@@ -178,11 +178,12 @@
   .reserve-grid{display:grid; grid-template-columns:1fr 1fr; gap:74px; align-items:center;}
   .reserve-form{display:flex; flex-direction:column; gap:18px;}
   .form-row{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
-  .field{display:flex; flex-direction:column; gap:8px;}
+  .field{display:flex; flex-direction:column; gap:8px; min-width:0;}
   .field label{font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#8a7f6c;}
   .field input, .field select{
     background:transparent; border:none; border-bottom:1px solid var(--line-dark);
     padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink);
+    width:100%; max-width:100%; box-sizing:border-box;
   }
   .field input::placeholder{color:rgba(28,26,23,0.35);}
   .field input:focus, .field select:focus{outline:none; border-color:var(--gold-deep);}
@@ -196,7 +197,8 @@
     padding:6px 12px; color:var(--ink); opacity:0.75;
   }
 
-  .stay-row{border:1px solid var(--line-dark); padding:20px; display:flex; flex-direction:column; gap:16px; margin-bottom:16px;}
+  .stay-row{border:1px solid var(--line-dark); padding:20px; display:flex; flex-direction:column; gap:16px; margin-bottom:16px; min-width:0; box-sizing:border-box;}
+  #stayRows{min-width:0; display:flex; flex-direction:column;}
   .stay-row-head{display:flex; justify-content:space-between; align-items:center;}
   .stay-row-head .eyebrow{margin:0;}
   .removeStayBtn{background:none; border:none; font-size:11px; letter-spacing:0.06em; color:var(--gold-deep); cursor:pointer; text-transform:uppercase; padding:0;}
@@ -408,7 +410,7 @@
       <h2>Check your stay.</h2>
       <p>Booking more than one home, or the same home twice? Add each stay below and see one combined total — no surprises at checkout.</p>
     </div>
-    <form class="reserve-form reveal" id="reserveForm">
+    <form class="reserve-form reveal" id="reserveForm" autocomplete="off">
       <div id="stayRows"></div>
 
       <button type="button" class="btn" id="addStayBtn" style="align-self:flex-start; font-size:11.5px; padding:10px 20px;">+ Add Another Stay</button>
@@ -584,21 +586,21 @@
       </div>
       <div class="field">
         <label>Home</label>
-        <select class="stayRow-suite">${suiteOptions}</select>
+        <select class="stayRow-suite" name="stay_${index}_suite">${suiteOptions}</select>
       </div>
       <div class="form-row">
         <div class="field">
           <label>Arrival</label>
-          <input type="date" class="stayRow-arrival" min="${todayStr}" autocomplete="off" required>
+          <input type="date" class="stayRow-arrival" name="stay_${index}_arrival" min="${todayStr}" autocomplete="off" required>
         </div>
         <div class="field">
           <label>Departure</label>
-          <input type="date" class="stayRow-departure" min="${todayStr}" autocomplete="off" required>
+          <input type="date" class="stayRow-departure" name="stay_${index}_departure" min="${todayStr}" autocomplete="off" required>
         </div>
       </div>
       <div class="field">
         <label>Guests</label>
-        <select class="stayRow-guests">${guestOptions}</select>
+        <select class="stayRow-guests" name="stay_${index}_guests">${guestOptions}</select>
       </div>
       <p class="stayRow-error" style="display:none;"></p>
       <div class="stayRow-subtotal"></div>
