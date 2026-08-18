@@ -598,6 +598,37 @@
         <input id="listHostEmail" name="Host Email" type="email" placeholder="you@example.com" required>
       </div>
 
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Offers & Discounts <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></div>
+      <div class="form-row">
+        <div class="field">
+          <label for="listDiscountType">Discount Type</label>
+          <select id="listDiscountType" name="Discount Type">
+            <option value="">None</option>
+            <option value="percentage">Percentage off</option>
+            <option value="flat">Flat amount off (₹)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="listDiscountValue">Amount</label>
+          <input id="listDiscountValue" name="Discount Value" type="number" min="0" placeholder="e.g. 10">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="listDiscountMinNights">Minimum Nights to Qualify</label>
+          <input id="listDiscountMinNights" name="Discount Min Nights" type="number" min="1" placeholder="e.g. 3">
+        </div>
+        <div class="field">
+          <label for="listDiscountNote">Short Note (shown to guests)</label>
+          <input id="listDiscountNote" name="Discount Description" type="text" placeholder="e.g. 10% off stays of 3+ nights">
+        </div>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Commission</div>
+      <p style="font-size:13px; line-height:1.7; opacity:0.75; border:1px solid var(--line-dark); padding:14px 16px; background:var(--cream);">
+        Aerva charges a flat <strong>15% commission</strong> on completed bookings — you receive 85% of what the guest pays, before any payment processing fees. This is set by Aerva and applies the same way it does for every host, so there's nothing to configure here. Payouts today are tracked internally per booking; automated bank transfers aren't set up yet, so settlement happens manually until that's built.
+      </p>
+
       <button type="submit" class="btn solid" id="listingSubmitBtn">Submit Listing for Review</button>
       <p class="listing-confirm" style="display:none; font-size:13px; opacity:0.75;">Thank you — we've received your listing. Our team reviews every submission personally and will follow up by email within a few days.</p>
       <p class="listing-error" style="display:none; font-size:13px; color:#a3402f;">Something went wrong sending your listing. Please try again, or email us directly at stay@aerva.in.</p>
@@ -991,13 +1022,22 @@
   });
 
   // ---- List Your Property form ----
-  // Submits via Formspree — a form-to-email service, so a listing submission
-  // just becomes an email your team reviews and follows up on manually.
+  // Submits via Formspree — a form-to-email service, so photos and the full
+  // submission still land in your inbox for review, same as before.
   // TODO: replace with your real Formspree endpoint (see README-LISTING-FORM.md).
   const LISTING_FORM_ENDPOINT = 'https://formspree.io/f/YOUR_FORM_ID';
 
+  // Structured fields (everything except photos) also get saved to your Neon
+  // database, so they're queryable and can later power the Suites section directly.
+  // TODO: replace with your deployed Vercel backend URL (same one used for Razorpay).
+  const LISTINGS_API_BASE = 'https://aerva-in.vercel.app';
+
   const listingForm = document.getElementById('listingForm');
   const listingSubmitBtn = document.getElementById('listingSubmitBtn');
+
+  function collectCheckedValues(name){
+    return Array.from(listingForm.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value);
+  }
 
   listingForm.addEventListener('submit', async function(e){
     e.preventDefault();
@@ -1016,6 +1056,36 @@
 
     listingSubmitBtn.disabled = true;
     listingSubmitBtn.textContent = 'Sending…';
+
+    // Save structured data to Neon first. If this fails, we still try to send
+    // the Formspree email — a host's submission reaching your inbox matters
+    // more than it also landing in the database on the very first attempt.
+    try{
+      await fetch(LISTINGS_API_BASE + '/api/submit-listing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          propertyName: document.getElementById('listPropertyName').value,
+          city: document.getElementById('listCity').value,
+          propertyType: document.getElementById('listType').value,
+          bedrooms: document.getElementById('listBedrooms').value,
+          maxGuests: document.getElementById('listGuests').value,
+          nightlyRate: document.getElementById('listPrice').value,
+          description: document.getElementById('listDescription').value,
+          amenities: collectCheckedValues('Amenities'),
+          services: collectCheckedValues('Services'),
+          hostName: document.getElementById('listHostName').value,
+          hostEmail: document.getElementById('listHostEmail').value,
+          hostPhone: document.getElementById('listHostPhone').value,
+          discountType: document.getElementById('listDiscountType').value,
+          discountValue: document.getElementById('listDiscountValue').value,
+          discountMinNights: document.getElementById('listDiscountMinNights').value,
+          discountDescription: document.getElementById('listDiscountNote').value
+        })
+      });
+    } catch(dbErr){
+      console.warn('Could not save to database, continuing with email submission:', dbErr);
+    }
 
     try{
       const formData = new FormData(listingForm);
