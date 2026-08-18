@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aerva — Listing Review</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  body{font-family:sans-serif; background:#f4eadc; color:#1c1a17; margin:0; padding:40px 20px;}
+  .wrap{max-width:720px; margin:0 auto;}
+  h1{font-family:Georgia,serif; font-size:26px; margin-bottom:24px;}
+  #gate{max-width:360px; margin:80px auto; text-align:center;}
+  #gate input{width:100%; padding:12px; font-size:15px; box-sizing:border-box; border:1px solid #ccc; margin-bottom:12px;}
+  #gate button{width:100%; padding:12px; background:#1c1a17; color:#f4eadc; border:none; font-size:14px; cursor:pointer;}
+  .listing{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:16px;}
+  .listing h3{margin:0 0 6px 0; font-family:Georgia,serif;}
+  .meta{font-size:13px; opacity:0.65; margin-bottom:10px;}
+  .desc{font-size:14px; line-height:1.6; margin-bottom:14px;}
+  .actions button{padding:9px 20px; font-size:13px; border:none; cursor:pointer; margin-right:10px;}
+  .approve-btn{background:#1c1a17; color:#f4eadc;}
+  .reject-btn{background:transparent; border:1px solid #a3402f !important; color:#a3402f;}
+  .empty{opacity:0.6; text-align:center; padding:60px 0;}
+  .error{color:#a3402f; font-size:13px;}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h1>Aerva Admin</h1>
+  <input id="secretInput" type="password" placeholder="Admin password">
+  <button onclick="unlock()">Enter</button>
+  <p id="gateError" class="error" style="display:none;">Incorrect password.</p>
+</div>
+
+<div class="wrap" id="mainView" style="display:none;">
+  <h1>Pending Listings</h1>
+  <div id="listingsContainer"><p class="empty">Loading…</p></div>
+</div>
+
+<script>
+  // API_BASE should match the Vercel deployment running your backend functions.
+  const API_BASE = 'https://aerva-in.vercel.app';
+  let adminSecret = '';
+
+  function unlock(){
+    adminSecret = document.getElementById('secretInput').value;
+    document.getElementById('gate').style.display = 'none';
+    document.getElementById('mainView').style.display = 'block';
+    loadListings();
+  }
+
+  async function loadListings(){
+    const container = document.getElementById('listingsContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        headers: { 'x-admin-secret': adminSecret }
+      });
+      if(res.status === 401){
+        document.getElementById('mainView').style.display = 'none';
+        document.getElementById('gate').style.display = 'block';
+        document.getElementById('gateError').style.display = 'block';
+        return;
+      }
+      const data = await res.json();
+      renderListings(data.listings);
+    } catch(err){
+      container.innerHTML = '<p class="error">Could not load listings. Check API_BASE and try again.</p>';
+    }
+  }
+
+  function renderListings(listings){
+    const container = document.getElementById('listingsContainer');
+    if(!listings.length){
+      container.innerHTML = '<p class="empty">No pending listings right now.</p>';
+      return;
+    }
+    container.innerHTML = listings.map(l => `
+      <div class="listing" id="listing-${l.id}">
+        <h3>${l.property_name}</h3>
+        <div class="meta">${l.city} · ${l.property_type || ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})</div>
+        <div class="desc">${l.description}</div>
+        <div class="actions">
+          <button class="approve-btn" onclick="decide(${l.id}, 'approve')">Approve</button>
+          <button class="reject-btn" onclick="decide(${l.id}, 'reject')">Reject</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  async function decide(listingId, action){
+    try{
+      const res = await fetch(API_BASE + '/api/approve-listing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-secret': adminSecret },
+        body: JSON.stringify({ listingId, action })
+      });
+      if(res.ok){
+        document.getElementById('listing-' + listingId).remove();
+      } else {
+        alert('Could not update this listing. Please try again.');
+      }
+    } catch(err){
+      alert('Could not update this listing. Please try again.');
+    }
+  }
+</script>
+
+</body>
+</html>
