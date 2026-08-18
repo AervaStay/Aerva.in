@@ -19,8 +19,9 @@ const NIGHTLY_RATE = 3500;
 const EXTRA_GUEST_RATE = 1500;
 const BASE_OCCUPANCY = 2;
 const GST_RATE = 0.12;
+const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
 
-function calculateTotal(arrival, departure, guests) {
+function calculateStaySubtotal(arrival, departure, guests) {
   const arrivalDate = new Date(arrival);
   const departureDate = new Date(departure);
   const nights = Math.round((departureDate - arrivalDate) / (1000 * 60 * 60 * 24));
@@ -31,9 +32,11 @@ function calculateTotal(arrival, departure, guests) {
   const roomTotal = NIGHTLY_RATE * nights;
   const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
   const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
-  const subtotal = roomTotal + extraTotal;
-  const gst = Math.round(subtotal * GST_RATE);
-  return subtotal + gst; // rupees
+  return { nights, subtotal: roomTotal + extraTotal };
+}
+
+function datesOverlap(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
 }
 
 module.exports = async (req, res) => {
@@ -47,23 +50,65 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { arrival, departure, guests, suite, email } = req.body;
+    const { stays, email } = req.body;
 
-    // Reject obviously malformed input before touching Razorpay.
-    if (!arrival || !departure || !guests || !email) {
+    if (!email || !Array.isArray(stays) || stays.length === 0) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
-
-    const totalRupees = calculateTotal(arrival, departure, Number(guests));
-    if (!totalRupees) {
-      return res.status(400).json({ error: 'Invalid dates or guest count' });
+    if (stays.length > MAX_STAYS) {
+      return res.status(400).json({ error: 'Too many stays in one request' });
     }
+
+    // Recalculate every stay's subtotal server-side — never trust a total
+    // the browser sends. Also re-check for the guest self-overlap rule,
+    // since a tampered request could skip the frontend validation entirely.
+    let grandSubtotal = 0;
+    const stayDetails = [];
+
+    for (let i = 0; i < stays.length; i++) {
+      const s = stays[i];
+      if (!s.arrival || !s.departure || !s.guests) {
+        return res.status(400).json({ error: `Stay ${i + 1}: missing dates or guest count` });
+      }
+
+      const result = calculateStaySubtotal(s.arrival, s.departure, Number(s.guests));
+      if (!result) {
+        return res.status(400).json({ error: `Stay ${i + 1}: invalid dates or guest count` });
+      }
+
+      // Same-guest double-booking check (same rule as the frontend) —
+      // this is NOT a check against other guests' bookings. See README:
+      // that requires a real booking calendar/database, not yet wired up.
+      for (let j = 0; j < i; j++) {
+        const other = stays[j];
+        if (
+          other.suite === s.suite &&
+          s.suite !== 'Not sure yet' &&
+          datesOverlap(s.arrival, s.departure, other.arrival, other.departure)
+        ) {
+          return res.status(400).json({
+            error: `Stay ${i + 1} overlaps with Stay ${j + 1} — same home, overlapping dates.`,
+          });
+        }
+      }
+
+      grandSubtotal += result.subtotal;
+      stayDetails.push({ suite: s.suite, arrival: s.arrival, departure: s.departure, guests: s.guests, nights: result.nights, subtotal: result.subtotal });
+    }
+
+    const gst = Math.round(grandSubtotal * GST_RATE);
+    const totalRupees = grandSubtotal + gst;
 
     const order = await razorpay.orders.create({
       amount: totalRupees * 100, // paise
       currency: 'INR',
       receipt: `aerva_${Date.now()}`,
-      notes: { suite: suite || 'Not specified', email, arrival, departure, guests },
+      notes: {
+        email,
+        stayCount: stays.length,
+        // Razorpay notes have a length limit — keep this compact.
+        stays: JSON.stringify(stayDetails).slice(0, 2000),
+      },
     });
 
     // Only send back what the browser needs — never the secret.
