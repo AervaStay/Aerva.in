@@ -35,10 +35,6 @@ function calculateStaySubtotal(arrival, departure, guests) {
   return { nights, subtotal: roomTotal + extraTotal };
 }
 
-function datesOverlap(aStart, aEnd, bStart, bEnd) {
-  return aStart < bEnd && bStart < aEnd;
-}
-
 module.exports = async (req, res) => {
   // Basic CORS lockdown — only allow requests from your own domain.
   const allowedOrigin = 'https://aerva.in';
@@ -76,18 +72,16 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Stay ${i + 1}: invalid dates or guest count` });
       }
 
-      // Same-guest double-booking check (same rule as the frontend) —
-      // this is NOT a check against other guests' bookings. See README:
-      // that requires a real booking calendar/database, not yet wired up.
+      // Each property can only appear once per booking request — not just
+      // "no overlapping dates," but no repeats at all. This mirrors the
+      // frontend, where a chosen property is disabled in every other row.
+      // Not a check against other guests' bookings — see README: that
+      // requires a real booking calendar/database, not yet wired up.
       for (let j = 0; j < i; j++) {
         const other = stays[j];
-        if (
-          other.suite === s.suite &&
-          s.suite !== 'Not sure yet' &&
-          datesOverlap(s.arrival, s.departure, other.arrival, other.departure)
-        ) {
+        if (other.suite === s.suite && s.suite !== 'Not sure yet') {
           return res.status(400).json({
-            error: `Stay ${i + 1} overlaps with Stay ${j + 1} — same home, overlapping dates.`,
+            error: `Stay ${i + 1} and Stay ${j + 1} both select ${s.suite} — pick a different home for one of them.`,
           });
         }
       }
