@@ -64,15 +64,15 @@
   /* ---------- NAV ---------- */
   header{
     position:fixed; top:0; left:0; right:0; z-index:100;
-    padding:28px 0;
-    transition:background .4s ease, padding .4s ease, border-color .4s ease, box-shadow .4s ease;
+    padding:20px 0;
+    transition:background .3s ease, border-color .3s ease, box-shadow .3s ease;
     border-bottom:1px solid transparent;
   }
   header.scrolled{
-    background:rgba(244,234,220,0.92);
+    background:rgba(244,234,220,0.96);
     backdrop-filter:blur(10px);
-    padding:16px 0;
     border-bottom:1px solid var(--line-dark);
+    box-shadow:0 1px 0 rgba(0,0,0,0.03);
   }
   nav.wrap{display:flex; align-items:center; justify-content:space-between;}
   .wordmark{
@@ -205,6 +205,10 @@
   .removeStayBtn:hover{text-decoration:underline;}
   .stayRow-error{color:#a3402f; font-size:12.5px; margin-top:-8px;}
   .stayRow-subtotal{font-size:13px; opacity:0.75; text-align:right;}
+
+  .check-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:10px 16px;}
+  .check-item{display:flex; align-items:center; gap:8px; font-size:13.5px; opacity:0.85; cursor:pointer;}
+  .check-item input{width:auto; accent-color:var(--gold-deep); cursor:pointer;}
   /* ---------- LOCATION ---------- */
   .loc-grid{display:grid; grid-template-columns:1.1fr 0.9fr; gap:74px; align-items:center;}
   .loc-copy p{font-size:15.5px; line-height:1.85; opacity:0.7; margin-top:18px;}
@@ -265,6 +269,7 @@
       <a href="#suites">Suites</a>
       <a href="#experience">Experience</a>
       <a href="#location">Location</a>
+      <a href="#add-listing">List Property</a>
       <a href="#reserve" class="btn">Reserve</a>
     </div>
   </nav>
@@ -478,6 +483,125 @@
         </g>
       </svg>
     </div>
+  </div>
+</section>
+
+<!-- ================= ADD LISTING ================= -->
+<section class="pad" id="add-listing" style="background:var(--cream-deep);">
+  <div class="wrap">
+    <div class="section-head center-head reveal">
+      <div class="eyebrow">For Property Owners</div>
+      <h2>List your home with Aerva.</h2>
+      <p style="margin-left:auto; margin-right:auto;">We're a small, curated collection — not a marketplace of thousands. If your place fits that spirit, tell us about it below and our team will review it personally.</p>
+    </div>
+  </div>
+  <div class="wrap" style="max-width:760px;">
+    <form class="reserve-form reveal" id="listingForm" autocomplete="off">
+
+      <div class="eyebrow" style="margin-bottom:-4px;">Property Details</div>
+      <div class="field">
+        <label for="listPropertyName">Property Name</label>
+        <input id="listPropertyName" name="Property Name" type="text" placeholder="e.g. The Riverside Cottage" required>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="listCity">City / Area</label>
+          <input id="listCity" name="City" type="text" placeholder="e.g. Goa, Candolim" required>
+        </div>
+        <div class="field">
+          <label for="listType">Property Type</label>
+          <select id="listType" name="Property Type">
+            <option>Entire Home / Villa</option>
+            <option>Studio Apartment</option>
+            <option>Suite within a larger property</option>
+            <option>Cabin / Cottage</option>
+            <option>Heritage / Traditional Home</option>
+            <option>Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="listBedrooms">Bedrooms</label>
+          <select id="listBedrooms" name="Bedrooms">
+            <option>Studio</option>
+            <option>1</option>
+            <option>2</option>
+            <option>3</option>
+            <option>4</option>
+            <option>5+</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="listGuests">Max Guests</label>
+          <select id="listGuests" name="Max Guests">
+            <option>1–2</option>
+            <option>3–4</option>
+            <option>5–6</option>
+            <option>7–8</option>
+            <option>9+</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="listPrice">Expected Nightly Rate (₹)</label>
+        <input id="listPrice" name="Expected Nightly Rate" type="number" min="0" placeholder="e.g. 4500">
+      </div>
+      <div class="field">
+        <label for="listDescription">Tell us about the property</label>
+        <textarea id="listDescription" name="Description" rows="4" placeholder="What makes this place worth staying at? Style, setting, story — whatever you'd want a guest to know." style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;" required></textarea>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Amenities</div>
+      <div class="check-grid">
+        <label class="check-item"><input type="checkbox" name="Amenities" value="WiFi"> WiFi</label>
+        <label class="check-item"><input type="checkbox" name="Amenities" value="Air Conditioning"> Air Conditioning</label>
+        <label class="check-item"><input type="checkbox" name="Amenities" value="Kitchen"> Kitchen</label>
+        <label class="check-item"><input type="checkbox" name="Amenities" value="Private Pool"> Private Pool</label>
+        <label class="check-item"><input type="checkbox" name="Amenities" value="Parking"> Parking</label>
+        <label class="check-item"><input type="checkbox" name="Amenities" value="Balcony / Terrace"> Balcony / Terrace</label>
+        <label class="check-item"><input type="checkbox" name="Amenities" value="Garden"> Garden</label>
+        <label class="check-item"><input type="checkbox" name="Amenities" value="Pet-Friendly"> Pet-Friendly</label>
+        <label class="check-item"><input type="checkbox" name="Amenities" value="Fireplace / Heating"> Fireplace / Heating</label>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Services You Offer</div>
+      <div class="check-grid">
+        <label class="check-item"><input type="checkbox" name="Services" value="Housekeeping"> Housekeeping</label>
+        <label class="check-item"><input type="checkbox" name="Services" value="Breakfast Included"> Breakfast Included</label>
+        <label class="check-item"><input type="checkbox" name="Services" value="Airport Pickup"> Airport Pickup</label>
+        <label class="check-item"><input type="checkbox" name="Services" value="In-house Chef"> In-house Chef</label>
+        <label class="check-item"><input type="checkbox" name="Services" value="Concierge / Local Guide"> Concierge / Local Guide</label>
+        <label class="check-item"><input type="checkbox" name="Services" value="Spa / Massage on request"> Spa / Massage on request</label>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Photos</div>
+      <div class="field">
+        <label for="listPhotos">Upload up to 5 photos</label>
+        <input id="listPhotos" name="attachment" type="file" accept="image/*" multiple>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Exterior, a bedroom, and any standout feature (view, pool, garden) help most.</p>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Your Contact Details</div>
+      <div class="form-row">
+        <div class="field">
+          <label for="listHostName">Your Name</label>
+          <input id="listHostName" name="Host Name" type="text" required>
+        </div>
+        <div class="field">
+          <label for="listHostPhone">Phone</label>
+          <input id="listHostPhone" name="Phone" type="tel" required>
+        </div>
+      </div>
+      <div class="field">
+        <label for="listHostEmail">Email</label>
+        <input id="listHostEmail" name="Host Email" type="email" placeholder="you@example.com" required>
+      </div>
+
+      <button type="submit" class="btn solid" id="listingSubmitBtn">Submit Listing for Review</button>
+      <p class="listing-confirm" style="display:none; font-size:13px; opacity:0.75;">Thank you — we've received your listing. Our team reviews every submission personally and will follow up by email within a few days.</p>
+      <p class="listing-error" style="display:none; font-size:13px; color:#a3402f;">Something went wrong sending your listing. Please try again, or email us directly at stay@aerva.in.</p>
+    </form>
   </div>
 </section>
 
@@ -864,6 +988,55 @@
       alert('Payment failed: ' + response.error.description);
     });
     rzp.open();
+  });
+
+  // ---- List Your Property form ----
+  // Submits via Formspree — a form-to-email service, so a listing submission
+  // just becomes an email your team reviews and follows up on manually.
+  // TODO: replace with your real Formspree endpoint (see README-LISTING-FORM.md).
+  const LISTING_FORM_ENDPOINT = 'https://formspree.io/f/YOUR_FORM_ID';
+
+  const listingForm = document.getElementById('listingForm');
+  const listingSubmitBtn = document.getElementById('listingSubmitBtn');
+
+  listingForm.addEventListener('submit', async function(e){
+    e.preventDefault();
+
+    const confirmEl = listingForm.querySelector('.listing-confirm');
+    const errorEl = listingForm.querySelector('.listing-error');
+    confirmEl.style.display = 'none';
+    errorEl.style.display = 'none';
+
+    const photosInput = document.getElementById('listPhotos');
+    if(photosInput.files.length > 5){
+      errorEl.textContent = 'Please attach 5 photos or fewer.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    listingSubmitBtn.disabled = true;
+    listingSubmitBtn.textContent = 'Sending…';
+
+    try{
+      const formData = new FormData(listingForm);
+      const res = await fetch(LISTING_FORM_ENDPOINT, {
+        method: 'POST',
+        body: formData,
+        headers: { 'Accept': 'application/json' }
+      });
+
+      if(res.ok){
+        confirmEl.style.display = 'block';
+        listingForm.reset();
+        listingSubmitBtn.textContent = 'Submitted';
+      } else {
+        throw new Error('Formspree returned an error');
+      }
+    } catch(err){
+      errorEl.style.display = 'block';
+      listingSubmitBtn.disabled = false;
+      listingSubmitBtn.textContent = 'Submit Listing for Review';
+    }
   });
 
 </script>
