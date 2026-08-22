@@ -554,10 +554,16 @@
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Photos</div>
       <div class="field">
-        <label for="listPhotos">Upload up to 5 photos</label>
-        <input id="listPhotos" name="attachment" type="file" accept="image/*" multiple required>
-        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Exterior, a bedroom, and any standout feature (view, pool, garden) help most.</p>
-        <div id="photoPreviewContainer" class="photo-preview-grid"></div>
+        <label for="listPhotosExterior">Exterior Photos <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(at least 1 required)</span></label>
+        <input id="listPhotosExterior" name="attachment_exterior" type="file" accept="image/*" multiple required>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">The front of the property, or whatever gives the best first impression — this becomes the main photo shown on the site.</p>
+        <div id="photoPreviewContainerExterior" class="photo-preview-grid"></div>
+      </div>
+      <div class="field">
+        <label for="listPhotosInterior">Interior Photos <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(at least 1 required)</span></label>
+        <input id="listPhotosInterior" name="attachment_interior" type="file" accept="image/*" multiple required>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">A bedroom, living space, or any standout interior feature.</p>
+        <div id="photoPreviewContainerInterior" class="photo-preview-grid"></div>
       </div>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Your Contact Details</div>
@@ -1053,51 +1059,61 @@
   const listingSubmitBtn = document.getElementById('listingSubmitBtn');
 
   // ---- Photo selection: add, preview, and remove individual photos ----
-  const photosInputEl = document.getElementById('listPhotos');
-  const photoPreviewContainer = document.getElementById('photoPreviewContainer');
+  // One reusable manager, instantiated once per category (exterior/interior)
+  // instead of duplicating this logic twice.
   const MAX_LISTING_PHOTOS = 5;
-  let selectedPhotoFiles = [];
 
-  // Keeps the real <input type="file"> in sync with our own array, so the
-  // browser's native "required" validation and the existing upload code
-  // (which reads photosInput.files) both keep working without changes.
-  function syncPhotoInput(){
-    const dt = new DataTransfer();
-    selectedPhotoFiles.forEach(f => dt.items.add(f));
-    photosInputEl.files = dt.files;
-  }
+  function createPhotoManager(inputId, previewContainerId){
+    const inputEl = document.getElementById(inputId);
+    const previewContainer = document.getElementById(previewContainerId);
+    let selectedFiles = [];
 
-  function renderPhotoPreviews(){
-    photoPreviewContainer.innerHTML = '';
-    selectedPhotoFiles.forEach((file, idx) => {
-      const url = URL.createObjectURL(file);
-      const item = document.createElement('div');
-      item.className = 'photo-preview-item';
-      item.innerHTML = `
-        <img src="${url}" alt="${file.name}">
-        <button type="button" class="photo-remove-btn" data-idx="${idx}" aria-label="Remove this photo">×</button>
-      `;
-      photoPreviewContainer.appendChild(item);
-    });
-    photoPreviewContainer.querySelectorAll('.photo-remove-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        selectedPhotoFiles.splice(parseInt(btn.dataset.idx, 10), 1);
-        syncPhotoInput();
-        renderPhotoPreviews();
-      });
-    });
-  }
-
-  photosInputEl.addEventListener('change', () => {
-    const newFiles = Array.from(photosInputEl.files);
-    for(const f of newFiles){
-      if(selectedPhotoFiles.length >= MAX_LISTING_PHOTOS) break;
-      const alreadyAdded = selectedPhotoFiles.some(existing => existing.name === f.name && existing.size === f.size);
-      if(!alreadyAdded) selectedPhotoFiles.push(f);
+    // Keeps the real <input type="file"> in sync with our own array, so the
+    // browser's native "required" validation and the upload step (which
+    // reads inputEl.files) both keep working without extra changes.
+    function syncInput(){
+      const dt = new DataTransfer();
+      selectedFiles.forEach(f => dt.items.add(f));
+      inputEl.files = dt.files;
     }
-    syncPhotoInput();
-    renderPhotoPreviews();
-  });
+
+    function renderPreviews(){
+      previewContainer.innerHTML = '';
+      selectedFiles.forEach((file, idx) => {
+        const url = URL.createObjectURL(file);
+        const item = document.createElement('div');
+        item.className = 'photo-preview-item';
+        item.innerHTML = `
+          <img src="${url}" alt="${file.name}">
+          <button type="button" class="photo-remove-btn" data-idx="${idx}" aria-label="Remove this photo">×</button>
+        `;
+        previewContainer.appendChild(item);
+      });
+      previewContainer.querySelectorAll('.photo-remove-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedFiles.splice(parseInt(btn.dataset.idx, 10), 1);
+          syncInput();
+          renderPreviews();
+        });
+      });
+    }
+
+    inputEl.addEventListener('change', () => {
+      const newFiles = Array.from(inputEl.files);
+      for(const f of newFiles){
+        if(selectedFiles.length >= MAX_LISTING_PHOTOS) break;
+        const alreadyAdded = selectedFiles.some(existing => existing.name === f.name && existing.size === f.size);
+        if(!alreadyAdded) selectedFiles.push(f);
+      }
+      syncInput();
+      renderPreviews();
+    });
+
+    return { getFiles: () => selectedFiles };
+  }
+
+  const exteriorPhotoManager = createPhotoManager('listPhotosExterior', 'photoPreviewContainerExterior');
+  const interiorPhotoManager = createPhotoManager('listPhotosInterior', 'photoPreviewContainerInterior');
 
   function collectCheckedValues(name){
     return Array.from(listingForm.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value);
@@ -1111,9 +1127,13 @@
     confirmEl.style.display = 'none';
     errorEl.style.display = 'none';
 
-    const photosInput = document.getElementById('listPhotos');
-    if(photosInput.files.length > 5){
-      errorEl.textContent = 'Please attach 5 photos or fewer.';
+    if(exteriorPhotoManager.getFiles().length === 0){
+      errorEl.textContent = 'Please attach at least 1 exterior photo.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    if(interiorPhotoManager.getFiles().length === 0){
+      errorEl.textContent = 'Please attach at least 1 interior photo.';
       errorEl.style.display = 'block';
       return;
     }
@@ -1123,24 +1143,31 @@
 
     // Photos upload directly from this browser to Vercel Blob storage —
     // they never pass through our own server. See api/blob-upload.js.
-    let photoUrls = [];
-    if(photosInput.files.length > 0){
-      try{
-        const { upload } = await import('https://esm.sh/@vercel/blob/client');
-        const uploads = await Promise.all(
-          Array.from(photosInput.files).map(file =>
-            upload(file.name, file, {
-              access: 'public',
-              handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload'
-            })
-          )
-        );
-        photoUrls = uploads.map(u => u.url);
-      } catch(uploadErr){
-        console.warn('Photo upload failed, continuing without photos on the listing card:', uploadErr);
-        // Not fatal — the submission still goes through, and photos still
-        // reach the admin inbox via the Formspree email attachment below.
-      }
+    async function uploadCategory(files){
+      if(files.length === 0) return [];
+      const { upload } = await import('https://esm.sh/@vercel/blob/client');
+      const uploads = await Promise.all(
+        files.map(file =>
+          upload(file.name, file, {
+            access: 'public',
+            handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload'
+          })
+        )
+      );
+      return uploads.map(u => u.url);
+    }
+
+    let exteriorPhotoUrls = [];
+    let interiorPhotoUrls = [];
+    try{
+      [exteriorPhotoUrls, interiorPhotoUrls] = await Promise.all([
+        uploadCategory(exteriorPhotoManager.getFiles()),
+        uploadCategory(interiorPhotoManager.getFiles())
+      ]);
+    } catch(uploadErr){
+      console.warn('Photo upload failed, continuing without photos on the listing card:', uploadErr);
+      // Not fatal — the submission still goes through, and photos still
+      // reach the admin inbox via the Formspree email attachment below.
     }
 
     listingSubmitBtn.textContent = 'Sending…';
@@ -1169,7 +1196,8 @@
           discountValue: document.getElementById('listDiscountValue').value,
           discountMinNights: document.getElementById('listDiscountMinNights').value,
           discountDescription: document.getElementById('listDiscountNote').value,
-          photoUrls: photoUrls
+          exteriorPhotoUrls: exteriorPhotoUrls,
+          interiorPhotoUrls: interiorPhotoUrls
         })
       });
     } catch(dbErr){
@@ -1216,7 +1244,11 @@
       ? `From <strong>₹${Number(listing.nightly_rate).toLocaleString('en-IN')}</strong>/night`
       : 'Rate on enquiry';
 
-    const photos = Array.isArray(listing.photo_urls) ? listing.photo_urls : [];
+    // Exterior is the lead photo everywhere it's shown, falling back to
+    // an interior shot only if a listing genuinely has no exterior photo.
+    const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
+    const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
+    const photos = exteriorPhotos.length ? exteriorPhotos : interiorPhotos;
     const photoHtml = photos.length
       ? `<img src="${photos[0]}" alt="${listing.property_name}" loading="lazy">`
       : `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
