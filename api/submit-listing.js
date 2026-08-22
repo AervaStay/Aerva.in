@@ -27,11 +27,21 @@ async function sendAdminNotification(listing) {
   const approveLink = `${SITE_BASE}/api/approve-listing?token=${createToken(listing.id, 'approve')}`;
   const rejectLink = `${SITE_BASE}/api/approve-listing?token=${createToken(listing.id, 'reject')}`;
 
-  const photos = Array.isArray(listing.photo_urls) ? listing.photo_urls : [];
-  const photoThumbnails = photos.length
-    ? `<div style="margin:12px 0; display:flex; gap:6px;">${photos.slice(0, 5).map(url =>
+  const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
+  const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
+
+  function thumbnailRow(label, urls){
+    if (!urls.length) return '';
+    return `
+      <p style="font-size:12px; opacity:0.6; margin:12px 0 4px;">${label}</p>
+      <div style="display:flex; gap:6px;">${urls.slice(0, 5).map(url =>
         `<img src="${url}" width="90" height="90" style="object-fit:cover; border-radius:4px;">`
-      ).join('')}</div>`
+      ).join('')}</div>
+    `;
+  }
+
+  const photoThumbnails = (exteriorPhotos.length || interiorPhotos.length)
+    ? thumbnailRow('Exterior', exteriorPhotos) + thumbnailRow('Interior', interiorPhotos)
     : '<p style="font-size:12px; opacity:0.6;">No photos attached to this submission.</p>';
 
   const html = `
@@ -79,26 +89,36 @@ module.exports = async (req, res) => {
       propertyName, city, propertyType, bedrooms, maxGuests, nightlyRate,
       description, amenities, services, hostName, hostEmail, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
-      photoUrls
+      exteriorPhotoUrls, interiorPhotoUrls
     } = req.body;
 
     if (!propertyName || !city || !description || !hostName || !hostEmail || !hostPhone) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
+    if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
+      return res.status(400).json({ error: 'At least 1 exterior photo is required' });
+    }
+    if (!Array.isArray(interiorPhotoUrls) || interiorPhotoUrls.length === 0) {
+      return res.status(400).json({ error: 'At least 1 interior photo is required' });
+    }
 
     const rate = nightlyRate ? Number(nightlyRate) : null;
     // Only accept strings that look like real Blob URLs — defensive against
     // a tampered request trying to inject arbitrary content here.
-    const safePhotoUrls = Array.isArray(photoUrls)
-      ? photoUrls.filter(url => typeof url === 'string' && url.startsWith('https://')).slice(0, 5)
-      : [];
+    function sanitizePhotoUrls(urls){
+      return Array.isArray(urls)
+        ? urls.filter(url => typeof url === 'string' && url.startsWith('https://')).slice(0, 5)
+        : [];
+    }
+    const safeExteriorUrls = sanitizePhotoUrls(exteriorPhotoUrls);
+    const safeInteriorUrls = sanitizePhotoUrls(interiorPhotoUrls);
 
     const inserted = await sql`
       INSERT INTO listings (
         property_name, city, property_type, bedrooms, max_guests, nightly_rate,
         description, amenities, services, host_name, host_email, host_phone,
         discount_type, discount_value, discount_min_nights, discount_description,
-        commission_rate, photo_urls
+        commission_rate, exterior_photo_urls, interior_photo_urls
       ) VALUES (
         ${propertyName}, ${city}, ${propertyType || null}, ${bedrooms || null},
         ${maxGuests || null}, ${rate},
@@ -106,7 +126,7 @@ module.exports = async (req, res) => {
         ${hostName}, ${hostEmail}, ${hostPhone},
         ${discountType || null}, ${discountValue ? Number(discountValue) : null},
         ${discountMinNights ? Number(discountMinNights) : null}, ${discountDescription || null},
-        ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safePhotoUrls)}
+        ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)}
       )
       RETURNING *
     `;
