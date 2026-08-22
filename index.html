@@ -152,9 +152,23 @@
   /* ---------- SUITES ---------- */
   .suite-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(280px,1fr)); gap:36px;}
   .suite-card{background:var(--cream); display:flex; flex-direction:column; border:1px solid var(--line-dark);}
-  .suite-photo{width:100%; aspect-ratio:4/3.1; overflow:hidden; background:var(--cream-deep);}
+  .suite-photo{width:100%; aspect-ratio:4/3.1; overflow:hidden; background:var(--cream-deep); position:relative;}
   .suite-photo img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .5s ease;}
   .suite-card:hover .suite-photo img{transform:scale(1.04);}
+  .suite-photo-slider{
+    width:100%; height:100%; display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none;
+  }
+  .suite-photo-slider::-webkit-scrollbar{display:none;}
+  .suite-photo-slider img{
+    width:100%; height:100%; object-fit:cover; flex:0 0 100%; scroll-snap-align:start; display:block;
+  }
+  .suite-photo-dots{
+    position:absolute; bottom:10px; left:0; right:0; display:flex; justify-content:center; gap:5px; pointer-events:none;
+  }
+  .suite-photo-dots span{
+    width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.55);
+  }
   .suite-body{padding:26px 26px 24px; display:flex; flex-direction:column; flex-grow:1;}
   .suite-card h3{font-size:19px; font-weight:500; line-height:1.3;}
   .suite-card .loc{font-size:11.5px; letter-spacing:0.12em; color:var(--gold-deep); margin-top:10px; text-transform:uppercase;}
@@ -169,6 +183,31 @@
   .suite-card .offer{font-size:11.5px; letter-spacing:0.03em; color:var(--gold-deep); margin-top:6px; font-style:italic; font-family:'Bodoni Moda', serif;}
   .suites-empty{text-align:center; padding:40px 20px; opacity:0.6; font-size:14px; grid-column:1/-1;}
   .suites-loading{text-align:center; padding:40px 20px; opacity:0.5; font-size:14px; grid-column:1/-1;}
+
+  .search-bar, .filter-bar{
+    display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px;
+    background:var(--cream); border:1px solid var(--line-dark); padding:22px;
+  }
+  .search-bar{margin-bottom:14px;}
+  .filter-bar{margin-bottom:6px; padding:16px 22px; opacity:0.92;}
+  .search-field{display:flex; flex-direction:column; gap:6px; flex:1; min-width:130px;}
+  .search-field label{font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c;}
+  .search-field input, .search-field select{
+    background:transparent; border:none; border-bottom:1px solid var(--line-dark);
+    padding:8px 2px; font-family:'Jost', sans-serif; font-size:14px; color:var(--ink);
+    width:100%; box-sizing:border-box;
+  }
+  .search-field input:focus, .search-field select:focus{outline:none; border-color:var(--gold-deep);}
+  .search-bar .btn{flex:0 0 auto; padding:12px 28px; margin-bottom:1px;}
+  .filter-clear{
+    flex:0 0 auto; background:none; border:none; font-size:12px; letter-spacing:0.05em;
+    color:var(--gold-deep); text-decoration:underline; cursor:pointer; padding:8px 0; margin-bottom:1px;
+  }
+  .search-status{font-size:13px; opacity:0.7; margin-top:14px; margin-bottom:6px;}
+  @media (max-width:640px){
+    .search-bar, .filter-bar{flex-direction:column; align-items:stretch;}
+    .search-bar .btn{width:100%;}
+  }
 
   .photo-preview-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:10px; margin-top:12px;}
   .photo-preview-item{position:relative; aspect-ratio:1/1; border:1px solid var(--line-dark); overflow:hidden;}
@@ -343,6 +382,61 @@
       <h2>Homes, personally chosen.</h2>
       <p style="margin-left:auto; margin-right:auto;">Every Aerva home is reviewed and approved individually — never a template, never bulk-listed.</p>
     </div>
+  </div>
+  <div class="wrap">
+    <div class="search-bar reveal" id="searchBar">
+      <div class="search-field">
+        <label for="searchArrival">Arrival</label>
+        <input type="date" id="searchArrival" autocomplete="off">
+      </div>
+      <div class="search-field">
+        <label for="searchDeparture">Departure</label>
+        <input type="date" id="searchDeparture" autocomplete="off">
+      </div>
+      <div class="search-field">
+        <label for="searchCity">Place</label>
+        <input type="text" id="searchCity" list="searchCityOptions" placeholder="e.g. Pune, Jibhi" autocomplete="off">
+        <datalist id="searchCityOptions"></datalist>
+      </div>
+      <div class="search-field">
+        <label for="searchGuests">Guests</label>
+        <select id="searchGuests">
+          <option value="">Any</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+          <option value="7">7</option>
+          <option value="8">8</option>
+          <option value="9">9+</option>
+        </select>
+      </div>
+      <button type="button" class="btn solid" id="searchBtn">Search</button>
+    </div>
+
+    <div class="filter-bar reveal">
+      <div class="search-field">
+        <label for="sortPrice">Sort by</label>
+        <select id="sortPrice">
+          <option value="">Recommended</option>
+          <option value="asc">Price: Low to High</option>
+          <option value="desc">Price: High to Low</option>
+        </select>
+      </div>
+      <div class="search-field">
+        <label for="minPrice">Min Price (₹/night)</label>
+        <input type="number" id="minPrice" min="0" placeholder="No min">
+      </div>
+      <div class="search-field">
+        <label for="maxPrice">Max Price (₹/night)</label>
+        <input type="number" id="maxPrice" min="0" placeholder="No max">
+      </div>
+      <button type="button" class="filter-clear" id="clearFiltersBtn">Clear filters</button>
+    </div>
+
+    <p class="search-status" id="searchStatus" style="display:none;"></p>
   </div>
   <div class="wrap">
     <div class="suite-grid reveal" id="suitesContainer">
@@ -1268,14 +1362,25 @@
       ? `From <strong>₹${Number(listing.nightly_rate).toLocaleString('en-IN')}</strong>/night`
       : 'Rate on enquiry';
 
-    // Exterior is the lead photo everywhere it's shown, falling back to
-    // an interior shot only if a listing genuinely has no exterior photo.
+    // Exterior photos lead the slider, interior photos follow — guests can
+    // swipe/scroll through all of them right on the card.
     const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
     const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
-    const photos = exteriorPhotos.length ? exteriorPhotos : interiorPhotos;
-    const photoHtml = photos.length
-      ? `<img src="${photos[0]}" alt="${listing.property_name}" loading="lazy">`
-      : `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
+    const allPhotos = [...exteriorPhotos, ...interiorPhotos];
+
+    let photoHtml;
+    if(allPhotos.length === 0){
+      photoHtml = `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
+    } else if(allPhotos.length === 1){
+      photoHtml = `<img src="${allPhotos[0]}" alt="${listing.property_name}" loading="lazy">`;
+    } else {
+      const slides = allPhotos.map(url => `<img src="${url}" alt="${listing.property_name}" loading="lazy">`).join('');
+      const dots = allPhotos.map(() => '<span></span>').join('');
+      photoHtml = `
+        <div class="suite-photo-slider">${slides}</div>
+        <div class="suite-photo-dots">${dots}</div>
+      `;
+    }
 
     const card = document.createElement('div');
     card.className = 'suite-card';
@@ -1289,25 +1394,182 @@
         <p class="desc">${listing.description}</p>
         <div class="price">${priceLine}</div>
         ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
-        <a href="#reserve" class="link">Enquire <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <a href="#reserve" class="link" data-listing-id="${listing.id}">Check Availability & Book <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
       </div>
     `;
     return card;
   }
 
-  function renderSuitesSection(){
+  function applyFiltersAndRender(){
     const container = document.getElementById('suitesContainer');
-    container.innerHTML = '';
 
     if(approvedListings.length === 0){
       container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="#add-listing" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
       return;
     }
 
-    approvedListings.forEach(listing => {
-      container.appendChild(buildSuiteCard(listing));
-    });
+    let list = approvedListings.slice();
+
+    const minPrice = document.getElementById('minPrice').value;
+    const maxPrice = document.getElementById('maxPrice').value;
+    if(minPrice) list = list.filter(l => l.nightly_rate && Number(l.nightly_rate) >= Number(minPrice));
+    if(maxPrice) list = list.filter(l => l.nightly_rate && Number(l.nightly_rate) <= Number(maxPrice));
+
+    const sortOrder = document.getElementById('sortPrice').value;
+    if(sortOrder === 'asc') list.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
+    if(sortOrder === 'desc') list.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
+
+    container.innerHTML = '';
+    if(list.length === 0){
+      container.innerHTML = '<div class="suites-empty">No homes match these filters — try widening your price range.</div>';
+      return;
+    }
+    list.forEach(listing => container.appendChild(buildSuiteCard(listing)));
   }
+
+  function populateCityOptions(){
+    const datalist = document.getElementById('searchCityOptions');
+    const uniqueCities = [...new Set(approvedListings.map(l => l.city).filter(Boolean))];
+    datalist.innerHTML = uniqueCities.map(c => `<option value="${c}"></option>`).join('');
+  }
+
+  // Refreshes the "Home" dropdown in every existing Reserve stay row after a
+  // search changes which listings are available — without wiping out dates
+  // or guest counts the person already entered.
+  function refreshAllStayRowSuiteOptions(){
+    const rows = Array.from(stayRowsEl.querySelectorAll('.stay-row'));
+    rows.forEach(row => {
+      const select = row.querySelector('.stayRow-suite');
+      if(!select) return;
+      const previousValue = select.value;
+      select.innerHTML = buildSuiteOptionsHtml();
+      if(listingsById[previousValue]) select.value = previousValue;
+    });
+    refreshSuiteAvailability();
+    updatePricing();
+  }
+
+  async function performSearch(){
+    const arrival = document.getElementById('searchArrival').value;
+    const departure = document.getElementById('searchDeparture').value;
+    const city = document.getElementById('searchCity').value.trim();
+    const guests = document.getElementById('searchGuests').value;
+    const statusEl = document.getElementById('searchStatus');
+
+    if((arrival && !departure) || (!arrival && departure)){
+      statusEl.textContent = 'Please pick both an arrival and departure date, or leave both blank.';
+      statusEl.style.display = 'block';
+      return;
+    }
+    if(arrival && departure && new Date(departure) <= new Date(arrival)){
+      statusEl.textContent = 'Departure must be after arrival.';
+      statusEl.style.display = 'block';
+      return;
+    }
+
+    const params = new URLSearchParams();
+    if(city) params.set('city', city);
+    if(guests) params.set('guests', guests);
+    if(arrival && departure){ params.set('arrival', arrival); params.set('departure', departure); }
+
+    const container = document.getElementById('suitesContainer');
+    container.innerHTML = '<div class="suites-loading">Searching…</div>';
+    statusEl.style.display = 'none';
+
+    try{
+      const url = SUITES_API_BASE + '/api/get-listings' + (params.toString() ? '?' + params.toString() : '');
+      const res = await fetch(url);
+      if(!res.ok) throw new Error('Search failed');
+      const data = await res.json();
+      approvedListings = data.listings || [];
+      listingsById = {};
+      approvedListings.forEach(l => { listingsById[l.id] = l; });
+
+      const hasFilters = city || guests || (arrival && departure);
+      if(hasFilters){
+        statusEl.textContent = approvedListings.length
+          ? `Showing ${approvedListings.length} home${approvedListings.length === 1 ? '' : 's'} matching your search.`
+          : 'No homes match your search — try different dates, guests, or place.';
+        statusEl.style.display = 'block';
+      }
+
+      applyFiltersAndRender();
+      refreshAllStayRowSuiteOptions();
+    } catch(err){
+      container.innerHTML = '<div class="suites-empty">Could not search right now. Please try again.</div>';
+    }
+  }
+
+  function prefillReserveWithListing(listingId){
+    if(stayRowsEl.children.length === 0){
+      addStayRow();
+    }
+    const firstRow = stayRowsEl.querySelector('.stay-row');
+    if(!firstRow) return;
+
+    const suiteSelect = firstRow.querySelector('.stayRow-suite');
+    if(listingsById[listingId]) suiteSelect.value = listingId;
+
+    const searchArrivalVal = document.getElementById('searchArrival').value;
+    const searchDepartureVal = document.getElementById('searchDeparture').value;
+    const searchGuestsVal = document.getElementById('searchGuests').value;
+
+    const arrivalEl = firstRow.querySelector('.stayRow-arrival');
+    const departureEl = firstRow.querySelector('.stayRow-departure');
+    const guestsEl = firstRow.querySelector('.stayRow-guests');
+
+    if(searchArrivalVal){
+      arrivalEl.value = searchArrivalVal;
+      const next = new Date(searchArrivalVal);
+      next.setDate(next.getDate() + 1);
+      departureEl.min = next.toISOString().split('T')[0];
+    }
+    if(searchDepartureVal) departureEl.value = searchDepartureVal;
+    if(searchGuestsVal) guestsEl.value = searchGuestsVal >= 6 ? '6' : searchGuestsVal;
+
+    refreshSuiteAvailability();
+    updatePricing();
+
+    document.getElementById('reserve').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  document.getElementById('suitesContainer').addEventListener('click', (e) => {
+    const link = e.target.closest('a[data-listing-id]');
+    if(!link) return;
+    e.preventDefault();
+    prefillReserveWithListing(link.dataset.listingId);
+  });
+
+  document.getElementById('searchBtn').addEventListener('click', performSearch);
+  document.getElementById('sortPrice').addEventListener('change', applyFiltersAndRender);
+  document.getElementById('minPrice').addEventListener('input', applyFiltersAndRender);
+  document.getElementById('maxPrice').addEventListener('input', applyFiltersAndRender);
+  document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+    document.getElementById('searchArrival').value = '';
+    document.getElementById('searchDeparture').value = '';
+    document.getElementById('searchCity').value = '';
+    document.getElementById('searchGuests').value = '';
+    document.getElementById('sortPrice').value = '';
+    document.getElementById('minPrice').value = '';
+    document.getElementById('maxPrice').value = '';
+    document.getElementById('searchStatus').style.display = 'none';
+    performSearch();
+  });
+
+  (function setSearchDateMins(){
+    const searchArrivalEl = document.getElementById('searchArrival');
+    const searchDepartureEl = document.getElementById('searchDeparture');
+    const today = new Date().toISOString().split('T')[0];
+    searchArrivalEl.min = today;
+    searchDepartureEl.min = today;
+    searchArrivalEl.addEventListener('change', () => {
+      if(searchArrivalEl.value){
+        const next = new Date(searchArrivalEl.value);
+        next.setDate(next.getDate() + 1);
+        searchDepartureEl.min = next.toISOString().split('T')[0];
+      }
+    });
+  })();
 
   // ---- One shared fetch, powering both the Suites section and the ----
   // ---- Reserve form's "Home" dropdown, so they never disagree. ----
@@ -1319,6 +1581,7 @@
       approvedListings = data.listings || [];
       listingsById = {};
       approvedListings.forEach(l => { listingsById[l.id] = l; });
+      populateCityOptions();
     } catch(err){
       approvedListings = [];
       listingsById = {};
@@ -1327,7 +1590,7 @@
       initReserveForm();
       return;
     }
-    renderSuitesSection();
+    applyFiltersAndRender();
     initReserveForm();
   }
 
