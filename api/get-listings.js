@@ -25,7 +25,7 @@ module.exports = async (req, res) => {
         id, property_name, city, property_type, bedrooms, max_guests,
         nightly_rate, description, amenities, services,
         discount_type, discount_value, discount_min_nights, discount_description,
-        photo_urls,
+        exterior_photo_urls, interior_photo_urls,
         created_at
       FROM listings
       WHERE status = 'approved'
