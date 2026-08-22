@@ -16,6 +16,18 @@
   .listing h3{margin:0 0 6px 0; font-family:Georgia,serif;}
   .meta{font-size:13px; opacity:0.65; margin-bottom:10px;}
   .desc{font-size:14px; line-height:1.6; margin-bottom:14px;}
+  .photo-group{margin-bottom:14px;}
+  .photo-group-label{font-size:12px; opacity:0.6; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.05em;}
+  .photo-row{
+    display:flex; gap:8px; overflow-x:auto; scroll-snap-type:x mandatory;
+    padding-bottom:6px; -webkit-overflow-scrolling:touch;
+  }
+  .photo-row img{
+    width:160px; height:160px; object-fit:cover; border-radius:4px; border:1px solid #e0d5c0;
+    flex:0 0 auto; scroll-snap-align:start;
+  }
+  .photo-row::-webkit-scrollbar{height:6px;}
+  .photo-row::-webkit-scrollbar-thumb{background:#e0d5c0; border-radius:3px;}
   .actions button{padding:9px 20px; font-size:13px; border:none; cursor:pointer; margin-right:10px;}
   .approve-btn{background:#1c1a17; color:#f4eadc;}
   .reject-btn{background:transparent; border:1px solid #a3402f !important; color:#a3402f;}
@@ -68,6 +80,18 @@
     }
   }
 
+  function photoThumbnailsHtml(label, urls){
+    if (!Array.isArray(urls) || urls.length === 0) return '';
+    return `
+      <div class="photo-group">
+        <div class="photo-group-label">${label}</div>
+        <div class="photo-row">
+          ${urls.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${label} photo"></a>`).join('')}
+        </div>
+      </div>
+    `;
+  }
+
   function renderListings(listings){
     const container = document.getElementById('listingsContainer');
     if(!listings.length){
@@ -79,6 +103,8 @@
         <h3>${l.property_name}</h3>
         <div class="meta">${l.city} · ${l.property_type || ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})</div>
         <div class="desc">${l.description}</div>
+        ${photoThumbnailsHtml('Exterior', l.exterior_photo_urls)}
+        ${photoThumbnailsHtml('Interior', l.interior_photo_urls)}
         <div class="actions">
           <button class="approve-btn" onclick="decide(${l.id}, 'approve')">Approve</button>
           <button class="reject-btn" onclick="decide(${l.id}, 'reject')">Reject</button>
