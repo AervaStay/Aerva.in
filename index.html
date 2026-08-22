@@ -1205,7 +1205,31 @@
     }
 
     try{
-      const formData = new FormData(listingForm);
+      // Formspree's free plan doesn't support file attachments at all — photos
+      // already went to Vercel Blob and are saved with the listing (and shown
+      // in the Resend admin email as embedded images, not attachments). So
+      // this only carries the text fields, built manually rather than via
+      // new FormData(listingForm), which would otherwise pull in the raw
+      // photo files from the two file inputs and get rejected every time.
+      const formData = new FormData();
+      formData.append('Property Name', document.getElementById('listPropertyName').value);
+      formData.append('City', document.getElementById('listCity').value);
+      formData.append('Property Type', document.getElementById('listType').value);
+      formData.append('Bedrooms', document.getElementById('listBedrooms').value);
+      formData.append('Max Guests', document.getElementById('listGuests').value);
+      formData.append('Expected Nightly Rate', document.getElementById('listPrice').value);
+      formData.append('Description', document.getElementById('listDescription').value);
+      collectCheckedValues('Amenities').forEach(v => formData.append('Amenities', v));
+      collectCheckedValues('Services').forEach(v => formData.append('Services', v));
+      formData.append('Discount Type', document.getElementById('listDiscountType').value);
+      formData.append('Discount Value', document.getElementById('listDiscountValue').value);
+      formData.append('Discount Min Nights', document.getElementById('listDiscountMinNights').value);
+      formData.append('Discount Description', document.getElementById('listDiscountNote').value);
+      formData.append('Host Name', document.getElementById('listHostName').value);
+      formData.append('Phone', document.getElementById('listHostPhone').value);
+      formData.append('Host Email', document.getElementById('listHostEmail').value);
+      formData.append('Photos', 'See admin notification email or database — not attached here (Formspree free plan doesn\'t support file uploads).');
+
       const res = await fetch(LISTING_FORM_ENDPOINT, {
         method: 'POST',
         body: formData,
