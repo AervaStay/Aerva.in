@@ -29,7 +29,7 @@ module.exports = async (req, res) => {
              nightly_rate, description, amenities, services,
              host_name, host_email, host_phone,
              discount_type, discount_value, discount_min_nights, discount_description,
-             photo_urls,
+             exterior_photo_urls, interior_photo_urls,
              commission_rate, created_at
       FROM listings
       WHERE status = 'pending'
