@@ -3,40 +3,46 @@
 //
 // This runs server-side only. Your Razorpay Key Secret NEVER reaches the browser.
 // The browser only ever sees the public Key ID and the order_id this function returns.
+//
+// Pricing is now driven entirely by each listing's own row in the database —
+// nightly_rate, discount_type/value/min_nights, commission_rate — never by
+// anything the browser sends. This mirrors the frontend's own calculation,
+// but is the actual source of truth: a tampered browser request can change
+// what it *displays*, never what it's actually charged.
 
 const Razorpay = require('razorpay');
+const { neon } = require('@neondatabase/serverless');
 
-// Read from environment variables — set these in your hosting dashboard,
-// NEVER hard-code them in this file or commit them to GitHub.
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
+const sql = neon(process.env.DATABASE_URL);
 
-// Server-side source of truth for pricing — mirrors the site's display logic,
-// but is recalculated here so a tampered browser request can't change the amount.
-const NIGHTLY_RATE = 3500;
 const EXTRA_GUEST_RATE = 1500;
 const BASE_OCCUPANCY = 2;
 const GST_RATE = 0.12;
 const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
 
-function calculateStaySubtotal(arrival, departure, guests) {
+function calculateNights(arrival, departure) {
   const arrivalDate = new Date(arrival);
   const departureDate = new Date(departure);
-  const nights = Math.round((departureDate - arrivalDate) / (1000 * 60 * 60 * 24));
+  return Math.round((departureDate - arrivalDate) / (1000 * 60 * 60 * 24));
+}
 
-  if (!nights || nights <= 0) return null;
-  if (!guests || guests < 1) return null;
-
-  const roomTotal = NIGHTLY_RATE * nights;
-  const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
-  const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
-  return { nights, subtotal: roomTotal + extraTotal };
+function calculateDiscount(listing, nights, subtotalBeforeDiscount) {
+  if (!listing.discount_type || !listing.discount_value) return 0;
+  if (listing.discount_min_nights && nights < listing.discount_min_nights) return 0;
+  if (listing.discount_type === 'percentage') {
+    return Math.round(subtotalBeforeDiscount * (Number(listing.discount_value) / 100));
+  }
+  if (listing.discount_type === 'flat') {
+    return Math.min(Number(listing.discount_value), subtotalBeforeDiscount);
+  }
+  return 0;
 }
 
 module.exports = async (req, res) => {
-  // Basic CORS lockdown — only allow requests from your own domain.
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -55,39 +61,69 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Too many stays in one request' });
     }
 
-    // Recalculate every stay's subtotal server-side — never trust a total
-    // the browser sends. Also re-check for the guest self-overlap rule,
-    // since a tampered request could skip the frontend validation entirely.
     let grandSubtotal = 0;
+    let grandDiscount = 0;
     const stayDetails = [];
+    const seenListingIds = new Set();
 
     for (let i = 0; i < stays.length; i++) {
       const s = stays[i];
-      if (!s.arrival || !s.departure || !s.guests) {
-        return res.status(400).json({ error: `Stay ${i + 1}: missing dates or guest count` });
+      if (!s.listingId || !s.arrival || !s.departure || !s.guests) {
+        return res.status(400).json({ error: `Stay ${i + 1}: missing home selection, dates, or guest count` });
       }
 
-      const result = calculateStaySubtotal(s.arrival, s.departure, Number(s.guests));
-      if (!result) {
+      // Each property can only appear once per booking request.
+      if (seenListingIds.has(s.listingId)) {
+        return res.status(400).json({ error: `Stay ${i + 1} repeats a home already used in this request.` });
+      }
+      seenListingIds.add(s.listingId);
+
+      // The listing is looked up fresh from the database — this is the
+      // "validate against what the owner actually shared" step. A listing
+      // that's been rejected, deleted, or never approved can't be booked,
+      // no matter what the browser sends.
+      const rows = await sql`
+        SELECT id, property_name, nightly_rate, discount_type, discount_value,
+               discount_min_nights, commission_rate
+        FROM listings
+        WHERE id = ${s.listingId} AND status = 'approved'
+      `;
+      const listing = rows[0];
+      if (!listing) {
+        return res.status(400).json({ error: `Stay ${i + 1}: this home is no longer available to book.` });
+      }
+      if (!listing.nightly_rate) {
+        return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} doesn't have a rate set yet.` });
+      }
+
+      const nights = calculateNights(s.arrival, s.departure);
+      const guests = Number(s.guests);
+      if (!nights || nights <= 0 || !guests || guests < 1) {
         return res.status(400).json({ error: `Stay ${i + 1}: invalid dates or guest count` });
       }
 
-      // Each property can only appear once per booking request — not just
-      // "no overlapping dates," but no repeats at all. This mirrors the
-      // frontend, where a chosen property is disabled in every other row.
-      // Not a check against other guests' bookings — see README: that
-      // requires a real booking calendar/database, not yet wired up.
-      for (let j = 0; j < i; j++) {
-        const other = stays[j];
-        if (other.suite === s.suite && s.suite !== 'Not sure yet') {
-          return res.status(400).json({
-            error: `Stay ${i + 1} and Stay ${j + 1} both select ${s.suite} — pick a different home for one of them.`,
-          });
-        }
-      }
+      const rate = Number(listing.nightly_rate);
+      const roomTotal = rate * nights;
+      const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
+      const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
+      const beforeDiscount = roomTotal + extraTotal;
+      const discountAmount = calculateDiscount(listing, nights, beforeDiscount);
+      const staySubtotal = beforeDiscount - discountAmount;
 
-      grandSubtotal += result.subtotal;
-      stayDetails.push({ suite: s.suite, arrival: s.arrival, departure: s.departure, guests: s.guests, nights: result.nights, subtotal: result.subtotal });
+      grandSubtotal += staySubtotal;
+      grandDiscount += discountAmount;
+
+      stayDetails.push({
+        listingId: listing.id,
+        suite: listing.property_name,
+        arrival: s.arrival,
+        departure: s.departure,
+        guests,
+        nights,
+        subtotal: staySubtotal,
+        discountAmount,
+        commissionRate: Number(listing.commission_rate),
+      });
     }
 
     const gst = Math.round(grandSubtotal * GST_RATE);
@@ -105,7 +141,6 @@ module.exports = async (req, res) => {
       },
     });
 
-    // Only send back what the browser needs — never the secret.
     return res.status(200).json({
       orderId: order.id,
       amount: order.amount,
