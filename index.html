@@ -893,7 +893,15 @@
       if(arrivalEl.value){
         const next = new Date(arrivalEl.value);
         next.setDate(next.getDate() + 1);
-        departureEl.min = next.toISOString().split('T')[0];
+        const nextStr = next.toISOString().split('T')[0];
+        departureEl.min = nextStr;
+        // Auto-fill departure to the next day so a guest doesn't have to
+        // make a second trip into the calendar — but never overwrite a
+        // departure date they've already deliberately chosen, unless it's
+        // no longer valid against the new arrival date.
+        if(!departureEl.value || departureEl.value <= arrivalEl.value){
+          departureEl.value = nextStr;
+        }
       } else {
         departureEl.min = todayStr;
       }
@@ -1566,7 +1574,13 @@
       if(searchArrivalEl.value){
         const next = new Date(searchArrivalEl.value);
         next.setDate(next.getDate() + 1);
-        searchDepartureEl.min = next.toISOString().split('T')[0];
+        const nextStr = next.toISOString().split('T')[0];
+        searchDepartureEl.min = nextStr;
+        // Auto-fill departure to the next day, same as the Reserve form —
+        // don't overwrite a deliberately-chosen date unless it's now invalid.
+        if(!searchDepartureEl.value || searchDepartureEl.value <= searchArrivalEl.value){
+          searchDepartureEl.value = nextStr;
+        }
       }
     });
   })();
