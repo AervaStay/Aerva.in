@@ -170,6 +170,16 @@
   .suites-empty{text-align:center; padding:40px 20px; opacity:0.6; font-size:14px; grid-column:1/-1;}
   .suites-loading{text-align:center; padding:40px 20px; opacity:0.5; font-size:14px; grid-column:1/-1;}
 
+  .photo-preview-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:10px; margin-top:12px;}
+  .photo-preview-item{position:relative; aspect-ratio:1/1; border:1px solid var(--line-dark); overflow:hidden;}
+  .photo-preview-item img{width:100%; height:100%; object-fit:cover; display:block;}
+  .photo-remove-btn{
+    position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream); border:none; cursor:pointer;
+    font-size:14px; line-height:1; display:flex; align-items:center; justify-content:center;
+  }
+  .photo-remove-btn:hover{background:#a3402f;}
+
   /* ---------- EXPERIENCE ---------- */
   .exp-list{display:flex; flex-direction:column;}
   .exp-row{
@@ -512,7 +522,7 @@
       </div>
       <div class="field">
         <label for="listPrice">Expected Nightly Rate (₹)</label>
-        <input id="listPrice" name="Expected Nightly Rate" type="number" min="0" placeholder="e.g. 4500">
+        <input id="listPrice" name="Expected Nightly Rate" type="number" min="0" placeholder="e.g. 4500" required>
       </div>
       <div class="field">
         <label for="listDescription">Tell us about the property</label>
@@ -545,8 +555,9 @@
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Photos</div>
       <div class="field">
         <label for="listPhotos">Upload up to 5 photos</label>
-        <input id="listPhotos" name="attachment" type="file" accept="image/*" multiple>
+        <input id="listPhotos" name="attachment" type="file" accept="image/*" multiple required>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Exterior, a bedroom, and any standout feature (view, pool, garden) help most.</p>
+        <div id="photoPreviewContainer" class="photo-preview-grid"></div>
       </div>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Your Contact Details</div>
@@ -662,19 +673,16 @@
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 
   // ---- Reserve form: multiple stays, date validation + live pricing ----
-  const NIGHTLY_RATE = 3500;
+  const SUITES_API_BASE = 'https://aerva-in.vercel.app';
   const EXTRA_GUEST_RATE = 1500;
   const BASE_OCCUPANCY = 2;
   const GST_RATE = 0.12;
 
-  const SUITES = [
-    'Bella Vista',
-    'Luxe Boho Vibes — Lodha Belmondo',
-    'The Manor — Elegant Suite, City Skyline View',
-    'The Misty Treewoods — Glass Cabin, Valley View',
-    'Vintage Heights — English Stay',
-    'Not sure yet'
-  ];
+  // Populated once approved listings are fetched (see initSite() near the
+  // bottom of this script) — both the Suites section and the Reserve form's
+  // "Home" dropdown are built from this same real data, not hardcoded names.
+  let approvedListings = [];
+  let listingsById = {};
 
   const stayRowsEl = document.getElementById('stayRows');
   const addStayBtn = document.getElementById('addStayBtn');
@@ -689,6 +697,13 @@
   const fmt = (n) => '₹' + n.toLocaleString('en-IN');
   const todayStr = new Date().toISOString().split('T')[0];
 
+  function buildSuiteOptionsHtml(){
+    if(approvedListings.length === 0){
+      return '<option value="">No stays available right now</option>';
+    }
+    return approvedListings.map(l => `<option value="${l.id}">${l.property_name}</option>`).join('');
+  }
+
   function buildStayRow(index){
     const row = document.createElement('div');
     row.className = 'stay-row';
@@ -696,9 +711,6 @@
 
     const guestOptions = [1,2,3,4,5,6].map(n =>
       `<option value="${n}"${n===2?' selected':''}>${n} Guest${n===1?'':'s'}</option>`
-    ).join('');
-    const suiteOptions = SUITES.map((s,i) =>
-      `<option${i===2 && index===0 ? ' selected' : ''}>${s}</option>`
     ).join('');
 
     row.innerHTML = `
@@ -708,7 +720,7 @@
       </div>
       <div class="field">
         <label>Home</label>
-        <select class="stayRow-suite" name="stay_${index}_suite">${suiteOptions}</select>
+        <select class="stayRow-suite" name="stay_${index}_suite">${buildSuiteOptionsHtml()}</select>
       </div>
       <div class="form-row">
         <div class="field">
@@ -755,8 +767,7 @@
   }
 
   // Once a property is picked in one stay, it's disabled as an option in every
-  // other stay's dropdown — a guest can't book the same home twice, even on
-  // different dates. "Not sure yet" is exempt since it isn't a real property.
+  // other stay's dropdown — a guest can't book the same home twice.
   function refreshSuiteAvailability(){
     const rows = Array.from(stayRowsEl.querySelectorAll('.stay-row'));
     const selectEls = rows.map(r => r.querySelector('.stayRow-suite'));
@@ -764,10 +775,7 @@
 
     selectEls.forEach((sel, idx) => {
       Array.from(sel.options).forEach(opt => {
-        if(opt.value === 'Not sure yet'){
-          opt.disabled = false;
-          return;
-        }
+        if(!opt.value){ opt.disabled = false; return; } // "No stays available" placeholder
         const chosenElsewhere = chosen.some((val, j) => j !== idx && val === opt.value);
         opt.disabled = chosenElsewhere;
       });
@@ -807,9 +815,13 @@
   }
 
   function readRow(row){
+    const listingId = row.querySelector('.stayRow-suite').value;
+    const listing = listingsById[listingId] || null;
     return {
       row,
-      suite: row.querySelector('.stayRow-suite').value,
+      listingId,
+      listing,
+      suiteName: listing ? listing.property_name : '',
       arrival: row.querySelector('.stayRow-arrival').value,
       departure: row.querySelector('.stayRow-departure').value,
       guests: parseInt(row.querySelector('.stayRow-guests').value, 10),
@@ -818,16 +830,35 @@
     };
   }
 
+  // Applies a listing's own discount, if the stay's length qualifies —
+  // this is the "validate against what the owner actually shared" part.
+  function calculateDiscount(listing, nights, subtotalBeforeDiscount){
+    if(!listing.discount_type || !listing.discount_value) return 0;
+    if(listing.discount_min_nights && nights < listing.discount_min_nights) return 0;
+    if(listing.discount_type === 'percentage'){
+      return Math.round(subtotalBeforeDiscount * (Number(listing.discount_value) / 100));
+    }
+    if(listing.discount_type === 'flat'){
+      return Math.min(Number(listing.discount_value), subtotalBeforeDiscount);
+    }
+    return 0;
+  }
+
   function updatePricing(){
     const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow);
     let allValid = true;
     let grandSubtotal = 0;
     const lines = [];
 
-    // Clear stale errors first
     stays.forEach(s => { s.errorEl.style.display = 'none'; s.subtotalEl.textContent = ''; });
 
     stays.forEach((s, i) => {
+      if(!s.listingId){
+        s.errorEl.textContent = 'Please select a home for this stay.';
+        s.errorEl.style.display = 'block';
+        allValid = false;
+        return;
+      }
       if(!s.arrival || !s.departure){
         allValid = false;
         return;
@@ -840,28 +871,38 @@
         return;
       }
 
-      // Defense in depth: the dropdown already disables a property once it's
-      // picked elsewhere, so this shouldn't normally trigger — but if DOM
-      // state ever gets out of sync, still refuse a repeated property here.
       for(let j = 0; j < i; j++){
         const other = stays[j];
-        if(other.suite === s.suite && other.suite !== 'Not sure yet'){
-          s.errorEl.textContent = `Stay ${j+1} already selects ${s.suite} — pick a different home for this stay.`;
+        if(other.listingId && other.listingId === s.listingId){
+          s.errorEl.textContent = `Stay ${j+1} already selects ${s.suiteName} — pick a different home for this stay.`;
           s.errorEl.style.display = 'block';
           allValid = false;
           return;
         }
       }
 
-      const roomTotal = NIGHTLY_RATE * nights;
+      const listing = s.listing;
+      const rate = listing && listing.nightly_rate ? Number(listing.nightly_rate) : 0;
+      if(!rate){
+        s.errorEl.textContent = `${s.suiteName} doesn't have a nightly rate set yet — please enquire directly instead.`;
+        s.errorEl.style.display = 'block';
+        allValid = false;
+        return;
+      }
+
+      const roomTotal = rate * nights;
       const extraGuests = Math.max(s.guests - BASE_OCCUPANCY, 0);
       const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
-      const staySubtotal = roomTotal + extraTotal;
+      const beforeDiscount = roomTotal + extraTotal;
+      const discountAmount = calculateDiscount(listing, nights, beforeDiscount);
+      const staySubtotal = beforeDiscount - discountAmount;
+
       grandSubtotal += staySubtotal;
 
-      s.subtotalEl.textContent = `${nights} night${nights===1?'':'s'}${extraGuests>0 ? ' + '+extraGuests+' extra guest'+(extraGuests===1?'':'s') : ''} — ${fmt(staySubtotal)}`;
+      const discountNote = discountAmount > 0 ? ` (−${fmt(discountAmount)} offer)` : '';
+      s.subtotalEl.textContent = `${nights} night${nights===1?'':'s'}${extraGuests>0 ? ' + '+extraGuests+' extra guest'+(extraGuests===1?'':'s') : ''}${discountNote} — ${fmt(staySubtotal)}`;
 
-      lines.push(`<div class="sum-row"><span>${s.suite} (${nights} night${nights===1?'':'s'})</span><span>${fmt(staySubtotal)}</span></div>`);
+      lines.push(`<div class="sum-row"><span>${s.suiteName} (${nights} night${nights===1?'':'s'})</span><span>${fmt(staySubtotal)}</span></div>`);
     });
 
     if(!allValid || stays.length === 0 || grandSubtotal === 0){
@@ -884,8 +925,17 @@
     currentBookingTotal = total;
   }
 
+  function initReserveForm(){
+    if(approvedListings.length === 0){
+      stayRowsEl.innerHTML = '<div class="suites-empty" style="text-align:left; padding:0;">No stays are available to book online right now. Check back shortly.</div>';
+      addStayBtn.style.display = 'none';
+      submitBtn.disabled = true;
+      return;
+    }
+    addStayRow();
+  }
+
   addStayBtn.addEventListener('click', addStayRow);
-  addStayRow(); // start with one stay
 
   // ---- Razorpay checkout (secure: order created server-side) ----
   const RAZORPAY_KEY_ID = 'rzp_test_TRBdgq9nPS2wfy'; // public Key ID only — safe to expose
@@ -900,7 +950,7 @@
     }
 
     const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow).map(s => ({
-      suite: s.suite, arrival: s.arrival, departure: s.departure, guests: s.guests
+      listingId: s.listingId, suite: s.suiteName, arrival: s.arrival, departure: s.departure, guests: s.guests
     }));
 
     submitBtn.disabled = true;
@@ -1002,6 +1052,53 @@
   const listingForm = document.getElementById('listingForm');
   const listingSubmitBtn = document.getElementById('listingSubmitBtn');
 
+  // ---- Photo selection: add, preview, and remove individual photos ----
+  const photosInputEl = document.getElementById('listPhotos');
+  const photoPreviewContainer = document.getElementById('photoPreviewContainer');
+  const MAX_LISTING_PHOTOS = 5;
+  let selectedPhotoFiles = [];
+
+  // Keeps the real <input type="file"> in sync with our own array, so the
+  // browser's native "required" validation and the existing upload code
+  // (which reads photosInput.files) both keep working without changes.
+  function syncPhotoInput(){
+    const dt = new DataTransfer();
+    selectedPhotoFiles.forEach(f => dt.items.add(f));
+    photosInputEl.files = dt.files;
+  }
+
+  function renderPhotoPreviews(){
+    photoPreviewContainer.innerHTML = '';
+    selectedPhotoFiles.forEach((file, idx) => {
+      const url = URL.createObjectURL(file);
+      const item = document.createElement('div');
+      item.className = 'photo-preview-item';
+      item.innerHTML = `
+        <img src="${url}" alt="${file.name}">
+        <button type="button" class="photo-remove-btn" data-idx="${idx}" aria-label="Remove this photo">×</button>
+      `;
+      photoPreviewContainer.appendChild(item);
+    });
+    photoPreviewContainer.querySelectorAll('.photo-remove-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectedPhotoFiles.splice(parseInt(btn.dataset.idx, 10), 1);
+        syncPhotoInput();
+        renderPhotoPreviews();
+      });
+    });
+  }
+
+  photosInputEl.addEventListener('change', () => {
+    const newFiles = Array.from(photosInputEl.files);
+    for(const f of newFiles){
+      if(selectedPhotoFiles.length >= MAX_LISTING_PHOTOS) break;
+      const alreadyAdded = selectedPhotoFiles.some(existing => existing.name === f.name && existing.size === f.size);
+      if(!alreadyAdded) selectedPhotoFiles.push(f);
+    }
+    syncPhotoInput();
+    renderPhotoPreviews();
+  });
+
   function collectCheckedValues(name){
     return Array.from(listingForm.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value);
   }
@@ -1101,8 +1198,8 @@
     }
   });
 
-  // ---- Suites section: render from real approved listings ----
-  const SUITES_API_BASE = 'https://aerva-in.vercel.app';
+  // ---- Suites section: render from the same approved-listings data ----
+  // used by the Reserve form (fetched once — see initSite() below).
 
   function formatOffer(listing){
     if(!listing.discount_type) return '';
@@ -1142,29 +1239,43 @@
     return card;
   }
 
-  async function loadSuites(){
+  function renderSuitesSection(){
     const container = document.getElementById('suitesContainer');
+    container.innerHTML = '';
+
+    if(approvedListings.length === 0){
+      container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="#add-listing" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
+      return;
+    }
+
+    approvedListings.forEach(listing => {
+      container.appendChild(buildSuiteCard(listing));
+    });
+  }
+
+  // ---- One shared fetch, powering both the Suites section and the ----
+  // ---- Reserve form's "Home" dropdown, so they never disagree. ----
+  async function initSite(){
     try{
       const res = await fetch(SUITES_API_BASE + '/api/get-listings');
       if(!res.ok) throw new Error('Failed to load listings');
       const data = await res.json();
-
-      container.innerHTML = '';
-
-      if(!data.listings || data.listings.length === 0){
-        container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="#add-listing" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
-        return;
-      }
-
-      data.listings.forEach(listing => {
-        container.appendChild(buildSuiteCard(listing));
-      });
+      approvedListings = data.listings || [];
+      listingsById = {};
+      approvedListings.forEach(l => { listingsById[l.id] = l; });
     } catch(err){
-      container.innerHTML = '<div class="suites-empty">Could not load homes right now. Please refresh, or check back shortly.</div>';
+      approvedListings = [];
+      listingsById = {};
+      document.getElementById('suitesContainer').innerHTML =
+        '<div class="suites-empty">Could not load homes right now. Please refresh, or check back shortly.</div>';
+      initReserveForm();
+      return;
     }
+    renderSuitesSection();
+    initReserveForm();
   }
 
-  loadSuites();
+  initSite();
 
 </script>
 
