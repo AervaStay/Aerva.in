@@ -216,14 +216,17 @@
   .calendar-dropdown{
     display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:50;
     background:var(--cream); border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
-    padding:18px; width:300px;
+    padding:20px; width:600px; max-width:90vw;
   }
   .calendar-dropdown.open{display:block;}
-  .calendar-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
-  .calendar-month-label{font-family:'Bodoni Moda', serif; font-size:15px; letter-spacing:0.02em;}
+  .calendar-months{display:flex; gap:28px;}
+  .calendar-month-panel{flex:1; min-width:0;}
+  .calendar-month-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
+  .calendar-month-label{font-family:'Bodoni Moda', serif; font-size:15px; letter-spacing:0.02em; text-align:center; flex:1;}
+  .cal-nav-spacer{width:28px; height:28px; flex:0 0 auto;}
   .cal-nav{
     background:none; border:1px solid var(--line-dark); width:28px; height:28px; cursor:pointer;
-    font-size:16px; color:var(--ink); display:flex; align-items:center; justify-content:center;
+    font-size:16px; color:var(--ink); display:flex; align-items:center; justify-content:center; flex:0 0 auto;
   }
   .cal-nav:disabled{opacity:0.3; cursor:default;}
   .calendar-weekdays{display:grid; grid-template-columns:repeat(7,1fr); text-align:center; font-size:10.5px; letter-spacing:0.06em; opacity:0.5; margin-bottom:4px;}
@@ -243,6 +246,8 @@
   @media (max-width:640px){
     .search-bar, .filter-bar{flex-direction:column; align-items:stretch;}
     .search-bar .btn{width:100%;}
+    .calendar-dropdown{width:calc(100vw - 48px);}
+    .calendar-months{flex-direction:column; gap:20px;}
   }
 
   .photo-preview-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:10px; margin-top:12px;}
@@ -425,15 +430,30 @@
         <label>Dates</label>
         <button type="button" class="date-range-btn" id="dateRangeBtn">Add dates</button>
         <div class="calendar-dropdown" id="calendarDropdown">
-          <div class="calendar-header">
-            <button type="button" class="cal-nav" id="calPrev" aria-label="Previous month">‹</button>
-            <div class="calendar-month-label" id="calMonthLabel"></div>
-            <button type="button" class="cal-nav" id="calNext" aria-label="Next month">›</button>
+          <div class="calendar-months">
+            <div class="calendar-month-panel">
+              <div class="calendar-month-header">
+                <button type="button" class="cal-nav" id="calPrev" aria-label="Previous month">‹</button>
+                <div class="calendar-month-label" id="calMonthLabel1"></div>
+                <span class="cal-nav-spacer"></span>
+              </div>
+              <div class="calendar-weekdays">
+                <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+              </div>
+              <div class="calendar-grid" id="calendarGrid1"></div>
+            </div>
+            <div class="calendar-month-panel">
+              <div class="calendar-month-header">
+                <span class="cal-nav-spacer"></span>
+                <div class="calendar-month-label" id="calMonthLabel2"></div>
+                <button type="button" class="cal-nav" id="calNext" aria-label="Next month">›</button>
+              </div>
+              <div class="calendar-weekdays">
+                <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+              </div>
+              <div class="calendar-grid" id="calendarGrid2"></div>
+            </div>
           </div>
-          <div class="calendar-weekdays">
-            <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
-          </div>
-          <div class="calendar-grid" id="calendarGrid"></div>
           <div class="calendar-footer">
             <span id="calendarHint">Pick your arrival date</span>
             <button type="button" class="calendar-clear" id="calendarClear">Clear</button>
@@ -1632,8 +1652,10 @@
 
   const dateRangeBtn = document.getElementById('dateRangeBtn');
   const calendarDropdown = document.getElementById('calendarDropdown');
-  const calMonthLabel = document.getElementById('calMonthLabel');
-  const calendarGrid = document.getElementById('calendarGrid');
+  const calMonthLabel1 = document.getElementById('calMonthLabel1');
+  const calMonthLabel2 = document.getElementById('calMonthLabel2');
+  const calendarGrid1 = document.getElementById('calendarGrid1');
+  const calendarGrid2 = document.getElementById('calendarGrid2');
   const calendarHint = document.getElementById('calendarHint');
   const calPrevBtn = document.getElementById('calPrev');
   const calNextBtn = document.getElementById('calNext');
@@ -1676,15 +1698,12 @@
     }
   }
 
-  function renderCalendar(){
-    calMonthLabel.textContent = MONTH_NAMES[calViewMonth] + ' ' + calViewYear;
+  function renderMonthPanel(year, month, labelEl, gridEl){
+    labelEl.textContent = MONTH_NAMES[month] + ' ' + year;
 
-    const isMinMonth = (calViewYear === calMinDate.getFullYear() && calViewMonth === calMinDate.getMonth());
-    calPrevBtn.disabled = isMinMonth;
-
-    const firstDay = new Date(calViewYear, calViewMonth, 1);
+    const firstDay = new Date(year, month, 1);
     const startWeekday = firstDay.getDay();
-    const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
 
     let html = '';
     for(let i = 0; i < startWeekday; i++){
@@ -1692,7 +1711,7 @@
     }
 
     for(let day = 1; day <= daysInMonth; day++){
-      const cellDate = new Date(calViewYear, calViewMonth, day);
+      const cellDate = new Date(year, month, day);
       cellDate.setHours(0, 0, 0, 0);
       const iso = cellDate.toISOString().split('T')[0];
       const isDisabled = cellDate < calMinDate;
@@ -1706,11 +1725,24 @@
       html += `<div class="${classes}" data-date="${iso}">${day}</div>`;
     }
 
-    calendarGrid.innerHTML = html;
+    gridEl.innerHTML = html;
 
-    calendarGrid.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+    gridEl.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
       cell.addEventListener('click', () => handleDayClick(cell.dataset.date));
     });
+  }
+
+  function renderCalendar(){
+    const isMinMonth = (calViewYear === calMinDate.getFullYear() && calViewMonth === calMinDate.getMonth());
+    calPrevBtn.disabled = isMinMonth;
+
+    // Second panel is always exactly one month ahead of the first.
+    let nextMonth = calViewMonth + 1;
+    let nextYear = calViewYear;
+    if(nextMonth > 11){ nextMonth = 0; nextYear++; }
+
+    renderMonthPanel(calViewYear, calViewMonth, calMonthLabel1, calendarGrid1);
+    renderMonthPanel(nextYear, nextMonth, calMonthLabel2, calendarGrid2);
 
     calendarHint.textContent = calSelectingStart ? 'Pick your arrival date' : 'Now pick your departure date';
   }
