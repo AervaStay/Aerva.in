@@ -795,7 +795,11 @@
   let currentBookingTotal = 0;
 
   const fmt = (n) => '₹' + n.toLocaleString('en-IN');
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Arrival must be at least tomorrow — no same-day bookings. Departure's
+  // own absolute floor (before any arrival is picked) is one day further
+  // still, since it always has to land after whatever arrival ends up being.
+  const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })();
+  const dayAfterTomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return d.toISOString().split('T')[0]; })();
 
   function buildSuiteOptionsHtml(){
     if(approvedListings.length === 0){
@@ -825,11 +829,11 @@
       <div class="form-row">
         <div class="field">
           <label>Arrival</label>
-          <input type="date" class="stayRow-arrival" name="stay_${index}_arrival" min="${todayStr}" autocomplete="off" required>
+          <input type="date" class="stayRow-arrival" name="stay_${index}_arrival" min="${tomorrowStr}" autocomplete="off" required>
         </div>
         <div class="field">
           <label>Departure</label>
-          <input type="date" class="stayRow-departure" name="stay_${index}_departure" min="${todayStr}" autocomplete="off" required>
+          <input type="date" class="stayRow-departure" name="stay_${index}_departure" min="${dayAfterTomorrowStr}" autocomplete="off" required>
         </div>
       </div>
       <div class="field">
@@ -903,13 +907,21 @@
           departureEl.value = nextStr;
         }
       } else {
-        departureEl.min = todayStr;
+        departureEl.min = dayAfterTomorrowStr;
       }
     }
 
     ['input','change'].forEach(evt => {
       arrivalEl.addEventListener(evt, () => { syncDepartureMin(); updatePricing(); });
       departureEl.addEventListener(evt, updatePricing);
+    });
+    // Once a full arrival date is picked, open the departure calendar right
+    // away so a guest can immediately choose a different date if they want
+    // one — without needing to click into the field themselves first.
+    arrivalEl.addEventListener('change', () => {
+      if(typeof departureEl.showPicker === 'function'){
+        try{ departureEl.showPicker(); } catch(err){ /* not supported in this context — fine, auto-fill already covers it */ }
+      }
     });
     guestsEl.addEventListener('change', updatePricing);
     suiteEl.addEventListener('change', () => { refreshSuiteAvailability(); updatePricing(); });
@@ -1567,9 +1579,11 @@
   (function setSearchDateMins(){
     const searchArrivalEl = document.getElementById('searchArrival');
     const searchDepartureEl = document.getElementById('searchDeparture');
-    const today = new Date().toISOString().split('T')[0];
-    searchArrivalEl.min = today;
-    searchDepartureEl.min = today;
+    // Same rule as the Reserve form: arrival must be at least tomorrow.
+    const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })();
+    const dayAfterTomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return d.toISOString().split('T')[0]; })();
+    searchArrivalEl.min = tomorrow;
+    searchDepartureEl.min = dayAfterTomorrow;
     searchArrivalEl.addEventListener('change', () => {
       if(searchArrivalEl.value){
         const next = new Date(searchArrivalEl.value);
@@ -1581,6 +1595,11 @@
         if(!searchDepartureEl.value || searchDepartureEl.value <= searchArrivalEl.value){
           searchDepartureEl.value = nextStr;
         }
+      }
+      // Open the departure calendar immediately so a guest can pick a
+      // different date in one continuous motion, if they want to.
+      if(typeof searchDepartureEl.showPicker === 'function'){
+        try{ searchDepartureEl.showPicker(); } catch(err){ /* not supported here — auto-fill still covers it */ }
       }
     });
   })();
