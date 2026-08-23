@@ -204,6 +204,42 @@
     color:var(--gold-deep); text-decoration:underline; cursor:pointer; padding:8px 0; margin-bottom:1px;
   }
   .search-status{font-size:13px; opacity:0.7; margin-top:14px; margin-bottom:6px;}
+
+  .date-range-wrapper{position:relative;}
+  .date-range-btn{
+    background:transparent; border:none; border-bottom:1px solid var(--line-dark);
+    padding:8px 2px; font-family:'Jost', sans-serif; font-size:14px; color:var(--ink);
+    width:100%; text-align:left; cursor:pointer;
+  }
+  .date-range-btn:focus{outline:none; border-color:var(--gold-deep);}
+  .date-range-btn.placeholder{opacity:0.45;}
+  .calendar-dropdown{
+    display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:50;
+    background:var(--cream); border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
+    padding:18px; width:300px;
+  }
+  .calendar-dropdown.open{display:block;}
+  .calendar-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
+  .calendar-month-label{font-family:'Bodoni Moda', serif; font-size:15px; letter-spacing:0.02em;}
+  .cal-nav{
+    background:none; border:1px solid var(--line-dark); width:28px; height:28px; cursor:pointer;
+    font-size:16px; color:var(--ink); display:flex; align-items:center; justify-content:center;
+  }
+  .cal-nav:disabled{opacity:0.3; cursor:default;}
+  .calendar-weekdays{display:grid; grid-template-columns:repeat(7,1fr); text-align:center; font-size:10.5px; letter-spacing:0.06em; opacity:0.5; margin-bottom:4px;}
+  .calendar-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:2px;}
+  .calendar-day{
+    aspect-ratio:1/1; display:flex; align-items:center; justify-content:center;
+    font-size:12.5px; cursor:pointer; border-radius:50%; color:var(--ink);
+  }
+  .calendar-day:hover:not(.disabled):not(.empty){background:var(--cream-deep);}
+  .calendar-day.disabled{opacity:0.25; cursor:default;}
+  .calendar-day.empty{cursor:default;}
+  .calendar-day.selected-start, .calendar-day.selected-end{background:var(--ink); color:var(--cream); border-radius:50%;}
+  .calendar-day.in-range{background:var(--cream-deep); border-radius:0;}
+  .calendar-footer{display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:12px; border-top:1px solid var(--line-dark);}
+  #calendarHint{font-size:11.5px; opacity:0.6;}
+  .calendar-clear{background:none; border:none; font-size:11.5px; letter-spacing:0.05em; color:var(--gold-deep); text-decoration:underline; cursor:pointer;}
   @media (max-width:640px){
     .search-bar, .filter-bar{flex-direction:column; align-items:stretch;}
     .search-bar .btn{width:100%;}
@@ -385,13 +421,24 @@
   </div>
   <div class="wrap">
     <div class="search-bar reveal" id="searchBar">
-      <div class="search-field">
-        <label for="searchArrival">Arrival</label>
-        <input type="date" id="searchArrival" autocomplete="off">
-      </div>
-      <div class="search-field">
-        <label for="searchDeparture">Departure</label>
-        <input type="date" id="searchDeparture" autocomplete="off">
+      <div class="search-field date-range-wrapper">
+        <label>Dates</label>
+        <button type="button" class="date-range-btn" id="dateRangeBtn">Add dates</button>
+        <div class="calendar-dropdown" id="calendarDropdown">
+          <div class="calendar-header">
+            <button type="button" class="cal-nav" id="calPrev" aria-label="Previous month">‹</button>
+            <div class="calendar-month-label" id="calMonthLabel"></div>
+            <button type="button" class="cal-nav" id="calNext" aria-label="Next month">›</button>
+          </div>
+          <div class="calendar-weekdays">
+            <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+          </div>
+          <div class="calendar-grid" id="calendarGrid"></div>
+          <div class="calendar-footer">
+            <span id="calendarHint">Pick your arrival date</span>
+            <button type="button" class="calendar-clear" id="calendarClear">Clear</button>
+          </div>
+        </div>
       </div>
       <div class="search-field">
         <label for="searchCity">Place</label>
@@ -915,14 +962,13 @@
       arrivalEl.addEventListener(evt, () => { syncDepartureMin(); updatePricing(); });
       departureEl.addEventListener(evt, updatePricing);
     });
-    // Once a full arrival date is picked, open the departure calendar right
-    // away so a guest can immediately choose a different date if they want
-    // one — without needing to click into the field themselves first.
-    arrivalEl.addEventListener('change', () => {
-      if(typeof departureEl.showPicker === 'function'){
-        try{ departureEl.showPicker(); } catch(err){ /* not supported in this context — fine, auto-fill already covers it */ }
-      }
-    });
+    // Note: we deliberately do NOT auto-open the departure calendar here.
+    // Doing so via showPicker() steals keyboard focus away from the arrival
+    // field the moment the browser considers its value "complete enough" —
+    // which can fire mid-keystroke while someone is still typing (e.g. the
+    // year), corrupting what they were entering. Auto-filling departure to
+    // the next day (in syncDepartureMin above) is the safe convenience;
+    // opening the calendar automatically is not.
     guestsEl.addEventListener('change', updatePricing);
     suiteEl.addEventListener('change', () => { refreshSuiteAvailability(); updatePricing(); });
 
@@ -1470,8 +1516,8 @@
   }
 
   async function performSearch(){
-    const arrival = document.getElementById('searchArrival').value;
-    const departure = document.getElementById('searchDeparture').value;
+    const arrival = searchArrivalDate;
+    const departure = searchDepartureDate;
     const city = document.getElementById('searchCity').value.trim();
     const guests = document.getElementById('searchGuests').value;
     const statusEl = document.getElementById('searchStatus');
@@ -1530,8 +1576,8 @@
     const suiteSelect = firstRow.querySelector('.stayRow-suite');
     if(listingsById[listingId]) suiteSelect.value = listingId;
 
-    const searchArrivalVal = document.getElementById('searchArrival').value;
-    const searchDepartureVal = document.getElementById('searchDeparture').value;
+    const searchArrivalVal = searchArrivalDate;
+    const searchDepartureVal = searchDepartureDate;
     const searchGuestsVal = document.getElementById('searchGuests').value;
 
     const arrivalEl = firstRow.querySelector('.stayRow-arrival');
@@ -1565,8 +1611,10 @@
   document.getElementById('minPrice').addEventListener('input', applyFiltersAndRender);
   document.getElementById('maxPrice').addEventListener('input', applyFiltersAndRender);
   document.getElementById('clearFiltersBtn').addEventListener('click', () => {
-    document.getElementById('searchArrival').value = '';
-    document.getElementById('searchDeparture').value = '';
+    searchArrivalDate = '';
+    searchDepartureDate = '';
+    calSelectingStart = true;
+    updateDateRangeBtn();
     document.getElementById('searchCity').value = '';
     document.getElementById('searchGuests').value = '';
     document.getElementById('sortPrice').value = '';
@@ -1576,33 +1624,161 @@
     performSearch();
   });
 
-  (function setSearchDateMins(){
-    const searchArrivalEl = document.getElementById('searchArrival');
-    const searchDepartureEl = document.getElementById('searchDeparture');
-    // Same rule as the Reserve form: arrival must be at least tomorrow.
-    const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })();
-    const dayAfterTomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return d.toISOString().split('T')[0]; })();
-    searchArrivalEl.min = tomorrow;
-    searchDepartureEl.min = dayAfterTomorrow;
-    searchArrivalEl.addEventListener('change', () => {
-      if(searchArrivalEl.value){
-        const next = new Date(searchArrivalEl.value);
-        next.setDate(next.getDate() + 1);
-        const nextStr = next.toISOString().split('T')[0];
-        searchDepartureEl.min = nextStr;
-        // Auto-fill departure to the next day, same as the Reserve form —
-        // don't overwrite a deliberately-chosen date unless it's now invalid.
-        if(!searchDepartureEl.value || searchDepartureEl.value <= searchArrivalEl.value){
-          searchDepartureEl.value = nextStr;
-        }
-      }
-      // Open the departure calendar immediately so a guest can pick a
-      // different date in one continuous motion, if they want to.
-      if(typeof searchDepartureEl.showPicker === 'function'){
-        try{ searchDepartureEl.showPicker(); } catch(err){ /* not supported here — auto-fill still covers it */ }
-      }
-    });
+  // ---- Custom calendar date-range picker (replaces native date inputs) ----
+  let searchArrivalDate = '';
+  let searchDepartureDate = '';
+  let calSelectingStart = true;
+  let calViewYear, calViewMonth;
+
+  const dateRangeBtn = document.getElementById('dateRangeBtn');
+  const calendarDropdown = document.getElementById('calendarDropdown');
+  const calMonthLabel = document.getElementById('calMonthLabel');
+  const calendarGrid = document.getElementById('calendarGrid');
+  const calendarHint = document.getElementById('calendarHint');
+  const calPrevBtn = document.getElementById('calPrev');
+  const calNextBtn = document.getElementById('calNext');
+  const calendarClearBtn = document.getElementById('calendarClear');
+
+  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  // Earliest selectable date across the whole picker: tomorrow — matches
+  // the existing "no same-day arrival" rule used elsewhere on the site.
+  const calMinDate = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
   })();
+
+  (function initCalendarView(){
+    calViewYear = calMinDate.getFullYear();
+    calViewMonth = calMinDate.getMonth();
+  })();
+
+  function formatDateLabel(){
+    const fmtShort = (iso) => {
+      const d = new Date(iso);
+      return d.getDate() + ' ' + MONTH_NAMES[d.getMonth()].slice(0, 3);
+    };
+    if(searchArrivalDate && searchDepartureDate) return fmtShort(searchArrivalDate) + ' – ' + fmtShort(searchDepartureDate);
+    if(searchArrivalDate) return fmtShort(searchArrivalDate) + ' – Add departure';
+    return '';
+  }
+
+  function updateDateRangeBtn(){
+    const label = formatDateLabel();
+    if(label){
+      dateRangeBtn.textContent = label;
+      dateRangeBtn.classList.remove('placeholder');
+    } else {
+      dateRangeBtn.textContent = 'Add dates';
+      dateRangeBtn.classList.add('placeholder');
+    }
+  }
+
+  function renderCalendar(){
+    calMonthLabel.textContent = MONTH_NAMES[calViewMonth] + ' ' + calViewYear;
+
+    const isMinMonth = (calViewYear === calMinDate.getFullYear() && calViewMonth === calMinDate.getMonth());
+    calPrevBtn.disabled = isMinMonth;
+
+    const firstDay = new Date(calViewYear, calViewMonth, 1);
+    const startWeekday = firstDay.getDay();
+    const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
+
+    let html = '';
+    for(let i = 0; i < startWeekday; i++){
+      html += '<div class="calendar-day empty"></div>';
+    }
+
+    for(let day = 1; day <= daysInMonth; day++){
+      const cellDate = new Date(calViewYear, calViewMonth, day);
+      cellDate.setHours(0, 0, 0, 0);
+      const iso = cellDate.toISOString().split('T')[0];
+      const isDisabled = cellDate < calMinDate;
+
+      let classes = 'calendar-day';
+      if(isDisabled) classes += ' disabled';
+      if(iso === searchArrivalDate) classes += ' selected-start';
+      if(iso === searchDepartureDate) classes += ' selected-end';
+      if(searchArrivalDate && searchDepartureDate && iso > searchArrivalDate && iso < searchDepartureDate) classes += ' in-range';
+
+      html += `<div class="${classes}" data-date="${iso}">${day}</div>`;
+    }
+
+    calendarGrid.innerHTML = html;
+
+    calendarGrid.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+      cell.addEventListener('click', () => handleDayClick(cell.dataset.date));
+    });
+
+    calendarHint.textContent = calSelectingStart ? 'Pick your arrival date' : 'Now pick your departure date';
+  }
+
+  function handleDayClick(iso){
+    if(calSelectingStart || !searchArrivalDate){
+      searchArrivalDate = iso;
+      searchDepartureDate = '';
+      calSelectingStart = false;
+    } else if(iso <= searchArrivalDate){
+      // Picked an earlier (or same) date as the second click — start a
+      // fresh range from here instead of allowing an invalid stay.
+      searchArrivalDate = iso;
+      searchDepartureDate = '';
+      calSelectingStart = false;
+    } else {
+      searchDepartureDate = iso;
+      calSelectingStart = true;
+      closeCalendar();
+    }
+    updateDateRangeBtn();
+    renderCalendar();
+  }
+
+  function openCalendar(){
+    calendarDropdown.classList.add('open');
+    const anchor = searchArrivalDate ? new Date(searchArrivalDate) : calMinDate;
+    calViewYear = anchor.getFullYear();
+    calViewMonth = anchor.getMonth();
+    renderCalendar();
+  }
+  function closeCalendar(){
+    calendarDropdown.classList.remove('open');
+  }
+
+  dateRangeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if(calendarDropdown.classList.contains('open')) closeCalendar();
+    else openCalendar();
+  });
+
+  calPrevBtn.addEventListener('click', () => {
+    calViewMonth--;
+    if(calViewMonth < 0){ calViewMonth = 11; calViewYear--; }
+    renderCalendar();
+  });
+  calNextBtn.addEventListener('click', () => {
+    calViewMonth++;
+    if(calViewMonth > 11){ calViewMonth = 0; calViewYear++; }
+    renderCalendar();
+  });
+
+  calendarClearBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    searchArrivalDate = '';
+    searchDepartureDate = '';
+    calSelectingStart = true;
+    updateDateRangeBtn();
+    renderCalendar();
+  });
+
+  document.addEventListener('click', (e) => {
+    if(!calendarDropdown.contains(e.target) && e.target !== dateRangeBtn){
+      closeCalendar();
+    }
+  });
+
+  updateDateRangeBtn();
 
   // ---- One shared fetch, powering both the Suites section and the ----
   // ---- Reserve form's "Home" dropdown, so they never disagree. ----
