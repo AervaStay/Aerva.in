@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manage Your Listing — Aerva</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:480px; margin:0 auto;}
+  h1{font-family:Georgia,serif; font-size:24px; margin-bottom:6px;}
+  .subtitle{opacity:0.65; font-size:14px; margin-bottom:32px;}
+  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:20px;}
+  label{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c;}
+  input, select{
+    background:white; border:1px solid #ddd0bc; padding:10px 12px; font-family:'Jost', sans-serif;
+    font-size:15px; color:#1c1a17; width:100%; box-sizing:border-box;
+  }
+  input:focus, select:focus{outline:none; border-color:#8a6c39;}
+  .form-row{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .btn{
+    background:#1c1a17; color:#f4ebe3; border:none; padding:14px 28px; font-size:12px;
+    letter-spacing:0.1em; text-transform:uppercase; cursor:pointer; width:100%;
+  }
+  .btn:disabled{opacity:0.5; cursor:default;}
+  .confirm{font-size:13px; color:#3a7d44; margin-top:16px; display:none;}
+  .error{font-size:13px; color:#a3402f; margin-top:16px; display:none;}
+  .loading{text-align:center; opacity:0.6; padding:60px 0;}
+  .price-history-note{font-size:11.5px; opacity:0.55; margin-top:6px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div id="loadingState" class="loading">Loading your listing…</div>
+
+  <div id="formState" style="display:none;">
+    <h1 id="propertyNameHeading"></h1>
+    <p class="subtitle">Update your nightly rate or offer anytime — changes apply immediately to future bookings.</p>
+
+    <form id="pricingForm">
+      <div class="field">
+        <label for="nightlyRate">Nightly Rate (₹)</label>
+        <input id="nightlyRate" type="number" min="1" required>
+        <p class="price-history-note">Every change here is recorded, so you can always see your rate history.</p>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="discountType">Discount Type</label>
+          <select id="discountType">
+            <option value="">None</option>
+            <option value="percentage">Percentage off</option>
+            <option value="flat">Flat amount off (₹)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="discountValue">Amount</label>
+          <input id="discountValue" type="number" min="0">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="discountMinNights">Minimum Nights to Qualify</label>
+          <input id="discountMinNights" type="number" min="1">
+        </div>
+        <div class="field">
+          <label for="discountDescription">Short Note (shown to guests)</label>
+          <input id="discountDescription" type="text" placeholder="e.g. 10% off stays of 3+ nights">
+        </div>
+      </div>
+
+      <button type="submit" class="btn" id="submitBtn">Save Changes</button>
+      <p class="confirm" id="confirmMsg">Saved — your new rate is live.</p>
+      <p class="error" id="errorMsg"></p>
+    </form>
+  </div>
+
+  <div id="notFoundState" style="display:none;">
+    <h1>Link not valid</h1>
+    <p class="subtitle">This link may have expired or is incorrect. Contact hello@aerva.in if you need a new one.</p>
+  </div>
+</div>
+
+<script>
+  const API_BASE = 'https://aerva-in.vercel.app';
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+
+  const loadingState = document.getElementById('loadingState');
+  const formState = document.getElementById('formState');
+  const notFoundState = document.getElementById('notFoundState');
+
+  async function loadListing(){
+    if(!token){
+      loadingState.style.display = 'none';
+      notFoundState.style.display = 'block';
+      return;
+    }
+    try{
+      const res = await fetch(API_BASE + '/api/update-listing-pricing?token=' + encodeURIComponent(token));
+      if(!res.ok) throw new Error('Invalid link');
+      const data = await res.json();
+      const l = data.listing;
+
+      document.getElementById('propertyNameHeading').textContent = l.property_name;
+      document.getElementById('nightlyRate').value = l.nightly_rate || '';
+      document.getElementById('discountType').value = l.discount_type || '';
+      document.getElementById('discountValue').value = l.discount_value || '';
+      document.getElementById('discountMinNights').value = l.discount_min_nights || '';
+      document.getElementById('discountDescription').value = l.discount_description || '';
+
+      loadingState.style.display = 'none';
+      formState.style.display = 'block';
+    } catch(err){
+      loadingState.style.display = 'none';
+      notFoundState.style.display = 'block';
+    }
+  }
+
+  document.getElementById('pricingForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const submitBtn = document.getElementById('submitBtn');
+    const confirmMsg = document.getElementById('confirmMsg');
+    const errorMsg = document.getElementById('errorMsg');
+    confirmMsg.style.display = 'none';
+    errorMsg.style.display = 'none';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving…';
+
+    try{
+      const res = await fetch(API_BASE + '/api/update-listing-pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          nightlyRate: document.getElementById('nightlyRate').value,
+          discountType: document.getElementById('discountType').value,
+          discountValue: document.getElementById('discountValue').value,
+          discountMinNights: document.getElementById('discountMinNights').value,
+          discountDescription: document.getElementById('discountDescription').value
+        })
+      });
+      const data = await res.json();
+      if(res.ok){
+        confirmMsg.style.display = 'block';
+      } else {
+        errorMsg.textContent = data.error || 'Something went wrong. Please try again.';
+        errorMsg.style.display = 'block';
+      }
+    } catch(err){
+      errorMsg.textContent = 'Something went wrong. Please try again.';
+      errorMsg.style.display = 'block';
+    }
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Save Changes';
+  });
+
+  loadListing();
+</script>
+
+</body>
+</html>
