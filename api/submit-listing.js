@@ -7,7 +7,7 @@
 // this only handles the structured/text fields.
 
 const { neon } = require('@neondatabase/serverless');
-const { createToken } = require('./_approval-token');
+const { createToken, verifyToken } = require('./_approval-token');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -79,27 +79,71 @@ module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  // A listing must now be tied to a real, logged-in host account — this is
+  // what makes host-dashboard.html's "your listings" actually meaningful.
+  const authHeader = req.headers['authorization'] || '';
+  const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const sessionPayload = sessionToken ? verifyToken(sessionToken) : null;
+  if (!sessionPayload || sessionPayload.action !== 'host-session') {
+    return res.status(401).json({ error: 'Please log in to list a property.' });
+  }
+  const hostId = sessionPayload.listingId; // see the naming note in host-auth.js
+
   try {
     const {
+      listingId, isDraft,
       propertyName, city, propertyType, bedrooms, maxGuests, nightlyRate,
-      description, amenities, services, hostName, hostEmail, hostPhone,
+      description, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
       exteriorPhotoUrls, interiorPhotoUrls
     } = req.body;
 
-    if (!propertyName || !city || !description || !hostName || !hostEmail || !hostPhone) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    // hostEmail is looked up from the authenticated account, never trusted
+    // from the request body — a logged-in host can't submit a listing
+    // claiming to be a different host's email address.
+    const hostRows = await sql`SELECT email FROM hosts WHERE id = ${hostId}`;
+    const authenticatedHostEmail = hostRows[0] ? hostRows[0].email : null;
+    if (!authenticatedHostEmail) {
+      return res.status(401).json({ error: 'Your account could not be found. Please log in again.' });
     }
-    if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
-      return res.status(400).json({ error: 'At least 1 exterior photo is required' });
+
+    // Resuming an existing draft to either update it or finally submit it —
+    // verify it's really this host's own draft before touching it.
+    let existingDraft = null;
+    if (listingId) {
+      const rows = await sql`SELECT id, host_id, status FROM listings WHERE id = ${listingId}`;
+      existingDraft = rows[0];
+      if (!existingDraft || existingDraft.host_id !== hostId) {
+        return res.status(403).json({ error: 'You do not have permission to edit this listing.' });
+      }
+      if (existingDraft.status !== 'draft') {
+        return res.status(400).json({ error: 'Only drafts can be edited this way — approved or pending listings go through the review team.' });
+      }
     }
-    if (!Array.isArray(interiorPhotoUrls) || interiorPhotoUrls.length === 0) {
-      return res.status(400).json({ error: 'At least 1 interior photo is required' });
+
+    // A draft only needs a name to be worth saving — everything else can
+    // come later. A real submission still needs the full set.
+    if (!propertyName) {
+      return res.status(400).json({ error: 'Please give your property a name before saving.' });
+    }
+    if (!isDraft) {
+      if (!city || !description || !hostName || !hostPhone) {
+        console.warn('submit-listing rejected: missing required text fields');
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+      if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
+        console.warn('submit-listing rejected: no exterior photos');
+        return res.status(400).json({ error: 'At least 1 exterior photo is required' });
+      }
+      if (!Array.isArray(interiorPhotoUrls) || interiorPhotoUrls.length === 0) {
+        console.warn('submit-listing rejected: no interior photos');
+        return res.status(400).json({ error: 'At least 1 interior photo is required' });
+      }
     }
 
     const rate = nightlyRate ? Number(nightlyRate) : null;
@@ -112,39 +156,60 @@ module.exports = async (req, res) => {
     }
     const safeExteriorUrls = sanitizePhotoUrls(exteriorPhotoUrls);
     const safeInteriorUrls = sanitizePhotoUrls(interiorPhotoUrls);
+    const newStatus = isDraft ? 'draft' : 'pending';
 
-    const inserted = await sql`
-      INSERT INTO listings (
-        property_name, city, property_type, bedrooms, max_guests, nightly_rate,
-        description, amenities, services, host_name, host_email, host_phone,
-        discount_type, discount_value, discount_min_nights, discount_description,
-        commission_rate, exterior_photo_urls, interior_photo_urls
-      ) VALUES (
-        ${propertyName}, ${city}, ${propertyType || null}, ${bedrooms || null},
-        ${maxGuests || null}, ${rate},
-        ${description}, ${JSON.stringify(amenities || [])}, ${JSON.stringify(services || [])},
-        ${hostName}, ${hostEmail}, ${hostPhone},
-        ${discountType || null}, ${discountValue ? Number(discountValue) : null},
-        ${discountMinNights ? Number(discountMinNights) : null}, ${discountDescription || null},
-        ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)}
-      )
-      RETURNING *
-    `;
-
-    const listing = inserted[0];
-
-    if (rate) {
-      await sql`INSERT INTO price_history (listing_id, nightly_rate) VALUES (${listing.id}, ${rate})`;
+    let listing;
+    if (existingDraft) {
+      const updated = await sql`
+        UPDATE listings SET
+          property_name = ${propertyName}, city = ${city || null}, property_type = ${propertyType || null},
+          bedrooms = ${bedrooms || null}, max_guests = ${maxGuests || null}, nightly_rate = ${rate},
+          description = ${description || null}, amenities = ${JSON.stringify(amenities || [])}, services = ${JSON.stringify(services || [])},
+          host_name = ${hostName || null}, host_phone = ${hostPhone || null},
+          discount_type = ${discountType || null}, discount_value = ${discountValue ? Number(discountValue) : null},
+          discount_min_nights = ${discountMinNights ? Number(discountMinNights) : null}, discount_description = ${discountDescription || null},
+          exterior_photo_urls = ${JSON.stringify(safeExteriorUrls)}, interior_photo_urls = ${JSON.stringify(safeInteriorUrls)},
+          status = ${newStatus}
+        WHERE id = ${listingId}
+        RETURNING *
+      `;
+      listing = updated[0];
+    } else {
+      const inserted = await sql`
+        INSERT INTO listings (
+          property_name, city, property_type, bedrooms, max_guests, nightly_rate,
+          description, amenities, services, host_name, host_email, host_phone, host_id,
+          discount_type, discount_value, discount_min_nights, discount_description,
+          commission_rate, exterior_photo_urls, interior_photo_urls, status
+        ) VALUES (
+          ${propertyName}, ${city || null}, ${propertyType || null}, ${bedrooms || null},
+          ${maxGuests || null}, ${rate},
+          ${description || null}, ${JSON.stringify(amenities || [])}, ${JSON.stringify(services || [])},
+          ${hostName || null}, ${authenticatedHostEmail}, ${hostPhone || null}, ${hostId},
+          ${discountType || null}, ${discountValue ? Number(discountValue) : null},
+          ${discountMinNights ? Number(discountMinNights) : null}, ${discountDescription || null},
+          ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)}, ${newStatus}
+        )
+        RETURNING *
+      `;
+      listing = inserted[0];
     }
 
-    // Best-effort — a failed notification email shouldn't fail the whole submission.
-    try {
-      await sendAdminNotification(listing);
-    } catch (emailErr) {
-      console.error('Admin notification email failed:', emailErr);
+    // Drafts don't need admin review yet, and don't count as a "real" price
+    // the way a submitted listing's starting price does.
+    if (!isDraft) {
+      if (rate) {
+        await sql`INSERT INTO price_history (listing_id, nightly_rate) VALUES (${listing.id}, ${rate})`;
+      }
+      // Best-effort — a failed notification email shouldn't fail the whole submission.
+      try {
+        await sendAdminNotification(listing);
+      } catch (emailErr) {
+        console.error('Admin notification email failed:', emailErr);
+      }
     }
 
-    return res.status(200).json({ success: true, id: listing.id });
+    return res.status(200).json({ success: true, id: listing.id, isDraft: !!isDraft });
   } catch (err) {
     console.error('submit-listing error:', err);
     return res.status(500).json({ error: 'Could not save listing' });
