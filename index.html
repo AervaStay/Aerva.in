@@ -173,6 +173,12 @@
   .suite-card h3{font-size:19px; font-weight:500; line-height:1.3;}
   .suite-card .loc{font-size:11.5px; letter-spacing:0.12em; color:var(--gold-deep); margin-top:10px; text-transform:uppercase;}
   .suite-card .desc{font-size:13.5px; line-height:1.75; opacity:0.75; margin-top:14px; flex-grow:1;}
+  .amenity-tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:12px;}
+  .amenity-tag{
+    font-size:10.5px; letter-spacing:0.03em; padding:4px 10px; border:1px solid var(--line-dark);
+    color:var(--ink); opacity:0.75; white-space:nowrap;
+  }
+  .amenity-tag-more{color:var(--gold-deep); opacity:1; border-color:var(--gold-deep);}
   .suite-card .link{margin-top:20px; font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink); border-top:1px solid var(--line-dark); padding-top:16px; display:flex; justify-content:space-between; align-items:center;}
   .suite-card .link svg{width:13px; height:13px; transition:transform .25s ease; stroke:var(--gold-deep);}
   .suite-card:hover .link svg{transform:translateX(4px);}
@@ -1467,6 +1473,20 @@
       ? `From <strong>₹${Number(listing.nightly_rate).toLocaleString('en-IN')}</strong>/night`
       : 'Rate on enquiry';
 
+    // Show a handful of amenities directly on the card — enough for a guest
+    // to gauge what's included at a glance, without listing all of them
+    // (which could be two dozen) and crowding the card.
+    const amenitiesList = Array.isArray(listing.amenities) ? listing.amenities : [];
+    const AMENITIES_PREVIEW_COUNT = 4;
+    let amenitiesHtml = '';
+    if(amenitiesList.length > 0){
+      const shown = amenitiesList.slice(0, AMENITIES_PREVIEW_COUNT);
+      const remaining = amenitiesList.length - shown.length;
+      const tags = shown.map(a => `<span class="amenity-tag">${a}</span>`).join('');
+      const moreTag = remaining > 0 ? `<span class="amenity-tag amenity-tag-more">+${remaining} more</span>` : '';
+      amenitiesHtml = `<div class="amenity-tags">${tags}${moreTag}</div>`;
+    }
+
     // Exterior photos lead the slider, interior photos follow — guests can
     // swipe/scroll through all of them right on the card.
     const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
@@ -1497,6 +1517,7 @@
         <h3>${listing.property_name}</h3>
         <div class="loc">${listing.city}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
         <p class="desc">${listing.description}</p>
+        ${amenitiesHtml}
         <div class="price">${priceLine}</div>
         ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
         <a href="#reserve" class="link" data-listing-id="${listing.id}">Check Availability & Book <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
