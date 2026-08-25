@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your Listings — Aerva</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:760px; margin:0 auto;}
+  .top-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;}
+  h1{font-family:Georgia,serif; font-size:26px; margin:0;}
+  .host-email{font-size:13px; opacity:0.6;}
+  .logout-btn{background:none; border:1px solid #ddd0bc; padding:8px 16px; font-size:12px; cursor:pointer; color:#1c1a17;}
+  .add-listing-link{
+    display:inline-block; background:#1c1a17; color:#f4ebe3; padding:12px 24px;
+    text-decoration:none; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:30px;
+  }
+  .listing-card{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:14px; display:flex; gap:16px; align-items:center;}
+  .listing-thumb{width:70px; height:70px; object-fit:cover; border-radius:4px; background:#ebdecd; flex:0 0 auto;}
+  .listing-thumb-placeholder{
+    width:70px; height:70px; border-radius:4px; background:#ebdecd; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:center; font-family:Georgia,serif; font-size:24px; opacity:0.5;
+  }
+  .listing-info{flex:1; min-width:0;}
+  .listing-info h3{margin:0 0 4px; font-size:16px; font-family:Georgia,serif;}
+  .listing-meta{font-size:13px; opacity:0.65;}
+  .status-badge{font-size:11px; padding:3px 9px; border-radius:3px; text-transform:uppercase; letter-spacing:0.04em;}
+  .status-approved{background:#e3f0e5; color:#3a7d44;}
+  .status-pending{background:#f5ecd7; color:#8a6c39;}
+  .status-rejected{background:#f5e0da; color:#a3402f;}
+  .status-draft{background:#e6e6e6; color:#555;}
+  .manage-link{font-size:12.5px; color:#8a6c39; text-decoration:underline; white-space:nowrap;}
+  .empty{text-align:center; opacity:0.6; padding:60px 0;}
+  .loading{text-align:center; opacity:0.6; padding:60px 0;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="top-row">
+    <div>
+      <h1>Your Listings</h1>
+      <div class="host-email" id="hostEmailDisplay"></div>
+    </div>
+    <button class="logout-btn" id="logoutBtn">Log Out</button>
+  </div>
+
+  <a href="index.html#add-listing" class="add-listing-link">List a New Property</a>
+
+  <div id="listingsContainer">
+    <p class="loading">Loading your listings…</p>
+  </div>
+</div>
+
+<script>
+  const API_BASE = 'https://aerva-in.vercel.app';
+  const sessionToken = localStorage.getItem('aerva_host_session');
+  const hostEmail = localStorage.getItem('aerva_host_email');
+
+  if(!sessionToken){
+    window.location.href = 'host-login.html';
+  }
+
+  document.getElementById('hostEmailDisplay').textContent = hostEmail || '';
+
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    localStorage.removeItem('aerva_host_session');
+    localStorage.removeItem('aerva_host_email');
+    window.location.href = 'host-login.html';
+  });
+
+  function statusBadgeHtml(status){
+    return `<span class="status-badge status-${status}">${status}</span>`;
+  }
+
+  function renderListings(listings){
+    const container = document.getElementById('listingsContainer');
+    if(!listings.length){
+      container.innerHTML = '<p class="empty">You haven\'t listed a property yet.</p>';
+      return;
+    }
+    container.innerHTML = listings.map(l => {
+      const photos = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
+      const thumbHtml = photos.length
+        ? `<img class="listing-thumb" src="${photos[0]}" alt="${l.property_name}">`
+        : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
+      const actionLink = l.status === 'draft'
+        ? `<a class="manage-link" href="index.html?edit=${l.id}#add-listing">Continue Editing</a>`
+        : `<a class="manage-link" href="${l.manageLink}">Manage Price & Offers</a>`;
+      return `
+        <div class="listing-card">
+          ${thumbHtml}
+          <div class="listing-info">
+            <h3>${l.property_name || '(Untitled draft)'}</h3>
+            <div class="listing-meta">${l.city || 'No city yet'} · ₹${l.nightly_rate || '—'}/night ${statusBadgeHtml(l.status)}</div>
+          </div>
+          ${actionLink}
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function loadListings(){
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      if(res.status === 401){
+        localStorage.removeItem('aerva_host_session');
+        localStorage.removeItem('aerva_host_email');
+        window.location.href = 'host-login.html';
+        return;
+      }
+      const data = await res.json();
+      renderListings(data.listings || []);
+    } catch(err){
+      document.getElementById('listingsContainer').innerHTML = '<p class="empty">Could not load your listings. Please refresh.</p>';
+    }
+  }
+
+  if(sessionToken){
+    loadListings();
+  }
+</script>
+
+</body>
+</html>
