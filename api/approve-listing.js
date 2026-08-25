@@ -4,11 +4,20 @@
 //                                in the admin notification email.
 //   POST { listingId, action } with header x-admin-secret — clicked from
 //                                a button on admin.html instead.
+//
+// On approval, this also emails the host a long-lived link to manage their
+// own listing's price and discount going forward (manage-listing.html) —
+// best-effort, same pattern as the admin notification email in
+// submit-listing.js: if RESEND_API_KEY isn't set, it's skipped quietly
+// rather than failing the approval itself.
 
 const { neon } = require('@neondatabase/serverless');
-const { verifyToken } = require('./_approval-token');
+const { verifyToken, createToken } = require('./_approval-token');
 
 const sql = neon(process.env.DATABASE_URL);
+
+const SITE_BASE = 'https://aerva.in';
+const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
 function htmlPage(title, message, isError) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
@@ -22,6 +31,39 @@ function htmlPage(title, message, isError) {
   <body><div class="box"><h1>${title}</h1><p>${message}</p></div></body></html>`;
 }
 
+async function sendHostApprovalEmail(listing) {
+  if (!process.env.RESEND_API_KEY) {
+    console.warn('RESEND_API_KEY not set — skipping host approval email.');
+    return;
+  }
+  const manageToken = createToken(listing.id, 'manage-pricing', TWO_YEARS_MS);
+  const manageLink = `${SITE_BASE}/manage-listing.html?token=${manageToken}`;
+
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">Your listing is live on Aerva</h2>
+      <p><strong>${listing.property_name}</strong> is now approved and visible to guests.</p>
+      <p>Whenever you'd like to change your nightly rate or set up an offer, use this link — it's yours to keep and reuse anytime:</p>
+      <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Manage Price & Offers</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, contact hello@aerva.in for a new one.</p>
+    </div>
+  `;
+
+  await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'Aerva <hello@aerva.in>',
+      to: listing.host_email,
+      subject: `${listing.property_name} is live on Aerva`,
+      html
+    })
+  });
+}
+
 async function applyDecision(listingId, action) {
   if (action !== 'approve' && action !== 'reject') {
     throw new Error('Invalid action');
@@ -31,9 +73,19 @@ async function applyDecision(listingId, action) {
   const result = await sql`
     UPDATE listings SET status = ${newStatus}
     WHERE id = ${listingId}
-    RETURNING id, property_name, status
+    RETURNING id, property_name, status, host_email
   `;
-  return result[0] || null;
+  const listing = result[0] || null;
+
+  if (listing && action === 'approve') {
+    try {
+      await sendHostApprovalEmail(listing);
+    } catch (emailErr) {
+      console.error('Host approval email failed:', emailErr);
+    }
+  }
+
+  return listing;
 }
 
 module.exports = async (req, res) => {

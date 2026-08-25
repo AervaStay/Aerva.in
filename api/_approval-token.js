@@ -10,10 +10,10 @@
 const crypto = require('crypto');
 
 const SECRET = process.env.APPROVAL_TOKEN_SECRET;
-const TOKEN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const TOKEN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — default, used by approve/reject links
 
-function createToken(listingId, action) {
-  const payload = { listingId, action, exp: Date.now() + TOKEN_LIFETIME_MS };
+function createToken(listingId, action, lifetimeMs = TOKEN_LIFETIME_MS) {
+  const payload = { listingId, action, exp: Date.now() + lifetimeMs };
   const payloadStr = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto.createHmac('sha256', SECRET).update(payloadStr).digest('base64url');
   return `${payloadStr}.${signature}`;
