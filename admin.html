@@ -16,6 +16,9 @@
   .listing h3{margin:0 0 6px 0; font-family:Georgia,serif;}
   .meta{font-size:13px; opacity:0.65; margin-bottom:10px;}
   .desc{font-size:14px; line-height:1.6; margin-bottom:14px;}
+  .tag-group{margin-bottom:10px; font-size:13px;}
+  .tag-group-label{opacity:0.6; margin-right:6px;}
+  .admin-tag{display:inline-block; background:#f4eadc; padding:2px 8px; border-radius:3px; margin:2px; font-size:12px;}
   .photo-group{margin-bottom:14px;}
   .photo-group-label{font-size:12px; opacity:0.6; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.05em;}
   .photo-row{
@@ -92,6 +95,16 @@
     `;
   }
 
+  function tagListHtml(label, items){
+    if (!Array.isArray(items) || items.length === 0) return '';
+    return `
+      <div class="tag-group">
+        <span class="tag-group-label">${label}:</span>
+        ${items.map(item => `<span class="admin-tag">${item}</span>`).join('')}
+      </div>
+    `;
+  }
+
   function renderListings(listings){
     const container = document.getElementById('listingsContainer');
     if(!listings.length){
@@ -103,6 +116,8 @@
         <h3>${l.property_name}</h3>
         <div class="meta">${l.city} · ${l.property_type || ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})</div>
         <div class="desc">${l.description}</div>
+        ${tagListHtml('Amenities', l.amenities)}
+        ${tagListHtml('Services', l.services)}
         ${photoThumbnailsHtml('Exterior', l.exterior_photo_urls)}
         ${photoThumbnailsHtml('Interior', l.interior_photo_urls)}
         <div class="actions">
