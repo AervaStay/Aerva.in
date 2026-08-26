@@ -90,9 +90,13 @@
       return;
     }
     container.innerHTML = listings.map(l => {
-      const photos = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
-      const thumbHtml = photos.length
-        ? `<img class="listing-thumb" src="${photos[0]}" alt="${l.property_name}">`
+      // Interior leads, matching the same order used on the live site's
+      // Suites cards — falls back to exterior if no interior photos exist.
+      const interiorPhotos = Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : [];
+      const exteriorPhotos = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
+      const leadPhoto = interiorPhotos[0] || exteriorPhotos[0];
+      const thumbHtml = leadPhoto
+        ? `<img class="listing-thumb" src="${leadPhoto}" alt="${l.property_name}">`
         : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
       const actionLink = l.status === 'draft'
         ? `<a class="manage-link" href="index.html?edit=${l.id}#add-listing">Continue Editing</a>`
