@@ -57,7 +57,7 @@ module.exports = async (req, res) => {
       if (!listing) return res.status(404).json({ error: 'This listing could not be found.' });
 
       const paidAmenities = await sql`
-        SELECT id, name, description, price, available_from, available_until, is_active
+        SELECT id, name, description, price, available_from, available_until, excluded_weekdays, is_active
         FROM listing_amenities WHERE listing_id = ${listingId} ORDER BY created_at ASC
       `;
 
@@ -147,20 +147,26 @@ module.exports = async (req, res) => {
             const description = typeof a.description === 'string' ? a.description.slice(0, 500) : null;
             const availableFrom = a.availableFrom || null;
             const availableUntil = a.availableUntil || null;
+            // Only real weekday numbers (0=Sunday..6=Saturday), deduplicated —
+            // defensive against anything malformed making it into the DB.
+            const excludedWeekdays = Array.isArray(a.excludedWeekdays)
+              ? [...new Set(a.excludedWeekdays.map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))]
+              : [];
             const isActive = a.isActive !== false;
 
             if (a.id && existingIds.has(Number(a.id))) {
               await sql`
                 UPDATE listing_amenities SET
                   name = ${name}, description = ${description}, price = ${price},
-                  available_from = ${availableFrom}, available_until = ${availableUntil}, is_active = ${isActive}
+                  available_from = ${availableFrom}, available_until = ${availableUntil},
+                  excluded_weekdays = ${JSON.stringify(excludedWeekdays)}, is_active = ${isActive}
                 WHERE id = ${Number(a.id)} AND listing_id = ${listingId}
               `;
               submittedIds.add(Number(a.id));
             } else {
               const inserted = await sql`
-                INSERT INTO listing_amenities (listing_id, name, description, price, available_from, available_until, is_active)
-                VALUES (${listingId}, ${name}, ${description}, ${price}, ${availableFrom}, ${availableUntil}, ${isActive})
+                INSERT INTO listing_amenities (listing_id, name, description, price, available_from, available_until, excluded_weekdays, is_active)
+                VALUES (${listingId}, ${name}, ${description}, ${price}, ${availableFrom}, ${availableUntil}, ${JSON.stringify(excludedWeekdays)}, ${isActive})
                 RETURNING id
               `;
               submittedIds.add(inserted[0].id);
