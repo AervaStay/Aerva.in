@@ -5,9 +5,17 @@
 //
 // Photos still go to your inbox separately via Formspree (see aerva.html) —
 // this only handles the structured/text fields.
+//
+// Login is unified: there's no separate "host account" signup anymore.
+// Any logged-in guest (see guest-auth.js / guest-phone-auth.js) can submit
+// a listing — the first time they do, this file automatically creates
+// their linked `hosts` row and links it via guests.host_id / hosts.guest_id
+// (see schema.sql). From then on, guests.account_type reads 'guest_host'
+// for their account.
 
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
+const { logAudit } = require('./_audit-log');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -17,6 +25,45 @@ const DEFAULT_COMMISSION_RATE = 15;
 
 const SITE_BASE = 'https://aerva.in';
 const ADMIN_EMAIL = 'hello@aerva.in';
+
+// Resolves the hosts.id for a logged-in guest, creating and linking that
+// row the first time they list a property. Returns { hostId } on success,
+// or { error } if a host account genuinely can't be created yet (no email
+// on file — see the file header for why that's required).
+async function getOrCreateHostForGuest(guest) {
+  if (guest.host_id) {
+    return { hostId: guest.host_id };
+  }
+
+  if (!guest.email) {
+    return { error: 'Please add an email to your account before listing a property — hosts need one to receive booking and approval notifications.' };
+  }
+
+  // A hosts row with this email might already exist from before accounts
+  // were unified (or from a different signup path) — link to that one
+  // rather than creating a duplicate.
+  const existing = await sql`SELECT id FROM hosts WHERE email = ${guest.email}`;
+  let hostId;
+  if (existing[0]) {
+    hostId = existing[0].id;
+    await sql`UPDATE hosts SET guest_id = ${guest.id} WHERE id = ${hostId}`;
+  } else {
+    const inserted = await sql`
+      INSERT INTO hosts (email, name, phone, guest_id)
+      VALUES (${guest.email}, ${guest.name || null}, ${guest.phone || null}, ${guest.id})
+      RETURNING id
+    `;
+    hostId = inserted[0].id;
+  }
+
+  await sql`UPDATE guests SET host_id = ${hostId} WHERE id = ${guest.id}`;
+  await logAudit(sql, {
+    action: 'host_account_created', success: true, actorType: 'guest', actorIdentifier: guest.email,
+    targetType: 'host', targetId: hostId, metadata: { guestId: guest.id }
+  });
+
+  return { hostId };
+}
 
 async function sendAdminNotification(listing) {
   if (!process.env.RESEND_API_KEY) {
@@ -84,15 +131,16 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // A listing must now be tied to a real, logged-in host account — this is
-  // what makes host-dashboard.html's "your listings" actually meaningful.
+  // Single login: a listing must be tied to a logged-in guest account —
+  // there's no separate host login anymore. This is what makes "your
+  // listings" on the profile/dashboard meaningful.
   const authHeader = req.headers['authorization'] || '';
   const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   const sessionPayload = sessionToken ? verifyToken(sessionToken) : null;
-  if (!sessionPayload || sessionPayload.action !== 'host-session') {
+  if (!sessionPayload || sessionPayload.action !== 'guest-session') {
     return res.status(401).json({ error: 'Please log in to list a property.' });
   }
-  const hostId = sessionPayload.listingId; // see the naming note in host-auth.js
+  const guestId = sessionPayload.listingId; // generically-named token field — see host-auth.js note
 
   try {
     const {
@@ -103,14 +151,20 @@ module.exports = async (req, res) => {
       exteriorPhotoUrls, interiorPhotoUrls
     } = req.body;
 
-    // hostEmail is looked up from the authenticated account, never trusted
-    // from the request body — a logged-in host can't submit a listing
-    // claiming to be a different host's email address.
-    const hostRows = await sql`SELECT email FROM hosts WHERE id = ${hostId}`;
-    const authenticatedHostEmail = hostRows[0] ? hostRows[0].email : null;
-    if (!authenticatedHostEmail) {
+    // The guest's own account info is never trusted from the request body
+    // — always looked up fresh from their session, same reasoning as the
+    // old host-email lookup this replaces.
+    const guestRows = await sql`SELECT id, email, name, phone, host_id FROM guests WHERE id = ${guestId}`;
+    const guest = guestRows[0];
+    if (!guest) {
       return res.status(401).json({ error: 'Your account could not be found. Please log in again.' });
     }
+
+    const { hostId, error: hostError } = await getOrCreateHostForGuest(guest);
+    if (hostError) {
+      return res.status(400).json({ error: hostError });
+    }
+    const authenticatedHostEmail = guest.email;
 
     // Resuming an existing draft to either update it or finally submit it —
     // verify it's really this host's own draft before touching it.
@@ -201,6 +255,10 @@ module.exports = async (req, res) => {
       if (rate) {
         await sql`INSERT INTO price_history (listing_id, nightly_rate) VALUES (${listing.id}, ${rate})`;
       }
+      await logAudit(sql, {
+        action: 'listing_submitted', success: true, actorType: 'host', actorIdentifier: authenticatedHostEmail,
+        targetType: 'listing', targetId: listing.id
+      });
       // Best-effort — a failed notification email shouldn't fail the whole submission.
       try {
         await sendAdminNotification(listing);
