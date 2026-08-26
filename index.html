@@ -1166,8 +1166,11 @@
     }
 
     const rows = paidAmenities.map(a => {
+      const excludedWeekdays = Array.isArray(a.excludedWeekdays) ? a.excludedWeekdays : [];
       const availableNights = nights.filter(n =>
-        (!a.availableFrom || n >= a.availableFrom) && (!a.availableUntil || n <= a.availableUntil)
+        (!a.availableFrom || n >= a.availableFrom) &&
+        (!a.availableUntil || n <= a.availableUntil) &&
+        !excludedWeekdays.includes(new Date(n + 'T00:00:00').getDay())
       );
       if(availableNights.length === 0) return '';
 
@@ -1192,7 +1195,8 @@
       `;
     }).join('');
 
-    container.innerHTML = rows ? `<div class="eyebrow" style="margin-top:16px; margin-bottom:2px;">Paid Amenities</div>${rows}` : '';
+    const disclaimer = rows ? `<p style="font-size:11px; opacity:0.55; margin-top:8px; line-height:1.5;">Paid amenities are available on the dates shown only, and are subject to weather, local circumstances, national holidays, and other factors outside the host's control. If a selected amenity can't be fulfilled, the host will provide a refund for that amenity.</p>` : '';
+    container.innerHTML = rows ? `<div class="eyebrow" style="margin-top:16px; margin-bottom:2px;">Paid Amenities</div>${rows}${disclaimer}` : '';
 
     container.querySelectorAll('input[type="checkbox"][data-amenity-id]').forEach(cb => {
       cb.addEventListener('change', () => {
