@@ -329,6 +329,16 @@
   .removeStayBtn:hover{text-decoration:underline;}
   .stayRow-error{color:#a3402f; font-size:12.5px; margin-top:-8px;}
   .stayRow-subtotal{font-size:13px; opacity:0.75; text-align:right;}
+  .stay-amenity-row{border:1px solid var(--line-dark); padding:12px; margin-top:10px;}
+  .stay-amenity-head{display:flex; justify-content:space-between; font-size:13.5px; margin-bottom:8px;}
+  .amenity-night-chips{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;}
+  .amenity-night-chip{
+    font-size:11.5px; border:1px solid var(--line-dark); padding:5px 10px; cursor:pointer;
+    display:inline-flex; align-items:center; gap:4px; user-select:none;
+  }
+  .amenity-night-chip input{width:auto; margin:0;}
+  .amenity-night-chip.checked{background:#1c1a17; color:#f4ebe3; border-color:#1c1a17;}
+  .stay-amenity-subtotal{font-size:11.5px; opacity:0.7;}
 
   .check-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:10px 16px;}
   .check-item{display:flex; align-items:center; gap:8px; font-size:13.5px; opacity:0.85; cursor:pointer;}
@@ -989,6 +999,7 @@
         <select class="stayRow-guests" name="stay_${index}_guests">${guestOptions}</select>
       </div>
       <p class="stayRow-error" style="display:none;"></p>
+      <div class="stayRow-amenities"></div>
       <div class="stayRow-subtotal"></div>
     `;
     return row;
@@ -1060,8 +1071,8 @@
     }
 
     ['input','change'].forEach(evt => {
-      arrivalEl.addEventListener(evt, () => { syncDepartureMin(); updatePricing(); });
-      departureEl.addEventListener(evt, updatePricing);
+      arrivalEl.addEventListener(evt, () => { syncDepartureMin(); renderStayAmenities(row); updatePricing(); });
+      departureEl.addEventListener(evt, () => { renderStayAmenities(row); updatePricing(); });
     });
     // Note: we deliberately do NOT auto-open the departure calendar here.
     // Doing so via showPicker() steals keyboard focus away from the arrival
@@ -1071,7 +1082,7 @@
     // the next day (in syncDepartureMin above) is the safe convenience;
     // opening the calendar automatically is not.
     guestsEl.addEventListener('change', updatePricing);
-    suiteEl.addEventListener('change', () => { refreshSuiteAvailability(); updatePricing(); });
+    suiteEl.addEventListener('change', () => { refreshSuiteAvailability(); renderStayAmenities(row); updatePricing(); });
 
     removeBtn.addEventListener('click', () => {
       row.remove();
@@ -1093,12 +1104,106 @@
       departure: row.querySelector('.stayRow-departure').value,
       guests: parseInt(row.querySelector('.stayRow-guests').value, 10),
       errorEl: row.querySelector('.stayRow-error'),
-      subtotalEl: row.querySelector('.stayRow-subtotal')
+      subtotalEl: row.querySelector('.stayRow-subtotal'),
+      selectedAmenities: row.selectedAmenities || {}
     };
   }
 
   // Applies a listing's own discount, if the stay's length qualifies —
   // this is the "validate against what the owner actually shared" part.
+  // Every night of a stay as 'YYYY-MM-DD' strings — matches the same
+  // convention create-order.js uses server-side, so what the guest sees
+  // and picks here lines up exactly with what gets validated at checkout.
+  function getNightsInRange(arrival, departure){
+    const nights = [];
+    if(!arrival || !departure) return nights;
+    let d = new Date(arrival);
+    const end = new Date(departure);
+    while(d < end){
+      nights.push(d.toISOString().split('T')[0]);
+      d.setDate(d.getDate() + 1);
+    }
+    return nights;
+  }
+
+  // Renders the paid-amenity picker for one stay row, based on its
+  // current listing + date range. Selections live on the row element
+  // itself (row.selectedAmenities, keyed by amenity id → Set of dates) so
+  // they survive re-renders as dates/guests change elsewhere in the form.
+  function renderStayAmenities(row){
+    const s = readRow(row);
+    const container = row.querySelector('.stayRow-amenities');
+    if(!row.selectedAmenities) row.selectedAmenities = {};
+
+    if(!s.listing || !s.arrival || !s.departure){
+      container.innerHTML = '';
+      return;
+    }
+
+    const nights = getNightsInRange(s.arrival, s.departure);
+    const paidAmenities = Array.isArray(s.listing.paid_amenities) ? s.listing.paid_amenities : [];
+
+    // Drop any selections that no longer make sense — the listing changed,
+    // or the stay's dates shrank past a previously-selected night.
+    const validAmenityIds = new Set(paidAmenities.map(a => String(a.id)));
+    Object.keys(row.selectedAmenities).forEach(aid => {
+      if(!validAmenityIds.has(aid)){
+        delete row.selectedAmenities[aid];
+      } else {
+        const kept = new Set([...row.selectedAmenities[aid]].filter(d => nights.includes(d)));
+        if(kept.size === 0) delete row.selectedAmenities[aid];
+        else row.selectedAmenities[aid] = kept;
+      }
+    });
+
+    if(paidAmenities.length === 0 || nights.length === 0){
+      container.innerHTML = '';
+      return;
+    }
+
+    const rows = paidAmenities.map(a => {
+      const availableNights = nights.filter(n =>
+        (!a.availableFrom || n >= a.availableFrom) && (!a.availableUntil || n <= a.availableUntil)
+      );
+      if(availableNights.length === 0) return '';
+
+      const selected = row.selectedAmenities[a.id] || new Set();
+      const chips = availableNights.map(n => {
+        const isChecked = selected.has(n);
+        const label = new Date(n + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
+        return `<label class="amenity-night-chip${isChecked ? ' checked' : ''}"><input type="checkbox" data-amenity-id="${a.id}" data-date="${n}" ${isChecked ? 'checked' : ''}> ${label}</label>`;
+      }).join('');
+
+      const subtotal = selected.size * Number(a.price);
+      const subtotalText = selected.size > 0
+        ? `${selected.size} night${selected.size === 1 ? '' : 's'} selected — ${fmt(subtotal)}`
+        : 'Tap nights to add this';
+
+      return `
+        <div class="stay-amenity-row">
+          <div class="stay-amenity-head"><strong>${a.name}</strong><span>${fmt(Number(a.price))}/night</span></div>
+          <div class="amenity-night-chips">${chips}</div>
+          <div class="stay-amenity-subtotal">${subtotalText}</div>
+        </div>
+      `;
+    }).join('');
+
+    container.innerHTML = rows ? `<div class="eyebrow" style="margin-top:16px; margin-bottom:2px;">Paid Amenities</div>${rows}` : '';
+
+    container.querySelectorAll('input[type="checkbox"][data-amenity-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const aid = cb.dataset.amenityId;
+        const date = cb.dataset.date;
+        if(!row.selectedAmenities[aid]) row.selectedAmenities[aid] = new Set();
+        if(cb.checked) row.selectedAmenities[aid].add(date);
+        else row.selectedAmenities[aid].delete(date);
+        if(row.selectedAmenities[aid].size === 0) delete row.selectedAmenities[aid];
+        renderStayAmenities(row);
+        updatePricing();
+      });
+    });
+  }
+
   function calculateDiscount(listing, nights, subtotalBeforeDiscount){
     if(!listing.discount_type || !listing.discount_value) return 0;
     if(listing.discount_min_nights && nights < listing.discount_min_nights) return 0;
@@ -1162,12 +1267,28 @@
       const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
       const beforeDiscount = roomTotal + extraTotal;
       const discountAmount = calculateDiscount(listing, nights, beforeDiscount);
-      const staySubtotal = beforeDiscount - discountAmount;
+
+      // Amenities are priced client-side here only for display — the real,
+      // trusted total is recalculated server-side in create-order.js from
+      // the same selections, never taken from this number directly.
+      let amenityTotal = 0;
+      let amenityNightCount = 0;
+      const paidAmenities = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
+      Object.entries(s.selectedAmenities).forEach(([aid, datesSet]) => {
+        const amenity = paidAmenities.find(a => String(a.id) === String(aid));
+        if(amenity){
+          amenityTotal += Number(amenity.price) * datesSet.size;
+          amenityNightCount += datesSet.size;
+        }
+      });
+
+      const staySubtotal = beforeDiscount - discountAmount + amenityTotal;
 
       grandSubtotal += staySubtotal;
 
       const discountNote = discountAmount > 0 ? ` (−${fmt(discountAmount)} offer)` : '';
-      s.subtotalEl.textContent = `${nights} night${nights===1?'':'s'}${extraGuests>0 ? ' + '+extraGuests+' extra guest'+(extraGuests===1?'':'s') : ''}${discountNote} — ${fmt(staySubtotal)}`;
+      const amenityNote = amenityNightCount > 0 ? ` + amenities (${fmt(amenityTotal)})` : '';
+      s.subtotalEl.textContent = `${nights} night${nights===1?'':'s'}${extraGuests>0 ? ' + '+extraGuests+' extra guest'+(extraGuests===1?'':'s') : ''}${discountNote}${amenityNote} — ${fmt(staySubtotal)}`;
 
       lines.push(`<div class="sum-row"><span>${s.suiteName} (${nights} night${nights===1?'':'s'})</span><span>${fmt(staySubtotal)}</span></div>`);
     });
@@ -1217,7 +1338,10 @@
     }
 
     const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow).map(s => ({
-      listingId: s.listingId, suite: s.suiteName, arrival: s.arrival, departure: s.departure, guests: s.guests
+      listingId: s.listingId, suite: s.suiteName, arrival: s.arrival, departure: s.departure, guests: s.guests,
+      selectedAmenities: Object.entries(s.selectedAmenities).map(([amenityId, datesSet]) => ({
+        amenityId: Number(amenityId), dates: [...datesSet]
+      }))
     }));
 
     submitBtn.disabled = true;
