@@ -24,6 +24,12 @@ const sql = neon(process.env.DATABASE_URL);
 const DEFAULT_COMMISSION_RATE = 15;
 
 const SITE_BASE = 'https://aerva.in';
+// Distinct from SITE_BASE on purpose: SITE_BASE is the static frontend
+// (GitHub Pages), which only serves .html files. Anything under /api/ is
+// a real backend endpoint and only exists on Vercel — a link built with
+// SITE_BASE + '/api/...' 404s, since GitHub Pages has no idea what that
+// path is.
+const API_BASE = 'https://aerva-in.vercel.app';
 const ADMIN_EMAIL = 'hello@aerva.in';
 
 // Resolves the hosts.id for a logged-in guest, creating and linking that
@@ -71,8 +77,8 @@ async function sendAdminNotification(listing) {
     return;
   }
 
-  const approveLink = `${SITE_BASE}/api/approve-listing?token=${createToken(listing.id, 'approve')}`;
-  const rejectLink = `${SITE_BASE}/api/approve-listing?token=${createToken(listing.id, 'reject')}`;
+  const approveLink = `${API_BASE}/api/approve-listing?token=${createToken(listing.id, 'approve')}`;
+  const rejectLink = `${API_BASE}/api/approve-listing?token=${createToken(listing.id, 'reject')}`;
 
   const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
   const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
