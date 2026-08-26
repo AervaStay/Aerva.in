@@ -373,6 +373,11 @@
       <a href="#experience">Experience</a>
       <a href="#location">Location</a>
       <a href="#add-listing">List Property</a>
+      <a href="guest-login.html" id="guestLoginLink">Log In</a>
+      <span id="guestAccountBox" style="display:none; align-items:center; gap:14px;">
+        <span id="guestNameDisplay" style="font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
+        <a href="#" id="guestLogoutLink">Log Out</a>
+      </span>
       <a href="#reserve" class="btn">Reserve</a>
     </div>
   </nav>
@@ -2010,6 +2015,56 @@
   }
 
   initSite();
+
+  // ---- Guest login status in the nav bar ----
+  // Checks for a stored session token on every page load and asks the
+  // backend to confirm it's still valid — this is what makes a returning
+  // guest show as logged in automatically ("remembered in the browser"),
+  // without ever storing their password client-side, only the signed
+  // session token.
+  (function initGuestNav(){
+    const guestLoginLink = document.getElementById('guestLoginLink');
+    const guestAccountBox = document.getElementById('guestAccountBox');
+    const guestNameDisplay = document.getElementById('guestNameDisplay');
+    const guestLogoutLink = document.getElementById('guestLogoutLink');
+
+    function clearGuestSession(){
+      localStorage.removeItem('aerva_guest_session');
+      localStorage.removeItem('aerva_guest_email');
+      localStorage.removeItem('aerva_guest_name');
+    }
+
+    async function checkGuestSession(){
+      const token = localStorage.getItem('aerva_guest_session');
+      if(!token) return;
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if(res.ok){
+          const data = await res.json();
+          guestNameDisplay.textContent = 'Hi, ' + (data.guest.name || data.guest.email);
+          guestLoginLink.style.display = 'none';
+          guestAccountBox.style.display = 'inline-flex';
+        } else {
+          // Token expired or invalid — quietly fall back to showing
+          // "Log In" rather than an error; the guest just logs in again.
+          clearGuestSession();
+        }
+      } catch(err){
+        // Network hiccup — leave storage alone so a temporary outage
+        // doesn't force an unnecessary re-login on the next page load.
+      }
+    }
+
+    guestLogoutLink.addEventListener('click', function(e){
+      e.preventDefault();
+      clearGuestSession();
+      window.location.reload();
+    });
+
+    checkGuestSession();
+  })();
 
 </script>
 
