@@ -13,6 +13,13 @@ const SECRET = process.env.APPROVAL_TOKEN_SECRET;
 const TOKEN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — default, used by approve/reject links
 
 function createToken(listingId, action, lifetimeMs = TOKEN_LIFETIME_MS) {
+  if (!SECRET) {
+    // This is the exact failure that used to surface as a cryptic
+    // "key argument must be of type string..." error — logging it
+    // explicitly here makes the real cause obvious in Vercel's logs
+    // instead of a generic crypto internals message.
+    throw new Error('APPROVAL_TOKEN_SECRET environment variable is not set in Vercel.');
+  }
   const payload = { listingId, action, exp: Date.now() + lifetimeMs };
   const payloadStr = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto.createHmac('sha256', SECRET).update(payloadStr).digest('base64url');

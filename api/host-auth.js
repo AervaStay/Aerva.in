@@ -95,8 +95,10 @@ module.exports = async (req, res) => {
 
       return res.status(200).json({ success: true });
     } catch (err) {
+      // Full detail goes to Vercel's logs for us to debug — never the raw
+      // error text to whoever's trying to log in.
       console.error('host-auth (POST) error:', err);
-      return res.status(500).json({ error: err.message || 'Could not send login link.' });
+      return res.status(500).json({ error: 'Could not send your login link right now. Please try again in a moment.' });
     }
   }
 
