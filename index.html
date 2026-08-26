@@ -757,13 +757,13 @@
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Photos</div>
       <div class="field">
-        <label for="listPhotosExterior">Exterior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(at least 1 required)</span></label>
+        <label for="listPhotosExterior">Exterior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(1–20, at least 1 required)</span></label>
         <input id="listPhotosExterior" name="attachment_exterior" type="file" accept="image/*" multiple>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">The front of the property, or whatever gives the best first impression — this becomes the main photo shown on the site.</p>
         <div id="photoPreviewContainerExterior" class="photo-preview-grid"></div>
       </div>
       <div class="field">
-        <label for="listPhotosInterior">Interior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(at least 1 required)</span></label>
+        <label for="listPhotosInterior">Interior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(1–20, at least 1 required)</span></label>
         <input id="listPhotosInterior" name="attachment_interior" type="file" accept="image/*" multiple>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">A bedroom, living space, or any standout interior feature.</p>
         <div id="photoPreviewContainerInterior" class="photo-preview-grid"></div>
@@ -1301,7 +1301,7 @@
   // ---- Photo selection: add, preview, and remove individual photos ----
   // One reusable manager, instantiated once per category (exterior/interior)
   // instead of duplicating this logic twice.
-  const MAX_LISTING_PHOTOS = 5;
+  const MAX_LISTING_PHOTOS = 20;
 
   function createPhotoManager(inputId, previewContainerId){
     const inputEl = document.getElementById(inputId);
@@ -1665,11 +1665,11 @@
       amenitiesHtml = `<div class="amenity-tags">${tags}${moreTag}</div>`;
     }
 
-    // Exterior photos lead the slider, interior photos follow — guests can
+    // Interior photos lead the slider, exterior photos follow — guests can
     // swipe/scroll through all of them right on the card.
     const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
     const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
-    const allPhotos = [...exteriorPhotos, ...interiorPhotos];
+    const allPhotos = [...interiorPhotos, ...exteriorPhotos];
 
     let photoHtml;
     if(allPhotos.length === 0){
