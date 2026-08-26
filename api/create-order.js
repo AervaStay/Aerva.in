@@ -22,7 +22,11 @@ const sql = neon(process.env.DATABASE_URL);
 
 const EXTRA_GUEST_RATE = 1500;
 const BASE_OCCUPANCY = 2;
-const GST_RATE = 0.12;
+// GST is temporarily disabled for testing — set back to the correct rate
+// once ready to introduce it properly per government rules. This is the
+// number that actually determines what guests are charged; aerva.html's
+// copy is display-only and must be kept in sync with this one.
+const GST_RATE = 0;
 const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
 const MAX_AMENITIES_PER_STAY = 15;
 
