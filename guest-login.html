@@ -57,6 +57,7 @@
       </div>
       <button type="submit" class="btn" id="loginBtn">Log In</button>
       <p class="error" id="loginError" style="display:none;"></p>
+      <p class="switch-mode" id="resendVerificationRow" style="display:none;"><button type="button" id="resendVerificationBtn">Resend verification email</button></p>
     </form>
     <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
     <p class="switch-mode"><button type="button" id="showPhoneRequest">Log in with phone instead</button></p>
@@ -86,6 +87,14 @@
       <p class="error" id="signupError" style="display:none;"></p>
     </form>
     <p class="switch-mode">Already have an account? <button type="button" id="showLogin">Log in</button></p>
+  </div>
+
+  <div id="checkEmailState" style="display:none;">
+    <h1>Check Your Email</h1>
+    <p class="subtitle" id="checkEmailSubtitle">We sent a verification link to your inbox. Click it to finish creating your account.</p>
+    <p class="error" id="checkEmailWarning" style="display:none;"></p>
+    <p class="switch-mode"><button type="button" id="resendFromCheckEmailBtn">Resend the email</button></p>
+    <p class="switch-mode"><button type="button" id="backToLoginFromCheckEmail">Back to log in</button></p>
   </div>
 
   <div id="phoneRequestState" style="display:none;">
@@ -126,9 +135,10 @@
   const signupState = document.getElementById('signupState');
   const phoneRequestState = document.getElementById('phoneRequestState');
   const phoneVerifyState = document.getElementById('phoneVerifyState');
+  const checkEmailState = document.getElementById('checkEmailState');
 
   function showOnly(el){
-    [checkingState, loginState, signupState, phoneRequestState, phoneVerifyState].forEach(s => s.style.display = 'none');
+    [checkingState, loginState, signupState, phoneRequestState, phoneVerifyState, checkEmailState].forEach(s => s.style.display = 'none');
     el.style.display = 'block';
   }
 
@@ -144,9 +154,38 @@
     localStorage.setItem('aerva_guest_name', guest.name || '');
   }
 
-  // ---- Auto-login: if a session token is already stored, check it's
-  // still valid before showing any login form at all ----
+  // Remembers the email between "signup" and "check your email" / resend,
+  // so those steps don't need to ask for it again.
+  let pendingVerifyEmail = '';
+
+  // ---- On page load: three possibilities ----
+  // 1. A ?verify=<token> in the URL — this is a click from the
+  //    verification email; complete that first.
+  // 2. A stored session token — check it's still valid, auto-login if so.
+  // 3. Neither — show the plain login form.
   async function checkExistingSession(){
+    const params = new URLSearchParams(window.location.search);
+    const verifyToken = params.get('verify');
+
+    if(verifyToken){
+      showOnly(checkingState);
+      try{
+        const res = await fetch(API_BASE + '/api/guest-auth?token=' + encodeURIComponent(verifyToken));
+        const data = await res.json();
+        if(res.ok){
+          storeSession(data.sessionToken, data.guest);
+          window.location.href = 'index.html';
+        } else {
+          showOnly(loginState);
+          document.getElementById('loginError').textContent = data.error || 'This verification link is invalid or has expired.';
+          document.getElementById('loginError').style.display = 'block';
+        }
+      } catch(err){
+        showOnly(loginState);
+      }
+      return;
+    }
+
     const existingToken = localStorage.getItem('aerva_guest_session');
     if(!existingToken){
       showOnly(loginState);
@@ -181,7 +220,9 @@
     e.preventDefault();
     const loginBtn = document.getElementById('loginBtn');
     const loginError = document.getElementById('loginError');
+    const resendRow = document.getElementById('resendVerificationRow');
     loginError.style.display = 'none';
+    resendRow.style.display = 'none';
 
     const emailValue = document.getElementById('loginEmail').value.trim();
     const passwordValue = document.getElementById('loginPassword').value;
@@ -207,6 +248,10 @@
       } else {
         loginError.textContent = data.error || 'Something went wrong. Please try again.';
         loginError.style.display = 'block';
+        if(data.requiresVerification){
+          pendingVerifyEmail = emailValue;
+          resendRow.style.display = 'block';
+        }
         loginBtn.disabled = false;
         loginBtn.textContent = 'Log In';
       }
@@ -216,6 +261,24 @@
       loginBtn.disabled = false;
       loginBtn.textContent = 'Log In';
     }
+  });
+
+  document.getElementById('resendVerificationBtn').addEventListener('click', async function(){
+    if(!pendingVerifyEmail) return;
+    this.disabled = true;
+    this.textContent = 'Sending…';
+    try{
+      await fetch(API_BASE + '/api/guest-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'resend-verification', email: pendingVerifyEmail })
+      });
+    } catch(err){ /* fall through to the confirmation state regardless */ }
+    document.getElementById('checkEmailSubtitle').textContent = `We sent a new verification link to ${pendingVerifyEmail}.`;
+    document.getElementById('checkEmailWarning').style.display = 'none';
+    showOnly(checkEmailState);
+    this.disabled = false;
+    this.textContent = 'Resend verification email';
   });
 
   document.getElementById('signupForm').addEventListener('submit', async function(e){
@@ -251,8 +314,16 @@
       });
       const data = await res.json();
       if(res.ok){
-        storeSession(data.sessionToken, data.guest);
-        window.location.href = 'index.html';
+        pendingVerifyEmail = emailValue;
+        document.getElementById('checkEmailSubtitle').textContent = `We sent a verification link to ${emailValue}. Click it to finish creating your account.`;
+        const warningEl = document.getElementById('checkEmailWarning');
+        if(data.warning){
+          warningEl.textContent = data.warning;
+          warningEl.style.display = 'block';
+        } else {
+          warningEl.style.display = 'none';
+        }
+        showOnly(checkEmailState);
       } else {
         signupError.textContent = data.error || 'Something went wrong. Please try again.';
         signupError.style.display = 'block';
@@ -349,6 +420,24 @@
     phoneVerifyBtn.disabled = false;
     phoneVerifyBtn.textContent = 'Verify';
   });
+
+  document.getElementById('resendFromCheckEmailBtn').addEventListener('click', async function(){
+    if(!pendingVerifyEmail) return;
+    this.disabled = true;
+    this.textContent = 'Sending…';
+    try{
+      await fetch(API_BASE + '/api/guest-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'resend-verification', email: pendingVerifyEmail })
+      });
+      document.getElementById('checkEmailSubtitle').textContent = `We sent a new verification link to ${pendingVerifyEmail}.`;
+      document.getElementById('checkEmailWarning').style.display = 'none';
+    } catch(err){ /* the request may still have gone through server-side */ }
+    this.disabled = false;
+    this.textContent = 'Resend the email';
+  });
+  document.getElementById('backToLoginFromCheckEmail').addEventListener('click', () => showOnly(loginState));
 
   checkExistingSession();
 </script>
