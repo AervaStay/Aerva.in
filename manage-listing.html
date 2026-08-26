@@ -102,30 +102,14 @@
         <p class="price-history-note">Every change here is recorded, so you can always see your rate history.</p>
       </div>
 
-      <div class="form-row">
-        <div class="field">
-          <label for="discountType">Discount Type</label>
-          <select id="discountType">
-            <option value="">None</option>
-            <option value="percentage">Percentage off</option>
-            <option value="flat">Flat amount off (₹)</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="discountValue">Amount</label>
-          <input id="discountValue" type="number" min="0">
-        </div>
+      <div class="eyebrow" style="margin-top:0;">Current Offer <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(view only)</span></div>
+      <div class="field">
+        <label>Discount</label>
+        <p id="discountSummaryText" style="font-size:15px; padding:10px 2px; opacity:0.55; margin:0;"></p>
       </div>
-
-      <div class="form-row">
-        <div class="field">
-          <label for="discountMinNights">Minimum Nights to Qualify</label>
-          <input id="discountMinNights" type="number" min="1">
-        </div>
-        <div class="field">
-          <label for="discountDescription">Short Note (shown to guests)</label>
-          <input id="discountDescription" type="text" placeholder="e.g. 10% off stays of 3+ nights">
-        </div>
+      <div class="field">
+        <label>Guest-Facing Note</label>
+        <p id="discountNoteText" style="font-size:15px; padding:10px 2px; opacity:0.55; margin:0;"></p>
       </div>
 
       <div class="eyebrow">Photos</div>
@@ -216,6 +200,10 @@
   // uploads) is the cover — shared across both categories, same pattern
   // as the listing submission form.
   let coverPhotoKey = null;
+  // Holds the discount as loaded from the server — view-only on this page
+  // now, so this is what gets sent back unchanged on Save rather than any
+  // form input.
+  let currentDiscount = { type: null, value: null, minNights: null, description: null };
   let nextTempId = 1;
   const allPhotoManagers = [];
 
@@ -377,10 +365,22 @@
 
       document.getElementById('propertyNameHeading').textContent = l.property_name;
       document.getElementById('nightlyRate').value = l.nightly_rate || '';
-      document.getElementById('discountType').value = l.discount_type || '';
-      document.getElementById('discountValue').value = l.discount_value || '';
-      document.getElementById('discountMinNights').value = l.discount_min_nights || '';
-      document.getElementById('discountDescription').value = l.discount_description || '';
+
+      // These are view-only here now — stored as-is so Save sends them
+      // back unchanged rather than accidentally clearing them.
+      currentDiscount = {
+        type: l.discount_type || null,
+        value: l.discount_value || null,
+        minNights: l.discount_min_nights || null,
+        description: l.discount_description || null
+      };
+      const discountSummary = currentDiscount.type === 'percentage'
+        ? `${currentDiscount.value}% off${currentDiscount.minNights ? ` stays of ${currentDiscount.minNights}+ nights` : ''}`
+        : currentDiscount.type === 'flat'
+          ? `₹${currentDiscount.value} off${currentDiscount.minNights ? ` stays of ${currentDiscount.minNights}+ nights` : ''}`
+          : 'No discount set';
+      document.getElementById('discountSummaryText').textContent = discountSummary;
+      document.getElementById('discountNoteText').textContent = currentDiscount.description || '—';
 
       const currentAmenities = Array.isArray(l.amenities) ? l.amenities : [];
       const currentServices = Array.isArray(l.services) ? l.services : [];
@@ -433,10 +433,10 @@
         body: JSON.stringify({
           token,
           nightlyRate: document.getElementById('nightlyRate').value,
-          discountType: document.getElementById('discountType').value,
-          discountValue: document.getElementById('discountValue').value,
-          discountMinNights: document.getElementById('discountMinNights').value,
-          discountDescription: document.getElementById('discountDescription').value,
+          discountType: currentDiscount.type,
+          discountValue: currentDiscount.value,
+          discountMinNights: currentDiscount.minNights,
+          discountDescription: currentDiscount.description,
           exteriorPhotoUrls,
           interiorPhotoUrls,
           coverPhotoUrl: coverPhotoKey,
