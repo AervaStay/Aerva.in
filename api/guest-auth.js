@@ -51,7 +51,7 @@ const DUMMY_HASH = '$2a$12$CwTycUXWue0Thq9StjUM0uJ8yqxbwmkQ.6qhg0OSyMH0RfaOOKKae
 
 function safeGuest(guest) {
   // Never send password_hash back to the client, under any circumstance.
-  return { id: guest.id, email: guest.email, name: guest.name, phone: guest.phone };
+  return { id: guest.id, email: guest.email, name: guest.name, phone: guest.phone, accountType: guest.account_type };
 }
 
 async function sendVerificationEmail(guest, verifyTok) {
@@ -89,7 +89,15 @@ async function sendVerificationEmail(guest, verifyTok) {
     try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
     console.error('Resend send failed:', res.status, detail);
 
-    if (res.status >= 400 && res.status < 500) {
+    // Only a 422 from Resend actually means "this recipient/request was
+    // rejected" (e.g. malformed or undeliverable address) — that's the
+    // one case worth blaming on what the guest typed. A 401 means OUR API
+    // key is wrong; 403 usually means a domain/sending permission issue;
+    // neither has anything to do with the email address itself, and
+    // mislabeling them that way (an earlier version of this code did)
+    // sends people on a wild goose chase checking their own typing for a
+    // problem that's actually on our end.
+    if (res.status === 422) {
       const err = new Error("That email address looks like it can't receive mail — double check it and try again.");
       err.isUserFacing = true;
       throw err;
@@ -118,7 +126,7 @@ module.exports = async (req, res) => {
       try {
         const rows = await sql`
           UPDATE guests SET email_verified = TRUE WHERE id = ${payload.listingId}
-          RETURNING id, email, name, phone
+          RETURNING id, email, name, phone, account_type
         `;
         const guest = rows[0];
         if (!guest) return res.status(404).json({ error: 'Account not found.' });
@@ -148,7 +156,7 @@ module.exports = async (req, res) => {
       // Reuses the generically-named "listingId" field from
       // _approval-token.js — same pattern as host-auth.js, here it holds
       // a guest's id instead.
-      const rows = await sql`SELECT id, email, name, phone FROM guests WHERE id = ${payload.listingId}`;
+      const rows = await sql`SELECT id, email, name, phone, account_type FROM guests WHERE id = ${payload.listingId}`;
       const guest = rows[0];
       if (!guest) return res.status(401).json({ error: 'Please log in again.' });
       return res.status(200).json({ guest: safeGuest(guest) });
@@ -220,7 +228,7 @@ module.exports = async (req, res) => {
       const inserted = await sql`
         INSERT INTO guests (email, password_hash, name, phone, email_verified)
         VALUES (${cleanEmail}, ${passwordHash}, ${name || null}, ${phone || null}, FALSE)
-        RETURNING id, email, name, phone
+        RETURNING id, email, name, phone, account_type
       `;
       const guest = inserted[0];
 
@@ -260,7 +268,7 @@ module.exports = async (req, res) => {
   // ---- Log in ----
   if (mode === 'login') {
     try {
-      const rows = await sql`SELECT id, email, password_hash, name, phone, email_verified FROM guests WHERE email = ${cleanEmail}`;
+      const rows = await sql`SELECT id, email, password_hash, name, phone, email_verified, account_type FROM guests WHERE email = ${cleanEmail}`;
       const guest = rows[0];
 
       // Always run bcrypt.compare, even for a non-existent account — see
