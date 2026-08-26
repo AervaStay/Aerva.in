@@ -2043,7 +2043,7 @@
         });
         if(res.ok){
           const data = await res.json();
-          guestNameDisplay.textContent = 'Hi, ' + (data.guest.name || data.guest.email);
+          guestNameDisplay.textContent = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
           guestLoginLink.style.display = 'none';
           guestAccountBox.style.display = 'inline-flex';
         } else {
