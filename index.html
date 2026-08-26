@@ -646,8 +646,8 @@
   </div>
   <div class="wrap" style="max-width:760px;">
     <div id="loggedOutGate" style="display:none; text-align:center; padding:20px 0 40px;">
-      <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">You'll need a host account to list a property — it's free, and just needs your email (no password).</p>
-      <a href="host-login.html" class="btn solid">Log In / Create Host Account</a>
+      <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">Log in to list a property — the same account you use to book stays.</p>
+      <a href="guest-login.html" class="btn solid">Log In</a>
     </div>
     <form class="reserve-form reveal" id="listingForm" autocomplete="off">
 
@@ -775,7 +775,7 @@
       <div class="field">
         <label>Email</label>
         <p id="listHostEmailDisplay" style="font-size:15px; padding:10px 2px; opacity:0.75;"></p>
-        <p style="font-size:11px; opacity:0.55;">This is your logged-in account's email — <a href="host-login.html" style="color:var(--gold-deep);">not you?</a></p>
+        <p style="font-size:11px; opacity:0.55;">This is your logged-in account's email — <a href="guest-login.html" style="color:var(--gold-deep);">not you?</a></p>
       </div>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Offers & Discounts <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></div>
@@ -1278,9 +1278,11 @@
   const listingForm = document.getElementById('listingForm');
   const listingSubmitBtn = document.getElementById('listingSubmitBtn');
 
-  // ---- Login gate: a listing must belong to a real, logged-in host ----
-  const hostSessionToken = localStorage.getItem('aerva_host_session');
-  const hostSessionEmail = localStorage.getItem('aerva_host_email');
+  // ---- Login gate: a listing must belong to a real, logged-in account ----
+  // (single login now — see guest-auth.js/guest-phone-auth.js — there's
+  // no separate "host account" to sign into anymore)
+  const hostSessionToken = localStorage.getItem('aerva_guest_session');
+  const hostSessionEmail = localStorage.getItem('aerva_guest_email');
   if(!hostSessionToken){
     document.getElementById('loggedOutGate').style.display = 'block';
     listingForm.style.display = 'none';
