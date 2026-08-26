@@ -80,6 +80,12 @@
     background:none; border:none; color:#a3402f; font-size:11.5px; letter-spacing:0.04em;
     cursor:pointer; text-decoration:underline; align-self:flex-start; padding:0;
   }
+  .weekday-excludes{display:flex; flex-wrap:wrap; gap:10px;}
+  .weekday-excludes label{
+    display:flex; align-items:center; gap:4px; font-size:11.5px; font-weight:normal;
+    letter-spacing:0; text-transform:none; color:#1c1a17; cursor:pointer;
+  }
+  .weekday-excludes input{width:auto; margin:0;}
   .add-paid-amenity-btn{
     background:white; border:1px dashed #ddd0bc; padding:12px; font-size:12px; letter-spacing:0.06em;
     text-transform:uppercase; cursor:pointer; width:100%; color:#8a6c39; margin-top:4px;
@@ -357,15 +363,24 @@
   let paidAmenityRows = [];
   const paidAmenitiesList = document.getElementById('paidAmenitiesList');
 
+  const WEEKDAY_LABELS = [
+    { value: 0, label: 'Sun' }, { value: 1, label: 'Mon' }, { value: 2, label: 'Tue' },
+    { value: 3, label: 'Wed' }, { value: 4, label: 'Thu' }, { value: 5, label: 'Fri' }, { value: 6, label: 'Sat' }
+  ];
+
   function renderPaidAmenities(){
     paidAmenitiesList.innerHTML = '';
     paidAmenityRows.forEach((row, idx) => {
+      if(!row.excludedWeekdays) row.excludedWeekdays = [];
       const el = document.createElement('div');
       el.className = 'paid-amenity-row';
+      const weekdayChecks = WEEKDAY_LABELS.map(w =>
+        `<label><input type="checkbox" data-weekday="${w.value}" ${row.excludedWeekdays.includes(w.value) ? 'checked' : ''}> ${w.label}</label>`
+      ).join('');
       el.innerHTML = `
         <div class="row-line">
           <input type="text" placeholder="Name, e.g. Private Chef" data-field="name" value="${row.name || ''}">
-          <input type="number" min="1" placeholder="₹ price" data-field="price" value="${row.price || ''}">
+          <input type="number" min="1" placeholder="₹ price/night" data-field="price" value="${row.price || ''}">
         </div>
         <div class="date-line">
           <div>
@@ -377,10 +392,24 @@
             <input type="date" data-field="availableUntil" value="${row.availableUntil || ''}">
           </div>
         </div>
+        <div>
+          <label style="font-size:9.5px; text-transform:uppercase; letter-spacing:0.1em; color:#8a7f6c; display:block; margin-bottom:6px;">Not Available On <span style="text-transform:none; letter-spacing:0;">(e.g. weekly maintenance day)</span></label>
+          <div class="weekday-excludes">${weekdayChecks}</div>
+        </div>
         <button type="button" class="remove-amenity-btn" data-action="remove">Remove this amenity</button>
       `;
       el.querySelectorAll('[data-field]').forEach(input => {
         input.addEventListener('input', () => { row[input.dataset.field] = input.value; });
+      });
+      el.querySelectorAll('[data-weekday]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const day = Number(cb.dataset.weekday);
+          if(cb.checked){
+            if(!row.excludedWeekdays.includes(day)) row.excludedWeekdays.push(day);
+          } else {
+            row.excludedWeekdays = row.excludedWeekdays.filter(d => d !== day);
+          }
+        });
       });
       el.querySelector('[data-action="remove"]').addEventListener('click', () => {
         paidAmenityRows.splice(idx, 1);
@@ -391,7 +420,7 @@
   }
 
   document.getElementById('addPaidAmenityBtn').addEventListener('click', () => {
-    paidAmenityRows.push({ id: null, name: '', price: '', availableFrom: '', availableUntil: '', isActive: true });
+    paidAmenityRows.push({ id: null, name: '', price: '', availableFrom: '', availableUntil: '', excludedWeekdays: [], isActive: true });
     renderPaidAmenities();
   });
 
@@ -435,6 +464,7 @@
         id: a.id, name: a.name, price: a.price,
         availableFrom: a.available_from ? a.available_from.slice(0, 10) : '',
         availableUntil: a.available_until ? a.available_until.slice(0, 10) : '',
+        excludedWeekdays: Array.isArray(a.excluded_weekdays) ? a.excluded_weekdays : [],
         isActive: a.is_active
       }));
       renderPaidAmenities();
