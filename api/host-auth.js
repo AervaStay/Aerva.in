@@ -58,7 +58,34 @@ async function sendLoginEmail(host, verifyToken) {
       html
     })
   });
-  if (!res.ok) throw new Error('Login email could not be sent. Please try again shortly.');
+
+  if (!res.ok) {
+    // Resend returns a JSON body describing exactly what went wrong —
+    // invalid recipient, unverified domain, bad API key, rate limit, etc.
+    // Always log the real body so this doesn't need to be re-diagnosed
+    // from scratch every time. res.json() can itself fail if Resend
+    // returns a non-JSON error page, so fall back to status text.
+    let detail;
+    try {
+      detail = await res.json();
+    } catch {
+      detail = { message: res.statusText };
+    }
+    console.error('Resend send failed:', res.status, detail);
+
+    // A 4xx here almost always means Resend rejected the request itself
+    // (e.g. "invalid_email" or an undeliverable domain for the recipient)
+    // — retrying won't help until the address is fixed, so say so
+    // plainly instead of telling the host to "try again." A 5xx (or
+    // anything else) is Resend's side acting up — that's the one case
+    // where retrying might actually work.
+    if (res.status >= 400 && res.status < 500) {
+      const err = new Error("That email address looks like it can't receive mail — double check it and try again.");
+      err.isUserFacing = true;
+      throw err;
+    }
+    throw new Error('Login email could not be sent. Please try again shortly.');
+  }
 }
 
 module.exports = async (req, res) => {
@@ -102,8 +129,14 @@ module.exports = async (req, res) => {
       return res.status(200).json({ success: true });
     } catch (err) {
       // Full detail goes to Vercel's logs for us to debug — never the raw
-      // error text to whoever's trying to log in.
+      // error text to whoever's trying to log in. The one exception is
+      // sendLoginEmail's isUserFacing errors: those messages are already
+      // written to be shown directly (e.g. "that email looks wrong"),
+      // as opposed to leaking internals like API keys or stack traces.
       console.error('host-auth (POST) error:', err);
+      if (err.isUserFacing) {
+        return res.status(400).json({ error: err.message });
+      }
       return res.status(500).json({ error: 'Could not send your login link right now. Please try again in a moment.' });
     }
   }

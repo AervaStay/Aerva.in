@@ -5,7 +5,7 @@
 // Never trust a "payment succeeded" message from the browser alone.
 //
 // Once verified, this also writes one row per stay into the `orders` table —
-// pulling the trusted stay/email details back from Razorpay's own order
+// pulling the trusted stay/email/guest details back from Razorpay's own order
 // record (via order.notes), not from anything the browser sends here, so a
 // tampered request can't fake what got booked or at what price.
 
@@ -60,6 +60,12 @@ module.exports = async (req, res) => {
     try {
       const order = await razorpay.orders.fetch(razorpay_order_id);
       const email = order.notes?.email;
+      // Only set if the guest was logged in at the time of booking (see
+      // create-order.js) — empty string means guest checkout, no account
+      // to link. Coerced to a real integer or null, never trusting the
+      // string itself as-is going into a numeric column.
+      const guestIdRaw = order.notes?.guestId;
+      const guestId = guestIdRaw ? parseInt(guestIdRaw, 10) : null;
       const stays = order.notes?.stays ? JSON.parse(order.notes.stays) : [];
 
       for (const stay of stays) {
@@ -72,12 +78,12 @@ module.exports = async (req, res) => {
 
         await sql`
           INSERT INTO orders (
-            suite_name, listing_id, guest_email, arrival, departure, guests, nights,
+            suite_name, listing_id, guest_id, guest_email, arrival, departure, guests, nights,
             subtotal, discount_amount, gst, total,
             commission_rate, commission_amount, payout_amount,
             razorpay_order_id, razorpay_payment_id, status
           ) VALUES (
-            ${stay.suite}, ${stay.listingId || null}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
+            ${stay.suite}, ${stay.listingId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${stayTotal},
             ${commissionRate}, ${commissionAmount}, ${payoutAmount},
             ${razorpay_order_id}, ${razorpay_payment_id}, 'paid'
@@ -90,14 +96,6 @@ module.exports = async (req, res) => {
       // Don't fail the guest's confirmation over a logging problem.
       console.error('Could not write order(s) to database:', dbErr);
     }
-
-    return res.status(200).json({ verified: true });
-  } catch (err) {
-    console.error('verify-payment error:', err);
-    return res.status(500).json({ error: 'Verification failed' });
-  }
-};    // At this point the payment is confirmed genuine.
-    // TODO: write the booking to your database / send confirmation email here.
 
     return res.status(200).json({ verified: true });
   } catch (err) {

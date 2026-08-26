@@ -12,6 +12,7 @@
 
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
+const { verifyToken } = require('./_approval-token');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -42,11 +43,26 @@ function calculateDiscount(listing, nights, subtotalBeforeDiscount) {
   return 0;
 }
 
+// A logged-in guest booking is optional, not required — Aerva still
+// supports guest checkout without an account. If a valid guest session
+// token is present, its id rides along in the Razorpay order's notes so
+// verify-payment.js can link the eventual order row back to the account;
+// if it's missing, expired, or invalid, booking proceeds exactly as
+// before, just without that link.
+function getOptionalGuestId(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!sessionToken) return null;
+  const payload = verifyToken(sessionToken);
+  if (!payload || payload.action !== 'guest-session') return null;
+  return payload.listingId; // generically-named token field — see host-auth.js note; here it's the guest's id
+}
+
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -60,6 +76,8 @@ module.exports = async (req, res) => {
     if (stays.length > MAX_STAYS) {
       return res.status(400).json({ error: 'Too many stays in one request' });
     }
+
+    const guestId = getOptionalGuestId(req);
 
     let grandSubtotal = 0;
     let grandDiscount = 0;
@@ -135,6 +153,7 @@ module.exports = async (req, res) => {
       receipt: `aerva_${Date.now()}`,
       notes: {
         email,
+        guestId: guestId || '',
         stayCount: stays.length,
         // Razorpay notes have a length limit — keep this compact.
         stays: JSON.stringify(stayDetails).slice(0, 2000),
