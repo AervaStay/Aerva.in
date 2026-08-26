@@ -1,15 +1,25 @@
 // /api/approve-listing.js
-// Two ways in, one action taken:
-//   GET  ?token=...           — clicked from the "Approve"/"Reject" link
-//                                in the admin notification email.
-//   POST { listingId, action } with header x-admin-secret — clicked from
-//                                a button on admin.html instead.
+// Three ways in:
+//   GET  ?token=...(action=approve)  — clicked "Approve" in the admin
+//                                       email. Instant, same as before.
+//   GET  ?token=...(action=reject)   — clicked "Reject" in the admin
+//                                       email. Shows a short form asking
+//                                       for a reason FIRST — rejection
+//                                       isn't finalized until that's
+//                                       submitted (see the POST-with-token
+//                                       path below).
+//   POST { token, reason }           — submitted from that reason form.
+//                                       Finalizes the rejection and emails
+//                                       the host with the specific reason.
+//   POST { listingId, action, reason? } with header x-admin-secret
+//                                     — clicked a button on admin.html
+//                                       instead. reason is optional here.
 //
 // On approval, this also emails the host a long-lived link to manage their
 // own listing's price and discount going forward (manage-listing.html) —
 // best-effort, same pattern as the admin notification email in
 // submit-listing.js: if RESEND_API_KEY isn't set, it's skipped quietly
-// rather than failing the approval itself.
+// rather than failing the approval/rejection itself.
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken } = require('./_approval-token');
@@ -17,6 +27,10 @@ const { verifyToken, createToken } = require('./_approval-token');
 const sql = neon(process.env.DATABASE_URL);
 
 const SITE_BASE = 'https://aerva.in';
+// Distinct from SITE_BASE — see the note in submit-listing.js. This file
+// IS the API, so its own self-referencing links (the reason form's submit
+// target) need to point here, not at the static frontend.
+const API_BASE = 'https://aerva-in.vercel.app';
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
 function htmlPage(title, message, isError) {
@@ -29,6 +43,80 @@ function htmlPage(title, message, isError) {
     p{opacity:0.75;line-height:1.6;}
   </style></head>
   <body><div class="box"><h1>${title}</h1><p>${message}</p></div></body></html>`;
+}
+
+// The reason-entry page shown when an admin clicks "Reject" — rejection
+// only actually happens once this form is submitted, not on the initial
+// click. Self-contained: submits via fetch to this same endpoint (POST
+// with the token), then swaps in a confirmation message inline.
+function rejectionReasonPage(listing, token) {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Reject Listing</title>
+  <style>
+    body{font-family:'Jost',sans-serif;background:#f4eadc;color:#1c1a17;
+      display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px;box-sizing:border-box;}
+    .box{max-width:440px;width:100%;}
+    h1{font-family:'Bodoni Moda',serif;font-size:24px;margin-bottom:8px;}
+    .subtitle{opacity:0.7;line-height:1.6;margin-bottom:24px;font-size:14px;}
+    label{font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#8a7f6c;display:block;margin-bottom:6px;}
+    textarea{width:100%;box-sizing:border-box;background:white;border:1px solid #ddd0bc;padding:12px;
+      font-family:'Jost',sans-serif;font-size:15px;color:#1c1a17;min-height:110px;resize:vertical;}
+    .btn{background:#a3402f;color:#f4eadc;border:none;padding:14px 28px;font-size:12px;
+      letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;width:100%;margin-top:16px;}
+    .btn:disabled{opacity:0.5;cursor:default;}
+    .error{font-size:13px;color:#a3402f;margin-top:12px;display:none;}
+    .confirm{font-size:15px;line-height:1.7;display:none;}
+  </style></head>
+  <body><div class="box">
+    <div id="formState">
+      <h1>Reject "${listing.property_name}"</h1>
+      <p class="subtitle">This note goes directly to the host by email, so please make it specific and actionable — e.g. "Exterior photos are too dark, please retake in daylight" rather than just "photos need work."</p>
+      <label for="reason">Reason for the host</label>
+      <textarea id="reason" placeholder="What needs to change before this can be approved?"></textarea>
+      <p class="error" id="reasonError">Please enter a reason before rejecting — the host needs to know what to fix.</p>
+      <button class="btn" id="submitBtn">Reject &amp; Notify Host</button>
+    </div>
+    <div id="confirmState" class="confirm">
+      <h1>Listing rejected</h1>
+      <p>"${listing.property_name}" has been marked as rejected, and the host has been emailed the reason.</p>
+    </div>
+  </div>
+  <script>
+    document.getElementById('submitBtn').addEventListener('click', async function(){
+      var reasonEl = document.getElementById('reason');
+      var errorEl = document.getElementById('reasonError');
+      var reason = reasonEl.value.trim();
+      if(!reason){
+        errorEl.style.display = 'block';
+        return;
+      }
+      errorEl.style.display = 'none';
+      this.disabled = true;
+      this.textContent = 'Submitting…';
+      try{
+        var res = await fetch('${API_BASE}/api/approve-listing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: '${token}', reason: reason })
+        });
+        if(res.ok){
+          document.getElementById('formState').style.display = 'none';
+          document.getElementById('confirmState').style.display = 'block';
+        } else {
+          var data = await res.json();
+          errorEl.textContent = data.error || 'Something went wrong. Please try again.';
+          errorEl.style.display = 'block';
+          this.disabled = false;
+          this.textContent = 'Reject & Notify Host';
+        }
+      } catch(err){
+        errorEl.textContent = 'Something went wrong. Please try again.';
+        errorEl.style.display = 'block';
+        this.disabled = false;
+        this.textContent = 'Reject & Notify Host';
+      }
+    });
+  </script>
+  </body></html>`;
 }
 
 async function sendHostApprovalEmail(listing) {
@@ -85,16 +173,49 @@ async function sendHostApprovalEmail(listing) {
   });
 }
 
-async function applyDecision(listingId, action) {
+async function sendHostRejectionEmail(listing) {
+  if (!process.env.RESEND_API_KEY) {
+    console.warn('RESEND_API_KEY not set — skipping host rejection email.');
+    return;
+  }
+
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">About your listing submission</h2>
+      <p><strong>${listing.property_name}</strong> wasn't approved this time. Here's why:</p>
+      <div style="background:#faf3e6; border-left:3px solid #a3402f; padding:14px 18px; margin:16px 0;">
+        <p style="margin:0; white-space:pre-wrap;">${listing.rejection_reason}</p>
+      </div>
+      <p>Once you've made those changes, reply to this email or contact hello@aerva.in and we'll help you get it resubmitted.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this decision? Just reply — a real person reads every message.</p>
+    </div>
+  `;
+
+  await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'Aerva <hello@aerva.in>',
+      to: listing.host_email,
+      subject: `Update on your Aerva listing: ${listing.property_name}`,
+      html
+    })
+  });
+}
+
+async function applyDecision(listingId, action, reason = null) {
   if (action !== 'approve' && action !== 'reject') {
     throw new Error('Invalid action');
   }
   const newStatus = action === 'approve' ? 'approved' : 'rejected';
 
   const result = await sql`
-    UPDATE listings SET status = ${newStatus}
+    UPDATE listings SET status = ${newStatus}, rejection_reason = ${action === 'reject' ? reason : null}
     WHERE id = ${listingId}
-    RETURNING id, property_name, status, host_email, host_id
+    RETURNING id, property_name, status, host_email, host_id, rejection_reason
   `;
   const listing = result[0] || null;
 
@@ -103,6 +224,13 @@ async function applyDecision(listingId, action) {
       await sendHostApprovalEmail(listing);
     } catch (emailErr) {
       console.error('Host approval email failed:', emailErr);
+    }
+  }
+  if (listing && action === 'reject' && listing.rejection_reason) {
+    try {
+      await sendHostRejectionEmail(listing);
+    } catch (emailErr) {
+      console.error('Host rejection email failed:', emailErr);
     }
   }
 
@@ -132,22 +260,58 @@ module.exports = async (req, res) => {
     }
 
     try {
-      const listing = await applyDecision(payload.listingId, payload.action);
+      // Approve is still instant — only reject needs a reason first.
+      if (payload.action === 'approve') {
+        const listing = await applyDecision(payload.listingId, 'approve');
+        if (!listing) {
+          return res.status(404).send(htmlPage('Listing not found', 'This listing may have already been removed.', true));
+        }
+        return res.status(200).send(htmlPage('Listing approved', `"${listing.property_name}" is now approved and live.`, false));
+      }
+
+      // Reject: show the reason form instead of rejecting immediately.
+      // Look the listing up without changing anything yet.
+      const rows = await sql`SELECT id, property_name, status FROM listings WHERE id = ${payload.listingId}`;
+      const listing = rows[0];
       if (!listing) {
         return res.status(404).send(htmlPage('Listing not found', 'This listing may have already been removed.', true));
       }
-      return res.status(200).send(htmlPage(
-        payload.action === 'approve' ? 'Listing approved' : 'Listing rejected',
-        `"${listing.property_name}" has been marked as ${listing.status}.`,
-        false
-      ));
+      if (listing.status !== 'pending') {
+        return res.status(400).send(htmlPage(
+          'Already reviewed',
+          `"${listing.property_name}" is already marked as ${listing.status} — no action needed.`,
+          true
+        ));
+      }
+      return res.status(200).send(rejectionReasonPage(listing, token));
     } catch (err) {
       console.error('approve-listing (GET) error:', err);
       return res.status(500).send(htmlPage('Something went wrong', 'Please try again from the admin page.', true));
     }
   }
 
-  // ---- Path 2: admin page button ----
+  // ---- Path 2: reason form submission (token-based, from the page above) ----
+  if (req.method === 'POST' && req.body && req.body.token) {
+    try {
+      const { token, reason } = req.body;
+      const payload = verifyToken(token);
+      if (!payload || payload.action !== 'reject') {
+        return res.status(400).json({ error: 'This link is no longer valid. Please use the admin page instead.' });
+      }
+      const cleanReason = typeof reason === 'string' ? reason.trim() : '';
+      if (!cleanReason) {
+        return res.status(400).json({ error: 'Please enter a reason before rejecting — the host needs to know what to fix.' });
+      }
+      const listing = await applyDecision(payload.listingId, 'reject', cleanReason);
+      if (!listing) return res.status(404).json({ error: 'Listing not found' });
+      return res.status(200).json({ success: true, listing });
+    } catch (err) {
+      console.error('approve-listing (POST token) error:', err);
+      return res.status(500).json({ error: 'Could not reject the listing right now. Please try again.' });
+    }
+  }
+
+  // ---- Path 3: admin page button ----
   if (req.method === 'POST') {
     const adminSecret = req.headers['x-admin-secret'];
     if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
@@ -155,8 +319,8 @@ module.exports = async (req, res) => {
     }
 
     try {
-      const { listingId, action } = req.body;
-      const listing = await applyDecision(listingId, action);
+      const { listingId, action, reason } = req.body;
+      const listing = await applyDecision(listingId, action, reason || null);
       if (!listing) return res.status(404).json({ error: 'Listing not found' });
       return res.status(200).json({ success: true, listing });
     } catch (err) {
