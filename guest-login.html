@@ -53,6 +53,7 @@
       <p class="error" id="loginError" style="display:none;"></p>
     </form>
     <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
+    <p class="switch-mode"><button type="button" id="showPhoneRequest">Log in with phone instead</button></p>
   </div>
 
   <div id="signupState" style="display:none;">
@@ -80,6 +81,34 @@
     </form>
     <p class="switch-mode">Already have an account? <button type="button" id="showLogin">Log in</button></p>
   </div>
+
+  <div id="phoneRequestState" style="display:none;">
+    <h1>Log In With Phone</h1>
+    <p class="subtitle">We'll text you a one-time code.</p>
+    <form id="phoneRequestForm">
+      <div class="field">
+        <label for="phoneNumber">Phone Number</label>
+        <input id="phoneNumber" type="tel" placeholder="+919876543210" autocomplete="tel" required>
+      </div>
+      <button type="submit" class="btn" id="phoneRequestBtn">Send Code</button>
+      <p class="error" id="phoneRequestError" style="display:none;"></p>
+    </form>
+    <p class="switch-mode"><button type="button" id="showLoginFromPhone">Log in with email instead</button></p>
+  </div>
+
+  <div id="phoneVerifyState" style="display:none;">
+    <h1>Enter Your Code</h1>
+    <p class="subtitle" id="phoneVerifySubtitle">We texted a code to your phone.</p>
+    <form id="phoneVerifyForm">
+      <div class="field">
+        <label for="phoneCode">Code</label>
+        <input id="phoneCode" type="text" inputmode="numeric" placeholder="6-digit code" autocomplete="one-time-code" required>
+      </div>
+      <button type="submit" class="btn" id="phoneVerifyBtn">Verify</button>
+      <p class="error" id="phoneVerifyError" style="display:none;"></p>
+    </form>
+    <p class="switch-mode"><button type="button" id="backToPhoneRequest">Use a different number</button></p>
+  </div>
 </div>
 
 <script>
@@ -89,9 +118,11 @@
   const checkingState = document.getElementById('checkingState');
   const loginState = document.getElementById('loginState');
   const signupState = document.getElementById('signupState');
+  const phoneRequestState = document.getElementById('phoneRequestState');
+  const phoneVerifyState = document.getElementById('phoneVerifyState');
 
   function showOnly(el){
-    [checkingState, loginState, signupState].forEach(s => s.style.display = 'none');
+    [checkingState, loginState, signupState, phoneRequestState, phoneVerifyState].forEach(s => s.style.display = 'none');
     el.style.display = 'block';
   }
 
@@ -103,7 +134,7 @@
     // and log the guest back in automatically, without asking for their
     // password again.
     localStorage.setItem('aerva_guest_session', sessionToken);
-    localStorage.setItem('aerva_guest_email', guest.email);
+    localStorage.setItem('aerva_guest_email', guest.email || '');
     localStorage.setItem('aerva_guest_name', guest.name || '');
   }
 
@@ -136,6 +167,9 @@
 
   document.getElementById('showSignup').addEventListener('click', () => showOnly(signupState));
   document.getElementById('showLogin').addEventListener('click', () => showOnly(loginState));
+  document.getElementById('showPhoneRequest').addEventListener('click', () => showOnly(phoneRequestState));
+  document.getElementById('showLoginFromPhone').addEventListener('click', () => showOnly(loginState));
+  document.getElementById('backToPhoneRequest').addEventListener('click', () => showOnly(phoneRequestState));
 
   document.getElementById('loginForm').addEventListener('submit', async function(e){
     e.preventDefault();
@@ -225,6 +259,89 @@
       signupBtn.disabled = false;
       signupBtn.textContent = 'Create Account';
     }
+  });
+
+  // Remembers the phone number between the "request code" and "verify
+  // code" steps, so the verify step doesn't need the guest to re-type it.
+  let pendingPhoneNumber = '';
+  const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
+
+  document.getElementById('phoneRequestForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const phoneRequestBtn = document.getElementById('phoneRequestBtn');
+    const phoneRequestError = document.getElementById('phoneRequestError');
+    phoneRequestError.style.display = 'none';
+
+    const phoneValue = document.getElementById('phoneNumber').value.trim();
+    if(!E164_PATTERN.test(phoneValue)){
+      phoneRequestError.textContent = 'Please include your country code, like +919876543210.';
+      phoneRequestError.style.display = 'block';
+      return;
+    }
+
+    phoneRequestBtn.disabled = true;
+    phoneRequestBtn.textContent = 'Sending…';
+
+    try{
+      const res = await fetch(API_BASE + '/api/guest-phone-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'request', phone: phoneValue })
+      });
+      const data = await res.json();
+      if(res.ok){
+        pendingPhoneNumber = phoneValue;
+        document.getElementById('phoneVerifySubtitle').textContent = `We texted a code to ${phoneValue}.`;
+        document.getElementById('phoneCode').value = '';
+        showOnly(phoneVerifyState);
+      } else {
+        phoneRequestError.textContent = data.error || 'Something went wrong. Please try again.';
+        phoneRequestError.style.display = 'block';
+      }
+    } catch(err){
+      phoneRequestError.textContent = 'Something went wrong. Please try again.';
+      phoneRequestError.style.display = 'block';
+    }
+    phoneRequestBtn.disabled = false;
+    phoneRequestBtn.textContent = 'Send Code';
+  });
+
+  document.getElementById('phoneVerifyForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const phoneVerifyBtn = document.getElementById('phoneVerifyBtn');
+    const phoneVerifyError = document.getElementById('phoneVerifyError');
+    phoneVerifyError.style.display = 'none';
+
+    const codeValue = document.getElementById('phoneCode').value.trim();
+    if(!codeValue){
+      phoneVerifyError.textContent = 'Please enter the code you received.';
+      phoneVerifyError.style.display = 'block';
+      return;
+    }
+
+    phoneVerifyBtn.disabled = true;
+    phoneVerifyBtn.textContent = 'Verifying…';
+
+    try{
+      const res = await fetch(API_BASE + '/api/guest-phone-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'verify', phone: pendingPhoneNumber, code: codeValue })
+      });
+      const data = await res.json();
+      if(res.ok){
+        storeSession(data.sessionToken, data.guest);
+        window.location.href = 'index.html';
+      } else {
+        phoneVerifyError.textContent = data.error || 'Something went wrong. Please try again.';
+        phoneVerifyError.style.display = 'block';
+      }
+    } catch(err){
+      phoneVerifyError.textContent = 'Something went wrong. Please try again.';
+      phoneVerifyError.style.display = 'block';
+    }
+    phoneVerifyBtn.disabled = false;
+    phoneVerifyBtn.textContent = 'Verify';
   });
 
   checkExistingSession();
