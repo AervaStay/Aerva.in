@@ -73,8 +73,14 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     try {
       const { email, name, phone } = req.body;
-      if (!email || typeof email !== 'string' || !email.includes('@')) {
-        return res.status(400).json({ error: 'Please enter a valid email address.' });
+      // Requires something@something.something — catches the common
+      // mistakes: no "@", or a domain with no dot/TLD (e.g. "name@gmail"
+      // instead of "name@gmail.com"). Not a full RFC-5322 validator, but
+      // enough to reject obviously malformed addresses before we try to
+      // email anyone.
+      const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!email || typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
+        return res.status(400).json({ error: 'Please enter a complete email address, like you@gmail.com.' });
       }
       const cleanEmail = email.trim().toLowerCase();
 
