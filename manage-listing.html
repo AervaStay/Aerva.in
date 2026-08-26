@@ -102,14 +102,30 @@
         <p class="price-history-note">Every change here is recorded, so you can always see your rate history.</p>
       </div>
 
-      <div class="eyebrow" style="margin-top:0;">Current Offer <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(view only)</span></div>
-      <div class="field">
-        <label>Discount</label>
-        <p id="discountSummaryText" style="font-size:15px; padding:10px 2px; opacity:0.55; margin:0;"></p>
+      <div class="form-row">
+        <div class="field">
+          <label for="discountType">Discount Type</label>
+          <select id="discountType">
+            <option value="">None</option>
+            <option value="percentage">Percentage off</option>
+            <option value="flat">Flat amount off (₹)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="discountValue">Amount</label>
+          <input id="discountValue" type="number" min="0">
+        </div>
       </div>
-      <div class="field">
-        <label>Guest-Facing Note</label>
-        <p id="discountNoteText" style="font-size:15px; padding:10px 2px; opacity:0.55; margin:0;"></p>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="discountMinNights">Minimum Nights to Qualify</label>
+          <input id="discountMinNights" type="number" min="1">
+        </div>
+        <div class="field">
+          <label for="discountDescription">Short Note <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-generated from your settings)</span></label>
+          <input id="discountDescription" type="text" readonly>
+        </div>
       </div>
 
       <div class="eyebrow">Photos</div>
@@ -200,10 +216,28 @@
   // uploads) is the cover — shared across both categories, same pattern
   // as the listing submission form.
   let coverPhotoKey = null;
-  // Holds the discount as loaded from the server — view-only on this page
-  // now, so this is what gets sent back unchanged on Save rather than any
-  // form input.
-  let currentDiscount = { type: null, value: null, minNights: null, description: null };
+
+  // Short Note is always derived from Discount Type/Amount/Minimum Nights
+  // — never typed freely — so it can never drift out of sync with what
+  // the discount actually is. "Discount" and "n" are the only two things
+  // that vary; the surrounding sentence is always the same.
+  function updateDiscountNote(){
+    const type = document.getElementById('discountType').value;
+    const value = document.getElementById('discountValue').value;
+    const minNights = document.getElementById('discountMinNights').value;
+    const noteEl = document.getElementById('discountDescription');
+
+    if(!type || !value){
+      noteEl.value = '';
+      return;
+    }
+    const discountText = type === 'percentage' ? `${value}% off` : `₹${value} off`;
+    noteEl.value = minNights ? `${discountText} on Min ${minNights} nights` : discountText;
+  }
+  ['discountType','discountValue','discountMinNights'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateDiscountNote);
+    document.getElementById(id).addEventListener('change', updateDiscountNote);
+  });
   let nextTempId = 1;
   const allPhotoManagers = [];
 
@@ -365,22 +399,13 @@
 
       document.getElementById('propertyNameHeading').textContent = l.property_name;
       document.getElementById('nightlyRate').value = l.nightly_rate || '';
-
-      // These are view-only here now — stored as-is so Save sends them
-      // back unchanged rather than accidentally clearing them.
-      currentDiscount = {
-        type: l.discount_type || null,
-        value: l.discount_value || null,
-        minNights: l.discount_min_nights || null,
-        description: l.discount_description || null
-      };
-      const discountSummary = currentDiscount.type === 'percentage'
-        ? `${currentDiscount.value}% off${currentDiscount.minNights ? ` stays of ${currentDiscount.minNights}+ nights` : ''}`
-        : currentDiscount.type === 'flat'
-          ? `₹${currentDiscount.value} off${currentDiscount.minNights ? ` stays of ${currentDiscount.minNights}+ nights` : ''}`
-          : 'No discount set';
-      document.getElementById('discountSummaryText').textContent = discountSummary;
-      document.getElementById('discountNoteText').textContent = currentDiscount.description || '—';
+      document.getElementById('discountType').value = l.discount_type || '';
+      document.getElementById('discountValue').value = l.discount_value || '';
+      document.getElementById('discountMinNights').value = l.discount_min_nights || '';
+      // Not set from l.discount_description directly — always regenerated
+      // from the discount fields themselves, so it can't carry forward a
+      // stale hand-typed note from before this became auto-generated.
+      updateDiscountNote();
 
       const currentAmenities = Array.isArray(l.amenities) ? l.amenities : [];
       const currentServices = Array.isArray(l.services) ? l.services : [];
@@ -433,10 +458,10 @@
         body: JSON.stringify({
           token,
           nightlyRate: document.getElementById('nightlyRate').value,
-          discountType: currentDiscount.type,
-          discountValue: currentDiscount.value,
-          discountMinNights: currentDiscount.minNights,
-          discountDescription: currentDiscount.description,
+          discountType: document.getElementById('discountType').value,
+          discountValue: document.getElementById('discountValue').value,
+          discountMinNights: document.getElementById('discountMinNights').value,
+          discountDescription: document.getElementById('discountDescription').value,
           exteriorPhotoUrls,
           interiorPhotoUrls,
           coverPhotoUrl: coverPhotoKey,
