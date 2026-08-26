@@ -55,19 +55,23 @@
 
 <script>
   const API_BASE = 'https://aerva-in.vercel.app';
-  const sessionToken = localStorage.getItem('aerva_host_session');
-  const hostEmail = localStorage.getItem('aerva_host_email');
+  // Single login — same session used across the whole site (see
+  // guest-auth.js / guest-phone-auth.js). There's no separate host
+  // account/session to check for anymore.
+  const sessionToken = localStorage.getItem('aerva_guest_session');
+  const hostEmail = localStorage.getItem('aerva_guest_email');
 
   if(!sessionToken){
-    window.location.href = 'host-login.html';
+    window.location.href = 'guest-login.html';
   }
 
   document.getElementById('hostEmailDisplay').textContent = hostEmail || '';
 
   document.getElementById('logoutBtn').addEventListener('click', () => {
-    localStorage.removeItem('aerva_host_session');
-    localStorage.removeItem('aerva_host_email');
-    window.location.href = 'host-login.html';
+    localStorage.removeItem('aerva_guest_session');
+    localStorage.removeItem('aerva_guest_email');
+    localStorage.removeItem('aerva_guest_name');
+    window.location.href = 'guest-login.html';
   });
 
   function statusBadgeHtml(status){
@@ -107,9 +111,10 @@
         headers: { 'Authorization': 'Bearer ' + sessionToken }
       });
       if(res.status === 401){
-        localStorage.removeItem('aerva_host_session');
-        localStorage.removeItem('aerva_host_email');
-        window.location.href = 'host-login.html';
+        localStorage.removeItem('aerva_guest_session');
+        localStorage.removeItem('aerva_guest_email');
+        localStorage.removeItem('aerva_guest_name');
+        window.location.href = 'guest-login.html';
         return;
       }
       const data = await res.json();
