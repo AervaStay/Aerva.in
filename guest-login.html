@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Log In — Aerva</title>
+<style>
+  body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:60px 20px; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:400px; margin:0 auto; text-align:center;}
+  h1{font-family:Georgia,serif; font-size:26px; margin-bottom:8px;}
+  .subtitle{opacity:0.65; font-size:14px; margin-bottom:32px;}
+  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:20px; text-align:left;}
+  label{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c;}
+  input{
+    background:white; border:1px solid #ddd0bc; padding:12px; font-family:'Jost', sans-serif;
+    font-size:15px; color:#1c1a17; width:100%; box-sizing:border-box;
+  }
+  input:focus{outline:none; border-color:#8a6c39;}
+  .btn{
+    background:#1c1a17; color:#f4ebe3; border:none; padding:14px 28px; font-size:12px;
+    letter-spacing:0.1em; text-transform:uppercase; cursor:pointer; width:100%;
+  }
+  .btn:disabled{opacity:0.5; cursor:default;}
+  .error{font-size:13px; color:#a3402f; margin-top:16px; text-align:left;}
+  .loading{opacity:0.6; padding:40px 0;}
+  .switch-mode{font-size:13px; opacity:0.7; margin-top:24px;}
+  .switch-mode button{
+    background:none; border:none; color:#8a6c39; text-decoration:underline;
+    cursor:pointer; font-family:'Jost', sans-serif; font-size:13px; padding:0;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div id="checkingState">
+    <p class="loading">Loading…</p>
+  </div>
+
+  <div id="loginState" style="display:none;">
+    <h1>Welcome Back</h1>
+    <p class="subtitle">Log in to view your bookings.</p>
+    <form id="loginForm">
+      <div class="field">
+        <label for="loginEmail">Email</label>
+        <input id="loginEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn" id="loginBtn">Log In</button>
+      <p class="error" id="loginError" style="display:none;"></p>
+    </form>
+    <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
+  </div>
+
+  <div id="signupState" style="display:none;">
+    <h1>Create Your Account</h1>
+    <p class="subtitle">Save your details for faster booking next time.</p>
+    <form id="signupForm">
+      <div class="field">
+        <label for="signupName">Name</label>
+        <input id="signupName" type="text" placeholder="Your name" autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="signupEmail">Email</label>
+        <input id="signupEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="signupPhone">Phone</label>
+        <input id="signupPhone" type="tel" placeholder="Your phone number" autocomplete="tel">
+      </div>
+      <div class="field">
+        <label for="signupPassword">Password</label>
+        <input id="signupPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" required>
+      </div>
+      <button type="submit" class="btn" id="signupBtn">Create Account</button>
+      <p class="error" id="signupError" style="display:none;"></p>
+    </form>
+    <p class="switch-mode">Already have an account? <button type="button" id="showLogin">Log in</button></p>
+  </div>
+</div>
+
+<script>
+  const API_BASE = 'https://aerva-in.vercel.app';
+  const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  const checkingState = document.getElementById('checkingState');
+  const loginState = document.getElementById('loginState');
+  const signupState = document.getElementById('signupState');
+
+  function showOnly(el){
+    [checkingState, loginState, signupState].forEach(s => s.style.display = 'none');
+    el.style.display = 'block';
+  }
+
+  function storeSession(sessionToken, guest){
+    // Only the session token and non-sensitive display info ever get
+    // stored client-side — never the password itself. The token is what
+    // makes "remembered in the browser" work: next visit, this same
+    // token is sent to /api/guest-auth (GET) to check it's still valid
+    // and log the guest back in automatically, without asking for their
+    // password again.
+    localStorage.setItem('aerva_guest_session', sessionToken);
+    localStorage.setItem('aerva_guest_email', guest.email);
+    localStorage.setItem('aerva_guest_name', guest.name || '');
+  }
+
+  // ---- Auto-login: if a session token is already stored, check it's
+  // still valid before showing any login form at all ----
+  async function checkExistingSession(){
+    const existingToken = localStorage.getItem('aerva_guest_session');
+    if(!existingToken){
+      showOnly(loginState);
+      return;
+    }
+    try{
+      const res = await fetch(API_BASE + '/api/guest-auth', {
+        headers: { 'Authorization': 'Bearer ' + existingToken }
+      });
+      if(res.ok){
+        // Session still valid — already logged in, send straight through.
+        window.location.href = 'index.html';
+        return;
+      }
+      // Token expired or invalid — clear it and fall through to login.
+      localStorage.removeItem('aerva_guest_session');
+      localStorage.removeItem('aerva_guest_email');
+      localStorage.removeItem('aerva_guest_name');
+      showOnly(loginState);
+    } catch(err){
+      showOnly(loginState);
+    }
+  }
+
+  document.getElementById('showSignup').addEventListener('click', () => showOnly(signupState));
+  document.getElementById('showLogin').addEventListener('click', () => showOnly(loginState));
+
+  document.getElementById('loginForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const loginBtn = document.getElementById('loginBtn');
+    const loginError = document.getElementById('loginError');
+    loginError.style.display = 'none';
+
+    const emailValue = document.getElementById('loginEmail').value.trim();
+    const passwordValue = document.getElementById('loginPassword').value;
+    if(!EMAIL_PATTERN.test(emailValue)){
+      loginError.textContent = 'Please enter a complete email address, like you@gmail.com.';
+      loginError.style.display = 'block';
+      return;
+    }
+
+    loginBtn.disabled = true;
+    loginBtn.textContent = 'Logging in…';
+
+    try{
+      const res = await fetch(API_BASE + '/api/guest-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'login', email: emailValue, password: passwordValue })
+      });
+      const data = await res.json();
+      if(res.ok){
+        storeSession(data.sessionToken, data.guest);
+        window.location.href = 'index.html';
+      } else {
+        loginError.textContent = data.error || 'Something went wrong. Please try again.';
+        loginError.style.display = 'block';
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Log In';
+      }
+    } catch(err){
+      loginError.textContent = 'Something went wrong. Please try again.';
+      loginError.style.display = 'block';
+      loginBtn.disabled = false;
+      loginBtn.textContent = 'Log In';
+    }
+  });
+
+  document.getElementById('signupForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const signupBtn = document.getElementById('signupBtn');
+    const signupError = document.getElementById('signupError');
+    signupError.style.display = 'none';
+
+    const emailValue = document.getElementById('signupEmail').value.trim();
+    const passwordValue = document.getElementById('signupPassword').value;
+    const nameValue = document.getElementById('signupName').value.trim();
+    const phoneValue = document.getElementById('signupPhone').value.trim();
+
+    if(!EMAIL_PATTERN.test(emailValue)){
+      signupError.textContent = 'Please enter a complete email address, like you@gmail.com.';
+      signupError.style.display = 'block';
+      return;
+    }
+    if(passwordValue.length < 8){
+      signupError.textContent = 'Password must be at least 8 characters.';
+      signupError.style.display = 'block';
+      return;
+    }
+
+    signupBtn.disabled = true;
+    signupBtn.textContent = 'Creating account…';
+
+    try{
+      const res = await fetch(API_BASE + '/api/guest-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'signup', email: emailValue, password: passwordValue, name: nameValue, phone: phoneValue })
+      });
+      const data = await res.json();
+      if(res.ok){
+        storeSession(data.sessionToken, data.guest);
+        window.location.href = 'index.html';
+      } else {
+        signupError.textContent = data.error || 'Something went wrong. Please try again.';
+        signupError.style.display = 'block';
+        signupBtn.disabled = false;
+        signupBtn.textContent = 'Create Account';
+      }
+    } catch(err){
+      signupError.textContent = 'Something went wrong. Please try again.';
+      signupError.style.display = 'block';
+      signupBtn.disabled = false;
+      signupBtn.textContent = 'Create Account';
+    }
+  });
+
+  checkExistingSession();
+</script>
+
+</body>
+</html>
