@@ -84,7 +84,7 @@ async function validateAndPriceAmenities(sql, listingId, arrival, departure, req
     if (!amenityId || dates.length === 0) continue;
 
     const rows = await sql`
-      SELECT id, name, price, available_from, available_until
+      SELECT id, name, price, available_from, available_until, excluded_weekdays
       FROM listing_amenities
       WHERE id = ${amenityId} AND listing_id = ${listingId} AND is_active = TRUE
     `;
@@ -92,10 +92,18 @@ async function validateAndPriceAmenities(sql, listingId, arrival, departure, req
     if (!amenity) {
       return { error: `One of the selected amenities is no longer available. Please refresh and try again.` };
     }
+    const excludedWeekdays = Array.isArray(amenity.excluded_weekdays) ? amenity.excluded_weekdays : [];
 
     for (const date of dates) {
       if (!stayNights.has(date)) {
         return { error: `${amenity.name}: selected date ${date} isn't part of this stay.` };
+      }
+      // getDay() on a 'YYYY-MM-DD' string parses as UTC midnight, which
+      // matches how getNightsInRange built these same strings above — no
+      // timezone drift between the two.
+      const weekday = new Date(date + 'T00:00:00Z').getUTCDay();
+      if (excludedWeekdays.includes(weekday)) {
+        return { error: `${amenity.name} isn't available on ${date} (unavailable on that day of the week).` };
       }
       if (amenity.available_from && date < toDateStr(amenity.available_from)) {
         return { error: `${amenity.name} isn't available on ${date}.` };
