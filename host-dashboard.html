@@ -104,11 +104,12 @@
       const thumbHtml = leadPhoto
         ? `<img class="listing-thumb" src="${leadPhoto}" alt="${l.property_name}">`
         : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
+      const actionHref = l.status === 'draft' ? `index.html?edit=${l.id}#add-listing` : l.manageLink;
       const actionLink = l.status === 'draft'
         ? `<a class="manage-link" href="index.html?edit=${l.id}#add-listing">Continue Editing</a>`
         : `<a class="manage-link" href="${l.manageLink}">Manage Price & Offers</a>`;
       return `
-        <div class="listing-card">
+        <div class="listing-card" data-href="${actionHref}" style="cursor:pointer;">
           ${thumbHtml}
           <div class="listing-info">
             <h3>${l.property_name || '(Untitled draft)'}</h3>
@@ -143,6 +144,16 @@
       document.getElementById('listingsContainer').innerHTML = '<p class="empty">Could not load your listings. Please refresh.</p>';
     }
   }
+
+  // Whole-card click: anywhere on the card jumps to its own action link's
+  // destination — except the link itself, which already navigates and
+  // would otherwise double-trigger.
+  document.getElementById('listingsContainer').addEventListener('click', (e) => {
+    if(e.target.closest('a.manage-link')) return;
+    const card = e.target.closest('.listing-card');
+    if(!card || !card.dataset.href) return;
+    window.location.href = card.dataset.href;
+  });
 
   if(sessionToken){
     loadListings();
