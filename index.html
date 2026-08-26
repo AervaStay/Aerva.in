@@ -2015,6 +2015,8 @@
       : '';
 
     card.className = 'suite-card';
+    card.dataset.listingId = listing.id;
+    card.style.cursor = 'pointer';
     card.innerHTML = `
       <div class="suite-photo">
         ${photoHtml}
@@ -2168,10 +2170,14 @@
   }
 
   document.getElementById('suitesContainer').addEventListener('click', (e) => {
-    const link = e.target.closest('a[data-listing-id]');
-    if(!link) return;
+    // "View on map" opens Google Maps in a new tab — let it behave
+    // completely normally, not trigger the card's own click action.
+    if(e.target.closest('a[target="_blank"]')) return;
+
+    const card = e.target.closest('.suite-card');
+    if(!card) return;
     e.preventDefault();
-    prefillReserveWithListing(link.dataset.listingId);
+    prefillReserveWithListing(card.dataset.listingId);
   });
 
   document.getElementById('searchBtn').addEventListener('click', performSearch);
