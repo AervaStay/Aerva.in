@@ -39,10 +39,31 @@ async function sendHostApprovalEmail(listing) {
   const manageToken = createToken(listing.id, 'manage-pricing', TWO_YEARS_MS);
   const manageLink = `${SITE_BASE}/manage-listing.html?token=${manageToken}`;
 
+  // "Aerva Host" status is awarded the moment a host has at least one
+  // approved listing (see host-listings.js, which computes this the same
+  // way for the dashboard). Only call it out here the first time it
+  // actually happens — a host's second, third, etc. approval is still
+  // good news, just not a new milestone worth re-announcing.
+  let isFirstApproval = false;
+  if (listing.host_id) {
+    const approvedCount = await sql`
+      SELECT COUNT(*)::int AS count FROM listings WHERE host_id = ${listing.host_id} AND status = 'approved'
+    `;
+    isFirstApproval = approvedCount[0].count === 1;
+  }
+
+  const badgeAnnouncement = isFirstApproval ? `
+      <div style="background:#faf3e6; border:1px solid #ddc9a3; padding:16px 20px; margin:20px 0; border-radius:4px;">
+        <p style="margin:0; font-size:13px; letter-spacing:0.06em; text-transform:uppercase; color:#8a6c39;">New status unlocked</p>
+        <p style="margin:6px 0 0; font-size:16px; font-family:Georgia,serif;">You're now an <strong>Aerva Host</strong> 🎉</p>
+      </div>
+  ` : '';
+
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">Your listing is live on Aerva</h2>
       <p><strong>${listing.property_name}</strong> is now approved and visible to guests.</p>
+      ${badgeAnnouncement}
       <p>Whenever you'd like to change your nightly rate or set up an offer, use this link — it's yours to keep and reuse anytime:</p>
       <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Manage Price & Offers</a></p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, contact hello@aerva.in for a new one.</p>
@@ -58,7 +79,7 @@ async function sendHostApprovalEmail(listing) {
     body: JSON.stringify({
       from: 'Aerva <hello@aerva.in>',
       to: listing.host_email,
-      subject: `${listing.property_name} is live on Aerva`,
+      subject: isFirstApproval ? `You're an Aerva Host — ${listing.property_name} is live!` : `${listing.property_name} is live on Aerva`,
       html
     })
   });
@@ -73,7 +94,7 @@ async function applyDecision(listingId, action) {
   const result = await sql`
     UPDATE listings SET status = ${newStatus}
     WHERE id = ${listingId}
-    RETURNING id, property_name, status, host_email
+    RETURNING id, property_name, status, host_email, host_id
   `;
   const listing = result[0] || null;
 
