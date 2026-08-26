@@ -11,6 +11,11 @@
   .top-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;}
   h1{font-family:Georgia,serif; font-size:26px; margin:0;}
   .host-email{font-size:13px; opacity:0.6;}
+  .host-badge{
+    display:inline-block; font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase;
+    color:#8a6c39; border:1px solid #ddc9a3; background:#faf3e6; padding:3px 9px; border-radius:3px;
+    margin-left:8px; vertical-align:middle;
+  }
   .logout-btn{background:none; border:1px solid #ddd0bc; padding:8px 16px; font-size:12px; cursor:pointer; color:#1c1a17;}
   .add-listing-link{
     display:inline-block; background:#1c1a17; color:#f4ebe3; padding:12px 24px;
@@ -40,7 +45,7 @@
 <div class="wrap">
   <div class="top-row">
     <div>
-      <h1>Your Listings</h1>
+      <h1>Your Listings<span class="host-badge" id="hostBadge" style="display:none;"></span></h1>
       <div class="host-email" id="hostEmailDisplay"></div>
     </div>
     <button class="logout-btn" id="logoutBtn">Log Out</button>
@@ -118,6 +123,11 @@
         return;
       }
       const data = await res.json();
+      if(data.hostBadge){
+        const badgeEl = document.getElementById('hostBadge');
+        badgeEl.textContent = data.hostBadge;
+        badgeEl.style.display = 'inline-block';
+      }
       renderListings(data.listings || []);
     } catch(err){
       document.getElementById('listingsContainer').innerHTML = '<p class="empty">Could not load your listings. Please refresh.</p>';
