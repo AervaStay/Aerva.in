@@ -94,7 +94,7 @@ async function sendAdminNotification(listing) {
   }
 
   const photoThumbnails = (exteriorPhotos.length || interiorPhotos.length)
-    ? thumbnailRow('Exterior', exteriorPhotos) + thumbnailRow('Interior', interiorPhotos)
+    ? thumbnailRow('Interior', interiorPhotos) + thumbnailRow('Exterior', exteriorPhotos)
     : '<p style="font-size:12px; opacity:0.6;">No photos attached to this submission.</p>';
 
   const html = `
@@ -208,10 +208,13 @@ module.exports = async (req, res) => {
 
     const rate = nightlyRate ? Number(nightlyRate) : null;
     // Only accept strings that look like real Blob URLs — defensive against
-    // a tampered request trying to inject arbitrary content here.
+    // a tampered request trying to inject arbitrary content here. Capped
+    // at 20 per category, matching MAX_LISTING_PHOTOS in aerva.html — this
+    // is the real, enforced limit; the frontend cap is just UX, so this
+    // one has to match it or extra photos would silently vanish on save.
     function sanitizePhotoUrls(urls){
       return Array.isArray(urls)
-        ? urls.filter(url => typeof url === 'string' && url.startsWith('https://')).slice(0, 5)
+        ? urls.filter(url => typeof url === 'string' && url.startsWith('https://')).slice(0, 20)
         : [];
     }
     const safeExteriorUrls = sanitizePhotoUrls(exteriorPhotoUrls);
