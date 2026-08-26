@@ -90,11 +90,11 @@
       return;
     }
     container.innerHTML = listings.map(l => {
-      // Interior leads, matching the same order used on the live site's
-      // Suites cards — falls back to exterior if no interior photos exist.
+      // Cover choice leads if set, otherwise interior, matching the same
+      // convention used on the live site's Suites cards.
       const interiorPhotos = Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : [];
       const exteriorPhotos = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
-      const leadPhoto = interiorPhotos[0] || exteriorPhotos[0];
+      const leadPhoto = l.cover_photo_url || interiorPhotos[0] || exteriorPhotos[0];
       const thumbHtml = leadPhoto
         ? `<img class="listing-thumb" src="${leadPhoto}" alt="${l.property_name}">`
         : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
