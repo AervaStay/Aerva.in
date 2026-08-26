@@ -91,7 +91,7 @@ module.exports = async (req, res) => {
     if (filtered.length > 0) {
       const listingIds = filtered.map(l => l.id);
       const amenityRows = await sql`
-        SELECT id, listing_id, name, description, price, available_from, available_until
+        SELECT id, listing_id, name, description, price, available_from, available_until, excluded_weekdays
         FROM listing_amenities
         WHERE listing_id = ANY(${listingIds}) AND is_active = TRUE
         ORDER BY created_at ASC
@@ -105,7 +105,8 @@ module.exports = async (req, res) => {
           description: a.description,
           price: a.price,
           availableFrom: a.available_from,
-          availableUntil: a.available_until
+          availableUntil: a.available_until,
+          excludedWeekdays: Array.isArray(a.excluded_weekdays) ? a.excluded_weekdays : []
         });
       }
       filtered.forEach(l => { l.paid_amenities = amenitiesByListing[l.id] || []; });
