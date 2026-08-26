@@ -217,6 +217,15 @@
   // as the listing submission form.
   let coverPhotoKey = null;
 
+  // Amount and Minimum Nights are meaningless with no discount active —
+  // disabled (not just visually, but actually non-interactive) whenever
+  // Discount Type is "None".
+  function updateDiscountFieldsState(){
+    const isNone = !document.getElementById('discountType').value;
+    document.getElementById('discountValue').disabled = isNone;
+    document.getElementById('discountMinNights').disabled = isNone;
+  }
+
   // Short Note is always derived from Discount Type/Amount/Minimum Nights
   // — never typed freely — so it can never drift out of sync with what
   // the discount actually is. "Discount" and "n" are the only two things
@@ -235,8 +244,8 @@
     noteEl.value = minNights ? `${discountText} on Min ${minNights} nights` : discountText;
   }
   ['discountType','discountValue','discountMinNights'].forEach(id => {
-    document.getElementById(id).addEventListener('input', updateDiscountNote);
-    document.getElementById(id).addEventListener('change', updateDiscountNote);
+    document.getElementById(id).addEventListener('input', () => { updateDiscountFieldsState(); updateDiscountNote(); });
+    document.getElementById(id).addEventListener('change', () => { updateDiscountFieldsState(); updateDiscountNote(); });
   });
   let nextTempId = 1;
   const allPhotoManagers = [];
@@ -405,6 +414,7 @@
       // Not set from l.discount_description directly — always regenerated
       // from the discount fields themselves, so it can't carry forward a
       // stale hand-typed note from before this became auto-generated.
+      updateDiscountFieldsState();
       updateDiscountNote();
 
       const currentAmenities = Array.isArray(l.amenities) ? l.amenities : [];
