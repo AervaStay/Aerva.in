@@ -8,6 +8,11 @@
 <style>
   body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
   .wrap{max-width:480px; margin:0 auto;}
+  .back-home{
+    display:inline-block; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
+    color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:28px;
+  }
+  .back-home:hover{opacity:1;}
   h1{font-family:Georgia,serif; font-size:24px; margin-bottom:6px;}
   .subtitle{opacity:0.65; font-size:14px; margin-bottom:32px;}
   .field{display:flex; flex-direction:column; gap:6px; margin-bottom:20px;}
@@ -27,16 +32,68 @@
   .error{font-size:13px; color:#a3402f; margin-top:16px; display:none;}
   .loading{text-align:center; opacity:0.6; padding:60px 0;}
   .price-history-note{font-size:11.5px; opacity:0.55; margin-top:6px;}
+  .eyebrow{font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c; margin:32px 0 12px;}
+
+  .photo-preview-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:10px; margin-top:10px;}
+  .photo-preview-item{position:relative; aspect-ratio:1/1; border:1px solid #ddd0bc; overflow:hidden;}
+  .photo-preview-item img{width:100%; height:100%; object-fit:cover; display:block;}
+  .photo-preview-item.is-cover{border:2px solid #a8834a;}
+  .photo-order-badge{
+    position:absolute; top:4px; left:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:11.5px; font-weight:600;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .photo-remove-btn{
+    position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; border:none; cursor:pointer;
+    font-size:14px; line-height:1; display:flex; align-items:center; justify-content:center;
+  }
+  .photo-remove-btn:hover{background:#a3402f;}
+  .photo-cover-btn{
+    position:absolute; bottom:4px; left:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f5c451; border:none; cursor:pointer;
+    font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center;
+  }
+  .photo-cover-btn:hover{background:rgba(28,26,23,1);}
+  .photo-reorder-btns{position:absolute; bottom:4px; right:4px; display:flex; gap:2px;}
+  .photo-reorder-btns button{
+    width:20px; height:22px; border-radius:2px; background:rgba(28,26,23,0.85); color:#f4ebe3;
+    border:none; cursor:pointer; font-size:13px; line-height:1;
+  }
+  .photo-reorder-btns button:hover:not(:disabled){background:rgba(28,26,23,1);}
+  .photo-reorder-btns button:disabled{opacity:0.3; cursor:default;}
+  .add-photos-btn{
+    background:white; border:1px dashed #ddd0bc; padding:10px; font-size:12px; letter-spacing:0.06em;
+    text-transform:uppercase; cursor:pointer; width:100%; margin-top:10px; color:#8a6c39;
+  }
+  .check-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px 16px;}
+  .check-item{display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:normal; letter-spacing:0; text-transform:none; color:#1c1a17; cursor:pointer;}
+  .check-item input{width:auto;}
+  .paid-amenity-row{
+    background:white; border:1px solid #ddd0bc; padding:14px; margin-bottom:10px; display:flex; flex-direction:column; gap:8px;
+  }
+  .paid-amenity-row .row-line{display:grid; grid-template-columns:1fr 100px; gap:10px;}
+  .paid-amenity-row .date-line{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .paid-amenity-row .date-line label{font-size:9.5px; margin-bottom:2px;}
+  .remove-amenity-btn{
+    background:none; border:none; color:#a3402f; font-size:11.5px; letter-spacing:0.04em;
+    cursor:pointer; text-decoration:underline; align-self:flex-start; padding:0;
+  }
+  .add-paid-amenity-btn{
+    background:white; border:1px dashed #ddd0bc; padding:12px; font-size:12px; letter-spacing:0.06em;
+    text-transform:uppercase; cursor:pointer; width:100%; color:#8a6c39; margin-top:4px;
+  }
 </style>
 </head>
 <body>
 
 <div class="wrap">
+  <a href="host-dashboard.html" class="back-home">&larr; Back to Your Listings</a>
   <div id="loadingState" class="loading">Loading your listing…</div>
 
   <div id="formState" style="display:none;">
     <h1 id="propertyNameHeading"></h1>
-    <p class="subtitle">Update your nightly rate or offer anytime — changes apply immediately to future bookings.</p>
+    <p class="subtitle">Update your nightly rate, offer, or photos anytime — changes apply immediately.</p>
 
     <form id="pricingForm">
       <div class="field">
@@ -71,8 +128,70 @@
         </div>
       </div>
 
+      <div class="eyebrow">Photos</div>
+      <div class="field">
+        <label>Exterior <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(up to 20)</span></label>
+        <div class="photo-preview-grid" id="exteriorPreviewGrid"></div>
+        <input type="file" id="exteriorFileInput" accept="image/*" multiple style="display:none;">
+        <button type="button" class="add-photos-btn" id="addExteriorBtn">+ Add Exterior Photos</button>
+      </div>
+      <div class="field">
+        <label>Interior <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(up to 20)</span></label>
+        <div class="photo-preview-grid" id="interiorPreviewGrid"></div>
+        <input type="file" id="interiorFileInput" accept="image/*" multiple style="display:none;">
+        <button type="button" class="add-photos-btn" id="addInteriorBtn">+ Add Interior Photos</button>
+      </div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-6px; margin-bottom:24px;">Use ‹ › to reorder, ☆ to set a cover photo, × to remove. Interior photos show first by default unless you set a cover.</p>
+
+      <div class="eyebrow">Included Amenities <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(always free, shown on your listing)</span></div>
+      <div class="check-grid" id="amenitiesGrid">
+        <label class="check-item"><input type="checkbox" name="amenity" value="WiFi"> WiFi</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Air Conditioning"> Air Conditioning</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Kitchen"> Kitchen</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Private Pool"> Private Pool</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Parking"> Parking</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Balcony / Terrace"> Balcony / Terrace</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Garden"> Garden</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Pet-Friendly"> Pet-Friendly</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Fireplace / Heating"> Fireplace / Heating</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="TV / Smart TV"> TV / Smart TV</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Washing Machine"> Washing Machine</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Power Backup"> Power Backup</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Hot Water"> Hot Water</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Refrigerator"> Refrigerator</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Workspace / Desk"> Workspace / Desk</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Elevator / Lift"> Elevator / Lift</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Gym / Fitness Area"> Gym / Fitness Area</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Hot Tub / Jacuzzi"> Hot Tub / Jacuzzi</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="BBQ / Grill"> BBQ / Grill</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Bonfire Area"> Bonfire Area</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Smoke Detector"> Smoke Detector</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="First Aid Kit"> First Aid Kit</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="CCTV / Security"> CCTV / Security</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Crib / Baby-Friendly"> Crib / Baby-Friendly</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Wheelchair Accessible"> Wheelchair Accessible</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Toiletries Provided"> Toiletries Provided</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Linens & Towels"> Linens & Towels</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Coffee, Sugar, Salt & Basic Masalas"> Coffee, Sugar, Salt & Basic Masalas</label>
+      </div>
+
+      <div class="eyebrow" style="margin-top:24px;">Included Services <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(always free)</span></div>
+      <div class="check-grid" id="servicesGrid">
+        <label class="check-item"><input type="checkbox" name="service" value="Housekeeping"> Housekeeping</label>
+        <label class="check-item"><input type="checkbox" name="service" value="Breakfast Included"> Breakfast Included</label>
+        <label class="check-item"><input type="checkbox" name="service" value="Airport Pickup"> Airport Pickup</label>
+        <label class="check-item"><input type="checkbox" name="service" value="In-house Chef"> In-house Chef</label>
+        <label class="check-item"><input type="checkbox" name="service" value="Concierge / Local Guide"> Concierge / Local Guide</label>
+        <label class="check-item"><input type="checkbox" name="service" value="Spa / Massage on request"> Spa / Massage on request</label>
+      </div>
+
+      <div class="eyebrow" style="margin-top:24px;">Paid Amenities <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(guests pay extra to add these at checkout)</span></div>
+      <div id="paidAmenitiesList"></div>
+      <button type="button" class="add-paid-amenity-btn" id="addPaidAmenityBtn">+ Add a Paid Amenity</button>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">A one-time fee per stay, not per night. Leave the date fields blank for an amenity that's available year-round.</p>
+
       <button type="submit" class="btn" id="submitBtn">Save Changes</button>
-      <p class="confirm" id="confirmMsg">Saved — your new rate is live.</p>
+      <p class="confirm" id="confirmMsg">Saved — your changes are live.</p>
       <p class="error" id="errorMsg"></p>
     </form>
   </div>
@@ -85,12 +204,164 @@
 
 <script>
   const API_BASE = 'https://aerva-in.vercel.app';
+  const MAX_LISTING_PHOTOS = 20;
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
 
   const loadingState = document.getElementById('loadingState');
   const formState = document.getElementById('formState');
   const notFoundState = document.getElementById('notFoundState');
+
+  // Which single photo (by url, for existing ones, or temp id for new
+  // uploads) is the cover — shared across both categories, same pattern
+  // as the listing submission form.
+  let coverPhotoKey = null;
+  let nextTempId = 1;
+  const allPhotoManagers = [];
+
+  function refreshAllPhotoPreviews(){
+    allPhotoManagers.forEach(m => m.renderPreviews());
+  }
+
+  // Each item is either { key: url, type: 'existing', url } for a photo
+  // already saved on the listing, or { key: tempId, type: 'new', file }
+  // for one just added and not yet uploaded — both render identically
+  // and share the same reorder/cover/remove controls.
+  function createPhotoManager(previewGridId, fileInputId, addBtnId){
+    const previewGrid = document.getElementById(previewGridId);
+    const fileInput = document.getElementById(fileInputId);
+    const addBtn = document.getElementById(addBtnId);
+    let items = [];
+
+    function move(fromIdx, toIdx){
+      if(toIdx < 0 || toIdx >= items.length) return;
+      const [moved] = items.splice(fromIdx, 1);
+      items.splice(toIdx, 0, moved);
+      renderPreviews();
+    }
+
+    function renderPreviews(){
+      previewGrid.innerHTML = '';
+      items.forEach((item, idx) => {
+        const url = item.type === 'existing' ? item.url : URL.createObjectURL(item.file);
+        const isCover = item.key === coverPhotoKey;
+        const el = document.createElement('div');
+        el.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
+        el.innerHTML = `
+          <img src="${url}" alt="">
+          <span class="photo-order-badge">${idx + 1}</span>
+          <button type="button" data-action="remove" class="photo-remove-btn" aria-label="Remove">×</button>
+          <button type="button" data-action="cover" class="photo-cover-btn" aria-label="Set as cover" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
+          <div class="photo-reorder-btns">
+            <button type="button" data-action="left" ${idx === 0 ? 'disabled' : ''}>‹</button>
+            <button type="button" data-action="right" ${idx === items.length - 1 ? 'disabled' : ''}>›</button>
+          </div>
+        `;
+        el.querySelector('[data-action="remove"]').addEventListener('click', () => {
+          const removedKey = items[idx].key;
+          items.splice(idx, 1);
+          if(coverPhotoKey === removedKey) coverPhotoKey = null;
+          renderPreviews();
+        });
+        el.querySelector('[data-action="cover"]').addEventListener('click', () => {
+          coverPhotoKey = isCover ? null : item.key;
+          refreshAllPhotoPreviews();
+        });
+        el.querySelector('[data-action="left"]').addEventListener('click', () => move(idx, idx - 1));
+        el.querySelector('[data-action="right"]').addEventListener('click', () => move(idx, idx + 1));
+        previewGrid.appendChild(el);
+      });
+    }
+
+    addBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const newFiles = Array.from(fileInput.files);
+      for(const f of newFiles){
+        if(items.length >= MAX_LISTING_PHOTOS) break;
+        items.push({ key: 'new_' + (nextTempId++), type: 'new', file: f });
+      }
+      fileInput.value = '';
+      renderPreviews();
+    });
+
+    const manager = {
+      setExisting: (urls) => {
+        items = (urls || []).map(url => ({ key: url, type: 'existing', url }));
+        renderPreviews();
+      },
+      // Uploads any newly-added files and returns the final ordered list
+      // of URLs (existing ones untouched, new ones uploaded fresh) plus
+      // which key (if any) in this category matches the chosen cover.
+      finalizeUrls: async () => {
+        const urls = [];
+        for(const item of items){
+          if(item.type === 'existing'){
+            urls.push(item.url);
+          } else {
+            const { upload } = await import('https://esm.sh/@vercel/blob/client');
+            const result = await upload(item.file.name, item.file, {
+              access: 'public',
+              handleUploadUrl: API_BASE + '/api/blob-upload'
+            });
+            urls.push(result.url);
+            // A newly-uploaded photo that was chosen as cover needs its
+            // temp key swapped for the real URL now that one exists.
+            if(coverPhotoKey === item.key) coverPhotoKey = result.url;
+          }
+        }
+        return urls;
+      },
+      renderPreviews
+    };
+    allPhotoManagers.push(manager);
+    return manager;
+  }
+
+  const exteriorManager = createPhotoManager('exteriorPreviewGrid', 'exteriorFileInput', 'addExteriorBtn');
+  const interiorManager = createPhotoManager('interiorPreviewGrid', 'interiorFileInput', 'addInteriorBtn');
+
+  // Paid amenity rows — each row is a plain object tracked in this array;
+  // the DOM inputs are just a view onto it, read back at save time.
+  let paidAmenityRows = [];
+  const paidAmenitiesList = document.getElementById('paidAmenitiesList');
+
+  function renderPaidAmenities(){
+    paidAmenitiesList.innerHTML = '';
+    paidAmenityRows.forEach((row, idx) => {
+      const el = document.createElement('div');
+      el.className = 'paid-amenity-row';
+      el.innerHTML = `
+        <div class="row-line">
+          <input type="text" placeholder="Name, e.g. Private Chef" data-field="name" value="${row.name || ''}">
+          <input type="number" min="1" placeholder="₹ price" data-field="price" value="${row.price || ''}">
+        </div>
+        <div class="date-line">
+          <div>
+            <label>Available From</label>
+            <input type="date" data-field="availableFrom" value="${row.availableFrom || ''}">
+          </div>
+          <div>
+            <label>Available Until</label>
+            <input type="date" data-field="availableUntil" value="${row.availableUntil || ''}">
+          </div>
+        </div>
+        <button type="button" class="remove-amenity-btn" data-action="remove">Remove this amenity</button>
+      `;
+      el.querySelectorAll('[data-field]').forEach(input => {
+        input.addEventListener('input', () => { row[input.dataset.field] = input.value; });
+      });
+      el.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        paidAmenityRows.splice(idx, 1);
+        renderPaidAmenities();
+      });
+      paidAmenitiesList.appendChild(el);
+    });
+  }
+
+  document.getElementById('addPaidAmenityBtn').addEventListener('click', () => {
+    paidAmenityRows.push({ id: null, name: '', price: '', availableFrom: '', availableUntil: '', isActive: true });
+    renderPaidAmenities();
+  });
 
   async function loadListing(){
     if(!token){
@@ -111,6 +382,27 @@
       document.getElementById('discountMinNights').value = l.discount_min_nights || '';
       document.getElementById('discountDescription').value = l.discount_description || '';
 
+      const currentAmenities = Array.isArray(l.amenities) ? l.amenities : [];
+      const currentServices = Array.isArray(l.services) ? l.services : [];
+      document.querySelectorAll('input[name="amenity"]').forEach(cb => {
+        cb.checked = currentAmenities.includes(cb.value);
+      });
+      document.querySelectorAll('input[name="service"]').forEach(cb => {
+        cb.checked = currentServices.includes(cb.value);
+      });
+
+      coverPhotoKey = l.cover_photo_url || null;
+      exteriorManager.setExisting(l.exterior_photo_urls);
+      interiorManager.setExisting(l.interior_photo_urls);
+
+      paidAmenityRows = (data.paidAmenities || []).map(a => ({
+        id: a.id, name: a.name, price: a.price,
+        availableFrom: a.available_from ? a.available_from.slice(0, 10) : '',
+        availableUntil: a.available_until ? a.available_until.slice(0, 10) : '',
+        isActive: a.is_active
+      }));
+      renderPaidAmenities();
+
       loadingState.style.display = 'none';
       formState.style.display = 'block';
     } catch(err){
@@ -130,6 +422,11 @@
     submitBtn.textContent = 'Saving…';
 
     try{
+      const [exteriorPhotoUrls, interiorPhotoUrls] = await Promise.all([
+        exteriorManager.finalizeUrls(),
+        interiorManager.finalizeUrls()
+      ]);
+
       const res = await fetch(API_BASE + '/api/update-listing-pricing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -139,18 +436,28 @@
           discountType: document.getElementById('discountType').value,
           discountValue: document.getElementById('discountValue').value,
           discountMinNights: document.getElementById('discountMinNights').value,
-          discountDescription: document.getElementById('discountDescription').value
+          discountDescription: document.getElementById('discountDescription').value,
+          exteriorPhotoUrls,
+          interiorPhotoUrls,
+          coverPhotoUrl: coverPhotoKey,
+          amenities: Array.from(document.querySelectorAll('input[name="amenity"]:checked')).map(cb => cb.value),
+          services: Array.from(document.querySelectorAll('input[name="service"]:checked')).map(cb => cb.value),
+          paidAmenities: paidAmenityRows
         })
       });
       const data = await res.json();
       if(res.ok){
+        if(data.warning){
+          errorMsg.textContent = data.warning;
+          errorMsg.style.display = 'block';
+        }
         confirmMsg.style.display = 'block';
       } else {
         errorMsg.textContent = data.error || 'Something went wrong. Please try again.';
         errorMsg.style.display = 'block';
       }
     } catch(err){
-      errorMsg.textContent = 'Something went wrong. Please try again.';
+      errorMsg.textContent = 'Something went wrong saving your photos. Please try again.';
       errorMsg.style.display = 'block';
     }
     submitBtn.disabled = false;
