@@ -60,7 +60,14 @@ module.exports = async (req, res) => {
       ...l,
       manageLink: `${SITE_BASE}/manage-listing.html?token=${createToken(l.id, 'manage-pricing', TWO_YEARS_MS)}`
     }));
-    return res.status(200).json({ listings: listingsWithLinks });
+
+    // "Aerva Host" status — awarded the moment a host has at least one
+    // approved listing. Computed here rather than stored anywhere, so it's
+    // always accurate the instant a listing's status flips to 'approved'
+    // (see approve-listing.js), with nothing to keep in sync.
+    const hostBadge = listings.some(l => l.status === 'approved') ? 'Aerva Host' : null;
+
+    return res.status(200).json({ listings: listingsWithLinks, hostBadge });
   } catch (err) {
     console.error('host-listings error:', err);
     return res.status(500).json({ error: 'Could not load your listings.' });
