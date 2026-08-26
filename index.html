@@ -398,6 +398,7 @@
       <a href="guest-login.html" id="guestLoginLink">Log In</a>
       <span id="guestAccountBox" style="display:none; align-items:center; gap:14px;">
         <span id="guestNameDisplay" style="font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
+        <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Listings</a>
         <a href="#" id="guestLogoutLink">Log Out</a>
       </span>
       <a href="#reserve" class="btn">Reserve</a>
@@ -2270,6 +2271,7 @@
     const guestLoginLink = document.getElementById('guestLoginLink');
     const guestAccountBox = document.getElementById('guestAccountBox');
     const guestNameDisplay = document.getElementById('guestNameDisplay');
+    const myListingsLink = document.getElementById('myListingsLink');
     const guestLogoutLink = document.getElementById('guestLogoutLink');
 
     function clearGuestSession(){
@@ -2290,6 +2292,13 @@
           guestNameDisplay.textContent = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
           guestLoginLink.style.display = 'none';
           guestAccountBox.style.display = 'inline-flex';
+          // Only shown once this account has actually listed a property —
+          // account_type flips to 'guest_host' automatically the moment
+          // that happens (see schema.sql / submit-listing.js), so this
+          // stays accurate with nothing to keep in sync manually.
+          if(data.guest.accountType === 'guest_host'){
+            myListingsLink.style.display = 'inline';
+          }
         } else {
           // Token expired or invalid — quietly fall back to showing
           // "Log In" rather than an error; the guest just logs in again.
