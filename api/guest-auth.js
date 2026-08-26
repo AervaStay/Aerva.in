@@ -1,23 +1,32 @@
 // /api/guest-auth.js
-// Email + password accounts for guests — separate from the passwordless
-// magic-link login hosts use (host-auth.js). Session tokens use the same
-// signed-token approach as hosts (see _approval-token.js): a guest's
-// browser stores a signed session token, never their actual password.
+// Email + password accounts for guests — separate from phone/OTP login
+// (guest-phone-auth.js). Session tokens use the same signed-token
+// approach as everywhere else (see _approval-token.js): a guest's browser
+// stores a signed session token, never their actual password.
 //
 //   POST { mode: 'signup', email, password, name?, phone? }
-//     Creates a new guest account. The password is hashed with bcrypt
-//     before it ever touches the database or a log line — the raw
-//     password itself is never stored anywhere.
+//     Creates a new guest account, UNVERIFIED. Does not log them in —
+//     instead sends a verification email with a 24-hour link. The
+//     password is hashed with bcrypt before it ever touches the database
+//     or a log line; the raw password itself is never stored anywhere.
 //
 //   POST { mode: 'login', email, password }
-//     Verifies credentials, returns a 30-day session token.
+//     Verifies credentials. Blocks login with a clear error if the
+//     account's email hasn't been verified yet.
+//
+//   POST { mode: 'resend-verification', email }
+//     Sends a fresh verification link, for when the first one expired or
+//     got lost.
+//
+//   GET  ?token=<verifyToken>
+//     Called when a guest clicks the link in their verification email.
+//     Marks the account verified and returns a session token, so
+//     clicking the link both verifies AND logs them in — one step, not two.
 //
 //   GET  (Authorization: Bearer <sessionToken>)
 //     Verifies an existing session token is still valid. Called on page
 //     load so a returning guest with a stored token gets logged in
-//     automatically, without typing their password again — this is what
-//     "remembered in the browser" means here. The token itself is the
-//     only thing that ever lives in the browser; never the password.
+//     automatically, without typing their password again.
 
 const bcrypt = require('bcryptjs');
 const { neon } = require('@neondatabase/serverless');
@@ -27,8 +36,10 @@ const { logAudit } = require('./_audit-log');
 const sql = neon(process.env.DATABASE_URL);
 
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — "stay logged in"
+const VERIFY_LINK_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24 hours — plenty of time to check an inbox
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SITE_BASE = 'https://aerva.in';
 
 // A bcrypt hash of a value nobody will ever type, used only so that a
 // login attempt against a non-existent email still runs bcrypt.compare
@@ -43,6 +54,50 @@ function safeGuest(guest) {
   return { id: guest.id, email: guest.email, name: guest.name, phone: guest.phone };
 }
 
+async function sendVerificationEmail(guest, verifyTok) {
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set — guest cannot receive their verification link.');
+    throw new Error('Verification email could not be sent. Please try again shortly.');
+  }
+
+  const link = `${SITE_BASE}/guest-login.html?verify=${verifyTok}`;
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">Confirm your email</h2>
+      <p>Click below to verify your email and log in to your Aerva account. This link expires in 24 hours.</p>
+      <p><a href="${link}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Verify Email</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you didn't create an Aerva account, you can safely ignore this email.</p>
+    </div>
+  `;
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'Aerva <hello@aerva.in>',
+      to: guest.email,
+      subject: 'Confirm your Aerva account',
+      html
+    })
+  });
+
+  if (!res.ok) {
+    let detail;
+    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
+    console.error('Resend send failed:', res.status, detail);
+
+    if (res.status >= 400 && res.status < 500) {
+      const err = new Error("That email address looks like it can't receive mail — double check it and try again.");
+      err.isUserFacing = true;
+      throw err;
+    }
+    throw new Error('Verification email could not be sent. Please try again shortly.');
+  }
+}
+
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -51,8 +106,36 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // ---- Auto-login: verify an existing session token ----
+  // ---- GET: either "verify this email link" or "check my session" ----
   if (req.method === 'GET') {
+    // A query-string token means this is a click from the verification
+    // email — distinct from the Authorization-header session check below.
+    if (req.query.token) {
+      const payload = verifyToken(req.query.token);
+      if (!payload || payload.action !== 'guest-email-verify') {
+        return res.status(400).json({ error: 'This verification link is invalid or has expired. Please request a new one.' });
+      }
+      try {
+        const rows = await sql`
+          UPDATE guests SET email_verified = TRUE WHERE id = ${payload.listingId}
+          RETURNING id, email, name, phone
+        `;
+        const guest = rows[0];
+        if (!guest) return res.status(404).json({ error: 'Account not found.' });
+
+        const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+        await logAudit(sql, {
+          action: 'guest_email_verified', success: true, actorType: 'guest', actorIdentifier: guest.email,
+          targetType: 'guest', targetId: guest.id
+        });
+        return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
+      } catch (err) {
+        console.error('guest-auth (verify) error:', err);
+        return res.status(500).json({ error: 'Could not verify your email right now. Please try again.' });
+      }
+    }
+
+    // Otherwise, this is the normal "is my stored session still valid" check.
     const authHeader = req.headers['authorization'] || '';
     const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     const payload = sessionToken ? verifyToken(sessionToken) : null;
@@ -79,6 +162,39 @@ module.exports = async (req, res) => {
 
   const { mode, email, password, name, phone } = req.body || {};
 
+  // ---- Resend a verification link ----
+  if (mode === 'resend-verification') {
+    if (!email || typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
+      return res.status(400).json({ error: 'Please enter a complete email address, like you@gmail.com.' });
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    try {
+      const rows = await sql`SELECT id, email, email_verified FROM guests WHERE email = ${cleanEmail}`;
+      const guest = rows[0];
+      // Deliberately the same success response whether or not the account
+      // exists or is already verified — same reasoning as login's
+      // identical error message, so this can't be used to probe which
+      // emails are registered.
+      if (guest && !guest.email_verified) {
+        const verifyTok = createToken(guest.id, 'guest-email-verify', VERIFY_LINK_LIFETIME_MS);
+        await sendVerificationEmail(guest, verifyTok);
+        await logAudit(sql, {
+          action: 'guest_verification_resent', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
+          targetType: 'guest', targetId: guest.id
+        });
+      }
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('guest-auth (resend-verification) error:', err);
+      await logAudit(sql, {
+        action: 'guest_verification_resent', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
+        metadata: { reason: 'server_error' }
+      });
+      // Still return success — see note above — but log the real failure.
+      return res.status(200).json({ success: true });
+    }
+  }
+
   if (!email || typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
     return res.status(400).json({ error: 'Please enter a complete email address, like you@gmail.com.' });
   }
@@ -102,19 +218,35 @@ module.exports = async (req, res) => {
 
       const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
       const inserted = await sql`
-        INSERT INTO guests (email, password_hash, name, phone)
-        VALUES (${cleanEmail}, ${passwordHash}, ${name || null}, ${phone || null})
+        INSERT INTO guests (email, password_hash, name, phone, email_verified)
+        VALUES (${cleanEmail}, ${passwordHash}, ${name || null}, ${phone || null}, FALSE)
         RETURNING id, email, name, phone
       `;
       const guest = inserted[0];
-      const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+
+      const verifyTok = createToken(guest.id, 'guest-email-verify', VERIFY_LINK_LIFETIME_MS);
+      try {
+        await sendVerificationEmail(guest, verifyTok);
+      } catch (emailErr) {
+        console.error('guest-auth (signup) verification email failed:', emailErr);
+        await logAudit(sql, {
+          action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
+          metadata: { reason: 'verification_email_failed' }
+        });
+        const message = emailErr.isUserFacing
+          ? emailErr.message
+          : 'Your account was created, but the verification email could not be sent. Please try "Resend verification email" in a moment.';
+        return res.status(200).json({ success: true, requiresVerification: true, email: cleanEmail, warning: message });
+      }
 
       await logAudit(sql, {
         action: 'guest_signup', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
         targetType: 'guest', targetId: guest.id
       });
 
-      return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
+      // No session token here on purpose — the account isn't usable until
+      // the guest clicks the verification link.
+      return res.status(200).json({ success: true, requiresVerification: true, email: cleanEmail });
     } catch (err) {
       console.error('guest-auth (signup) error:', err);
       await logAudit(sql, {
@@ -128,7 +260,7 @@ module.exports = async (req, res) => {
   // ---- Log in ----
   if (mode === 'login') {
     try {
-      const rows = await sql`SELECT id, email, password_hash, name, phone FROM guests WHERE email = ${cleanEmail}`;
+      const rows = await sql`SELECT id, email, password_hash, name, phone, email_verified FROM guests WHERE email = ${cleanEmail}`;
       const guest = rows[0];
 
       // Always run bcrypt.compare, even for a non-existent account — see
@@ -144,6 +276,17 @@ module.exports = async (req, res) => {
         // Deliberately the same message either way — never reveal
         // whether the email itself is registered.
         return res.status(401).json({ error: 'Incorrect email or password.' });
+      }
+
+      if (!guest.email_verified) {
+        await logAudit(sql, {
+          action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
+          metadata: { reason: 'email_not_verified' }
+        });
+        return res.status(403).json({
+          error: 'Please verify your email before logging in — check your inbox for the link we sent.',
+          requiresVerification: true
+        });
       }
 
       const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
@@ -163,5 +306,5 @@ module.exports = async (req, res) => {
     }
   }
 
-  return res.status(400).json({ error: 'Invalid request. mode must be "signup" or "login".' });
+  return res.status(400).json({ error: 'Invalid request. mode must be "signup", "login", or "resend-verification".' });
 };
