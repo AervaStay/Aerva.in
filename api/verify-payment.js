@@ -76,7 +76,7 @@ module.exports = async (req, res) => {
         const commissionAmount = Math.round(stayTotal * (commissionRate / 100));
         const payoutAmount = stayTotal - commissionAmount;
 
-        await sql`
+        const inserted = await sql`
           INSERT INTO orders (
             suite_name, listing_id, guest_id, guest_email, arrival, departure, guests, nights,
             subtotal, discount_amount, gst, total,
@@ -88,7 +88,21 @@ module.exports = async (req, res) => {
             ${commissionRate}, ${commissionAmount}, ${payoutAmount},
             ${razorpay_order_id}, ${razorpay_payment_id}, 'paid'
           )
+          RETURNING id
         `;
+        const newOrderId = inserted[0].id;
+
+        // Persist which paid amenities (and specific nights) were part of
+        // this stay — already validated and priced server-side back in
+        // create-order.js, so this is just recording what was genuinely
+        // paid for, not re-trusting anything from the browser.
+        const amenities = Array.isArray(stay.amenities) ? stay.amenities : [];
+        for (const a of amenities) {
+          await sql`
+            INSERT INTO order_amenities (order_id, listing_amenity_id, name, price_per_night, selected_dates, total_price)
+            VALUES (${newOrderId}, ${a.id || null}, ${a.name}, ${a.pricePerNight}, ${JSON.stringify(a.dates)}, ${a.total})
+          `;
+        }
       }
     } catch (dbErr) {
       // A booking that's paid-for but not logged to `orders` is recoverable

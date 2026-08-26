@@ -57,7 +57,8 @@ module.exports = async (req, res) => {
         id, property_name, city, property_type, bedrooms, max_guests,
         nightly_rate, description, amenities, services,
         discount_type, discount_value, discount_min_nights, discount_description,
-        exterior_photo_urls, interior_photo_urls,
+        exterior_photo_urls, interior_photo_urls, cover_photo_url,
+        latitude, longitude, formatted_address,
         created_at
       FROM listings
       WHERE status = 'approved'
@@ -83,6 +84,32 @@ module.exports = async (req, res) => {
           return capacity === null || capacity >= guestsFilter;
         })
       : listings;
+
+    // One extra query for all paid amenities across every listing being
+    // returned, rather than one query per listing — cheaper, and this
+    // endpoint can return many listings at once.
+    if (filtered.length > 0) {
+      const listingIds = filtered.map(l => l.id);
+      const amenityRows = await sql`
+        SELECT id, listing_id, name, description, price, available_from, available_until
+        FROM listing_amenities
+        WHERE listing_id = ANY(${listingIds}) AND is_active = TRUE
+        ORDER BY created_at ASC
+      `;
+      const amenitiesByListing = {};
+      for (const a of amenityRows) {
+        if (!amenitiesByListing[a.listing_id]) amenitiesByListing[a.listing_id] = [];
+        amenitiesByListing[a.listing_id].push({
+          id: a.id,
+          name: a.name,
+          description: a.description,
+          price: a.price,
+          availableFrom: a.available_from,
+          availableUntil: a.available_until
+        });
+      }
+      filtered.forEach(l => { l.paid_amenities = amenitiesByListing[l.id] || []; });
+    }
 
     return res.status(200).json({ listings: filtered });
   } catch (err) {
