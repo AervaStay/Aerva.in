@@ -10,11 +10,11 @@
 <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
-  script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com https://fonts.googleapis.com https://esm.sh;
+  script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com https://fonts.googleapis.com https://esm.sh https://maps.googleapis.com;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com;
-  img-src 'self' data: blob: https://*.public.blob.vercel-storage.com;
-  connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com https://aerva-in.vercel.app https://formspree.io https://vercel.com https://*.public.blob.vercel-storage.com;
+  img-src 'self' data: blob: https://*.public.blob.vercel-storage.com https://maps.gstatic.com https://maps.googleapis.com https://*.googleusercontent.com;
+  connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com https://aerva-in.vercel.app https://formspree.io https://vercel.com https://*.public.blob.vercel-storage.com https://maps.googleapis.com;
   frame-src https://api.razorpay.com https://checkout.razorpay.com;
 ">
 
@@ -265,6 +265,27 @@
     font-size:14px; line-height:1; display:flex; align-items:center; justify-content:center;
   }
   .photo-remove-btn:hover{background:#a3402f;}
+  .photo-preview-item.is-cover{border:2px solid var(--gold, #a8834a);}
+  .photo-cover-btn{
+    position:absolute; bottom:4px; left:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f5c451; border:none; cursor:pointer;
+    font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center;
+  }
+  .photo-cover-btn:hover{background:rgba(28,26,23,1);}
+  .photo-reorder-btns{
+    position:absolute; bottom:4px; right:4px; display:flex; gap:2px;
+  }
+  .photo-reorder-btns button{
+    width:20px; height:22px; border-radius:2px; background:rgba(28,26,23,0.85); color:var(--cream);
+    border:none; cursor:pointer; font-size:13px; line-height:1;
+  }
+  .photo-reorder-btns button:hover:not(:disabled){background:rgba(28,26,23,1);}
+  .photo-reorder-btns button:disabled{opacity:0.3; cursor:default;}
+  .photo-order-badge{
+    position:absolute; top:4px; left:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream); font-size:11.5px; font-weight:600;
+    display:flex; align-items:center; justify-content:center;
+  }
 
   /* ---------- EXPERIENCE ---------- */
   .exp-list{display:flex; flex-direction:column;}
@@ -513,6 +534,7 @@
         <input type="number" id="maxPrice" min="0" placeholder="No max">
       </div>
       <button type="button" class="filter-clear" id="clearFiltersBtn">Clear filters</button>
+      <button type="button" class="filter-clear" id="showDistanceBtn">Show distance from me</button>
     </div>
 
     <p class="search-status" id="searchStatus" style="display:none;"></p>
@@ -657,6 +679,15 @@
         <label for="listPropertyName">Property Name <span class="required-mark">*</span></label>
         <input id="listPropertyName" name="Property Name" type="text" placeholder="e.g. The Riverside Cottage" required>
       </div>
+      <div class="field">
+        <label for="listLocationSearch">Property Location <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
+        <input id="listLocationSearch" type="text" placeholder="Start typing an address…" autocomplete="off">
+        <input type="hidden" id="listLatitude">
+        <input type="hidden" id="listLongitude">
+        <input type="hidden" id="listFormattedAddress">
+        <p id="listLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">This powers the "distance from you" shown to guests — pick a suggestion rather than just typing free text.</p>
+      </div>
       <div class="form-row">
         <div class="field">
           <label for="listCity">City / Area <span class="required-mark">*</span></label>
@@ -759,7 +790,7 @@
       <div class="field">
         <label for="listPhotosExterior">Exterior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(1–20, at least 1 required)</span></label>
         <input id="listPhotosExterior" name="attachment_exterior" type="file" accept="image/*" multiple>
-        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">The front of the property, or whatever gives the best first impression — this becomes the main photo shown on the site.</p>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Use the ‹ › buttons to arrange photos in order — the number shows their current position. Tap ☆ on any photo to set it as your listing's cover, otherwise interior photos show first by default.</p>
         <div id="photoPreviewContainerExterior" class="photo-preview-grid"></div>
       </div>
       <div class="field">
@@ -876,6 +907,7 @@
 </footer>
 
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&callback=initGoogleMaps"></script>
 <script>
   const header = document.getElementById('siteHeader');
   window.addEventListener('scroll', () => {
@@ -1303,56 +1335,139 @@
   // instead of duplicating this logic twice.
   const MAX_LISTING_PHOTOS = 20;
 
+  // Called by the Google Maps script once it's loaded (see the script tag
+  // in <head>). Wires up address autocomplete on the listing form's
+  // location field — selecting a suggestion captures lat/lng and a clean
+  // formatted address, and auto-fills the City field so hosts don't have
+  // to type the same thing twice.
+  window.initGoogleMaps = function(){
+    const searchInput = document.getElementById('listLocationSearch');
+    if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
+
+    const autocomplete = new google.maps.places.Autocomplete(searchInput, {
+      fields: ['geometry', 'formatted_address', 'address_components'],
+      types: ['geocode', 'establishment']
+    });
+
+    autocomplete.addListener('place_changed', function(){
+      const place = autocomplete.getPlace();
+      if(!place.geometry || !place.geometry.location) return;
+
+      document.getElementById('listLatitude').value = place.geometry.location.lat();
+      document.getElementById('listLongitude').value = place.geometry.location.lng();
+      document.getElementById('listFormattedAddress').value = place.formatted_address || '';
+
+      const confirmEl = document.getElementById('listLocationConfirm');
+      confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || '');
+      confirmEl.style.display = 'block';
+
+      // Best-effort auto-fill of the City field from Google's address
+      // components — a host can still edit it manually afterward.
+      const cityComponent = (place.address_components || []).find(c =>
+        c.types.includes('locality') || c.types.includes('administrative_area_level_2')
+      );
+      if(cityComponent){
+        document.getElementById('listCity').value = cityComponent.long_name;
+      }
+    });
+  };
+
+  // Which single photo (by id) is the host's chosen cover/lead photo —
+  // shared across both managers since the cover can come from either
+  // category. null means no explicit choice; the site falls back to its
+  // automatic default (interior photos first).
+  let coverPhotoId = null;
+  let nextPhotoId = 1;
+  const allPhotoManagers = [];
+
+  function refreshAllPhotoPreviews(){
+    allPhotoManagers.forEach(m => m.renderPreviews());
+  }
+
   function createPhotoManager(inputId, previewContainerId){
     const inputEl = document.getElementById(inputId);
     const previewContainer = document.getElementById(previewContainerId);
-    let selectedFiles = [];
+    let selectedPhotos = []; // [{ id, file }]
 
-    // Keeps the real <input type="file"> in sync with our own array, so the
-    // browser's native "required" validation and the upload step (which
-    // reads inputEl.files) both keep working without extra changes.
+    // Keeps the real <input type="file"> in sync with our own array, so
+    // the upload step (which reads inputEl.files) keeps working. Native
+    // "required" validation is intentionally NOT relied on here — see the
+    // note elsewhere about DataTransfer being unreliable on iOS Safari.
     function syncInput(){
       const dt = new DataTransfer();
-      selectedFiles.forEach(f => dt.items.add(f));
+      selectedPhotos.forEach(p => dt.items.add(p.file));
       inputEl.files = dt.files;
+    }
+
+    function move(fromIdx, toIdx){
+      if(toIdx < 0 || toIdx >= selectedPhotos.length) return;
+      const [moved] = selectedPhotos.splice(fromIdx, 1);
+      selectedPhotos.splice(toIdx, 0, moved);
+      syncInput();
+      renderPreviews();
     }
 
     function renderPreviews(){
       previewContainer.innerHTML = '';
-      selectedFiles.forEach((file, idx) => {
-        const url = URL.createObjectURL(file);
+      selectedPhotos.forEach((photo, idx) => {
+        const url = URL.createObjectURL(photo.file);
+        const isCover = photo.id === coverPhotoId;
         const item = document.createElement('div');
-        item.className = 'photo-preview-item';
+        item.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
         item.innerHTML = `
-          <img src="${url}" alt="${file.name}">
-          <button type="button" class="photo-remove-btn" data-idx="${idx}" aria-label="Remove this photo">×</button>
+          <img src="${url}" alt="${photo.file.name}">
+          <span class="photo-order-badge">${idx + 1}</span>
+          <button type="button" class="photo-remove-btn" data-action="remove" aria-label="Remove this photo">×</button>
+          <button type="button" class="photo-cover-btn" data-action="cover" aria-label="Set as cover photo" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
+          <div class="photo-reorder-btns">
+            <button type="button" data-action="left" aria-label="Move earlier" ${idx === 0 ? 'disabled' : ''}>‹</button>
+            <button type="button" data-action="right" aria-label="Move later" ${idx === selectedPhotos.length - 1 ? 'disabled' : ''}>›</button>
+          </div>
         `;
-        previewContainer.appendChild(item);
-      });
-      previewContainer.querySelectorAll('.photo-remove-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          selectedFiles.splice(parseInt(btn.dataset.idx, 10), 1);
+
+        item.querySelector('[data-action="remove"]').addEventListener('click', () => {
+          const removedId = selectedPhotos[idx].id;
+          selectedPhotos.splice(idx, 1);
+          if(coverPhotoId === removedId) coverPhotoId = null;
           syncInput();
           renderPreviews();
         });
+        item.querySelector('[data-action="cover"]').addEventListener('click', () => {
+          coverPhotoId = isCover ? null : photo.id;
+          refreshAllPhotoPreviews();
+        });
+        item.querySelector('[data-action="left"]').addEventListener('click', () => move(idx, idx - 1));
+        item.querySelector('[data-action="right"]').addEventListener('click', () => move(idx, idx + 1));
+
+        previewContainer.appendChild(item);
       });
     }
 
     inputEl.addEventListener('change', () => {
       const newFiles = Array.from(inputEl.files);
       for(const f of newFiles){
-        if(selectedFiles.length >= MAX_LISTING_PHOTOS) break;
-        const alreadyAdded = selectedFiles.some(existing => existing.name === f.name && existing.size === f.size);
-        if(!alreadyAdded) selectedFiles.push(f);
+        if(selectedPhotos.length >= MAX_LISTING_PHOTOS) break;
+        const alreadyAdded = selectedPhotos.some(p => p.file.name === f.name && p.file.size === f.size);
+        if(!alreadyAdded) selectedPhotos.push({ id: 'photo_' + (nextPhotoId++), file: f });
       }
       syncInput();
       renderPreviews();
     });
 
-    return {
-      getFiles: () => selectedFiles,
-      clear: () => { selectedFiles = []; syncInput(); renderPreviews(); }
+    const manager = {
+      getFiles: () => selectedPhotos.map(p => p.file),
+      getOrderedIds: () => selectedPhotos.map(p => p.id),
+      renderPreviews,
+      clear: () => {
+        const remainingIds = selectedPhotos.map(p => p.id);
+        selectedPhotos = [];
+        if(remainingIds.includes(coverPhotoId)) coverPhotoId = null;
+        syncInput();
+        renderPreviews();
+      }
     };
+    allPhotoManagers.push(manager);
+    return manager;
   }
 
   const exteriorPhotoManager = createPhotoManager('listPhotosExterior', 'photoPreviewContainerExterior');
@@ -1411,6 +1526,7 @@
       // whichever error shows is the first thing the host actually needs
       // to fix, not just an arbitrary one.
       const requiredChecks = [
+        { value: document.getElementById('listLatitude').value, message: 'Please select your property\'s location from the address suggestions.' },
         { value: document.getElementById('listCity').value.trim(), message: 'Please enter the city or area.' },
         { value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' },
         { value: document.getElementById('listDescription').value.trim(), message: 'Please tell us a bit about the property.' }
@@ -1452,6 +1568,13 @@
     let exteriorPhotoUrls = listingSubmissionState.exteriorUrls;
     let interiorPhotoUrls = listingSubmissionState.interiorUrls;
 
+    // Snapshot the current order now — getFiles()/getOrderedIds() stay in
+    // lockstep, so the Nth id here always corresponds to the Nth URL once
+    // upload finishes, letting the chosen cover photo be mapped back to
+    // its real URL regardless of which category it came from.
+    const exteriorIdsAtUpload = exteriorPhotoManager.getOrderedIds();
+    const interiorIdsAtUpload = interiorPhotoManager.getOrderedIds();
+
     if(exteriorPhotoUrls === null || interiorPhotoUrls === null){
       activeBtn.textContent = 'Uploading photos…';
       try{
@@ -1479,6 +1602,17 @@
 
     activeBtn.textContent = isDraft ? 'Saving draft…' : 'Sending…';
 
+    // Map the chosen cover photo (if any) to its real uploaded URL, using
+    // the id snapshot taken before upload — whichever category actually
+    // contains the id tells us which URL array to look in.
+    let coverPhotoUrl = null;
+    if(coverPhotoId){
+      const exteriorIdx = exteriorIdsAtUpload.indexOf(coverPhotoId);
+      const interiorIdx = interiorIdsAtUpload.indexOf(coverPhotoId);
+      if(exteriorIdx !== -1 && exteriorPhotoUrls[exteriorIdx]) coverPhotoUrl = exteriorPhotoUrls[exteriorIdx];
+      else if(interiorIdx !== -1 && interiorPhotoUrls[interiorIdx]) coverPhotoUrl = interiorPhotoUrls[interiorIdx];
+    }
+
     try{
       const res = await fetch(LISTINGS_API_BASE + '/api/submit-listing', {
         method: 'POST',
@@ -1501,8 +1635,12 @@
           discountValue: document.getElementById('listDiscountValue').value,
           discountMinNights: document.getElementById('listDiscountMinNights').value,
           discountDescription: document.getElementById('listDiscountNote').value,
+          latitude: document.getElementById('listLatitude').value,
+          longitude: document.getElementById('listLongitude').value,
+          formattedAddress: document.getElementById('listFormattedAddress').value,
           exteriorPhotoUrls: exteriorPhotoUrls,
-          interiorPhotoUrls: interiorPhotoUrls
+          interiorPhotoUrls: interiorPhotoUrls,
+          coverPhotoUrl: coverPhotoUrl
         })
       });
       const data = await res.json();
@@ -1602,6 +1740,15 @@
       listingSubmissionState.currentListingId = draft.id;
       document.getElementById('listPropertyName').value = draft.property_name || '';
       document.getElementById('listCity').value = draft.city || '';
+      if(draft.latitude && draft.longitude){
+        document.getElementById('listLatitude').value = draft.latitude;
+        document.getElementById('listLongitude').value = draft.longitude;
+        document.getElementById('listFormattedAddress').value = draft.formatted_address || '';
+        document.getElementById('listLocationSearch').value = draft.formatted_address || '';
+        const confirmEl = document.getElementById('listLocationConfirm');
+        confirmEl.textContent = '✓ Location set: ' + (draft.formatted_address || '');
+        confirmEl.style.display = 'block';
+      }
       if(draft.property_type) document.getElementById('listType').value = draft.property_type;
       if(draft.bedrooms) document.getElementById('listBedrooms').value = draft.bedrooms;
       if(draft.max_guests) document.getElementById('listGuests').value = draft.max_guests;
@@ -1644,6 +1791,46 @@
     return '';
   }
 
+  // Straight-line ("as the crow flies") distance in km between two
+  // coordinates — the Haversine formula. Deliberately computed client-side
+  // rather than via Google's Distance Matrix API: it's free, instant, and
+  // accurate enough for "X km away" — actual driving distance isn't worth
+  // the extra API cost and latency for this.
+  function haversineDistanceKm(lat1, lon1, lat2, lon2){
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // Populated once the guest grants location access (see the "Show
+  // distance from me" button below) — null until then, so cards simply
+  // omit the distance line rather than showing anything misleading.
+  let guestLocation = null;
+
+  document.getElementById('showDistanceBtn').addEventListener('click', function(){
+    if(!navigator.geolocation){
+      alert('Your browser doesn\'t support location access.');
+      return;
+    }
+    const btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Locating…';
+    navigator.geolocation.getCurrentPosition(
+      function(position){
+        guestLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
+        btn.textContent = 'Distances shown below';
+        applyFiltersAndRender();
+      },
+      function(err){
+        btn.disabled = false;
+        btn.textContent = 'Show distance from me';
+        alert('Could not access your location. Please check your browser\'s location permission for this site.');
+      }
+    );
+  });
+
   function buildSuiteCard(listing){
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
@@ -1665,11 +1852,15 @@
       amenitiesHtml = `<div class="amenity-tags">${tags}${moreTag}</div>`;
     }
 
-    // Interior photos lead the slider, exterior photos follow — guests can
-    // swipe/scroll through all of them right on the card.
+    // The host's explicit cover choice leads if one was set; otherwise
+    // interior photos lead by default. Either way, the rest follow with
+    // no duplicates.
     const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
     const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
-    const allPhotos = [...interiorPhotos, ...exteriorPhotos];
+    let allPhotos = [...interiorPhotos, ...exteriorPhotos];
+    if(listing.cover_photo_url && allPhotos.includes(listing.cover_photo_url)){
+      allPhotos = [listing.cover_photo_url, ...allPhotos.filter(url => url !== listing.cover_photo_url)];
+    }
 
     let photoHtml;
     if(allPhotos.length === 0){
@@ -1686,6 +1877,18 @@
     }
 
     const card = document.createElement('div');
+    // Distance only shows once the guest has granted location access (see
+    // the "Show distance from me" button) and the listing actually has
+    // coordinates saved — silently omitted otherwise, never a guess.
+    let distanceHtml = '';
+    if(guestLocation && listing.latitude && listing.longitude){
+      const km = haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(listing.latitude), Number(listing.longitude));
+      distanceHtml = `<div class="loc" style="opacity:0.65;">${km < 1 ? 'Less than 1 km' : Math.round(km) + ' km'} from you</div>`;
+    }
+    const mapLinkHtml = (listing.latitude && listing.longitude)
+      ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="link" style="font-size:12.5px; margin-top:4px;">View on map</a>`
+      : '';
+
     card.className = 'suite-card';
     card.innerHTML = `
       <div class="suite-photo">
@@ -1694,6 +1897,8 @@
       <div class="suite-body">
         <h3>${listing.property_name}</h3>
         <div class="loc">${listing.city}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        ${distanceHtml}
+        ${mapLinkHtml}
         <p class="desc">${listing.description}</p>
         ${amenitiesHtml}
         <div class="price">${priceLine}</div>
