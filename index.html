@@ -357,6 +357,7 @@
     .pad{padding:92px 0;}
     .hero-logo{width:min(320px, 78vw);}
   }
+  .required-mark{color:#a3402f;}
 </style>
 </head>
 <body>
@@ -653,12 +654,12 @@
 
       <div class="eyebrow" style="margin-bottom:-4px;">Property Details</div>
       <div class="field">
-        <label for="listPropertyName">Property Name</label>
+        <label for="listPropertyName">Property Name <span class="required-mark">*</span></label>
         <input id="listPropertyName" name="Property Name" type="text" placeholder="e.g. The Riverside Cottage" required>
       </div>
       <div class="form-row">
         <div class="field">
-          <label for="listCity">City / Area</label>
+          <label for="listCity">City / Area <span class="required-mark">*</span></label>
           <input id="listCity" name="City" type="text" placeholder="e.g. Goa, Candolim" required>
         </div>
         <div class="field">
@@ -688,20 +689,27 @@
         <div class="field">
           <label for="listGuests">Max Guests</label>
           <select id="listGuests" name="Max Guests">
-            <option>1–2</option>
-            <option>3–4</option>
-            <option>5–6</option>
-            <option>7–8</option>
-            <option>9+</option>
+            <option>1</option>
+            <option>2</option>
+            <option>3</option>
+            <option>4</option>
+            <option>5</option>
+            <option>6</option>
+            <option>7</option>
+            <option>8</option>
+            <option>9</option>
+            <option>10</option>
+            <option>11</option>
+            <option>12+</option>
           </select>
         </div>
       </div>
       <div class="field">
-        <label for="listPrice">Expected Nightly Rate (₹)</label>
+        <label for="listPrice">Expected Nightly Rate (₹) <span class="required-mark">*</span></label>
         <input id="listPrice" name="Expected Nightly Rate" type="number" min="0" placeholder="e.g. 4500" required>
       </div>
       <div class="field">
-        <label for="listDescription">Tell us about the property</label>
+        <label for="listDescription">Tell us about the property <span class="required-mark">*</span></label>
         <textarea id="listDescription" name="Description" rows="4" placeholder="What makes this place worth staying at? Style, setting, story — whatever you'd want a guest to know." style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;" required></textarea>
       </div>
 
@@ -749,14 +757,14 @@
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Photos</div>
       <div class="field">
-        <label for="listPhotosExterior">Exterior Photos <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(at least 1 required)</span></label>
-        <input id="listPhotosExterior" name="attachment_exterior" type="file" accept="image/*" multiple required>
+        <label for="listPhotosExterior">Exterior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(at least 1 required)</span></label>
+        <input id="listPhotosExterior" name="attachment_exterior" type="file" accept="image/*" multiple>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">The front of the property, or whatever gives the best first impression — this becomes the main photo shown on the site.</p>
         <div id="photoPreviewContainerExterior" class="photo-preview-grid"></div>
       </div>
       <div class="field">
-        <label for="listPhotosInterior">Interior Photos <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(at least 1 required)</span></label>
-        <input id="listPhotosInterior" name="attachment_interior" type="file" accept="image/*" multiple required>
+        <label for="listPhotosInterior">Interior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(at least 1 required)</span></label>
+        <input id="listPhotosInterior" name="attachment_interior" type="file" accept="image/*" multiple>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">A bedroom, living space, or any standout interior feature.</p>
         <div id="photoPreviewContainerInterior" class="photo-preview-grid"></div>
       </div>
@@ -764,11 +772,11 @@
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Your Contact Details</div>
       <div class="form-row">
         <div class="field">
-          <label for="listHostName">Your Name</label>
+          <label for="listHostName">Your Name <span class="required-mark">*</span></label>
           <input id="listHostName" name="Host Name" type="text" required>
         </div>
         <div class="field">
-          <label for="listHostPhone">Phone</label>
+          <label for="listHostPhone">Phone <span class="required-mark">*</span></label>
           <input id="listHostPhone" name="Phone" type="tel" required>
         </div>
       </div>
@@ -1391,8 +1399,29 @@
     const activeBtn = isDraft ? listingDraftBtn : listingSubmitBtn;
     const otherBtn = isDraft ? listingSubmitBtn : listingDraftBtn;
 
+    if(!document.getElementById('listPropertyName').value.trim()){
+      errorEl.textContent = 'Please give your property a name.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
     if(!isDraft){
-      // A full submission still needs everything — a draft only needs a name.
+      // A full submission needs everything — a draft only needs a name.
+      // Checked in the same top-to-bottom order as the form itself, so
+      // whichever error shows is the first thing the host actually needs
+      // to fix, not just an arbitrary one.
+      const requiredChecks = [
+        { value: document.getElementById('listCity').value.trim(), message: 'Please enter the city or area.' },
+        { value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' },
+        { value: document.getElementById('listDescription').value.trim(), message: 'Please tell us a bit about the property.' }
+      ];
+      for(const check of requiredChecks){
+        if(!check.value){
+          errorEl.textContent = check.message;
+          errorEl.style.display = 'block';
+          return;
+        }
+      }
       if(exteriorPhotoManager.getFiles().length === 0 && !(listingSubmissionState.exteriorUrls && listingSubmissionState.exteriorUrls.length)){
         errorEl.textContent = 'Please attach at least 1 exterior photo.';
         errorEl.style.display = 'block';
@@ -1403,11 +1432,16 @@
         errorEl.style.display = 'block';
         return;
       }
-    }
-    if(!document.getElementById('listPropertyName').value){
-      errorEl.textContent = 'Please give your property a name.';
-      errorEl.style.display = 'block';
-      return;
+      if(!document.getElementById('listHostName').value.trim()){
+        errorEl.textContent = 'Please enter your name.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      if(!document.getElementById('listHostPhone').value.trim()){
+        errorEl.textContent = 'Please enter your phone number.';
+        errorEl.style.display = 'block';
+        return;
+      }
     }
 
     activeBtn.disabled = true;
@@ -1432,7 +1466,8 @@
         exteriorPhotoUrls = exteriorPhotoUrls || [];
         interiorPhotoUrls = interiorPhotoUrls || [];
         if(!isDraft && (exteriorPhotoUrls.length === 0 || interiorPhotoUrls.length === 0)){
-          errorEl.textContent = 'Photo upload failed — please try again.';
+          const detail = uploadErr && uploadErr.message ? ` (${uploadErr.message})` : '';
+          errorEl.textContent = `Photo upload failed${detail} — please try again, or email us directly at hello@aerva.in if this keeps happening.`;
           errorEl.style.display = 'block';
           activeBtn.disabled = false;
           otherBtn.disabled = false;
@@ -1532,7 +1567,9 @@
       otherBtn.disabled = false;
       activeBtn.textContent = 'Submitted';
     } catch(err){
-      errorEl.textContent = 'Something went wrong. Please try again.';
+      console.error('Listing submission failed:', err);
+      const detail = err && err.message ? ` (${err.message})` : '';
+      errorEl.textContent = `Something went wrong sending your listing${detail} — please try again, or email us directly at hello@aerva.in.`;
       errorEl.style.display = 'block';
       activeBtn.disabled = false;
       otherBtn.disabled = false;
