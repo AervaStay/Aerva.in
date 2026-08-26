@@ -79,6 +79,15 @@
     const requestBtn = document.getElementById('requestBtn');
     const requestError = document.getElementById('requestError');
     requestError.style.display = 'none';
+
+    const emailValue = document.getElementById('hostEmail').value.trim();
+    const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if(!EMAIL_PATTERN.test(emailValue)){
+      requestError.textContent = 'Please enter a complete email address, like you@gmail.com.';
+      requestError.style.display = 'block';
+      return;
+    }
+
     requestBtn.disabled = true;
     requestBtn.textContent = 'Sending…';
 
