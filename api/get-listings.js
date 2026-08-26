@@ -1,25 +1,57 @@
 // /api/get-listings.js
-// Returns all APPROVED listings as JSON. This is read-only and safe to call
-// publicly — it never exposes pending/rejected submissions or host contact
-// details beyond what's meant to be shown on the live site. Also never
-// exposes commission_rate — that's internal, not guest-facing.
+// Returns APPROVED listings as JSON — read-only, safe to call publicly;
+// never exposes pending/rejected submissions, host contact details beyond
+// what's guest-facing, or commission_rate.
 //
-// Now wired into the Suites section and Reserve form (see Steps 2-3) —
-// includes discount fields so the site can calculate and display offers.
+// Supports optional filters via query params, all combinable:
+//   ?city=Pune              — partial, case-insensitive match against city
+//   ?guests=4               — only listings that can sleep at least this many
+//   ?arrival=...&departure=... — only listings with no existing paid
+//                                booking that overlaps this date range
+//                                (both must be given together)
+//
+// max_guests is stored as free text (e.g. "4" going forward, but older
+// listings may still have range strings like "3–4" or "9+" from before
+// the submission form was changed to exact numbers) — parseMaxGuests()
+// below extracts the largest number found either way, so filtering works
+// correctly against old and new data alike.
 
 const { neon } = require('@neondatabase/serverless');
-
 const sql = neon(process.env.DATABASE_URL);
+
+function parseMaxGuests(raw) {
+  if (!raw) return null;
+  const numbers = String(raw).match(/\d+/g);
+  if (!numbers) return null;
+  return Math.max(...numbers.map(Number));
+}
 
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
+    const cityRaw = typeof req.query.city === 'string' ? req.query.city.trim() : '';
+    const guestsRaw = typeof req.query.guests === 'string' ? req.query.guests.trim() : '';
+    const arrivalRaw = typeof req.query.arrival === 'string' ? req.query.arrival.trim() : '';
+    const departureRaw = typeof req.query.departure === 'string' ? req.query.departure.trim() : '';
+
+    const cityFilter = cityRaw ? `%${cityRaw}%` : null;
+    const guestsFilter = guestsRaw && !isNaN(Number(guestsRaw)) ? Number(guestsRaw) : null;
+    // Dates only apply as a pair — a lone arrival or departure is ignored
+    // rather than causing a confusing partial filter.
+    const datesFilter = arrivalRaw && departureRaw;
+    const arrivalFilter = datesFilter ? arrivalRaw : null;
+    const departureFilter = datesFilter ? departureRaw : null;
+
+    // City and date-availability are filtered in SQL — availability
+    // specifically needs to check against the orders table, which only
+    // makes sense server-side. guests is filtered afterward in JS (see
+    // parseMaxGuests) since max_guests can still contain old-format range
+    // strings that aren't safe to compare numerically in raw SQL.
     const listings = await sql`
       SELECT
         id, property_name, city, property_type, bedrooms, max_guests,
@@ -29,10 +61,30 @@ module.exports = async (req, res) => {
         created_at
       FROM listings
       WHERE status = 'approved'
+        AND (${cityFilter}::text IS NULL OR city ILIKE ${cityFilter})
+        AND (
+          ${arrivalFilter}::date IS NULL OR NOT EXISTS (
+            SELECT 1 FROM orders o
+            WHERE o.listing_id = listings.id
+              AND o.status = 'paid'
+              AND o.arrival < ${departureFilter}::date
+              AND o.departure > ${arrivalFilter}::date
+          )
+        )
       ORDER BY created_at DESC
     `;
 
-    return res.status(200).json({ listings });
+    const filtered = guestsFilter
+      ? listings.filter(l => {
+          const capacity = parseMaxGuests(l.max_guests);
+          // A listing with no max_guests set at all isn't excluded by a
+          // guest-count search — better to show it and let the guest
+          // judge for themselves than to hide it over missing data.
+          return capacity === null || capacity >= guestsFilter;
+        })
+      : listings;
+
+    return res.status(200).json({ listings: filtered });
   } catch (err) {
     console.error('get-listings error:', err);
     return res.status(500).json({ error: 'Could not fetch listings' });
