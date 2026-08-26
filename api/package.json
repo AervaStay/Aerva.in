@@ -5,6 +5,7 @@
   "dependencies": {
     "razorpay": "^2.9.4",
     "@neondatabase/serverless": "^0.10.4",
-    "@vercel/blob": "latest"
+    "@vercel/blob": "latest",
+    "bcryptjs": "^2.4.3"
   }
 }
