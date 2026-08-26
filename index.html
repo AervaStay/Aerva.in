@@ -611,7 +611,7 @@
       <div id="priceSummary" style="display:none; border-top:1px solid var(--line-dark); margin-top:6px; padding-top:16px;">
         <div class="eyebrow" style="margin-bottom:12px;">Estimated Total</div>
         <div id="summaryLines"></div>
-        <div class="sum-row"><span>GST (12%)</span><span id="sumGst"></span></div>
+        <div id="sumGstRow" class="sum-row" style="display:none;"><span>GST (12%)</span><span id="sumGst"></span></div>
         <div class="sum-row sum-total"><span>Total</span><span id="sumTotal"></span></div>
         <p style="font-size:11.5px; opacity:0.55; margin-top:10px;">Nightly rate covers up to 2 guests per stay. Each additional guest is ₹1,500/night, from the 3rd guest onward. Estimate only — final rate confirmed on availability check.</p>
       </div>
@@ -934,7 +934,11 @@
   const SUITES_API_BASE = 'https://aerva-in.vercel.app';
   const EXTRA_GUEST_RATE = 1500;
   const BASE_OCCUPANCY = 2;
-  const GST_RATE = 0.12;
+  // GST is temporarily disabled for testing — set back to the correct
+  // rate (and update the "GST (12%)" label below) once ready to introduce
+  // it properly per government rules. Kept as a rate rather than deleted
+  // so re-enabling is a one-line change.
+  const GST_RATE = 0;
 
   // Populated once approved listings are fetched (see initSite() near the
   // bottom of this script) — both the Suites section and the Reserve form's
@@ -1306,6 +1310,7 @@
     const total = grandSubtotal + gst;
 
     summaryLinesEl.innerHTML = lines.join('');
+    document.getElementById('sumGstRow').style.display = gst > 0 ? 'flex' : 'none';
     document.getElementById('sumGst').textContent = fmt(gst);
     document.getElementById('sumTotal').textContent = fmt(total);
     summaryEl.style.display = 'block';
