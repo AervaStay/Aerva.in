@@ -1,8 +1,14 @@
 // /api/host-listings.js
-// Returns every listing belonging to the logged-in host — pending,
-// approved, and rejected, so the dashboard can show real status, not just
-// what's live to guests. Requires a valid host-session token, sent as:
+// Returns every listing belonging to the logged-in guest's linked host
+// account — pending, approved, and rejected, so the dashboard can show
+// real status, not just what's live to guests. Requires a valid
+// guest-session token (the single login used across the whole site — see
+// guest-auth.js / guest-phone-auth.js), sent as:
 //   Authorization: Bearer <sessionToken>
+//
+// A guest who hasn't listed a property yet simply has no linked host
+// account (guests.host_id is null) — that's not an error, it just means
+// an empty list, same as a brand-new account.
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken } = require('./_approval-token');
@@ -24,18 +30,28 @@ module.exports = async (req, res) => {
   const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   const payload = sessionToken ? verifyToken(sessionToken) : null;
 
-  if (!payload || payload.action !== 'host-session') {
+  if (!payload || payload.action !== 'guest-session') {
     return res.status(401).json({ error: 'Please log in again.' });
   }
+  const guestId = payload.listingId; // generically-named token field — see host-auth.js note
 
   try {
+    const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+    const guest = guestRows[0];
+    if (!guest) return res.status(401).json({ error: 'Please log in again.' });
+
+    // Never hosted anything yet — an empty dashboard, not an error.
+    if (!guest.host_id) {
+      return res.status(200).json({ listings: [] });
+    }
+
     const listings = await sql`
       SELECT id, property_name, city, property_type, bedrooms, max_guests, nightly_rate, status,
              description, amenities, services, host_name, host_phone,
              discount_type, discount_value, discount_min_nights, discount_description,
              exterior_photo_urls, interior_photo_urls, created_at
       FROM listings
-      WHERE host_id = ${payload.listingId}
+      WHERE host_id = ${guest.host_id}
       ORDER BY created_at DESC
     `;
     // Generate a fresh "manage price" link for each listing on the spot —
