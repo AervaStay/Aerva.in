@@ -55,6 +55,28 @@
   .booking-figures .figure-label{opacity:0.55; text-transform:uppercase; letter-spacing:0.05em; font-size:10px; display:block; margin-bottom:2px;}
   .booking-figures .figure-value{font-size:14px;}
   .payout-value{color:#3a7d44; font-weight:600;}
+  .verify-box{background:#faf3e6; border:1px solid #ddc9a3; padding:18px 20px; margin-bottom:24px; border-radius:4px;}
+  .verify-box h3{margin:0 0 4px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a6c39;}
+  .verify-step{border-top:1px solid #e6d5b8; padding:14px 0;}
+  .verify-step:first-of-type{border-top:none;}
+  .verify-step-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+  .verify-step-head strong{font-size:14px;}
+  .verify-status{font-size:10.5px; padding:2px 8px; border-radius:3px; text-transform:uppercase; letter-spacing:0.04em;}
+  .verify-status-not_submitted{background:#e6e6e6; color:#555;}
+  .verify-status-pending_review{background:#f5ecd7; color:#8a6c39;}
+  .verify-status-verified{background:#e3f0e5; color:#3a7d44;}
+  .verify-status-rejected{background:#f5e0da; color:#a3402f;}
+  .verify-box input{
+    background:white; border:1px solid #ddd0bc; padding:9px 11px; font-family:'Jost', sans-serif;
+    font-size:14px; color:#1c1a17; width:100%; box-sizing:border-box; margin-bottom:8px;
+  }
+  .verify-box .btn-small{
+    background:#1c1a17; color:#f4ebe3; border:none; padding:9px 18px; font-size:11.5px;
+    letter-spacing:0.06em; text-transform:uppercase; cursor:pointer;
+  }
+  .verify-box .btn-small:disabled{opacity:0.5; cursor:default;}
+  .verify-error{font-size:12px; color:#a3402f; margin-top:6px; display:none;}
+  .verify-rejection-note{font-size:12.5px; color:#a3402f; margin-bottom:8px;}
 </style>
 </head>
 <body>
@@ -71,12 +93,7 @@
 
   <a href="index.html#add-listing" class="add-listing-link">List a New Property</a>
 
-  <div style="background:#faf3e6; border:1px solid #ddc9a3; padding:16px 20px; margin-bottom:24px; border-radius:4px;">
-    <p style="margin:0 0 10px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a6c39;">Before your first payout</p>
-    <p style="margin:0 0 4px; font-size:14px;"><strong>Step 1:</strong> Aadhaar verification</p>
-    <p style="margin:0 0 10px; font-size:14px;"><strong>Step 2:</strong> Bank account verification</p>
-    <p style="margin:0; font-size:12.5px; opacity:0.75;">Payouts are held until both steps are complete — contact hello@aerva.in to get started.</p>
-  </div>
+  <div id="verificationSection"></div>
 
   <div id="listingsContainer">
     <p class="loading">Loading your listings…</p>
@@ -178,6 +195,140 @@
     }).join('');
   }
 
+  function renderVerification(v){
+    const container = document.getElementById('verificationSection');
+    if(!v){
+      container.innerHTML = '';
+      return;
+    }
+
+    // 'verified' is the underlying status value (unchanged in the
+    // database/API), but shown to hosts as "Approved" — friendlier
+    // wording for something that's granted automatically on submission.
+    const statusLabel = (status) => status === 'verified' ? 'Approved' : status.replace('_', ' ');
+
+    const aadhaarDone = v.aadhaarStatus === 'verified' || v.aadhaarStatus === 'pending_review';
+    const bankDone = v.bankStatus === 'verified' || v.bankStatus === 'pending_review';
+
+    container.innerHTML = `
+      <div class="verify-box">
+        <h3>Before your first payout</h3>
+
+        <div class="verify-step">
+          <div class="verify-step-head">
+            <strong>Step 1: Aadhaar Verification</strong>
+            <span class="verify-status verify-status-${v.aadhaarStatus}">${statusLabel(v.aadhaarStatus)}</span>
+          </div>
+          ${v.aadhaarStatus === 'rejected' && v.aadhaarRejectionReason ? `<p class="verify-rejection-note">${v.aadhaarRejectionReason}</p>` : ''}
+          ${aadhaarDone ? `<p style="font-size:12.5px; opacity:0.7; margin:0;">Approved — nothing more needed.</p>` : `
+            <input type="file" id="aadhaarFileInput" accept="image/*,.pdf">
+            <button type="button" class="btn-small" id="submitAadhaarBtn">Submit Document</button>
+            <p class="verify-error" id="aadhaarError"></p>
+          `}
+        </div>
+
+        <div class="verify-step">
+          <div class="verify-step-head">
+            <strong>Step 2: Bank Account Verification</strong>
+            <span class="verify-status verify-status-${v.bankStatus}">${statusLabel(v.bankStatus)}</span>
+          </div>
+          ${v.bankStatus === 'rejected' && v.bankRejectionReason ? `<p class="verify-rejection-note">${v.bankRejectionReason}</p>` : ''}
+          ${bankDone ? `<p style="font-size:12.5px; opacity:0.7; margin:0;">Approved — account ending ${v.bankAccountNumberMasked ? v.bankAccountNumberMasked.slice(-4) : ''}.</p>` : `
+            <input type="text" id="bankHolderInput" placeholder="Account holder name">
+            <input type="text" id="bankAccountInput" placeholder="Bank account number">
+            <input type="text" id="bankIfscInput" placeholder="IFSC code">
+            <button type="button" class="btn-small" id="submitBankBtn">Submit Bank Details</button>
+            <p class="verify-error" id="bankError"></p>
+          `}
+        </div>
+
+        <p style="margin:14px 0 0; font-size:12px; opacity:0.65;">Payouts are held until both steps show Verified.</p>
+      </div>
+    `;
+
+    const aadhaarBtn = document.getElementById('submitAadhaarBtn');
+    if(aadhaarBtn){
+      aadhaarBtn.addEventListener('click', async function(){
+        const fileInput = document.getElementById('aadhaarFileInput');
+        const errorEl = document.getElementById('aadhaarError');
+        errorEl.style.display = 'none';
+        const file = fileInput.files[0];
+        if(!file){
+          errorEl.textContent = 'Please choose a file first.';
+          errorEl.style.display = 'block';
+          return;
+        }
+        this.disabled = true;
+        this.textContent = 'Uploading…';
+        try{
+          const { upload } = await import('https://esm.sh/@vercel/blob/client');
+          const result = await upload(file.name, file, {
+            access: 'public',
+            handleUploadUrl: API_BASE + '/api/blob-upload'
+          });
+          const res = await fetch(API_BASE + '/api/host-listings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+            body: JSON.stringify({ aadhaarDocumentUrl: result.url })
+          });
+          const data = await res.json();
+          if(res.ok){
+            loadListings();
+          } else {
+            errorEl.textContent = data.error || 'Something went wrong. Please try again.';
+            errorEl.style.display = 'block';
+            this.disabled = false;
+            this.textContent = 'Submit Document';
+          }
+        } catch(err){
+          errorEl.textContent = 'Upload failed. Please try again.';
+          errorEl.style.display = 'block';
+          this.disabled = false;
+          this.textContent = 'Submit Document';
+        }
+      });
+    }
+
+    const bankBtn = document.getElementById('submitBankBtn');
+    if(bankBtn){
+      bankBtn.addEventListener('click', async function(){
+        const errorEl = document.getElementById('bankError');
+        errorEl.style.display = 'none';
+        const bankAccountHolderName = document.getElementById('bankHolderInput').value.trim();
+        const bankAccountNumber = document.getElementById('bankAccountInput').value.trim();
+        const bankIfsc = document.getElementById('bankIfscInput').value.trim();
+        if(!bankAccountHolderName || !bankAccountNumber || !bankIfsc){
+          errorEl.textContent = 'Please fill in all three fields.';
+          errorEl.style.display = 'block';
+          return;
+        }
+        this.disabled = true;
+        this.textContent = 'Saving…';
+        try{
+          const res = await fetch(API_BASE + '/api/host-listings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+            body: JSON.stringify({ bankAccountHolderName, bankAccountNumber, bankIfsc })
+          });
+          const data = await res.json();
+          if(res.ok){
+            loadListings();
+          } else {
+            errorEl.textContent = data.error || 'Something went wrong. Please try again.';
+            errorEl.style.display = 'block';
+            this.disabled = false;
+            this.textContent = 'Submit Bank Details';
+          }
+        } catch(err){
+          errorEl.textContent = 'Something went wrong. Please try again.';
+          errorEl.style.display = 'block';
+          this.disabled = false;
+          this.textContent = 'Submit Bank Details';
+        }
+      });
+    }
+  }
+
   async function loadListings(){
     try{
       const res = await fetch(API_BASE + '/api/host-listings', {
@@ -198,6 +349,7 @@
       }
       renderListings(data.listings || []);
       renderBookings(data.bookings || []);
+      renderVerification(data.verification);
     } catch(err){
       document.getElementById('listingsContainer').innerHTML = '<p class="empty">Could not load your listings. Please refresh.</p>';
       document.getElementById('bookingsContainer').innerHTML = '<p class="empty">Could not load your bookings. Please refresh.</p>';
