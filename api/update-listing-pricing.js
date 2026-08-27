@@ -50,7 +50,8 @@ module.exports = async (req, res) => {
     try {
       const rows = await sql`
         SELECT id, property_name, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
-               exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services
+               exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
+               latitude, longitude, formatted_address
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -72,7 +73,8 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     try {
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
-              exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities } = req.body || {};
+              exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities,
+              latitude, longitude, formattedAddress } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -109,6 +111,13 @@ module.exports = async (req, res) => {
         ? coverPhotoUrl
         : null;
 
+      // Same bounds-check pattern as submit-listing.js. undefined (not
+      // null) means "not sent this time, leave the existing value alone"
+      // — a photo-only or price-only save shouldn't wipe out a location
+      // that was already set.
+      const safeLat = (latitude && !isNaN(Number(latitude)) && Math.abs(Number(latitude)) <= 90) ? Number(latitude) : undefined;
+      const safeLng = (longitude && !isNaN(Number(longitude)) && Math.abs(Number(longitude)) <= 180) ? Number(longitude) : undefined;
+
       const updated = await sql`
         UPDATE listings SET
           nightly_rate = ${rate},
@@ -120,7 +129,10 @@ module.exports = async (req, res) => {
           interior_photo_urls = COALESCE(${safeInteriorUrls ? JSON.stringify(safeInteriorUrls) : null}, interior_photo_urls),
           cover_photo_url = ${safeCoverUrl},
           amenities = COALESCE(${Array.isArray(amenities) ? JSON.stringify(amenities) : null}, amenities),
-          services = COALESCE(${Array.isArray(services) ? JSON.stringify(services) : null}, services)
+          services = COALESCE(${Array.isArray(services) ? JSON.stringify(services) : null}, services),
+          latitude = COALESCE(${safeLat ?? null}, latitude),
+          longitude = COALESCE(${safeLng ?? null}, longitude),
+          formatted_address = COALESCE(${formattedAddress || null}, formatted_address)
         WHERE id = ${listingId}
         RETURNING id, property_name, host_email
       `;
