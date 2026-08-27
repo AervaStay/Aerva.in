@@ -19,11 +19,10 @@ const razorpay = new Razorpay({
 });
 const sql = neon(process.env.DATABASE_URL);
 
-// Same platform-set commission used for new listing submissions. Kept only
-// as a fallback for orders that predate real listing_id/commissionRate data
-// (e.g. anything booked before this update shipped) — every new order now
-// uses the specific listing's own commission_rate, passed through from
-// create-order.js via the Razorpay order notes.
+// Fixed platform commission rates, matching create-order.js exactly — see
+// that file for the reasoning. Kept here only as a fallback for orders
+// placed before this split existed (where stay.baseCommission /
+// amenityCommission won't be present in the stored notes).
 const FALLBACK_COMMISSION_RATE = 15;
 
 module.exports = async (req, res) => {
@@ -68,24 +67,47 @@ module.exports = async (req, res) => {
       const guestId = guestIdRaw ? parseInt(guestIdRaw, 10) : null;
       const stays = order.notes?.stays ? JSON.parse(order.notes.stays) : [];
 
+      const totalSubtotalAllStays = stays.reduce((sum, s) => sum + s.subtotal, 0);
+      const totalGuestFeeAllStays = stays.reduce((sum, s) => sum + (Number(s.guestServiceFee) || 0), 0);
+
       for (const stay of stays) {
-        const gstShare = Math.round((stay.subtotal / stays.reduce((sum, s) => sum + s.subtotal, 0)) *
-          (order.amount / 100 - stays.reduce((sum, s) => sum + s.subtotal, 0)));
-        const stayTotal = stay.subtotal + gstShare;
-        const commissionRate = stay.commissionRate != null ? Number(stay.commissionRate) : FALLBACK_COMMISSION_RATE;
-        const commissionAmount = Math.round(stayTotal * (commissionRate / 100));
-        const payoutAmount = stayTotal - commissionAmount;
+        const guestServiceFee = Number(stay.guestServiceFee) || 0;
+        // GST share, with the guest fee subtracted out first — otherwise
+        // it would get miscounted as part of GST, since both are now
+        // folded into order.amount alongside the room/amenity subtotals.
+        const gstShare = Math.round((stay.subtotal / totalSubtotalAllStays) *
+          (order.amount / 100 - totalSubtotalAllStays - totalGuestFeeAllStays));
+
+        // This is the amount commission/payout are based on — deliberately
+        // EXCLUDING guestServiceFee, since that's Aerva's guest-side
+        // revenue only and never touches what the host is owed.
+        const hostRelevantTotal = stay.subtotal + gstShare;
+        // What the guest actually paid for this stay, guest fee included.
+        const stayTotal = hostRelevantTotal + guestServiceFee;
+
+        // Prefer the new split commission (base booking vs. amenities,
+        // computed server-side in create-order.js). Falls back to the old
+        // single blended rate only for orders placed before this existed.
+        let commissionAmount, effectiveRate;
+        if (stay.baseCommission != null && stay.amenityCommission != null) {
+          commissionAmount = Number(stay.baseCommission) + Number(stay.amenityCommission);
+          effectiveRate = hostRelevantTotal > 0 ? Number(((commissionAmount / hostRelevantTotal) * 100).toFixed(2)) : 0;
+        } else {
+          effectiveRate = stay.commissionRate != null ? Number(stay.commissionRate) : FALLBACK_COMMISSION_RATE;
+          commissionAmount = Math.round(hostRelevantTotal * (effectiveRate / 100));
+        }
+        const payoutAmount = hostRelevantTotal - commissionAmount;
 
         const inserted = await sql`
           INSERT INTO orders (
             suite_name, listing_id, guest_id, guest_email, arrival, departure, guests, nights,
-            subtotal, discount_amount, gst, total,
+            subtotal, discount_amount, gst, guest_service_fee, total,
             commission_rate, commission_amount, payout_amount,
             razorpay_order_id, razorpay_payment_id, status
           ) VALUES (
             ${stay.suite}, ${stay.listingId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
-            ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${stayTotal},
-            ${commissionRate}, ${commissionAmount}, ${payoutAmount},
+            ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
+            ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             ${razorpay_order_id}, ${razorpay_payment_id}, 'paid'
           )
           RETURNING id
