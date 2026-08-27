@@ -27,6 +27,20 @@ const BASE_OCCUPANCY = 2;
 // number that actually determines what guests are charged; aerva.html's
 // copy is display-only and must be kept in sync with this one.
 const GST_RATE = 0;
+// Fixed platform commission rates — replaces the old per-listing
+// commission_rate column, which is no longer read for new bookings (kept
+// in the schema/orders table only for historical orders placed before
+// this change). Room + extra-guest charges are commissioned separately
+// from paid amenities, at a lower rate, since amenities are a smaller
+// add-on the host arranges directly.
+const BASE_COMMISSION_RATE = 10; // on room + extra-guest charges, after any discount
+const AMENITY_COMMISSION_RATE = 5; // on paid amenities
+// Separate from the commission rates above — this is added ON TOP of what
+// the guest pays, entirely distinct from what comes out of the host's
+// side. A flat rate on the whole stay subtotal (room + extra guests +
+// amenities, after discount), not split by category like the host
+// commission is.
+const GUEST_SERVICE_FEE_RATE = 8;
 const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
 const MAX_AMENITIES_PER_STAY = 15;
 
@@ -172,6 +186,7 @@ module.exports = async (req, res) => {
 
     let grandSubtotal = 0;
     let grandDiscount = 0;
+    let grandGuestServiceFee = 0;
     const stayDetails = [];
     const seenListingIds = new Set();
 
@@ -228,10 +243,17 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Stay ${i + 1}: ${amenityError}` });
       }
 
-      const staySubtotal = beforeDiscount - discountAmount + amenityTotal;
+      const roomPortion = beforeDiscount - discountAmount; // room + extra guests, after discount, never includes amenities
+      const staySubtotal = roomPortion + amenityTotal;
+      const baseCommission = Math.round(roomPortion * (BASE_COMMISSION_RATE / 100));
+      const amenityCommission = Math.round(amenityTotal * (AMENITY_COMMISSION_RATE / 100));
+      // Flat rate on the whole stay subtotal — added on top of what the
+      // guest pays, never subtracted from what the host receives.
+      const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
 
       grandSubtotal += staySubtotal;
       grandDiscount += discountAmount;
+      grandGuestServiceFee += guestServiceFee;
 
       stayDetails.push({
         listingId: listing.id,
@@ -242,13 +264,17 @@ module.exports = async (req, res) => {
         nights,
         subtotal: staySubtotal,
         discountAmount,
-        commissionRate: Number(listing.commission_rate),
+        extraGuestCharge: extraTotal, // broken out for the guest-facing summary
+        roomPortion,
+        baseCommission,
+        amenityCommission,
+        guestServiceFee,
         amenities: amenityDetails,
       });
     }
 
     const gst = Math.round(grandSubtotal * GST_RATE);
-    const totalRupees = grandSubtotal + gst;
+    const totalRupees = grandSubtotal + gst + grandGuestServiceFee;
 
     const order = await razorpay.orders.create({
       amount: totalRupees * 100, // paise
