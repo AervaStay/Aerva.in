@@ -40,9 +40,21 @@
   .status-pending{background:#f5ecd7; color:#8a6c39;}
   .status-rejected{background:#f5e0da; color:#a3402f;}
   .status-draft{background:#e6e6e6; color:#555;}
+  .status-paid{background:#e3f0e5; color:#3a7d44;}
+  .status-refunded{background:#f5ecd7; color:#8a6c39;}
+  .status-cancelled{background:#f5e0da; color:#a3402f;}
   .manage-link{font-size:12.5px; color:#8a6c39; text-decoration:underline; white-space:nowrap;}
   .empty{text-align:center; opacity:0.6; padding:60px 0;}
   .loading{text-align:center; opacity:0.6; padding:60px 0;}
+  .section-heading{font-family:Georgia,serif; font-size:19px; margin:36px 0 14px;}
+  .booking-row{background:white; border:1px solid #e0d5c0; padding:16px 20px; margin-bottom:10px;}
+  .booking-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
+  .booking-top h4{margin:0; font-size:14.5px; font-family:Georgia,serif;}
+  .booking-dates{font-size:12.5px; opacity:0.65;}
+  .booking-figures{display:flex; gap:24px; flex-wrap:wrap; font-size:12.5px; margin-top:8px;}
+  .booking-figures .figure-label{opacity:0.55; text-transform:uppercase; letter-spacing:0.05em; font-size:10px; display:block; margin-bottom:2px;}
+  .booking-figures .figure-value{font-size:14px;}
+  .payout-value{color:#3a7d44; font-weight:600;}
 </style>
 </head>
 <body>
@@ -59,8 +71,20 @@
 
   <a href="index.html#add-listing" class="add-listing-link">List a New Property</a>
 
+  <div style="background:#faf3e6; border:1px solid #ddc9a3; padding:16px 20px; margin-bottom:24px; border-radius:4px;">
+    <p style="margin:0 0 10px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a6c39;">Before your first payout</p>
+    <p style="margin:0 0 4px; font-size:14px;"><strong>Step 1:</strong> Aadhaar verification</p>
+    <p style="margin:0 0 10px; font-size:14px;"><strong>Step 2:</strong> Bank account verification</p>
+    <p style="margin:0; font-size:12.5px; opacity:0.75;">Payouts are held until both steps are complete — contact hello@aerva.in to get started.</p>
+  </div>
+
   <div id="listingsContainer">
     <p class="loading">Loading your listings…</p>
+  </div>
+
+  <h2 class="section-heading">Your Earnings</h2>
+  <div id="bookingsContainer">
+    <p class="loading">Loading your bookings…</p>
   </div>
 </div>
 
@@ -121,6 +145,39 @@
     }).join('');
   }
 
+  // Shows only what's relevant to the host: what the guest paid for the
+  // stay itself (subtotal + gst — this never includes the guest's own
+  // separate service fee, which is Aerva's guest-side revenue and none of
+  // the host's business), the commission taken out, and the resulting
+  // payout. Nothing about the guest's fee appears here, by design.
+  function renderBookings(bookings){
+    const container = document.getElementById('bookingsContainer');
+    if(!bookings.length){
+      container.innerHTML = '<p class="empty">No bookings yet.</p>';
+      return;
+    }
+    const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
+    container.innerHTML = bookings.map(b => {
+      const guestPaidForStay = Number(b.subtotal) + Number(b.gst);
+      const dateRange = new Date(b.arrival).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) +
+        ' – ' + new Date(b.departure).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' });
+      return `
+        <div class="booking-row">
+          <div class="booking-top">
+            <h4>${b.suite_name}</h4>
+            ${statusBadgeHtml(b.status)}
+          </div>
+          <div class="booking-dates">${dateRange} · ${b.nights} night${b.nights === 1 ? '' : 's'}</div>
+          <div class="booking-figures">
+            <div><span class="figure-label">Guest Paid (Stay)</span><span class="figure-value">${fmt(guestPaidForStay)}</span></div>
+            <div><span class="figure-label">Commission (${b.commission_rate}%)</span><span class="figure-value">− ${fmt(b.commission_amount)}</span></div>
+            <div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(b.payout_amount)}</span></div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
   async function loadListings(){
     try{
       const res = await fetch(API_BASE + '/api/host-listings', {
@@ -140,8 +197,10 @@
         badgeEl.style.display = 'inline-block';
       }
       renderListings(data.listings || []);
+      renderBookings(data.bookings || []);
     } catch(err){
       document.getElementById('listingsContainer').innerHTML = '<p class="empty">Could not load your listings. Please refresh.</p>';
+      document.getElementById('bookingsContainer').innerHTML = '<p class="empty">Could not load your bookings. Please refresh.</p>';
     }
   }
 
