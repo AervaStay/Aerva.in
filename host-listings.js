@@ -42,7 +42,7 @@ module.exports = async (req, res) => {
 
     // Never hosted anything yet — an empty dashboard, not an error.
     if (!guest.host_id) {
-      return res.status(200).json({ listings: [] });
+      return res.status(200).json({ listings: [], bookings: [] });
     }
 
     const listings = await sql`
@@ -68,7 +68,27 @@ module.exports = async (req, res) => {
     // (see approve-listing.js), with nothing to keep in sync.
     const hostBadge = listings.some(l => l.status === 'approved') ? 'Aerva Host' : null;
 
-    return res.status(200).json({ listings: listingsWithLinks, hostBadge });
+    // Bookings/earnings for this host's listings — deliberately selects
+    // only host-relevant columns. `total` and `guest_service_fee` are
+    // NEVER included here on purpose: total includes the guest's own
+    // service fee, which is Aerva's guest-side revenue and none of the
+    // host's business, exactly as guests never see the host's commission.
+    // subtotal + gst here already reflects what the guest paid for the
+    // stay itself, before that split — payout_amount is what actually
+    // lands with the host after commission.
+    const bookings = await sql`
+      SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.nights,
+             o.subtotal, o.discount_amount, o.gst,
+             o.commission_rate, o.commission_amount, o.payout_amount,
+             o.status, o.created_at
+      FROM orders o
+      JOIN listings l ON o.listing_id = l.id
+      WHERE l.host_id = ${guest.host_id}
+      ORDER BY o.created_at DESC
+      LIMIT 100
+    `;
+
+    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings });
   } catch (err) {
     console.error('host-listings error:', err);
     return res.status(500).json({ error: 'Could not load your listings.' });
