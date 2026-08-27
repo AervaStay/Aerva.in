@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Manage Your Listing — Aerva</title>
 <meta name="robots" content="noindex, nofollow">
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&callback=initGoogleMaps"></script>
 <style>
   body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
   .wrap{max-width:480px; margin:0 auto;}
@@ -103,6 +104,16 @@
     <p class="subtitle">Update your nightly rate, offer, or photos anytime — changes apply immediately.</p>
 
     <form id="pricingForm">
+      <div class="field">
+        <label for="listLocationSearch">Property Location <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
+        <input id="listLocationSearch" type="text" placeholder="Start typing an address…" autocomplete="off">
+        <input type="hidden" id="listLatitude">
+        <input type="hidden" id="listLongitude">
+        <input type="hidden" id="listFormattedAddress">
+        <p id="listLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Powers the "distance from you" shown to guests, and the "View on map" link on your listing.</p>
+      </div>
+
       <div class="field">
         <label for="nightlyRate">Nightly Rate (₹)</label>
         <input id="nightlyRate" type="number" min="1" required>
@@ -211,6 +222,33 @@
 
 <script>
   const API_BASE = 'https://aerva-in.vercel.app';
+
+  // Called by the Google Maps script once it's loaded (see the script tag
+  // in <head>). Same pattern as the listing submission form in
+  // aerva.html — selecting a suggestion captures lat/lng and a clean
+  // formatted address.
+  window.initGoogleMaps = function(){
+    const searchInput = document.getElementById('listLocationSearch');
+    if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
+
+    const autocomplete = new google.maps.places.Autocomplete(searchInput, {
+      fields: ['geometry', 'formatted_address'],
+      types: ['geocode', 'establishment']
+    });
+
+    autocomplete.addListener('place_changed', function(){
+      const place = autocomplete.getPlace();
+      if(!place.geometry || !place.geometry.location) return;
+
+      document.getElementById('listLatitude').value = place.geometry.location.lat();
+      document.getElementById('listLongitude').value = place.geometry.location.lng();
+      document.getElementById('listFormattedAddress').value = place.formatted_address || '';
+
+      const confirmEl = document.getElementById('listLocationConfirm');
+      confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || '');
+      confirmEl.style.display = 'block';
+    });
+  };
   const MAX_LISTING_PHOTOS = 20;
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
@@ -437,6 +475,15 @@
       const l = data.listing;
 
       document.getElementById('propertyNameHeading').textContent = l.property_name;
+      if(l.latitude && l.longitude){
+        document.getElementById('listLatitude').value = l.latitude;
+        document.getElementById('listLongitude').value = l.longitude;
+        document.getElementById('listFormattedAddress').value = l.formatted_address || '';
+        document.getElementById('listLocationSearch').value = l.formatted_address || '';
+        const confirmEl = document.getElementById('listLocationConfirm');
+        confirmEl.textContent = '✓ Location set: ' + (l.formatted_address || '');
+        confirmEl.style.display = 'block';
+      }
       document.getElementById('nightlyRate').value = l.nightly_rate || '';
       document.getElementById('discountType').value = l.discount_type || '';
       document.getElementById('discountValue').value = l.discount_value || '';
@@ -499,6 +546,9 @@
         body: JSON.stringify({
           token,
           nightlyRate: document.getElementById('nightlyRate').value,
+          latitude: document.getElementById('listLatitude').value,
+          longitude: document.getElementById('listLongitude').value,
+          formattedAddress: document.getElementById('listFormattedAddress').value,
           discountType: document.getElementById('discountType').value,
           discountValue: document.getElementById('discountValue').value,
           discountMinNights: document.getElementById('discountMinNights').value,
