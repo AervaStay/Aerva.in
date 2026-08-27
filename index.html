@@ -2118,6 +2118,33 @@
     updatePricing();
   }
 
+  // Reused across searches so we don't create a new Geocoder instance
+  // every time — cheap either way, but tidier.
+  let placesGeocoder = null;
+
+  // Converts whatever the guest typed into the Place field into
+  // coordinates, so search can be "within 200km of this place" instead of
+  // an exact text match against a listing's city field — the latter finds
+  // nothing if a guest searches "Jibhi" but the only listing nearby is
+  // tagged "Pune", even though it's a perfectly reasonable result.
+  function geocodePlace(placeText){
+    return new Promise((resolve) => {
+      if(!placeText || !window.google || !window.google.maps){
+        resolve(null);
+        return;
+      }
+      if(!placesGeocoder) placesGeocoder = new google.maps.Geocoder();
+      placesGeocoder.geocode({ address: placeText }, (results, status) => {
+        if(status === 'OK' && results && results[0]){
+          const loc = results[0].geometry.location;
+          resolve({ lat: loc.lat(), lng: loc.lng() });
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  }
+
   async function performSearch(){
     const arrival = searchArrivalDate;
     const departure = searchDepartureDate;
@@ -2136,14 +2163,27 @@
       return;
     }
 
-    const params = new URLSearchParams();
-    if(city) params.set('city', city);
-    if(guests) params.set('guests', guests);
-    if(arrival && departure){ params.set('arrival', arrival); params.set('departure', departure); }
-
     const container = document.getElementById('suitesContainer');
     container.innerHTML = '<div class="suites-loading">Searching…</div>';
     statusEl.style.display = 'none';
+
+    // A typed place is turned into "within 200km" rather than an exact
+    // text match — geocoding failure (an unrecognized place name) just
+    // falls back to no location filter at all, rather than blocking search.
+    const geocoded = city ? await geocodePlace(city) : null;
+
+    const params = new URLSearchParams();
+    if(geocoded){
+      params.set('lat', geocoded.lat);
+      params.set('lng', geocoded.lng);
+      params.set('radiusKm', '200');
+    } else if(city){
+      // Geocoding failed — still worth trying the old exact-text match
+      // as a fallback rather than silently dropping the filter.
+      params.set('city', city);
+    }
+    if(guests) params.set('guests', guests);
+    if(arrival && departure){ params.set('arrival', arrival); params.set('departure', departure); }
 
     try{
       const url = SUITES_API_BASE + '/api/get-listings' + (params.toString() ? '?' + params.toString() : '');
