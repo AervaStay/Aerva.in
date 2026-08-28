@@ -5,6 +5,14 @@
 //
 // Supports optional filters via query params, all combinable:
 //   ?city=Pune              — partial, case-insensitive match against city
+//                              (fallback only — see lat/lng below)
+//   ?lat=...&lng=...&radiusKm=200 — only listings within this distance of
+//                              a point (typically a geocoded place name —
+//                              see aerva.html's performSearch). Preferred
+//                              over ?city, since a plain text match finds
+//                              nothing when a guest searches a nearby town
+//                              that doesn't literally match any listing's
+//                              city field.
 //   ?guests=4               — only listings that can sleep at least this many
 //   ?arrival=...&departure=... — only listings with no existing paid
 //                                booking that overlaps this date range
@@ -26,6 +34,16 @@ function parseMaxGuests(raw) {
   return Math.max(...numbers.map(Number));
 }
 
+// Same Haversine formula used client-side for "distance from me" — kept
+// in sync deliberately, since both should agree on what "200km" means.
+function haversineDistanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -38,20 +56,34 @@ module.exports = async (req, res) => {
     const guestsRaw = typeof req.query.guests === 'string' ? req.query.guests.trim() : '';
     const arrivalRaw = typeof req.query.arrival === 'string' ? req.query.arrival.trim() : '';
     const departureRaw = typeof req.query.departure === 'string' ? req.query.departure.trim() : '';
+    const latRaw = typeof req.query.lat === 'string' ? Number(req.query.lat) : null;
+    const lngRaw = typeof req.query.lng === 'string' ? Number(req.query.lng) : null;
+    const radiusRaw = typeof req.query.radiusKm === 'string' ? Number(req.query.radiusKm) : null;
 
     const cityFilter = cityRaw ? `%${cityRaw}%` : null;
     const guestsFilter = guestsRaw && !isNaN(Number(guestsRaw)) ? Number(guestsRaw) : null;
+    // Only a genuine, complete lat/lng/radius triple activates distance
+    // filtering — a lone or malformed value is ignored rather than
+    // crashing or silently filtering everything out.
+    const distanceFilter = (latRaw != null && !isNaN(latRaw) && lngRaw != null && !isNaN(lngRaw) && radiusRaw != null && !isNaN(radiusRaw))
+      ? { lat: latRaw, lng: lngRaw, radiusKm: radiusRaw }
+      : null;
     // Dates only apply as a pair — a lone arrival or departure is ignored
     // rather than causing a confusing partial filter.
     const datesFilter = arrivalRaw && departureRaw;
     const arrivalFilter = datesFilter ? arrivalRaw : null;
     const departureFilter = datesFilter ? departureRaw : null;
 
+    // If a distance filter is active, it takes priority — city text
+    // matching is skipped entirely rather than combining the two, since
+    // the frontend only ever sends one or the other anyway.
+    const effectiveCityFilter = distanceFilter ? null : cityFilter;
+
     // City and date-availability are filtered in SQL — availability
     // specifically needs to check against the orders table, which only
-    // makes sense server-side. guests is filtered afterward in JS (see
-    // parseMaxGuests) since max_guests can still contain old-format range
-    // strings that aren't safe to compare numerically in raw SQL.
+    // makes sense server-side. guests and distance are filtered afterward
+    // in JS (see parseMaxGuests / haversineDistanceKm) since both need
+    // logic that's awkward or unsafe to express directly in SQL.
     const listings = await sql`
       SELECT
         id, property_name, city, property_type, bedrooms, max_guests,
@@ -62,7 +94,7 @@ module.exports = async (req, res) => {
         created_at
       FROM listings
       WHERE status = 'approved'
-        AND (${cityFilter}::text IS NULL OR city ILIKE ${cityFilter})
+        AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter})
         AND (
           ${arrivalFilter}::date IS NULL OR NOT EXISTS (
             SELECT 1 FROM orders o
@@ -75,7 +107,7 @@ module.exports = async (req, res) => {
       ORDER BY created_at DESC
     `;
 
-    const filtered = guestsFilter
+    const afterGuestsFilter = guestsFilter
       ? listings.filter(l => {
           const capacity = parseMaxGuests(l.max_guests);
           // A listing with no max_guests set at all isn't excluded by a
@@ -84,6 +116,18 @@ module.exports = async (req, res) => {
           return capacity === null || capacity >= guestsFilter;
         })
       : listings;
+
+    // A listing with no coordinates at all is excluded when searching by
+    // distance — unlike the guest-count case above, there's no reasonable
+    // benefit-of-the-doubt here: "within 200km" genuinely can't be
+    // evaluated without a location to measure from.
+    const filtered = distanceFilter
+      ? afterGuestsFilter.filter(l => {
+          if (l.latitude == null || l.longitude == null) return false;
+          const km = haversineDistanceKm(distanceFilter.lat, distanceFilter.lng, Number(l.latitude), Number(l.longitude));
+          return km <= distanceFilter.radiusKm;
+        })
+      : afterGuestsFilter;
 
     // One extra query for all paid amenities across every listing being
     // returned, rather than one query per listing — cheaper, and this
