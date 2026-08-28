@@ -204,6 +204,17 @@
     width:100%; box-sizing:border-box;
   }
   .search-field input:focus, .search-field select:focus{outline:none; border-color:var(--gold-deep);}
+  .place-input-wrap{position:relative;}
+  .place-hint{
+    position:absolute; left:2px; top:8px; pointer-events:none;
+    font-family:'Jost', sans-serif; font-size:14px; color:#a89c86;
+    opacity:0; transition:opacity 0.4s ease; white-space:nowrap; overflow:hidden;
+  }
+  /* Only shows while the field is genuinely empty — same rule a real
+     placeholder follows, so this reads as "the placeholder is animated"
+     rather than an obviously separate overlay element. */
+  #searchCity:placeholder-shown ~ .place-hint{opacity:1;}
+  #placeHintText{display:inline-block; transition:opacity 0.4s ease;}
   .search-bar .btn{flex:0 0 auto; padding:12px 28px; margin-bottom:1px;}
   .filter-clear{
     flex:0 0 auto; background:none; border:none; font-size:12px; letter-spacing:0.05em;
@@ -506,8 +517,12 @@
       </div>
       <div class="search-field">
         <label for="searchCity">Place</label>
-        <input type="text" id="searchCity" list="searchCityOptions" placeholder="e.g. Pune, Jibhi" autocomplete="off">
-        <datalist id="searchCityOptions"></datalist>
+        <div class="place-input-wrap">
+          <input type="text" id="searchCity" placeholder="" autocomplete="off">
+          <span class="place-hint" id="placeHint"><span id="placeHintText"></span></span>
+        </div>
+        <input type="hidden" id="searchPlaceLat">
+        <input type="hidden" id="searchPlaceLng">
       </div>
       <div class="search-field">
         <label for="searchGuests">Guests</label>
@@ -1528,6 +1543,32 @@
         document.getElementById('listCity').value = cityComponent.long_name;
       }
     });
+
+    // Search bar's "Place" field — real-world address suggestions as the
+    // guest types, not just cities that already have listings. Selecting
+    // a suggestion captures coordinates directly, so performSearch() can
+    // skip a redundant geocoding call for anything picked from this list.
+    const searchPlaceInput = document.getElementById('searchCity');
+    if(searchPlaceInput){
+      const searchAutocomplete = new google.maps.places.Autocomplete(searchPlaceInput, {
+        fields: ['geometry'],
+        types: ['geocode', 'establishment']
+      });
+      searchAutocomplete.addListener('place_changed', function(){
+        const place = searchAutocomplete.getPlace();
+        if(!place.geometry || !place.geometry.location) return;
+        document.getElementById('searchPlaceLat').value = place.geometry.location.lat();
+        document.getElementById('searchPlaceLng').value = place.geometry.location.lng();
+      });
+      // Typing after a suggestion was already selected means the old
+      // coordinates no longer match what's in the box — clear them so
+      // performSearch() falls back to geocoding the new text instead of
+      // silently reusing a stale location.
+      searchPlaceInput.addEventListener('input', function(){
+        document.getElementById('searchPlaceLat').value = '';
+        document.getElementById('searchPlaceLng').value = '';
+      });
+    }
   };
 
   // Which single photo (by id) is the host's chosen cover/lead photo —
@@ -1984,8 +2025,23 @@
       function(err){
         btn.disabled = false;
         btn.textContent = 'Show distance from me';
-        alert('Could not access your location. Please check your browser\'s location permission for this site.');
-      }
+        // err.code: 1 = permission denied, 2 = position unavailable
+        // (e.g. no GPS/network signal), 3 = timed out. Distinguishing
+        // these means the message actually points at the real fix
+        // instead of always suggesting a permission check.
+        let message;
+        if(err.code === 1){
+          message = 'Location access was denied. Please allow location for this site in your browser settings, then try again.';
+        } else if(err.code === 2){
+          message = 'Your location couldn\'t be determined right now — this can happen with a weak GPS/network signal. Please try again in a moment.';
+        } else if(err.code === 3){
+          message = 'Getting your location took too long. Please try again.';
+        } else {
+          message = 'Could not access your location. Please check your browser\'s location permission for this site.';
+        }
+        alert(message);
+      },
+      { timeout: 10000 }
     );
   });
 
@@ -2096,11 +2152,9 @@
     list.forEach(listing => container.appendChild(buildSuiteCard(listing)));
   }
 
-  function populateCityOptions(){
-    const datalist = document.getElementById('searchCityOptions');
-    const uniqueCities = [...new Set(approvedListings.map(l => l.city).filter(Boolean))];
-    datalist.innerHTML = uniqueCities.map(c => `<option value="${c}"></option>`).join('');
-  }
+  // Real address suggestions for the search Place field are wired up in
+  // initGoogleMaps() instead — see below. populateCityOptions() (which
+  // only ever suggested existing listing cities) is retired.
 
   // Refreshes the "Home" dropdown in every existing Reserve stay row after a
   // search changes which listings are available — without wiping out dates
@@ -2170,7 +2224,14 @@
     // A typed place is turned into "within 200km" rather than an exact
     // text match — geocoding failure (an unrecognized place name) just
     // falls back to no location filter at all, rather than blocking search.
-    const geocoded = city ? await geocodePlace(city) : null;
+    // If the guest picked a real suggestion, we already have exact
+    // coordinates — no need to geocode the same text again. Only fall
+    // back to geocoding when they typed freely without selecting one.
+    const selectedLat = document.getElementById('searchPlaceLat').value;
+    const selectedLng = document.getElementById('searchPlaceLng').value;
+    const geocoded = (selectedLat && selectedLng)
+      ? { lat: Number(selectedLat), lng: Number(selectedLng) }
+      : (city ? await geocodePlace(city) : null);
 
     const params = new URLSearchParams();
     if(geocoded){
@@ -2441,6 +2502,28 @@
 
   // ---- One shared fetch, powering both the Suites section and the ----
   // ---- Reserve form's "Home" dropdown, so they never disagree. ----
+  // Cycles the Place field's animated hint through real property
+  // locations (deduplicated city names from current listings) — gives a
+  // sense of where Aerva actually has homes before the guest types
+  // anything, rather than a static, generic placeholder.
+  function startPlaceHintRotation(){
+    const cities = [...new Set(approvedListings.map(l => l.city).filter(Boolean))];
+    const hintTextEl = document.getElementById('placeHintText');
+    if(!hintTextEl || cities.length === 0) return;
+
+    let idx = 0;
+    hintTextEl.textContent = 'Try “' + cities[0] + '”';
+
+    setInterval(() => {
+      idx = (idx + 1) % cities.length;
+      hintTextEl.style.opacity = '0';
+      setTimeout(() => {
+        hintTextEl.textContent = 'Try “' + cities[idx] + '”';
+        hintTextEl.style.opacity = '1';
+      }, 400);
+    }, 2600);
+  }
+
   async function initSite(){
     try{
       const res = await fetch(SUITES_API_BASE + '/api/get-listings');
@@ -2449,7 +2532,7 @@
       approvedListings = data.listings || [];
       listingsById = {};
       approvedListings.forEach(l => { listingsById[l.id] = l; });
-      populateCityOptions();
+      startPlaceHintRotation();
     } catch(err){
       approvedListings = [];
       listingsById = {};
