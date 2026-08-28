@@ -669,31 +669,12 @@
 <section class="pad on-dark" id="experience">
   <div class="wrap">
     <div class="section-head reveal">
-      <div class="eyebrow">A Day at Aerva</div>
-      <h2>Loosely kept hours.</h2>
-      <p>Nothing here runs on a schedule but the sun. This is simply how most days tend to settle.</p>
+      <div class="eyebrow">Beyond the Stay</div>
+      <h2>Experiences, arranged by your host.</h2>
+      <p>Optional add-ons your hosts offer directly — availability and pricing vary by property and dates.</p>
     </div>
-    <div class="exp-list reveal">
-      <div class="exp-row">
-        <div class="exp-time">Dawn</div>
-        <h3>Ridge Walk & Wild Breakfast</h3>
-        <p>A guided walk along the old goat trails, ending with tea and millet flatbread cooked over coals on the eastern outcrop.</p>
-      </div>
-      <div class="exp-row">
-        <div class="exp-time">Midday</div>
-        <h3>The Spring Pool</h3>
-        <p>Fed by an underground spring and kept unheated on purpose — the one part of the retreat left exactly as the hill made it.</p>
-      </div>
-      <div class="exp-row">
-        <div class="exp-time">Late Afternoon</div>
-        <h3>Stone Bath House</h3>
-        <p>Oil massage and a hammam-style steam room built from local sandstone, drawing on Rajasthani bathing traditions.</p>
-      </div>
-      <div class="exp-row">
-        <div class="exp-time">Dusk</div>
-        <h3>One Long Table</h3>
-        <p>A single nightly menu, seasonal and mostly grown within the valley, served family-style for all guests who wish to join.</p>
-      </div>
+    <div class="exp-list reveal" id="experienceList">
+      <div class="exp-row"><p style="opacity:0.6;">Loading…</p></div>
     </div>
   </div>
 </section>
@@ -748,14 +729,14 @@
 <section class="pad on-dark" id="location">
   <div class="wrap loc-grid">
     <div class="loc-copy reveal">
-      <div class="eyebrow">Finding Us</div>
-      <h2>A single ridge, ninety minutes from Udaipur.</h2>
-      <p>Aerva sits alone on its hilltop, reached by a private unpaved road that closes to all but retreat vehicles after check-in. We arrange the transfer.</p>
-      <div class="loc-list">
-        <div><span>Nearest airport</span><span>Udaipur (UDR) — 90 min</span></div>
-        <div><span>Elevation</span><span>612m, Aravalli Range</span></div>
-        <div><span>Check-in / out</span><span>2:00 PM / 11:00 AM</span></div>
-        <div><span>Suites</span><span>11 total, adults preferred</span></div>
+      <div class="eyebrow">Where We Are</div>
+      <h2>Two regions, personally scouted.</h2>
+      <p>Aerva currently covers Pune and the hill towns of Himachal Pradesh — we add a new region only once we've found homes there worth including, not on a fixed schedule.</p>
+      <div class="loc-list" id="locStatsList">
+        <div><span>Cities</span><span id="locStatCities">—</span></div>
+        <div><span>Homes</span><span id="locStatHomes">—</span></div>
+        <div><span>Check-in / out</span><span>Set by each host, confirmed at booking</span></div>
+        <div><span>Best For</span><span>Small groups & families</span></div>
       </div>
     </div>
     <div class="loc-map reveal">
@@ -907,10 +888,11 @@
       </div>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Photos</div>
+      <p style="font-size:11.5px; opacity:0.6; margin:6px 0 0;">Use the ‹ › buttons to arrange photos in order — the number shows their current position. Tap ☆ on any photo to set it as your listing's cover, otherwise interior photos show first by default.</p>
       <div class="field">
         <label for="listPhotosExterior">Exterior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(1–20, at least 1 required)</span></label>
         <input id="listPhotosExterior" name="attachment_exterior" type="file" accept="image/*" multiple>
-        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Use the ‹ › buttons to arrange photos in order — the number shows their current position. Tap ☆ on any photo to set it as your listing's cover, otherwise interior photos show first by default.</p>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">The front of the property, or whatever gives the best first impression — this becomes the main photo shown on the site unless you set a different cover.</p>
         <div id="photoPreviewContainerExterior" class="photo-preview-grid"></div>
       </div>
       <div class="field">
@@ -965,7 +947,7 @@
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Commission</div>
       <p style="font-size:13px; line-height:1.7; opacity:0.75; border:1px solid var(--line-dark); padding:14px 16px; background:var(--cream);">
-        Aerva charges a flat <strong>15% commission</strong> on completed bookings — you receive 85% of what the guest pays, before any payment processing fees. This is set by Aerva and applies the same way it does for every host, so there's nothing to configure here. Payouts today are tracked internally per booking; automated bank transfers aren't set up yet, so settlement happens manually until that's built.
+        Aerva charges <strong>10% commission</strong> on your base booking (room + extra guests) and <strong>5%</strong> on any paid amenities you offer — this comes out of what you receive, and applies the same way for every host, so there's nothing to configure here. Separately, guests pay their own service fee on top, which never affects your payout. Payouts today are tracked internally per booking; automated bank transfers aren't set up yet, so settlement happens manually until that's built.
       </p>
 
       <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
@@ -993,7 +975,7 @@
   </div>
   <div class="wrap foot-grid">
     <div class="foot-col">
-      <p>A hilltop retreat on Rajasthan's Aravalli ridge — eleven suites, one table, and a spring that never runs warm.</p>
+      <p>A curated collection of personally reviewed homes across Pune and Himachal Pradesh — never a template, never bulk-listed.</p>
     </div>
     <div class="foot-col">
       <h4>Explore</h4>
@@ -2797,6 +2779,49 @@
   // representative photo per listing (cover choice first, falling back to
   // whatever's actually available) — real property photos, not stock
   // imagery, so it stays accurate as listings change.
+  // Replaces the old fixed-retreat "Day at Aerva" narrative with real
+  // paid amenities pulled from actual approved listings — each shown
+  // tied to the specific property offering it, since price and
+  // availability genuinely vary host to host rather than being one
+  // shared experience.
+  // Real counts from actual approved listings, rather than a fixed
+  // claim that inevitably goes stale as listings are added.
+  function renderLocationStats(){
+    const citiesEl = document.getElementById('locStatCities');
+    const homesEl = document.getElementById('locStatHomes');
+    if(!citiesEl || !homesEl) return;
+
+    const uniqueCities = [...new Set(approvedListings.map(l => l.city).filter(Boolean))];
+    citiesEl.textContent = uniqueCities.length ? uniqueCities.join(', ') : '—';
+    homesEl.textContent = approvedListings.length ? String(approvedListings.length) : '—';
+  }
+
+  function renderExperienceSection(){
+    const listEl = document.getElementById('experienceList');
+    if(!listEl) return;
+
+    const rows = [];
+    approvedListings.forEach(l => {
+      const amenities = Array.isArray(l.paid_amenities) ? l.paid_amenities : [];
+      amenities.forEach(a => {
+        rows.push({ listingName: l.property_name, name: a.name, price: a.price, description: a.description });
+      });
+    });
+
+    if(rows.length === 0){
+      listEl.innerHTML = `<div class="exp-row"><p style="opacity:0.65;">Hosts haven't added any bookable experiences yet — check back soon, or ask your host directly once you've reserved a stay.</p></div>`;
+      return;
+    }
+
+    listEl.innerHTML = rows.slice(0, 8).map(r => `
+      <div class="exp-row">
+        <div class="exp-time">${fmt(Number(r.price))}/night</div>
+        <h3>${r.name}</h3>
+        <p>${r.description ? r.description + ' — ' : ''}Available at ${r.listingName}.</p>
+      </div>
+    `).join('');
+  }
+
   function startFilterBgSlideshow(){
     const slidesEl = document.getElementById('filterBgSlides');
     if(!slidesEl) return;
@@ -2836,6 +2861,8 @@
       approvedListings.forEach(l => { listingsById[l.id] = l; });
       startPlaceHintRotation();
       startFilterBgSlideshow();
+      renderExperienceSection();
+      renderLocationStats();
     } catch(err){
       approvedListings = [];
       listingsById = {};
