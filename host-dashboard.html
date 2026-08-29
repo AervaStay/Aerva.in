@@ -355,7 +355,8 @@
           const { upload } = await import('https://esm.sh/@vercel/blob/client');
           const result = await upload(file.name, file, {
             access: 'public',
-            handleUploadUrl: API_BASE + '/api/blob-upload'
+            handleUploadUrl: API_BASE + '/api/blob-upload',
+            clientPayload: 'aadhaar-verification'
           });
           const res = await fetch(API_BASE + '/api/host-listings', {
             method: 'POST',
