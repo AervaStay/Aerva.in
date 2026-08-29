@@ -2707,15 +2707,27 @@
       : 'Rate on enquiry';
     const offerLine = formatOffer(listing);
 
+    // A co-host isn't part of the data model yet — only one host name is
+    // stored per listing — so this shows the listed owner only. Adding a
+    // real co-host field would need a small schema change first.
+    const hostLine = listing.host_name
+      ? `<div class="loc" style="margin-top:6px; opacity:0.85;">Hosted by ${listing.host_name}</div>`
+      : '';
+
     return `
       ${photosHtml}
       <div class="listing-modal-content">
         <h2>${listing.property_name}</h2>
         <div class="loc">${listing.city}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        ${hostLine}
         ${mapLinkHtml ? `<div style="margin-top:6px;">${mapLinkHtml}</div>` : ''}
         <p class="desc">${listing.description}</p>
         ${amenitiesHtml}
         ${paidAmenitiesHtml}
+        <div class="listing-modal-section-title">Availability</div>
+        <div id="availabilityCalendar" data-listing-id="${listing.id}">
+          <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
+        </div>
         <div class="listing-modal-price-row">
           <div>
             <div class="price">${priceLine}</div>
@@ -2743,6 +2755,91 @@
   // clicks a suite card. Same content as buildListingDetailHtml, just
   // rendered into the page itself instead of an overlay, with the rest
   // of the homepage (search, grid) hidden rather than shown alongside it.
+  // Every night covered by a booked range, arrival up to (not including)
+  // departure — same convention the backend uses (see create-order.js).
+  function getNightsInRangeClient(arrival, departure){
+    const nights = [];
+    let d = new Date(arrival + 'T00:00:00Z');
+    const end = new Date(departure + 'T00:00:00Z');
+    while(d < end){
+      nights.push(d.toISOString().split('T')[0]);
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return nights;
+  }
+
+  // Real availability, not a guess — pulls actual paid bookings for this
+  // listing from the server (see /api/get-listing-availability) and greys
+  // out those nights on a read-only month calendar the guest can page
+  // through. Never shows who booked, only that a date is taken.
+  async function renderAvailabilityCalendar(listingId){
+    const container = document.getElementById('availabilityCalendar');
+    if(!container) return;
+
+    let bookedRanges = [];
+    try {
+      const res = await fetch(SUITES_API_BASE + '/api/get-listing-availability?listingId=' + encodeURIComponent(listingId));
+      if(res.ok){
+        const data = await res.json();
+        bookedRanges = Array.isArray(data.bookedRanges) ? data.bookedRanges : [];
+      }
+    } catch(err){
+      console.error('Could not load availability:', err);
+    }
+
+    const bookedNights = new Set();
+    bookedRanges.forEach(r => {
+      if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => bookedNights.add(n));
+    });
+
+    let viewYear = new Date().getFullYear();
+    let viewMonth = new Date().getMonth();
+
+    function renderMonth(){
+      const firstDay = new Date(viewYear, viewMonth, 1);
+      const startWeekday = firstDay.getDay();
+      const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+      const todayIso = new Date().toISOString().split('T')[0];
+
+      let cellsHtml = '';
+      for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
+      for(let day = 1; day <= daysInMonth; day++){
+        const cellDate = new Date(viewYear, viewMonth, day);
+        const iso = cellDate.toISOString().split('T')[0];
+        const classes = 'calendar-day' + ((iso < todayIso || bookedNights.has(iso)) ? ' disabled' : '');
+        cellsHtml += `<div class="${classes}">${day}</div>`;
+      }
+
+      container.innerHTML = `
+        <div class="calendar-month-panel" style="max-width:320px; padding:0;">
+          <div class="calendar-month-header">
+            <button type="button" class="cal-nav" id="availCalPrev" aria-label="Previous month">‹</button>
+            <div class="calendar-month-label">${MONTH_NAMES[viewMonth]} ${viewYear}</div>
+            <button type="button" class="cal-nav" id="availCalNext" aria-label="Next month">›</button>
+          </div>
+          <div class="calendar-weekdays">
+            <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+          </div>
+          <div class="calendar-grid">${cellsHtml}</div>
+          <p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Greyed-out dates are already booked or in the past.</p>
+        </div>
+      `;
+
+      document.getElementById('availCalPrev').addEventListener('click', () => {
+        viewMonth -= 1;
+        if(viewMonth < 0){ viewMonth = 11; viewYear -= 1; }
+        renderMonth();
+      });
+      document.getElementById('availCalNext').addEventListener('click', () => {
+        viewMonth += 1;
+        if(viewMonth > 11){ viewMonth = 0; viewYear += 1; }
+        renderMonth();
+      });
+    }
+
+    renderMonth();
+  }
+
   function showFullListingPage(listing){
     const catNav = document.querySelector('.category-nav');
     if(catNav) catNav.style.display = 'none';
@@ -2750,6 +2847,7 @@
     document.getElementById('listingFullViewBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingFullView').style.display = 'block';
     document.title = listing.property_name + ' — Aerva';
+    renderAvailabilityCalendar(listing.id);
   }
 
   document.getElementById('listingModalClose').addEventListener('click', closeListingDetail);
