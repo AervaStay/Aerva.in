@@ -836,42 +836,8 @@
   </div>
 </section>
 
-<!-- ================= LOCATION ================= -->
-<section class="pad on-dark" id="location">
-  <div class="wrap loc-grid">
-    <div class="loc-copy reveal">
-      <div class="eyebrow">Where We Are</div>
-      <h2>Two regions, personally scouted.</h2>
-      <p>Aerva currently covers Pune and the hill towns of Himachal Pradesh — we add a new region only once we've found homes there worth including, not on a fixed schedule.</p>
-      <div class="loc-list" id="locStatsList">
-        <div><span>Cities</span><span id="locStatCities">—</span></div>
-        <div><span>Homes</span><span id="locStatHomes">—</span></div>
-        <div><span>Check-in / out</span><span>Set by each host, confirmed at booking</span></div>
-        <div><span>Best For</span><span>Small groups & families</span></div>
-      </div>
-    </div>
-    <div class="loc-map reveal">
-      <svg viewBox="0 0 400 400" aria-hidden="true">
-        <rect width="400" height="400" fill="#211e1a"/>
-        <path d="M0,240 C80,180 140,260 220,190 C280,140 320,210 400,170 L400,400 L0,400 Z" fill="#2a2620"/>
-        <path d="M0,300 C100,260 180,320 260,270 C320,235 360,280 400,255 L400,400 L0,400 Z" fill="#1c1a17"/>
-        <circle cx="230" cy="185" r="4.5" fill="var(--gold)"/>
-        <circle cx="230" cy="185" r="12" fill="none" stroke="var(--gold)" stroke-width="1" opacity="0.5"/>
-        <circle cx="230" cy="185" r="22" fill="none" stroke="var(--gold)" stroke-width="1" opacity="0.25"/>
-        <text x="248" y="190" fill="var(--gold)" font-family="Bodoni Moda, serif" font-style="italic" font-size="14">Aerva</text>
-        <g stroke="#4a463d" stroke-width="1" opacity="0.6">
-          <line x1="0" y1="60" x2="400" y2="60"/>
-          <line x1="0" y1="140" x2="400" y2="140"/>
-          <line x1="60" y1="0" x2="60" y2="400"/>
-          <line x1="150" y1="0" x2="150" y2="400"/>
-        </g>
-      </svg>
-    </div>
-  </div>
-</section>
-
 <!-- ================= ADD LISTING ================= -->
-<section class="pad" id="add-listing" style="background:var(--cream-deep);">
+<section class="pad" id="add-listing" style="background:var(--cream-deep); display:none;">
   <div class="wrap">
     <div class="section-head center-head reveal">
       <div class="eyebrow">For Property Owners</div>
@@ -2349,6 +2315,27 @@
     }
   }
 
+  // Recent-search history — also purely client-side (localStorage). Every
+  // place a guest actually searches gets remembered, most recent first, so
+  // it can be offered back as a one-tap suggestion the next time they open
+  // the "Where" field with nothing typed yet.
+  const RECENT_SEARCHES_KEY = 'aerva_recent_searches';
+  const MAX_RECENT_SEARCHES = 6;
+  function getRecentSearches(){
+    try {
+      return JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || '[]');
+    } catch(err){
+      return [];
+    }
+  }
+  function saveRecentSearch(text, lat, lng){
+    const trimmed = (text || '').trim();
+    if(!trimmed) return;
+    let list = getRecentSearches().filter(item => item.text.toLowerCase() !== trimmed.toLowerCase());
+    list.unshift({ text: trimmed, lat: lat || '', lng: lng || '' });
+    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
+  }
+
   function buildSuiteCard(listing){
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
@@ -2545,6 +2532,8 @@
       ? { lat: Number(selectedLat), lng: Number(selectedLng) }
       : (city ? await geocodePlace(city) : null);
 
+    if(city) saveRecentSearch(city, geocoded ? geocoded.lat : '', geocoded ? geocoded.lng : '');
+
     const params = new URLSearchParams();
     if(geocoded){
       params.set('lat', geocoded.lat);
@@ -2698,6 +2687,50 @@
   });
 
   document.getElementById('searchBtn').addEventListener('click', performSearch);
+
+  // Recent-search suggestions — shown on focus when the "Where" field is
+  // empty, independent of whether the Google Maps script has loaded (that
+  // one only powers live address predictions once typing starts). This is
+  // the only place that renders into #placeSuggestions before any input,
+  // so it never fights with the Maps-driven predictions that take over
+  // once the guest starts typing.
+  (function initRecentSearchSuggestions(){
+    const input = document.getElementById('searchCity');
+    const dropdown = document.getElementById('placeSuggestions');
+    if(!input || !dropdown) return;
+
+    function showRecent(){
+      const recents = getRecentSearches();
+      if(recents.length === 0) return;
+      dropdown.innerHTML = '<div class="place-suggest-heading">Recent Searches</div>' +
+        recents.map((r, i) => `
+          <button type="button" class="place-suggest-item" data-recent-index="${i}">${r.text}</button>
+        `).join('');
+      dropdown.style.display = 'block';
+      dropdown.querySelectorAll('[data-recent-index]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const item = recents[Number(btn.dataset.recentIndex)];
+          if(!item) return;
+          input.value = item.text;
+          document.getElementById('searchPlaceLat').value = item.lat || '';
+          document.getElementById('searchPlaceLng').value = item.lng || '';
+          dropdown.innerHTML = '';
+          dropdown.style.display = 'none';
+        });
+      });
+    }
+
+    input.addEventListener('focus', function(){
+      if(this.value.trim() === '') showRecent();
+    });
+
+    document.addEventListener('click', function(e){
+      if(input.value.trim() === '' && !dropdown.contains(e.target) && e.target !== input){
+        setTimeout(() => { dropdown.innerHTML = ''; dropdown.style.display = 'none'; }, 150);
+      }
+    });
+  })();
+
   document.getElementById('sortPrice').addEventListener('change', applyFiltersAndRender);
   document.getElementById('minPrice').addEventListener('input', applyFiltersAndRender);
   document.getElementById('maxPrice').addEventListener('input', applyFiltersAndRender);
