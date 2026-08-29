@@ -357,16 +357,16 @@
   .filter-bg-wrap .wrap{position:relative; z-index:2;}
   .filter-bar{margin-bottom:6px; padding:16px 22px; opacity:0.92;}
   .search-field{display:flex; flex-direction:column; gap:6px; flex:1; min-width:130px;}
-  .search-field label{font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c;}
+  .search-field label{font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c; font-weight:700;}
   .search-field input, .search-field select{
     background:transparent; border:none; border-bottom:1px solid var(--line-dark);
     padding:8px 2px; font-family:'Jost', sans-serif; font-size:14px; color:var(--ink);
     width:100%; box-sizing:border-box;
   }
   .search-field input:focus, .search-field select:focus{outline:none; border-color:var(--gold-deep);}
-  .place-input-wrap{position:relative;}
+  .place-input-wrap{position:relative; display:flex; align-items:center; flex:1; min-width:0;}
   .place-hint{
-    position:absolute; left:2px; top:8px; pointer-events:none;
+    position:absolute; left:2px; top:50%; transform:translateY(-50%); pointer-events:none;
     font-family:'Jost', sans-serif; font-size:14px; color:#a89c86;
     opacity:0; transition:opacity 0.4s ease; white-space:nowrap; overflow:hidden;
   }
