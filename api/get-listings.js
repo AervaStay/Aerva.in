@@ -87,7 +87,7 @@ module.exports = async (req, res) => {
     const listings = await sql`
       SELECT
         id, property_name, city, property_type, bedrooms, max_guests,
-        nightly_rate, description, amenities, services,
+        nightly_rate, description, amenities, services, host_name,
         discount_type, discount_value, discount_min_nights, discount_description,
         exterior_photo_urls, interior_photo_urls, cover_photo_url,
         latitude, longitude, formatted_address,
