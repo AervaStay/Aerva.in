@@ -3202,17 +3202,33 @@
     `).join('');
   }
 
-  function startFilterBgSlideshow(){
+  async function startFilterBgSlideshow(){
     const slidesEl = document.getElementById('filterBgSlides');
     if(!slidesEl) return;
 
-    const photos = approvedListings
-      .map(l => {
-        const exterior = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
-        const interior = Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : [];
-        return l.cover_photo_url || exterior[0] || interior[0] || null;
-      })
-      .filter(Boolean);
+    // The admin's chosen photos win if any are set (see admin.html and
+    // get-pending-listings.js's POST mode); otherwise fall back to every
+    // approved listing's own cover photo, same as before.
+    let photos = [];
+    try {
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?siteBackground=1');
+      if(res.ok){
+        const data = await res.json();
+        photos = Array.isArray(data.images) ? data.images : [];
+      }
+    } catch(err){
+      console.error('Could not load admin background images, falling back to listing photos:', err);
+    }
+
+    if(photos.length === 0){
+      photos = approvedListings
+        .map(l => {
+          const exterior = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
+          const interior = Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : [];
+          return l.cover_photo_url || exterior[0] || interior[0] || null;
+        })
+        .filter(Boolean);
+    }
 
     if(photos.length === 0) return;
 
