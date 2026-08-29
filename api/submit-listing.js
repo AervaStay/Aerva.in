@@ -154,7 +154,8 @@ module.exports = async (req, res) => {
       propertyName, city, propertyType, bedrooms, maxGuests, nightlyRate,
       description, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
-      exteriorPhotoUrls, interiorPhotoUrls
+      exteriorPhotoUrls, interiorPhotoUrls,
+      petFriendly, maxPetsAllowed, allowedPetTypes, petFee
     } = req.body;
 
     // The guest's own account info is never trusted from the request body
@@ -204,6 +205,10 @@ module.exports = async (req, res) => {
         console.warn('submit-listing rejected: no interior photos');
         return res.status(400).json({ error: 'At least 1 interior photo is required' });
       }
+      if (petFriendly !== true && petFriendly !== false) {
+        console.warn('submit-listing rejected: pet policy not specified');
+        return res.status(400).json({ error: 'Please tell us whether pets are allowed at this property.' });
+      }
     }
 
     const rate = nightlyRate ? Number(nightlyRate) : null;
@@ -221,6 +226,19 @@ module.exports = async (req, res) => {
     const safeInteriorUrls = sanitizePhotoUrls(interiorPhotoUrls);
     const newStatus = isDraft ? 'draft' : 'pending';
 
+    // Pet policy — deliberately kept separate from the free amenities
+    // list. Only "Dog" and "Cat" are ever accepted regardless of what the
+    // request sends, and the detail fields (count, types, fee) are only
+    // stored at all when the property is actually marked pet-friendly —
+    // a "No" answer clears any stray values rather than storing them.
+    const ALLOWED_PET_TYPES = ['Dog', 'Cat'];
+    const safePetFriendly = petFriendly === true ? true : (petFriendly === false ? false : null);
+    const safePetTypes = safePetFriendly === true && Array.isArray(allowedPetTypes)
+      ? allowedPetTypes.filter(t => ALLOWED_PET_TYPES.includes(t))
+      : [];
+    const safeMaxPets = safePetFriendly === true && maxPetsAllowed ? Number(maxPetsAllowed) : null;
+    const safePetFee = safePetFriendly === true && petFee ? Number(petFee) : null;
+
     let listing;
     if (existingDraft) {
       const updated = await sql`
@@ -232,6 +250,8 @@ module.exports = async (req, res) => {
           discount_type = ${discountType || null}, discount_value = ${discountValue ? Number(discountValue) : null},
           discount_min_nights = ${discountMinNights ? Number(discountMinNights) : null}, discount_description = ${discountDescription || null},
           exterior_photo_urls = ${JSON.stringify(safeExteriorUrls)}, interior_photo_urls = ${JSON.stringify(safeInteriorUrls)},
+          pet_friendly = ${safePetFriendly}, max_pets_allowed = ${safeMaxPets},
+          allowed_pet_types = ${JSON.stringify(safePetTypes)}, pet_fee = ${safePetFee},
           status = ${newStatus}
         WHERE id = ${listingId}
         RETURNING *
@@ -243,7 +263,8 @@ module.exports = async (req, res) => {
           property_name, city, property_type, bedrooms, max_guests, nightly_rate,
           description, amenities, services, host_name, host_email, host_phone, host_id,
           discount_type, discount_value, discount_min_nights, discount_description,
-          commission_rate, exterior_photo_urls, interior_photo_urls, status
+          commission_rate, exterior_photo_urls, interior_photo_urls,
+          pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, status
         ) VALUES (
           ${propertyName}, ${city || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
@@ -251,7 +272,8 @@ module.exports = async (req, res) => {
           ${hostName || null}, ${authenticatedHostEmail}, ${hostPhone || null}, ${hostId},
           ${discountType || null}, ${discountValue ? Number(discountValue) : null},
           ${discountMinNights ? Number(discountMinNights) : null}, ${discountDescription || null},
-          ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)}, ${newStatus}
+          ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
+          ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${newStatus}
         )
         RETURNING *
       `;
