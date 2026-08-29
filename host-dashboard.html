@@ -55,6 +55,23 @@
   .booking-figures .figure-label{opacity:0.55; text-transform:uppercase; letter-spacing:0.05em; font-size:10px; display:block; margin-bottom:2px;}
   .booking-figures .figure-value{font-size:14px;}
   .payout-value{color:#3a7d44; font-weight:600;}
+  .deposit-row{margin-top:12px; padding-top:12px; border-top:1px solid #f0e6d6;}
+  .deposit-status-badge{font-size:10.5px; padding:3px 9px; border-radius:3px; text-transform:uppercase; letter-spacing:0.04em; margin-left:8px;}
+  .deposit-status-held{background:#f5ecd7; color:#8a6c39;}
+  .deposit-status-disputed{background:#f5e0da; color:#a3402f;}
+  .deposit-status-refunded{background:#e3f0e5; color:#3a7d44;}
+  .deposit-status-resolved{background:#e3f0e5; color:#3a7d44;}
+  .dispute-btn{
+    background:none; border:1px solid #a3402f; color:#a3402f; padding:6px 14px;
+    font-size:11.5px; cursor:pointer; margin-top:8px;
+  }
+  .dispute-form{margin-top:10px; display:none;}
+  .dispute-form textarea{
+    width:100%; box-sizing:border-box; border:1px solid #ddd0bc; padding:8px 10px;
+    font-family:'Jost', sans-serif; font-size:13px; resize:vertical; margin-bottom:8px;
+  }
+  .dispute-note{font-size:12px; opacity:0.65; margin-top:6px;}
+  .dispute-reason-shown{font-size:12.5px; opacity:0.75; margin-top:6px; font-style:italic;}
   .verify-box{background:#faf3e6; border:1px solid #ddc9a3; padding:18px 20px; margin-bottom:24px; border-radius:4px;}
   .verify-box h3{margin:0 0 4px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a6c39;}
   .verify-step{border-top:1px solid #e6d5b8; padding:14px 0;}
@@ -178,6 +195,45 @@
       const guestPaidForStay = Number(b.subtotal) + Number(b.gst);
       const dateRange = new Date(b.arrival).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) +
         ' – ' + new Date(b.departure).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      // Deposit section — only shown at all if this booking actually had
+      // one (deposit_status defaults to 'none' for bookings on listings
+      // with no security deposit set). "Raise a Concern" only appears
+      // while it's still 'held' and the 7-day window hasn't closed yet —
+      // the same two checks the backend enforces, so a host never sees a
+      // button that would just fail when clicked.
+      let depositHtml = '';
+      if(b.deposit_status && b.deposit_status !== 'none'){
+        const releaseDate = b.deposit_release_at ? new Date(b.deposit_release_at) : null;
+        const canDispute = b.deposit_status === 'held' && releaseDate && new Date() <= releaseDate;
+        const releaseLabel = releaseDate
+          ? releaseDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })
+          : '';
+
+        let statusNote = '';
+        if(b.deposit_status === 'held') statusNote = `Held until ${releaseLabel} unless you raise a concern.`;
+        else if(b.deposit_status === 'disputed') statusNote = 'Under review by Aerva — you\'ll hear back once it\'s resolved.';
+        else if(b.deposit_status === 'refunded') statusNote = 'The 7-day window passed with no concern raised — refunded to the guest in full.';
+        else if(b.deposit_status === 'resolved') statusNote = `Resolved — ${fmt(b.deposit_resolution_amount || 0)} credited toward your payout, remainder refunded to the guest.`;
+
+        depositHtml = `
+          <div class="deposit-row">
+            <span class="figure-label">Security Deposit</span>
+            <span class="figure-value">${fmt(b.deposit_amount)}<span class="deposit-status-badge deposit-status-${b.deposit_status}">${b.deposit_status}</span></span>
+            <div class="dispute-note">${statusNote}</div>
+            ${b.dispute_reason ? `<div class="dispute-reason-shown">Your note: "${b.dispute_reason}"</div>` : ''}
+            ${canDispute ? `
+              <button type="button" class="dispute-btn" data-order-id="${b.id}" onclick="toggleDisputeForm(${b.id})">Raise a Concern</button>
+              <div class="dispute-form" id="disputeForm-${b.id}">
+                <textarea id="disputeReason-${b.id}" rows="3" placeholder="What happened? (damage, missing items, extra cleaning needed, etc.)"></textarea>
+                <button type="button" class="btn-small" onclick="submitDispute(${b.id})">Submit</button>
+                <p class="verify-error" id="disputeError-${b.id}"></p>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+
       return `
         <div class="booking-row">
           <div class="booking-top">
@@ -190,9 +246,44 @@
             <div><span class="figure-label">Commission (${b.commission_rate}%)</span><span class="figure-value">− ${fmt(b.commission_amount)}</span></div>
             <div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(b.payout_amount)}</span></div>
           </div>
+          ${depositHtml}
         </div>
       `;
     }).join('');
+  }
+
+  function toggleDisputeForm(orderId){
+    const form = document.getElementById('disputeForm-' + orderId);
+    if(form) form.style.display = form.style.display === 'block' ? 'none' : 'block';
+  }
+
+  async function submitDispute(orderId){
+    const reasonEl = document.getElementById('disputeReason-' + orderId);
+    const errorEl = document.getElementById('disputeError-' + orderId);
+    errorEl.style.display = 'none';
+    const reason = reasonEl.value.trim();
+    if(!reason){
+      errorEl.textContent = 'Please describe the concern first.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ raiseDispute: { orderId, reason } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        loadListings();
+      } else {
+        errorEl.textContent = data.error || 'Could not submit your concern. Please try again.';
+        errorEl.style.display = 'block';
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not submit your concern. Please try again.';
+      errorEl.style.display = 'block';
+    }
   }
 
   function renderVerification(v){
