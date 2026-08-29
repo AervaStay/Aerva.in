@@ -57,7 +57,7 @@ module.exports = async (req, res) => {
         SELECT id, property_name, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address,
-               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee
+               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -81,7 +81,7 @@ module.exports = async (req, res) => {
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities,
               latitude, longitude, formattedAddress,
-              petFriendly, maxPetsAllowed, allowedPetTypes, petFee } = req.body || {};
+              petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -90,7 +90,7 @@ module.exports = async (req, res) => {
 
       const before = await sql`
         SELECT nightly_rate, exterior_photo_urls, interior_photo_urls,
-               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee
+               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit
         FROM listings WHERE id = ${listingId}
       `;
       if (!before[0]) return res.status(404).json({ error: 'This listing could not be found.' });
@@ -146,6 +146,11 @@ module.exports = async (req, res) => {
         ? (petFriendly === true && petFee ? Number(petFee) : null)
         : before[0].pet_fee;
 
+      // Security deposit — always sent fresh from the manage-listing form
+      // (like the discount fields above), so this simply overwrites rather
+      // than needing the same "not sent at all" handling pet policy needs.
+      const finalSecurityDeposit = securityDeposit && Number(securityDeposit) > 0 ? Number(securityDeposit) : null;
+
       const updated = await sql`
         UPDATE listings SET
           nightly_rate = ${rate},
@@ -162,7 +167,8 @@ module.exports = async (req, res) => {
           longitude = COALESCE(${safeLng ?? null}, longitude),
           formatted_address = COALESCE(${formattedAddress || null}, formatted_address),
           pet_friendly = ${finalPetFriendly}, max_pets_allowed = ${finalMaxPets},
-          allowed_pet_types = ${JSON.stringify(finalPetTypes)}, pet_fee = ${finalPetFee}
+          allowed_pet_types = ${JSON.stringify(finalPetTypes)}, pet_fee = ${finalPetFee},
+          security_deposit = ${finalSecurityDeposit}
         WHERE id = ${listingId}
         RETURNING id, property_name, host_email
       `;
