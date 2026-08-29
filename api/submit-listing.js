@@ -155,7 +155,8 @@ module.exports = async (req, res) => {
       description, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
       exteriorPhotoUrls, interiorPhotoUrls,
-      petFriendly, maxPetsAllowed, allowedPetTypes, petFee
+      petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
+      securityDeposit
     } = req.body;
 
     // The guest's own account info is never trusted from the request body
@@ -239,6 +240,11 @@ module.exports = async (req, res) => {
     const safeMaxPets = safePetFriendly === true && maxPetsAllowed ? Number(maxPetsAllowed) : null;
     const safePetFee = safePetFriendly === true && petFee ? Number(petFee) : null;
 
+    // Security deposit — entirely optional, like the pet fee. A host who
+    // doesn't want one just leaves it blank; guests only ever see and pay
+    // it when a listing actually has one set.
+    const safeSecurityDeposit = securityDeposit && Number(securityDeposit) > 0 ? Number(securityDeposit) : null;
+
     let listing;
     if (existingDraft) {
       const updated = await sql`
@@ -252,6 +258,7 @@ module.exports = async (req, res) => {
           exterior_photo_urls = ${JSON.stringify(safeExteriorUrls)}, interior_photo_urls = ${JSON.stringify(safeInteriorUrls)},
           pet_friendly = ${safePetFriendly}, max_pets_allowed = ${safeMaxPets},
           allowed_pet_types = ${JSON.stringify(safePetTypes)}, pet_fee = ${safePetFee},
+          security_deposit = ${safeSecurityDeposit},
           status = ${newStatus}
         WHERE id = ${listingId}
         RETURNING *
@@ -264,7 +271,7 @@ module.exports = async (req, res) => {
           description, amenities, services, host_name, host_email, host_phone, host_id,
           discount_type, discount_value, discount_min_nights, discount_description,
           commission_rate, exterior_photo_urls, interior_photo_urls,
-          pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, status
+          pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit, status
         ) VALUES (
           ${propertyName}, ${city || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
@@ -273,7 +280,7 @@ module.exports = async (req, res) => {
           ${discountType || null}, ${discountValue ? Number(discountValue) : null},
           ${discountMinNights ? Number(discountMinNights) : null}, ${discountDescription || null},
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
-          ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${newStatus}
+          ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit}, ${newStatus}
         )
         RETURNING *
       `;
