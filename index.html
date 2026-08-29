@@ -436,6 +436,14 @@
     padding:20px; width:600px; max-width:90vw;
   }
   .calendar-dropdown.open{display:block;}
+  .quick-date-row{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid var(--line-dark);}
+  .quick-date-btn{
+    background:none; border:1px solid var(--line-dark); border-radius:999px; padding:7px 14px;
+    font-size:12.5px; font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer;
+    transition:border-color .2s ease, background .2s ease;
+  }
+  .quick-date-btn:hover{border-color:var(--gold-deep); background:rgba(169,136,79,0.08);}
+  .quick-date-btn.selected{background:var(--ink); border-color:var(--ink); color:var(--cream);}
   .calendar-months{display:flex; gap:28px; background-color:#f4ebe3;}
   .calendar-month-panel{flex:1; min-width:0; background-color:#f4ebe3;}
   .calendar-month-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; background-color:#f4ebe3;}
@@ -761,6 +769,13 @@
         <label>When</label>
         <button type="button" class="date-range-btn" id="dateRangeBtn">Add dates</button>
         <div class="calendar-dropdown" id="calendarDropdown">
+          <div class="quick-date-row" id="quickDateRow">
+            <button type="button" class="quick-date-btn" data-days="1">1 night</button>
+            <button type="button" class="quick-date-btn" data-days="2">2 nights</button>
+            <button type="button" class="quick-date-btn" data-days="4">4 nights</button>
+            <button type="button" class="quick-date-btn" data-days="7">1 week</button>
+            <button type="button" class="quick-date-btn" data-days="14">2 weeks</button>
+          </div>
           <div class="calendar-months">
             <div class="calendar-month-panel">
               <div class="calendar-month-header">
@@ -3162,7 +3177,44 @@
     renderMonthPanel(nextYear, nextMonth, calMonthLabel2, calendarGrid2);
 
     calendarHint.textContent = calSelectingStart ? 'Pick your arrival date' : 'Now pick your departure date';
+
+    // Highlight whichever quick-pick (if any) matches the current
+    // selection exactly — e.g. picking dates by hand that happen to be
+    // "earliest arrival + 7 nights" shows "1 week" as selected too.
+    const calMinIso = calMinDate.toISOString().split('T')[0];
+    document.querySelectorAll('.quick-date-btn').forEach(btn => {
+      const matches = searchArrivalDate === calMinIso && searchDepartureDate === isoAddDays(calMinIso, Number(btn.dataset.days));
+      btn.classList.toggle('selected', matches);
+    });
   }
+
+  function isoAddDays(iso, days){
+    const d = new Date(iso + 'T00:00:00');
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split('T')[0];
+  }
+
+  // Quick date-range presets — always anchored to the earliest bookable
+  // arrival date (calMinDate), so "1 week" always means "the soonest
+  // possible week-long stay" rather than extending whatever the guest may
+  // have already picked.
+  function selectQuickDateRange(days){
+    const arrivalIso = calMinDate.toISOString().split('T')[0];
+    searchArrivalDate = arrivalIso;
+    searchDepartureDate = isoAddDays(arrivalIso, days);
+    calSelectingStart = true;
+    updateDateRangeBtn();
+    renderCalendar();
+    closeCalendar();
+    openGuestsDropdown();
+  }
+
+  document.querySelectorAll('.quick-date-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectQuickDateRange(Number(btn.dataset.days));
+    });
+  });
 
   function handleDayClick(iso){
     if(calSelectingStart || !searchArrivalDate){
