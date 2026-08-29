@@ -1,47 +1,20 @@
-// /api/get-listings.js
-// Returns APPROVED listings as JSON — read-only, safe to call publicly;
-// never exposes pending/rejected submissions, host contact details beyond
-// what's guest-facing, or commission_rate.
-//
-// Supports optional filters via query params, all combinable:
-//   ?city=Pune              — partial, case-insensitive match against city
-//                              (fallback only — see lat/lng below)
-//   ?lat=...&lng=...&radiusKm=200 — only listings within this distance of
-//                              a point (typically a geocoded place name —
-//                              see aerva.html's performSearch). Preferred
-//                              over ?city, since a plain text match finds
-//                              nothing when a guest searches a nearby town
-//                              that doesn't literally match any listing's
-//                              city field.
-//   ?guests=4               — only listings that can sleep at least this many
-//   ?arrival=...&departure=... — only listings with no existing paid
-//                                booking that overlaps this date range
-//                                (both must be given together)
-//
-// max_guests is stored as free text (e.g. "4" going forward, but older
-// listings may still have range strings like "3–4" or "9+" from before
-// the submission form was changed to exact numbers) — parseMaxGuests()
-// below extracts the largest number found either way, so filtering works
-// correctly against old and new data alike.
+// /api/get-listing-availability.js
+// Powers the availability calendar on a listing's full detail page.
+// Public and read-only, like get-listings.js — returns only which date
+// ranges are already booked and paid for on this one listing, nothing
+// about who booked them. No guest identity, no order details, just
+// arrival/departure pairs a calendar can grey out.
 
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
-function parseMaxGuests(raw) {
-  if (!raw) return null;
-  const numbers = String(raw).match(/\d+/g);
-  if (!numbers) return null;
-  return Math.max(...numbers.map(Number));
-}
-
-// Same Haversine formula used client-side for "distance from me" — kept
-// in sync deliberately, since both should agree on what "200km" means.
-function haversineDistanceKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+// Normalizes a DATE column value to 'YYYY-MM-DD' whether the driver
+// returns it as a JS Date object or an already-formatted string — same
+// helper used in create-order.js for the same reason.
+function toDateStr(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val.toISOString().split('T')[0];
+  return String(val).slice(0, 10);
 }
 
 module.exports = async (req, res) => {
@@ -51,114 +24,29 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
+  const listingId = Number(req.query.listingId);
+  if (!listingId) {
+    return res.status(400).json({ error: 'Missing or invalid listingId' });
+  }
+
   try {
-    const cityRaw = typeof req.query.city === 'string' ? req.query.city.trim() : '';
-    const guestsRaw = typeof req.query.guests === 'string' ? req.query.guests.trim() : '';
-    const arrivalRaw = typeof req.query.arrival === 'string' ? req.query.arrival.trim() : '';
-    const departureRaw = typeof req.query.departure === 'string' ? req.query.departure.trim() : '';
-    const latRaw = typeof req.query.lat === 'string' ? Number(req.query.lat) : null;
-    const lngRaw = typeof req.query.lng === 'string' ? Number(req.query.lng) : null;
-    const radiusRaw = typeof req.query.radiusKm === 'string' ? Number(req.query.radiusKm) : null;
-
-    const cityFilter = cityRaw ? `%${cityRaw}%` : null;
-    const guestsFilter = guestsRaw && !isNaN(Number(guestsRaw)) ? Number(guestsRaw) : null;
-    // Only a genuine, complete lat/lng/radius triple activates distance
-    // filtering — a lone or malformed value is ignored rather than
-    // crashing or silently filtering everything out.
-    const distanceFilter = (latRaw != null && !isNaN(latRaw) && lngRaw != null && !isNaN(lngRaw) && radiusRaw != null && !isNaN(radiusRaw))
-      ? { lat: latRaw, lng: lngRaw, radiusKm: radiusRaw }
-      : null;
-    // Dates only apply as a pair — a lone arrival or departure is ignored
-    // rather than causing a confusing partial filter.
-    const datesFilter = arrivalRaw && departureRaw;
-    const arrivalFilter = datesFilter ? arrivalRaw : null;
-    const departureFilter = datesFilter ? departureRaw : null;
-
-    // If a distance filter is active, it takes priority — city text
-    // matching is skipped entirely rather than combining the two, since
-    // the frontend only ever sends one or the other anyway.
-    const effectiveCityFilter = distanceFilter ? null : cityFilter;
-
-    // City and date-availability are filtered in SQL — availability
-    // specifically needs to check against the orders table, which only
-    // makes sense server-side. guests and distance are filtered afterward
-    // in JS (see parseMaxGuests / haversineDistanceKm) since both need
-    // logic that's awkward or unsafe to express directly in SQL.
-    const listings = await sql`
-      SELECT
-        id, property_name, city, property_type, bedrooms, max_guests,
-        nightly_rate, description, amenities, services, host_name,
-        discount_type, discount_value, discount_min_nights, discount_description,
-        exterior_photo_urls, interior_photo_urls, cover_photo_url,
-        latitude, longitude, formatted_address,
-        created_at
-      FROM listings
-      WHERE status = 'approved'
-        AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter})
-        AND (
-          ${arrivalFilter}::date IS NULL OR NOT EXISTS (
-            SELECT 1 FROM orders o
-            WHERE o.listing_id = listings.id
-              AND o.status = 'paid'
-              AND o.arrival < ${departureFilter}::date
-              AND o.departure > ${arrivalFilter}::date
-          )
-        )
-      ORDER BY created_at DESC
+    // Only confirmed, paid bookings block the calendar — a listing that
+    // was never approved or has no paid bookings simply comes back with
+    // an empty range list, not an error, so the calendar just renders as
+    // fully open.
+    const rows = await sql`
+      SELECT arrival, departure FROM orders
+      WHERE listing_id = ${listingId} AND status = 'paid'
+      ORDER BY arrival ASC
     `;
+    const bookedRanges = rows.map(r => ({
+      arrival: toDateStr(r.arrival),
+      departure: toDateStr(r.departure),
+    }));
 
-    const afterGuestsFilter = guestsFilter
-      ? listings.filter(l => {
-          const capacity = parseMaxGuests(l.max_guests);
-          // A listing with no max_guests set at all isn't excluded by a
-          // guest-count search — better to show it and let the guest
-          // judge for themselves than to hide it over missing data.
-          return capacity === null || capacity >= guestsFilter;
-        })
-      : listings;
-
-    // A listing with no coordinates at all is excluded when searching by
-    // distance — unlike the guest-count case above, there's no reasonable
-    // benefit-of-the-doubt here: "within 200km" genuinely can't be
-    // evaluated without a location to measure from.
-    const filtered = distanceFilter
-      ? afterGuestsFilter.filter(l => {
-          if (l.latitude == null || l.longitude == null) return false;
-          const km = haversineDistanceKm(distanceFilter.lat, distanceFilter.lng, Number(l.latitude), Number(l.longitude));
-          return km <= distanceFilter.radiusKm;
-        })
-      : afterGuestsFilter;
-
-    // One extra query for all paid amenities across every listing being
-    // returned, rather than one query per listing — cheaper, and this
-    // endpoint can return many listings at once.
-    if (filtered.length > 0) {
-      const listingIds = filtered.map(l => l.id);
-      const amenityRows = await sql`
-        SELECT id, listing_id, name, description, price, available_from, available_until, excluded_weekdays
-        FROM listing_amenities
-        WHERE listing_id = ANY(${listingIds}) AND is_active = TRUE
-        ORDER BY created_at ASC
-      `;
-      const amenitiesByListing = {};
-      for (const a of amenityRows) {
-        if (!amenitiesByListing[a.listing_id]) amenitiesByListing[a.listing_id] = [];
-        amenitiesByListing[a.listing_id].push({
-          id: a.id,
-          name: a.name,
-          description: a.description,
-          price: a.price,
-          availableFrom: a.available_from,
-          availableUntil: a.available_until,
-          excludedWeekdays: Array.isArray(a.excluded_weekdays) ? a.excluded_weekdays : []
-        });
-      }
-      filtered.forEach(l => { l.paid_amenities = amenitiesByListing[l.id] || []; });
-    }
-
-    return res.status(200).json({ listings: filtered });
+    return res.status(200).json({ bookedRanges });
   } catch (err) {
-    console.error('get-listings error:', err);
-    return res.status(500).json({ error: 'Could not fetch listings' });
+    console.error('get-listing-availability error:', err);
+    return res.status(500).json({ error: 'Could not load availability' });
   }
 };
