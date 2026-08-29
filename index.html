@@ -344,7 +344,7 @@
     background:var(--cream); border:1px solid var(--line-dark); padding:22px;
   }
   .search-bar{margin-bottom:14px; position:relative; z-index:10;}
-  .filter-bg-wrap{position:relative; padding:40px 0; overflow:hidden;}
+  .filter-bg-wrap{position:relative; padding:40px 0;}
   .filter-bg-slides{position:absolute; inset:0; z-index:0;}
   .filter-bg-slides img{
     position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
@@ -359,7 +359,11 @@
     background:linear-gradient(180deg, rgba(20,17,14,0.35), rgba(20,17,14,0.55));
   }
   .filter-bg-wrap .wrap{position:relative; z-index:2;}
-  .filter-bar{margin-bottom:6px; padding:12px 20px; gap:20px; opacity:0.92;}
+  .search-and-filters-row{display:flex; flex-wrap:wrap; align-items:center; gap:16px;}
+  .filter-bar{
+    margin-bottom:0; padding:0; gap:14px; opacity:0.92;
+    background:none; border:none; align-items:center; width:auto; flex:0 1 auto;
+  }
   .filter-bar .search-field{min-width:150px;}
   .filter-bar .search-field label{
     white-space:nowrap; font-size:10px; letter-spacing:0.07em;
@@ -453,7 +457,33 @@
   .calendar-footer{display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:12px; border-top:1px solid var(--line-dark);}
   #calendarHint{font-size:11.5px; opacity:0.6;}
   .calendar-clear{background:none; border:none; font-size:11.5px; letter-spacing:0.05em; color:var(--gold-deep); text-decoration:underline; cursor:pointer;}
+  .guests-dropdown{
+    display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:50;
+    background-color:#f4ebe3; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
+    padding:8px; width:220px; max-width:90vw; flex-direction:column;
+  }
+  .guests-dropdown.open{display:flex;}
+  .guests-option{
+    background:none; border:none; text-align:left; padding:10px 12px; font-size:14px;
+    font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer; border-radius:3px;
+  }
+  .guests-option:hover{background-color:#ebdecd;}
+  .guests-option.selected{background:var(--ink); color:var(--cream);}
+  .more-filters-wrapper{position:relative;}
+  .more-filters-btn svg{width:15px; height:15px; flex:0 0 auto;}
+  .more-filters-dropdown{
+    display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:50;
+    background-color:#f4ebe3; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
+    padding:20px; width:340px; max-width:90vw; flex-direction:column; gap:16px;
+  }
+  .more-filters-dropdown.open{display:flex;}
+  .more-filters-dropdown .search-field{min-width:0;}
   @media (max-width:640px){
+    .guests-dropdown{width:100%;}
+    .more-filters-dropdown{width:100%;}
+  }
+  @media (max-width:640px){
+    .search-and-filters-row{flex-direction:column; align-items:stretch;}
     .search-bar, .filter-bar{flex-direction:column; align-items:stretch;}
     .sort-field{ max-width:none; }
     .search-bar .btn{width:100%;}
@@ -706,6 +736,7 @@
     <div class="filter-bg-slides" id="filterBgSlides"></div>
     <div class="filter-bg-overlay"></div>
     <div class="wrap">
+      <div class="search-and-filters-row">
       <div class="search-bar pill-search reveal" id="searchBar">
       <div class="search-field">
         <label for="searchCity">Where</label>
@@ -751,20 +782,22 @@
           </div>
         </div>
       </div>
-      <div class="search-field">
+      <div class="search-field date-range-wrapper">
         <label for="searchGuests">Who</label>
-        <select id="searchGuests">
-          <option value="">Add guests</option>
-          <option value="1">1 guest</option>
-          <option value="2">2 guests</option>
-          <option value="3">3 guests</option>
-          <option value="4">4 guests</option>
-          <option value="5">5 guests</option>
-          <option value="6">6 guests</option>
-          <option value="7">7 guests</option>
-          <option value="8">8 guests</option>
-          <option value="9">9+ guests</option>
-        </select>
+        <button type="button" class="date-range-btn placeholder" id="guestsTriggerBtn">Add guests</button>
+        <input type="hidden" id="searchGuests" value="">
+        <div class="guests-dropdown" id="guestsDropdown">
+          <button type="button" class="guests-option" data-value="">Add guests</button>
+          <button type="button" class="guests-option" data-value="1">1 guest</button>
+          <button type="button" class="guests-option" data-value="2">2 guests</button>
+          <button type="button" class="guests-option" data-value="3">3 guests</button>
+          <button type="button" class="guests-option" data-value="4">4 guests</button>
+          <button type="button" class="guests-option" data-value="5">5 guests</button>
+          <button type="button" class="guests-option" data-value="6">6 guests</button>
+          <button type="button" class="guests-option" data-value="7">7 guests</button>
+          <button type="button" class="guests-option" data-value="8">8 guests</button>
+          <button type="button" class="guests-option" data-value="9">9+ guests</button>
+        </div>
       </div>
       <button type="button" class="pill-search-submit" id="searchBtn" aria-label="Search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -772,21 +805,29 @@
     </div>
 
     <div class="filter-bar reveal">
-      <div class="search-field sort-field">
-        <label for="sortPrice">Sort by</label>
-        <select id="sortPrice">
-          <option value="">Recommended</option>
-          <option value="asc">Price: Low to High</option>
-          <option value="desc">Price: High to Low</option>
-        </select>
-      </div>
-      <div class="search-field">
-        <label for="minPrice">Min Price (₹/night)</label>
-        <input type="number" id="minPrice" min="0" placeholder="No min">
-      </div>
-      <div class="search-field">
-        <label for="maxPrice">Max Price (₹/night)</label>
-        <input type="number" id="maxPrice" min="0" placeholder="No max">
+      <div class="more-filters-wrapper">
+        <button type="button" class="filter-clear near-me-btn more-filters-btn" id="moreFiltersBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+          More Filters
+        </button>
+        <div class="more-filters-dropdown" id="moreFiltersDropdown">
+          <div class="search-field sort-field">
+            <label for="sortPrice">Sort by</label>
+            <select id="sortPrice">
+              <option value="">Recommended</option>
+              <option value="asc">Price: Low to High</option>
+              <option value="desc">Price: High to Low</option>
+            </select>
+          </div>
+          <div class="search-field">
+            <label for="minPrice">Min Price (₹/night)</label>
+            <input type="number" id="minPrice" min="0" placeholder="No min">
+          </div>
+          <div class="search-field">
+            <label for="maxPrice">Max Price (₹/night)</label>
+            <input type="number" id="maxPrice" min="0" placeholder="No max">
+          </div>
+        </div>
       </div>
       <button type="button" class="filter-clear" id="clearFiltersBtn">Clear filters</button>
       <button type="button" class="filter-clear near-me-btn" id="showDistanceBtn">
@@ -794,6 +835,7 @@
         Near Me
       </button>
     </div>
+      </div>
 
       <p class="search-status" id="searchStatus" style="display:none;"></p>
     </div>
@@ -2961,6 +3003,7 @@
     updateDateRangeBtn();
     document.getElementById('searchCity').value = '';
     document.getElementById('searchGuests').value = '';
+    updateGuestsTrigger();
     document.getElementById('sortPrice').value = '';
     document.getElementById('minPrice').value = '';
     document.getElementById('maxPrice').value = '';
@@ -3088,18 +3131,20 @@
     } else {
       searchDepartureDate = iso;
       calSelectingStart = true;
-      closeCalendar();
-      // Chain straight into the guest count next — the whole point of
-      // this flow is picking a place, then dates, then guests without
-      // having to click back into each field separately.
-      const guestsSelect = document.getElementById('searchGuests');
-      if(guestsSelect) guestsSelect.focus();
+      // Chain straight into guest count — a fully automatic Where -> When
+      // -> Who flow. This only works because the guests field is a custom
+      // dropdown now, not a native <select>; browsers won't let JS force
+      // a native select's picker open, which is why this used to just
+      // move focus there instead of actually opening it.
+      openGuestsDropdown();
     }
     updateDateRangeBtn();
     renderCalendar();
   }
 
   function openCalendar(){
+    closeGuestsDropdown();
+    closeMoreFiltersDropdown();
     calendarDropdown.classList.add('open');
     const anchor = searchArrivalDate ? new Date(searchArrivalDate) : calMinDate;
     calViewYear = anchor.getFullYear();
@@ -3143,6 +3188,89 @@
   });
 
   updateDateRangeBtn();
+
+  // ---- Guests dropdown: a custom widget (not a native <select>) so it
+  // can be opened programmatically — completing the Where -> When -> Who
+  // chain automatically after departure is picked, which a native select
+  // can't do (browsers don't let JS force its picker open). ----
+  const guestsTriggerBtn = document.getElementById('guestsTriggerBtn');
+  const guestsHiddenInput = document.getElementById('searchGuests');
+  const guestsDropdown = document.getElementById('guestsDropdown');
+
+  function guestsLabel(value){
+    if(!value) return 'Add guests';
+    if(value === '9') return '9+ guests';
+    return value + (value === '1' ? ' guest' : ' guests');
+  }
+
+  function updateGuestsTrigger(){
+    const value = guestsHiddenInput.value;
+    guestsTriggerBtn.textContent = guestsLabel(value);
+    guestsTriggerBtn.classList.toggle('placeholder', !value);
+    guestsDropdown.querySelectorAll('.guests-option').forEach(opt => {
+      opt.classList.toggle('selected', opt.dataset.value === value);
+    });
+  }
+
+  function openGuestsDropdown(){
+    closeCalendar();
+    closeMoreFiltersDropdown();
+    guestsDropdown.classList.add('open');
+  }
+  function closeGuestsDropdown(){
+    guestsDropdown.classList.remove('open');
+  }
+
+  guestsTriggerBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if(guestsDropdown.classList.contains('open')) closeGuestsDropdown();
+    else openGuestsDropdown();
+  });
+
+  guestsDropdown.querySelectorAll('.guests-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      guestsHiddenInput.value = opt.dataset.value;
+      updateGuestsTrigger();
+      closeGuestsDropdown();
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if(!guestsDropdown.contains(e.target) && e.target !== guestsTriggerBtn){
+      closeGuestsDropdown();
+    }
+  });
+
+  updateGuestsTrigger();
+
+  // ---- More Filters: Sort By / Min Price / Max Price, tucked behind a
+  // toggle so the filter row only ever shows Clear Filters and Near Me by
+  // default. Same open/close pattern as the calendar and guests dropdowns
+  // — only one of the three is ever open at once. ----
+  const moreFiltersBtn = document.getElementById('moreFiltersBtn');
+  const moreFiltersDropdown = document.getElementById('moreFiltersDropdown');
+
+  function openMoreFiltersDropdown(){
+    closeCalendar();
+    closeGuestsDropdown();
+    moreFiltersDropdown.classList.add('open');
+  }
+  function closeMoreFiltersDropdown(){
+    moreFiltersDropdown.classList.remove('open');
+  }
+
+  moreFiltersBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if(moreFiltersDropdown.classList.contains('open')) closeMoreFiltersDropdown();
+    else openMoreFiltersDropdown();
+  });
+
+  document.addEventListener('click', (e) => {
+    if(!moreFiltersDropdown.contains(e.target) && e.target !== moreFiltersBtn){
+      closeMoreFiltersDropdown();
+    }
+  });
 
   // ---- One shared fetch, powering both the Suites section and the ----
   // ---- Reserve form's "Home" dropdown, so they never disagree. ----
