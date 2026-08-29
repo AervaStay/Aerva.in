@@ -2,22 +2,27 @@
 // Backs manage-listing.html — the long-lived link a host gets by email
 // after their listing is approved (see approve-listing.js) and can reuse
 // anytime from their dashboard (see host-listings.js) to manage their
-// nightly rate, discount, photos, included amenities/services, and paid
-// add-ons, all without logging in again.
+// nightly rate, discount, photos, included amenities/services, paid
+// add-ons, and pet policy, all without logging in again.
 //
 //   GET  ?token=...
 //     Loads everything the form needs to pre-fill: pricing, discount,
-//     photos, amenities/services, and this listing's paid amenities.
+//     photos, amenities/services, pet policy, and this listing's paid
+//     amenities.
 //
 //   POST { token, nightlyRate, discountType, discountValue,
 //          discountMinNights, discountDescription,
 //          exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl,
-//          amenities, services, paidAmenities }
+//          amenities, services, paidAmenities,
+//          petFriendly, maxPetsAllowed, allowedPetTypes, petFee }
 //     Saves everything in one request. A rate change is also logged to
 //     price_history. paidAmenities is a full-replace "sync" — whatever
 //     array is sent becomes the complete set: existing rows matching an
 //     id are updated, rows with no id are inserted as new, and any
-//     existing row NOT present in the array is deleted.
+//     existing row NOT present in the array is deleted. Pet policy is
+//     also a full-replace set of its own four fields — see the inline
+//     comment near where it's resolved for how "not sent at all" differs
+//     from "explicitly set to No".
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
@@ -51,7 +56,8 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT id, property_name, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
-               latitude, longitude, formatted_address
+               latitude, longitude, formatted_address,
+               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -74,7 +80,8 @@ module.exports = async (req, res) => {
     try {
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities,
-              latitude, longitude, formattedAddress } = req.body || {};
+              latitude, longitude, formattedAddress,
+              petFriendly, maxPetsAllowed, allowedPetTypes, petFee } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -82,7 +89,9 @@ module.exports = async (req, res) => {
       }
 
       const before = await sql`
-        SELECT nightly_rate, exterior_photo_urls, interior_photo_urls FROM listings WHERE id = ${listingId}
+        SELECT nightly_rate, exterior_photo_urls, interior_photo_urls,
+               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee
+        FROM listings WHERE id = ${listingId}
       `;
       if (!before[0]) return res.status(404).json({ error: 'This listing could not be found.' });
       const rateChanged = Number(before[0].nightly_rate) !== rate;
@@ -118,6 +127,25 @@ module.exports = async (req, res) => {
       const safeLat = (latitude && !isNaN(Number(latitude)) && Math.abs(Number(latitude)) <= 90) ? Number(latitude) : undefined;
       const safeLng = (longitude && !isNaN(Number(longitude)) && Math.abs(Number(longitude)) <= 180) ? Number(longitude) : undefined;
 
+      // Pet policy — same "Dog"/"Cat" whitelist as submit-listing.js. A
+      // save that doesn't send petFriendly at all (e.g. a price-only
+      // update from elsewhere) leaves the existing pet policy untouched;
+      // one that does replaces all four fields together, since they only
+      // make sense as a set — switching to "No" clears the detail fields
+      // rather than leaving a stale count/fee behind.
+      const ALLOWED_PET_TYPES = ['Dog', 'Cat'];
+      const petFriendlyProvided = petFriendly === true || petFriendly === false;
+      const finalPetFriendly = petFriendlyProvided ? petFriendly : before[0].pet_friendly;
+      const finalMaxPets = petFriendlyProvided
+        ? (petFriendly === true && maxPetsAllowed ? Number(maxPetsAllowed) : null)
+        : before[0].max_pets_allowed;
+      const finalPetTypes = petFriendlyProvided
+        ? (petFriendly === true && Array.isArray(allowedPetTypes) ? allowedPetTypes.filter(t => ALLOWED_PET_TYPES.includes(t)) : [])
+        : (before[0].allowed_pet_types || []);
+      const finalPetFee = petFriendlyProvided
+        ? (petFriendly === true && petFee ? Number(petFee) : null)
+        : before[0].pet_fee;
+
       const updated = await sql`
         UPDATE listings SET
           nightly_rate = ${rate},
@@ -132,7 +160,9 @@ module.exports = async (req, res) => {
           services = COALESCE(${Array.isArray(services) ? JSON.stringify(services) : null}, services),
           latitude = COALESCE(${safeLat ?? null}, latitude),
           longitude = COALESCE(${safeLng ?? null}, longitude),
-          formatted_address = COALESCE(${formattedAddress || null}, formatted_address)
+          formatted_address = COALESCE(${formattedAddress || null}, formatted_address),
+          pet_friendly = ${finalPetFriendly}, max_pets_allowed = ${finalMaxPets},
+          allowed_pet_types = ${JSON.stringify(finalPetTypes)}, pet_fee = ${finalPetFee}
         WHERE id = ${listingId}
         RETURNING id, property_name, host_email
       `;
