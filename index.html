@@ -466,9 +466,43 @@
   .reveal{opacity:0; transform:translateY(20px); transition:opacity .8s ease, transform .8s ease;}
   .reveal.in{opacity:1; transform:translateY(0);}
 
+  /* ---------- MOBILE NAV ---------- */
+  .nav-toggle{
+    display:none; background:none; border:none; cursor:pointer; padding:8px;
+    width:40px; height:40px; align-items:center; justify-content:center;
+  }
+  .nav-toggle span, .nav-toggle::before, .nav-toggle::after{
+    content:''; display:block; width:22px; height:1.5px; background:var(--ink);
+    transition:transform .25s ease, opacity .25s ease;
+  }
+  .nav-toggle::before{ margin-bottom:6px; }
+  .nav-toggle::after{ margin-top:6px; }
+  .nav-toggle.is-open::before{ transform:translateY(7.5px) rotate(45deg); }
+  .nav-toggle.is-open::after{ transform:translateY(-7.5px) rotate(-45deg); }
+  .nav-toggle.is-open span{ opacity:0; }
+
+  .mobile-nav-panel{
+    position:fixed; top:0; right:0; bottom:0; width:min(320px, 84vw);
+    background:var(--cream); z-index:150; padding:100px 32px 40px;
+    box-shadow:-8px 0 40px rgba(0,0,0,0.18);
+    transform:translateX(100%); transition:transform .35s ease;
+    display:flex; flex-direction:column; gap:26px; overflow-y:auto;
+  }
+  .mobile-nav-panel.is-open{ transform:translateX(0); }
+  .mobile-nav-panel a{
+    font-size:15px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink);
+  }
+  .mobile-nav-panel .btn{ text-align:center; }
+  .mobile-nav-scrim{
+    position:fixed; inset:0; background:rgba(20,17,14,0.5); z-index:140;
+    opacity:0; pointer-events:none; transition:opacity .3s ease;
+  }
+  .mobile-nav-scrim.is-open{ opacity:1; pointer-events:auto; }
+
   /* ---------- RESPONSIVE ---------- */
   @media (max-width:900px){
     .nav-links{display:none;}
+    .nav-toggle{display:flex; flex-direction:column;}
     .phil-grid, .reserve-grid, .loc-grid{grid-template-columns:1fr; gap:44px;}
     .suite-grid{grid-template-columns:1fr 1fr;}
     .exp-row{grid-template-columns:1fr; gap:8px;}
@@ -478,6 +512,10 @@
     .wrap{padding:0 24px;}
     .pad{padding:92px 0;}
     .hero-logo{width:min(320px, 78vw);}
+  }
+  @media (min-width:901px){
+    .nav-toggle{display:none;}
+    .mobile-nav-panel, .mobile-nav-scrim{display:none;}
   }
   .required-mark{color:#a3402f;}
 </style>
@@ -504,8 +542,25 @@
       </span>
       <a href="#reserve" class="btn">Reserve</a>
     </div>
+    <button class="nav-toggle" id="navToggle" aria-label="Open menu" aria-expanded="false"><span></span></button>
   </nav>
 </header>
+
+<div class="mobile-nav-scrim" id="mobileNavScrim"></div>
+<nav class="mobile-nav-panel" id="mobileNavPanel" aria-label="Mobile navigation">
+  <a href="#philosophy">Philosophy</a>
+  <a href="#suites">Suites</a>
+  <a href="#experience">Experience</a>
+  <a href="#location">Location</a>
+  <a href="#add-listing">List Property</a>
+  <a href="guest-login.html" id="guestLoginLinkMobile">Log In</a>
+  <span id="guestAccountBoxMobile" style="display:none; flex-direction:column; gap:18px;">
+    <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
+    <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Listings</a>
+    <a href="#" id="guestLogoutLinkMobile">Log Out</a>
+  </span>
+  <a href="#reserve" class="btn solid">Reserve</a>
+</nav>
 
 <!-- ================= HERO ================= -->
 <section class="hero">
@@ -2877,6 +2932,34 @@
 
   initSite();
 
+  // ---- Mobile nav toggle ----
+  (function initMobileNav(){
+    const toggle = document.getElementById('navToggle');
+    const panel = document.getElementById('mobileNavPanel');
+    const scrim = document.getElementById('mobileNavScrim');
+    if(!toggle || !panel || !scrim) return;
+
+    function closeMenu(){
+      toggle.classList.remove('is-open');
+      toggle.setAttribute('aria-expanded', 'false');
+      panel.classList.remove('is-open');
+      scrim.classList.remove('is-open');
+      document.body.style.overflow = '';
+    }
+    function openMenu(){
+      toggle.classList.add('is-open');
+      toggle.setAttribute('aria-expanded', 'true');
+      panel.classList.add('is-open');
+      scrim.classList.add('is-open');
+      document.body.style.overflow = 'hidden';
+    }
+    toggle.addEventListener('click', () => {
+      if(panel.classList.contains('is-open')) closeMenu(); else openMenu();
+    });
+    scrim.addEventListener('click', closeMenu);
+    panel.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
+  })();
+
   // ---- Guest login status in the nav bar ----
   // Checks for a stored session token on every page load and asks the
   // backend to confirm it's still valid — this is what makes a returning
@@ -2889,6 +2972,14 @@
     const guestNameDisplay = document.getElementById('guestNameDisplay');
     const myListingsLink = document.getElementById('myListingsLink');
     const guestLogoutLink = document.getElementById('guestLogoutLink');
+    // Mirrors the same elements inside the mobile slide-out panel, so a
+    // returning guest sees their login state there too, not just in the
+    // desktop nav bar which is hidden on small screens.
+    const guestLoginLinkMobile = document.getElementById('guestLoginLinkMobile');
+    const guestAccountBoxMobile = document.getElementById('guestAccountBoxMobile');
+    const guestNameDisplayMobile = document.getElementById('guestNameDisplayMobile');
+    const myListingsLinkMobile = document.getElementById('myListingsLinkMobile');
+    const guestLogoutLinkMobile = document.getElementById('guestLogoutLinkMobile');
 
     function clearGuestSession(){
       localStorage.removeItem('aerva_guest_session');
@@ -2905,15 +2996,22 @@
         });
         if(res.ok){
           const data = await res.json();
-          guestNameDisplay.textContent = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
+          const greeting = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
+          guestNameDisplay.textContent = greeting;
           guestLoginLink.style.display = 'none';
           guestAccountBox.style.display = 'inline-flex';
+          if(guestNameDisplayMobile){
+            guestNameDisplayMobile.textContent = greeting;
+            guestLoginLinkMobile.style.display = 'none';
+            guestAccountBoxMobile.style.display = 'flex';
+          }
           // Only shown once this account has actually listed a property —
           // account_type flips to 'guest_host' automatically the moment
           // that happens (see schema.sql / submit-listing.js), so this
           // stays accurate with nothing to keep in sync manually.
           if(data.guest.accountType === 'guest_host'){
             myListingsLink.style.display = 'inline';
+            if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
           }
         } else {
           // Token expired or invalid — quietly fall back to showing
@@ -2931,6 +3029,13 @@
       clearGuestSession();
       window.location.reload();
     });
+    if(guestLogoutLinkMobile){
+      guestLogoutLinkMobile.addEventListener('click', function(e){
+        e.preventDefault();
+        clearGuestSession();
+        window.location.reload();
+      });
+    }
 
     checkGuestSession();
   })();
