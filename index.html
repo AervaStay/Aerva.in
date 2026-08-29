@@ -297,6 +297,21 @@
   .pill-search .date-range-btn{
     border-bottom:none; padding:0; font-size:13.5px;
   }
+  /* The More Filters popup's fields (Sort By / Min / Max Price) live
+     inside .pill-search now too (see the search-and-filters restructure),
+     but they're a normal stacked dropdown panel, not pill segments — undo
+     the row-styling above so they don't get squeezed into a single line. */
+  .pill-search .more-filters-dropdown .search-field{
+    flex-direction:column; align-items:flex-start; gap:6px; padding:0;
+    border-right:none; width:100%;
+  }
+  .pill-search .more-filters-dropdown .search-field label{
+    font-size:11px; letter-spacing:0.12em; white-space:normal; margin-right:0;
+  }
+  .pill-search .more-filters-dropdown .search-field input,
+  .pill-search .more-filters-dropdown .search-field select{
+    border-bottom:1px solid var(--line-dark); padding:8px 2px; font-size:14px; width:100%;
+  }
   .pill-search-submit{
     flex:0 0 auto; width:52px; height:52px; margin:6px 6px 6px 0; border-radius:50%;
     background:var(--gold-deep); border:none; color:var(--cream); cursor:pointer;
@@ -599,6 +614,7 @@
 
   .check-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:10px 16px;}
   .check-item{display:flex; align-items:center; gap:8px; font-size:13.5px; opacity:0.85; cursor:pointer;}
+  .radio-row{display:flex; gap:24px; margin-top:6px;}
   .check-item input{width:auto; accent-color:var(--gold-deep); cursor:pointer;}
   /* ---------- LOCATION ---------- */
   .loc-grid{display:grid; grid-template-columns:1.1fr 0.9fr; gap:74px; align-items:center;}
@@ -1078,7 +1094,6 @@
         <label class="check-item"><input type="checkbox" name="Amenities" value="Parking"> Parking</label>
         <label class="check-item"><input type="checkbox" name="Amenities" value="Balcony / Terrace"> Balcony / Terrace</label>
         <label class="check-item"><input type="checkbox" name="Amenities" value="Garden"> Garden</label>
-        <label class="check-item"><input type="checkbox" name="Amenities" value="Pet-Friendly"> Pet-Friendly</label>
         <label class="check-item"><input type="checkbox" name="Amenities" value="Fireplace / Heating"> Fireplace / Heating</label>
         <label class="check-item"><input type="checkbox" name="Amenities" value="TV / Smart TV"> TV / Smart TV</label>
         <label class="check-item"><input type="checkbox" name="Amenities" value="Washing Machine"> Washing Machine</label>
@@ -1099,6 +1114,33 @@
         <label class="check-item"><input type="checkbox" name="Amenities" value="Toiletries Provided"> Toiletries Provided</label>
         <label class="check-item"><input type="checkbox" name="Amenities" value="Linens & Towels"> Linens & Towels</label>
         <label class="check-item"><input type="checkbox" name="Amenities" value="Coffee, Sugar, Salt & Basic Masalas"> Coffee, Sugar, Salt & Basic Masalas</label>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Pet Policy</div>
+      <p style="font-size:11.5px; opacity:0.6; margin:6px 0 0;">Separate from the free amenities above — pets come with their own rules and, optionally, a fee, so this is asked directly rather than folded into a checkbox.</p>
+      <div class="field">
+        <label>Is this property pet-friendly? <span class="required-mark">*</span></label>
+        <div class="radio-row">
+          <label class="check-item"><input type="radio" name="PetFriendly" value="yes" id="petFriendlyYes" required> Yes</label>
+          <label class="check-item"><input type="radio" name="PetFriendly" value="no" id="petFriendlyNo"> No</label>
+        </div>
+      </div>
+      <div id="petPolicyDetails" style="display:none;">
+        <div class="field">
+          <label for="listMaxPets">Maximum pets allowed per stay</label>
+          <input id="listMaxPets" name="Max Pets Allowed" type="number" min="1" max="10" placeholder="e.g. 2">
+        </div>
+        <div class="field">
+          <label>Pet types allowed</label>
+          <div class="check-grid">
+            <label class="check-item"><input type="checkbox" name="PetTypes" value="Dog"> Dogs</label>
+            <label class="check-item"><input type="checkbox" name="PetTypes" value="Cat"> Cats</label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="listPetFee">Pet fee (₹ per stay) <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if you don't charge one</span></label>
+          <input id="listPetFee" name="Pet Fee" type="number" min="0" placeholder="e.g. 500">
+        </div>
       </div>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Services You Offer</div>
@@ -1799,6 +1841,25 @@
     document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
   }
 
+  // ---- Pet policy: the detail fields (max pets, types, fee) only make
+  // sense once the host says the property is pet-friendly at all — kept
+  // hidden until "Yes" is picked, and cleared if they switch back to "No"
+  // so a stray value can't submit alongside a "not pet-friendly" listing.
+  const petPolicyDetails = document.getElementById('petPolicyDetails');
+  const petFriendlyYes = document.getElementById('petFriendlyYes');
+  const petFriendlyNo = document.getElementById('petFriendlyNo');
+  function togglePetPolicyDetails(){
+    const showDetails = petFriendlyYes.checked;
+    petPolicyDetails.style.display = showDetails ? 'block' : 'none';
+    if(!showDetails){
+      document.getElementById('listMaxPets').value = '';
+      document.getElementById('listPetFee').value = '';
+      petPolicyDetails.querySelectorAll('input[name="PetTypes"]').forEach(cb => { cb.checked = false; });
+    }
+  }
+  petFriendlyYes.addEventListener('change', togglePetPolicyDetails);
+  petFriendlyNo.addEventListener('change', togglePetPolicyDetails);
+
   // ---- Photo selection: add, preview, and remove individual photos ----
   // One reusable manager, instantiated once per category (exterior/interior)
   // instead of duplicating this logic twice.
@@ -2158,6 +2219,11 @@
         errorEl.style.display = 'block';
         return;
       }
+      if(!petFriendlyYes.checked && !petFriendlyNo.checked){
+        errorEl.textContent = 'Please tell us whether pets are allowed at this property.';
+        errorEl.style.display = 'block';
+        return;
+      }
     }
 
     activeBtn.disabled = true;
@@ -2229,6 +2295,10 @@
           description: document.getElementById('listDescription').value,
           amenities: collectCheckedValues('Amenities'),
           services: collectCheckedValues('Services'),
+          petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
+          maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('listMaxPets').value : '',
+          allowedPetTypes: petFriendlyYes.checked ? collectCheckedValues('PetTypes') : [],
+          petFee: petFriendlyYes.checked ? document.getElementById('listPetFee').value : '',
           hostName: document.getElementById('listHostName').value,
           hostPhone: document.getElementById('listHostPhone').value,
           discountType: document.getElementById('listDiscountType').value,
@@ -2280,6 +2350,12 @@
         formData.append('Description', document.getElementById('listDescription').value);
         collectCheckedValues('Amenities').forEach(v => formData.append('Amenities', v));
         collectCheckedValues('Services').forEach(v => formData.append('Services', v));
+        formData.append('Pet Friendly', petFriendlyYes.checked ? 'Yes' : 'No');
+        if(petFriendlyYes.checked){
+          formData.append('Max Pets Allowed', document.getElementById('listMaxPets').value);
+          collectCheckedValues('PetTypes').forEach(v => formData.append('Pet Types', v));
+          formData.append('Pet Fee', document.getElementById('listPetFee').value);
+        }
         formData.append('Discount Type', document.getElementById('listDiscountType').value);
         formData.append('Discount Value', document.getElementById('listDiscountValue').value);
         formData.append('Discount Min Nights', document.getElementById('listDiscountMinNights').value);
@@ -2368,6 +2444,18 @@
         const box = listingForm.querySelector(`input[name="Services"][value="${v}"]`);
         if(box) box.checked = true;
       });
+      if(draft.pet_friendly){
+        petFriendlyYes.checked = true;
+        document.getElementById('listMaxPets').value = draft.max_pets_allowed || '';
+        document.getElementById('listPetFee').value = draft.pet_fee || '';
+        (draft.allowed_pet_types || []).forEach(v => {
+          const box = listingForm.querySelector(`input[name="PetTypes"][value="${v}"]`);
+          if(box) box.checked = true;
+        });
+        togglePetPolicyDetails();
+      } else if(draft.pet_friendly === false){
+        petFriendlyNo.checked = true;
+      }
 
       const errorEl = listingForm.querySelector('.listing-error');
       errorEl.style.color = 'var(--gold-deep)';
@@ -2578,6 +2666,19 @@
       ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="link" style="font-size:12.5px; margin-top:4px;">View on map</a>`
       : '';
 
+    // Pet policy line — only shown when the host has actually set one via
+    // the dedicated Pet Policy section, never inferred from amenities.
+    let petPolicyHtml = '';
+    if(listing.pet_friendly === true){
+      const petTypes = Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length
+        ? listing.allowed_pet_types.join(' & ') + ' welcome'
+        : 'Pet-friendly';
+      const petFeeNote = listing.pet_fee && Number(listing.pet_fee) > 0
+        ? ` · ₹${Number(listing.pet_fee).toLocaleString('en-IN')} pet fee`
+        : ' · No pet fee';
+      petPolicyHtml = `<div class="amenity-tags"><span class="amenity-tag">${petTypes}${petFeeNote}</span></div>`;
+    }
+
     card.className = 'suite-card reveal';
     card.style.transitionDelay = ((index || 0) % 8) * 60 + 'ms';
     card.dataset.listingId = listing.id;
@@ -2600,6 +2701,7 @@
         ${distanceHtml}
         ${mapLinkHtml}
         ${amenitiesHtml}
+        ${petPolicyHtml}
         <div class="price">${priceLine}</div>
         ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
       </div>
@@ -2627,6 +2729,15 @@
     if(minPrice) list = list.filter(l => l.nightly_rate && Number(l.nightly_rate) >= Number(minPrice));
     if(maxPrice) list = list.filter(l => l.nightly_rate && Number(l.nightly_rate) <= Number(maxPrice));
 
+    // Bringing a pet narrows results to homes the host has actually
+    // marked pet-friendly, and further excludes any that cap pets below
+    // how many the guest is bringing — both real fields the host set in
+    // the dedicated Pet Policy section, never guessed from anything else.
+    const wantsPetFriendly = guestCounts.pets > 0;
+    if(wantsPetFriendly){
+      list = list.filter(l => l.pet_friendly === true && (!l.max_pets_allowed || Number(l.max_pets_allowed) >= guestCounts.pets));
+    }
+
     const sortOrder = document.getElementById('sortPrice').value;
     if(sortOrder === 'asc') list.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
     else if(sortOrder === 'desc') list.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
@@ -2643,7 +2754,9 @@
 
     container.innerHTML = '';
     if(list.length === 0){
-      container.innerHTML = '<div class="suites-empty">No homes match these filters — try widening your price range.</div>';
+      container.innerHTML = wantsPetFriendly
+        ? '<div class="suites-empty">No pet-friendly homes match your other filters — try widening your price range or removing pets.</div>'
+        : '<div class="suites-empty">No homes match these filters — try widening your price range.</div>';
       return;
     }
     list.forEach((listing, index) => {
@@ -2805,6 +2918,34 @@
          <p style="font-size:11.5px; opacity:0.55; margin-top:6px;">Availability and exact dates confirmed at booking.</p>`
       : '';
 
+    // Kept as its own section, separate from the free amenities grid above
+    // — pets come with real rules (a cap, allowed types, an optional fee),
+    // not just a yes/no checkbox, so they get their own honest treatment
+    // here rather than being buried in a bullet list.
+    let petPolicyHtml = '';
+    if(listing.pet_friendly === true){
+      const petTypes = Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length
+        ? listing.allowed_pet_types.join(' & ')
+        : 'Dogs & Cats';
+      const maxPetsLine = listing.max_pets_allowed
+        ? `Up to ${listing.max_pets_allowed} pet${Number(listing.max_pets_allowed) === 1 ? '' : 's'}`
+        : 'No stated limit on how many';
+      const feeLine = listing.pet_fee && Number(listing.pet_fee) > 0
+        ? `${fmt(Number(listing.pet_fee))} pet fee per stay`
+        : 'No pet fee';
+      petPolicyHtml = `
+        <div class="listing-modal-section-title">Pet Policy</div>
+        <div class="listing-modal-amenity-grid">
+          <span>✓ ${petTypes} welcome</span>
+          <span>✓ ${maxPetsLine}</span>
+          <span>✓ ${feeLine}</span>
+        </div>`;
+    } else if(listing.pet_friendly === false){
+      petPolicyHtml = `
+        <div class="listing-modal-section-title">Pet Policy</div>
+        <p style="font-size:13.5px; opacity:0.7;">This property does not allow pets.</p>`;
+    }
+
     const mapLinkHtml = (listing.latitude && listing.longitude)
       ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="link" style="font-size:13px;">View on map</a>`
       : '';
@@ -2831,6 +2972,7 @@
         <p class="desc">${listing.description}</p>
         ${amenitiesHtml}
         ${paidAmenitiesHtml}
+        ${petPolicyHtml}
         <div class="listing-modal-section-title">Availability</div>
         <div id="availabilityCalendar" data-listing-id="${listing.id}">
           <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
@@ -3361,6 +3503,11 @@
       if(next < 0 || next > GUEST_MAX[type]) return;
       guestCounts[type] = next;
       updateGuestsTrigger();
+      // Pets drive a client-side amenity filter (pet-friendly homes only)
+      // that doesn't need a fresh server search — re-render immediately,
+      // same as changing the price filters does. Only once listings have
+      // actually loaded, so this doesn't fire prematurely on page load.
+      if(type === 'pets' && approvedListings.length > 0) applyFiltersAndRender();
     });
   });
 
