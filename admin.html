@@ -36,6 +36,30 @@
   .reject-btn{background:transparent; border:1px solid #a3402f !important; color:#a3402f;}
   .empty{opacity:0.6; text-align:center; padding:60px 0;}
   .error{color:#a3402f; font-size:13px;}
+  .success{color:#3a7d44; font-size:13px;}
+  .tabs{display:flex; gap:8px; margin-bottom:24px;}
+  .tab-btn{
+    background:none; border:1px solid #ddd0bc; padding:10px 18px; font-size:13px;
+    cursor:pointer; color:#1c1a17;
+  }
+  .tab-btn.active{background:#1c1a17; color:#f4eadc; border-color:#1c1a17;}
+  .deposit-section{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:20px;}
+  .deposit-section h3{margin:0 0 6px 0; font-family:Georgia,serif; font-size:17px;}
+  .deposit-section p{font-size:13px; opacity:0.7; margin:0 0 14px;}
+  .process-btn{
+    background:#1c1a17; color:#f4eadc; border:none; padding:11px 22px;
+    font-size:13px; cursor:pointer;
+  }
+  .process-btn:disabled{opacity:0.5; cursor:default;}
+  .dispute-card{border:1px solid #e0d5c0; padding:16px; margin-bottom:12px; background:#fffdf9;}
+  .dispute-card h4{margin:0 0 4px; font-family:Georgia,serif; font-size:15px;}
+  .dispute-meta{font-size:12.5px; opacity:0.65; margin-bottom:8px;}
+  .dispute-reason-box{background:#f4eadc; padding:10px 12px; font-size:13px; margin-bottom:12px; border-radius:3px;}
+  .resolve-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  .resolve-row input{padding:9px 11px; font-size:14px; border:1px solid #ccc; width:160px;}
+  .resolve-btn{background:#1c1a17; color:#f4eadc; border:none; padding:9px 18px; font-size:12.5px; cursor:pointer;}
+  .process-results{margin-top:14px; font-size:12.5px;}
+  .process-results div{padding:4px 0;}
 </style>
 </head>
 <body>
@@ -48,8 +72,30 @@
 </div>
 
 <div class="wrap" id="mainView" style="display:none;">
-  <h1>Pending Listings</h1>
-  <div id="listingsContainer"><p class="empty">Loading…</p></div>
+  <h1>Aerva Admin</h1>
+  <div class="tabs">
+    <button class="tab-btn active" id="tabListingsBtn" onclick="switchTab('listings')">Pending Listings</button>
+    <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
+  </div>
+
+  <div id="listingsView">
+    <div id="listingsContainer"><p class="empty">Loading…</p></div>
+  </div>
+
+  <div id="depositsView" style="display:none;">
+    <div class="deposit-section">
+      <h3>Auto-Refund Eligible Deposits</h3>
+      <p>Refunds every held deposit past its 7-day window with no dispute raised, in full, to each guest's original payment method. Nothing is refunded for a deposit still within its window or currently disputed.</p>
+      <button type="button" class="process-btn" id="processDepositsBtn" onclick="processDeposits()">Process Eligible Refunds</button>
+      <div class="process-results" id="processResults"></div>
+    </div>
+
+    <div class="deposit-section">
+      <h3>Disputed Deposits</h3>
+      <p>A host has raised a concern on each of these — decide how much of the deposit compensates the host; the remainder is refunded to the guest.</p>
+      <div id="disputesContainer"><p class="empty">Loading…</p></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -142,6 +188,117 @@
       }
     } catch(err){
       alert('Could not update this listing. Please try again.');
+    }
+  }
+
+  // ---- Security Deposits tab ----
+  function switchTab(tab){
+    const isListings = tab === 'listings';
+    document.getElementById('tabListingsBtn').classList.toggle('active', isListings);
+    document.getElementById('tabDepositsBtn').classList.toggle('active', !isListings);
+    document.getElementById('listingsView').style.display = isListings ? 'block' : 'none';
+    document.getElementById('depositsView').style.display = isListings ? 'none' : 'block';
+    if(!isListings) loadDisputes();
+  }
+
+  const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+
+  // Real money movement — this hits Razorpay's refund API for every
+  // eligible deposit. Confirmed explicitly rather than firing on page
+  // load, and results are shown per-order so a partial failure (e.g. one
+  // payment too old for Razorpay to refund) is visible, not silent.
+  async function processDeposits(){
+    if(!confirm('This will refund every eligible security deposit to guests via Razorpay right now. Continue?')) return;
+    const btn = document.getElementById('processDepositsBtn');
+    const resultsEl = document.getElementById('processResults');
+    btn.disabled = true;
+    btn.textContent = 'Processing…';
+    resultsEl.innerHTML = '';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-secret': adminSecret },
+        body: JSON.stringify({ processDeposits: true })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        resultsEl.innerHTML = `<div class="error">${data.error || 'Could not process deposits.'}</div>`;
+      } else if(data.processed === 0){
+        resultsEl.innerHTML = '<div class="empty" style="padding:10px 0;">No deposits are currently eligible for refund.</div>';
+      } else {
+        resultsEl.innerHTML = data.results.map(r =>
+          `<div class="${r.success ? 'success' : 'error'}">Order #${r.orderId}: ${r.success ? 'refunded successfully' : 'failed — ' + r.error}</div>`
+        ).join('');
+      }
+    } catch(err){
+      resultsEl.innerHTML = '<div class="error">Could not reach the server. Please try again.</div>';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Process Eligible Refunds';
+  }
+
+  async function loadDisputes(){
+    const container = document.getElementById('disputesContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?disputes=1', {
+        headers: { 'x-admin-secret': adminSecret }
+      });
+      const data = await res.json();
+      renderDisputes(data.disputes || []);
+    } catch(err){
+      container.innerHTML = '<p class="error">Could not load disputes. Please refresh.</p>';
+    }
+  }
+
+  function renderDisputes(disputes){
+    const container = document.getElementById('disputesContainer');
+    if(!disputes.length){
+      container.innerHTML = '<p class="empty">No disputed deposits right now.</p>';
+      return;
+    }
+    container.innerHTML = disputes.map(d => {
+      const dateRange = new Date(d.arrival).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) +
+        ' – ' + new Date(d.departure).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' });
+      return `
+        <div class="dispute-card" id="dispute-${d.id}">
+          <h4>${d.suite_name} — ${fmt(d.deposit_amount)} deposit</h4>
+          <div class="dispute-meta">${dateRange} · Host: ${d.host_name} (${d.host_email}) · Guest: ${d.guest_email}</div>
+          <div class="dispute-reason-box">"${d.dispute_reason}"</div>
+          <div class="resolve-row">
+            <label style="font-size:12.5px;">Compensate host ₹</label>
+            <input type="number" id="compensation-${d.id}" min="0" max="${d.deposit_amount}" placeholder="0">
+            <button type="button" class="resolve-btn" onclick="resolveDispute(${d.id}, ${d.deposit_amount})">Resolve</button>
+            <span id="resolveError-${d.id}" class="error"></span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function resolveDispute(orderId, depositAmount){
+    const input = document.getElementById('compensation-' + orderId);
+    const errorEl = document.getElementById('resolveError-' + orderId);
+    errorEl.textContent = '';
+    const compensationAmount = Number(input.value) || 0;
+    if(compensationAmount < 0 || compensationAmount > Number(depositAmount)){
+      errorEl.textContent = `Must be between 0 and ${fmt(depositAmount)}.`;
+      return;
+    }
+    if(!confirm(`Compensate the host ₹${compensationAmount} and refund the remaining ₹${depositAmount - compensationAmount} to the guest?`)) return;
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-secret': adminSecret },
+        body: JSON.stringify({ resolveDispute: { orderId, compensationAmount } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        document.getElementById('dispute-' + orderId).remove();
+      } else {
+        errorEl.textContent = data.error || 'Could not resolve this dispute.';
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not resolve this dispute. Please try again.';
     }
   }
 </script>
