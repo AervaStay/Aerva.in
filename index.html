@@ -156,10 +156,24 @@
 
   /* ---------- SUITES ---------- */
   .suite-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(280px,1fr)); gap:36px;}
-  .suite-card{background:var(--cream); display:flex; flex-direction:column; border:1px solid var(--line-dark);}
+  .suite-card{
+    background:var(--cream); display:flex; flex-direction:column; border:1px solid var(--line-dark);
+    border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(28,26,23,0.05);
+    transition:transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s ease, border-color .35s ease;
+  }
+  .suite-card:hover{
+    transform:translateY(-6px); box-shadow:0 18px 34px rgba(28,26,23,0.14); border-color:var(--gold);
+  }
+  .suite-card.reveal{ transition:opacity .55s ease, transform .55s ease; transform:translateY(16px); }
+  .suite-card.reveal.in{ transform:translateY(0); }
+  .suite-card.reveal:hover{ transition:transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s ease, border-color .35s ease; }
   .suite-photo{width:100%; aspect-ratio:4/3.1; overflow:hidden; background:var(--cream-deep); position:relative;}
   .suite-photo img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .5s ease;}
-  .suite-card:hover .suite-photo img{transform:scale(1.04);}
+  .suite-card:hover .suite-photo img{transform:scale(1.06);}
+  .suite-badge{
+    position:absolute; top:12px; left:12px; z-index:6; background:var(--ink); color:var(--cream);
+    font-size:10px; letter-spacing:0.1em; text-transform:uppercase; padding:5px 10px; border-radius:3px;
+  }
   .suite-photo-slider{
     width:100%; height:100%; display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
     -webkit-overflow-scrolling:touch; scrollbar-width:none;
@@ -382,6 +396,14 @@
     flex:0 0 auto; background:none; border:none; font-size:12px; letter-spacing:0.05em;
     color:var(--gold-deep); text-decoration:underline; cursor:pointer; padding:8px 0; margin-bottom:1px;
   }
+  .near-me-btn{
+    display:inline-flex; align-items:center; gap:6px; text-decoration:none;
+    border:1px solid var(--line-dark); border-radius:999px; padding:9px 16px !important;
+    transition:border-color .2s ease, background .2s ease;
+  }
+  .near-me-btn:hover{ border-color:var(--gold); background:rgba(169,136,79,0.08); }
+  .near-me-btn svg{width:15px; height:15px; flex:0 0 auto;}
+  .near-me-btn:disabled{opacity:0.6; cursor:default;}
   .search-status{font-size:13px; opacity:0.7; margin-top:14px; margin-bottom:6px;}
 
   .date-range-wrapper{position:relative;}
@@ -761,7 +783,10 @@
         <input type="number" id="maxPrice" min="0" placeholder="No max">
       </div>
       <button type="button" class="filter-clear" id="clearFiltersBtn">Clear filters</button>
-      <button type="button" class="filter-clear" id="showDistanceBtn">Show distance from me</button>
+      <button type="button" class="filter-clear near-me-btn" id="showDistanceBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
+        Near Me
+      </button>
     </div>
 
       <p class="search-status" id="searchStatus" style="display:none;"></p>
@@ -2251,10 +2276,19 @@
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  // Populated once the guest grants location access (see the "Show
-  // distance from me" button below) — null until then, so cards simply
-  // omit the distance line rather than showing anything misleading.
+  // Populated once the guest grants location access (see the "Near Me"
+  // button below) — null until then, so cards simply omit the distance
+  // line, and the listing order is left alone, rather than showing or
+  // sorting by anything guessed.
   let guestLocation = null;
+
+  function setNearMeLabel(btn, text){
+    // Only the text node changes — the location-pin <svg> stays put.
+    const svg = btn.querySelector('svg');
+    btn.innerHTML = '';
+    if(svg) btn.appendChild(svg);
+    btn.appendChild(document.createTextNode(' ' + text));
+  }
 
   document.getElementById('showDistanceBtn').addEventListener('click', function(){
     if(!navigator.geolocation){
@@ -2263,16 +2297,19 @@
     }
     const btn = this;
     btn.disabled = true;
-    btn.textContent = 'Locating…';
+    setNearMeLabel(btn, 'Locating…');
     navigator.geolocation.getCurrentPosition(
       function(position){
         guestLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
-        btn.textContent = 'Distances shown below';
+        setNearMeLabel(btn, 'Showing nearest first');
+        // A guest who already chose an explicit price sort keeps that
+        // choice — Near Me only takes over ordering when sort is still on
+        // "Recommended" (see applyFiltersAndRender).
         applyFiltersAndRender();
       },
       function(err){
         btn.disabled = false;
-        btn.textContent = 'Show distance from me';
+        setNearMeLabel(btn, 'Near Me');
         // err.code: 1 = permission denied, 2 = position unavailable
         // (e.g. no GPS/network signal), 3 = timed out. Distinguishing
         // these means the message actually points at the real fix
@@ -2336,12 +2373,21 @@
     localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
   }
 
-  function buildSuiteCard(listing){
+  function buildSuiteCard(listing, index){
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
     const priceLine = listing.nightly_rate
       ? `From <strong>₹${Number(listing.nightly_rate).toLocaleString('en-IN')}</strong>/night`
       : 'Rate on enquiry';
+
+    // "New" badge — driven entirely by the listing's real created_at date,
+    // never fabricated. A home counts as new for its first 14 days live.
+    const NEW_LISTING_DAYS = 14;
+    let isNew = false;
+    if(listing.created_at){
+      const ageMs = Date.now() - new Date(listing.created_at).getTime();
+      isNew = ageMs >= 0 && ageMs <= NEW_LISTING_DAYS * 24 * 60 * 60 * 1000;
+    }
 
     // Show a handful of amenities directly on the card — enough for a guest
     // to gauge what's included at a glance, without listing all of them
@@ -2394,13 +2440,15 @@
       ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="link" style="font-size:12.5px; margin-top:4px;">View on map</a>`
       : '';
 
-    card.className = 'suite-card';
+    card.className = 'suite-card reveal';
+    card.style.transitionDelay = ((index || 0) % 8) * 60 + 'ms';
     card.dataset.listingId = listing.id;
     card.style.cursor = 'pointer';
     const isFav = getFavoriteIds().includes(String(listing.id));
     card.innerHTML = `
       <div class="suite-photo">
         ${photoHtml}
+        ${isNew ? '<span class="suite-badge">New</span>' : ''}
         <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
           <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
         </button>
@@ -2441,14 +2489,28 @@
 
     const sortOrder = document.getElementById('sortPrice').value;
     if(sortOrder === 'asc') list.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
-    if(sortOrder === 'desc') list.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
+    else if(sortOrder === 'desc') list.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
+    else if(guestLocation){
+      // "Recommended" (no explicit price sort) becomes "nearest first" once
+      // the guest has shared their location via the Near Me button — a
+      // listing with no coordinates sorts last rather than being dropped.
+      list.sort((a, b) => {
+        const da = (a.latitude && a.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(a.latitude), Number(a.longitude)) : Infinity;
+        const db = (b.latitude && b.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(b.latitude), Number(b.longitude)) : Infinity;
+        return da - db;
+      });
+    }
 
     container.innerHTML = '';
     if(list.length === 0){
       container.innerHTML = '<div class="suites-empty">No homes match these filters — try widening your price range.</div>';
       return;
     }
-    list.forEach(listing => container.appendChild(buildSuiteCard(listing)));
+    list.forEach((listing, index) => {
+      const card = buildSuiteCard(listing, index);
+      container.appendChild(card);
+      io.observe(card);
+    });
   }
 
   // Real address suggestions for the search Place field are wired up in
