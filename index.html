@@ -1901,7 +1901,8 @@
         placeSuggestionsEl.style.display = 'block';
 
         placeSuggestionsEl.querySelectorAll('[data-type="listing"]').forEach(btn => {
-          btn.addEventListener('click', () => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
             const listing = listingsById[btn.dataset.id];
             if(listing && listing.latitude && listing.longitude){
               selectCoordinates(listing.latitude, listing.longitude, listing.property_name);
@@ -1918,7 +1919,8 @@
           });
         });
         placeSuggestionsEl.querySelectorAll('[data-type="place"]').forEach(btn => {
-          btn.addEventListener('click', () => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
             const placeId = btn.dataset.placeId;
             placesService.getDetails({ placeId, fields: ['geometry', 'formatted_address'] }, (result, status) => {
               if(status === 'OK' && result.geometry && result.geometry.location){
@@ -3028,7 +3030,8 @@
         `).join('');
       dropdown.style.display = 'block';
       dropdown.querySelectorAll('[data-recent-index]').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
           const item = recents[Number(btn.dataset.recentIndex)];
           if(!item) return;
           input.value = item.text;
