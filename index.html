@@ -1769,6 +1769,9 @@
         document.getElementById('searchPlaceLat').value = lat;
         document.getElementById('searchPlaceLng').value = lng;
         closeSuggestions();
+        // Chain straight into date selection — no need to make the guest
+        // click "Add dates" separately right after picking a place.
+        openCalendar();
       }
 
       function renderSuggestions(matchingListings, predictions){
@@ -1809,6 +1812,7 @@
               document.getElementById('searchPlaceLat').value = '';
               document.getElementById('searchPlaceLng').value = '';
               closeSuggestions();
+              openCalendar();
             }
           });
         });
@@ -2931,6 +2935,7 @@
           document.getElementById('searchPlaceLng').value = item.lng || '';
           dropdown.innerHTML = '';
           dropdown.style.display = 'none';
+          openCalendar();
         });
       });
     }
@@ -3047,7 +3052,10 @@
     gridEl.innerHTML = html;
 
     gridEl.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
-      cell.addEventListener('click', () => handleDayClick(cell.dataset.date));
+      cell.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleDayClick(cell.dataset.date);
+      });
     });
   }
 
@@ -3081,6 +3089,11 @@
       searchDepartureDate = iso;
       calSelectingStart = true;
       closeCalendar();
+      // Chain straight into the guest count next — the whole point of
+      // this flow is picking a place, then dates, then guests without
+      // having to click back into each field separately.
+      const guestsSelect = document.getElementById('searchGuests');
+      if(guestsSelect) guestsSelect.focus();
     }
     updateDateRangeBtn();
     renderCalendar();
