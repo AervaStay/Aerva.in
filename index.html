@@ -463,15 +463,23 @@
   .guests-dropdown{
     display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:50;
     background-color:#f4ebe3; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
-    padding:8px; width:220px; max-width:90vw; flex-direction:column;
+    padding:8px 20px; width:320px; max-width:90vw; flex-direction:column;
   }
   .guests-dropdown.open{display:flex;}
-  .guests-option{
-    background:none; border:none; text-align:left; padding:10px 12px; font-size:14px;
-    font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer; border-radius:3px;
+  .guest-row{display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 0;}
+  .guest-row-divider{height:1px; background:var(--line-dark);}
+  .guest-row-title{font-size:15px; font-weight:600; color:var(--ink);}
+  .guest-row-sub{font-size:12.5px; opacity:0.6; margin-top:2px;}
+  .guest-row-sub-muted{opacity:0.45;}
+  .guest-stepper{display:flex; align-items:center; gap:14px; flex:0 0 auto;}
+  .guest-step-btn{
+    width:30px; height:30px; border-radius:50%; border:1px solid var(--line-dark);
+    background:none; color:var(--ink); font-size:16px; line-height:1; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; transition:border-color .2s ease, opacity .2s ease;
   }
-  .guests-option:hover{background-color:#ebdecd;}
-  .guests-option.selected{background:var(--ink); color:var(--cream);}
+  .guest-step-btn:hover:not(:disabled){border-color:var(--gold-deep);}
+  .guest-step-btn:disabled{opacity:0.3; cursor:default;}
+  .guest-count{font-size:14.5px; min-width:16px; text-align:center;}
   .more-filters-wrapper{position:relative;}
   .more-filters-btn svg{width:15px; height:15px; flex:0 0 auto;}
   .more-filters-dropdown{
@@ -788,16 +796,53 @@
         <button type="button" class="date-range-btn placeholder" id="guestsTriggerBtn">Add guests</button>
         <input type="hidden" id="searchGuests" value="">
         <div class="guests-dropdown" id="guestsDropdown">
-          <button type="button" class="guests-option" data-value="">Add guests</button>
-          <button type="button" class="guests-option" data-value="1">1 guest</button>
-          <button type="button" class="guests-option" data-value="2">2 guests</button>
-          <button type="button" class="guests-option" data-value="3">3 guests</button>
-          <button type="button" class="guests-option" data-value="4">4 guests</button>
-          <button type="button" class="guests-option" data-value="5">5 guests</button>
-          <button type="button" class="guests-option" data-value="6">6 guests</button>
-          <button type="button" class="guests-option" data-value="7">7 guests</button>
-          <button type="button" class="guests-option" data-value="8">8 guests</button>
-          <button type="button" class="guests-option" data-value="9">9+ guests</button>
+          <div class="guest-row">
+            <div class="guest-row-text">
+              <div class="guest-row-title">Adults</div>
+              <div class="guest-row-sub">Ages 13 or above</div>
+            </div>
+            <div class="guest-stepper">
+              <button type="button" class="guest-step-btn" data-type="adults" data-action="dec" aria-label="Decrease adults">−</button>
+              <span class="guest-count" id="guestCountAdults">0</span>
+              <button type="button" class="guest-step-btn" data-type="adults" data-action="inc" aria-label="Increase adults">+</button>
+            </div>
+          </div>
+          <div class="guest-row-divider"></div>
+          <div class="guest-row">
+            <div class="guest-row-text">
+              <div class="guest-row-title">Children</div>
+              <div class="guest-row-sub">Ages 2–12</div>
+            </div>
+            <div class="guest-stepper">
+              <button type="button" class="guest-step-btn" data-type="children" data-action="dec" aria-label="Decrease children">−</button>
+              <span class="guest-count" id="guestCountChildren">0</span>
+              <button type="button" class="guest-step-btn" data-type="children" data-action="inc" aria-label="Increase children">+</button>
+            </div>
+          </div>
+          <div class="guest-row-divider"></div>
+          <div class="guest-row">
+            <div class="guest-row-text">
+              <div class="guest-row-title">Infants</div>
+              <div class="guest-row-sub">Under 2</div>
+            </div>
+            <div class="guest-stepper">
+              <button type="button" class="guest-step-btn" data-type="infants" data-action="dec" aria-label="Decrease infants">−</button>
+              <span class="guest-count" id="guestCountInfants">0</span>
+              <button type="button" class="guest-step-btn" data-type="infants" data-action="inc" aria-label="Increase infants">+</button>
+            </div>
+          </div>
+          <div class="guest-row-divider"></div>
+          <div class="guest-row">
+            <div class="guest-row-text">
+              <div class="guest-row-title">Pets</div>
+              <div class="guest-row-sub guest-row-sub-muted">Let your host know if you're bringing a pet</div>
+            </div>
+            <div class="guest-stepper">
+              <button type="button" class="guest-step-btn" data-type="pets" data-action="dec" aria-label="Decrease pets">−</button>
+              <span class="guest-count" id="guestCountPets">0</span>
+              <button type="button" class="guest-step-btn" data-type="pets" data-action="inc" aria-label="Increase pets">+</button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="filter-bar reveal">
@@ -3001,7 +3046,10 @@
     calSelectingStart = true;
     updateDateRangeBtn();
     document.getElementById('searchCity').value = '';
-    document.getElementById('searchGuests').value = '';
+    guestCounts.adults = 0;
+    guestCounts.children = 0;
+    guestCounts.infants = 0;
+    guestCounts.pets = 0;
     updateGuestsTrigger();
     document.getElementById('sortPrice').value = '';
     document.getElementById('minPrice').value = '';
@@ -3196,18 +3244,41 @@
   const guestsHiddenInput = document.getElementById('searchGuests');
   const guestsDropdown = document.getElementById('guestsDropdown');
 
-  function guestsLabel(value){
-    if(!value) return 'Add guests';
-    if(value === '9') return '9+ guests';
-    return value + (value === '1' ? ' guest' : ' guests');
+  // Only adults + children count toward a home's sleeping capacity — the
+  // hidden #searchGuests value (what performSearch actually sends to
+  // get-listings.js's ?guests= filter) is that sum. Infants and pets are
+  // tracked for the guest's own planning and shown in the trigger label,
+  // but never affect which homes match a capacity search, same as most
+  // booking sites treat them.
+  const guestCounts = { adults: 0, children: 0, infants: 0, pets: 0 };
+  const GUEST_MAX = { adults: 16, children: 12, infants: 5, pets: 5 };
+
+  function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  function guestsSummaryLabel(){
+    const sleeping = guestCounts.adults + guestCounts.children;
+    if(sleeping === 0 && guestCounts.infants === 0 && guestCounts.pets === 0) return 'Add guests';
+    let label = sleeping + (sleeping === 1 ? ' guest' : ' guests');
+    const extras = [];
+    if(guestCounts.infants > 0) extras.push(guestCounts.infants + (guestCounts.infants === 1 ? ' infant' : ' infants'));
+    if(guestCounts.pets > 0) extras.push(guestCounts.pets + (guestCounts.pets === 1 ? ' pet' : ' pets'));
+    if(extras.length) label += ', ' + extras.join(', ');
+    return label;
   }
 
   function updateGuestsTrigger(){
-    const value = guestsHiddenInput.value;
-    guestsTriggerBtn.textContent = guestsLabel(value);
-    guestsTriggerBtn.classList.toggle('placeholder', !value);
-    guestsDropdown.querySelectorAll('.guests-option').forEach(opt => {
-      opt.classList.toggle('selected', opt.dataset.value === value);
+    const sleeping = guestCounts.adults + guestCounts.children;
+    guestsHiddenInput.value = sleeping > 0 ? String(sleeping) : '';
+    guestsTriggerBtn.textContent = guestsSummaryLabel();
+    guestsTriggerBtn.classList.toggle('placeholder', sleeping === 0 && guestCounts.infants === 0 && guestCounts.pets === 0);
+
+    Object.keys(guestCounts).forEach(type => {
+      const countEl = document.getElementById('guestCount' + capitalize(type));
+      if(countEl) countEl.textContent = guestCounts[type];
+      const decBtn = guestsDropdown.querySelector(`.guest-step-btn[data-type="${type}"][data-action="dec"]`);
+      if(decBtn) decBtn.disabled = guestCounts[type] <= 0;
+      const incBtn = guestsDropdown.querySelector(`.guest-step-btn[data-type="${type}"][data-action="inc"]`);
+      if(incBtn) incBtn.disabled = guestCounts[type] >= GUEST_MAX[type];
     });
   }
 
@@ -3226,12 +3297,15 @@
     else openGuestsDropdown();
   });
 
-  guestsDropdown.querySelectorAll('.guests-option').forEach(opt => {
-    opt.addEventListener('click', (e) => {
+  guestsDropdown.querySelectorAll('.guest-step-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      guestsHiddenInput.value = opt.dataset.value;
+      const type = btn.dataset.type;
+      const delta = btn.dataset.action === 'inc' ? 1 : -1;
+      const next = guestCounts[type] + delta;
+      if(next < 0 || next > GUEST_MAX[type]) return;
+      guestCounts[type] = next;
       updateGuestsTrigger();
-      closeGuestsDropdown();
     });
   });
 
