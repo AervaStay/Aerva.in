@@ -308,6 +308,7 @@
   @media (max-width:640px){
     .pill-search{border-radius:16px; flex-direction:column;}
     .pill-search .search-field{border-right:none; border-bottom:1px solid var(--line-dark); padding:14px 20px;}
+    .pill-search .filter-bar{border-left:none; border-top:1px solid var(--line-dark); padding:14px 20px;}
     .pill-search-submit{width:100%; border-radius:10px; margin:10px 16px 16px;}
   }
 
@@ -359,7 +360,9 @@
     background:linear-gradient(180deg, rgba(20,17,14,0.35), rgba(20,17,14,0.55));
   }
   .filter-bg-wrap .wrap{position:relative; z-index:2;}
-  .search-and-filters-row{display:flex; flex-wrap:wrap; align-items:center; gap:16px;}
+  .pill-search .filter-bar{
+    padding:10px 22px; border-left:1px solid var(--line-dark); margin:0; flex-shrink:0;
+  }
   .filter-bar{
     margin-bottom:0; padding:0; gap:14px; opacity:0.92;
     background:none; border:none; align-items:center; width:auto; flex:0 1 auto;
@@ -483,7 +486,6 @@
     .more-filters-dropdown{width:100%;}
   }
   @media (max-width:640px){
-    .search-and-filters-row{flex-direction:column; align-items:stretch;}
     .search-bar, .filter-bar{flex-direction:column; align-items:stretch;}
     .sort-field{ max-width:none; }
     .search-bar .btn{width:100%;}
@@ -736,7 +738,6 @@
     <div class="filter-bg-slides" id="filterBgSlides"></div>
     <div class="filter-bg-overlay"></div>
     <div class="wrap">
-      <div class="search-and-filters-row">
       <div class="search-bar pill-search reveal" id="searchBar">
       <div class="search-field">
         <label for="searchCity">Where</label>
@@ -799,43 +800,41 @@
           <button type="button" class="guests-option" data-value="9">9+ guests</button>
         </div>
       </div>
+      <div class="filter-bar reveal">
+        <div class="more-filters-wrapper">
+          <button type="button" class="filter-clear near-me-btn more-filters-btn" id="moreFiltersBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+            More Filters
+          </button>
+          <div class="more-filters-dropdown" id="moreFiltersDropdown">
+            <div class="search-field sort-field">
+              <label for="sortPrice">Sort by</label>
+              <select id="sortPrice">
+                <option value="">Recommended</option>
+                <option value="asc">Price: Low to High</option>
+                <option value="desc">Price: High to Low</option>
+              </select>
+            </div>
+            <div class="search-field">
+              <label for="minPrice">Min Price (₹/night)</label>
+              <input type="number" id="minPrice" min="0" placeholder="No min">
+            </div>
+            <div class="search-field">
+              <label for="maxPrice">Max Price (₹/night)</label>
+              <input type="number" id="maxPrice" min="0" placeholder="No max">
+            </div>
+          </div>
+        </div>
+        <button type="button" class="filter-clear" id="clearFiltersBtn">Clear filters</button>
+        <button type="button" class="filter-clear near-me-btn" id="showDistanceBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
+          Near Me
+        </button>
+      </div>
       <button type="button" class="pill-search-submit" id="searchBtn" aria-label="Search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       </button>
     </div>
-
-    <div class="filter-bar reveal">
-      <div class="more-filters-wrapper">
-        <button type="button" class="filter-clear near-me-btn more-filters-btn" id="moreFiltersBtn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
-          More Filters
-        </button>
-        <div class="more-filters-dropdown" id="moreFiltersDropdown">
-          <div class="search-field sort-field">
-            <label for="sortPrice">Sort by</label>
-            <select id="sortPrice">
-              <option value="">Recommended</option>
-              <option value="asc">Price: Low to High</option>
-              <option value="desc">Price: High to Low</option>
-            </select>
-          </div>
-          <div class="search-field">
-            <label for="minPrice">Min Price (₹/night)</label>
-            <input type="number" id="minPrice" min="0" placeholder="No min">
-          </div>
-          <div class="search-field">
-            <label for="maxPrice">Max Price (₹/night)</label>
-            <input type="number" id="maxPrice" min="0" placeholder="No max">
-          </div>
-        </div>
-      </div>
-      <button type="button" class="filter-clear" id="clearFiltersBtn">Clear filters</button>
-      <button type="button" class="filter-clear near-me-btn" id="showDistanceBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
-        Near Me
-      </button>
-    </div>
-      </div>
 
       <p class="search-status" id="searchStatus" style="display:none;"></p>
     </div>
