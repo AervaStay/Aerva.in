@@ -157,8 +157,8 @@
   /* ---------- SUITES ---------- */
   .suite-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(280px,1fr)); gap:36px;}
   .suite-card{
-    background:var(--cream); display:flex; flex-direction:column; border:1px solid var(--line-dark);
-    border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(28,26,23,0.05);
+    background:var(--cream); display:flex; flex-direction:column; border:2px solid #ffffff;
+    border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(28,26,23,0.08);
     transition:transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s ease, border-color .35s ease;
   }
   .suite-card:hover{
@@ -2769,7 +2769,9 @@
   }
 
   // Real availability, not a guess — pulls actual paid bookings for this
-  // listing from the server (see /api/get-listing-availability) and greys
+  // listing from the server (via get-listings.js's ?availabilityFor= mode
+  // — kept in that same file rather than its own endpoint to stay under
+  // Vercel's Hobby-plan serverless function limit) and greys
   // out those nights on a read-only month calendar the guest can page
   // through. Never shows who booked, only that a date is taken.
   async function renderAvailabilityCalendar(listingId){
@@ -2778,7 +2780,7 @@
 
     let bookedRanges = [];
     try {
-      const res = await fetch(SUITES_API_BASE + '/api/get-listing-availability?listingId=' + encodeURIComponent(listingId));
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
       if(res.ok){
         const data = await res.json();
         bookedRanges = Array.isArray(data.bookedRanges) ? data.bookedRanges : [];
