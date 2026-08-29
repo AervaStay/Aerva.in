@@ -11,12 +11,20 @@
 // an empty list, same as a brand-new account.
 //
 //   GET  — as above, now also returns `verification`: the host's
-//          Aadhaar/bank verification status.
+//          Aadhaar/bank verification status, and each booking now
+//          includes its deposit fields (amount, status, release date,
+//          any dispute already raised).
 //   POST { aadhaarDocumentUrl? , bankAccountNumber?, bankIfsc?,
 //          bankAccountHolderName? } — submits (or resubmits) whichever
 //          section is included. Locked once a section is 'verified'
 //          (contact support to change verified info, rather than letting
 //          it be silently overwritten).
+//   POST { raiseDispute: { orderId, reason } } — flags a concern on one
+//          of this host's bookings' held security deposits, before it
+//          would otherwise auto-refund to the guest 7 days after
+//          checkout. Only works while deposit_status is still 'held' and
+//          the release date hasn't passed. See get-pending-listings.js's
+//          resolveDispute mode for how an admin follows up.
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken } = require('./_approval-token');
@@ -44,6 +52,60 @@ module.exports = async (req, res) => {
 
   const guestId = requireGuestId(req);
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
+
+  // ---- Raise a concern on a held security deposit ----
+  // Separate from the verification-submission branch above — this only
+  // ever touches one order's deposit_status, gated on it actually
+  // belonging to this host and still being within the 7-day hold.
+  if (req.method === 'POST' && req.body && req.body.raiseDispute) {
+    try {
+      const { orderId, reason } = req.body.raiseDispute;
+      if (!orderId || !reason || !String(reason).trim()) {
+        return res.status(400).json({ error: 'Please explain the concern before submitting.' });
+      }
+
+      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      const guest = guestRows[0];
+      if (!guest || !guest.host_id) {
+        return res.status(403).json({ error: 'You do not have permission to do this.' });
+      }
+
+      // Ownership check: the order's listing has to belong to this host —
+      // never trust orderId alone, since it's just a number a guest's
+      // browser could also send.
+      const rows = await sql`
+        SELECT o.id, o.deposit_status, o.deposit_release_at
+        FROM orders o
+        JOIN listings l ON o.listing_id = l.id
+        WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
+      `;
+      const order = rows[0];
+      if (!order) {
+        return res.status(403).json({ error: 'You do not have permission to do this.' });
+      }
+      if (order.deposit_status !== 'held') {
+        return res.status(400).json({ error: 'This deposit is no longer open to a concern — it has already been refunded, disputed, or resolved.' });
+      }
+      const releaseDate = order.deposit_release_at ? new Date(order.deposit_release_at) : null;
+      if (releaseDate && new Date() > releaseDate) {
+        return res.status(400).json({ error: 'The 7-day window to raise a concern on this deposit has passed.' });
+      }
+
+      await sql`
+        UPDATE orders SET deposit_status = 'disputed', dispute_reason = ${String(reason).trim().slice(0, 1000)}, dispute_raised_at = now()
+        WHERE id = ${orderId}
+      `;
+      await logAudit(sql, {
+        action: 'deposit_dispute_raised', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
+        targetType: 'order', targetId: orderId
+      });
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('host-listings (raiseDispute) error:', err);
+      return res.status(500).json({ error: 'Could not submit your concern right now. Please try again.' });
+    }
+  }
 
   // ---- Submit or resubmit verification info ----
   if (req.method === 'POST') {
@@ -158,6 +220,8 @@ module.exports = async (req, res) => {
       SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.nights,
              o.subtotal, o.discount_amount, o.gst,
              o.commission_rate, o.commission_amount, o.payout_amount,
+             o.deposit_amount, o.deposit_status, o.deposit_release_at,
+             o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.status, o.created_at
       FROM orders o
       JOIN listings l ON o.listing_id = l.id

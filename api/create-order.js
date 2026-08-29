@@ -5,10 +5,15 @@
 // The browser only ever sees the public Key ID and the order_id this function returns.
 //
 // Pricing is now driven entirely by each listing's own row in the database —
-// nightly_rate, discount_type/value/min_nights, commission_rate — never by
-// anything the browser sends. This mirrors the frontend's own calculation,
-// but is the actual source of truth: a tampered browser request can change
-// what it *displays*, never what it's actually charged.
+// nightly_rate, discount_type/value/min_nights, commission_rate, security_deposit
+// — never by anything the browser sends. This mirrors the frontend's own
+// calculation, but is the actual source of truth: a tampered browser
+// request can change what it *displays*, never what it's actually charged.
+//
+// Refundable security deposits (see security_deposit on listings) are
+// collected here as part of the same Razorpay payment, then tracked
+// separately by verify-payment.js once payment succeeds — see that file
+// for the 7-day hold, auto-refund, and dispute lifecycle.
 
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
@@ -187,6 +192,7 @@ module.exports = async (req, res) => {
     let grandSubtotal = 0;
     let grandDiscount = 0;
     let grandGuestServiceFee = 0;
+    let grandDeposit = 0;
     const stayDetails = [];
     const seenListingIds = new Set();
 
@@ -208,7 +214,7 @@ module.exports = async (req, res) => {
       // no matter what the browser sends.
       const rows = await sql`
         SELECT id, property_name, nightly_rate, discount_type, discount_value,
-               discount_min_nights, commission_rate
+               discount_min_nights, commission_rate, security_deposit
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
@@ -251,9 +257,17 @@ module.exports = async (req, res) => {
       // guest pays, never subtracted from what the host receives.
       const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
 
+      // Refundable security deposit — the host's own per-listing amount,
+      // charged in full on top of everything else. Never discounted,
+      // never commissioned, never counted as Aerva revenue: it's held,
+      // not earned, and normally goes straight back to the guest (see
+      // verify-payment.js for how the 7-day hold and release works).
+      const depositAmount = listing.security_deposit ? Number(listing.security_deposit) : 0;
+
       grandSubtotal += staySubtotal;
       grandDiscount += discountAmount;
       grandGuestServiceFee += guestServiceFee;
+      grandDeposit += depositAmount;
 
       stayDetails.push({
         listingId: listing.id,
@@ -269,12 +283,13 @@ module.exports = async (req, res) => {
         baseCommission,
         amenityCommission,
         guestServiceFee,
+        depositAmount,
         amenities: amenityDetails,
       });
     }
 
     const gst = Math.round(grandSubtotal * GST_RATE);
-    const totalRupees = grandSubtotal + gst + grandGuestServiceFee;
+    const totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit;
 
     const order = await razorpay.orders.create({
       amount: totalRupees * 100, // paise
@@ -298,6 +313,7 @@ module.exports = async (req, res) => {
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
+      totalDeposit: grandDeposit,
     });
   } catch (err) {
     console.error('create-order error:', err);

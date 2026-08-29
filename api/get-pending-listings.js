@@ -6,6 +6,8 @@
 // reviewers with different permissions.
 //
 //   GET  — pending listings for review, as before.
+//   GET ?disputes=1 — disputed security deposits awaiting an admin
+//          decision (see resolveDispute below), instead of pending listings.
 //   POST { backgroundImages: [url, url, ...] }
 //        — saves the admin's chosen homepage background photos. Kept in
 //          this same file (rather than its own /api endpoint) to stay
@@ -17,6 +19,18 @@
 //          falls back to using every listing's own cover photo instead
 //          (see get-listings.js's ?siteBackground=1 mode, which is what
 //          the homepage actually reads from).
+//   POST { processDeposits: true }
+//        — finds every security deposit past its 7-day hold with no
+//          dispute raised, and refunds each one in full to the guest's
+//          original payment method via Razorpay. Admin-triggered by
+//          design (a button in admin.html), not an unattended cron job —
+//          this moves real money. Returns per-order results so a partial
+//          failure is visible rather than silent.
+//   POST { resolveDispute: { orderId, compensationAmount } }
+//        — an admin's decision on a disputed deposit: compensationAmount
+//          (capped at the deposit itself) is recorded against the order
+//          for the host's payout, and whatever's left of the deposit is
+//          refunded to the guest the same way processDeposits does.
 //
 // Requires a site_settings table:
 //   CREATE TABLE IF NOT EXISTS site_settings (
@@ -24,10 +38,19 @@
 //     value JSONB NOT NULL,
 //     updated_at TIMESTAMPTZ DEFAULT now()
 //   );
+//
+// processDeposits and resolveDispute both call the Razorpay Refunds API
+// (razorpay.payments.refund) — make sure this has been tested against a
+// real Razorpay test-mode payment before relying on it in production.
 
 const { neon } = require('@neondatabase/serverless');
+const Razorpay = require('razorpay');
 
 const sql = neon(process.env.DATABASE_URL);
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
 const BACKGROUND_IMAGES_KEY = 'homepage_background_images';
 
 module.exports = async (req, res) => {
@@ -47,6 +70,96 @@ module.exports = async (req, res) => {
   }
 
   if (req.method === 'POST') {
+    // ---- Auto-refund every held deposit past its 7-day release date ----
+    // Admin-triggered rather than a blind cron job — this endpoint does
+    // real money movement via Razorpay, so a human clicking "Process" in
+    // admin.html is the safety check before it runs, at least until this
+    // has been tested enough in production to trust running unattended.
+    if (req.body && req.body.processDeposits) {
+      try {
+        const eligible = await sql`
+          SELECT id, razorpay_payment_id, deposit_amount
+          FROM orders
+          WHERE deposit_status = 'held' AND deposit_release_at <= CURRENT_DATE AND deposit_amount > 0
+        `;
+
+        const results = [];
+        for (const order of eligible) {
+          try {
+            // A partial refund on the ORIGINAL payment — Razorpay sends
+            // this back to whatever the guest originally paid with
+            // (card, UPI, etc.) automatically. This is what satisfies
+            // "refunded ... into the same account" — Aerva never asks
+            // for or stores separate refund destination details.
+            const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
+              amount: Math.round(Number(order.deposit_amount) * 100),
+              speed: 'normal',
+            });
+            await sql`
+              UPDATE orders SET deposit_status = 'refunded', deposit_refund_id = ${refund.id}
+              WHERE id = ${order.id}
+            `;
+            results.push({ orderId: order.id, success: true });
+          } catch (refundErr) {
+            // One failed refund (e.g. a payment too old for Razorpay to
+            // refund) shouldn't block the rest — log it and keep going,
+            // leaving that order's status as 'held' for manual follow-up.
+            console.error(`processDeposits: refund failed for order ${order.id}:`, refundErr);
+            results.push({ orderId: order.id, success: false, error: refundErr.message || 'Refund failed' });
+          }
+        }
+
+        return res.status(200).json({ processed: results.length, results });
+      } catch (err) {
+        console.error('get-pending-listings (processDeposits) error:', err);
+        return res.status(500).json({ error: 'Could not process deposits right now.' });
+      }
+    }
+
+    // ---- Resolve a disputed deposit ----
+    // An admin decides how much of the deposit compensates the host for
+    // damage/etc.; whatever's left over (if anything) goes back to the
+    // guest the same way processDeposits refunds do — a partial refund on
+    // the original payment. The host's compensation isn't paid out
+    // automatically here (Aerva's payouts are handled outside this
+    // codebase, same as regular booking payouts) — deposit_resolution_amount
+    // just records the decision so it's visible on the host's dashboard
+    // and can be included in their next payout.
+    if (req.body && req.body.resolveDispute) {
+      try {
+        const { orderId, compensationAmount } = req.body.resolveDispute;
+        const rows = await sql`SELECT id, razorpay_payment_id, deposit_amount, deposit_status FROM orders WHERE id = ${orderId}`;
+        const order = rows[0];
+        if (!order) return res.status(404).json({ error: 'Order not found.' });
+        if (order.deposit_status !== 'disputed') {
+          return res.status(400).json({ error: 'This deposit is not currently disputed.' });
+        }
+
+        const compensation = Math.max(0, Math.min(Number(compensationAmount) || 0, Number(order.deposit_amount)));
+        const guestRefundAmount = Number(order.deposit_amount) - compensation;
+
+        let refundId = null;
+        if (guestRefundAmount > 0) {
+          const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
+            amount: Math.round(guestRefundAmount * 100),
+            speed: 'normal',
+          });
+          refundId = refund.id;
+        }
+
+        await sql`
+          UPDATE orders SET
+            deposit_status = 'resolved', deposit_resolution_amount = ${compensation}, deposit_refund_id = ${refundId}
+          WHERE id = ${orderId}
+        `;
+
+        return res.status(200).json({ success: true, compensation, guestRefundAmount });
+      } catch (err) {
+        console.error('get-pending-listings (resolveDispute) error:', err);
+        return res.status(500).json({ error: 'Could not resolve this dispute right now.' });
+      }
+    }
+
     try {
       const { backgroundImages } = req.body || {};
       // Only real Blob URLs are kept — same defensive pattern used
@@ -66,6 +179,28 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('get-pending-listings (POST background) error:', err);
       return res.status(500).json({ error: 'Could not save background images right now.' });
+    }
+  }
+
+  // ---- Disputed deposits awaiting review ----
+  // A separate GET mode (?disputes=1) rather than always bundling this in
+  // — admin.html only needs it on the deposits tab, not on every load of
+  // the pending-listings view.
+  if (req.query.disputes === '1') {
+    try {
+      const disputes = await sql`
+        SELECT o.id, o.suite_name, o.arrival, o.departure, o.deposit_amount,
+               o.dispute_reason, o.dispute_raised_at, o.guest_email,
+               l.host_name, l.host_email
+        FROM orders o
+        JOIN listings l ON o.listing_id = l.id
+        WHERE o.deposit_status = 'disputed'
+        ORDER BY o.dispute_raised_at ASC
+      `;
+      return res.status(200).json({ disputes });
+    } catch (err) {
+      console.error('get-pending-listings (disputes) error:', err);
+      return res.status(500).json({ error: 'Could not fetch disputes' });
     }
   }
 

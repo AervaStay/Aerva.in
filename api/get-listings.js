@@ -160,7 +160,7 @@ module.exports = async (req, res) => {
         discount_type, discount_value, discount_min_nights, discount_description,
         exterior_photo_urls, interior_photo_urls, cover_photo_url,
         latitude, longitude, formatted_address,
-        pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee,
+        pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
         created_at
       FROM listings
       WHERE status = 'approved'
