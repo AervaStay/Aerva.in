@@ -170,10 +170,14 @@
   .suite-photo{width:100%; aspect-ratio:4/3.1; overflow:hidden; background:var(--cream-deep); position:relative;}
   .suite-photo img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .5s ease;}
   .suite-card:hover .suite-photo img{transform:scale(1.06);}
+  .suite-badges{
+    position:absolute; top:12px; left:12px; z-index:6; display:flex; flex-direction:column; gap:6px; align-items:flex-start;
+  }
   .suite-badge{
-    position:absolute; top:12px; left:12px; z-index:6; background:var(--ink); color:var(--cream);
+    background:var(--ink); color:var(--cream);
     font-size:10px; letter-spacing:0.1em; text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
+  .suite-badge-discount{ background:#a3402f; color:#fff; }
   .suite-photo-slider{
     width:100%; height:100%; display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
     -webkit-overflow-scrolling:touch; scrollbar-width:none;
@@ -355,7 +359,12 @@
     background:linear-gradient(180deg, rgba(20,17,14,0.35), rgba(20,17,14,0.55));
   }
   .filter-bg-wrap .wrap{position:relative; z-index:2;}
-  .filter-bar{margin-bottom:6px; padding:16px 22px; opacity:0.92;}
+  .filter-bar{margin-bottom:6px; padding:12px 20px; gap:20px; opacity:0.92;}
+  .filter-bar .search-field{min-width:150px;}
+  .filter-bar .search-field label{
+    white-space:nowrap; font-size:10px; letter-spacing:0.07em;
+  }
+  .sort-field{ flex:0 1 180px; min-width:140px; max-width:190px; }
   .search-field{display:flex; flex-direction:column; gap:6px; flex:1; min-width:130px;}
   .search-field label{font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c; font-weight:700;}
   .search-field input, .search-field select{
@@ -446,6 +455,7 @@
   .calendar-clear{background:none; border:none; font-size:11.5px; letter-spacing:0.05em; color:var(--gold-deep); text-decoration:underline; cursor:pointer;}
   @media (max-width:640px){
     .search-bar, .filter-bar{flex-direction:column; align-items:stretch;}
+    .sort-field{ max-width:none; }
     .search-bar .btn{width:100%;}
     .calendar-dropdown{width:calc(100vw - 48px);}
     .calendar-months{flex-direction:column; gap:20px;}
@@ -766,7 +776,7 @@
     </div>
 
     <div class="filter-bar reveal">
-      <div class="search-field">
+      <div class="search-field sort-field">
         <label for="sortPrice">Sort by</label>
         <select id="sortPrice">
           <option value="">Recommended</option>
@@ -815,7 +825,22 @@
   </div>
 </div>
 
+<!-- ================= FULL LISTING PAGE ================= -->
+<!-- Shown instead of the homepage when this tab was opened with
+     ?listing=<id> — clicking any suite card opens exactly that in a new
+     tab (see the click handler on #suitesContainer). -->
+<section class="pad" id="listingFullView" style="display:none;">
+  <div class="wrap">
+    <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      Back to all homes
+    </a>
+    <div id="listingFullViewBody"></div>
+  </div>
+</section>
+
 <!-- ================= RESERVE ================= -->
+ ================= -->
 <section class="pad" id="reserve" style="display:none;">
   <div class="wrap reserve-grid">
     <div class="section-head reveal" style="margin-bottom:0;">
@@ -2389,6 +2414,16 @@
       isNew = ageMs >= 0 && ageMs <= NEW_LISTING_DAYS * 24 * 60 * 60 * 1000;
     }
 
+    // Short badge form of the same discount used in offerLine below — the
+    // full sentence (with the min-nights condition) still shows under the
+    // price; this is just the attention-grabbing version on the photo.
+    let discountBadge = '';
+    if(listing.discount_type === 'percentage' && listing.discount_value){
+      discountBadge = `${listing.discount_value}% OFF`;
+    } else if(listing.discount_type === 'flat' && listing.discount_value){
+      discountBadge = `₹${listing.discount_value} OFF`;
+    }
+
     // Show a handful of amenities directly on the card — enough for a guest
     // to gauge what's included at a glance, without listing all of them
     // (which could be two dozen) and crowding the card.
@@ -2448,7 +2483,10 @@
     card.innerHTML = `
       <div class="suite-photo">
         ${photoHtml}
-        ${isNew ? '<span class="suite-badge">New</span>' : ''}
+        <div class="suite-badges">
+          ${isNew ? '<span class="suite-badge">New</span>' : ''}
+          ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
+        </div>
         <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
           <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
         </button>
@@ -2458,7 +2496,6 @@
         <div class="loc">${listing.city}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
         ${distanceHtml}
         ${mapLinkHtml}
-        <p class="desc">${listing.description}</p>
         ${amenitiesHtml}
         <div class="price">${priceLine}</div>
         ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
@@ -2634,10 +2671,12 @@
   }
 
   // ---- Listing detail modal ----
-  function openListingDetail(listingId){
-    const listing = listingsById[listingId];
-    if(!listing) return;
-
+  // Shared by the full listing page (and kept for the modal, in case it's
+  // ever wired back up) — builds the photos + content HTML for one
+  // listing's detail view. Never trims the description here: that's
+  // deliberately kept off the small grid cards, but a guest who opened
+  // the full listing page asked to see everything.
+  function buildListingDetailHtml(listing){
     const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
     const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
     let allPhotos = [...interiorPhotos, ...exteriorPhotos];
@@ -2672,7 +2711,7 @@
       : 'Rate on enquiry';
     const offerLine = formatOffer(listing);
 
-    document.getElementById('listingModalBody').innerHTML = `
+    return `
       ${photosHtml}
       <div class="listing-modal-content">
         <h2>${listing.property_name}</h2>
@@ -2689,7 +2728,12 @@
         </div>
       </div>
     `;
+  }
 
+  function openListingDetail(listingId){
+    const listing = listingsById[listingId];
+    if(!listing) return;
+    document.getElementById('listingModalBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingModalOverlay').style.display = 'flex';
     document.body.style.overflow = 'hidden';
   }
@@ -2697,6 +2741,19 @@
   function closeListingDetail(){
     document.getElementById('listingModalOverlay').style.display = 'none';
     document.body.style.overflow = '';
+  }
+
+  // Full listing page — what actually opens (in a new tab) when a guest
+  // clicks a suite card. Same content as buildListingDetailHtml, just
+  // rendered into the page itself instead of an overlay, with the rest
+  // of the homepage (search, grid) hidden rather than shown alongside it.
+  function showFullListingPage(listing){
+    const catNav = document.querySelector('.category-nav');
+    if(catNav) catNav.style.display = 'none';
+    document.getElementById('suites').style.display = 'none';
+    document.getElementById('listingFullViewBody').innerHTML = buildListingDetailHtml(listing);
+    document.getElementById('listingFullView').style.display = 'block';
+    document.title = listing.property_name + ' — Aerva';
   }
 
   document.getElementById('listingModalClose').addEventListener('click', closeListingDetail);
@@ -2745,7 +2802,7 @@
     const card = e.target.closest('.suite-card');
     if(!card) return;
     e.preventDefault();
-    openListingDetail(card.dataset.listingId);
+    window.open('index.html?listing=' + encodeURIComponent(card.dataset.listingId), '_blank');
   });
 
   document.getElementById('searchBtn').addEventListener('click', performSearch);
@@ -3100,6 +3157,13 @@
     }
     applyFiltersAndRender();
     initReserveForm();
+
+    // If this tab was opened as a direct link to one listing (see the
+    // suite-card click handler), show that instead of the homepage grid.
+    const requestedListingId = new URLSearchParams(window.location.search).get('listing');
+    if(requestedListingId && listingsById[requestedListingId]){
+      showFullListingPage(listingsById[requestedListingId]);
+    }
   }
 
   initSite();
