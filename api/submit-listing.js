@@ -97,12 +97,22 @@ async function sendAdminNotification(listing) {
     ? thumbnailRow('Interior', interiorPhotos) + thumbnailRow('Exterior', exteriorPhotos)
     : '<p style="font-size:12px; opacity:0.6;">No photos attached to this submission.</p>';
 
+  const isExperienceListing = listing.listing_type === 'experience';
+  const typeLabel = isExperienceListing ? 'New experience submitted' : 'New listing submitted';
+  const priceLabel = isExperienceListing
+    ? `Price: ₹${listing.nightly_rate || 'not specified'}${listing.experience_price_unit === 'per_person' ? ' per person' : ' flat'}`
+    : `Rate: ₹${listing.nightly_rate || 'not specified'}/night`;
+  const hostingLine = isExperienceListing
+    ? `<p>Hosted at: listing #${listing.hosting_listing_id || 'not set'} · Category: ${listing.experience_category || 'not set'}</p>`
+    : '';
+
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
-      <h2 style="font-family:Georgia,serif;">New listing submitted</h2>
-      <p><strong>${listing.property_name}</strong> — ${listing.city}</p>
+      <h2 style="font-family:Georgia,serif;">${typeLabel}</h2>
+      <p><strong>${listing.property_name}</strong>${listing.city ? ' — ' + listing.city : ''}</p>
       <p>Host: ${listing.host_name} (${listing.host_email}, ${listing.host_phone})</p>
-      <p>Rate: ₹${listing.nightly_rate || 'not specified'}/night</p>
+      ${hostingLine}
+      <p>${priceLabel}</p>
       ${photoThumbnails}
       <p style="white-space:pre-wrap;">${listing.description}</p>
       <div style="margin-top:24px;">
@@ -150,14 +160,19 @@ module.exports = async (req, res) => {
 
   try {
     const {
-      listingId, isDraft,
+      listingId, isDraft, listingType,
       propertyName, city, propertyType, bedrooms, maxGuests, nightlyRate,
       description, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
       exteriorPhotoUrls, interiorPhotoUrls,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
-      securityDeposit
+      securityDeposit,
+      hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours
     } = req.body;
+    // Defaults to 'stay' for every existing caller — only the new
+    // Experience submission path sends 'experience' explicitly.
+    const safeListingType = listingType === 'experience' ? 'experience' : 'stay';
+    const isExperience = safeListingType === 'experience';
 
     // The guest's own account info is never trusted from the request body
     // — always looked up fresh from their session, same reasoning as the
@@ -189,26 +204,64 @@ module.exports = async (req, res) => {
     }
 
     // A draft only needs a name to be worth saving — everything else can
-    // come later. A real submission still needs the full set.
+    // come later. A real submission still needs the full set, though what
+    // counts as "full" differs between a stay and an experience.
     if (!propertyName) {
-      return res.status(400).json({ error: 'Please give your property a name before saving.' });
+      return res.status(400).json({ error: isExperience ? 'Please give your experience a name before saving.' : 'Please give your property a name before saving.' });
     }
+
+    // An experience always has to point at one of this host's own stay
+    // listings — that's the "hosting property" a guest sees when booking
+    // it. Checked here (not just trusted from the request) regardless of
+    // draft/real, since a bad reference shouldn't even save as a draft.
+    let hostingListing = null;
+    if (isExperience && hostingListingId) {
+      const hostingRows = await sql`SELECT id, host_id, property_name, city FROM listings WHERE id = ${hostingListingId} AND listing_type = 'stay'`;
+      hostingListing = hostingRows[0];
+      if (!hostingListing || hostingListing.host_id !== hostId) {
+        return res.status(400).json({ error: 'That hosting property could not be found among your own listings.' });
+      }
+    }
+
     if (!isDraft) {
-      if (!city || !description || !hostName || !hostPhone) {
-        console.warn('submit-listing rejected: missing required text fields');
-        return res.status(400).json({ error: 'Missing required fields' });
-      }
-      if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
-        console.warn('submit-listing rejected: no exterior photos');
-        return res.status(400).json({ error: 'At least 1 exterior photo is required' });
-      }
-      if (!Array.isArray(interiorPhotoUrls) || interiorPhotoUrls.length === 0) {
-        console.warn('submit-listing rejected: no interior photos');
-        return res.status(400).json({ error: 'At least 1 interior photo is required' });
-      }
-      if (petFriendly !== true && petFriendly !== false) {
-        console.warn('submit-listing rejected: pet policy not specified');
-        return res.status(400).json({ error: 'Please tell us whether pets are allowed at this property.' });
+      if (isExperience) {
+        if (!description || !hostName || !hostPhone) {
+          console.warn('submit-listing rejected: missing required experience text fields');
+          return res.status(400).json({ error: 'Missing required fields' });
+        }
+        if (!hostingListing) {
+          return res.status(400).json({ error: 'Please choose which of your properties hosts this experience.' });
+        }
+        if (!experienceCategory || !String(experienceCategory).trim()) {
+          return res.status(400).json({ error: 'Please choose a category for this experience.' });
+        }
+        if (experiencePriceUnit !== 'per_person' && experiencePriceUnit !== 'flat') {
+          return res.status(400).json({ error: 'Please choose how this experience is priced.' });
+        }
+        if (!nightlyRate || Number(nightlyRate) <= 0) {
+          return res.status(400).json({ error: 'Please set a price for this experience.' });
+        }
+        if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
+          console.warn('submit-listing rejected: no experience photos');
+          return res.status(400).json({ error: 'At least 1 photo is required' });
+        }
+      } else {
+        if (!city || !description || !hostName || !hostPhone) {
+          console.warn('submit-listing rejected: missing required text fields');
+          return res.status(400).json({ error: 'Missing required fields' });
+        }
+        if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
+          console.warn('submit-listing rejected: no exterior photos');
+          return res.status(400).json({ error: 'At least 1 exterior photo is required' });
+        }
+        if (!Array.isArray(interiorPhotoUrls) || interiorPhotoUrls.length === 0) {
+          console.warn('submit-listing rejected: no interior photos');
+          return res.status(400).json({ error: 'At least 1 interior photo is required' });
+        }
+        if (petFriendly !== true && petFriendly !== false) {
+          console.warn('submit-listing rejected: pet policy not specified');
+          return res.status(400).json({ error: 'Please tell us whether pets are allowed at this property.' });
+        }
       }
     }
 
@@ -245,6 +298,14 @@ module.exports = async (req, res) => {
     // it when a listing actually has one set.
     const safeSecurityDeposit = securityDeposit && Number(securityDeposit) > 0 ? Number(securityDeposit) : null;
 
+    // Experience-specific fields — only ever kept for listing_type =
+    // 'experience' rows. A 'stay' submission stores none of these, even
+    // if a tampered request included them.
+    const safeHostingListingId = isExperience && hostingListing ? hostingListing.id : null;
+    const safeExperienceCategory = isExperience && experienceCategory ? String(experienceCategory).trim().slice(0, 60) : null;
+    const safeExperiencePriceUnit = isExperience && (experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : null;
+    const safeExperienceDuration = isExperience && experienceDurationHours ? Number(experienceDurationHours) : null;
+
     let listing;
     if (existingDraft) {
       const updated = await sql`
@@ -259,6 +320,9 @@ module.exports = async (req, res) => {
           pet_friendly = ${safePetFriendly}, max_pets_allowed = ${safeMaxPets},
           allowed_pet_types = ${JSON.stringify(safePetTypes)}, pet_fee = ${safePetFee},
           security_deposit = ${safeSecurityDeposit},
+          listing_type = ${safeListingType}, hosting_listing_id = ${safeHostingListingId},
+          experience_category = ${safeExperienceCategory}, experience_price_unit = ${safeExperiencePriceUnit},
+          experience_duration_hours = ${safeExperienceDuration},
           status = ${newStatus}
         WHERE id = ${listingId}
         RETURNING *
@@ -271,7 +335,9 @@ module.exports = async (req, res) => {
           description, amenities, services, host_name, host_email, host_phone, host_id,
           discount_type, discount_value, discount_min_nights, discount_description,
           commission_rate, exterior_photo_urls, interior_photo_urls,
-          pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit, status
+          pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
+          listing_type, hosting_listing_id, experience_category, experience_price_unit,
+          experience_duration_hours, status
         ) VALUES (
           ${propertyName}, ${city || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
@@ -280,7 +346,9 @@ module.exports = async (req, res) => {
           ${discountType || null}, ${discountValue ? Number(discountValue) : null},
           ${discountMinNights ? Number(discountMinNights) : null}, ${discountDescription || null},
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
-          ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit}, ${newStatus}
+          ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit},
+          ${safeListingType}, ${safeHostingListingId}, ${safeExperienceCategory}, ${safeExperiencePriceUnit},
+          ${safeExperienceDuration}, ${newStatus}
         )
         RETURNING *
       `;

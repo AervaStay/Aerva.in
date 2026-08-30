@@ -29,6 +29,13 @@
 //                              (saved via the POST mode on
 //                              get-pending-listings.js), or an empty list
 //                              if none are set yet.
+//   ?experiences=1          — another standalone mode: returns every
+//                              approved Aerva Experience (listing_type =
+//                              'experience'), each joined with a summary
+//                              of the property that hosts it. The default
+//                              (no special param) query only ever returns
+//                              listing_type = 'stay' rows now — experiences
+//                              never appear in the regular Suites results.
 //
 // max_guests is stored as free text (e.g. "4" going forward, but older
 // listings may still have range strings like "3–4" or "9+" from before
@@ -121,6 +128,32 @@ module.exports = async (req, res) => {
       }
     }
 
+    // ---- Aerva Experience browsing ----
+    // Public, read-only, same pattern as everything else here. Returns
+    // every approved experience along with a summary of the property that
+    // hosts it — city/photo/whether it has its own bookable stay — so the
+    // frontend can show "Hosted at X" and, if that property is itself an
+    // approved stay listing, offer the "also book your stay here"
+    // cross-sell without a second round trip.
+    if (req.query.experiences === '1') {
+      const experiences = await sql`
+        SELECT
+          e.id, e.property_name, e.description, e.experience_category,
+          e.nightly_rate AS price, e.experience_price_unit, e.experience_duration_hours,
+          e.exterior_photo_urls, e.interior_photo_urls, e.cover_photo_url,
+          e.host_name, e.created_at,
+          e.hosting_listing_id,
+          h.property_name AS hosting_property_name, h.city AS hosting_city,
+          h.nightly_rate AS hosting_nightly_rate, h.cover_photo_url AS hosting_cover_photo_url,
+          h.status AS hosting_status
+        FROM listings e
+        LEFT JOIN listings h ON h.id = e.hosting_listing_id
+        WHERE e.status = 'approved' AND e.listing_type = 'experience'
+        ORDER BY e.created_at DESC
+      `;
+      return res.status(200).json({ experiences });
+    }
+
     const cityRaw = typeof req.query.city === 'string' ? req.query.city.trim() : '';
     const guestsRaw = typeof req.query.guests === 'string' ? req.query.guests.trim() : '';
     const arrivalRaw = typeof req.query.arrival === 'string' ? req.query.arrival.trim() : '';
@@ -163,7 +196,7 @@ module.exports = async (req, res) => {
         pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
         created_at
       FROM listings
-      WHERE status = 'approved'
+      WHERE status = 'approved' AND listing_type = 'stay'
         AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter})
         AND (
           ${arrivalFilter}::date IS NULL OR NOT EXISTS (

@@ -4,10 +4,14 @@
 // re-computes that signature server-side and checks it matches what the browser sent.
 // Never trust a "payment succeeded" message from the browser alone.
 //
-// Once verified, this also writes one row per stay into the `orders` table —
-// pulling the trusted stay/email/guest details back from Razorpay's own order
-// record (via order.notes), not from anything the browser sends here, so a
-// tampered request can't fake what got booked or at what price.
+// Once verified, this also writes one row per stay AND one row per
+// Aerva Experience booking into the `orders` table (order_type = 'stay'
+// or 'experience') — pulling the trusted stay/experience/email/guest
+// details back from Razorpay's own order record (via order.notes), not
+// from anything the browser sends here, so a tampered request can't fake
+// what got booked or at what price. An experience row reuses the same
+// columns a stay does (arrival = departure = the experience's date,
+// nights = 1) rather than needing its own table.
 //
 // Security deposit lifecycle (see orders.deposit_status):
 //   'held'     — set here, the moment payment is confirmed, if the stay's
@@ -80,6 +84,7 @@ module.exports = async (req, res) => {
       const guestIdRaw = order.notes?.guestId;
       const guestId = guestIdRaw ? parseInt(guestIdRaw, 10) : null;
       const stays = order.notes?.stays ? JSON.parse(order.notes.stays) : [];
+      const experiences = order.notes?.experiences ? JSON.parse(order.notes.experiences) : [];
 
       const totalSubtotalAllStays = stays.reduce((sum, s) => sum + s.subtotal, 0);
       const totalGuestFeeAllStays = stays.reduce((sum, s) => sum + (Number(s.guestServiceFee) || 0), 0);
@@ -87,16 +92,21 @@ module.exports = async (req, res) => {
       // now includes it too (see create-order.js), and without this the
       // whole deposit would get miscounted as GST below.
       const totalDepositAllStays = stays.reduce((sum, s) => sum + (Number(s.depositAmount) || 0), 0);
+      const totalExperienceSubtotal = experiences.reduce((sum, e) => sum + (Number(e.subtotal) || 0), 0);
+      const totalExperienceGuestFee = experiences.reduce((sum, e) => sum + (Number(e.guestServiceFee) || 0), 0);
+
+      // GST (currently 0%, see create-order.js) is shared proportionally
+      // across EVERYTHING in the order — stays and experiences together —
+      // by each item's slice of the combined subtotal. Computed once here
+      // rather than separately per type, so a mixed stay+experience order
+      // splits it consistently.
+      const grandSubtotalAll = totalSubtotalAllStays + totalExperienceSubtotal;
+      const gstPool = order.amount / 100 - grandSubtotalAll - totalGuestFeeAllStays - totalExperienceGuestFee - totalDepositAllStays;
 
       for (const stay of stays) {
         const guestServiceFee = Number(stay.guestServiceFee) || 0;
         const depositAmount = Number(stay.depositAmount) || 0;
-        // GST share, with the guest fee and deposit subtracted out first —
-        // otherwise either would get miscounted as part of GST, since all
-        // three are now folded into order.amount alongside the room/amenity
-        // subtotals.
-        const gstShare = Math.round((stay.subtotal / totalSubtotalAllStays) *
-          (order.amount / 100 - totalSubtotalAllStays - totalGuestFeeAllStays - totalDepositAllStays));
+        const gstShare = grandSubtotalAll > 0 ? Math.round((stay.subtotal / grandSubtotalAll) * gstPool) : 0;
 
         // This is the amount commission/payout are based on — deliberately
         // EXCLUDING guestServiceFee and depositAmount, since neither is
@@ -140,13 +150,13 @@ module.exports = async (req, res) => {
             subtotal, discount_amount, gst, guest_service_fee, total,
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
-            razorpay_order_id, razorpay_payment_id, status
+            razorpay_order_id, razorpay_payment_id, status, order_type
           ) VALUES (
             ${stay.suite}, ${stay.listingId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             ${depositAmount}, ${depositStatus}, ${depositReleaseAt},
-            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid'
+            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay'
           )
           RETURNING id
         `;
@@ -163,6 +173,37 @@ module.exports = async (req, res) => {
             VALUES (${newOrderId}, ${a.id || null}, ${a.name}, ${a.pricePerNight}, ${JSON.stringify(a.dates)}, ${a.total})
           `;
         }
+      }
+
+      // Experience bookings — much simpler than stays: no discount, no
+      // extra-guest charge, no deposit, one "night" standing in for the
+      // single day of the experience (arrival = departure = that date),
+      // so every existing query reading arrival/departure/nights keeps
+      // working without special-casing order_type = 'experience' rows.
+      for (const ex of experiences) {
+        const guestServiceFee = Number(ex.guestServiceFee) || 0;
+        const gstShare = grandSubtotalAll > 0 ? Math.round((ex.subtotal / grandSubtotalAll) * gstPool) : 0;
+        const hostRelevantTotal = ex.subtotal + gstShare;
+        const total = hostRelevantTotal + guestServiceFee;
+        const commissionAmount = Number(ex.commissionAmount) || 0;
+        const effectiveRate = ex.commissionRate != null ? Number(ex.commissionRate) : FALLBACK_COMMISSION_RATE;
+        const payoutAmount = hostRelevantTotal - commissionAmount;
+
+        await sql`
+          INSERT INTO orders (
+            suite_name, listing_id, guest_id, guest_email, arrival, departure, guests, nights,
+            subtotal, discount_amount, gst, guest_service_fee, total,
+            commission_rate, commission_amount, payout_amount,
+            deposit_amount, deposit_status, deposit_release_at,
+            razorpay_order_id, razorpay_payment_id, status, order_type
+          ) VALUES (
+            ${ex.suite}, ${ex.listingId || null}, ${guestId}, ${email}, ${ex.date}, ${ex.date}, ${ex.guests}, 1,
+            ${ex.subtotal}, 0, ${gstShare}, ${guestServiceFee}, ${total},
+            ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
+            0, 'none', null,
+            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'experience'
+          )
+        `;
       }
     } catch (dbErr) {
       // A booking that's paid-for but not logged to `orders` is recoverable

@@ -206,15 +206,19 @@ module.exports = async (req, res) => {
 
   try {
     const listings = await sql`
-      SELECT id, property_name, city, property_type, bedrooms, max_guests,
-             nightly_rate, description, amenities, services,
-             host_name, host_email, host_phone,
-             discount_type, discount_value, discount_min_nights, discount_description,
-             exterior_photo_urls, interior_photo_urls,
-             commission_rate, created_at
-      FROM listings
-      WHERE status = 'pending'
-      ORDER BY created_at ASC
+      SELECT l.id, l.property_name, l.city, l.property_type, l.bedrooms, l.max_guests,
+             l.nightly_rate, l.description, l.amenities, l.services,
+             l.host_name, l.host_email, l.host_phone,
+             l.discount_type, l.discount_value, l.discount_min_nights, l.discount_description,
+             l.exterior_photo_urls, l.interior_photo_urls,
+             l.commission_rate, l.created_at,
+             l.listing_type, l.hosting_listing_id, l.experience_category,
+             l.experience_price_unit, l.experience_duration_hours,
+             h.property_name AS hosting_property_name
+      FROM listings l
+      LEFT JOIN listings h ON h.id = l.hosting_listing_id
+      WHERE l.status = 'pending'
+      ORDER BY l.created_at ASC
     `;
     return res.status(200).json({ listings });
   } catch (err) {

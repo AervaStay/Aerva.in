@@ -47,6 +47,7 @@ const AMENITY_COMMISSION_RATE = 5; // on paid amenities
 // commission is.
 const GUEST_SERVICE_FEE_RATE = 8;
 const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
+const MAX_EXPERIENCES = 5; // same reasoning, for the experiences array
 const MAX_AMENITIES_PER_STAY = 15;
 
 function calculateNights(arrival, departure) {
@@ -178,13 +179,18 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { stays, email } = req.body;
+    const { stays, experiences, email } = req.body;
+    const safeStays = Array.isArray(stays) ? stays : [];
+    const safeExperiences = Array.isArray(experiences) ? experiences : [];
 
-    if (!email || !Array.isArray(stays) || stays.length === 0) {
+    if (!email || (safeStays.length === 0 && safeExperiences.length === 0)) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
-    if (stays.length > MAX_STAYS) {
+    if (safeStays.length > MAX_STAYS) {
       return res.status(400).json({ error: 'Too many stays in one request' });
+    }
+    if (safeExperiences.length > MAX_EXPERIENCES) {
+      return res.status(400).json({ error: 'Too many experiences in one request' });
     }
 
     const guestId = getOptionalGuestId(req);
@@ -194,10 +200,11 @@ module.exports = async (req, res) => {
     let grandGuestServiceFee = 0;
     let grandDeposit = 0;
     const stayDetails = [];
+    const experienceDetails = [];
     const seenListingIds = new Set();
 
-    for (let i = 0; i < stays.length; i++) {
-      const s = stays[i];
+    for (let i = 0; i < safeStays.length; i++) {
+      const s = safeStays[i];
       if (!s.listingId || !s.arrival || !s.departure || !s.guests) {
         return res.status(400).json({ error: `Stay ${i + 1}: missing home selection, dates, or guest count` });
       }
@@ -288,6 +295,60 @@ module.exports = async (req, res) => {
       });
     }
 
+    // Experiences price much more simply than stays: no discount, no
+    // extra-guest charge, no security deposit, no nights — just the
+    // host's set price (per person or flat) plus the same guest service
+    // fee rate everything else on Aerva charges.
+    const seenExperienceIds = new Set();
+    for (let i = 0; i < safeExperiences.length; i++) {
+      const ex = safeExperiences[i];
+      if (!ex.listingId || !ex.date) {
+        return res.status(400).json({ error: `Experience ${i + 1}: missing selection or date` });
+      }
+      if (seenExperienceIds.has(ex.listingId)) {
+        return res.status(400).json({ error: `Experience ${i + 1} repeats one already used in this request.` });
+      }
+      seenExperienceIds.add(ex.listingId);
+
+      const rows = await sql`
+        SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate
+        FROM listings
+        WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
+      `;
+      const experience = rows[0];
+      if (!experience) {
+        return res.status(400).json({ error: `Experience ${i + 1}: this experience is no longer available to book.` });
+      }
+      if (!experience.nightly_rate) {
+        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} doesn't have a price set yet.` });
+      }
+
+      const guests = Number(ex.guests) || 1;
+      if (guests < 1) {
+        return res.status(400).json({ error: `Experience ${i + 1}: invalid guest count` });
+      }
+
+      const price = Number(experience.nightly_rate);
+      const subtotal = experience.experience_price_unit === 'per_person' ? price * guests : price;
+      const commissionRate = BASE_COMMISSION_RATE;
+      const commissionAmount = Math.round(subtotal * (commissionRate / 100));
+      const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
+
+      grandSubtotal += subtotal;
+      grandGuestServiceFee += guestServiceFee;
+
+      experienceDetails.push({
+        listingId: experience.id,
+        suite: experience.property_name,
+        date: ex.date,
+        guests,
+        subtotal,
+        commissionRate,
+        commissionAmount,
+        guestServiceFee,
+      });
+    }
+
     const gst = Math.round(grandSubtotal * GST_RATE);
     const totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit;
 
@@ -298,7 +359,8 @@ module.exports = async (req, res) => {
       notes: {
         email,
         guestId: guestId || '',
-        stayCount: stays.length,
+        stayCount: safeStays.length,
+        experienceCount: safeExperiences.length,
         // Razorpay notes have a size limit we haven't hit in practice yet,
         // but amenities make this payload meaningfully bigger than before
         // — if bookings with several amenities/dates start failing here,
@@ -306,6 +368,7 @@ module.exports = async (req, res) => {
         // or storing full details in our own DB keyed by a short token
         // instead of putting everything in Razorpay's notes directly).
         stays: JSON.stringify(stayDetails).slice(0, 4000),
+        experiences: JSON.stringify(experienceDetails).slice(0, 2000),
       },
     });
 
