@@ -2502,12 +2502,34 @@
   // ---- Suites section: render from the same approved-listings data ----
   // used by the Reserve form (fetched once — see initSite() below).
 
+  // Every discount is now shown in BOTH units, regardless of which one
+  // the host actually set — converted using the minimum qualifying stay
+  // (nightly_rate × discount_min_nights, or just one night if no minimum
+  // is set) as the baseline "whole" that a flat ₹ amount is a percentage
+  // of, and vice versa. This is a real conversion, not a guess: it's the
+  // same baseline a guest would actually see once they've picked dates
+  // that qualify for the discount.
   function formatOffer(listing){
-    if(!listing.discount_type) return '';
-    if(listing.discount_description) return listing.discount_description;
-    if(listing.discount_type === 'percentage') return `${listing.discount_value}% off` + (listing.discount_min_nights ? ` stays of ${listing.discount_min_nights}+ nights` : '');
-    if(listing.discount_type === 'flat') return `₹${listing.discount_value} off` + (listing.discount_min_nights ? ` stays of ${listing.discount_min_nights}+ nights` : '');
-    return '';
+    if(!listing.discount_type || !listing.discount_value || !listing.nightly_rate) return '';
+    const rate = Number(listing.nightly_rate);
+    const value = Number(listing.discount_value);
+    const baselineNights = listing.discount_min_nights ? Number(listing.discount_min_nights) : 1;
+    const baselineTotal = rate * baselineNights;
+    if(!baselineTotal) return '';
+
+    let rupees, percent;
+    if(listing.discount_type === 'percentage'){
+      percent = value;
+      rupees = Math.round(baselineTotal * (value / 100));
+    } else if(listing.discount_type === 'flat'){
+      rupees = value;
+      percent = Math.round((value / baselineTotal) * 100);
+    } else {
+      return '';
+    }
+
+    const minNightsNote = listing.discount_min_nights ? ` on stays of ${listing.discount_min_nights}+ nights` : '';
+    return `₹${rupees.toLocaleString('en-IN')} (${percent}%) off${minNightsNote}`;
   }
 
   // Straight-line ("as the crow flies") distance in km between two
@@ -2710,11 +2732,22 @@
     // Short badge form of the same discount used in offerLine below — the
     // full sentence (with the min-nights condition) still shows under the
     // price; this is just the attention-grabbing version on the photo.
+    // Same dual-unit conversion as formatOffer(), just condensed to fit a badge.
     let discountBadge = '';
-    if(listing.discount_type === 'percentage' && listing.discount_value){
-      discountBadge = `${listing.discount_value}% OFF`;
-    } else if(listing.discount_type === 'flat' && listing.discount_value){
-      discountBadge = `₹${listing.discount_value} OFF`;
+    if(listing.discount_type && listing.discount_value && listing.nightly_rate){
+      const rate = Number(listing.nightly_rate);
+      const value = Number(listing.discount_value);
+      const baselineNights = listing.discount_min_nights ? Number(listing.discount_min_nights) : 1;
+      const baselineTotal = rate * baselineNights;
+      if(baselineTotal){
+        if(listing.discount_type === 'percentage'){
+          const rupees = Math.round(baselineTotal * (value / 100));
+          discountBadge = `${value}% (₹${rupees.toLocaleString('en-IN')}) OFF`;
+        } else if(listing.discount_type === 'flat'){
+          const percent = Math.round((value / baselineTotal) * 100);
+          discountBadge = `₹${value.toLocaleString('en-IN')} (${percent}%) OFF`;
+        }
+      }
     }
 
     // Show a handful of amenities directly on the card — enough for a guest
