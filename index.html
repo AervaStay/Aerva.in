@@ -3309,6 +3309,10 @@
             <label for="listingBookEmail">Email <span style="color:#a3402f;">*</span></label>
             <input id="listingBookEmail" type="email" placeholder="you@email.com" required>
           </div>
+          <div class="field" style="margin-top:12px;">
+            <label for="listingBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+            <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" required>
+          </div>
           <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
           <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
           <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
@@ -3694,6 +3698,18 @@
       return;
     }
 
+    // Razorpay's own checkout requires a contact number for its
+    // verification step (OTP for UPI/cards) regardless of what we send —
+    // collecting it here and prefilling it below means that step is
+    // already filled in rather than stopping the guest mid-payment to
+    // ask for it themselves.
+    const phone = document.getElementById('listingBookPhone').value.trim().replace(/\D/g, '');
+    if(!phone || phone.length < 10){
+      errorEl.textContent = 'Please enter a valid mobile number.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
     const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0 };
     const guests = counts.adults + counts.children;
     const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
@@ -3743,7 +3759,7 @@
       currency: order.currency,
       name: 'Aerva',
       description: listing.property_name,
-      prefill: { email },
+      prefill: { email, contact: phone },
       theme: { color: '#a9884f' },
       config: {
         display: {
@@ -3852,6 +3868,10 @@
             <label for="expBookEmail">Email <span style="color:#a3402f;">*</span></label>
             <input id="expBookEmail" type="email" placeholder="you@email.com" required>
           </div>
+          <div class="field" style="margin-top:12px;">
+            <label for="expBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+            <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" required>
+          </div>
           <button type="button" class="btn solid" id="expBookNowBtn" style="width:100%; margin-top:6px;">Book Experience</button>
           <p id="expBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
           <p id="expBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
@@ -3907,6 +3927,12 @@
       errorEl.style.display = 'block';
       return;
     }
+    const phone = document.getElementById('expBookPhone').value.trim().replace(/\D/g, '');
+    if(!phone || phone.length < 10){
+      errorEl.textContent = 'Please enter a valid mobile number.';
+      errorEl.style.display = 'block';
+      return;
+    }
     const guests = Number(document.getElementById('expGuestsCount').textContent) || 1;
 
     btn.disabled = true;
@@ -3951,7 +3977,7 @@
       currency: order.currency,
       name: 'Aerva',
       description: exp.property_name,
-      prefill: { email },
+      prefill: { email, contact: phone },
       theme: { color: '#a9884f' },
       config: {
         display: { sequence: ['upi', 'card', 'netbanking', 'wallet'], preferences: { show_default_blocks: true } }
