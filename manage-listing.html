@@ -146,6 +146,12 @@
         </div>
       </div>
 
+      <div class="field">
+        <label for="securityDeposit">Security Deposit (₹) <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, leave blank if you don't charge one</span></label>
+        <input id="securityDeposit" type="number" min="0" placeholder="e.g. 2000">
+        <p class="price-history-note">Charged to the guest at checkout and held by Aerva for 7 days after checkout. If you don't raise a concern in that window, it's refunded to the guest automatically.</p>
+      </div>
+
       <div class="eyebrow">Photos</div>
       <div class="field">
         <label>Exterior <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(up to 20)</span></label>
@@ -170,7 +176,6 @@
         <label class="check-item"><input type="checkbox" name="amenity" value="Parking"> Parking</label>
         <label class="check-item"><input type="checkbox" name="amenity" value="Balcony / Terrace"> Balcony / Terrace</label>
         <label class="check-item"><input type="checkbox" name="amenity" value="Garden"> Garden</label>
-        <label class="check-item"><input type="checkbox" name="amenity" value="Pet-Friendly"> Pet-Friendly</label>
         <label class="check-item"><input type="checkbox" name="amenity" value="Fireplace / Heating"> Fireplace / Heating</label>
         <label class="check-item"><input type="checkbox" name="amenity" value="TV / Smart TV"> TV / Smart TV</label>
         <label class="check-item"><input type="checkbox" name="amenity" value="Washing Machine"> Washing Machine</label>
@@ -201,6 +206,32 @@
         <label class="check-item"><input type="checkbox" name="service" value="In-house Chef"> In-house Chef</label>
         <label class="check-item"><input type="checkbox" name="service" value="Concierge / Local Guide"> Concierge / Local Guide</label>
         <label class="check-item"><input type="checkbox" name="service" value="Spa / Massage on request"> Spa / Massage on request</label>
+      </div>
+
+      <div class="eyebrow" style="margin-top:24px;">Pet Policy <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(separate from the free amenities above)</span></div>
+      <div class="field">
+        <label>Is this property pet-friendly? <span style="color:#a3402f;">*</span></label>
+        <div style="display:flex; gap:24px; margin-top:6px;">
+          <label class="check-item"><input type="radio" name="petFriendly" value="yes" id="petFriendlyYes"> Yes</label>
+          <label class="check-item"><input type="radio" name="petFriendly" value="no" id="petFriendlyNo"> No</label>
+        </div>
+      </div>
+      <div id="petPolicyDetails" style="display:none;">
+        <div class="field">
+          <label for="maxPetsAllowed">Maximum Pets Allowed Per Stay</label>
+          <input id="maxPetsAllowed" type="number" min="1" max="10" placeholder="e.g. 2">
+        </div>
+        <div class="field">
+          <label>Pet Types Allowed</label>
+          <div class="check-grid">
+            <label class="check-item"><input type="checkbox" name="petType" value="Dog"> Dogs</label>
+            <label class="check-item"><input type="checkbox" name="petType" value="Cat"> Cats</label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="petFee">Pet Fee (₹ per stay) <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if free</span></label>
+          <input id="petFee" type="number" min="0" placeholder="e.g. 500">
+        </div>
       </div>
 
       <div class="eyebrow" style="margin-top:24px;">Paid Amenities <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(guests pay extra to add these at checkout)</span></div>
@@ -250,6 +281,25 @@
     });
   };
   const MAX_LISTING_PHOTOS = 20;
+
+  // Pet policy detail fields only make sense once "Yes" is picked —
+  // hidden otherwise, and cleared if switched back to "No" so a stray
+  // value can't get saved alongside a "not pet-friendly" listing.
+  const petPolicyDetails = document.getElementById('petPolicyDetails');
+  const petFriendlyYes = document.getElementById('petFriendlyYes');
+  const petFriendlyNo = document.getElementById('petFriendlyNo');
+  function togglePetPolicyDetails(){
+    const showDetails = petFriendlyYes.checked;
+    petPolicyDetails.style.display = showDetails ? 'block' : 'none';
+    if(!showDetails){
+      document.getElementById('maxPetsAllowed').value = '';
+      document.getElementById('petFee').value = '';
+      petPolicyDetails.querySelectorAll('input[name="petType"]').forEach(cb => { cb.checked = false; });
+    }
+  }
+  petFriendlyYes.addEventListener('change', togglePetPolicyDetails);
+  petFriendlyNo.addEventListener('change', togglePetPolicyDetails);
+
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
 
@@ -503,6 +553,21 @@
         cb.checked = currentServices.includes(cb.value);
       });
 
+      document.getElementById('securityDeposit').value = l.security_deposit || '';
+
+      if(l.pet_friendly === true){
+        petFriendlyYes.checked = true;
+        document.getElementById('maxPetsAllowed').value = l.max_pets_allowed || '';
+        document.getElementById('petFee').value = l.pet_fee || '';
+        const allowedTypes = Array.isArray(l.allowed_pet_types) ? l.allowed_pet_types : [];
+        document.querySelectorAll('input[name="petType"]').forEach(cb => {
+          cb.checked = allowedTypes.includes(cb.value);
+        });
+        togglePetPolicyDetails();
+      } else if(l.pet_friendly === false){
+        petFriendlyNo.checked = true;
+      }
+
       coverPhotoKey = l.cover_photo_url || null;
       exteriorManager.setExisting(l.exterior_photo_urls);
       interiorManager.setExisting(l.interior_photo_urls);
@@ -558,7 +623,12 @@
           coverPhotoUrl: coverPhotoKey,
           amenities: Array.from(document.querySelectorAll('input[name="amenity"]:checked')).map(cb => cb.value),
           services: Array.from(document.querySelectorAll('input[name="service"]:checked')).map(cb => cb.value),
-          paidAmenities: paidAmenityRows
+          paidAmenities: paidAmenityRows,
+          securityDeposit: document.getElementById('securityDeposit').value,
+          petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
+          maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
+          allowedPetTypes: petFriendlyYes.checked ? Array.from(document.querySelectorAll('input[name="petType"]:checked')).map(cb => cb.value) : [],
+          petFee: petFriendlyYes.checked ? document.getElementById('petFee').value : ''
         })
       });
       const data = await res.json();
