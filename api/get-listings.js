@@ -1,4 +1,5 @@
 // /api/get-listings.js
+   // redeploy trigger
 // Returns APPROVED listings as JSON — read-only, safe to call publicly;
 // never exposes pending/rejected submissions, host contact details beyond
 // what's guest-facing, or commission_rate.
