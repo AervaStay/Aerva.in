@@ -512,6 +512,30 @@
   }
   .more-filters-dropdown.open{display:flex;}
   .more-filters-dropdown .search-field{min-width:0;}
+  .currency-picker-wrap{position:relative;}
+  .currency-trigger{
+    background:none; border:1px solid var(--line-dark); border-radius:999px; padding:6px 12px;
+    font-size:11.5px; letter-spacing:0.05em; color:var(--ink); cursor:pointer; font-family:'Jost', sans-serif;
+    transition:border-color .2s ease;
+  }
+  .currency-trigger:hover{border-color:var(--gold-deep);}
+  .currency-dropdown{
+    display:none; position:absolute; top:calc(100% + 8px); right:0; z-index:50;
+    background-color:#f4ebe3; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
+    padding:6px; width:180px; flex-direction:column;
+  }
+  .currency-dropdown.open{display:flex;}
+  .currency-option{
+    background:none; border:none; text-align:left; padding:9px 12px; font-size:13.5px;
+    font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer; border-radius:3px; display:flex; justify-content:space-between;
+  }
+  .currency-option:hover{background-color:#ebdecd;}
+  .currency-option.selected{background:var(--ink); color:var(--cream);}
+  @media (max-width:640px){
+    .guests-dropdown{width:100%;}
+    .more-filters-dropdown{width:100%;}
+    .currency-dropdown{width:100%; left:0; right:auto;}
+  }
   @media (max-width:640px){
     .guests-dropdown{width:100%;}
     .more-filters-dropdown{width:100%;}
@@ -717,6 +741,10 @@
     </a>
     <div class="nav-links">
       <a href="#location">Location</a>
+      <div class="currency-picker-wrap">
+        <button type="button" class="currency-trigger" id="currencyTriggerBtn" aria-label="Change display currency">INR</button>
+        <div class="currency-dropdown" id="currencyDropdown"></div>
+      </div>
       <a href="guest-login.html" id="guestLoginLink">Log In</a>
       <span id="guestAccountBox" style="display:none; align-items:center; gap:14px;">
         <span id="guestNameDisplay" style="font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
@@ -731,6 +759,10 @@
 <div class="mobile-nav-scrim" id="mobileNavScrim"></div>
 <nav class="mobile-nav-panel" id="mobileNavPanel" aria-label="Mobile navigation">
   <a href="#location">Location</a>
+  <div class="currency-picker-wrap">
+    <button type="button" class="currency-trigger" id="currencyTriggerBtnMobile" aria-label="Change display currency">INR</button>
+    <div class="currency-dropdown" id="currencyDropdownMobile"></div>
+  </div>
   <a href="guest-login.html" id="guestLoginLinkMobile">Log In</a>
   <span id="guestAccountBoxMobile" style="display:none; flex-direction:column; gap:18px;">
     <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
@@ -1361,6 +1393,116 @@
   let currentBookingTotal = 0;
 
   const fmt = (n) => '₹' + n.toLocaleString('en-IN');
+
+  // ---- Guest-facing currency display ----
+  // Important distinction: this only changes what price GUESTS SEE while
+  // browsing. The actual charge always happens in INR through Razorpay —
+  // switching real settlement currency is an account-level decision on
+  // Razorpay's side, not something this code can change. Every booking
+  // confirmation still states the real INR amount explicitly (see
+  // handleListingBookNow/handleExperienceBookNow) so nobody is surprised
+  // by what Razorpay's own checkout shows.
+  const SUPPORTED_CURRENCIES = {
+    INR: { symbol: '₹', locale: 'en-IN' },
+    USD: { symbol: '$', locale: 'en-US' },
+    GBP: { symbol: '£', locale: 'en-GB' },
+    EUR: { symbol: '€', locale: 'de-DE' },
+    AUD: { symbol: 'A$', locale: 'en-AU' },
+    CAD: { symbol: 'C$', locale: 'en-CA' },
+  };
+  // Maps a detected country code to a sensible default currency — only
+  // ever used as a starting guess, never overrides an explicit choice.
+  const COUNTRY_TO_CURRENCY = {
+    GB: 'GBP', US: 'USD', IN: 'INR', AU: 'AUD', CA: 'CAD',
+    DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR', PT: 'EUR',
+  };
+  const CURRENCY_STORAGE_KEY = 'aerva_currency';
+
+  let currentCurrency = 'INR';
+  let currencyRates = { INR: 1 }; // filled in by fetchCurrencyRates(); 1 until then, so prices just show INR
+
+  async function fetchCurrencyRates(){
+    try {
+      const res = await fetch('https://open.er-api.com/v6/latest/INR');
+      if(!res.ok) throw new Error('rate fetch failed');
+      const data = await res.json();
+      if(data && data.rates) currencyRates = data.rates;
+    } catch(err){
+      // No live rates — every conversion below just falls back to INR
+      // (rate 1) rather than showing a wrong number, since guessing an
+      // exchange rate would be worse than not converting at all.
+      console.error('Could not fetch currency rates, showing INR:', err);
+    }
+  }
+
+  async function detectCurrencyFromLocation(){
+    try {
+      const res = await fetch('https://ipapi.co/json/');
+      if(!res.ok) throw new Error('geolocation lookup failed');
+      const data = await res.json();
+      const code = data && data.country_code ? COUNTRY_TO_CURRENCY[data.country_code] : null;
+      return code || 'INR';
+    } catch(err){
+      console.error('Could not detect location for currency default:', err);
+      return 'INR';
+    }
+  }
+
+  async function initCurrency(){
+    // Priority: explicit choice (this browser) > logged-in account's
+    // saved preference (applied later once login state is known, see
+    // checkGuestSession) > detected location > INR.
+    const stored = localStorage.getItem(CURRENCY_STORAGE_KEY);
+    if(stored && SUPPORTED_CURRENCIES[stored]){
+      currentCurrency = stored;
+    } else {
+      currentCurrency = await detectCurrencyFromLocation();
+    }
+    await fetchCurrencyRates();
+    updateCurrencyTriggerLabel();
+    applyCurrencyToPage();
+  }
+
+  function setCurrency(code, persistToAccount){
+    if(!SUPPORTED_CURRENCIES[code]) return;
+    currentCurrency = code;
+    localStorage.setItem(CURRENCY_STORAGE_KEY, code);
+    updateCurrencyTriggerLabel();
+    applyCurrencyToPage();
+    if(persistToAccount && hostSessionToken){
+      fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+        body: JSON.stringify({ preferredCurrency: code })
+      }).catch(err => console.error('Could not save currency preference:', err));
+    }
+  }
+
+  // Converts a real INR amount into the guest's chosen display currency
+  // and formats it with the right symbol — this is what every
+  // guest-facing price on the site should route through instead of fmt().
+  function fmtGuest(amountInInr){
+    const rate = currencyRates[currentCurrency] || 1;
+    const converted = amountInInr * rate;
+    const info = SUPPORTED_CURRENCIES[currentCurrency] || SUPPORTED_CURRENCIES.INR;
+    const decimals = currentCurrency === 'INR' ? 0 : 2;
+    return info.symbol + converted.toLocaleString(info.locale, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  }
+
+  // Re-renders whatever's currently on screen so a currency switch takes
+  // effect immediately, without a full page reload.
+  function applyCurrencyToPage(){
+    if(typeof applyFiltersAndRender === 'function' && document.getElementById('suitesContainer')) applyFiltersAndRender();
+    if(typeof renderExperienceCards === 'function' && experiencesLoaded) renderExperienceCards();
+  }
+
+  function updateCurrencyTriggerLabel(){
+    const btn = document.getElementById('currencyTriggerBtn');
+    if(btn) btn.textContent = currentCurrency;
+    const btnMobile = document.getElementById('currencyTriggerBtnMobile');
+    if(btnMobile) btnMobile.textContent = currentCurrency;
+  }
+
   // Arrival must be at least tomorrow — no same-day bookings. Departure's
   // own absolute floor (before any arrival is picked) is one day further
   // still, since it always has to land after whatever arrival ends up being.
@@ -2537,7 +2679,7 @@
     }
 
     const minNightsNote = listing.discount_min_nights ? ` on stays of ${listing.discount_min_nights}+ nights` : '';
-    return `₹${rupees.toLocaleString('en-IN')} (${percent}%) off${minNightsNote}`;
+    return `${fmtGuest(rupees)} (${percent}%) off${minNightsNote}`;
   }
 
   // Straight-line ("as the crow flies") distance in km between two
@@ -2695,7 +2837,7 @@
       : `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
 
     const priceLine = exp.price
-      ? `${fmt(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' <span style="font-size:12px; opacity:0.65;">/ person</span>' : ' <span style="font-size:12px; opacity:0.65;">/ group</span>'}`
+      ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' <span style="font-size:12px; opacity:0.65;">/ person</span>' : ' <span style="font-size:12px; opacity:0.65;">/ group</span>'}`
       : 'Price on enquiry';
     const hostedAtLine = exp.hosting_property_name
       ? `Hosted at ${exp.hosting_property_name}${exp.hosting_city ? ', ' + exp.hosting_city : ''}`
@@ -2725,7 +2867,7 @@
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
     const priceLine = listing.nightly_rate
-      ? `From <strong>₹${Number(listing.nightly_rate).toLocaleString('en-IN')}</strong>/night`
+      ? `From <strong>${fmtGuest(Number(listing.nightly_rate))}</strong>/night`
       : 'Rate on enquiry';
 
     // "New" badge — driven entirely by the listing's real created_at date,
@@ -2750,10 +2892,10 @@
       if(baselineTotal){
         if(listing.discount_type === 'percentage'){
           const rupees = Math.round(baselineTotal * (value / 100));
-          discountBadge = `${value}% (₹${rupees.toLocaleString('en-IN')}) OFF`;
+          discountBadge = `${value}% (${fmtGuest(rupees)}) OFF`;
         } else if(listing.discount_type === 'flat'){
           const percent = Math.round((value / baselineTotal) * 100);
-          discountBadge = `₹${value.toLocaleString('en-IN')} (${percent}%) OFF`;
+          discountBadge = `${fmtGuest(value)} (${percent}%) OFF`;
         }
       }
     }
@@ -3495,22 +3637,31 @@
     const total = staySubtotal + guestServiceFee;
 
     const rows = [];
-    rows.push(`<div class="sum-row"><span>${fmt(rate)} × ${nights} night${nights === 1 ? '' : 's'}</span><span>${fmt(roomTotal)}</span></div>`);
-    if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmt(extraTotal)}</span></div>`);
-    if(discountAmount > 0) rows.push(`<div class="sum-row"><span>Offer applied</span><span>−${fmt(discountAmount)}</span></div>`);
-    if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee</span><span>${fmt(petFeeAmount)}</span></div>`);
-    if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmt(amenityTotal)}</span></div>`);
-    rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmt(guestServiceFee)}</span></div>`);
+    rows.push(`<div class="sum-row"><span>${fmtGuest(rate)} × ${nights} night${nights === 1 ? '' : 's'}</span><span>${fmtGuest(roomTotal)}</span></div>`);
+    if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmtGuest(extraTotal)}</span></div>`);
+    if(discountAmount > 0) rows.push(`<div class="sum-row"><span>Offer applied</span><span>−${fmtGuest(discountAmount)}</span></div>`);
+    if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
+    if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmtGuest(amenityTotal)}</span></div>`);
+    rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
-      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (held 7 days)</span><span>${fmt(Number(listing.security_deposit))}</span></div>`);
+      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (held 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
     }
+
+    const grandTotalInr = total + (listing.security_deposit ? Number(listing.security_deposit) : 0);
+    // Payment always actually happens in INR (see the note on fmtGuest) —
+    // when showing a converted currency, say so explicitly right here,
+    // not just at the final payment button, so there's no surprise later.
+    const inrNote = currentCurrency !== 'INR'
+      ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ${fmt(grandTotalInr)} (Indian Rupees) — shown in ${currentCurrency} at today's rate.</p>`
+      : '';
 
     summaryEl.innerHTML = `
       <div class="listing-modal-section-title">Price Summary</div>
       ${rows.join('')}
       <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);">
-        <span>Total</span><span>${fmt(total + (listing.security_deposit ? Number(listing.security_deposit) : 0))}</span>
+        <span>Total</span><span>${fmtGuest(grandTotalInr)}</span>
       </div>
+      ${inrNote}
       <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">This is a live estimate for these dates and guests — the exact amount is confirmed at checkout.</p>
     `;
     summaryEl.style.display = 'block';
@@ -3648,7 +3799,7 @@
       : '';
 
     const priceLine = exp.price
-      ? `${fmt(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
+      ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
       : 'Price on enquiry';
     const durationLine = exp.experience_duration_hours ? `${exp.experience_duration_hours} hour${Number(exp.experience_duration_hours) === 1 ? '' : 's'}` : '';
 
@@ -3665,7 +3816,7 @@
           <h3>${exp.hosting_property_name}</h3>
           <div class="loc">${exp.hosting_city || ''}</div>
           ${hostingIsBookable ? `
-            <div class="price">${fmt(Number(exp.hosting_nightly_rate))}/night</div>
+            <div class="price">${fmtGuest(Number(exp.hosting_nightly_rate))}/night</div>
             <p style="font-size:12.5px; color:var(--gold-deep); margin-top:8px;">Also staying here? Tap to view availability and book your stay alongside this experience — opens in a new tab, booked separately from the experience itself.</p>
           ` : `<p style="font-size:12.5px; opacity:0.6; margin-top:8px;">This property isn't currently bookable as a stay.</p>`}
         </div>
@@ -3724,11 +3875,15 @@
     const subtotal = exp.experience_price_unit === 'per_person' ? price * guests : price;
     const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
     const total = subtotal + guestServiceFee;
+    const inrNote = currentCurrency !== 'INR'
+      ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ${fmt(total)} (Indian Rupees) — shown in ${currentCurrency} at today's rate.</p>`
+      : '';
     summaryEl.innerHTML = `
       <div class="listing-modal-section-title">Price Summary</div>
-      <div class="sum-row"><span>${exp.experience_price_unit === 'per_person' ? fmt(price) + ' × ' + guests + ' guest' + (guests === 1 ? '' : 's') : 'Flat price'}</span><span>${fmt(subtotal)}</span></div>
-      <div class="sum-row"><span>Guest service fee</span><span>${fmt(guestServiceFee)}</span></div>
-      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmt(total)}</span></div>
+      <div class="sum-row"><span>${exp.experience_price_unit === 'per_person' ? fmtGuest(price) + ' × ' + guests + ' guest' + (guests === 1 ? '' : 's') : 'Flat price'}</span><span>${fmtGuest(subtotal)}</span></div>
+      <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
+      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
+      ${inrNote}
     `;
     summaryEl.style.display = 'block';
   }
@@ -4501,6 +4656,53 @@
     }
   }
 
+  // ---- Currency picker: builds both the desktop and mobile dropdowns
+  // from SUPPORTED_CURRENCIES, so they can never drift out of sync with
+  // each other. ----
+  (function initCurrencyPicker(){
+    const pairs = [
+      { trigger: document.getElementById('currencyTriggerBtn'), dropdown: document.getElementById('currencyDropdown') },
+      { trigger: document.getElementById('currencyTriggerBtnMobile'), dropdown: document.getElementById('currencyDropdownMobile') },
+    ];
+
+    function renderOptions(dropdown){
+      dropdown.innerHTML = Object.keys(SUPPORTED_CURRENCIES).map(code => `
+        <button type="button" class="currency-option${code === currentCurrency ? ' selected' : ''}" data-currency="${code}">
+          <span>${code}</span><span>${SUPPORTED_CURRENCIES[code].symbol}</span>
+        </button>
+      `).join('');
+      dropdown.querySelectorAll('.currency-option').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          setCurrency(btn.dataset.currency, true);
+          pairs.forEach(p => p.dropdown.classList.remove('open'));
+        });
+      });
+    }
+
+    pairs.forEach(({ trigger, dropdown }) => {
+      if(!trigger || !dropdown) return;
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = dropdown.classList.contains('open');
+        pairs.forEach(p => p.dropdown.classList.remove('open'));
+        if(!isOpen){
+          renderOptions(dropdown);
+          dropdown.classList.add('open');
+        }
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      pairs.forEach(({ trigger, dropdown }) => {
+        if(dropdown && !dropdown.contains(e.target) && e.target !== trigger){
+          dropdown.classList.remove('open');
+        }
+      });
+    });
+  })();
+
+  initCurrency();
   initSite();
 
   // ---- Mobile nav toggle ----
@@ -4583,6 +4785,24 @@
           if(data.guest.accountType === 'guest_host'){
             myListingsLink.style.display = 'inline';
             if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
+          }
+          // Resume a saved currency choice from another device — only
+          // when THIS browser has no explicit choice of its own yet, so
+          // it never overrides something the guest just picked here.
+          if(!localStorage.getItem(CURRENCY_STORAGE_KEY)){
+            try{
+              const profileRes = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+                headers: { 'Authorization': 'Bearer ' + token }
+              });
+              if(profileRes.ok){
+                const profileData = await profileRes.json();
+                if(profileData.guest && profileData.guest.preferredCurrency){
+                  setCurrency(profileData.guest.preferredCurrency, false);
+                }
+              }
+            } catch(err){
+              // Not critical — the location-detected/default currency stays.
+            }
           }
         } else {
           // Token expired or invalid — quietly fall back to showing
