@@ -147,7 +147,10 @@
     return `<span class="status-badge status-${status}">${status}</span>`;
   }
 
+  let currentListings = [];
+
   function renderListings(listings){
+    currentListings = listings;
     const container = document.getElementById('listingsContainer');
     if(!listings.length){
       container.innerHTML = '<p class="empty">You haven\'t listed a property yet.</p>';
@@ -166,6 +169,11 @@
       const actionLink = l.status === 'draft'
         ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Continue Editing</a>`
         : `<a class="manage-link" href="${l.manageLink}">Manage Price & Offers</a>`;
+      // Clone only makes sense for stay listings right now — there's no
+      // Experience submission form yet for a cloned experience to land in.
+      const cloneLink = (!l.listing_type || l.listing_type === 'stay')
+        ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${l.id})">Clone</button>`
+        : '';
       return `
         <div class="listing-card" data-href="${actionHref}" style="cursor:pointer;">
           ${thumbHtml}
@@ -173,10 +181,28 @@
             <h3>${l.property_name || '(Untitled draft)'}</h3>
             <div class="listing-meta">${l.city || 'No city yet'} · ₹${l.nightly_rate || '—'}/night ${statusBadgeHtml(l.status)}</div>
           </div>
-          ${actionLink}
+          <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
+            ${actionLink}
+            ${cloneLink}
+          </div>
         </div>
       `;
     }).join('');
+  }
+
+  // Hands the listing's data to the Add Listing form via localStorage
+  // (one-time, cleared as soon as it's read) rather than a new backend
+  // call — host-dashboard.html already has this exact data loaded from
+  // host-listings.js, no need to fetch it again. Submits as a genuinely
+  // NEW listing, not an edit — see index.html's clone-handling for why
+  // property_name is deliberately left blank rather than copied, so two
+  // configurations of the same property (e.g. "3BHK" vs "2BHK") don't
+  // launch with an identical, confusing name.
+  function cloneListing(listingId){
+    const listing = currentListings.find(l => l.id === listingId);
+    if(!listing) return;
+    localStorage.setItem('aerva_clone_listing', JSON.stringify(listing));
+    window.location.href = 'index.html?view=list-property&clone=1';
   }
 
   // Shows only what's relevant to the host: what the guest paid for the
@@ -234,6 +260,37 @@
         `;
       }
 
+      // Cancellation — only offered while the booking is still 'paid'
+      // (not already cancelled) and check-in is more than 48 hours away.
+      // Same two checks the backend enforces, so a host never sees a
+      // button that would just fail when clicked.
+      const CANCELLATION_CUTOFF_HOURS = 48;
+      const hoursUntilArrival = (new Date(b.arrival + 'T00:00:00Z').getTime() - Date.now()) / (1000 * 60 * 60);
+      const canCancel = b.status === 'paid' && hoursUntilArrival >= CANCELLATION_CUTOFF_HOURS;
+      let cancellationHtml = '';
+      if(b.status === 'cancelled'){
+        cancellationHtml = `
+          <div class="deposit-row">
+            <span class="deposit-status-badge deposit-status-rejected">Cancelled</span>
+            ${b.cancellation_reason ? `<div class="dispute-reason-shown">Reason: "${b.cancellation_reason}"</div>` : ''}
+          </div>
+        `;
+      } else if(canCancel){
+        cancellationHtml = `
+          <div class="deposit-row">
+            <button type="button" class="dispute-btn" onclick="toggleCancelForm(${b.id})">Cancel This Booking</button>
+            <div class="dispute-form" id="cancelForm-${b.id}">
+              <p style="font-size:12.5px; opacity:0.7; margin-bottom:8px;">This refunds the guest in full and cannot be undone. Only available more than 48 hours before check-in.</p>
+              <textarea id="cancelReason-${b.id}" rows="3" placeholder="Why are you cancelling this booking?"></textarea>
+              <button type="button" class="btn-small" onclick="submitCancellation(${b.id})">Confirm Cancellation</button>
+              <p class="verify-error" id="cancelError-${b.id}"></p>
+            </div>
+          </div>
+        `;
+      } else if(b.status === 'paid'){
+        cancellationHtml = `<div class="deposit-row"><p style="font-size:12px; opacity:0.55;">This stay checks in within 48 hours — no longer cancellable from here. Contact hello@aerva.in if urgent.</p></div>`;
+      }
+
       return `
         <div class="booking-row">
           <div class="booking-top">
@@ -247,6 +304,7 @@
             <div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(b.payout_amount)}</span></div>
           </div>
           ${depositHtml}
+          ${cancellationHtml}
         </div>
       `;
     }).join('');
@@ -282,6 +340,43 @@
       }
     } catch(err){
       errorEl.textContent = 'Could not submit your concern. Please try again.';
+      errorEl.style.display = 'block';
+    }
+  }
+
+  function toggleCancelForm(orderId){
+    const form = document.getElementById('cancelForm-' + orderId);
+    if(form) form.style.display = form.style.display === 'block' ? 'none' : 'block';
+  }
+
+  async function submitCancellation(orderId){
+    const reasonEl = document.getElementById('cancelReason-' + orderId);
+    const errorEl = document.getElementById('cancelError-' + orderId);
+    errorEl.style.display = 'none';
+    const reason = reasonEl.value.trim();
+    if(!reason){
+      errorEl.textContent = 'Please explain why you\'re cancelling.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    // Real money movement, and irreversible — a confirm dialog is the
+    // safety check here, same reasoning as admin.html's deposit actions.
+    if(!confirm('This will cancel the booking and refund the guest in full. This cannot be undone. Continue?')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ cancelBooking: { orderId, reason } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        loadListings();
+      } else {
+        errorEl.textContent = data.error || 'Could not cancel this booking. Please try again.';
+        errorEl.style.display = 'block';
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not cancel this booking. Please try again.';
       errorEl.style.display = 'block';
     }
   }
