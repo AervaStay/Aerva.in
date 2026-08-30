@@ -18,6 +18,16 @@
 //     Sends a fresh verification link, for when the first one expired or
 //     got lost.
 //
+//   POST { mode: 'forgot-password', email }
+//     Sends a password reset link if an account exists for this email —
+//     but responds with the same success message either way, so this
+//     can't be used to check which emails have Aerva accounts.
+//
+//   POST { mode: 'reset-password', resetToken, newPassword }
+//     Sets a new password using a link from the forgot-password email,
+//     then logs the guest in immediately (same "one click, verified AND
+//     logged in" convenience as the email-verification link below).
+//
 //   GET  ?token=<verifyToken>
 //     Called when a guest clicks the link in their verification email.
 //     Marks the account verified and returns a session token, so
@@ -37,6 +47,7 @@ const sql = neon(process.env.DATABASE_URL);
 
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — "stay logged in"
 const VERIFY_LINK_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24 hours — plenty of time to check an inbox
+const RESET_LINK_LIFETIME_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a password reset link is more sensitive if intercepted
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SITE_BASE = 'https://aerva.in';
@@ -103,6 +114,52 @@ async function sendVerificationEmail(guest, verifyTok) {
       throw err;
     }
     throw new Error('Verification email could not be sent. Please try again shortly.');
+  }
+}
+
+// Same shape as sendVerificationEmail — kept separate rather than a
+// shared "sendAuthEmail" helper, since the subject/copy genuinely differ
+// and forcing them into one parametrized function would make both harder
+// to read for a marginal reduction in duplication.
+async function sendPasswordResetEmail(guest, resetTok) {
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set — guest cannot receive their password reset link.');
+    throw new Error('Reset email could not be sent. Please try again shortly.');
+  }
+
+  const link = `${SITE_BASE}/guest-login.html?resetToken=${resetTok}`;
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">Reset your password</h2>
+      <p>Click below to choose a new password for your Aerva account. This link expires in 1 hour.</p>
+      <p><a href="${link}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Reset Password</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you didn't request this, you can safely ignore this email — your password won't change unless you click the link above and set a new one.</p>
+    </div>
+  `;
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'Aerva <hello@aerva.in>',
+      to: guest.email,
+      subject: 'Reset your Aerva password',
+      html
+    })
+  });
+
+  if (!res.ok) {
+    let detail;
+    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
+    console.error('Resend send failed (password reset):', res.status, detail);
+    // Deliberately NOT re-thrown as user-facing here — the calling code
+    // always returns the same generic success message regardless of
+    // whether the email actually sent, to avoid leaking account
+    // existence. A real send failure still gets logged server-side above
+    // for you to notice and investigate.
   }
 }
 
@@ -200,6 +257,73 @@ module.exports = async (req, res) => {
       });
       // Still return success — see note above — but log the real failure.
       return res.status(200).json({ success: true });
+    }
+  }
+
+  // ---- Forgot password ----
+  if (mode === 'forgot-password') {
+    if (!email || typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
+      return res.status(400).json({ error: 'Please enter a complete email address, like you@gmail.com.' });
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    try {
+      const rows = await sql`SELECT id, email FROM guests WHERE email = ${cleanEmail}`;
+      const guest = rows[0];
+      // Same anti-enumeration pattern as resend-verification above: this
+      // response is identical whether or not an account exists, so
+      // nobody can use "forgot password" to check which emails have
+      // Aerva accounts. Only the guest who actually owns that inbox ever
+      // learns the real answer, by whether an email shows up.
+      if (guest) {
+        const resetTok = createToken(guest.id, 'guest-password-reset', RESET_LINK_LIFETIME_MS);
+        await sendPasswordResetEmail(guest, resetTok);
+        await logAudit(sql, {
+          action: 'guest_password_reset_requested', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
+          targetType: 'guest', targetId: guest.id
+        });
+      }
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('guest-auth (forgot-password) error:', err);
+      return res.status(200).json({ success: true }); // still the same generic response — see note above
+    }
+  }
+
+  // ---- Reset password (from the emailed link) ----
+  if (mode === 'reset-password') {
+    const { resetToken, newPassword } = req.body || {};
+    if (!resetToken) {
+      return res.status(400).json({ error: 'This reset link is missing its token — please request a new one.' });
+    }
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    }
+    const payload = verifyToken(resetToken);
+    if (!payload || payload.action !== 'guest-password-reset') {
+      return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
+    }
+    try {
+      const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+      const rows = await sql`
+        UPDATE guests SET password_hash = ${passwordHash} WHERE id = ${payload.listingId}
+        RETURNING id, email, name, phone, account_type
+      `;
+      const guest = rows[0];
+      if (!guest) return res.status(404).json({ error: 'Account not found.' });
+
+      // Log the guest straight in, same convenience as the email-verify
+      // link — one click both resets the password AND signs them in,
+      // rather than making them turn around and log in again immediately
+      // with the password they just set.
+      const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+      await logAudit(sql, {
+        action: 'guest_password_reset_completed', success: true, actorType: 'guest', actorIdentifier: guest.email,
+        targetType: 'guest', targetId: guest.id
+      });
+      return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
+    } catch (err) {
+      console.error('guest-auth (reset-password) error:', err);
+      return res.status(500).json({ error: 'Could not reset your password right now. Please try again.' });
     }
   }
 
