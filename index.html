@@ -3867,7 +3867,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, selectedAmenities: selectedAmenitiesPayload }],
-          email
+          email,
+          // Only takes effect if this currency is admin-enabled for direct
+          // international charging server-side (see create-order.js) —
+          // otherwise the backend charges INR exactly as it always has.
+          preferredCurrency: currentCurrency
         })
       });
       if(!orderRes.ok){
@@ -4085,7 +4089,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           experiences: [{ listingId: exp.id, date, guests }],
-          email
+          email,
+          preferredCurrency: currentCurrency
         })
       });
       if(!orderRes.ok){
