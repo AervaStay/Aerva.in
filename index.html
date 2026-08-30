@@ -1148,8 +1148,16 @@
         </div>
       </div>
       <div class="field">
-        <label for="listPrice">Expected Nightly Rate (₹) <span class="required-mark">*</span></label>
+        <label for="listPricingCurrency">Pricing Currency <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— enter your prices below in this currency; Aerva converts and stores them in INR automatically</span></label>
+        <select id="listPricingCurrency"></select>
+      </div>
+      <div class="field">
+        <label for="listPrice"><span id="listPriceLabel">Expected Nightly Rate (₹)</span> <span class="required-mark">*</span></label>
         <input id="listPrice" name="Expected Nightly Rate" type="number" min="0" placeholder="e.g. 4500" required>
+      </div>
+      <div class="field">
+        <label for="listSecurityDeposit"><span id="listSecurityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, refundable, held 7 days after checkout</span></label>
+        <input id="listSecurityDeposit" name="Security Deposit" type="number" min="0" placeholder="e.g. 2000">
       </div>
       <div class="field">
         <label for="listDescription">Tell us about the property <span class="required-mark">*</span></label>
@@ -1209,7 +1217,7 @@
           </div>
         </div>
         <div class="field">
-          <label for="listPetFee">Pet fee (₹ per stay) <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if you don't charge one</span></label>
+          <label for="listPetFee"><span id="listPetFeeLabel">Pet fee (₹ per stay)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if you don't charge one</span></label>
           <input id="listPetFee" name="Pet Fee" type="number" min="0" placeholder="e.g. 500">
         </div>
       </div>
@@ -1263,11 +1271,11 @@
           <select id="listDiscountType" name="Discount Type">
             <option value="">None</option>
             <option value="percentage">Percentage off</option>
-            <option value="flat">Flat amount off (₹)</option>
+            <option value="flat" id="listDiscountFlatOption">Flat amount off (₹)</option>
           </select>
         </div>
         <div class="field">
-          <label for="listDiscountValue">Amount</label>
+          <label for="listDiscountValue"><span id="listDiscountValueLabel">Amount</span></label>
           <input id="listDiscountValue" name="Discount Value" type="number" min="0" placeholder="e.g. 10">
         </div>
       </div>
@@ -1403,18 +1411,25 @@
   // handleListingBookNow/handleExperienceBookNow) so nobody is surprised
   // by what Razorpay's own checkout shows.
   const SUPPORTED_CURRENCIES = {
-    INR: { symbol: '₹', locale: 'en-IN' },
-    USD: { symbol: '$', locale: 'en-US' },
-    GBP: { symbol: '£', locale: 'en-GB' },
-    EUR: { symbol: '€', locale: 'de-DE' },
-    AUD: { symbol: 'A$', locale: 'en-AU' },
-    CAD: { symbol: 'C$', locale: 'en-CA' },
+    INR: { symbol: '₹', locale: 'en-IN', decimals: 0 },
+    USD: { symbol: '$', locale: 'en-US', decimals: 2 },
+    GBP: { symbol: '£', locale: 'en-GB', decimals: 2 },
+    EUR: { symbol: '€', locale: 'de-DE', decimals: 2 },
+    AUD: { symbol: 'A$', locale: 'en-AU', decimals: 2 },
+    CAD: { symbol: 'C$', locale: 'en-CA', decimals: 2 },
+    KRW: { symbol: '₩', locale: 'ko-KR', decimals: 0 }, // no minor unit in everyday use
+    JPY: { symbol: '¥', locale: 'ja-JP', decimals: 0 }, // same — Yen has no decimal subunit in practice
+    SGD: { symbol: 'S$', locale: 'en-SG', decimals: 2 },
+    AED: { symbol: 'AED ', locale: 'en-AE', decimals: 2 }, // UAE Dirham — the single most relevant Gulf currency for travel to India; let me know if you want the others (SAR, QAR, KWD, BHD, OMR) added too
+    CHF: { symbol: 'CHF ', locale: 'de-CH', decimals: 2 },
+    RUB: { symbol: '₽', locale: 'ru-RU', decimals: 2 },
   };
   // Maps a detected country code to a sensible default currency — only
   // ever used as a starting guess, never overrides an explicit choice.
   const COUNTRY_TO_CURRENCY = {
     GB: 'GBP', US: 'USD', IN: 'INR', AU: 'AUD', CA: 'CAD',
     DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR', PT: 'EUR',
+    KR: 'KRW', JP: 'JPY', SG: 'SGD', AE: 'AED', CH: 'CHF', RU: 'RUB',
   };
   const CURRENCY_STORAGE_KEY = 'aerva_currency';
 
@@ -1480,6 +1495,12 @@
     await fetchCurrencyRates();
     updateCurrencyTriggerLabel();
     applyCurrencyToPage();
+    // The host pricing currency selector (Add Listing form) defaults to
+    // whatever the guest-browsing currency turns out to be — but that's
+    // only known once this async function actually finishes, well after
+    // the form's own synchronous setup ran. Sync it now rather than
+    // leaving it stuck on the pre-detection default.
+    if(typeof syncHostPricingCurrencyDefault === 'function') syncHostPricingCurrencyDefault();
   }
 
   async function setCurrency(code, persistToAccount){
@@ -1521,7 +1542,8 @@
     }
     const converted = amountInInr * rate;
     const info = SUPPORTED_CURRENCIES[currentCurrency];
-    return info.symbol + converted.toLocaleString(info.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const decimals = info.decimals ?? 2;
+    return info.symbol + converted.toLocaleString(info.locale, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   }
 
   // Re-renders whatever's currently on screen so a currency switch takes
@@ -2057,6 +2079,69 @@
     document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
   }
 
+  // ---- Host pricing currency: lets a host entering prices from another
+  // country think in their own currency instead of INR. This is entirely
+  // separate from the guest-browsing currency picker in the nav — a host
+  // could easily be browsing the site in one currency while wanting to
+  // price their own property in another — but reuses the exact same
+  // SUPPORTED_CURRENCIES/currencyRates machinery, just applied as INPUT
+  // conversion here instead of DISPLAY conversion there. Defaults to
+  // whatever the guest-browsing currency currently is, purely as a
+  // reasonable starting guess.
+  let hostPricingCurrency = currentCurrency;
+  const listPricingCurrencySelect = document.getElementById('listPricingCurrency');
+
+  function populateHostCurrencySelect(){
+    listPricingCurrencySelect.innerHTML = Object.keys(SUPPORTED_CURRENCIES).map(code =>
+      `<option value="${code}"${code === hostPricingCurrency ? ' selected' : ''}>${code} (${SUPPORTED_CURRENCIES[code].symbol.trim()})</option>`
+    ).join('');
+  }
+  populateHostCurrencySelect();
+
+  function updateHostPricingLabels(){
+    const symbol = SUPPORTED_CURRENCIES[hostPricingCurrency].symbol.trim();
+    document.getElementById('listPriceLabel').textContent = `Expected Nightly Rate (${symbol})`;
+    document.getElementById('listSecurityDepositLabel').textContent = `Security Deposit (${symbol})`;
+    document.getElementById('listPetFeeLabel').textContent = `Pet fee (${symbol} per stay)`;
+    document.getElementById('listDiscountFlatOption').textContent = `Flat amount off (${symbol})`;
+    const discountTypeEl = document.getElementById('listDiscountType');
+    document.getElementById('listDiscountValueLabel').textContent =
+      discountTypeEl.value === 'flat' ? `Amount (${symbol})` : 'Amount';
+  }
+  updateHostPricingLabels();
+
+  listPricingCurrencySelect.addEventListener('change', () => {
+    hostPricingCurrency = listPricingCurrencySelect.value;
+    updateHostPricingLabels();
+  });
+  document.getElementById('listDiscountType').addEventListener('change', updateHostPricingLabels);
+
+  // Called by initCurrency() once real currency detection/rates have
+  // actually finished — only updates the DEFAULT if the host hasn't
+  // already changed the selector themselves in the meantime.
+  let hostPricingCurrencyTouched = false;
+  listPricingCurrencySelect.addEventListener('change', () => { hostPricingCurrencyTouched = true; });
+  function syncHostPricingCurrencyDefault(){
+    if(hostPricingCurrencyTouched) return;
+    hostPricingCurrency = currentCurrency;
+    populateHostCurrencySelect();
+    updateHostPricingLabels();
+  }
+
+  // Converts a host-entered amount (in hostPricingCurrency) into real INR
+  // for storage — every price column in the database is INR regardless of
+  // what currency a host typed it in. Falls back to treating the input as
+  // already-INR if live rates aren't loaded, same safety rule fmtGuest()
+  // follows on the guest-facing side (never silently apply a fake rate).
+  function hostAmountToInr(value){
+    const num = Number(value);
+    if(!num) return num;
+    if(hostPricingCurrency === 'INR' || !currencyRatesLoaded) return Math.round(num);
+    const rate = currencyRates[hostPricingCurrency];
+    if(!rate) return Math.round(num);
+    return Math.round(num / rate);
+  }
+
   // ---- Pet policy: the detail fields (max pets, types, fee) only make
   // sense once the host says the property is pet-friendly at all — kept
   // hidden until "Yes" is picked, and cleared if they switch back to "No"
@@ -2507,18 +2592,25 @@
           propertyType: document.getElementById('listType').value,
           bedrooms: document.getElementById('listBedrooms').value,
           maxGuests: document.getElementById('listGuests').value,
-          nightlyRate: document.getElementById('listPrice').value,
+          nightlyRate: hostAmountToInr(document.getElementById('listPrice').value),
           description: document.getElementById('listDescription').value,
           amenities: collectCheckedValues('Amenities'),
           services: collectCheckedValues('Services'),
           petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
           maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('listMaxPets').value : '',
           allowedPetTypes: petFriendlyYes.checked ? collectCheckedValues('PetTypes') : [],
-          petFee: petFriendlyYes.checked ? document.getElementById('listPetFee').value : '',
+          petFee: petFriendlyYes.checked ? hostAmountToInr(document.getElementById('listPetFee').value) : '',
+          securityDeposit: hostAmountToInr(document.getElementById('listSecurityDeposit').value),
           hostName: document.getElementById('listHostName').value,
           hostPhone: document.getElementById('listHostPhone').value,
           discountType: document.getElementById('listDiscountType').value,
-          discountValue: document.getElementById('listDiscountValue').value,
+          // Only a flat-amount discount is a real currency value needing
+          // conversion — a percentage is already unit-less and must never
+          // be run through hostAmountToInr (that would treat "10" as
+          // "10 <currency>" and mangle it into some unrelated INR number).
+          discountValue: document.getElementById('listDiscountType').value === 'flat'
+            ? hostAmountToInr(document.getElementById('listDiscountValue').value)
+            : document.getElementById('listDiscountValue').value,
           discountMinNights: document.getElementById('listDiscountMinNights').value,
           discountDescription: document.getElementById('listDiscountNote').value,
           latitude: document.getElementById('listLatitude').value,
@@ -2630,6 +2722,14 @@
       if(!draft) return;
 
       listingSubmissionState.currentListingId = draft.id;
+      // Stored draft values are always real INR — reset the pricing
+      // currency selector to INR rather than leaving it on whatever it
+      // last was, since there's no record of what currency the host
+      // originally typed these numbers in.
+      hostPricingCurrency = 'INR';
+      hostPricingCurrencyTouched = true; // don't let the async detection default overwrite this reset
+      populateHostCurrencySelect();
+      updateHostPricingLabels();
       document.getElementById('listPropertyName').value = draft.property_name || '';
       document.getElementById('listCity').value = draft.city || '';
       if(draft.latitude && draft.longitude){
@@ -2660,6 +2760,7 @@
         const box = listingForm.querySelector(`input[name="Services"][value="${v}"]`);
         if(box) box.checked = true;
       });
+      document.getElementById('listSecurityDeposit').value = draft.security_deposit || '';
       if(draft.pet_friendly){
         petFriendlyYes.checked = true;
         document.getElementById('listMaxPets').value = draft.max_pets_allowed || '';
