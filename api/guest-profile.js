@@ -6,7 +6,7 @@
 //     Returns { guest, bookings, reviews }. "guest" includes a computed
 //     "badge" field derived from guest_reviews — see computeBadge() below.
 //
-//   PATCH { name?, profilePhotoUrl? } (Authorization: Bearer <token>)
+//   PATCH { name?, profilePhotoUrl?, preferredCurrency? } (Authorization: Bearer <token>)
 //     Updates only the fields provided. The photo itself is uploaded
 //     directly to Vercel Blob from the browser first (see blob-upload.js,
 //     same endpoint listing photos already use) — this call just saves
@@ -52,7 +52,7 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     try {
       const guestRows = await sql`
-        SELECT id, email, phone, name, profile_photo_url, created_at
+        SELECT id, email, phone, name, profile_photo_url, preferred_currency, created_at
         FROM guests WHERE id = ${guestId}
       `;
       const guest = guestRows[0];
@@ -88,6 +88,7 @@ module.exports = async (req, res) => {
           phone: guest.phone,
           name: guest.name,
           profilePhotoUrl: guest.profile_photo_url,
+          preferredCurrency: guest.preferred_currency || null,
           memberSince: guest.created_at,
           badge: computeBadge(reviewCount, avgRating),
           reviewCount,
@@ -105,7 +106,7 @@ module.exports = async (req, res) => {
   // ---- Update name and/or profile photo ----
   if (req.method === 'PATCH') {
     try {
-      const { name, profilePhotoUrl } = req.body || {};
+      const { name, profilePhotoUrl, preferredCurrency } = req.body || {};
 
       // Only accept real Blob URLs for the photo, same defensive check
       // used for listing photos in submit-listing.js — never trust an
@@ -114,23 +115,30 @@ module.exports = async (req, res) => {
         ? profilePhotoUrl
         : undefined;
       const safeName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : undefined;
+      // Whitelisted currency codes only — this is a display preference,
+      // not something that should ever accept arbitrary input.
+      const SUPPORTED_CURRENCIES = ['INR', 'USD', 'GBP', 'EUR', 'AUD', 'CAD'];
+      const safeCurrency = typeof preferredCurrency === 'string' && SUPPORTED_CURRENCIES.includes(preferredCurrency.toUpperCase())
+        ? preferredCurrency.toUpperCase()
+        : undefined;
 
-      if (safeName === undefined && safePhotoUrl === undefined) {
+      if (safeName === undefined && safePhotoUrl === undefined && safeCurrency === undefined) {
         return res.status(400).json({ error: 'Nothing to update.' });
       }
 
       const updated = await sql`
         UPDATE guests SET
           name = COALESCE(${safeName ?? null}, name),
-          profile_photo_url = COALESCE(${safePhotoUrl ?? null}, profile_photo_url)
+          profile_photo_url = COALESCE(${safePhotoUrl ?? null}, profile_photo_url),
+          preferred_currency = COALESCE(${safeCurrency ?? null}, preferred_currency)
         WHERE id = ${guestId}
-        RETURNING id, name, profile_photo_url
+        RETURNING id, name, profile_photo_url, preferred_currency
       `;
 
       await logAudit(sql, {
         action: 'guest_profile_updated', success: true, actorType: 'guest', actorIdentifier: String(guestId),
         targetType: 'guest', targetId: guestId,
-        metadata: { updatedName: safeName !== undefined, updatedPhoto: safePhotoUrl !== undefined }
+        metadata: { updatedName: safeName !== undefined, updatedPhoto: safePhotoUrl !== undefined, updatedCurrency: safeCurrency !== undefined }
       });
 
       return res.status(200).json({ success: true, guest: updated[0] });
