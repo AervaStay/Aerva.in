@@ -75,11 +75,20 @@
   <h1>Aerva Admin</h1>
   <div class="tabs">
     <button class="tab-btn active" id="tabListingsBtn" onclick="switchTab('listings')">Pending Listings</button>
+    <button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications</button>
     <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
   </div>
 
   <div id="listingsView">
     <div id="listingsContainer"><p class="empty">Loading…</p></div>
+  </div>
+
+  <div id="verificationsView" style="display:none;">
+    <div class="deposit-section">
+      <h3>Aadhaar &amp; Bank Verifications</h3>
+      <p>Each of these needs an actual look before approving — a host uploading any file, or entering any correctly-formatted account number, isn't the same as it being genuine.</p>
+      <div id="verificationsContainer"><p class="empty">Loading…</p></div>
+    </div>
   </div>
 
   <div id="depositsView" style="display:none;">
@@ -200,14 +209,16 @@
     }
   }
 
-  // ---- Security Deposits tab ----
+  // ---- Tab switching (three tabs now: listings, verifications, deposits) ----
   function switchTab(tab){
-    const isListings = tab === 'listings';
-    document.getElementById('tabListingsBtn').classList.toggle('active', isListings);
-    document.getElementById('tabDepositsBtn').classList.toggle('active', !isListings);
-    document.getElementById('listingsView').style.display = isListings ? 'block' : 'none';
-    document.getElementById('depositsView').style.display = isListings ? 'none' : 'block';
-    if(!isListings) loadDisputes();
+    document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
+    document.getElementById('tabVerificationsBtn').classList.toggle('active', tab === 'verifications');
+    document.getElementById('tabDepositsBtn').classList.toggle('active', tab === 'deposits');
+    document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
+    document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
+    document.getElementById('depositsView').style.display = tab === 'deposits' ? 'block' : 'none';
+    if(tab === 'verifications') loadVerifications();
+    if(tab === 'deposits') loadDisputes();
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -244,6 +255,88 @@
     }
     btn.disabled = false;
     btn.textContent = 'Process Eligible Refunds';
+  }
+
+  // ---- ID Verifications tab ----
+  async function loadVerifications(){
+    const container = document.getElementById('verificationsContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?verifications=1', {
+        headers: { 'x-admin-secret': adminSecret }
+      });
+      const data = await res.json();
+      renderVerifications(data.verifications || []);
+    } catch(err){
+      container.innerHTML = '<p class="error">Could not load verifications. Please refresh.</p>';
+    }
+  }
+
+  function renderVerifications(verifications){
+    const container = document.getElementById('verificationsContainer');
+    if(!verifications.length){
+      container.innerHTML = '<p class="empty">No verifications waiting for review right now.</p>';
+      return;
+    }
+    container.innerHTML = verifications.map(v => {
+      const aadhaarBlock = v.aadhaar_status === 'pending_review' ? `
+        <div class="dispute-card" id="verify-${v.id}-aadhaar">
+          <h4>${v.name || v.email} — Aadhaar</h4>
+          <div class="dispute-meta">${v.email}${v.phone ? ' · ' + v.phone : ''}</div>
+          <p><a href="${v.aadhaar_document_url}" target="_blank" rel="noopener">Open the uploaded document ↗</a></p>
+          <div class="resolve-row">
+            <button type="button" class="approve-btn" onclick="decideVerification(${v.id}, 'aadhaar', 'approve')">Approve</button>
+            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${v.id}, 'aadhaar')">Reject</button>
+          </div>
+          <span id="verifyError-${v.id}-aadhaar" class="error"></span>
+        </div>
+      ` : '';
+      const bankBlock = v.bank_status === 'pending_review' ? `
+        <div class="dispute-card" id="verify-${v.id}-bank">
+          <h4>${v.name || v.email} — Bank Details</h4>
+          <div class="dispute-meta">${v.email}${v.phone ? ' · ' + v.phone : ''}</div>
+          <p>Account holder: ${v.bank_account_holder_name || '—'}<br>
+             Account ending: ••••${v.bank_account_number ? v.bank_account_number.slice(-4) : '—'}<br>
+             IFSC: ${v.bank_ifsc || '—'}</p>
+          <div class="resolve-row">
+            <button type="button" class="approve-btn" onclick="decideVerification(${v.id}, 'bank', 'approve')">Approve</button>
+            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${v.id}, 'bank')">Reject</button>
+          </div>
+          <span id="verifyError-${v.id}-bank" class="error"></span>
+        </div>
+      ` : '';
+      return aadhaarBlock + bankBlock;
+    }).join('');
+  }
+
+  function rejectVerificationPrompt(hostId, field){
+    const reason = prompt('Why is this being rejected? This is shown to the host.');
+    if(reason === null) return; // cancelled
+    if(!reason.trim()){
+      alert('Please enter a reason.');
+      return;
+    }
+    decideVerification(hostId, field, 'reject', reason.trim());
+  }
+
+  async function decideVerification(hostId, field, action, reason){
+    const errorEl = document.getElementById(`verifyError-${hostId}-${field}`);
+    if(errorEl) errorEl.textContent = '';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-secret': adminSecret },
+        body: JSON.stringify({ verifyDocument: { hostId, field, action, reason } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        const card = document.getElementById(`verify-${hostId}-${field}`);
+        if(card) card.remove();
+      } else if(errorEl){
+        errorEl.textContent = data.error || 'Could not update this verification.';
+      }
+    } catch(err){
+      if(errorEl) errorEl.textContent = 'Could not update this verification. Please try again.';
+    }
   }
 
   async function loadDisputes(){
