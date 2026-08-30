@@ -241,7 +241,7 @@ module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-secret');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-secret, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -313,8 +313,16 @@ module.exports = async (req, res) => {
 
   // ---- Path 3: admin page button ----
   if (req.method === 'POST') {
+    // Same dual-auth as get-pending-listings.js: a real admin login
+    // session (the normal way now) or the master ADMIN_SECRET (kept
+    // working as a fallback / for creating new admin accounts).
     const adminSecret = req.headers['x-admin-secret'];
-    if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+    const authHeader = req.headers['authorization'] || '';
+    const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const sessionPayload = sessionToken ? verifyToken(sessionToken) : null;
+    const hasValidSession = sessionPayload && sessionPayload.action === 'admin-session';
+    const hasValidSecret = adminSecret && adminSecret === process.env.ADMIN_SECRET;
+    if (!hasValidSession && !hasValidSecret) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
