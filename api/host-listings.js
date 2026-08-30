@@ -124,8 +124,20 @@ module.exports = async (req, res) => {
         if (host.aadhaar_status === 'verified') {
           return res.status(400).json({ error: 'Your Aadhaar is already approved. Contact hello@aerva.in to change it.' });
         }
+        if (host.aadhaar_status === 'pending_review') {
+          return res.status(400).json({ error: 'Your Aadhaar is already submitted and awaiting review.' });
+        }
+        // Uploading a file only confirms a file was uploaded — it says
+        // nothing about whose document it actually is. This used to jump
+        // straight to 'verified', which meant literally any HTTPS URL
+        // (including someone else's ID) was accepted as "verified" with
+        // zero actual checking. Real verification now happens as a human
+        // admin review (see get-pending-listings.js's ?verifications=1
+        // mode and its verifyDocument POST action) — pending_review is
+        // the correct state until that review happens, matching what
+        // host-dashboard.html's badge/label logic already expected.
         await sql`
-          UPDATE hosts SET aadhaar_document_url = ${aadhaarDocumentUrl}, aadhaar_status = 'verified', aadhaar_rejection_reason = NULL
+          UPDATE hosts SET aadhaar_document_url = ${aadhaarDocumentUrl}, aadhaar_status = 'pending_review', aadhaar_rejection_reason = NULL
           WHERE id = ${guest.host_id}
         `;
         await logAudit(sql, {
@@ -139,8 +151,15 @@ module.exports = async (req, res) => {
         if (host.bank_status === 'verified') {
           return res.status(400).json({ error: 'Your bank details are already approved. Contact hello@aerva.in to change them.' });
         }
-        // Basic sanity checks only — real validation happens when an admin
-        // (or eventually a bank verification API) actually reviews this.
+        if (host.bank_status === 'pending_review') {
+          return res.status(400).json({ error: 'Your bank details are already submitted and awaiting review.' });
+        }
+        // Format checks only (real account number pattern, real IFSC
+        // pattern) — this was already the comment's stated intent, but
+        // the code below it still auto-approved on format alone. Same
+        // fix as Aadhaar: pending_review until an admin actually looks
+        // at it, not an automatic "verified" the moment the numbers look
+        // shaped right.
         const cleanAccountNumber = String(bankAccountNumber).replace(/\s/g, '');
         const cleanIfsc = String(bankIfsc).trim().toUpperCase();
         if (!/^\d{6,20}$/.test(cleanAccountNumber)) {
@@ -153,7 +172,7 @@ module.exports = async (req, res) => {
           UPDATE hosts SET
             bank_account_number = ${cleanAccountNumber}, bank_ifsc = ${cleanIfsc},
             bank_account_holder_name = ${String(bankAccountHolderName).trim().slice(0, 100)},
-            bank_status = 'verified', bank_rejection_reason = NULL
+            bank_status = 'pending_review', bank_rejection_reason = NULL
           WHERE id = ${guest.host_id}
         `;
         await logAudit(sql, {
