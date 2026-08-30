@@ -74,6 +74,8 @@
     <p id="loginError" class="error" style="display:none;"></p>
     <p style="text-align:center; font-size:13px; margin-top:16px;">
       <a href="#" onclick="showSignupForm(); return false;" style="color:#8a6c39;">First time here? Create your admin account</a>
+      &nbsp;·&nbsp;
+      <a href="#" onclick="showForgotForm(); return false;" style="color:#8a6c39;">Forgot password?</a>
     </p>
   </div>
 
@@ -89,6 +91,24 @@
     <p style="text-align:center; font-size:13px; margin-top:16px;">
       <a href="#" onclick="showLoginForm(); return false;" style="color:#8a6c39;">Already have an account? Log in</a>
     </p>
+  </div>
+
+  <div id="forgotForm" style="display:none;">
+    <p style="font-size:13px; opacity:0.7; margin-bottom:14px;">Enter your admin email and we'll send a password reset link, if an account exists for it.</p>
+    <input id="forgotEmail" type="email" placeholder="Your email">
+    <button onclick="requestPasswordReset()">Send Reset Link</button>
+    <p id="forgotError" class="error" style="display:none;"></p>
+    <p id="forgotSuccess" class="success" style="display:none;"></p>
+    <p style="text-align:center; font-size:13px; margin-top:16px;">
+      <a href="#" onclick="showLoginForm(); return false;" style="color:#8a6c39;">Back to login</a>
+    </p>
+  </div>
+
+  <div id="resetForm" style="display:none;">
+    <p style="font-size:13px; opacity:0.7; margin-bottom:14px;">Choose a new password for your admin account.</p>
+    <input id="resetNewPassword" type="password" placeholder="New password (min 8 characters)">
+    <button onclick="submitPasswordReset()">Set New Password</button>
+    <p id="resetError" class="error" style="display:none;"></p>
   </div>
 </div>
 
@@ -144,11 +164,98 @@
 
   function showSignupForm(){
     document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('forgotForm').style.display = 'none';
     document.getElementById('signupForm').style.display = 'block';
   }
   function showLoginForm(){
     document.getElementById('signupForm').style.display = 'none';
+    document.getElementById('forgotForm').style.display = 'none';
+    document.getElementById('resetForm').style.display = 'none';
     document.getElementById('loginForm').style.display = 'block';
+  }
+  function showForgotForm(){
+    document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('forgotForm').style.display = 'block';
+  }
+
+  async function requestPasswordReset(){
+    const email = document.getElementById('forgotEmail').value.trim();
+    const errorEl = document.getElementById('forgotError');
+    const successEl = document.getElementById('forgotSuccess');
+    errorEl.style.display = 'none';
+    successEl.style.display = 'none';
+    if(!email){
+      errorEl.textContent = 'Please enter your email.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminForgotPassword: { email } })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errorEl.textContent = data.error || 'Could not send the reset link. Please try again.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      successEl.textContent = 'If an account exists for that email, a reset link has been sent — check your inbox.';
+      successEl.style.display = 'block';
+    } catch(err){
+      errorEl.textContent = 'Could not reach the server. Please try again.';
+      errorEl.style.display = 'block';
+    }
+  }
+
+  // ---- Handling the emailed reset link ----
+  // If this page was opened as admin-....html?resetToken=xxx (from the
+  // password reset email), show the "set a new password" form instead of
+  // the normal login — the token itself proves identity here, not a
+  // password, so no email/current-password needed on this screen.
+  const urlResetToken = new URLSearchParams(window.location.search).get('resetToken');
+  if(urlResetToken){
+    document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('resetForm').style.display = 'block';
+  }
+
+  async function submitPasswordReset(){
+    const newPassword = document.getElementById('resetNewPassword').value;
+    const errorEl = document.getElementById('resetError');
+    errorEl.style.display = 'none';
+    if(!newPassword || newPassword.length < 8){
+      errorEl.textContent = 'Password must be at least 8 characters.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminResetPassword: { resetToken: urlResetToken, newPassword } })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errorEl.textContent = data.error || 'Could not reset your password. The link may have expired — request a new one.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      // Same convenience as the backend already provides: the reset
+      // response includes a fresh session, so this logs the admin
+      // straight in rather than sending them back to type a password
+      // they just set moments ago.
+      sessionToken = data.sessionToken;
+      currentAdmin = data.admin;
+      localStorage.setItem(SESSION_STORAGE_KEY, sessionToken);
+      // Clean the token out of the URL so it can't be reused/shared via
+      // browser history or an accidental copy-paste of the address bar.
+      window.history.replaceState({}, document.title, window.location.pathname);
+      enterAdmin();
+    } catch(err){
+      errorEl.textContent = 'Could not reach the server. Please try again.';
+      errorEl.style.display = 'block';
+    }
   }
 
   async function login(){
@@ -244,8 +351,10 @@
   // Resume an existing session automatically (e.g. a page refresh)
   // rather than making the admin log in again every visit — if the
   // stored token turns out to be invalid/expired, loadListings()'s own
-  // 401 handling below sends them back to the login form.
-  if(sessionToken){
+  // 401 handling below sends them back to the login form. Skipped
+  // entirely if a reset link brought them here — that flow should never
+  // get silently overridden by an old session sitting in localStorage.
+  if(sessionToken && !urlResetToken){
     enterAdmin();
   }
 
