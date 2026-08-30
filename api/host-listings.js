@@ -25,12 +25,61 @@
 //          checkout. Only works while deposit_status is still 'held' and
 //          the release date hasn't passed. See get-pending-listings.js's
 //          resolveDispute mode for how an admin follows up.
+//   POST { cancelBooking: { orderId, reason } } — cancels a paid booking
+//          and refunds the guest in full, but ONLY if check-in is more
+//          than 48 hours away. Within that window, the host cannot
+//          cancel through this endpoint at all — the guest is protected
+//          regardless of the host's reason.
 
 const { neon } = require('@neondatabase/serverless');
+const Razorpay = require('razorpay');
 const { verifyToken, createToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
+const { convertInrToForeignSubunit } = require('./_currency');
 
 const sql = neon(process.env.DATABASE_URL);
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+const CANCELLATION_CUTOFF_HOURS = 48;
+
+// Same Resend pattern used everywhere else in this codebase (see
+// guest-auth.js, submit-listing.js, approve-listing.js) — never throws;
+// a failed notification email shouldn't undo a cancellation that's
+// already happened and already been refunded.
+async function sendCancellationEmail(order){
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set — guest will not receive a cancellation notice.');
+    return;
+  }
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">Your booking has been cancelled</h2>
+      <p>Your host has cancelled your stay at <strong>${order.suite_name}</strong> (${order.arrival} — ${order.departure}).</p>
+      <p>Your full payment has been refunded to your original payment method — it should appear within 5–7 business days depending on your bank.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you have questions about this cancellation, please contact hello@aerva.in.</p>
+    </div>
+  `;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'Aerva <hello@aerva.in>',
+      to: order.guest_email,
+      subject: `Your Aerva booking at ${order.suite_name} has been cancelled`,
+      html
+    })
+  });
+  if (!res.ok) {
+    let detail;
+    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
+    console.error('Resend send failed (cancellation notice):', res.status, detail);
+  }
+}
 const SITE_BASE = 'https://aerva.in';
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
@@ -104,6 +153,97 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('host-listings (raiseDispute) error:', err);
       return res.status(500).json({ error: 'Could not submit your concern right now. Please try again.' });
+    }
+  }
+
+  // ---- Cancel a booking (host-initiated) ----
+  // Only allowed more than 48 hours before check-in — a guest who's
+  // already within that window is protected from a last-minute
+  // cancellation, no matter the host's reason. Refunds the guest's
+  // FULL payment (not just the deposit — this ends the whole stay, not
+  // a deposit dispute), in whatever currency they were actually charged.
+  if (req.method === 'POST' && req.body && req.body.cancelBooking) {
+    try {
+      const { orderId, reason } = req.body.cancelBooking;
+      if (!orderId || !reason || !String(reason).trim()) {
+        return res.status(400).json({ error: 'Please explain why you\'re cancelling this booking.' });
+      }
+
+      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      const guest = guestRows[0];
+      if (!guest || !guest.host_id) {
+        return res.status(403).json({ error: 'You do not have permission to do this.' });
+      }
+
+      // Ownership check — same reasoning as raiseDispute above: never
+      // trust orderId alone, confirm it actually belongs to this host's
+      // own listing before touching anything.
+      const rows = await sql`
+        SELECT o.id, o.suite_name, o.arrival, o.departure, o.guest_email, o.status,
+               o.total, o.deposit_status, o.charge_currency, o.razorpay_payment_id
+        FROM orders o
+        JOIN listings l ON o.listing_id = l.id
+        WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
+      `;
+      const order = rows[0];
+      if (!order) {
+        return res.status(403).json({ error: 'You do not have permission to do this.' });
+      }
+      if (order.status === 'cancelled') {
+        return res.status(400).json({ error: 'This booking has already been cancelled.' });
+      }
+      if (order.status !== 'paid') {
+        return res.status(400).json({ error: 'Only a paid, confirmed booking can be cancelled this way.' });
+      }
+
+      const arrivalDate = new Date(order.arrival + 'T00:00:00Z');
+      const hoursUntilArrival = (arrivalDate.getTime() - Date.now()) / (1000 * 60 * 60);
+      if (hoursUntilArrival < CANCELLATION_CUTOFF_HOURS) {
+        return res.status(400).json({
+          error: `This stay checks in within ${CANCELLATION_CUTOFF_HOURS} hours — bookings this close to check-in can no longer be cancelled by the host. Please contact hello@aerva.in if this is urgent.`
+        });
+      }
+
+      // Refund has to match whatever currency the guest was actually
+      // charged in — same requirement as the deposit refund logic in
+      // get-pending-listings.js, and the same shared helper for it.
+      const currency = order.charge_currency || 'INR';
+      let refundAmount;
+      if (currency === 'INR') {
+        refundAmount = Math.round(Number(order.total) * 100);
+      } else {
+        refundAmount = await convertInrToForeignSubunit(sql, Number(order.total), currency);
+        if (!refundAmount) {
+          return res.status(502).json({ error: `No cached exchange rate available to refund this ${currency} booking right now. Please try again shortly.` });
+        }
+      }
+
+      const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
+        amount: refundAmount,
+        speed: 'normal',
+      });
+
+      await sql`
+        UPDATE orders SET
+          status = 'cancelled',
+          cancellation_reason = ${String(reason).trim().slice(0, 1000)},
+          cancelled_at = now(),
+          deposit_status = ${order.deposit_status === 'held' ? 'refunded' : order.deposit_status},
+          deposit_refund_id = ${refund.id}
+        WHERE id = ${orderId}
+      `;
+
+      await logAudit(sql, {
+        action: 'booking_cancelled_by_host', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
+        targetType: 'order', targetId: orderId
+      });
+
+      await sendCancellationEmail(order);
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('host-listings (cancelBooking) error:', err);
+      return res.status(500).json({ error: 'Could not cancel this booking right now. Please try again, or contact hello@aerva.in.' });
     }
   }
 
@@ -241,6 +381,7 @@ module.exports = async (req, res) => {
              o.commission_rate, o.commission_amount, o.payout_amount,
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
+             o.cancellation_reason, o.cancelled_at,
              o.status, o.created_at
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
