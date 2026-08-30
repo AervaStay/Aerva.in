@@ -52,8 +52,10 @@
 
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
+const bcrypt = require('bcryptjs');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
+const { createToken, verifyToken } = require('./_approval-token');
 
 const sql = neon(process.env.DATABASE_URL);
 const razorpay = new Razorpay({
@@ -61,20 +63,105 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 const BACKGROUND_IMAGES_KEY = 'homepage_background_images';
+const ADMIN_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — same as guest sessions
+const BCRYPT_ROUNDS = 12; // matches guest-auth.js exactly
 
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-secret');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-secret, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // ---- Admin login (real email + password, no secret needed) ----
+  // Deliberately runs BEFORE the auth gate below — this is how an admin
+  // gets in without already having a session or the master secret.
+  if (req.method === 'POST' && req.body && req.body.adminLogin) {
+    try {
+      const { email, password } = req.body.adminLogin;
+      const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+      if (!cleanEmail || !password) {
+        return res.status(400).json({ error: 'Please enter your email and password.' });
+      }
+      const rows = await sql`SELECT id, email, password_hash, name FROM admins WHERE email = ${cleanEmail}`;
+      const admin = rows[0];
+      // Same timing-safe pattern as guest-auth.js: always run bcrypt.compare,
+      // even against a dummy hash for a non-existent account, so a wrong
+      // email can't be distinguished from a wrong password by response time.
+      const DUMMY_HASH = '$2a$12$CwTycUXWue0Thq9StjUM0uJ8yqxbwmkQ.6qhg0OSyMH0RfaOOKKae';
+      const passwordMatches = await bcrypt.compare(password, admin ? admin.password_hash : DUMMY_HASH);
+      if (!admin || !passwordMatches) {
+        await logAudit(sql, {
+          action: 'admin_login', success: false, actorType: 'admin', actorIdentifier: cleanEmail,
+          metadata: { reason: !admin ? 'no_such_account' : 'wrong_password' }
+        });
+        return res.status(401).json({ error: 'Incorrect email or password.' });
+      }
+      const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS);
+      await logAudit(sql, {
+        action: 'admin_login', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
+        targetType: 'admin', targetId: admin.id
+      });
+      return res.status(200).json({ sessionToken, admin: { id: admin.id, email: admin.email, name: admin.name } });
+    } catch (err) {
+      console.error('get-pending-listings (adminLogin) error:', err);
+      return res.status(500).json({ error: 'Could not log you in right now. Please try again.' });
+    }
+  }
+
+  // ---- Create a new admin account ----
+  // Gated by ADMIN_SECRET itself, not a session — this is the one place
+  // the shared secret still matters day to day: proving you're allowed
+  // to create a real login, whether for yourself the first time or for
+  // a second admin later. Not reachable with just an admin-session token.
+  if (req.method === 'POST' && req.body && req.body.adminSignup) {
+    const adminSecretHeader = req.headers['x-admin-secret'];
+    if (!adminSecretHeader || adminSecretHeader !== process.env.ADMIN_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    try {
+      const { email, password, name } = req.body.adminSignup;
+      const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+      if (!cleanEmail || !cleanEmail.includes('@')) {
+        return res.status(400).json({ error: 'Please enter a valid email address.' });
+      }
+      if (!password || password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+      }
+      const existing = await sql`SELECT id FROM admins WHERE email = ${cleanEmail}`;
+      if (existing[0]) {
+        return res.status(409).json({ error: 'An admin account with this email already exists — log in instead.' });
+      }
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+      const inserted = await sql`
+        INSERT INTO admins (email, password_hash, name)
+        VALUES (${cleanEmail}, ${passwordHash}, ${name || null})
+        RETURNING id, email, name
+      `;
+      await logAudit(sql, {
+        action: 'admin_account_created', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
+        targetType: 'admin', targetId: inserted[0].id
+      });
+      return res.status(200).json({ success: true, admin: inserted[0] });
+    } catch (err) {
+      console.error('get-pending-listings (adminSignup) error:', err);
+      return res.status(500).json({ error: 'Could not create the admin account right now. Please try again.' });
+    }
+  }
+
+  // ---- Everything else requires either a valid admin session OR the
+  // master secret (kept working so nothing already relying on it breaks) ----
   const adminSecret = req.headers['x-admin-secret'];
-  if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+  const authHeader = req.headers['authorization'] || '';
+  const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const sessionPayload = sessionToken ? verifyToken(sessionToken) : null;
+  const hasValidSession = sessionPayload && sessionPayload.action === 'admin-session';
+  const hasValidSecret = adminSecret && adminSecret === process.env.ADMIN_SECRET;
+  if (!hasValidSession && !hasValidSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
