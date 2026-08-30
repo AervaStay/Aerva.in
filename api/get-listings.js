@@ -36,6 +36,17 @@
 //                              (no special param) query only ever returns
 //                              listing_type = 'stay' rows now — experiences
 //                              never appear in the regular Suites results.
+//   ?currencyRates=1        — public, returns the currency conversion
+//                              rates last cached by the daily cron below
+//                              (or { rates: null } if none have been
+//                              fetched yet — the frontend falls back to
+//                              plain INR in that case).
+//   ?refreshCurrencyRates=1 — NOT public — requires an Authorization:
+//                              Bearer <CRON_SECRET> header, which only
+//                              Vercel's own Cron scheduler sends (see
+//                              vercel.json). Fetches fresh rates and
+//                              caches them; called automatically once a
+//                              day, never by the frontend directly.
 //
 // max_guests is stored as free text (e.g. "4" going forward, but older
 // listings may still have range strings like "3–4" or "9+" from before
@@ -126,6 +137,64 @@ module.exports = async (req, res) => {
         console.error('siteBackground lookup failed (site_settings may not exist yet):', settingsErr);
         return res.status(200).json({ images: [] });
       }
+    }
+
+    // ---- Currency display rates ----
+    // Public, read-only — returns whatever was last cached by the daily
+    // cron refresh below. Never fetches live from here on a guest's own
+    // page load; that's exactly the fragility this replaced (a third-
+    // party API being slow/down/CORS-blocked no longer affects guests at
+    // all, since they're reading from our own database, not the source
+    // directly).
+    if (req.query.currencyRates === '1') {
+      try {
+        const rows = await sql`SELECT value, updated_at FROM site_settings WHERE key = 'currency_rates'`;
+        if (!rows[0]) return res.status(200).json({ rates: null, updatedAt: null });
+        return res.status(200).json({ rates: rows[0].value, updatedAt: rows[0].updated_at });
+      } catch (settingsErr) {
+        console.error('currencyRates lookup failed (site_settings may not exist yet):', settingsErr);
+        return res.status(200).json({ rates: null, updatedAt: null });
+      }
+    }
+
+    // ---- Daily currency rate refresh (Vercel Cron only) ----
+    // Vercel calls this automatically once a day per the schedule in
+    // vercel.json, with an Authorization header it generates itself from
+    // your CRON_SECRET env var — this check is what stops anyone else
+    // from hitting this URL and forcing a refresh (harmless on its own,
+    // but still not something a public endpoint should allow arbitrarily).
+    if (req.query.refreshCurrencyRates === '1') {
+      const authHeader = req.headers['authorization'] || '';
+      if (!process.env.CRON_SECRET || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      // Same two free/keyless sources the frontend used to call directly
+      // — tried in order, first one to return a real-looking rate table
+      // wins. If both fail, the cached rates from the last successful
+      // run stay in place rather than being wiped out.
+      const sources = [
+        { url: 'https://open.er-api.com/v6/latest/INR', extract: (data) => data && data.rates },
+        { url: 'https://api.exchangerate-api.com/v4/latest/INR', extract: (data) => data && data.rates },
+      ];
+      for (const source of sources) {
+        try {
+          const res2 = await fetch(source.url);
+          if (!res2.ok) continue;
+          const data = await res2.json();
+          const rates = source.extract(data);
+          if (rates && rates.USD && rates.GBP) {
+            await sql`
+              INSERT INTO site_settings (key, value, updated_at)
+              VALUES ('currency_rates', ${JSON.stringify(rates)}, now())
+              ON CONFLICT (key) DO UPDATE SET value = ${JSON.stringify(rates)}, updated_at = now()
+            `;
+            return res.status(200).json({ success: true, source: source.url });
+          }
+        } catch (fetchErr) {
+          console.error('refreshCurrencyRates: source failed, trying next:', source.url, fetchErr);
+        }
+      }
+      return res.status(502).json({ error: 'Both currency rate sources failed — cached rates left unchanged.' });
     }
 
     // ---- Aerva Experience browsing ----
