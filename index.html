@@ -2973,9 +2973,68 @@
         ${amenitiesHtml}
         ${paidAmenitiesHtml}
         ${petPolicyHtml}
-        <div class="listing-modal-section-title">Availability</div>
+        <div class="listing-modal-section-title">Check Availability &amp; Price</div>
         <div id="availabilityCalendar" data-listing-id="${listing.id}">
           <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
+        </div>
+        <div class="guest-row" style="border:none; padding-top:16px;">
+          <div class="guest-row-text">
+            <div class="guest-row-title">Adults</div>
+            <div class="guest-row-sub">Ages 13 or above</div>
+          </div>
+          <div class="guest-stepper">
+            <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="dec" aria-label="Decrease adults">−</button>
+            <span class="guest-count" id="lgCountAdults">1</span>
+            <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="inc" aria-label="Increase adults">+</button>
+          </div>
+        </div>
+        <div class="guest-row-divider"></div>
+        <div class="guest-row">
+          <div class="guest-row-text">
+            <div class="guest-row-title">Children</div>
+            <div class="guest-row-sub">Ages 2–12</div>
+          </div>
+          <div class="guest-stepper">
+            <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="dec" aria-label="Decrease children">−</button>
+            <span class="guest-count" id="lgCountChildren">0</span>
+            <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="inc" aria-label="Increase children">+</button>
+          </div>
+        </div>
+        <div class="guest-row-divider"></div>
+        <div class="guest-row">
+          <div class="guest-row-text">
+            <div class="guest-row-title">Infants</div>
+            <div class="guest-row-sub">Under 2</div>
+          </div>
+          <div class="guest-stepper">
+            <button type="button" class="guest-step-btn" data-lg-type="infants" data-lg-action="dec" aria-label="Decrease infants">−</button>
+            <span class="guest-count" id="lgCountInfants">0</span>
+            <button type="button" class="guest-step-btn" data-lg-type="infants" data-lg-action="inc" aria-label="Increase infants">+</button>
+          </div>
+        </div>
+        ${listing.pet_friendly === true ? `
+        <div class="guest-row-divider"></div>
+        <div class="guest-row">
+          <div class="guest-row-text">
+            <div class="guest-row-title">Pets</div>
+            <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? fmt(Number(listing.pet_fee)) + ' fee per stay' : 'No pet fee'}</div>
+          </div>
+          <div class="guest-stepper">
+            <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="dec" aria-label="Decrease pets">−</button>
+            <span class="guest-count" id="lgCountPets">0</span>
+            <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="inc" aria-label="Increase pets">+</button>
+          </div>
+        </div>` : ''}
+        <div id="listingAmenitiesPicker"></div>
+        <div id="listingPriceSummary" style="display:none;"></div>
+        <div id="listingBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+          <div class="field">
+            <label for="listingBookEmail">Email <span style="color:#a3402f;">*</span></label>
+            <input id="listingBookEmail" type="email" placeholder="you@email.com" required>
+          </div>
+          <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
+          <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
+          <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
         </div>
         <div class="listing-modal-price-row">
           <div>
@@ -3020,12 +3079,15 @@
   // Real availability, not a guess — pulls actual paid bookings for this
   // listing from the server (via get-listings.js's ?availabilityFor= mode
   // — kept in that same file rather than its own endpoint to stay under
-  // Vercel's Hobby-plan serverless function limit) and greys
-  // out those nights on a read-only month calendar the guest can page
-  // through. Never shows who booked, only that a date is taken.
-  async function renderAvailabilityCalendar(listingId){
+  // Vercel's Hobby-plan serverless function limit). Days the guest can
+  // actually pick, exactly like the homepage's date picker — arrival
+  // first click, departure second — plus a guest count and a live price
+  // summary using the same formula the reserve form itself uses, so what
+  // shows here always matches what checkout would actually charge.
+  async function renderAvailabilityCalendar(listing){
     const container = document.getElementById('availabilityCalendar');
     if(!container) return;
+    const listingId = listing.id;
 
     let bookedRanges = [];
     try {
@@ -3043,28 +3105,65 @@
       if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => bookedNights.add(n));
     });
 
+    const todayIso = new Date().toISOString().split('T')[0];
     let viewYear = new Date().getFullYear();
     let viewMonth = new Date().getMonth();
+    let lgArrival = '';
+    let lgDeparture = '';
+    let lgSelectingStart = true;
+
+    // A selected range is only valid to commit if no night inside it is
+    // already booked — picking through a gap between two bookings isn't
+    // something this simple two-click flow can express safely.
+    function rangeHasConflict(arrival, departure){
+      return getNightsInRangeClient(arrival, departure).some(n => bookedNights.has(n));
+    }
+
+    function handleDayClick(iso){
+      if(lgSelectingStart || !lgArrival){
+        lgArrival = iso;
+        lgDeparture = '';
+        lgSelectingStart = false;
+      } else if(iso <= lgArrival || rangeHasConflict(lgArrival, iso)){
+        // Picked an earlier/same date, or a range that crosses a booked
+        // night — start a fresh selection from here instead.
+        lgArrival = iso;
+        lgDeparture = '';
+        lgSelectingStart = false;
+      } else {
+        lgDeparture = iso;
+        lgSelectingStart = true;
+      }
+      renderMonth();
+      updateListingPriceSummary(listing, lgArrival, lgDeparture);
+      renderListingAmenities(listing, lgArrival, lgDeparture);
+    }
 
     function renderMonth(){
       const firstDay = new Date(viewYear, viewMonth, 1);
       const startWeekday = firstDay.getDay();
       const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
-      const todayIso = new Date().toISOString().split('T')[0];
+      const isCurrentMonth = viewYear === new Date().getFullYear() && viewMonth === new Date().getMonth();
 
       let cellsHtml = '';
       for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
       for(let day = 1; day <= daysInMonth; day++){
         const cellDate = new Date(viewYear, viewMonth, day);
         const iso = cellDate.toISOString().split('T')[0];
-        const classes = 'calendar-day' + ((iso < todayIso || bookedNights.has(iso)) ? ' disabled' : '');
-        cellsHtml += `<div class="${classes}">${day}</div>`;
+        const isPast = iso < todayIso;
+        const isBooked = bookedNights.has(iso);
+        const isDisabled = isPast || isBooked;
+        let classes = 'calendar-day';
+        if(isDisabled) classes += ' disabled';
+        if(iso === lgArrival || iso === lgDeparture) classes += ' selected-start';
+        else if(lgArrival && lgDeparture && iso > lgArrival && iso < lgDeparture) classes += ' in-range';
+        cellsHtml += `<div class="${classes}" data-lg-date="${iso}">${day}</div>`;
       }
 
       container.innerHTML = `
         <div class="calendar-month-panel" style="max-width:320px; padding:0;">
           <div class="calendar-month-header">
-            <button type="button" class="cal-nav" id="availCalPrev" aria-label="Previous month">‹</button>
+            <button type="button" class="cal-nav" id="availCalPrev" aria-label="Previous month" ${isCurrentMonth ? 'disabled' : ''}>‹</button>
             <div class="calendar-month-label">${MONTH_NAMES[viewMonth]} ${viewYear}</div>
             <button type="button" class="cal-nav" id="availCalNext" aria-label="Next month">›</button>
           </div>
@@ -3072,7 +3171,9 @@
             <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
           </div>
           <div class="calendar-grid">${cellsHtml}</div>
-          <p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Greyed-out dates are already booked or in the past.</p>
+          <p style="font-size:11.5px; opacity:0.6; margin-top:10px;">
+            ${lgArrival && !lgDeparture ? 'Now pick your departure date.' : 'Greyed-out dates are already booked or in the past.'}
+          </p>
         </div>
       `;
 
@@ -3086,9 +3187,313 @@
         if(viewMonth > 11){ viewMonth = 0; viewYear += 1; }
         renderMonth();
       });
+      container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+        cell.addEventListener('click', (e) => {
+          e.stopPropagation();
+          handleDayClick(cell.dataset.lgDate);
+        });
+      });
     }
 
     renderMonth();
+
+    // ---- Guest stepper wiring ----
+    const lgCounts = { adults: 1, children: 0, infants: 0, pets: 0 };
+    const LG_MAX = { adults: 16, children: 12, infants: 5, pets: 5 };
+    container.parentElement.querySelectorAll('.guest-step-btn[data-lg-type]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.lgType;
+        const delta = btn.dataset.lgAction === 'inc' ? 1 : -1;
+        const next = lgCounts[type] + delta;
+        const min = type === 'adults' ? 1 : 0;
+        if(next < min || next > LG_MAX[type]) return;
+        lgCounts[type] = next;
+        const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
+        if(countEl) countEl.textContent = next;
+        updateListingPriceSummary(listing, lgArrival, lgDeparture);
+      });
+    });
+
+    // Expose the current guest counts to the price function without a
+    // second copy of this state — read straight off the same object the
+    // stepper buttons above are mutating.
+    container.dataset.listingId = listingId;
+    renderAvailabilityCalendar._lgCounts = renderAvailabilityCalendar._lgCounts || {};
+    renderAvailabilityCalendar._lgCounts[listingId] = lgCounts;
+  }
+
+  // Mirrors updatePricing()'s formula exactly (room + extra-guest charge,
+  // discount, guest service fee, pet fee) so the number shown here always
+  // matches what checkout would actually charge — see updatePricing() for
+  // the same math applied to the (currently hidden) multi-stay reserve form.
+  // Same dated-amenity picker as the reserve form's renderStayAmenities —
+  // night-by-night checkboxes for each paid amenity, respecting its own
+  // availability window and excluded weekdays. Selections live in
+  // renderAvailabilityCalendar._lgAmenities, read by both the price
+  // summary and the actual booking request.
+  function renderListingAmenities(listing, arrival, departure){
+    const container = document.getElementById('listingAmenitiesPicker');
+    if(!container) return;
+
+    renderAvailabilityCalendar._lgAmenities = renderAvailabilityCalendar._lgAmenities || {};
+    if(!renderAvailabilityCalendar._lgAmenities[listing.id]) renderAvailabilityCalendar._lgAmenities[listing.id] = {};
+    const selectedAmenities = renderAvailabilityCalendar._lgAmenities[listing.id];
+
+    const paidAmenities = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
+    if(!arrival || !departure || paidAmenities.length === 0){
+      container.innerHTML = '';
+      return;
+    }
+
+    const nights = getNightsInRangeClient(arrival, departure);
+
+    // Drop selections that no longer make sense now that dates changed.
+    const validAmenityIds = new Set(paidAmenities.map(a => String(a.id)));
+    Object.keys(selectedAmenities).forEach(aid => {
+      if(!validAmenityIds.has(aid)){
+        delete selectedAmenities[aid];
+      } else {
+        const kept = new Set([...selectedAmenities[aid]].filter(d => nights.includes(d)));
+        if(kept.size === 0) delete selectedAmenities[aid];
+        else selectedAmenities[aid] = kept;
+      }
+    });
+
+    const rowsHtml = paidAmenities.map(a => {
+      const excludedWeekdays = Array.isArray(a.excludedWeekdays) ? a.excludedWeekdays : [];
+      const availableNights = nights.filter(n =>
+        (!a.availableFrom || n >= a.availableFrom) &&
+        (!a.availableUntil || n <= a.availableUntil) &&
+        !excludedWeekdays.includes(new Date(n + 'T00:00:00').getDay())
+      );
+      if(availableNights.length === 0) return '';
+
+      const selected = selectedAmenities[a.id] || new Set();
+      const chips = availableNights.map(n => {
+        const isChecked = selected.has(n);
+        const label = new Date(n + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
+        return `<label class="amenity-night-chip${isChecked ? ' checked' : ''}"><input type="checkbox" data-lg-amenity-id="${a.id}" data-lg-amenity-date="${n}" ${isChecked ? 'checked' : ''}> ${label}</label>`;
+      }).join('');
+
+      const subtotal = selected.size * Number(a.price);
+      const subtotalText = selected.size > 0
+        ? `${selected.size} night${selected.size === 1 ? '' : 's'} selected — ${fmt(subtotal)}`
+        : 'Tap nights to add this';
+
+      return `
+        <div class="stay-amenity-row">
+          <div class="stay-amenity-head"><strong>${a.name}</strong><span>${fmt(Number(a.price))}/night</span></div>
+          <div class="amenity-night-chips">${chips}</div>
+          <div class="stay-amenity-subtotal">${subtotalText}</div>
+        </div>
+      `;
+    }).join('');
+
+    const disclaimer = rowsHtml ? `<p style="font-size:11px; opacity:0.55; margin-top:8px; line-height:1.5;">Paid amenities are available on the dates shown only, and are subject to weather, local circumstances, national holidays, and other factors outside the host's control. If a selected amenity can't be fulfilled, the host will provide a refund for that amenity.</p>` : '';
+    container.innerHTML = rowsHtml ? `<div class="listing-modal-section-title">Add Paid Amenities</div>${rowsHtml}${disclaimer}` : '';
+
+    container.querySelectorAll('input[type="checkbox"][data-lg-amenity-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const aid = cb.dataset.lgAmenityId;
+        const date = cb.dataset.lgAmenityDate;
+        if(!selectedAmenities[aid]) selectedAmenities[aid] = new Set();
+        if(cb.checked) selectedAmenities[aid].add(date);
+        else selectedAmenities[aid].delete(date);
+        if(selectedAmenities[aid].size === 0) delete selectedAmenities[aid];
+        renderListingAmenities(listing, arrival, departure);
+        updateListingPriceSummary(listing, arrival, departure);
+      });
+    });
+  }
+
+  function updateListingPriceSummary(listing, arrival, departure){
+    const summaryEl = document.getElementById('listingPriceSummary');
+    const actionEl = document.getElementById('listingBookingAction');
+    if(!summaryEl) return;
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0 };
+
+    // Book Now needs to read the current dates too — stashed here since
+    // this function already runs on every date/guest change, same as
+    // _lgCounts above.
+    renderAvailabilityCalendar._lgDates = renderAvailabilityCalendar._lgDates || {};
+    renderAvailabilityCalendar._lgDates[listing.id] = { arrival, departure };
+
+    if(!arrival || !departure){
+      summaryEl.style.display = 'none';
+      if(actionEl) actionEl.style.display = 'none';
+      return;
+    }
+
+    const nights = Math.round((new Date(departure) - new Date(arrival)) / (1000 * 60 * 60 * 24));
+    const rate = listing.nightly_rate ? Number(listing.nightly_rate) : 0;
+    if(!rate || nights <= 0){
+      summaryEl.style.display = 'none';
+      if(actionEl) actionEl.style.display = 'none';
+      return;
+    }
+
+    const guests = counts.adults + counts.children;
+    const roomTotal = rate * nights;
+    const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
+    const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
+    const beforeDiscount = roomTotal + extraTotal;
+    const discountAmount = calculateDiscount(listing, nights, beforeDiscount);
+    const petFeeAmount = counts.pets > 0 && listing.pet_fee ? Number(listing.pet_fee) : 0;
+
+    // Amenities are priced client-side here only for display — same as
+    // updatePricing() — the real, trusted total is recalculated
+    // server-side in create-order.js from the same selections.
+    let amenityTotal = 0;
+    let amenityNightCount = 0;
+    const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
+    const paidAmenitiesList = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
+    Object.entries(selectedAmenities).forEach(([aid, datesSet]) => {
+      const amenity = paidAmenitiesList.find(a => String(a.id) === String(aid));
+      if(amenity){
+        amenityTotal += Number(amenity.price) * datesSet.size;
+        amenityNightCount += datesSet.size;
+      }
+    });
+
+    const staySubtotal = beforeDiscount - discountAmount + petFeeAmount + amenityTotal;
+    const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
+    const total = staySubtotal + guestServiceFee;
+
+    const rows = [];
+    rows.push(`<div class="sum-row"><span>${fmt(rate)} × ${nights} night${nights === 1 ? '' : 's'}</span><span>${fmt(roomTotal)}</span></div>`);
+    if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmt(extraTotal)}</span></div>`);
+    if(discountAmount > 0) rows.push(`<div class="sum-row"><span>Offer applied</span><span>−${fmt(discountAmount)}</span></div>`);
+    if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee</span><span>${fmt(petFeeAmount)}</span></div>`);
+    if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmt(amenityTotal)}</span></div>`);
+    rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmt(guestServiceFee)}</span></div>`);
+    if(listing.security_deposit && Number(listing.security_deposit) > 0){
+      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (held 7 days)</span><span>${fmt(Number(listing.security_deposit))}</span></div>`);
+    }
+
+    summaryEl.innerHTML = `
+      <div class="listing-modal-section-title">Price Summary</div>
+      ${rows.join('')}
+      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);">
+        <span>Total</span><span>${fmt(total + (listing.security_deposit ? Number(listing.security_deposit) : 0))}</span>
+      </div>
+      <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">This is a live estimate for these dates and guests — the exact amount is confirmed at checkout.</p>
+    `;
+    summaryEl.style.display = 'block';
+    if(actionEl) actionEl.style.display = 'block';
+  }
+
+  // Same checkout flow as the (currently hidden) multi-stay reserve form
+  // — same create-order → Razorpay → verify-payment sequence, same
+  // RAZORPAY_KEY_ID/API_BASE constants — just triggered from this page
+  // directly for a single stay, so a guest never has to leave the
+  // listing they're looking at to actually book it.
+  async function handleListingBookNow(listing){
+    const errorEl = document.getElementById('listingBookError');
+    const confirmEl = document.getElementById('listingBookConfirm');
+    const btn = document.getElementById('listingBookNowBtn');
+    errorEl.style.display = 'none';
+    confirmEl.style.display = 'none';
+
+    const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
+    if(!dates.arrival || !dates.departure){
+      errorEl.textContent = 'Please select your arrival and departure dates first.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const email = document.getElementById('listingBookEmail').value.trim();
+    if(!email || !email.includes('@')){
+      errorEl.textContent = 'Please enter a valid email address.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0 };
+    const guests = counts.adults + counts.children;
+    const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
+    const selectedAmenitiesPayload = Object.entries(selectedAmenities).map(([amenityId, datesSet]) => ({
+      amenityId: Number(amenityId), dates: [...datesSet]
+    }));
+
+    btn.disabled = true;
+    btn.textContent = 'Preparing payment…';
+
+    let order;
+    try {
+      const orderRes = await fetch(API_BASE + '/api/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, selectedAmenities: selectedAmenitiesPayload }],
+          email
+        })
+      });
+      if(!orderRes.ok){
+        const errData = await orderRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Could not start payment. Please try again.');
+      }
+      order = await orderRes.json();
+    } catch(err){
+      btn.disabled = false;
+      btn.textContent = 'Book Now';
+      errorEl.textContent = err.message || 'Could not start payment. Please try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Book Now';
+
+    if(typeof Razorpay === 'undefined'){
+      errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const options = {
+      key: RAZORPAY_KEY_ID,
+      order_id: order.orderId,   // amount/currency come from the order itself — cannot be edited client-side
+      amount: order.amount,
+      currency: order.currency,
+      name: 'Aerva',
+      description: listing.property_name,
+      prefill: { email },
+      theme: { color: '#a9884f' },
+      config: {
+        display: {
+          sequence: ['upi', 'card', 'netbanking', 'wallet'],
+          preferences: { show_default_blocks: true }
+        }
+      },
+      handler: async function(response){
+        try {
+          const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(response)
+          });
+          const verifyData = await verifyRes.json();
+          if(verifyData.verified){
+            confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm availability and follow up by email shortly.';
+            confirmEl.style.display = 'block';
+          } else {
+            errorEl.textContent = 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
+            errorEl.style.display = 'block';
+          }
+        } catch(err){
+          errorEl.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.';
+          errorEl.style.display = 'block';
+        }
+      },
+      modal: { ondismiss: function(){} }
+    };
+
+    const rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(response){
+      errorEl.textContent = 'Payment failed: ' + response.error.description;
+      errorEl.style.display = 'block';
+    });
+    rzp.open();
   }
 
   function showFullListingPage(listing){
@@ -3098,7 +3503,8 @@
     document.getElementById('listingFullViewBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingFullView').style.display = 'block';
     document.title = listing.property_name + ' — Aerva';
-    renderAvailabilityCalendar(listing.id);
+    renderAvailabilityCalendar(listing);
+    document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
   }
 
   document.getElementById('listingModalClose').addEventListener('click', closeListingDetail);
