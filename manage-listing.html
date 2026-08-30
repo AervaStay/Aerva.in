@@ -321,24 +321,44 @@
     document.getElementById('discountMinNights').disabled = isNone;
   }
 
-  // Short Note is always derived from Discount Type/Amount/Minimum Nights
-  // — never typed freely — so it can never drift out of sync with what
-  // the discount actually is. "Discount" and "n" are the only two things
-  // that vary; the surrounding sentence is always the same.
+  // Short Note is always derived from Discount Type/Amount/Minimum
+  // Nights/Nightly Rate — never typed freely — so it can never drift out
+  // of sync with what the discount actually is, and now always shows
+  // both units (₹ and %) so the host can see what their choice is worth
+  // in the other unit too — same baseline conversion (minimum qualifying
+  // stay, or one night) that guests see on the listing itself.
   function updateDiscountNote(){
     const type = document.getElementById('discountType').value;
     const value = document.getElementById('discountValue').value;
     const minNights = document.getElementById('discountMinNights').value;
+    const rate = Number(document.getElementById('nightlyRate').value) || 0;
     const noteEl = document.getElementById('discountDescription');
 
     if(!type || !value){
       noteEl.value = '';
       return;
     }
-    const discountText = type === 'percentage' ? `${value}% off` : `₹${value} off`;
+
+    const baselineNights = minNights ? Number(minNights) : 1;
+    const baselineTotal = rate * baselineNights;
+    const numValue = Number(value);
+    let discountText;
+    if(baselineTotal > 0){
+      if(type === 'percentage'){
+        const rupees = Math.round(baselineTotal * (numValue / 100));
+        discountText = `${value}% (≈₹${rupees.toLocaleString('en-IN')}) off`;
+      } else {
+        const percent = Math.round((numValue / baselineTotal) * 100);
+        discountText = `₹${value} (≈${percent}%) off`;
+      }
+    } else {
+      // No nightly rate set yet — can't convert, so just show the one
+      // unit the host actually entered.
+      discountText = type === 'percentage' ? `${value}% off` : `₹${value} off`;
+    }
     noteEl.value = minNights ? `${discountText} on Min ${minNights} nights` : discountText;
   }
-  ['discountType','discountValue','discountMinNights'].forEach(id => {
+  ['discountType','discountValue','discountMinNights','nightlyRate'].forEach(id => {
     document.getElementById(id).addEventListener('input', () => { updateDiscountFieldsState(); updateDiscountNote(); });
     document.getElementById(id).addEventListener('change', () => { updateDiscountFieldsState(); updateDiscountNote(); });
   });
