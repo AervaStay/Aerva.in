@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/get-listings?refreshCurrencyRates=1",
-      "schedule": "0 0 * * *"
-    }
-  ]
-}
