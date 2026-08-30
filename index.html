@@ -2785,6 +2785,98 @@
     }
   })();
 
+  // ---- Clone an existing listing into a new one ----
+  // Handed off via localStorage from host-dashboard.html's Clone button
+  // (that page already has the full listing data loaded — no need for a
+  // second fetch). Read once, then cleared immediately, so refreshing
+  // this page or navigating back to it doesn't silently reapply stale
+  // clone data days later.
+  (function cloneListingIfLinked(){
+    const params = new URLSearchParams(window.location.search);
+    if(params.get('clone') !== '1') return;
+
+    const raw = localStorage.getItem('aerva_clone_listing');
+    localStorage.removeItem('aerva_clone_listing');
+    if(!raw) return;
+
+    let source;
+    try { source = JSON.parse(raw); } catch(err) { return; }
+
+    // Deliberately NOT set — this must submit as a brand new listing,
+    // never overwrite the original being cloned from.
+    // listingSubmissionState.currentListingId stays whatever it already was (unset).
+
+    hostPricingCurrency = 'INR';
+    hostPricingCurrencyTouched = true;
+    populateHostCurrencySelect();
+    updateHostPricingLabels();
+
+    // Property name deliberately left BLANK rather than copied — if this
+    // is, say, a 3BHK being cloned into a 2BHK configuration of the same
+    // physical property, an identical name would be actively confusing
+    // for guests browsing both. Everything else is genuinely worth
+    // reusing as a starting point.
+    document.getElementById('listCity').value = source.city || '';
+    if(source.latitude && source.longitude){
+      document.getElementById('listLatitude').value = source.latitude;
+      document.getElementById('listLongitude').value = source.longitude;
+      document.getElementById('listFormattedAddress').value = source.formatted_address || '';
+      document.getElementById('listLocationSearch').value = source.formatted_address || '';
+      const confirmEl = document.getElementById('listLocationConfirm');
+      confirmEl.textContent = '✓ Location set: ' + (source.formatted_address || '');
+      confirmEl.style.display = 'block';
+    }
+    if(source.property_type) document.getElementById('listType').value = source.property_type;
+    if(source.bedrooms) document.getElementById('listBedrooms').value = source.bedrooms;
+    if(source.max_guests) document.getElementById('listGuests').value = source.max_guests;
+    document.getElementById('listPrice').value = source.nightly_rate || '';
+    document.getElementById('listDescription').value = source.description || '';
+    document.getElementById('listHostName').value = source.host_name || '';
+    document.getElementById('listHostPhone').value = source.host_phone || '';
+    if(source.discount_type) document.getElementById('listDiscountType').value = source.discount_type;
+    document.getElementById('listDiscountValue').value = source.discount_value || '';
+    document.getElementById('listDiscountMinNights').value = source.discount_min_nights || '';
+    document.getElementById('listDiscountNote').value = source.discount_description || '';
+    (source.amenities || []).forEach(v => {
+      const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
+      if(box) box.checked = true;
+    });
+    (source.services || []).forEach(v => {
+      const box = listingForm.querySelector(`input[name="Services"][value="${v}"]`);
+      if(box) box.checked = true;
+    });
+    document.getElementById('listSecurityDeposit').value = source.security_deposit || '';
+    if(source.pet_friendly){
+      petFriendlyYes.checked = true;
+      document.getElementById('listMaxPets').value = source.max_pets_allowed || '';
+      document.getElementById('listPetFee').value = source.pet_fee || '';
+      (source.allowed_pet_types || []).forEach(v => {
+        const box = listingForm.querySelector(`input[name="PetTypes"][value="${v}"]`);
+        if(box) box.checked = true;
+      });
+      togglePetPolicyDetails();
+    } else if(source.pet_friendly === false){
+      petFriendlyNo.checked = true;
+    }
+
+    // Show the original's photos as reference thumbnails only — browsers
+    // don't allow a file input to be pre-filled from a URL for security
+    // reasons, same limitation the draft-resume flow already has, so
+    // these still have to be re-uploaded, not just re-attached.
+    const referencePhotos = [...(source.exterior_photo_urls || []), ...(source.interior_photo_urls || [])];
+    const referenceHtml = referencePhotos.length
+      ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">${referencePhotos.slice(0, 8).map(url => `<img src="${url}" style="width:64px; height:64px; object-fit:cover; border-radius:4px;">`).join('')}</div>`
+      : '';
+
+    const cloneErrorEl = listingForm.querySelector('.listing-error');
+    cloneErrorEl.style.color = 'var(--gold-deep)';
+    cloneErrorEl.innerHTML = `Cloned from "${source.property_name}" — give this configuration its own name below, and re-upload photos (shown here for reference only; browsers don't allow carrying over previously uploaded files).${referenceHtml}`;
+    cloneErrorEl.style.display = 'block';
+
+    document.getElementById('listPropertyName').focus();
+    window.scrollTo({ top: listingForm.offsetTop - 100, behavior: 'smooth' });
+  })();
+
   // ---- Suites section: render from the same approved-listings data ----
   // used by the Reserve form (fetched once — see initSite() below).
 
@@ -3522,12 +3614,37 @@
       if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => bookedNights.add(n));
     });
 
+    // Carried over from the main search (see the suite-card click handler)
+    // via URL params, since a new tab shares no JS state with the one
+    // that opened it. Only honored if it's actually still a valid,
+    // available range for THIS listing — a date that looked free on the
+    // search results a moment ago could theoretically already be taken.
+    const carriedParams = new URLSearchParams(window.location.search);
+    const carriedArrival = carriedParams.get('arrival') || '';
+    const carriedDeparture = carriedParams.get('departure') || '';
+    const todayIsoForValidation = new Date().toISOString().split('T')[0];
+    let initialArrival = '';
+    let initialDeparture = '';
+    if(carriedArrival && carriedDeparture && carriedArrival >= todayIsoForValidation && carriedDeparture > carriedArrival){
+      const carriedNights = getNightsInRangeClient(carriedArrival, carriedDeparture);
+      const hasConflict = carriedNights.some(n => bookedNights.has(n));
+      if(!hasConflict){
+        initialArrival = carriedArrival;
+        initialDeparture = carriedDeparture;
+      }
+    }
+
     const todayIso = new Date().toISOString().split('T')[0];
     let viewYear = new Date().getFullYear();
     let viewMonth = new Date().getMonth();
-    let lgArrival = '';
-    let lgDeparture = '';
-    let lgSelectingStart = true;
+    if(initialArrival){
+      const anchor = new Date(initialArrival);
+      viewYear = anchor.getFullYear();
+      viewMonth = anchor.getMonth();
+    }
+    let lgArrival = initialArrival;
+    let lgDeparture = initialDeparture;
+    let lgSelectingStart = !initialArrival;
 
     // A selected range is only valid to commit if no night inside it is
     // already booked — picking through a gap between two bookings isn't
@@ -3616,6 +3733,16 @@
 
     // ---- Guest stepper wiring ----
     const lgCounts = { adults: 1, children: 0, infants: 0, pets: 0 };
+    // Same carry-over as dates above — only overrides the default if the
+    // main search actually had guests selected.
+    if(carriedParams.get('adults')) lgCounts.adults = Math.max(1, parseInt(carriedParams.get('adults'), 10) || 1);
+    if(carriedParams.get('children')) lgCounts.children = parseInt(carriedParams.get('children'), 10) || 0;
+    if(carriedParams.get('infants')) lgCounts.infants = parseInt(carriedParams.get('infants'), 10) || 0;
+    if(carriedParams.get('pets')) lgCounts.pets = parseInt(carriedParams.get('pets'), 10) || 0;
+    ['adults', 'children', 'infants', 'pets'].forEach(type => {
+      const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
+      if(countEl) countEl.textContent = lgCounts[type];
+    });
     const LG_MAX = { adults: 16, children: 12, infants: 5, pets: 5 };
     container.parentElement.querySelectorAll('.guest-step-btn[data-lg-type]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -3637,6 +3764,15 @@
     container.dataset.listingId = listingId;
     renderAvailabilityCalendar._lgCounts = renderAvailabilityCalendar._lgCounts || {};
     renderAvailabilityCalendar._lgCounts[listingId] = lgCounts;
+
+    // If a valid date range carried over from the search, show the price
+    // summary (and any dated amenities) immediately — the whole point of
+    // carrying this state over is that the guest shouldn't have to
+    // re-select anything they'd already picked.
+    if(initialArrival && initialDeparture){
+      updateListingPriceSummary(listing, initialArrival, initialDeparture);
+      if(typeof renderListingAmenities === 'function') renderListingAmenities(listing, initialArrival, initialDeparture);
+    }
   }
 
   // Mirrors updatePricing()'s formula exactly (room + extra-guest charge,
@@ -4241,7 +4377,20 @@
     const card = e.target.closest('.suite-card');
     if(!card) return;
     e.preventDefault();
-    window.open('index.html?listing=' + encodeURIComponent(card.dataset.listingId), '_blank');
+
+    // Carry the current search's dates and guest counts into the new
+    // tab as URL params, so the listing page's booking widget opens
+    // already showing what was searched for instead of starting blank —
+    // a new tab has no shared memory with this one, so this is the only
+    // way for that state to travel across.
+    const params = new URLSearchParams({ listing: card.dataset.listingId });
+    if(searchArrivalDate) params.set('arrival', searchArrivalDate);
+    if(searchDepartureDate) params.set('departure', searchDepartureDate);
+    if(guestCounts.adults) params.set('adults', guestCounts.adults);
+    if(guestCounts.children) params.set('children', guestCounts.children);
+    if(guestCounts.infants) params.set('infants', guestCounts.infants);
+    if(guestCounts.pets) params.set('pets', guestCounts.pets);
+    window.open('index.html?' + params.toString(), '_blank');
   });
 
   document.getElementById('experiencesContainer').addEventListener('click', (e) => {
