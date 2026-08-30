@@ -108,7 +108,7 @@
     <button class="logout-btn" id="logoutBtn">Log Out</button>
   </div>
 
-  <a href="index.html#add-listing" class="add-listing-link">List a New Property</a>
+  <a href="index.html?view=list-property" class="add-listing-link">List a New Property</a>
 
   <div id="verificationSection"></div>
 
@@ -162,9 +162,9 @@
       const thumbHtml = leadPhoto
         ? `<img class="listing-thumb" src="${leadPhoto}" alt="${l.property_name}">`
         : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
-      const actionHref = l.status === 'draft' ? `index.html?edit=${l.id}#add-listing` : l.manageLink;
+      const actionHref = l.status === 'draft' ? `index.html?view=list-property&edit=${l.id}` : l.manageLink;
       const actionLink = l.status === 'draft'
-        ? `<a class="manage-link" href="index.html?edit=${l.id}#add-listing">Continue Editing</a>`
+        ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Continue Editing</a>`
         : `<a class="manage-link" href="${l.manageLink}">Manage Price & Offers</a>`;
       return `
         <div class="listing-card" data-href="${actionHref}" style="cursor:pointer;">
