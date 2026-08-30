@@ -6,8 +6,15 @@
 // reviewers with different permissions.
 //
 //   GET  — pending listings for review, as before.
+//   GET ?verifications=1 — hosts with an Aadhaar or bank submission
+//          awaiting review (pending_review), instead of pending listings.
 //   GET ?disputes=1 — disputed security deposits awaiting an admin
 //          decision (see resolveDispute below), instead of pending listings.
+//   POST { verifyDocument: { hostId, field: 'aadhaar'|'bank', action:
+//          'approve'|'reject', reason? } }
+//        — the actual human check pending_review exists for: an admin
+//          looking at the uploaded document (or bank details) and
+//          approving or rejecting it. reason is required when rejecting.
 //   POST { backgroundImages: [url, url, ...] }
 //        — saves the admin's chosen homepage background photos. Kept in
 //          this same file (rather than its own /api endpoint) to stay
@@ -45,6 +52,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
+const { logAudit } = require('./_audit-log');
 
 const sql = neon(process.env.DATABASE_URL);
 const razorpay = new Razorpay({
@@ -160,6 +168,51 @@ module.exports = async (req, res) => {
       }
     }
 
+    // ---- Approve or reject a pending Aadhaar/bank submission ----
+    // This is the actual human check that pending_review exists for —
+    // an admin looking at the uploaded document (or the bank details)
+    // and deciding whether it's genuine, rather than the old behavior
+    // of trusting any upload automatically.
+    if (req.body && req.body.verifyDocument) {
+      try {
+        const { hostId, field, action, reason } = req.body.verifyDocument;
+        if (field !== 'aadhaar' && field !== 'bank') {
+          return res.status(400).json({ error: 'Invalid field.' });
+        }
+        if (action !== 'approve' && action !== 'reject') {
+          return res.status(400).json({ error: 'Invalid action.' });
+        }
+        if (action === 'reject' && (!reason || !String(reason).trim())) {
+          return res.status(400).json({ error: 'Please provide a reason for rejecting this.' });
+        }
+
+        const newStatus = action === 'approve' ? 'verified' : 'rejected';
+        const cleanReason = action === 'reject' ? String(reason).trim().slice(0, 500) : null;
+
+        if (field === 'aadhaar') {
+          await sql`
+            UPDATE hosts SET aadhaar_status = ${newStatus}, aadhaar_rejection_reason = ${cleanReason}
+            WHERE id = ${hostId} AND aadhaar_status = 'pending_review'
+          `;
+        } else {
+          await sql`
+            UPDATE hosts SET bank_status = ${newStatus}, bank_rejection_reason = ${cleanReason}
+            WHERE id = ${hostId} AND bank_status = 'pending_review'
+          `;
+        }
+
+        await logAudit(sql, {
+          action: `host_${field}_${action}d`, success: true, actorType: 'admin', actorIdentifier: 'admin',
+          targetType: 'host', targetId: hostId
+        });
+
+        return res.status(200).json({ success: true });
+      } catch (err) {
+        console.error('get-pending-listings (verifyDocument) error:', err);
+        return res.status(500).json({ error: 'Could not update this verification right now.' });
+      }
+    }
+
     try {
       const { backgroundImages } = req.body || {};
       // Only real Blob URLs are kept — same defensive pattern used
@@ -179,6 +232,27 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('get-pending-listings (POST background) error:', err);
       return res.status(500).json({ error: 'Could not save background images right now.' });
+    }
+  }
+
+  // ---- Host ID/bank verifications awaiting review ----
+  // Same pattern as disputes above — pending_review Aadhaar/bank
+  // submissions, which now actually require a human look before
+  // becoming 'verified' (see host-listings.js for why this changed).
+  if (req.query.verifications === '1') {
+    try {
+      const verifications = await sql`
+        SELECT id, guest_id, email, name, phone,
+               aadhaar_document_url, aadhaar_status,
+               bank_account_number, bank_ifsc, bank_account_holder_name, bank_status
+        FROM hosts
+        WHERE aadhaar_status = 'pending_review' OR bank_status = 'pending_review'
+        ORDER BY id ASC
+      `;
+      return res.status(200).json({ verifications });
+    } catch (err) {
+      console.error('get-pending-listings (verifications) error:', err);
+      return res.status(500).json({ error: 'Could not fetch verifications' });
     }
   }
 
