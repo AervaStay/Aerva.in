@@ -14,10 +14,39 @@
 // collected here as part of the same Razorpay payment, then tracked
 // separately by verify-payment.js once payment succeeds — see that file
 // for the 7-day hold, auto-refund, and dispute lifecycle.
+//
+// ---------------------------------------------------------------------
+// International Payments (Razorpay) — SCAFFOLDING, disabled by default
+// ---------------------------------------------------------------------
+// Razorpay's Orders API already supports charging in a currency other
+// than INR — same razorpay.orders.create() call used below, just with a
+// `currency` param and the amount in THAT currency's own subunit instead
+// of paise. The catch: your Razorpay account has to be approved for
+// International Payments first (a request made from the Razorpay
+// Dashboard, not something this code can do), and it's high-fraud-risk
+// enough that Razorpay reviews it manually.
+//
+// Until that approval exists, INTERNATIONAL_ENABLED_CURRENCIES (read from
+// site_settings, see getEnabledInternationalCurrencies() below) stays
+// empty, and every order charges in INR exactly as it always has —
+// nothing about existing behavior changes by this code merely existing.
+// Once approved, an admin can enable specific currencies by writing to
+// that same site_settings row (no code change needed) and this same
+// function starts actually charging guests directly in their currency.
+//
+// Settlement to Aerva stays INR regardless (confirmed against Razorpay's
+// own docs — payments in any currency settle to the merchant in INR/USD
+// per your account type, never in the guest's currency), so every OTHER
+// pricing column in `orders` (subtotal, gst, commission_amount,
+// payout_amount, deposit_amount) stays INR-denominated no matter what a
+// guest was actually charged — host payout accounting is completely
+// unaffected by this feature. charge_currency/charge_amount exist purely
+// to record what the guest's own statement will show.
 
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
+const { getEnabledInternationalCurrencies, convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -179,7 +208,7 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { stays, experiences, email } = req.body;
+    const { stays, experiences, email, preferredCurrency } = req.body;
     const safeStays = Array.isArray(stays) ? stays : [];
     const safeExperiences = Array.isArray(experiences) ? experiences : [];
 
@@ -352,15 +381,43 @@ module.exports = async (req, res) => {
     const gst = Math.round(grandSubtotal * GST_RATE);
     const totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit;
 
+    // Default path, and the ONLY path until International Payments is
+    // actually approved and an admin explicitly enables specific
+    // currencies — charge in INR, exactly as this has always worked.
+    let razorpayAmount = totalRupees * 100; // paise
+    let razorpayCurrency = 'INR';
+    let chargeCurrency = 'INR';
+    let chargeAmount = null;
+
+    if (preferredCurrency && preferredCurrency !== 'INR') {
+      const enabledCurrencies = await getEnabledInternationalCurrencies(sql);
+      if (enabledCurrencies.includes(preferredCurrency)) {
+        const foreignSubunitAmount = await convertInrToForeignSubunit(sql, totalRupees, preferredCurrency);
+        if (foreignSubunitAmount && foreignSubunitAmount > 0) {
+          razorpayAmount = foreignSubunitAmount;
+          razorpayCurrency = preferredCurrency;
+          chargeCurrency = preferredCurrency;
+          const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.includes(preferredCurrency);
+          chargeAmount = isZeroDecimal ? foreignSubunitAmount : foreignSubunitAmount / 100;
+        }
+        // If conversion failed (no cached rate for this currency), this
+        // silently falls through to the INR defaults set above — a
+        // missing rate should never block a booking, just mean it
+        // charges in INR instead of the guest's preferred currency.
+      }
+    }
+
     const order = await razorpay.orders.create({
-      amount: totalRupees * 100, // paise
-      currency: 'INR',
+      amount: razorpayAmount,
+      currency: razorpayCurrency,
       receipt: `aerva_${Date.now()}`,
       notes: {
         email,
         guestId: guestId || '',
         stayCount: safeStays.length,
         experienceCount: safeExperiences.length,
+        chargeCurrency,
+        chargeAmount: chargeAmount || '',
         // Razorpay notes have a size limit we haven't hit in practice yet,
         // but amenities make this payload meaningfully bigger than before
         // — if bookings with several amenities/dates start failing here,
@@ -374,6 +431,8 @@ module.exports = async (req, res) => {
 
     return res.status(200).json({
       orderId: order.id,
+      chargeCurrency,
+      chargeAmount,
       amount: order.amount,
       currency: order.currency,
       totalDeposit: grandDeposit,

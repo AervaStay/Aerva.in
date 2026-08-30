@@ -85,6 +85,12 @@ module.exports = async (req, res) => {
       const guestId = guestIdRaw ? parseInt(guestIdRaw, 10) : null;
       const stays = order.notes?.stays ? JSON.parse(order.notes.stays) : [];
       const experiences = order.notes?.experiences ? JSON.parse(order.notes.experiences) : [];
+      // What the guest was ACTUALLY charged in — trusted because it comes
+      // from Razorpay's own order record, not anything the browser sent
+      // here. 'INR' with no amount is the default/only case until
+      // International Payments is enabled (see create-order.js).
+      const chargeCurrency = order.notes?.chargeCurrency || 'INR';
+      const chargeAmount = order.notes?.chargeAmount ? Number(order.notes.chargeAmount) : null;
 
       const totalSubtotalAllStays = stays.reduce((sum, s) => sum + s.subtotal, 0);
       const totalGuestFeeAllStays = stays.reduce((sum, s) => sum + (Number(s.guestServiceFee) || 0), 0);
@@ -150,12 +156,14 @@ module.exports = async (req, res) => {
             subtotal, discount_amount, gst, guest_service_fee, total,
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
+            charge_currency, charge_amount,
             razorpay_order_id, razorpay_payment_id, status, order_type
           ) VALUES (
             ${stay.suite}, ${stay.listingId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             ${depositAmount}, ${depositStatus}, ${depositReleaseAt},
+            ${chargeCurrency}, ${chargeAmount},
             ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay'
           )
           RETURNING id
@@ -195,12 +203,14 @@ module.exports = async (req, res) => {
             subtotal, discount_amount, gst, guest_service_fee, total,
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
+            charge_currency, charge_amount,
             razorpay_order_id, razorpay_payment_id, status, order_type
           ) VALUES (
             ${ex.suite}, ${ex.listingId || null}, ${guestId}, ${email}, ${ex.date}, ${ex.date}, ${ex.guests}, 1,
             ${ex.subtotal}, 0, ${gstShare}, ${guestServiceFee}, ${total},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             0, 'none', null,
+            ${chargeCurrency}, ${chargeAmount},
             ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'experience'
           )
         `;

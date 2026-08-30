@@ -53,6 +53,7 @@
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const { logAudit } = require('./_audit-log');
+const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
 
 const sql = neon(process.env.DATABASE_URL);
 const razorpay = new Razorpay({
@@ -86,7 +87,7 @@ module.exports = async (req, res) => {
     if (req.body && req.body.processDeposits) {
       try {
         const eligible = await sql`
-          SELECT id, razorpay_payment_id, deposit_amount
+          SELECT id, razorpay_payment_id, deposit_amount, charge_currency
           FROM orders
           WHERE deposit_status = 'held' AND deposit_release_at <= CURRENT_DATE AND deposit_amount > 0
         `;
@@ -94,13 +95,30 @@ module.exports = async (req, res) => {
         const results = [];
         for (const order of eligible) {
           try {
+            // A refund has to be issued in the SAME currency the payment
+            // was originally charged in — deposit_amount is always stored
+            // in INR, but if this particular order was charged directly
+            // in a foreign currency (International Payments — see
+            // create-order.js), refunding it as INR paise against a
+            // foreign-currency payment would be wrong. Convert first.
+            const currency = order.charge_currency || 'INR';
+            let refundAmount;
+            if (currency === 'INR') {
+              refundAmount = Math.round(Number(order.deposit_amount) * 100);
+            } else {
+              refundAmount = await convertInrToForeignSubunit(sql, Number(order.deposit_amount), currency);
+              if (!refundAmount) {
+                throw new Error(`No cached rate available to refund this ${currency} deposit — left 'held' for manual review.`);
+              }
+            }
+
             // A partial refund on the ORIGINAL payment — Razorpay sends
             // this back to whatever the guest originally paid with
             // (card, UPI, etc.) automatically. This is what satisfies
             // "refunded ... into the same account" — Aerva never asks
             // for or stores separate refund destination details.
             const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
-              amount: Math.round(Number(order.deposit_amount) * 100),
+              amount: refundAmount,
               speed: 'normal',
             });
             await sql`
@@ -136,7 +154,7 @@ module.exports = async (req, res) => {
     if (req.body && req.body.resolveDispute) {
       try {
         const { orderId, compensationAmount } = req.body.resolveDispute;
-        const rows = await sql`SELECT id, razorpay_payment_id, deposit_amount, deposit_status FROM orders WHERE id = ${orderId}`;
+        const rows = await sql`SELECT id, razorpay_payment_id, deposit_amount, deposit_status, charge_currency FROM orders WHERE id = ${orderId}`;
         const order = rows[0];
         if (!order) return res.status(404).json({ error: 'Order not found.' });
         if (order.deposit_status !== 'disputed') {
@@ -148,8 +166,21 @@ module.exports = async (req, res) => {
 
         let refundId = null;
         if (guestRefundAmount > 0) {
+          // Same currency-matching requirement as processDeposits above —
+          // a refund has to be issued in whatever currency the payment
+          // was actually charged in.
+          const currency = order.charge_currency || 'INR';
+          let refundSubunitAmount;
+          if (currency === 'INR') {
+            refundSubunitAmount = Math.round(guestRefundAmount * 100);
+          } else {
+            refundSubunitAmount = await convertInrToForeignSubunit(sql, guestRefundAmount, currency);
+            if (!refundSubunitAmount) {
+              return res.status(502).json({ error: `No cached rate available to refund this ${currency} deposit right now. Please try again shortly.` });
+            }
+          }
           const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
-            amount: Math.round(guestRefundAmount * 100),
+            amount: refundSubunitAmount,
             speed: 'normal',
           });
           refundId = refund.id;
