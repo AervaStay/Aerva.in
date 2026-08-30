@@ -5,6 +5,20 @@
 // not a substitute for real authentication if this ever needs multiple
 // reviewers with different permissions.
 //
+//   POST { adminLogin: { email, password } }
+//        — real admin login, no secret needed once an account exists.
+//   POST { adminSignup: { email, password, name } }
+//        — creates a real admin login. Requires x-admin-secret, not a
+//          session — this is the one place the master secret still
+//          matters day to day.
+//   POST { adminForgotPassword: { email } }
+//        — sends a password reset link if that email belongs to an
+//          admin account, but responds identically either way (same
+//          anti-enumeration approach as guest-auth.js).
+//   POST { adminResetPassword: { resetToken, newPassword } }
+//        — sets a new password from the emailed link, then logs the
+//          admin straight in.
+//
 //   GET  — pending listings for review, as before.
 //   GET ?verifications=1 — hosts with an Aadhaar or bank submission
 //          awaiting review (pending_review), instead of pending listings.
@@ -64,7 +78,47 @@ const razorpay = new Razorpay({
 });
 const BACKGROUND_IMAGES_KEY = 'homepage_background_images';
 const ADMIN_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — same as guest sessions
+const ADMIN_RESET_LINK_LIFETIME_MS = 60 * 60 * 1000; // 1 hour — same reasoning as guest-auth.js's password reset link
 const BCRYPT_ROUNDS = 12; // matches guest-auth.js exactly
+const SITE_BASE = 'https://aerva.in';
+// Keep this in sync with whatever your actual admin page filename is —
+// see the note near the top of admin.html about why it's an obscure,
+// randomly-generated name rather than the guessable "admin.html".
+const ADMIN_PAGE_PATH = 'admin-e75a6e8cd0cf8f34bc57cf65.html';
+
+async function sendAdminPasswordResetEmail(admin, resetTok) {
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set — admin cannot receive their password reset link.');
+    return; // same "fail quietly, log loudly" approach as guest-auth.js's version — never reveals send failures to the caller
+  }
+  const link = `${SITE_BASE}/${ADMIN_PAGE_PATH}?resetToken=${resetTok}`;
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">Reset your admin password</h2>
+      <p>Click below to choose a new password for your Aerva admin account. This link expires in 1 hour.</p>
+      <p><a href="${link}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Reset Password</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you didn't request this, you can safely ignore this email — your password won't change unless you click the link above and set a new one.</p>
+    </div>
+  `;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'Aerva <hello@aerva.in>',
+      to: admin.email,
+      subject: 'Reset your Aerva admin password',
+      html
+    })
+  });
+  if (!res.ok) {
+    let detail;
+    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
+    console.error('Resend send failed (admin password reset):', res.status, detail);
+  }
+}
 
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
@@ -150,6 +204,69 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('get-pending-listings (adminSignup) error:', err);
       return res.status(500).json({ error: 'Could not create the admin account right now. Please try again.' });
+    }
+  }
+
+  // ---- Admin forgot password ----
+  // Same anti-enumeration approach as guest-auth.js's version: identical
+  // response whether or not the email belongs to a real admin account.
+  if (req.method === 'POST' && req.body && req.body.adminForgotPassword) {
+    try {
+      const { email } = req.body.adminForgotPassword;
+      const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+      if (!cleanEmail || !cleanEmail.includes('@')) {
+        return res.status(400).json({ error: 'Please enter a valid email address.' });
+      }
+      const rows = await sql`SELECT id, email FROM admins WHERE email = ${cleanEmail}`;
+      const admin = rows[0];
+      if (admin) {
+        const resetTok = createToken(admin.id, 'admin-password-reset', ADMIN_RESET_LINK_LIFETIME_MS);
+        await sendAdminPasswordResetEmail(admin, resetTok);
+        await logAudit(sql, {
+          action: 'admin_password_reset_requested', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
+          targetType: 'admin', targetId: admin.id
+        });
+      }
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('get-pending-listings (adminForgotPassword) error:', err);
+      return res.status(200).json({ success: true }); // still the same generic response — see note above
+    }
+  }
+
+  // ---- Admin reset password (from the emailed link) ----
+  if (req.method === 'POST' && req.body && req.body.adminResetPassword) {
+    try {
+      const { resetToken, newPassword } = req.body.adminResetPassword;
+      if (!resetToken) {
+        return res.status(400).json({ error: 'This reset link is missing its token — please request a new one.' });
+      }
+      if (!newPassword || newPassword.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+      }
+      const payload = verifyToken(resetToken);
+      if (!payload || payload.action !== 'admin-password-reset') {
+        return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
+      }
+      const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+      const rows = await sql`
+        UPDATE admins SET password_hash = ${passwordHash} WHERE id = ${payload.listingId}
+        RETURNING id, email, name
+      `;
+      const admin = rows[0];
+      if (!admin) return res.status(404).json({ error: 'Account not found.' });
+
+      // Same convenience as the guest-facing version: one click both
+      // resets the password and logs the admin straight in.
+      const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS);
+      await logAudit(sql, {
+        action: 'admin_password_reset_completed', success: true, actorType: 'admin', actorIdentifier: admin.email,
+        targetType: 'admin', targetId: admin.id
+      });
+      return res.status(200).json({ sessionToken, admin: { id: admin.id, email: admin.email, name: admin.name } });
+    } catch (err) {
+      console.error('get-pending-listings (adminResetPassword) error:', err);
+      return res.status(500).json({ error: 'Could not reset your password right now. Please try again.' });
     }
   }
 
