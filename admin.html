@@ -157,10 +157,18 @@
       container.innerHTML = '<p class="empty">No pending listings right now.</p>';
       return;
     }
-    container.innerHTML = listings.map(l => `
+    container.innerHTML = listings.map(l => {
+      const isExperience = l.listing_type === 'experience';
+      const typeTag = isExperience
+        ? '<span class="admin-tag" style="background:#e6dcc9;">EXPERIENCE</span> '
+        : '';
+      const metaLine = isExperience
+        ? `${typeTag}${l.experience_category || 'Uncategorized'} · ₹${l.nightly_rate || '—'}${l.experience_price_unit === 'per_person' ? ' per person' : ' flat'}${l.experience_duration_hours ? ' · ' + l.experience_duration_hours + 'h' : ''} · Hosted at: ${l.hosting_property_name || 'not set'} · ${l.host_name} (${l.host_email}, ${l.host_phone})`
+        : `${l.city} · ${l.property_type || ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})`;
+      return `
       <div class="listing" id="listing-${l.id}">
         <h3>${l.property_name}</h3>
-        <div class="meta">${l.city} · ${l.property_type || ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})</div>
+        <div class="meta">${metaLine}</div>
         <div class="desc">${l.description}</div>
         ${tagListHtml('Amenities', l.amenities)}
         ${tagListHtml('Services', l.services)}
@@ -171,7 +179,8 @@
           <button class="reject-btn" onclick="decide(${l.id}, 'reject')">Reject</button>
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
   }
 
   async function decide(listingId, action){
