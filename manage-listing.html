@@ -115,7 +115,12 @@
       </div>
 
       <div class="field">
-        <label for="nightlyRate">Nightly Rate (₹)</label>
+        <label for="pricingCurrency">Pricing Currency <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— view and edit your prices below in this currency; Aerva stores everything in INR automatically</span></label>
+        <select id="pricingCurrency"></select>
+      </div>
+
+      <div class="field">
+        <label for="nightlyRate"><span id="nightlyRateLabel">Nightly Rate (₹)</span></label>
         <input id="nightlyRate" type="number" min="1" required>
         <p class="price-history-note">Every change here is recorded, so you can always see your rate history.</p>
       </div>
@@ -126,11 +131,11 @@
           <select id="discountType">
             <option value="">None</option>
             <option value="percentage">Percentage off</option>
-            <option value="flat">Flat amount off (₹)</option>
+            <option value="flat" id="discountFlatOption">Flat amount off (₹)</option>
           </select>
         </div>
         <div class="field">
-          <label for="discountValue">Amount</label>
+          <label for="discountValue"><span id="discountValueLabel">Amount</span></label>
           <input id="discountValue" type="number" min="0">
         </div>
       </div>
@@ -147,7 +152,7 @@
       </div>
 
       <div class="field">
-        <label for="securityDeposit">Security Deposit (₹) <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, leave blank if you don't charge one</span></label>
+        <label for="securityDeposit"><span id="securityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, leave blank if you don't charge one</span></label>
         <input id="securityDeposit" type="number" min="0" placeholder="e.g. 2000">
         <p class="price-history-note">Charged to the guest at checkout and held by Aerva for 7 days after checkout. If you don't raise a concern in that window, it's refunded to the guest automatically.</p>
       </div>
@@ -229,7 +234,7 @@
           </div>
         </div>
         <div class="field">
-          <label for="petFee">Pet Fee (₹ per stay) <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if free</span></label>
+          <label for="petFee"><span id="petFeeLabel">Pet Fee (₹ per stay)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if free</span></label>
           <input id="petFee" type="number" min="0" placeholder="e.g. 500">
         </div>
       </div>
@@ -532,6 +537,78 @@
     renderPaidAmenities();
   });
 
+  // ---- Pricing currency: lets a host view/edit their listing's INR
+  // prices in their own currency. Purely a display/input convenience —
+  // everything is still stored and charged in INR; see the note on
+  // fmtGuest() in index.html for the same reasoning on the guest side.
+  const SUPPORTED_CURRENCIES = {
+    INR: { symbol: '₹' }, USD: { symbol: '$' }, GBP: { symbol: '£' }, EUR: { symbol: '€' },
+    AUD: { symbol: 'A$' }, CAD: { symbol: 'C$' }, KRW: { symbol: '₩' }, JPY: { symbol: '¥' },
+    SGD: { symbol: 'S$' }, AED: { symbol: 'AED ' }, CHF: { symbol: 'CHF ' }, RUB: { symbol: '₽' },
+  };
+  let currencyRates = {};
+  let currencyRatesLoaded = false;
+  let pricingCurrency = 'INR';
+  const baselineInr = { nightlyRate: 0, securityDeposit: 0, petFee: 0, discountValueFlat: 0 };
+
+  async function fetchPricingCurrencyRates(){
+    try {
+      const res = await fetch(API_BASE + '/api/get-listings?currencyRates=1');
+      if(!res.ok) throw new Error('rate fetch failed');
+      const data = await res.json();
+      if(data && data.rates && data.rates.USD){ currencyRates = data.rates; currencyRatesLoaded = true; }
+    } catch(err){
+      console.error('Could not load currency rates — pricing will show in INR only:', err);
+    }
+  }
+
+  function fromInr(amountInr){
+    if(pricingCurrency === 'INR' || !currencyRatesLoaded || !currencyRates[pricingCurrency]) return amountInr;
+    return Math.round(amountInr * currencyRates[pricingCurrency] * 100) / 100;
+  }
+  function toInr(amountInSelected){
+    const num = Number(amountInSelected) || 0;
+    if(pricingCurrency === 'INR' || !currencyRatesLoaded || !currencyRates[pricingCurrency]) return Math.round(num);
+    return Math.round(num / currencyRates[pricingCurrency]);
+  }
+
+  function populatePricingCurrencySelect(){
+    const sel = document.getElementById('pricingCurrency');
+    sel.innerHTML = Object.keys(SUPPORTED_CURRENCIES).map(code =>
+      `<option value="${code}"${code === pricingCurrency ? ' selected' : ''}>${code} (${SUPPORTED_CURRENCIES[code].symbol.trim()})</option>`
+    ).join('');
+  }
+
+  function updatePricingLabels(){
+    const symbol = SUPPORTED_CURRENCIES[pricingCurrency].symbol.trim();
+    document.getElementById('nightlyRateLabel').textContent = `Nightly Rate (${symbol})`;
+    document.getElementById('securityDepositLabel').textContent = `Security Deposit (${symbol})`;
+    document.getElementById('petFeeLabel').textContent = `Pet Fee (${symbol} per stay)`;
+    document.getElementById('discountFlatOption').textContent = `Flat amount off (${symbol})`;
+    document.getElementById('discountValueLabel').textContent =
+      document.getElementById('discountType').value === 'flat' ? `Amount (${symbol})` : 'Amount';
+  }
+
+  // Re-derives every displayed price FROM the stored INR baseline —
+  // called on load and whenever the currency selector changes, never
+  // chained off the currently-displayed (possibly already-converted)
+  // value, which would compound rounding error with every switch.
+  function refreshDisplayedPricingFields(){
+    document.getElementById('nightlyRate').value = baselineInr.nightlyRate ? fromInr(baselineInr.nightlyRate) : '';
+    document.getElementById('securityDeposit').value = baselineInr.securityDeposit ? fromInr(baselineInr.securityDeposit) : '';
+    document.getElementById('petFee').value = baselineInr.petFee ? fromInr(baselineInr.petFee) : '';
+    if(document.getElementById('discountType').value === 'flat' && baselineInr.discountValueFlat){
+      document.getElementById('discountValue').value = fromInr(baselineInr.discountValueFlat);
+    }
+    updatePricingLabels();
+  }
+
+  document.getElementById('pricingCurrency').addEventListener('change', function(){
+    pricingCurrency = this.value;
+    refreshDisplayedPricingFields();
+    updateDiscountNote();
+  });
+
   async function loadListing(){
     if(!token){
       loadingState.style.display = 'none';
@@ -554,10 +631,21 @@
         confirmEl.textContent = '✓ Location set: ' + (l.formatted_address || '');
         confirmEl.style.display = 'block';
       }
-      document.getElementById('nightlyRate').value = l.nightly_rate || '';
+      // Real INR values from the server, kept aside as the baseline —
+      // display fields get derived FROM this every time the currency
+      // selector changes, rather than converting the already-converted
+      // number (which would compound errors on every switch).
+      baselineInr.nightlyRate = l.nightly_rate || 0;
+      baselineInr.securityDeposit = l.security_deposit || 0;
+      baselineInr.petFee = l.pet_fee || 0;
+      baselineInr.discountValueFlat = l.discount_type === 'flat' ? (l.discount_value || 0) : 0;
+
       document.getElementById('discountType').value = l.discount_type || '';
-      document.getElementById('discountValue').value = l.discount_value || '';
+      document.getElementById('discountValue').value = l.discount_type === 'percentage' ? (l.discount_value || '') : '';
       document.getElementById('discountMinNights').value = l.discount_min_nights || '';
+      await fetchPricingCurrencyRates();
+      populatePricingCurrencySelect();
+      refreshDisplayedPricingFields();
       // Not set from l.discount_description directly — always regenerated
       // from the discount fields themselves, so it can't carry forward a
       // stale hand-typed note from before this became auto-generated.
@@ -630,12 +718,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token,
-          nightlyRate: document.getElementById('nightlyRate').value,
+          nightlyRate: toInr(document.getElementById('nightlyRate').value),
           latitude: document.getElementById('listLatitude').value,
           longitude: document.getElementById('listLongitude').value,
           formattedAddress: document.getElementById('listFormattedAddress').value,
           discountType: document.getElementById('discountType').value,
-          discountValue: document.getElementById('discountValue').value,
+          discountValue: document.getElementById('discountType').value === 'flat'
+            ? toInr(document.getElementById('discountValue').value)
+            : document.getElementById('discountValue').value,
           discountMinNights: document.getElementById('discountMinNights').value,
           discountDescription: document.getElementById('discountDescription').value,
           exteriorPhotoUrls,
@@ -644,11 +734,11 @@
           amenities: Array.from(document.querySelectorAll('input[name="amenity"]:checked')).map(cb => cb.value),
           services: Array.from(document.querySelectorAll('input[name="service"]:checked')).map(cb => cb.value),
           paidAmenities: paidAmenityRows,
-          securityDeposit: document.getElementById('securityDeposit').value,
+          securityDeposit: toInr(document.getElementById('securityDeposit').value),
           petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
           maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
           allowedPetTypes: petFriendlyYes.checked ? Array.from(document.querySelectorAll('input[name="petType"]:checked')).map(cb => cb.value) : [],
-          petFee: petFriendlyYes.checked ? document.getElementById('petFee').value : ''
+          petFee: petFriendlyYes.checked ? toInr(document.getElementById('petFee').value) : ''
         })
       });
       const data = await res.json();
