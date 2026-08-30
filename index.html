@@ -1419,19 +1419,38 @@
   const CURRENCY_STORAGE_KEY = 'aerva_currency';
 
   let currentCurrency = 'INR';
-  let currencyRates = { INR: 1 }; // filled in by fetchCurrencyRates(); 1 until then, so prices just show INR
+  let currencyRates = { INR: 1 };
+  // Only true once a REAL rate table has loaded. This is what fmtGuest()
+  // checks before converting anything — without it, currencyRates[code]
+  // would silently fall back to 1 (no conversion) while the currency
+  // SYMBOL still switched, showing e.g. "£3500" for something that's
+  // actually ₹3500. Better to keep showing correct INR than a wrong
+  // number under the right-looking symbol.
+  let currencyRatesLoaded = false;
 
   async function fetchCurrencyRates(){
+    // Reads from our own backend now, not a third-party API directly —
+    // get-listings.js's ?currencyRates=1 mode just returns whatever was
+    // last cached by the daily Vercel Cron refresh (see vercel.json and
+    // that mode's ?refreshCurrencyRates=1 counterpart). This removes the
+    // CORS/uptime dependency on a stranger's server from every guest's
+    // page load — if open.er-api.com is slow or down, it no longer
+    // affects anyone browsing, only tomorrow's scheduled refresh.
     try {
-      const res = await fetch('https://open.er-api.com/v6/latest/INR');
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?currencyRates=1');
       if(!res.ok) throw new Error('rate fetch failed');
       const data = await res.json();
-      if(data && data.rates) currencyRates = data.rates;
+      if(data && data.rates && data.rates.USD && data.rates.GBP){
+        currencyRates = data.rates;
+        currencyRatesLoaded = true;
+        return;
+      }
+      // rates: null means the cron hasn't run successfully yet (e.g. the
+      // very first day after deploying this, before midnight UTC) — not
+      // an error, just "nothing cached yet."
+      console.warn('No cached currency rates yet — showing INR until the next daily refresh.');
     } catch(err){
-      // No live rates — every conversion below just falls back to INR
-      // (rate 1) rather than showing a wrong number, since guessing an
-      // exchange rate would be worse than not converting at all.
-      console.error('Could not fetch currency rates, showing INR:', err);
+      console.error('Could not load currency rates from our own backend:', err);
     }
   }
 
@@ -1463,11 +1482,17 @@
     applyCurrencyToPage();
   }
 
-  function setCurrency(code, persistToAccount){
+  async function setCurrency(code, persistToAccount){
     if(!SUPPORTED_CURRENCIES[code]) return;
     currentCurrency = code;
     localStorage.setItem(CURRENCY_STORAGE_KEY, code);
     updateCurrencyTriggerLabel();
+    if(code !== 'INR' && !currencyRatesLoaded){
+      // The initial load never got real rates — try again now rather
+      // than leaving the guest stuck seeing INR for the rest of the
+      // session just because of one earlier network hiccup.
+      await fetchCurrencyRates();
+    }
     applyCurrencyToPage();
     if(persistToAccount && hostSessionToken){
       fetch(SUITES_API_BASE + '/api/guest-profile', {
@@ -1481,12 +1506,22 @@
   // Converts a real INR amount into the guest's chosen display currency
   // and formats it with the right symbol — this is what every
   // guest-facing price on the site should route through instead of fmt().
+  // Falls back to plain, correct INR whenever a real conversion isn't
+  // available yet, rather than ever pairing a foreign symbol with an
+  // amount that was never actually converted.
   function fmtGuest(amountInInr){
-    const rate = currencyRates[currentCurrency] || 1;
+    if(currentCurrency === 'INR' || !currencyRatesLoaded){
+      return SUPPORTED_CURRENCIES.INR.symbol + amountInInr.toLocaleString('en-IN');
+    }
+    const rate = currencyRates[currentCurrency];
+    if(!rate){
+      // This specific currency's rate wasn't in the response for some
+      // reason, even though the table loaded — same fallback logic.
+      return SUPPORTED_CURRENCIES.INR.symbol + amountInInr.toLocaleString('en-IN');
+    }
     const converted = amountInInr * rate;
-    const info = SUPPORTED_CURRENCIES[currentCurrency] || SUPPORTED_CURRENCIES.INR;
-    const decimals = currentCurrency === 'INR' ? 0 : 2;
-    return info.symbol + converted.toLocaleString(info.locale, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    const info = SUPPORTED_CURRENCIES[currentCurrency];
+    return info.symbol + converted.toLocaleString(info.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   // Re-renders whatever's currently on screen so a currency switch takes
