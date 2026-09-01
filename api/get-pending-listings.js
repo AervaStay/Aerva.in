@@ -192,7 +192,11 @@ async function sendListingStatusEmail(listing, action, reason) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: listing.host_email, subject: copy.subject, html })
+  }).catch(err => {
+    console.error('Resend request failed (listing status change):', err);
+    return null;
   });
+  if (!emailRes) return; // network/DNS-level failure — never let this bubble up and mask a successful status change
   if (!emailRes.ok) {
     let detail;
     try { detail = await emailRes.json(); } catch { detail = { message: emailRes.statusText }; }
