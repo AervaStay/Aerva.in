@@ -697,7 +697,20 @@
   let calSelEnd = null;   // 'YYYY-MM-DD' — other end, while dragging/hovering
   let calDragging = false;
 
-  function toDateStr(d){ return d.toISOString().slice(0, 10); }
+  // Builds 'YYYY-MM-DD' from a Date object's LOCAL calendar fields —
+  // deliberately NOT toISOString(), which converts to UTC first. For
+  // anyone in a timezone ahead of UTC (IST, +5:30 — everyone using this
+  // page), local midnight on a given day is still the evening of the
+  // PREVIOUS day in UTC, so toISOString().slice(0,10) would silently
+  // roll every date back by one — exactly what caused clicking "2" to
+  // register and save as the 1st. This reads the calendar fields
+  // straight off the Date object with no UTC conversion at all.
+  function toDateStr(d){
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
   function todayStr(){ const t = new Date(); t.setHours(0,0,0,0); return toDateStr(t); }
 
   // date falls within [rangeStart, rangeEnd) — same inclusive-start,
