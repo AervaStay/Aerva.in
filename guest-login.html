@@ -33,6 +33,18 @@
     color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:28px;
   }
   .back-home:hover{opacity:1;}
+
+  .social-buttons{display:flex; flex-direction:column; gap:10px; margin-bottom:20px;}
+  #googleSignInBtn{display:flex; justify-content:center;}
+  #googleSignInBtn > div{width:100% !important;}
+  .social-btn{
+    display:flex; align-items:center; justify-content:center; gap:10px;
+    background:white; border:1px solid #ddd0bc; padding:11px; width:100%;
+    font-family:'Jost', sans-serif; font-size:14px; color:#1c1a17; cursor:pointer;
+  }
+  .social-btn:hover{border-color:#8a6c39;}
+  .divider{display:flex; align-items:center; gap:12px; margin-bottom:20px; opacity:0.5; font-size:12px;}
+  .divider::before, .divider::after{content:''; flex:1; height:1px; background:#ddd0bc;}
 </style>
 </head>
 <body>
@@ -46,6 +58,12 @@
   <div id="loginState" style="display:none;">
     <h1>Welcome Back</h1>
     <p class="subtitle">Log in to view your bookings.</p>
+
+    <div class="social-buttons">
+      <div id="googleSignInBtn"></div>
+    </div>
+    <div class="divider"><span>or</span></div>
+
     <form id="loginForm">
       <div class="field">
         <label for="loginEmail">Email</label>
@@ -57,6 +75,7 @@
       </div>
       <button type="submit" class="btn" id="loginBtn">Log In</button>
       <p class="error" id="loginError" style="display:none;"></p>
+      <p class="error" id="socialError" style="display:none;"></p>
       <p class="switch-mode" id="resendVerificationRow" style="display:none;"><button type="button" id="resendVerificationBtn">Resend verification email</button></p>
     </form>
     <p class="switch-mode"><button type="button" id="showForgotPassword">Forgot your password?</button></p>
@@ -166,9 +185,26 @@
   </div>
 </div>
 
+<!-- Sign in with Google (Google Identity Services) — loaded
+     unconditionally on page load; it no-ops harmlessly if
+     GOOGLE_CLIENT_ID below isn't configured yet, so this page still
+     works fine before you've set it up. -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
 <script>
   const API_BASE = 'https://aerva-in.vercel.app';
   const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  // ---- Google sign-in setup ----
+  // From Google Cloud Console → APIs & Services → Credentials →
+  // OAuth 2.0 Client ID (type "Web application"). Add https://aerva.in
+  // as an Authorized JavaScript origin. This value is public by design —
+  // it identifies the app, not a secret — safe to leave in this file.
+  // The matching GOOGLE_CLIENT_ID must also be set as a Vercel
+  // environment variable so guest-auth.js can verify tokens were issued
+  // for this exact client id. Until it's filled in, the button below
+  // simply shows an error if clicked — nothing else on this page is affected.
+  const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com';
 
   const checkingState = document.getElementById('checkingState');
   const loginState = document.getElementById('loginState');
@@ -589,6 +625,62 @@
       resetBtn.textContent = 'Set New Password';
     }
   });
+
+  // ---- Social sign-in: Google ----
+  // Google's own library renders its official button into #googleSignInBtn
+  // (see the CSS note above on why — a fully custom button isn't a
+  // supported/reliable trigger for Google Identity Services). The
+  // callback fires with a signed credential; that's sent straight to the
+  // backend for verification — this page never inspects or trusts it itself.
+  function initGoogleSignIn(){
+    if(googleInitialized) return true;
+    if(!window.google || !google.accounts || !google.accounts.id) return false; // library hasn't loaded yet or was blocked
+    if(GOOGLE_CLIENT_ID.startsWith('YOUR_')) return true; // not configured yet — stop polling, see setup notes above
+    google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: handleGoogleCredential
+    });
+    google.accounts.id.renderButton(document.getElementById('googleSignInBtn'), {
+      theme: 'outline', size: 'large', shape: 'rectangular', text: 'continue_with', width: 320
+    });
+    googleInitialized = true;
+    return true;
+  }
+
+  async function handleGoogleCredential(response){
+    const socialError = document.getElementById('socialError');
+    socialError.style.display = 'none';
+    try{
+      const res = await fetch(API_BASE + '/api/guest-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'google', idToken: response.credential })
+      });
+      const data = await res.json();
+      if(res.ok){
+        storeSession(data.sessionToken, data.guest);
+        window.location.href = 'index.html';
+      } else {
+        socialError.textContent = data.error || 'Could not sign in with Google. Please try again.';
+        socialError.style.display = 'block';
+      }
+    } catch(err){
+      socialError.textContent = 'Could not sign in with Google. Please try again.';
+      socialError.style.display = 'block';
+    }
+  }
+
+  // The library loads async — poll briefly rather than assuming it's
+  // ready by the time this script runs. Stops as soon as it's
+  // initialized (or after ~10s if the library never loads, e.g. an ad
+  // blocker) rather than polling forever.
+  let googleInitialized = false;
+  let socialInitAttempts = 0;
+  const socialInitTimer = setInterval(() => {
+    const googleDone = initGoogleSignIn();
+    socialInitAttempts++;
+    if(googleDone || socialInitAttempts > 20) clearInterval(socialInitTimer);
+  }, 500);
 
   checkExistingSession();
 </script>
