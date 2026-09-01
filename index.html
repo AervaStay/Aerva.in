@@ -2446,23 +2446,39 @@
   let listingSubmissionState = {
     currentListingId: null, // set once Neon save succeeds (draft or full) — reused so retries UPDATE instead of INSERT again
     exteriorUrls: null,     // cached once photo upload succeeds
-    interiorUrls: null
+    interiorUrls: null,
+    exteriorHashes: null,   // SHA-256 content hashes, cached alongside the URLs — used server-side for duplicate-listing detection
+    interiorHashes: null
   };
 
   const listingDraftBtn = document.getElementById('listingDraftBtn');
 
+  // Real content fingerprint of a file, computed entirely in the browser
+  // via the Web Crypto API — no upload, no server round-trip needed just
+  // to hash it. This is what makes duplicate-listing detection possible
+  // at all: two uploads of the exact same photo always get different
+  // Blob URLs (a fresh random one every time), so comparing URLs alone
+  // can never catch a re-uploaded duplicate — only comparing the actual
+  // image bytes can.
+  async function computeFileHash(file){
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
   async function uploadPhotoCategory(files){
-    if(files.length === 0) return [];
+    if(files.length === 0) return { urls: [], hashes: [] };
     const { upload } = await import('https://esm.sh/@vercel/blob/client');
-    const uploads = await Promise.all(
-      files.map(file =>
-        upload(file.name, file, {
-          access: 'public',
-          handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload'
-        })
-      )
+    const results = await Promise.all(
+      files.map(async file => {
+        const [uploaded, hash] = await Promise.all([
+          upload(file.name, file, { access: 'public', handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload' }),
+          computeFileHash(file)
+        ]);
+        return { url: uploaded.url, hash };
+      })
     );
-    return uploads.map(u => u.url);
+    return { urls: results.map(r => r.url), hashes: results.map(r => r.hash) };
   }
 
   async function saveListing(isDraft){
@@ -2534,6 +2550,8 @@
     // them — no need to re-upload the same files again on a retry.
     let exteriorPhotoUrls = listingSubmissionState.exteriorUrls;
     let interiorPhotoUrls = listingSubmissionState.interiorUrls;
+    let exteriorPhotoHashes = listingSubmissionState.exteriorHashes;
+    let interiorPhotoHashes = listingSubmissionState.interiorHashes;
 
     // Snapshot the current order now — getFiles()/getOrderedIds() stay in
     // lockstep, so the Nth id here always corresponds to the Nth URL once
@@ -2545,16 +2563,24 @@
     if(exteriorPhotoUrls === null || interiorPhotoUrls === null){
       activeBtn.textContent = 'Uploading photos…';
       try{
-        [exteriorPhotoUrls, interiorPhotoUrls] = await Promise.all([
+        const [exteriorResult, interiorResult] = await Promise.all([
           uploadPhotoCategory(exteriorPhotoManager.getFiles()),
           uploadPhotoCategory(interiorPhotoManager.getFiles())
         ]);
+        exteriorPhotoUrls = exteriorResult.urls;
+        interiorPhotoUrls = interiorResult.urls;
+        exteriorPhotoHashes = exteriorResult.hashes;
+        interiorPhotoHashes = interiorResult.hashes;
         listingSubmissionState.exteriorUrls = exteriorPhotoUrls;
         listingSubmissionState.interiorUrls = interiorPhotoUrls;
+        listingSubmissionState.exteriorHashes = exteriorPhotoHashes;
+        listingSubmissionState.interiorHashes = interiorPhotoHashes;
       } catch(uploadErr){
         console.warn('Photo upload failed:', uploadErr);
         exteriorPhotoUrls = exteriorPhotoUrls || [];
         interiorPhotoUrls = interiorPhotoUrls || [];
+        exteriorPhotoHashes = exteriorPhotoHashes || [];
+        interiorPhotoHashes = interiorPhotoHashes || [];
         if(!isDraft && (exteriorPhotoUrls.length === 0 || interiorPhotoUrls.length === 0)){
           const detail = uploadErr && uploadErr.message ? ` (${uploadErr.message})` : '';
           errorEl.textContent = `Photo upload failed${detail} — please try again, or email us directly at hello@aerva.in if this keeps happening.`;
@@ -2618,7 +2644,12 @@
           formattedAddress: document.getElementById('listFormattedAddress').value,
           exteriorPhotoUrls: exteriorPhotoUrls,
           interiorPhotoUrls: interiorPhotoUrls,
-          coverPhotoUrl: coverPhotoUrl
+          coverPhotoUrl: coverPhotoUrl,
+          // Content hashes, not URLs — a re-upload of the exact same photo
+          // always gets a brand-new Blob URL, so only comparing actual
+          // image bytes can catch a genuine duplicate. See submit-listing.js
+          // for how this is used to block near-identical resubmissions.
+          photoHashes: [...(exteriorPhotoHashes || []), ...(interiorPhotoHashes || [])]
         })
       });
       const data = await res.json();
