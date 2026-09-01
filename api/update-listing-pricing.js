@@ -14,7 +14,8 @@
 //          discountMinNights, discountDescription,
 //          exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl,
 //          amenities, services, paidAmenities,
-//          petFriendly, maxPetsAllowed, allowedPetTypes, petFee }
+//          petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
+//          blockedDates }
 //     Saves everything in one request. A rate change is also logged to
 //     price_history. paidAmenities is a full-replace "sync" — whatever
 //     array is sent becomes the complete set: existing rows matching an
@@ -22,7 +23,11 @@
 //     existing row NOT present in the array is deleted. Pet policy is
 //     also a full-replace set of its own four fields — see the inline
 //     comment near where it's resolved for how "not sent at all" differs
-//     from "explicitly set to No".
+//     from "explicitly set to No". blockedDates is the same full-replace
+//     "sync" pattern as paidAmenities — dates a host takes off the
+//     market themselves (maintenance, personal use, etc.), enforced
+//     server-side in create-order.js so a guest genuinely can't book
+//     over them, not just hidden from the calendar UI.
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
@@ -68,7 +73,12 @@ module.exports = async (req, res) => {
         FROM listing_amenities WHERE listing_id = ${listingId} ORDER BY created_at ASC
       `;
 
-      return res.status(200).json({ listing, paidAmenities });
+      const blockedDates = await sql`
+        SELECT id, start_date, end_date, reason
+        FROM listing_blocked_dates WHERE listing_id = ${listingId} ORDER BY start_date ASC
+      `;
+
+      return res.status(200).json({ listing, paidAmenities, blockedDates });
     } catch (err) {
       console.error('update-listing-pricing (GET) error:', err);
       return res.status(500).json({ error: 'Could not load your listing right now. Please try again.' });
@@ -79,7 +89,7 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     try {
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
-              exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities,
+              exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates,
               latitude, longitude, formattedAddress,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit } = req.body || {};
 
@@ -234,13 +244,59 @@ module.exports = async (req, res) => {
         }
       }
 
+      // ---- Sync blocked dates: same full-replace pattern as paid
+      // amenities above. Ranges are host-defined (maintenance, personal
+      // use, etc.) and are what create-order.js actually checks against
+      // before letting a guest pay — this isn't just a calendar display.
+      let blockedDatesError = null;
+      if (Array.isArray(blockedDates)) {
+        try {
+          const existingRows = await sql`SELECT id FROM listing_blocked_dates WHERE listing_id = ${listingId}`;
+          const existingIds = new Set(existingRows.map(r => r.id));
+          const submittedIds = new Set();
+
+          for (const b of blockedDates) {
+            const startDate = typeof b.startDate === 'string' ? b.startDate : null;
+            const endDate = typeof b.endDate === 'string' ? b.endDate : null;
+            // Skip incomplete or backwards ranges rather than failing the
+            // whole save — same tolerance as paid amenities' skip-if-incomplete rule.
+            if (!startDate || !endDate || endDate <= startDate) continue;
+            const reason = typeof b.reason === 'string' ? b.reason.trim().slice(0, 200) || null : null;
+
+            if (b.id && existingIds.has(Number(b.id))) {
+              await sql`
+                UPDATE listing_blocked_dates SET start_date = ${startDate}, end_date = ${endDate}, reason = ${reason}
+                WHERE id = ${Number(b.id)} AND listing_id = ${listingId}
+              `;
+              submittedIds.add(Number(b.id));
+            } else {
+              const inserted = await sql`
+                INSERT INTO listing_blocked_dates (listing_id, start_date, end_date, reason)
+                VALUES (${listingId}, ${startDate}, ${endDate}, ${reason})
+                RETURNING id
+              `;
+              submittedIds.add(inserted[0].id);
+            }
+          }
+
+          const idsToDelete = [...existingIds].filter(id => !submittedIds.has(id));
+          if (idsToDelete.length) {
+            await sql`DELETE FROM listing_blocked_dates WHERE id = ANY(${idsToDelete}) AND listing_id = ${listingId}`;
+          }
+        } catch (blockedErr) {
+          console.error('Blocked dates sync failed:', blockedErr);
+          blockedDatesError = 'Your other changes saved, but blocked dates could not be updated. Please try again.';
+        }
+      }
+
       await logAudit(sql, {
         action: 'listing_pricing_updated', success: true, actorType: 'host', actorIdentifier: listing.host_email,
         targetType: 'listing', targetId: listingId,
-        metadata: { newRate: rate, rateChanged, discountType: discountType || null, paidAmenitiesError: !!paidAmenitiesError }
+        metadata: { newRate: rate, rateChanged, discountType: discountType || null, paidAmenitiesError: !!paidAmenitiesError, blockedDatesError: !!blockedDatesError }
       });
 
-      return res.status(200).json({ success: true, warning: paidAmenitiesError || undefined });
+      const warning = [paidAmenitiesError, blockedDatesError].filter(Boolean).join(' ') || undefined;
+      return res.status(200).json({ success: true, warning });
     } catch (err) {
       console.error('update-listing-pricing (POST) error:', err);
       await logAudit(sql, {

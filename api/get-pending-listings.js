@@ -52,6 +52,26 @@
 //          (capped at the deposit itself) is recorded against the order
 //          for the host's payout, and whatever's left of the deposit is
 //          refunded to the guest the same way processDeposits does.
+//   GET ?liveListings=1
+//        — every listing that has ever gone live (status IN ('approved',
+//          'blocked', 'removed')), for the admin's moderation view.
+//          Pending/rejected submissions aren't included here — those are
+//          the default GET's job.
+//   POST { setListingStatus: { listingId, action, reason? } }
+//        — admin moderation of an already-approved listing. action is
+//          one of:
+//            'block'   approved -> blocked (reversible; e.g. a quality
+//                      or policy concern worth pausing over)
+//            'unblock' blocked  -> approved
+//            'remove'  approved or blocked -> removed (a more final
+//                      takedown, but still reversible if needed)
+//            'restore' removed  -> approved
+//          reason is optional free text, shown to the host by email and
+//          saved so the admin panel can show why a listing is down.
+//          Both 'blocked' and 'removed' are equally hidden from guests
+//          (get-listings.js only shows status = 'approved') — this never
+//          deletes the row, so existing orders/reviews on it are
+//          untouched. The host is emailed either way, best-effort.
 //
 // Requires a site_settings table:
 //   CREATE TABLE IF NOT EXISTS site_settings (
@@ -117,6 +137,66 @@ async function sendAdminPasswordResetEmail(admin, resetTok) {
     let detail;
     try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
     console.error('Resend send failed (admin password reset):', res.status, detail);
+  }
+}
+
+// Tells a host their listing's visibility changed — used by both
+// block/remove and unblock/restore. Never thrown on failure: a host not
+// getting the email shouldn't undo a moderation action that's already
+// taken effect. Same "log loudly, fail quietly" pattern as every other
+// Resend call in this codebase.
+async function sendListingStatusEmail(listing, action, reason) {
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set — host will not be notified of listing status change.');
+    return;
+  }
+  const copy = {
+    block: {
+      subject: `Your Aerva listing has been paused: ${listing.property_name}`,
+      heading: 'Your listing has been paused',
+      body: `Your listing <strong>${listing.property_name}</strong> has been temporarily taken off Aerva and is no longer visible to guests.`,
+    },
+    remove: {
+      subject: `Your Aerva listing has been removed: ${listing.property_name}`,
+      heading: 'Your listing has been removed',
+      body: `Your listing <strong>${listing.property_name}</strong> has been removed from Aerva and is no longer visible to guests.`,
+    },
+    unblock: {
+      subject: `Your Aerva listing is live again: ${listing.property_name}`,
+      heading: 'Your listing is live again',
+      body: `Good news — your listing <strong>${listing.property_name}</strong> is visible to guests on Aerva again.`,
+    },
+    restore: {
+      subject: `Your Aerva listing is live again: ${listing.property_name}`,
+      heading: 'Your listing is live again',
+      body: `Good news — your listing <strong>${listing.property_name}</strong> has been restored and is visible to guests on Aerva again.`,
+    },
+  }[action];
+  if (!copy) return;
+
+  const reasonBlock = reason
+    ? `<p style="background:#f4eadc; padding:14px 16px; margin-top:16px;"><strong>Note from Aerva:</strong> ${reason}</p>`
+    : '';
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">${copy.heading}</h2>
+      <p>${copy.body}</p>
+      ${reasonBlock}
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this? Contact hello@aerva.in.</p>
+    </div>
+  `;
+  const emailRes = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: listing.host_email, subject: copy.subject, html })
+  });
+  if (!emailRes.ok) {
+    let detail;
+    try { detail = await emailRes.json(); } catch { detail = { message: emailRes.statusText }; }
+    console.error('Resend send failed (listing status change):', emailRes.status, detail);
   }
 }
 
@@ -283,6 +363,57 @@ module.exports = async (req, res) => {
   }
 
   if (req.method === 'POST') {
+    // ---- Block / unblock / remove / restore an already-approved listing ----
+    if (req.body && req.body.setListingStatus) {
+      try {
+        const { listingId, action, reason } = req.body.setListingStatus;
+        const id = Number(listingId);
+        const VALID_ACTIONS = { block: 'blocked', unblock: 'approved', remove: 'removed', restore: 'approved' };
+        if (!id || !VALID_ACTIONS[action]) {
+          return res.status(400).json({ error: 'Invalid listing or action.' });
+        }
+        const rows = await sql`SELECT id, property_name, host_email, status FROM listings WHERE id = ${id}`;
+        const listing = rows[0];
+        if (!listing) return res.status(404).json({ error: 'Listing not found.' });
+
+        // Only sensible transitions — this is what stops, say, "unblock"
+        // being called on a listing that was never blocked in the first
+        // place, or a moderation action landing on a submission that's
+        // still just pending review (that's approve-listing.js's job).
+        const ALLOWED_FROM = {
+          block: ['approved'],
+          remove: ['approved', 'blocked'],
+          unblock: ['blocked'],
+          restore: ['removed'],
+        };
+        if (!ALLOWED_FROM[action].includes(listing.status)) {
+          return res.status(400).json({ error: `Can't ${action} a listing that's currently "${listing.status}".` });
+        }
+
+        const newStatus = VALID_ACTIONS[action];
+        const isTakedown = action === 'block' || action === 'remove';
+        const safeReason = isTakedown && typeof reason === 'string' ? reason.trim().slice(0, 500) || null : null;
+
+        await sql`
+          UPDATE listings SET status = ${newStatus}, admin_status_reason = ${safeReason}
+          WHERE id = ${id}
+        `;
+
+        await logAudit(sql, {
+          action: 'listing_status_changed', success: true, actorType: 'admin', actorIdentifier: null,
+          targetType: 'listing', targetId: id,
+          metadata: { action, fromStatus: listing.status, toStatus: newStatus, reason: safeReason }
+        });
+
+        await sendListingStatusEmail(listing, action, safeReason);
+
+        return res.status(200).json({ success: true, status: newStatus });
+      } catch (err) {
+        console.error('get-pending-listings (setListingStatus) error:', err);
+        return res.status(500).json({ error: 'Could not update this listing right now.' });
+      }
+    }
+
     // ---- Auto-refund every held deposit past its 7-day release date ----
     // Admin-triggered rather than a blind cron job — this endpoint does
     // real money movement via Razorpay, so a human clicking "Process" in
@@ -510,6 +641,26 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('get-pending-listings (disputes) error:', err);
       return res.status(500).json({ error: 'Could not fetch disputes' });
+    }
+  }
+
+  // ---- Listings that have ever gone live, for admin moderation ----
+  // Deliberately separate from the 'pending' GET below — this is the
+  // "manage what's already live" view (block/remove/unblock/restore),
+  // not the "review a new submission" queue.
+  if (req.query.liveListings === '1') {
+    try {
+      const liveListings = await sql`
+        SELECT id, property_name, city, host_name, host_email, status,
+               admin_status_reason, created_at
+        FROM listings
+        WHERE status IN ('approved', 'blocked', 'removed') AND listing_type = 'stay'
+        ORDER BY created_at DESC
+      `;
+      return res.status(200).json({ liveListings });
+    } catch (err) {
+      console.error('get-pending-listings (liveListings) error:', err);
+      return res.status(500).json({ error: 'Could not fetch listings' });
     }
   }
 

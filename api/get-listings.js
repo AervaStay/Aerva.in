@@ -115,7 +115,22 @@ module.exports = async (req, res) => {
         arrival: toDateStr(r.arrival),
         departure: toDateStr(r.departure),
       }));
-      return res.status(200).json({ bookedRanges });
+
+      // Host-blocked dates (maintenance, personal use, etc.) — shown on
+      // the same calendar as booked dates so a guest can't even try to
+      // select them, though create-order.js is what actually enforces it.
+      const blockedRows = await sql`
+        SELECT start_date, end_date, reason FROM listing_blocked_dates
+        WHERE listing_id = ${listingId}
+        ORDER BY start_date ASC
+      `;
+      const blockedRanges = blockedRows.map(r => ({
+        arrival: toDateStr(r.start_date),
+        departure: toDateStr(r.end_date),
+        reason: r.reason || null,
+      }));
+
+      return res.status(200).json({ bookedRanges, blockedRanges });
     }
 
     // ---- Homepage background images, chosen by the admin ----

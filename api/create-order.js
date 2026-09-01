@@ -268,6 +268,36 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Stay ${i + 1}: invalid dates or guest count` });
       }
 
+      // ---- Availability, checked here for real (not just in the search
+      // results the guest happened to click through from) ----
+      // 1. Host-blocked dates (maintenance, personal use, etc. — see
+      //    update-listing-pricing.js / listing_blocked_dates).
+      // 2. Any other already-PAID booking on this same listing that
+      //    overlaps. get-listings.js's search already excludes listings
+      //    with an overlap for the dates a guest searched, but that's a
+      //    point-in-time filter — nothing stopped two guests racing to
+      //    pay for the same dates, or a guest paying from a stale page.
+      //    This is the actual guarantee against a double-booked stay.
+      const blockedRows = await sql`
+        SELECT 1 FROM listing_blocked_dates
+        WHERE listing_id = ${listing.id}
+          AND start_date < ${s.departure}::date
+          AND end_date > ${s.arrival}::date
+        LIMIT 1
+      `;
+      if (blockedRows[0]) {
+        return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} isn't available for those dates.` });
+      }
+      const overlapRows = await sql`
+        SELECT 1 FROM orders
+        WHERE listing_id = ${listing.id} AND status = 'paid'
+          AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date
+        LIMIT 1
+      `;
+      if (overlapRows[0]) {
+        return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} was just booked for those dates. Please choose different dates.` });
+      }
+
       const rate = Number(listing.nightly_rate);
       const roomTotal = rate * nights;
       const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
