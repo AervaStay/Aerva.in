@@ -59,8 +59,48 @@
       <p class="error" id="loginError" style="display:none;"></p>
       <p class="switch-mode" id="resendVerificationRow" style="display:none;"><button type="button" id="resendVerificationBtn">Resend verification email</button></p>
     </form>
+    <p class="switch-mode"><button type="button" id="showForgotPassword">Forgot your password?</button></p>
     <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
     <p class="switch-mode"><button type="button" id="showPhoneRequest">Log in with phone instead</button></p>
+  </div>
+
+  <div id="forgotPasswordState" style="display:none;">
+    <h1>Reset Your Password</h1>
+    <p class="subtitle">Enter your email and we'll send you a link to set a new password.</p>
+    <form id="forgotPasswordForm">
+      <div class="field">
+        <label for="forgotEmail">Email</label>
+        <input id="forgotEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+      </div>
+      <button type="submit" class="btn" id="forgotPasswordBtn">Send Reset Link</button>
+      <p class="error" id="forgotPasswordError" style="display:none;"></p>
+    </form>
+    <p class="switch-mode"><button type="button" id="backToLoginFromForgot">Back to log in</button></p>
+  </div>
+
+  <div id="forgotSentState" style="display:none;">
+    <h1>Check Your Email</h1>
+    <p class="subtitle" id="forgotSentSubtitle">If an account exists for that email, we've sent a link to reset your password. It's valid for 1 hour.</p>
+    <p class="switch-mode"><button type="button" id="backToLoginFromForgotSent">Back to log in</button></p>
+  </div>
+
+  <div id="resetPasswordState" style="display:none;">
+    <h1>Choose a New Password</h1>
+    <p class="subtitle">Enter a new password for your account.</p>
+    <form id="resetPasswordForm">
+      <div class="field">
+        <label for="newPassword">New Password</label>
+        <input id="newPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" required>
+      </div>
+      <button type="submit" class="btn" id="resetPasswordBtn">Set New Password</button>
+      <p class="error" id="resetPasswordError" style="display:none;"></p>
+    </form>
+  </div>
+
+  <div id="resetExpiredState" style="display:none;">
+    <h1>Link Expired</h1>
+    <p class="subtitle" id="resetExpiredMsg">This password reset link is no longer valid. Please request a new one.</p>
+    <button class="btn" id="requestNewResetBtn">Request a New Link</button>
   </div>
 
   <div id="signupState" style="display:none;">
@@ -136,9 +176,14 @@
   const phoneRequestState = document.getElementById('phoneRequestState');
   const phoneVerifyState = document.getElementById('phoneVerifyState');
   const checkEmailState = document.getElementById('checkEmailState');
+  const forgotPasswordState = document.getElementById('forgotPasswordState');
+  const forgotSentState = document.getElementById('forgotSentState');
+  const resetPasswordState = document.getElementById('resetPasswordState');
+  const resetExpiredState = document.getElementById('resetExpiredState');
 
   function showOnly(el){
-    [checkingState, loginState, signupState, phoneRequestState, phoneVerifyState, checkEmailState].forEach(s => s.style.display = 'none');
+    [checkingState, loginState, signupState, phoneRequestState, phoneVerifyState, checkEmailState,
+     forgotPasswordState, forgotSentState, resetPasswordState, resetExpiredState].forEach(s => s.style.display = 'none');
     el.style.display = 'block';
   }
 
@@ -158,14 +203,28 @@
   // so those steps don't need to ask for it again.
   let pendingVerifyEmail = '';
 
-  // ---- On page load: three possibilities ----
-  // 1. A ?verify=<token> in the URL — this is a click from the
+  // Holds the resetToken from the URL for the duration of the
+  // "choose a new password" step — never sent anywhere until the guest
+  // submits their new password.
+  let pendingResetToken = '';
+
+  // ---- On page load: four possibilities ----
+  // 1. A ?resetToken=<token> in the URL — a click from the password
+  //    reset email; show the "choose a new password" form.
+  // 2. A ?verify=<token> in the URL — this is a click from the
   //    verification email; complete that first.
-  // 2. A stored session token — check it's still valid, auto-login if so.
-  // 3. Neither — show the plain login form.
+  // 3. A stored session token — check it's still valid, auto-login if so.
+  // 4. Neither — show the plain login form.
   async function checkExistingSession(){
     const params = new URLSearchParams(window.location.search);
     const verifyToken = params.get('verify');
+    const resetToken = params.get('resetToken');
+
+    if(resetToken){
+      pendingResetToken = resetToken;
+      showOnly(resetPasswordState);
+      return;
+    }
 
     if(verifyToken){
       showOnly(checkingState);
@@ -215,6 +274,10 @@
   document.getElementById('showPhoneRequest').addEventListener('click', () => showOnly(phoneRequestState));
   document.getElementById('showLoginFromPhone').addEventListener('click', () => showOnly(loginState));
   document.getElementById('backToPhoneRequest').addEventListener('click', () => showOnly(phoneRequestState));
+  document.getElementById('showForgotPassword').addEventListener('click', () => showOnly(forgotPasswordState));
+  document.getElementById('backToLoginFromForgot').addEventListener('click', () => showOnly(loginState));
+  document.getElementById('backToLoginFromForgotSent').addEventListener('click', () => showOnly(loginState));
+  document.getElementById('requestNewResetBtn').addEventListener('click', () => showOnly(forgotPasswordState));
 
   document.getElementById('loginForm').addEventListener('submit', async function(e){
     e.preventDefault();
@@ -438,6 +501,94 @@
     this.textContent = 'Resend the email';
   });
   document.getElementById('backToLoginFromCheckEmail').addEventListener('click', () => showOnly(loginState));
+
+  // ---- Forgot password: request the reset link ----
+  document.getElementById('forgotPasswordForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const forgotBtn = document.getElementById('forgotPasswordBtn');
+    const forgotError = document.getElementById('forgotPasswordError');
+    forgotError.style.display = 'none';
+
+    const emailValue = document.getElementById('forgotEmail').value.trim();
+    if(!EMAIL_PATTERN.test(emailValue)){
+      forgotError.textContent = 'Please enter a complete email address, like you@gmail.com.';
+      forgotError.style.display = 'block';
+      return;
+    }
+
+    forgotBtn.disabled = true;
+    forgotBtn.textContent = 'Sending…';
+
+    try{
+      const res = await fetch(API_BASE + '/api/guest-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'forgot-password', email: emailValue })
+      });
+      const data = await res.json();
+      if(res.ok){
+        // Same response whether or not the account exists — see
+        // guest-auth.js — so the message here is intentionally generic
+        // rather than confirming an account was found.
+        document.getElementById('forgotSentSubtitle').textContent = `If an account exists for ${emailValue}, we've sent a link to reset your password. It's valid for 1 hour.`;
+        showOnly(forgotSentState);
+      } else {
+        forgotError.textContent = data.error || 'Something went wrong. Please try again.';
+        forgotError.style.display = 'block';
+      }
+    } catch(err){
+      forgotError.textContent = 'Something went wrong. Please try again.';
+      forgotError.style.display = 'block';
+    }
+    forgotBtn.disabled = false;
+    forgotBtn.textContent = 'Send Reset Link';
+  });
+
+  // ---- Reset password: set the new password using the emailed token ----
+  document.getElementById('resetPasswordForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const resetBtn = document.getElementById('resetPasswordBtn');
+    const resetError = document.getElementById('resetPasswordError');
+    resetError.style.display = 'none';
+
+    const newPasswordValue = document.getElementById('newPassword').value;
+    if(newPasswordValue.length < 8){
+      resetError.textContent = 'Password must be at least 8 characters.';
+      resetError.style.display = 'block';
+      return;
+    }
+
+    resetBtn.disabled = true;
+    resetBtn.textContent = 'Saving…';
+
+    try{
+      const res = await fetch(API_BASE + '/api/guest-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'reset-password', resetToken: pendingResetToken, newPassword: newPasswordValue })
+      });
+      const data = await res.json();
+      if(res.ok){
+        // One click both resets the password AND logs the guest in — same
+        // convenience as the email-verification link (see guest-auth.js).
+        storeSession(data.sessionToken, data.guest);
+        window.location.href = 'index.html';
+      } else if(res.status === 400 && /invalid or has expired/i.test(data.error || '')){
+        document.getElementById('resetExpiredMsg').textContent = data.error;
+        showOnly(resetExpiredState);
+      } else {
+        resetError.textContent = data.error || 'Something went wrong. Please try again.';
+        resetError.style.display = 'block';
+        resetBtn.disabled = false;
+        resetBtn.textContent = 'Set New Password';
+      }
+    } catch(err){
+      resetError.textContent = 'Something went wrong. Please try again.';
+      resetError.style.display = 'block';
+      resetBtn.disabled = false;
+      resetBtn.textContent = 'Set New Password';
+    }
+  });
 
   checkExistingSession();
 </script>
