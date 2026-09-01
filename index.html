@@ -13,8 +13,8 @@
   script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com https://fonts.googleapis.com https://esm.sh https://maps.googleapis.com;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com;
-  img-src 'self' data: blob: https://*.public.blob.vercel-storage.com https://maps.gstatic.com https://maps.googleapis.com https://*.googleusercontent.com;
-  connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com https://aerva-in.vercel.app https://formspree.io https://vercel.com https://*.public.blob.vercel-storage.com https://maps.googleapis.com;
+  img-src 'self' data: blob: https://*.public.blob.vercel-storage.com https://*.gstatic.com https://*.googleapis.com https://*.googleusercontent.com;
+  connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com https://aerva-in.vercel.app https://formspree.io https://vercel.com https://*.public.blob.vercel-storage.com https://*.googleapis.com;
   frame-src https://api.razorpay.com https://checkout.razorpay.com;
 ">
 
@@ -203,7 +203,7 @@
     display:flex; align-items:center; justify-content:center; padding:24px;
   }
   .listing-modal{
-    background:var(--cream); max-width:760px; width:100%; max-height:88vh; overflow:hidden;
+    background:var(--cream); max-width:1120px; width:100%; max-height:88vh; overflow:hidden;
     position:relative; border:1px solid var(--line-dark); display:flex; flex-direction:column;
   }
   .listing-modal-close{
@@ -220,6 +220,59 @@
   .listing-modal-photos img{
     width:100%; flex:0 0 100%; scroll-snap-align:start; aspect-ratio:4/2.6; object-fit:cover; display:block;
   }
+
+  /* 4-photo collage — replaces the single-photo-at-a-time carousel above
+     for the listing detail view specifically (buildListingDetailHtml).
+     Always shows exactly up to 4 tiles; a 5th+ photo shows as a "+N
+     photos" overlay on the last tile instead of just being hidden —
+     clicking any tile (including that overlay) opens the full-photo
+     lightbox below. */
+  .photo-collage{
+    display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:4px;
+    aspect-ratio:16/8; overflow:hidden;
+  }
+  .photo-collage-tile{position:relative; cursor:pointer; overflow:hidden; background:#e9e2d6;}
+  .photo-collage-tile img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .35s ease;}
+  .photo-collage-tile:hover img{transform:scale(1.04);}
+  .photo-collage-more-overlay{
+    position:absolute; inset:0; background:rgba(20,17,14,0.55); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:15px; letter-spacing:0.04em;
+  }
+  .photo-collage-single img{aspect-ratio:16/8; object-fit:cover; width:100%; display:block;}
+
+  .photo-lightbox-overlay{
+    position:fixed; inset:0; background:rgba(10,9,8,0.94); z-index:300;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .photo-lightbox-img{max-width:100%; max-height:80vh; object-fit:contain; display:block;}
+  .photo-lightbox-close{
+    position:absolute; top:16px; right:16px; width:40px; height:40px; border-radius:50%;
+    background:rgba(255,255,255,0.12); color:#fff; border:none; cursor:pointer; font-size:22px; line-height:1;
+  }
+  .photo-lightbox-nav{
+    position:absolute; top:50%; transform:translateY(-50%); width:48px; height:48px; border-radius:50%;
+    background:rgba(255,255,255,0.12); color:#fff; border:none; cursor:pointer; font-size:22px; line-height:1;
+  }
+  .photo-lightbox-nav:hover, .photo-lightbox-close:hover{background:rgba(255,255,255,0.24);}
+  .photo-lightbox-prev{left:16px;}
+  .photo-lightbox-next{right:16px;}
+  .photo-lightbox-counter{
+    position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    color:#fff; font-size:12.5px; letter-spacing:0.06em; opacity:0.8;
+  }
+
+  /* Two-column layout: booking widget (calendar/guests/price) on the
+     left, Google Map sidebar on the right. Collapses to a single column
+     — map below the booking widget — on narrow viewports. */
+  .listing-two-col{display:grid; grid-template-columns:1fr 320px; gap:32px; align-items:start;}
+  .listing-col-map{position:sticky; top:0;}
+  .listing-map-embed{width:100%; aspect-ratio:1/1; background:#e9e2d6; border:1px solid var(--line-dark);}
+  @media (max-width: 820px){
+    .listing-two-col{grid-template-columns:1fr;}
+    .listing-col-map{position:static;}
+    .listing-map-embed{aspect-ratio:16/9;}
+  }
+
   .listing-modal-content{padding:28px 30px 34px;}
   .listing-modal-content h2{font-size:26px; margin-bottom:6px;}
   .listing-modal-content .loc{font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep);}
@@ -3491,6 +3544,118 @@
   // listing's detail view. Never trims the description here: that's
   // deliberately kept off the small grid cards, but a guest who opened
   // the full listing page asked to see everything.
+  // ---- Photo collage + lightbox (listing detail view only) ----
+  // Shows up to 4 photos as a 2x2 grid instead of the one-at-a-time
+  // carousel. A 5th+ photo doesn't get hidden — the 4th tile shows a
+  // "+N photos" overlay, and any tile click opens the lightbox below
+  // with every photo, starting at whichever one was clicked.
+  function buildPhotoCollageHtml(photos, altText, listingId){
+    if(!photos.length) return '';
+    if(photos.length === 1){
+      return `<div class="photo-collage-single" data-lightbox-photos data-listing-id="${listingId}"><img src="${photos[0]}" alt="${altText}" loading="lazy" data-lightbox-index="0"></div>`;
+    }
+    const shown = photos.slice(0, 4);
+    const remaining = photos.length - shown.length;
+    const tiles = shown.map((url, i) => {
+      const isLastVisible = i === shown.length - 1;
+      const overlay = (isLastVisible && remaining > 0)
+        ? `<div class="photo-collage-more-overlay">+${remaining} photo${remaining === 1 ? '' : 's'}</div>`
+        : '';
+      return `<div class="photo-collage-tile" data-lightbox-index="${i}"><img src="${url}" alt="${altText}" loading="lazy">${overlay}</div>`;
+    }).join('');
+    return `<div class="photo-collage" data-lightbox-photos data-listing-id="${listingId}">${tiles}</div>`;
+  }
+
+  let lightboxPhotos = [];
+  let lightboxIndex = 0;
+
+  function openPhotoLightbox(photos, startIndex){
+    lightboxPhotos = photos;
+    lightboxIndex = startIndex || 0;
+    renderPhotoLightbox();
+  }
+  function renderPhotoLightbox(){
+    let overlay = document.getElementById('photoLightboxOverlay');
+    if(!overlay){
+      overlay = document.createElement('div');
+      overlay.className = 'photo-lightbox-overlay';
+      overlay.id = 'photoLightboxOverlay';
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => { if(e.target === overlay) closePhotoLightbox(); });
+    }
+    overlay.innerHTML = `
+      <button type="button" class="photo-lightbox-close" id="photoLightboxCloseBtn" aria-label="Close">&times;</button>
+      ${lightboxPhotos.length > 1 ? '<button type="button" class="photo-lightbox-nav photo-lightbox-prev" id="photoLightboxPrevBtn" aria-label="Previous photo">&larr;</button>' : ''}
+      <img class="photo-lightbox-img" src="${lightboxPhotos[lightboxIndex]}" alt="">
+      ${lightboxPhotos.length > 1 ? '<button type="button" class="photo-lightbox-nav photo-lightbox-next" id="photoLightboxNextBtn" aria-label="Next photo">&rarr;</button>' : ''}
+      ${lightboxPhotos.length > 1 ? `<div class="photo-lightbox-counter">${lightboxIndex + 1} / ${lightboxPhotos.length}</div>` : ''}
+    `;
+    overlay.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    document.getElementById('photoLightboxCloseBtn').addEventListener('click', closePhotoLightbox);
+    const prevBtn = document.getElementById('photoLightboxPrevBtn');
+    const nextBtn = document.getElementById('photoLightboxNextBtn');
+    if(prevBtn) prevBtn.addEventListener('click', () => { lightboxIndex = (lightboxIndex - 1 + lightboxPhotos.length) % lightboxPhotos.length; renderPhotoLightbox(); });
+    if(nextBtn) nextBtn.addEventListener('click', () => { lightboxIndex = (lightboxIndex + 1) % lightboxPhotos.length; renderPhotoLightbox(); });
+  }
+  function closePhotoLightbox(){
+    const overlay = document.getElementById('photoLightboxOverlay');
+    if(overlay) overlay.style.display = 'none';
+    document.body.style.overflow = document.getElementById('listingModalOverlay').style.display === 'flex' ? 'hidden' : '';
+  }
+  // Delegated click handler — works for any collage rendered anywhere,
+  // present or future, without needing per-tile listeners re-attached
+  // every time the modal content is rebuilt.
+  document.addEventListener('click', function(e){
+    const tile = e.target.closest('[data-lightbox-photos] [data-lightbox-index]');
+    if(!tile) return;
+    const wrap = tile.closest('[data-lightbox-photos]');
+    // The collage only ever keeps up to 4 <img> tiles in the DOM even
+    // when more photos exist — reopen against the listing's FULL photo
+    // list (same order used to build the collage), not just what's
+    // visibly rendered, so "+N photos" genuinely shows everything.
+    let fullList = Array.from(wrap.querySelectorAll('img')).map(img => img.src);
+    const listing = listingsById[wrap.dataset.listingId];
+    if(listing){
+      const ext = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
+      const intr = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
+      let all = [...intr, ...ext];
+      if(listing.cover_photo_url && all.includes(listing.cover_photo_url)){
+        all = [listing.cover_photo_url, ...all.filter(u => u !== listing.cover_photo_url)];
+      }
+      if(all.length) fullList = all;
+    }
+    openPhotoLightbox(fullList, Number(tile.dataset.lightboxIndex));
+  });
+
+  // ---- Google Map embed (listing detail sidebar) ----
+  // Reuses the same Maps JS API script already loaded for address
+  // autocomplete elsewhere on this page (see initGoogleMaps near the
+  // top) — no second script tag needed. The script loads async, so this
+  // polls briefly rather than assuming google.maps is ready the instant
+  // the modal opens.
+  function initListingMapEmbed(container, lat, lng, label){
+    if(!container) return;
+    if(!window.google || !window.google.maps){
+      let attempts = 0;
+      const timer = setInterval(() => {
+        attempts++;
+        if(window.google && window.google.maps){
+          clearInterval(timer);
+          initListingMapEmbed(container, lat, lng, label);
+        } else if(attempts > 20){
+          clearInterval(timer); // ~10s, then give up quietly — the "View on map" link still works
+        }
+      }, 500);
+      return;
+    }
+    const position = { lat: Number(lat), lng: Number(lng) };
+    const map = new google.maps.Map(container, {
+      center: position, zoom: 14, disableDefaultUI: true, zoomControl: true,
+    });
+    new google.maps.Marker({ position, map, title: label });
+  }
+
   function buildListingDetailHtml(listing){
     const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
     const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
@@ -3498,9 +3663,7 @@
     if(listing.cover_photo_url && allPhotos.includes(listing.cover_photo_url)){
       allPhotos = [listing.cover_photo_url, ...allPhotos.filter(url => url !== listing.cover_photo_url)];
     }
-    const photosHtml = allPhotos.length
-      ? `<div class="listing-modal-photos">${allPhotos.map(url => `<img src="${url}" alt="${listing.property_name}" loading="lazy">`).join('')}</div>`
-      : '';
+    const photosHtml = buildPhotoCollageHtml(allPhotos, listing.property_name, listing.id);
 
     const amenitiesList = Array.isArray(listing.amenities) ? listing.amenities : [];
     const servicesList = Array.isArray(listing.services) ? listing.services : [];
@@ -3560,87 +3723,97 @@
       <div class="listing-modal-content">
         <h2>${listing.property_name}</h2>
         <div class="loc">${listing.city}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
-        ${mapLinkHtml ? `<div style="margin-top:6px;">${mapLinkHtml}</div>` : ''}
         <p class="desc">${listing.description}</p>
         ${amenitiesHtml}
         ${paidAmenitiesHtml}
         ${petPolicyHtml}
-        <div class="listing-modal-section-title">Check Availability &amp; Price</div>
-        <div id="availabilityCalendar" data-listing-id="${listing.id}">
-          <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
-        </div>
-        <div class="guest-row" style="border:none; padding-top:16px;">
-          <div class="guest-row-text">
-            <div class="guest-row-title">Adults</div>
-            <div class="guest-row-sub">Ages 13 or above</div>
+        <div class="listing-two-col">
+          <div class="listing-col-main">
+            <div class="listing-modal-section-title" style="margin-top:26px;">Check Availability &amp; Price</div>
+            <div id="availabilityCalendar" data-listing-id="${listing.id}">
+              <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
+            </div>
+            <div class="guest-row" style="border:none; padding-top:16px;">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Adults</div>
+                <div class="guest-row-sub">Ages 13 or above</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="dec" aria-label="Decrease adults">−</button>
+                <span class="guest-count" id="lgCountAdults">1</span>
+                <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="inc" aria-label="Increase adults">+</button>
+              </div>
+            </div>
+            <div class="guest-row-divider"></div>
+            <div class="guest-row">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Children</div>
+                <div class="guest-row-sub">Ages 2–12</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="dec" aria-label="Decrease children">−</button>
+                <span class="guest-count" id="lgCountChildren">0</span>
+                <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="inc" aria-label="Increase children">+</button>
+              </div>
+            </div>
+            <div class="guest-row-divider"></div>
+            <div class="guest-row">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Infants</div>
+                <div class="guest-row-sub">Under 2</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" data-lg-type="infants" data-lg-action="dec" aria-label="Decrease infants">−</button>
+                <span class="guest-count" id="lgCountInfants">0</span>
+                <button type="button" class="guest-step-btn" data-lg-type="infants" data-lg-action="inc" aria-label="Increase infants">+</button>
+              </div>
+            </div>
+            ${listing.pet_friendly === true ? `
+            <div class="guest-row-divider"></div>
+            <div class="guest-row">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Pets</div>
+                <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? fmt(Number(listing.pet_fee)) + ' fee per stay' : 'No pet fee'}</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="dec" aria-label="Decrease pets">−</button>
+                <span class="guest-count" id="lgCountPets">0</span>
+                <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="inc" aria-label="Increase pets">+</button>
+              </div>
+            </div>` : ''}
+            <div id="listingAmenitiesPicker"></div>
+            <div id="listingPriceSummary" style="display:none;"></div>
+            <div id="listingBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+              <div class="field">
+                <label for="listingBookEmail">Email <span style="color:#a3402f;">*</span></label>
+                <input id="listingBookEmail" type="email" placeholder="you@email.com" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="listingBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="listingCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
+                <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+              </div>
+              <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
+              <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
+              <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
+            </div>
+            <div class="listing-modal-price-row">
+              <div>
+                <div class="price">${priceLine}</div>
+                ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
+                ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
+              </div>
+            </div>
           </div>
-          <div class="guest-stepper">
-            <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="dec" aria-label="Decrease adults">−</button>
-            <span class="guest-count" id="lgCountAdults">1</span>
-            <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="inc" aria-label="Increase adults">+</button>
-          </div>
-        </div>
-        <div class="guest-row-divider"></div>
-        <div class="guest-row">
-          <div class="guest-row-text">
-            <div class="guest-row-title">Children</div>
-            <div class="guest-row-sub">Ages 2–12</div>
-          </div>
-          <div class="guest-stepper">
-            <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="dec" aria-label="Decrease children">−</button>
-            <span class="guest-count" id="lgCountChildren">0</span>
-            <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="inc" aria-label="Increase children">+</button>
-          </div>
-        </div>
-        <div class="guest-row-divider"></div>
-        <div class="guest-row">
-          <div class="guest-row-text">
-            <div class="guest-row-title">Infants</div>
-            <div class="guest-row-sub">Under 2</div>
-          </div>
-          <div class="guest-stepper">
-            <button type="button" class="guest-step-btn" data-lg-type="infants" data-lg-action="dec" aria-label="Decrease infants">−</button>
-            <span class="guest-count" id="lgCountInfants">0</span>
-            <button type="button" class="guest-step-btn" data-lg-type="infants" data-lg-action="inc" aria-label="Increase infants">+</button>
-          </div>
-        </div>
-        ${listing.pet_friendly === true ? `
-        <div class="guest-row-divider"></div>
-        <div class="guest-row">
-          <div class="guest-row-text">
-            <div class="guest-row-title">Pets</div>
-            <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? fmt(Number(listing.pet_fee)) + ' fee per stay' : 'No pet fee'}</div>
-          </div>
-          <div class="guest-stepper">
-            <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="dec" aria-label="Decrease pets">−</button>
-            <span class="guest-count" id="lgCountPets">0</span>
-            <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="inc" aria-label="Increase pets">+</button>
-          </div>
-        </div>` : ''}
-        <div id="listingAmenitiesPicker"></div>
-        <div id="listingPriceSummary" style="display:none;"></div>
-        <div id="listingBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
-          <div class="field">
-            <label for="listingBookEmail">Email <span style="color:#a3402f;">*</span></label>
-            <input id="listingBookEmail" type="email" placeholder="you@email.com" required>
-          </div>
-          <div class="field" style="margin-top:12px;">
-            <label for="listingBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
-            <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" required>
-          </div>
-          <div class="field" style="margin-top:12px;">
-            <label for="listingCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
-            <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
-          </div>
-          <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
-          <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
-          <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
-        </div>
-        <div class="listing-modal-price-row">
-          <div>
-            <div class="price">${priceLine}</div>
-            ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
-            ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
+          <div class="listing-col-map">
+            <div class="listing-modal-section-title" style="margin-top:26px;">Location</div>
+            ${(listing.latitude && listing.longitude) ? `
+              <div class="listing-map-embed" id="listingMapEmbed"></div>
+              <div style="margin-top:8px;">${mapLinkHtml}</div>
+            ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
           </div>
         </div>
       </div>
@@ -3653,6 +3826,10 @@
     document.getElementById('listingModalBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingModalOverlay').style.display = 'flex';
     document.body.style.overflow = 'hidden';
+    const mapEl = document.getElementById('listingMapEmbed');
+    if(mapEl && listing.latitude && listing.longitude){
+      initListingMapEmbed(mapEl, listing.latitude, listing.longitude, listing.property_name);
+    }
   }
 
   function closeListingDetail(){
