@@ -12,6 +12,14 @@
 // their linked `hosts` row and links it via guests.host_id / hosts.guest_id
 // (see schema.sql). From then on, guests.account_type reads 'guest_host'
 // for their account.
+//
+// Duplicate-listing detection: a new (non-draft-edit) submission is
+// rejected with 409 if it matches an existing listing from the SAME host
+// on all of: property name, bedroom config, AND at least one identical
+// photo (by real file content hash — see the photo_hashes migration for
+// why URLs alone can't catch a re-uploaded duplicate). All of these have
+// to match together — a shared name alone, or a shared photo alone,
+// isn't enough to block anything.
 
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
@@ -164,7 +172,7 @@ module.exports = async (req, res) => {
       propertyName, city, propertyType, bedrooms, maxGuests, nightlyRate,
       description, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
-      exteriorPhotoUrls, interiorPhotoUrls,
+      exteriorPhotoUrls, interiorPhotoUrls, photoHashes,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
       securityDeposit,
       hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours
@@ -208,6 +216,38 @@ module.exports = async (req, res) => {
     // counts as "full" differs between a stay and an experience.
     if (!propertyName) {
       return res.status(400).json({ error: isExperience ? 'Please give your experience a name before saving.' : 'Please give your property a name before saving.' });
+    }
+
+    // ---- Duplicate-listing detection ----
+    // Only checked when actually creating a NEW listing (not editing an
+    // existing draft) — resubmitting the same draft goes through the
+    // UPDATE path below, which isn't creating a second, duplicate row.
+    // All four signals have to match before anything is blocked: same
+    // host, same name, same bedroom config, AND at least one identical
+    // photo (by actual file content, not URL — see the note on
+    // photo_hashes in the migration for why URLs alone can't catch
+    // this). Requiring all four avoids falsely blocking two genuinely
+    // different listings that just happen to share a property name.
+    if (!existingDraft && !isExperience) {
+      const safePhotoHashes = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
+      if (safePhotoHashes.length > 0) {
+        const dupeRows = await sql`
+          SELECT id, property_name, status FROM listings
+          WHERE host_id = ${hostId}
+            AND listing_type = 'stay'
+            AND lower(trim(property_name)) = lower(trim(${propertyName}))
+            AND bedrooms = ${bedrooms || null}
+            AND photo_hashes && ${safePhotoHashes}
+          LIMIT 1
+        `;
+        const dupe = dupeRows[0];
+        if (dupe) {
+          console.warn(`submit-listing rejected: likely duplicate of listing #${dupe.id} (${dupe.status})`);
+          return res.status(409).json({
+            error: `This looks like a duplicate of your existing listing "${dupe.property_name}" (${dupe.status}) — same name, same configuration, and at least one identical photo. If this is meant to be a different listing (e.g. a different room configuration of the same property), please use a distinct name and at least one different photo. If you meant to edit the existing listing instead, use "Manage Price & Offers" from your dashboard.`
+          });
+        }
+      }
     }
 
     // An experience always has to point at one of this host's own stay
@@ -306,6 +346,8 @@ module.exports = async (req, res) => {
     const safeExperiencePriceUnit = isExperience && (experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : null;
     const safeExperienceDuration = isExperience && experienceDurationHours ? Number(experienceDurationHours) : null;
 
+    const safePhotoHashesToStore = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
+
     let listing;
     if (existingDraft) {
       const updated = await sql`
@@ -323,6 +365,7 @@ module.exports = async (req, res) => {
           listing_type = ${safeListingType}, hosting_listing_id = ${safeHostingListingId},
           experience_category = ${safeExperienceCategory}, experience_price_unit = ${safeExperiencePriceUnit},
           experience_duration_hours = ${safeExperienceDuration},
+          photo_hashes = ${safePhotoHashesToStore},
           status = ${newStatus}
         WHERE id = ${listingId}
         RETURNING *
@@ -337,7 +380,7 @@ module.exports = async (req, res) => {
           commission_rate, exterior_photo_urls, interior_photo_urls,
           pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
           listing_type, hosting_listing_id, experience_category, experience_price_unit,
-          experience_duration_hours, status
+          experience_duration_hours, status, photo_hashes
         ) VALUES (
           ${propertyName}, ${city || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
@@ -348,7 +391,7 @@ module.exports = async (req, res) => {
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
           ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit},
           ${safeListingType}, ${safeHostingListingId}, ${safeExperienceCategory}, ${safeExperiencePriceUnit},
-          ${safeExperienceDuration}, ${newStatus}
+          ${safeExperienceDuration}, ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
       `;
