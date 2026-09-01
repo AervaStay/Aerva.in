@@ -91,6 +91,44 @@
     background:white; border:1px dashed #ddd0bc; padding:12px; font-size:12px; letter-spacing:0.06em;
     text-transform:uppercase; cursor:pointer; width:100%; color:#8a6c39; margin-top:4px;
   }
+
+  /* ---- Blocked-dates calendar ---- */
+  .cal-wrap{background:white; border:1px solid #ddd0bc; padding:16px; margin-bottom:14px; user-select:none;}
+  .cal-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;}
+  .cal-header .cal-month-label{font-family:Georgia,serif; font-size:16px;}
+  .cal-nav-btn{
+    background:none; border:1px solid #ddd0bc; width:28px; height:28px; cursor:pointer;
+    font-size:14px; color:#1c1a17; line-height:1;
+  }
+  .cal-nav-btn:hover{border-color:#8a6c39;}
+  .cal-grid{display:grid; grid-template-columns:repeat(7, 1fr); gap:3px;}
+  .cal-weekday{font-size:9.5px; text-transform:uppercase; letter-spacing:0.06em; color:#8a7f6c; text-align:center; padding:4px 0;}
+  .cal-day{
+    aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; font-size:12.5px;
+    background:#f9f5ef; border:1px solid transparent; cursor:pointer; border-radius:3px; color:#1c1a17;
+  }
+  .cal-day:hover:not(.cal-day--disabled){border-color:#8a6c39;}
+  .cal-day--empty{visibility:hidden; cursor:default;}
+  .cal-day--past{opacity:0.3; cursor:default;}
+  .cal-day--past:hover{border-color:transparent;}
+  .cal-day--booked{background:#e9e2d6; color:#8a7f6c; cursor:not-allowed; text-decoration:line-through;}
+  .cal-day--booked:hover{border-color:transparent;}
+  .cal-day--blocked{background:#f3d9c4; color:#8a4a1c;}
+  .cal-day--selected{background:#1c1a17; color:#f4ebe3;}
+  .cal-legend{display:flex; gap:14px; flex-wrap:wrap; margin-top:12px; font-size:11px; opacity:0.75;}
+  .cal-legend span{display:inline-flex; align-items:center; gap:5px;}
+  .cal-legend i{width:10px; height:10px; display:inline-block; border-radius:2px;}
+  .cal-confirm{
+    background:#faf6f0; border:1px solid #ddd0bc; padding:12px; margin-top:12px; display:none;
+  }
+  .cal-confirm p{font-size:13px; margin:0 0 8px;}
+  .cal-confirm input{margin-bottom:8px;}
+  .cal-confirm-actions{display:flex; gap:8px;}
+  .cal-confirm-actions button{
+    flex:1; padding:10px; font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; border:none;
+  }
+  .cal-confirm-block-btn{background:#1c1a17; color:#f4ebe3;}
+  .cal-confirm-cancel-btn{background:white; border:1px solid #ddd0bc !important; color:#1c1a17;}
 </style>
 </head>
 <body>
@@ -245,8 +283,31 @@
       <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">A one-time fee per stay, not per night. Leave the date fields blank for an amenity that's available year-round.</p>
 
       <div class="eyebrow" style="margin-top:24px;">Block Dates <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(maintenance, personal use, or any other reason to close this listing)</span></div>
+      <div class="cal-wrap">
+        <div class="cal-header">
+          <button type="button" class="cal-nav-btn" id="calPrevBtn">&larr;</button>
+          <div class="cal-month-label" id="calMonthLabel"></div>
+          <button type="button" class="cal-nav-btn" id="calNextBtn">&rarr;</button>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="cal-legend">
+          <span><i style="background:#f9f5ef; border:1px solid #ddd0bc;"></i> Open</span>
+          <span><i style="background:#f3d9c4;"></i> Blocked by you</span>
+          <span><i style="background:#e9e2d6;"></i> Booked</span>
+          <span><i style="background:#1c1a17;"></i> Selecting</span>
+        </div>
+        <div class="cal-confirm" id="calConfirm">
+          <p id="calConfirmLabel"></p>
+          <input type="text" id="calConfirmReason" placeholder="Reason (optional), e.g. Maintenance">
+          <div class="cal-confirm-actions">
+            <button type="button" class="cal-confirm-block-btn" id="calConfirmBlockBtn">Block These Dates</button>
+            <button type="button" class="cal-confirm-cancel-btn" id="calConfirmCancelBtn">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-6px; margin-bottom:16px;">Click a date to start, click another to select a range (or click-drag), then confirm below. Click an already-blocked date to remove that block.</p>
       <div id="blockedDatesList"></div>
-      <button type="button" class="add-paid-amenity-btn" id="addBlockedDateBtn">+ Block a Date Range</button>
+      <button type="button" class="add-paid-amenity-btn" id="addBlockedDateBtn">+ Block a Date Range Manually</button>
       <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">Guests won't be able to book these dates. This doesn't affect any stay already booked.</p>
 
       <button type="submit" class="btn" id="submitBtn">Save Changes</button>
@@ -569,11 +630,12 @@
         <button type="button" class="remove-amenity-btn" data-action="remove">Remove this block</button>
       `;
       el.querySelectorAll('[data-field]').forEach(input => {
-        input.addEventListener('input', () => { row[input.dataset.field] = input.value; });
+        input.addEventListener('input', () => { row[input.dataset.field] = input.value; renderCalendar(); });
       });
       el.querySelector('[data-action="remove"]').addEventListener('click', () => {
         blockedDateRows.splice(idx, 1);
         renderBlockedDates();
+        renderCalendar();
       });
       blockedDatesList.appendChild(el);
     });
@@ -582,7 +644,196 @@
   document.getElementById('addBlockedDateBtn').addEventListener('click', () => {
     blockedDateRows.push({ id: null, startDate: '', endDate: '', reason: '' });
     renderBlockedDates();
+    renderCalendar();
   });
+
+  // ---- Blocked-dates calendar ----
+  // A visual alternative to the manual rows above, writing into the same
+  // blockedDateRows array so either method keeps the other in sync.
+  // bookedRanges (guest stays already paid for) is read-only here — it's
+  // fetched from the public get-listings.js endpoint once we know this
+  // listing's id, purely so the host can see what's already booked while
+  // picking maintenance dates, not something this page can change.
+  let calMonth = new Date(); calMonth.setDate(1); calMonth.setHours(0,0,0,0);
+  let calListingId = null;
+  let bookedRanges = []; // [{arrival, departure}] — 'YYYY-MM-DD' strings, departure exclusive
+  let calSelStart = null; // 'YYYY-MM-DD' — anchor of an in-progress selection
+  let calSelEnd = null;   // 'YYYY-MM-DD' — other end, while dragging/hovering
+  let calDragging = false;
+
+  function toDateStr(d){ return d.toISOString().slice(0, 10); }
+  function todayStr(){ const t = new Date(); t.setHours(0,0,0,0); return toDateStr(t); }
+
+  // date falls within [rangeStart, rangeEnd) — same inclusive-start,
+  // exclusive-end convention used server-side throughout this codebase.
+  function inRange(dateStr, rangeStart, rangeEnd){
+    return dateStr >= rangeStart && dateStr < rangeEnd;
+  }
+  function dateIsBooked(dateStr){
+    return bookedRanges.some(r => inRange(dateStr, r.arrival, r.departure));
+  }
+  function blockedRowFor(dateStr){
+    return blockedDateRows.find(b => b.startDate && b.endDate && inRange(dateStr, b.startDate, b.endDate));
+  }
+
+  function renderCalendar(){
+    const grid = document.getElementById('calGrid');
+    const label = document.getElementById('calMonthLabel');
+    label.textContent = calMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
+    const year = calMonth.getFullYear(), month = calMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const startWeekday = firstDay.getDay(); // 0=Sun
+
+    let html = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
+    for(let i = 0; i < startWeekday; i++){
+      html += `<div class="cal-day cal-day--empty"></div>`;
+    }
+    const today = todayStr();
+    for(let day = 1; day <= daysInMonth; day++){
+      const d = new Date(year, month, day);
+      const dateStr = toDateStr(d);
+      const isPast = dateStr < today;
+      const booked = dateIsBooked(dateStr);
+      const blockedRow = blockedRowFor(dateStr);
+      let selecting = false;
+      if(calSelStart && calSelEnd){
+        const selMin = calSelStart <= calSelEnd ? calSelStart : calSelEnd;
+        const selMax = calSelStart <= calSelEnd ? calSelEnd : calSelStart;
+        selecting = inRange(dateStr, selMin, nextDay(selMax));
+      }
+
+      let cls = 'cal-day';
+      if(isPast) cls += ' cal-day--past cal-day--disabled';
+      else if(booked) cls += ' cal-day--booked';
+      else if(selecting) cls += ' cal-day--selected';
+      else if(blockedRow) cls += ' cal-day--blocked';
+
+      html += `<div class="${cls}" data-date="${dateStr}" title="${blockedRow && blockedRow.reason ? blockedRow.reason : ''}">${day}</div>`;
+    }
+    grid.innerHTML = html;
+
+    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
+      cell.addEventListener('mousedown', () => onCalMouseDown(cell.dataset.date));
+      cell.addEventListener('mouseenter', () => onCalMouseEnter(cell.dataset.date));
+      cell.addEventListener('mouseup', () => onCalMouseUp(cell.dataset.date));
+      cell.addEventListener('click', () => onCalClick(cell.dataset.date));
+    });
+  }
+
+  function nextDay(dateStr){
+    const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + 1); return toDateStr(d);
+  }
+
+  function onCalMouseDown(dateStr){
+    // Starting a fresh drag on an already-blocked date is handled as a
+    // tap-to-remove instead (see onCalClick) — don't begin a selection there.
+    if(blockedRowFor(dateStr)) return;
+    calDragging = true;
+    calSelStart = dateStr;
+    calSelEnd = dateStr;
+    renderCalendar();
+  }
+  function onCalMouseEnter(dateStr){
+    if(!calDragging || !calSelStart) return;
+    calSelEnd = dateStr;
+    renderCalendar();
+  }
+  function onCalMouseUp(dateStr){
+    if(!calDragging) return;
+    calDragging = false;
+    calSelEnd = dateStr;
+    if(calSelStart && calSelEnd && calSelStart !== calSelEnd){
+      showCalConfirm();
+    }
+    // A plain click (no movement) falls through to onCalClick below,
+    // which handles the single-day and two-tap cases.
+  }
+
+  // Handles: (a) tapping an already-blocked date to remove it, (b) the
+  // two-tap range selection for touch/simple-click users who don't drag.
+  function onCalClick(dateStr){
+    const existingBlock = blockedRowFor(dateStr);
+    if(existingBlock && !calSelStart){
+      const label = `${existingBlock.startDate} to ${existingBlock.endDate}`;
+      if(window.confirm(`Remove this block (${label}${existingBlock.reason ? ', ' + existingBlock.reason : ''})?`)){
+        blockedDateRows = blockedDateRows.filter(b => b !== existingBlock);
+        renderBlockedDates();
+        renderCalendar();
+      }
+      return;
+    }
+    if(!calSelStart){
+      calSelStart = dateStr;
+      calSelEnd = dateStr;
+      renderCalendar();
+      return;
+    }
+    if(calSelStart && calSelEnd === calSelStart && dateStr !== calSelStart && !calDragging){
+      // Second tap, different day — completes the range.
+      calSelEnd = dateStr;
+      showCalConfirm();
+    }
+  }
+
+  function showCalConfirm(){
+    const start = calSelStart <= calSelEnd ? calSelStart : calSelEnd;
+    const endInclusive = calSelStart <= calSelEnd ? calSelEnd : calSelStart;
+    const endExclusive = nextDay(endInclusive);
+    const nights = Math.round((new Date(endExclusive) - new Date(start)) / 86400000);
+    document.getElementById('calConfirmLabel').textContent =
+      start === endInclusive
+        ? `Block ${start} (1 night)?`
+        : `Block ${start} through ${endInclusive} (${nights} nights)?`;
+    document.getElementById('calConfirmReason').value = '';
+    document.getElementById('calConfirm').style.display = 'block';
+  }
+
+  function hideCalConfirm(){
+    calSelStart = null; calSelEnd = null; calDragging = false;
+    document.getElementById('calConfirm').style.display = 'none';
+    renderCalendar();
+  }
+
+  document.getElementById('calConfirmBlockBtn').addEventListener('click', () => {
+    const start = calSelStart <= calSelEnd ? calSelStart : calSelEnd;
+    const endInclusive = calSelStart <= calSelEnd ? calSelEnd : calSelStart;
+    const reason = document.getElementById('calConfirmReason').value.trim();
+    blockedDateRows.push({ id: null, startDate: start, endDate: nextDay(endInclusive), reason });
+    renderBlockedDates();
+    hideCalConfirm();
+  });
+  document.getElementById('calConfirmCancelBtn').addEventListener('click', hideCalConfirm);
+
+  document.getElementById('calPrevBtn').addEventListener('click', () => {
+    calMonth.setMonth(calMonth.getMonth() - 1);
+    renderCalendar();
+  });
+  document.getElementById('calNextBtn').addEventListener('click', () => {
+    calMonth.setMonth(calMonth.getMonth() + 1);
+    renderCalendar();
+  });
+  // Mouse released outside any day cell (e.g. dragged off the grid) —
+  // still needs to end the drag and offer to confirm.
+  document.addEventListener('mouseup', () => {
+    if(calDragging){
+      calDragging = false;
+      if(calSelStart && calSelEnd && calSelStart !== calSelEnd) showCalConfirm();
+    }
+  });
+
+  async function loadBookedRangesForCalendar(listingId){
+    calListingId = listingId;
+    try{
+      const res = await fetch(API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
+      const data = await res.json();
+      bookedRanges = data.bookedRanges || [];
+    } catch(err){
+      bookedRanges = []; // calendar still works, just without the "already booked" shading
+    }
+    renderCalendar();
+  }
 
   // ---- Pricing currency: lets a host view/edit their listing's INR
   // prices in their own currency. Purely a display/input convenience —
@@ -743,6 +994,8 @@
         reason: b.reason || ''
       }));
       renderBlockedDates();
+      renderCalendar();
+      loadBookedRangesForCalendar(l.id); // re-renders the calendar again once bookedRanges arrives
 
       loadingState.style.display = 'none';
       formState.style.display = 'block';
