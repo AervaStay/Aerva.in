@@ -244,6 +244,11 @@
       <button type="button" class="add-paid-amenity-btn" id="addPaidAmenityBtn">+ Add a Paid Amenity</button>
       <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">A one-time fee per stay, not per night. Leave the date fields blank for an amenity that's available year-round.</p>
 
+      <div class="eyebrow" style="margin-top:24px;">Block Dates <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(maintenance, personal use, or any other reason to close this listing)</span></div>
+      <div id="blockedDatesList"></div>
+      <button type="button" class="add-paid-amenity-btn" id="addBlockedDateBtn">+ Block a Date Range</button>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">Guests won't be able to book these dates. This doesn't affect any stay already booked.</p>
+
       <button type="submit" class="btn" id="submitBtn">Save Changes</button>
       <p class="confirm" id="confirmMsg">Saved — your changes are live.</p>
       <p class="error" id="errorMsg"></p>
@@ -537,6 +542,48 @@
     renderPaidAmenities();
   });
 
+  // ---- Blocked dates: same "array is the source of truth, DOM is just
+  // a view onto it" pattern as paid amenities above. ----
+  let blockedDateRows = [];
+  const blockedDatesList = document.getElementById('blockedDatesList');
+
+  function renderBlockedDates(){
+    blockedDatesList.innerHTML = '';
+    blockedDateRows.forEach((row, idx) => {
+      const el = document.createElement('div');
+      el.className = 'paid-amenity-row';
+      el.innerHTML = `
+        <div class="date-line">
+          <div>
+            <label>From</label>
+            <input type="date" data-field="startDate" value="${row.startDate || ''}">
+          </div>
+          <div>
+            <label>Until</label>
+            <input type="date" data-field="endDate" value="${row.endDate || ''}">
+          </div>
+        </div>
+        <div class="row-line">
+          <input type="text" placeholder="Reason (optional), e.g. Maintenance" data-field="reason" value="${row.reason || ''}">
+        </div>
+        <button type="button" class="remove-amenity-btn" data-action="remove">Remove this block</button>
+      `;
+      el.querySelectorAll('[data-field]').forEach(input => {
+        input.addEventListener('input', () => { row[input.dataset.field] = input.value; });
+      });
+      el.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        blockedDateRows.splice(idx, 1);
+        renderBlockedDates();
+      });
+      blockedDatesList.appendChild(el);
+    });
+  }
+
+  document.getElementById('addBlockedDateBtn').addEventListener('click', () => {
+    blockedDateRows.push({ id: null, startDate: '', endDate: '', reason: '' });
+    renderBlockedDates();
+  });
+
   // ---- Pricing currency: lets a host view/edit their listing's INR
   // prices in their own currency. Purely a display/input convenience —
   // everything is still stored and charged in INR; see the note on
@@ -689,6 +736,14 @@
       }));
       renderPaidAmenities();
 
+      blockedDateRows = (data.blockedDates || []).map(b => ({
+        id: b.id,
+        startDate: b.start_date ? b.start_date.slice(0, 10) : '',
+        endDate: b.end_date ? b.end_date.slice(0, 10) : '',
+        reason: b.reason || ''
+      }));
+      renderBlockedDates();
+
       loadingState.style.display = 'none';
       formState.style.display = 'block';
     } catch(err){
@@ -734,6 +789,7 @@
           amenities: Array.from(document.querySelectorAll('input[name="amenity"]:checked')).map(cb => cb.value),
           services: Array.from(document.querySelectorAll('input[name="service"]:checked')).map(cb => cb.value),
           paidAmenities: paidAmenityRows,
+          blockedDates: blockedDateRows,
           securityDeposit: toInr(document.getElementById('securityDeposit').value),
           petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
           maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
