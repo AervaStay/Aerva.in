@@ -3806,6 +3806,7 @@
           <div class="listing-col-photos">
             <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
             ${photosHtml}
+            <p class="desc" style="margin-top:16px;">${listing.description}</p>
           </div>
           <div class="listing-col-map">
             <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
@@ -3815,7 +3816,6 @@
             ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
           </div>
         </div>
-        <p class="desc">${listing.description}</p>
         ${amenitiesHtml}
         ${paidAmenitiesHtml}
         ${petPolicyHtml}
