@@ -28,6 +28,15 @@
 //     then logs the guest in immediately (same "one click, verified AND
 //     logged in" convenience as the email-verification link below).
 //
+//   POST { mode: 'google', idToken }
+//     Verifies a Google Sign-In credential (see _social-auth.js) and
+//     logs the guest in, creating an account on first sign-in. Looked up
+//     first by google_id, then by email — a guest who already has an
+//     email/password account gets THAT account linked (google_id saved
+//     onto it) rather than a duplicate second account. Google's own
+//     attestation of the email is trusted, so the account is marked
+//     email_verified immediately, no separate verification email needed.
+//
 //   GET  ?token=<verifyToken>
 //     Called when a guest clicks the link in their verification email.
 //     Marks the account verified and returns a session token, so
@@ -42,6 +51,7 @@ const bcrypt = require('bcryptjs');
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
+const { verifyGoogleIdToken } = require('./_social-auth');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -63,6 +73,39 @@ const DUMMY_HASH = '$2a$12$CwTycUXWue0Thq9StjUM0uJ8yqxbwmkQ.6qhg0OSyMH0RfaOOKKae
 function safeGuest(guest) {
   // Never send password_hash back to the client, under any circumstance.
   return { id: guest.id, email: guest.email, name: guest.name, phone: guest.phone, accountType: guest.account_type };
+}
+
+// Shared by the 'google' mode below. Three cases, checked in order:
+//   1. A guest already has this Google id on file (google_id) — just log
+//      them in, nothing to change.
+//   2. No google_id match, but the email matches an existing account
+//      (most likely one created the normal email/password way) — LINK
+//      the Google id onto that existing account rather than creating a
+//      confusing second one with the same email. This also flips
+//      email_verified to true if it wasn't already, since Google just
+//      proved the guest owns that inbox.
+//   3. No match at all — create a brand-new account, marked verified
+//      immediately (same reasoning as the link case).
+async function findOrLinkSocialGuest(sql, { providerId, email, name }) {
+  const byProviderId = await sql`SELECT id, email, name, phone, account_type FROM guests WHERE google_id = ${providerId}`;
+  if (byProviderId[0]) return byProviderId[0];
+
+  if (email) {
+    const byEmail = await sql`SELECT id, email, name, phone, account_type FROM guests WHERE email = ${email}`;
+    if (byEmail[0]) {
+      const linked = await sql`
+        UPDATE guests SET google_id = ${providerId}, email_verified = TRUE, name = COALESCE(name, ${name})
+        WHERE id = ${byEmail[0].id} RETURNING id, email, name, phone, account_type
+      `;
+      return linked[0];
+    }
+  }
+
+  const inserted = await sql`
+    INSERT INTO guests (email, name, google_id, email_verified) VALUES (${email}, ${name}, ${providerId}, TRUE)
+    RETURNING id, email, name, phone, account_type
+  `;
+  return inserted[0];
 }
 
 async function sendVerificationEmail(guest, verifyTok) {
@@ -324,6 +367,35 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('guest-auth (reset-password) error:', err);
       return res.status(500).json({ error: 'Could not reset your password right now. Please try again.' });
+    }
+  }
+
+  // ---- Sign in with Google ----
+  if (mode === 'google') {
+    const { idToken } = req.body || {};
+    const verified = await verifyGoogleIdToken(idToken);
+    if (verified.error) {
+      await logAudit(sql, {
+        action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: null,
+        metadata: { reason: 'google_verification_failed', detail: verified.error }
+      });
+      return res.status(401).json({ error: verified.error });
+    }
+    try {
+      const guest = await findOrLinkSocialGuest(sql, { providerId: verified.googleId, email: verified.email, name: verified.name });
+      const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+      await logAudit(sql, {
+        action: 'guest_login', success: true, actorType: 'guest', actorIdentifier: verified.email,
+        targetType: 'guest', targetId: guest.id, metadata: { provider: 'google' }
+      });
+      return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
+    } catch (err) {
+      console.error('guest-auth (google) error:', err);
+      await logAudit(sql, {
+        action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: verified.email,
+        metadata: { reason: 'server_error', provider: 'google' }
+      });
+      return res.status(500).json({ error: 'Could not sign you in with Google right now. Please try again.' });
     }
   }
 
