@@ -740,7 +740,6 @@
     
     </a>
     <div class="nav-links">
-      <a href="#location">Location</a>
       <div class="currency-picker-wrap">
         <button type="button" class="currency-trigger" id="currencyTriggerBtn" aria-label="Change display currency">INR</button>
         <div class="currency-dropdown" id="currencyDropdown"></div>
@@ -758,7 +757,6 @@
 
 <div class="mobile-nav-scrim" id="mobileNavScrim"></div>
 <nav class="mobile-nav-panel" id="mobileNavPanel" aria-label="Mobile navigation">
-  <a href="#location">Location</a>
   <div class="currency-picker-wrap">
     <button type="button" class="currency-trigger" id="currencyTriggerBtnMobile" aria-label="Change display currency">INR</button>
     <div class="currency-dropdown" id="currencyDropdownMobile"></div>
@@ -1326,7 +1324,6 @@
       <h4>Explore</h4>
       <ul>
         <li><a href="#suites">Suites</a></li>
-        <li><a href="#location">Location</a></li>
       </ul>
     </div>
     <div class="foot-col">
@@ -2941,6 +2938,54 @@
     return `${fmtGuest(rupees)} (${percent}%) off${minNightsNote}`;
   }
 
+  // Picks whichever currently-running promotion (see get-listings.js's
+  // active_promotions, already filtered to is_active + not-yet-ended)
+  // saves the most on a single night — just for display purposes, since
+  // no dates are chosen yet at the card-browsing stage. This is a teaser
+  // only; create-order.js recalculates the real discount against the
+  // guest's actual selected dates/nights at checkout, the same "picks
+  // whichever discount saves the most, standing or promo" logic as
+  // there, just evaluated here without a specific stay to check against.
+  function bestActivePromotion(listing){
+    const promos = Array.isArray(listing.active_promotions) ? listing.active_promotions : [];
+    if(!promos.length || !listing.nightly_rate) return null;
+    const rate = Number(listing.nightly_rate);
+    let best = null, bestSavings = -1;
+    for(const p of promos){
+      const value = Number(p.discountValue);
+      const savings = p.discountType === 'percentage' ? rate * (value / 100) : Math.min(value, rate);
+      if(savings > bestSavings){ bestSavings = savings; best = p; }
+    }
+    return best;
+  }
+
+  function formatPromotionBadge(listing){
+    const promo = bestActivePromotion(listing);
+    if(!promo) return '';
+    const label = promo.discountType === 'percentage' ? `${Number(promo.discountValue)}% OFF` : `${fmtGuest(Number(promo.discountValue))} OFF`;
+    return `${promo.name} — ${label}`;
+  }
+
+  // Full sentence for the promotion, shown alongside (not instead of) the
+  // listing's standing-discount sentence — a guest browsing cards should
+  // be able to see both if a listing happens to have each.
+  function formatPromotionOffer(listing){
+    const promo = bestActivePromotion(listing);
+    if(!promo || !listing.nightly_rate) return '';
+    const rate = Number(listing.nightly_rate);
+    const value = Number(promo.discountValue);
+    let rupees, percent;
+    if(promo.discountType === 'percentage'){
+      percent = value;
+      rupees = Math.round(rate * (value / 100));
+    } else {
+      rupees = value;
+      percent = Math.round((value / rate) * 100);
+    }
+    const minNightsNote = promo.minNights ? ` on stays of ${promo.minNights}+ nights` : '';
+    return `${promo.name}: ${fmtGuest(rupees)} (${percent}%) off${minNightsNote}, through ${promo.endDate}`;
+  }
+
   // Straight-line ("as the crow flies") distance in km between two
   // coordinates — the Haversine formula. Deliberately computed client-side
   // rather than via Google's Distance Matrix API: it's free, instant, and
@@ -3125,6 +3170,7 @@
   function buildSuiteCard(listing, index){
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
+    const promoOfferLine = formatPromotionOffer(listing);
     const priceLine = listing.nightly_rate
       ? `From <strong>${fmtGuest(Number(listing.nightly_rate))}</strong>/night`
       : 'Rate on enquiry';
@@ -3158,6 +3204,14 @@
         }
       }
     }
+    // A named, date-scoped promotion (see manage-listing.html) always
+    // takes over the discount badge when one is active — it's more
+    // specific and time-limited than the listing's standing discount, so
+    // it's the more useful thing to lead with, even on the rare occasion
+    // it happens to be numerically smaller. The listing's full offer
+    // sentence below the price still mentions the standing discount too.
+    const promoBadgeText = formatPromotionBadge(listing);
+    if(promoBadgeText) discountBadge = promoBadgeText;
 
     // Show a handful of amenities directly on the card — enough for a guest
     // to gauge what's included at a glance, without listing all of them
@@ -3248,6 +3302,7 @@
         ${petPolicyHtml}
         <div class="price">${priceLine}</div>
         ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
+        ${promoOfferLine ? `<div class="offer" style="color:#2f5c2a;">${promoOfferLine}</div>` : ''}
       </div>
     `;
     const favBtn = card.querySelector('.fav-heart');
@@ -3498,6 +3553,7 @@
       ? `From <strong>${fmt(Number(listing.nightly_rate))}</strong>/night`
       : 'Rate on enquiry';
     const offerLine = formatOffer(listing);
+    const promoOfferLine = formatPromotionOffer(listing);
 
     return `
       ${photosHtml}
@@ -3584,6 +3640,7 @@
           <div>
             <div class="price">${priceLine}</div>
             ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
+            ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
           </div>
         </div>
       </div>
@@ -4023,6 +4080,16 @@
 
     const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0 };
     const guests = counts.adults + counts.children;
+    // The guest-count stepper already never lets adults drop below 1
+    // (see the min:1 rule near LG_MAX), but this checks it explicitly
+    // too — a stay can't be booked by children/infants alone, and the
+    // server enforces this for real (see create-order.js); this is just
+    // a faster, clearer message than waiting on a round trip.
+    if(counts.adults < 1){
+      errorEl.textContent = 'At least one adult (18+) must be part of the group to book this stay.';
+      errorEl.style.display = 'block';
+      return;
+    }
     const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
     const selectedAmenitiesPayload = Object.entries(selectedAmenities).map(([amenityId, datesSet]) => ({
       amenityId: Number(amenityId), dates: [...datesSet]
@@ -4037,7 +4104,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, selectedAmenities: selectedAmenitiesPayload }],
+          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, selectedAmenities: selectedAmenitiesPayload }],
           email,
           // Only takes effect if this currency is admin-enabled for direct
           // international charging server-side (see create-order.js) —
