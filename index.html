@@ -1403,6 +1403,25 @@
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&callback=initGoogleMaps"></script>
 <script>
+  // Builds 'YYYY-MM-DD' from a Date object's LOCAL calendar fields —
+  // deliberately NOT toISOString(), which converts to UTC first. For
+  // anyone in a timezone ahead of UTC (IST, +5:30 — Aerva's whole
+  // market), a Date built at local midnight is still the previous
+  // calendar day in UTC, so toISOString().slice(0,10)/.split('T')[0]
+  // silently rolls the date back by one. Used everywhere a calendar
+  // date needs to become a string FROM a Date object that was built
+  // using local-time semantics (new Date(), new Date(y,m,d), or any
+  // Date that's had setHours/setDate called on it) — as opposed to a
+  // Date parsed FROM an existing UTC-anchored 'YYYY-MM-DD' string
+  // (e.g. new Date(arrival + 'T00:00:00Z')), which stays correct on
+  // its own and doesn't need this.
+  function toLocalDateStr(d){
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
   const header = document.getElementById('siteHeader');
   window.addEventListener('scroll', () => {
     header.classList.toggle('scrolled', window.scrollY > 40);
@@ -1613,8 +1632,8 @@
   // Arrival must be at least tomorrow — no same-day bookings. Departure's
   // own absolute floor (before any arrival is picked) is one day further
   // still, since it always has to land after whatever arrival ends up being.
-  const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })();
-  const dayAfterTomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return d.toISOString().split('T')[0]; })();
+  const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return toLocalDateStr(d); })();
+  const dayAfterTomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return toLocalDateStr(d); })();
 
   function buildSuiteOptionsHtml(){
     if(approvedListings.length === 0){
@@ -3894,7 +3913,7 @@
     const carriedParams = new URLSearchParams(window.location.search);
     const carriedArrival = carriedParams.get('arrival') || '';
     const carriedDeparture = carriedParams.get('departure') || '';
-    const todayIsoForValidation = new Date().toISOString().split('T')[0];
+    const todayIsoForValidation = toLocalDateStr(new Date());
     let initialArrival = '';
     let initialDeparture = '';
     if(carriedArrival && carriedDeparture && carriedArrival >= todayIsoForValidation && carriedDeparture > carriedArrival){
@@ -3906,7 +3925,7 @@
       }
     }
 
-    const todayIso = new Date().toISOString().split('T')[0];
+    const todayIso = toLocalDateStr(new Date());
     let viewYear = new Date().getFullYear();
     let viewMonth = new Date().getMonth();
     if(initialArrival){
@@ -3955,7 +3974,7 @@
       for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
       for(let day = 1; day <= daysInMonth; day++){
         const cellDate = new Date(viewYear, viewMonth, day);
-        const iso = cellDate.toISOString().split('T')[0];
+        const iso = toLocalDateStr(cellDate);
         const isPast = iso < todayIso;
         const isBooked = bookedNights.has(iso);
         const isDisabled = isPast || isBooked;
@@ -4419,7 +4438,7 @@
         <div class="listing-modal-section-title">Book This Experience</div>
         <div class="field">
           <label for="expBookDate">Date</label>
-          <input type="date" id="expBookDate" min="${new Date(Date.now() + 86400000).toISOString().split('T')[0]}">
+          <input type="date" id="expBookDate" min="${toLocalDateStr(new Date(Date.now() + 86400000))}">
         </div>
         <div class="guest-row" style="border:none; padding-top:16px;">
           <div class="guest-row-text">
@@ -4836,7 +4855,7 @@
     for(let day = 1; day <= daysInMonth; day++){
       const cellDate = new Date(year, month, day);
       cellDate.setHours(0, 0, 0, 0);
-      const iso = cellDate.toISOString().split('T')[0];
+      const iso = toLocalDateStr(cellDate);
       const isDisabled = cellDate < calMinDate;
 
       let classes = 'calendar-day';
@@ -4875,7 +4894,7 @@
     // Highlight whichever quick-pick (if any) matches the current
     // selection exactly — e.g. picking dates by hand that happen to be
     // "earliest arrival + 7 nights" shows "1 week" as selected too.
-    const calMinIso = calMinDate.toISOString().split('T')[0];
+    const calMinIso = toLocalDateStr(calMinDate);
     document.querySelectorAll('.quick-date-btn').forEach(btn => {
       const matches = searchArrivalDate === calMinIso && searchDepartureDate === isoAddDays(calMinIso, Number(btn.dataset.days));
       btn.classList.toggle('selected', matches);
@@ -4885,7 +4904,7 @@
   function isoAddDays(iso, days){
     const d = new Date(iso + 'T00:00:00');
     d.setDate(d.getDate() + days);
-    return d.toISOString().split('T')[0];
+    return toLocalDateStr(d);
   }
 
   // Quick date-range presets — always anchored to the earliest bookable
@@ -4893,7 +4912,7 @@
   // possible week-long stay" rather than extending whatever the guest may
   // have already picked.
   function selectQuickDateRange(days){
-    const arrivalIso = calMinDate.toISOString().split('T')[0];
+    const arrivalIso = toLocalDateStr(calMinDate);
     searchArrivalDate = arrivalIso;
     searchDepartureDate = isoAddDays(arrivalIso, days);
     calSelectingStart = true;
