@@ -129,6 +129,9 @@
   }
   .cal-confirm-block-btn{background:#1c1a17; color:#f4ebe3;}
   .cal-confirm-cancel-btn{background:white; border:1px solid #ddd0bc !important; color:#1c1a17;}
+  .cal-day--promo{background:#d9e8d4; color:#2f5c2a;}
+  .promo-confirm-fields{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;}
+  .promo-confirm-fields input, .promo-confirm-fields select{margin-bottom:0;}
 </style>
 </head>
 <body>
@@ -308,7 +311,40 @@
       <p style="font-size:11.5px; opacity:0.6; margin-top:-6px; margin-bottom:16px;">Click a date to start, click another to select a range (or click-drag), then confirm below. Click an already-blocked date to remove that block.</p>
       <div id="blockedDatesList"></div>
       <button type="button" class="add-paid-amenity-btn" id="addBlockedDateBtn">+ Block a Date Range Manually</button>
-      <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">Guests won't be able to book these dates. This doesn't affect any stay already booked.</p>
+
+      <div class="eyebrow" style="margin-top:24px;">Promotions <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(run multiple named discounts for different date ranges)</span></div>
+      <div class="cal-wrap">
+        <div class="cal-header">
+          <button type="button" class="cal-nav-btn" id="promoCalPrevBtn">&larr;</button>
+          <div class="cal-month-label" id="promoCalMonthLabel"></div>
+          <button type="button" class="cal-nav-btn" id="promoCalNextBtn">&rarr;</button>
+        </div>
+        <div class="cal-grid" id="promoCalGrid"></div>
+        <div class="cal-legend">
+          <span><i style="background:#f9f5ef; border:1px solid #ddd0bc;"></i> No promotion</span>
+          <span><i style="background:#d9e8d4;"></i> Promotion active</span>
+          <span><i style="background:#e9e2d6;"></i> Booked</span>
+          <span><i style="background:#1c1a17;"></i> Selecting</span>
+        </div>
+        <div class="cal-confirm" id="promoCalConfirm">
+          <p id="promoCalConfirmLabel"></p>
+          <div class="promo-confirm-fields">
+            <input type="text" id="promoConfirmName" placeholder="Promotion name, e.g. Diwali Sale">
+            <select id="promoConfirmType">
+              <option value="percentage">% off</option>
+              <option value="flat">₹ flat off</option>
+            </select>
+            <input type="number" min="1" id="promoConfirmValue" placeholder="Discount value">
+            <input type="number" min="1" id="promoConfirmMinNights" placeholder="Min nights (optional)">
+          </div>
+          <div class="cal-confirm-actions">
+            <button type="button" class="cal-confirm-block-btn" id="promoConfirmAddBtn">Add This Promotion</button>
+            <button type="button" class="cal-confirm-cancel-btn" id="promoConfirmCancelBtn">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-6px; margin-bottom:16px;">Select a date range the same way as blocking dates, then fill in the discount. Click an existing promotion's dates to remove it. If a stay qualifies for more than one discount (including your standing discount above), the guest gets whichever saves them the most — they're never combined.</p>
+      <div id="promotionsList"></div>
 
       <button type="submit" class="btn" id="submitBtn">Save Changes</button>
       <p class="confirm" id="confirmMsg">Saved — your changes are live.</p>
@@ -833,6 +869,210 @@
       bookedRanges = []; // calendar still works, just without the "already booked" shading
     }
     renderCalendar();
+    renderPromoCalendar(); // shares the same bookedRanges — a promotion can't help dates that are already booked either
+  }
+
+  // ---- Promotions calendar ----
+  // Same interaction pattern as the blocked-dates calendar above (click,
+  // click-drag, or two-tap to select a range), writing into
+  // promotionRows instead of blockedDateRows, and reusing the shared
+  // bookedRanges/toDateStr/todayStr/inRange/nextDay helpers.
+  let promotionRows = [];
+  let promoCalMonth = new Date(); promoCalMonth.setDate(1); promoCalMonth.setHours(0,0,0,0);
+  let promoSelStart = null;
+  let promoSelEnd = null;
+  let promoDragging = false;
+
+  function promoRowFor(dateStr){
+    return promotionRows.find(p => p.startDate && p.endDate && inRange(dateStr, p.startDate, p.endDate));
+  }
+
+  function renderPromoCalendar(){
+    const grid = document.getElementById('promoCalGrid');
+    const label = document.getElementById('promoCalMonthLabel');
+    label.textContent = promoCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
+    const year = promoCalMonth.getFullYear(), month = promoCalMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const startWeekday = firstDay.getDay();
+
+    let html = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
+    for(let i = 0; i < startWeekday; i++){
+      html += `<div class="cal-day cal-day--empty"></div>`;
+    }
+    const today = todayStr();
+    for(let day = 1; day <= daysInMonth; day++){
+      const d = new Date(year, month, day);
+      const dateStr = toDateStr(d);
+      const isPast = dateStr < today;
+      const booked = dateIsBooked(dateStr);
+      const promoRow = promoRowFor(dateStr);
+      let selecting = false;
+      if(promoSelStart && promoSelEnd){
+        const selMin = promoSelStart <= promoSelEnd ? promoSelStart : promoSelEnd;
+        const selMax = promoSelStart <= promoSelEnd ? promoSelEnd : promoSelStart;
+        selecting = inRange(dateStr, selMin, nextDay(selMax));
+      }
+
+      let cls = 'cal-day';
+      if(isPast) cls += ' cal-day--past cal-day--disabled';
+      else if(booked) cls += ' cal-day--booked';
+      else if(selecting) cls += ' cal-day--selected';
+      else if(promoRow) cls += ' cal-day--promo';
+
+      const title = promoRow ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}` : '';
+      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}</div>`;
+    }
+    grid.innerHTML = html;
+
+    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
+      cell.addEventListener('mousedown', () => onPromoCalMouseDown(cell.dataset.date));
+      cell.addEventListener('mouseenter', () => onPromoCalMouseEnter(cell.dataset.date));
+      cell.addEventListener('mouseup', () => onPromoCalMouseUp(cell.dataset.date));
+      cell.addEventListener('click', () => onPromoCalClick(cell.dataset.date));
+    });
+  }
+
+  function onPromoCalMouseDown(dateStr){
+    if(promoRowFor(dateStr)) return; // tap-to-remove instead, see onPromoCalClick
+    promoDragging = true;
+    promoSelStart = dateStr;
+    promoSelEnd = dateStr;
+    renderPromoCalendar();
+  }
+  function onPromoCalMouseEnter(dateStr){
+    if(!promoDragging || !promoSelStart) return;
+    promoSelEnd = dateStr;
+    renderPromoCalendar();
+  }
+  function onPromoCalMouseUp(dateStr){
+    if(!promoDragging) return;
+    promoDragging = false;
+    promoSelEnd = dateStr;
+    if(promoSelStart && promoSelEnd && promoSelStart !== promoSelEnd){
+      showPromoCalConfirm();
+    }
+  }
+  function onPromoCalClick(dateStr){
+    const existingPromo = promoRowFor(dateStr);
+    if(existingPromo && !promoSelStart){
+      const label = `${existingPromo.name} (${existingPromo.startDate} to ${existingPromo.endDate})`;
+      if(window.confirm(`Remove this promotion — ${label}?`)){
+        promotionRows = promotionRows.filter(p => p !== existingPromo);
+        renderPromotionsList();
+        renderPromoCalendar();
+      }
+      return;
+    }
+    if(!promoSelStart){
+      promoSelStart = dateStr;
+      promoSelEnd = dateStr;
+      renderPromoCalendar();
+      return;
+    }
+    if(promoSelStart && promoSelEnd === promoSelStart && dateStr !== promoSelStart && !promoDragging){
+      promoSelEnd = dateStr;
+      showPromoCalConfirm();
+    }
+  }
+
+  function showPromoCalConfirm(){
+    const start = promoSelStart <= promoSelEnd ? promoSelStart : promoSelEnd;
+    const endInclusive = promoSelStart <= promoSelEnd ? promoSelEnd : promoSelStart;
+    const nights = Math.round((new Date(nextDay(endInclusive)) - new Date(start)) / 86400000);
+    document.getElementById('promoCalConfirmLabel').textContent =
+      start === endInclusive
+        ? `New promotion for ${start} (1 night)`
+        : `New promotion for ${start} through ${endInclusive} (${nights} nights)`;
+    document.getElementById('promoConfirmName').value = '';
+    document.getElementById('promoConfirmType').value = 'percentage';
+    document.getElementById('promoConfirmValue').value = '';
+    document.getElementById('promoConfirmMinNights').value = '';
+    document.getElementById('promoCalConfirm').style.display = 'block';
+  }
+
+  function hidePromoCalConfirm(){
+    promoSelStart = null; promoSelEnd = null; promoDragging = false;
+    document.getElementById('promoCalConfirm').style.display = 'none';
+    renderPromoCalendar();
+  }
+
+  document.getElementById('promoConfirmAddBtn').addEventListener('click', () => {
+    const start = promoSelStart <= promoSelEnd ? promoSelStart : promoSelEnd;
+    const endInclusive = promoSelStart <= promoSelEnd ? promoSelEnd : promoSelStart;
+    const name = document.getElementById('promoConfirmName').value.trim();
+    const discountType = document.getElementById('promoConfirmType').value;
+    const discountValue = Number(document.getElementById('promoConfirmValue').value);
+    const minNights = document.getElementById('promoConfirmMinNights').value;
+
+    if(!name){
+      alert('Please give this promotion a name, e.g. "Diwali Sale".');
+      return;
+    }
+    if(!discountValue || discountValue <= 0){
+      alert('Please enter a discount amount greater than 0.');
+      return;
+    }
+    if(discountType === 'percentage' && discountValue > 100){
+      alert('A percentage discount can\'t be more than 100.');
+      return;
+    }
+
+    promotionRows.push({
+      id: null, name, discountType, discountValue,
+      minNights: minNights ? Number(minNights) : null,
+      startDate: start, endDate: nextDay(endInclusive), isActive: true
+    });
+    renderPromotionsList();
+    hidePromoCalConfirm();
+  });
+  document.getElementById('promoConfirmCancelBtn').addEventListener('click', hidePromoCalConfirm);
+
+  document.getElementById('promoCalPrevBtn').addEventListener('click', () => {
+    promoCalMonth.setMonth(promoCalMonth.getMonth() - 1);
+    renderPromoCalendar();
+  });
+  document.getElementById('promoCalNextBtn').addEventListener('click', () => {
+    promoCalMonth.setMonth(promoCalMonth.getMonth() + 1);
+    renderPromoCalendar();
+  });
+  document.addEventListener('mouseup', () => {
+    if(promoDragging){
+      promoDragging = false;
+      if(promoSelStart && promoSelEnd && promoSelStart !== promoSelEnd) showPromoCalConfirm();
+    }
+  });
+
+  // Read-only summary cards below the calendar — removal only (editing a
+  // promotion means removing it and picking a fresh range), matching the
+  // helper copy above the calendar.
+  function renderPromotionsList(){
+    const list = document.getElementById('promotionsList');
+    if(!promotionRows.length){
+      list.innerHTML = '';
+      return;
+    }
+    list.innerHTML = promotionRows.map((p, idx) => {
+      const discountLabel = p.discountType === 'flat' ? `₹${p.discountValue} off` : `${p.discountValue}% off`;
+      const minNightsLabel = p.minNights ? `, ${p.minNights}+ nights` : '';
+      return `
+        <div class="paid-amenity-row">
+          <div class="row-line" style="grid-template-columns:1fr;">
+            <strong style="font-size:13.5px;">${p.name}</strong>
+          </div>
+          <p style="font-size:12.5px; opacity:0.75; margin:0;">${p.startDate} to ${p.endDate} — ${discountLabel}${minNightsLabel}</p>
+          <button type="button" class="remove-amenity-btn" data-idx="${idx}">Remove this promotion</button>
+        </div>
+      `;
+    }).join('');
+    list.querySelectorAll('[data-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        promotionRows.splice(Number(btn.dataset.idx), 1);
+        renderPromotionsList();
+        renderPromoCalendar();
+      });
+    });
   }
 
   // ---- Pricing currency: lets a host view/edit their listing's INR
@@ -995,7 +1235,21 @@
       }));
       renderBlockedDates();
       renderCalendar();
-      loadBookedRangesForCalendar(l.id); // re-renders the calendar again once bookedRanges arrives
+
+      promotionRows = (data.promotions || []).map(p => ({
+        id: p.id,
+        name: p.name,
+        discountType: p.discount_type,
+        discountValue: Number(p.discount_value),
+        minNights: p.min_nights || null,
+        startDate: p.start_date ? p.start_date.slice(0, 10) : '',
+        endDate: p.end_date ? p.end_date.slice(0, 10) : '',
+        isActive: p.is_active
+      }));
+      renderPromotionsList();
+      renderPromoCalendar();
+
+      loadBookedRangesForCalendar(l.id); // re-renders both calendars again once bookedRanges arrives
 
       loadingState.style.display = 'none';
       formState.style.display = 'block';
@@ -1043,6 +1297,7 @@
           services: Array.from(document.querySelectorAll('input[name="service"]:checked')).map(cb => cb.value),
           paidAmenities: paidAmenityRows,
           blockedDates: blockedDateRows,
+          promotions: promotionRows,
           securityDeposit: toInr(document.getElementById('securityDeposit').value),
           petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
           maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
