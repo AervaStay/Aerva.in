@@ -5,138 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Host Login — Aerva</title>
 <meta name="robots" content="noindex, nofollow">
+<!--
+  host-login.html is retired. Hosts are just guest accounts with a linked
+  hosts row (guests.host_id) — see host-dashboard.html, which already
+  authenticates against host-listings.js using the same aerva_guest_session
+  token that guest-auth.js issues. There's no separate host password or
+  magic-link system anymore (the old /api/host-auth endpoint this page
+  used to call is gone), so this page just sends hosts to the one real
+  login page. A meta-refresh + JS redirect covers both no-JS and JS cases.
+-->
+<meta http-equiv="refresh" content="0; url=guest-login.html">
 <style>
   body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:60px 20px; -webkit-font-smoothing:antialiased;}
   .wrap{max-width:400px; margin:0 auto; text-align:center;}
-  h1{font-family:Georgia,serif; font-size:26px; margin-bottom:8px;}
-  .subtitle{opacity:0.65; font-size:14px; margin-bottom:32px;}
-  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:20px; text-align:left;}
-  label{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c;}
-  input{
-    background:white; border:1px solid #ddd0bc; padding:12px; font-family:'Jost', sans-serif;
-    font-size:15px; color:#1c1a17; width:100%; box-sizing:border-box;
-  }
-  input:focus{outline:none; border-color:#8a6c39;}
-  .btn{
-    background:#1c1a17; color:#f4ebe3; border:none; padding:14px 28px; font-size:12px;
-    letter-spacing:0.1em; text-transform:uppercase; cursor:pointer; width:100%;
-  }
-  .btn:disabled{opacity:0.5; cursor:default;}
-  .confirm{font-size:14px; color:#3a7d44; margin-top:20px; line-height:1.6;}
-  .error{font-size:13px; color:#a3402f; margin-top:16px;}
-  .loading{opacity:0.6; padding:40px 0;}
+  p{opacity:0.65; font-size:14px;}
+  a{color:#8a6c39;}
 </style>
 </head>
 <body>
 
 <div class="wrap">
-  <div id="requestState">
-    <h1>Host Login</h1>
-    <p class="subtitle">Enter your email and we'll send you a login link — no password needed.</p>
-    <form id="loginForm">
-      <div class="field">
-        <label for="hostEmail">Email</label>
-        <input id="hostEmail" type="email" placeholder="you@example.com" required>
-      </div>
-      <button type="submit" class="btn" id="requestBtn">Send Login Link</button>
-      <p class="error" id="requestError" style="display:none;"></p>
-    </form>
-  </div>
-
-  <div id="sentState" style="display:none;">
-    <h1>Check your email</h1>
-    <p class="confirm">We've sent a login link to your inbox. It's valid for 15 minutes and works once.</p>
-  </div>
-
-  <div id="verifyingState" style="display:none;">
-    <p class="loading">Logging you in…</p>
-  </div>
-
-  <div id="verifyErrorState" style="display:none;">
-    <h1>Link expired</h1>
-    <p class="subtitle" id="verifyErrorMsg">This login link is no longer valid. Please request a new one below.</p>
-    <button class="btn" onclick="window.location.href = 'host-login.html'">Request a New Link</button>
-  </div>
+  <p>Redirecting you to <a href="guest-login.html">Aerva login</a>&hellip;</p>
 </div>
 
 <script>
-  const API_BASE = 'https://aerva-in.vercel.app';
-  const params = new URLSearchParams(window.location.search);
-  const verifyToken = params.get('verify');
-
-  const requestState = document.getElementById('requestState');
-  const sentState = document.getElementById('sentState');
-  const verifyingState = document.getElementById('verifyingState');
-  const verifyErrorState = document.getElementById('verifyErrorState');
-
-  function showOnly(el){
-    [requestState, sentState, verifyingState, verifyErrorState].forEach(s => s.style.display = 'none');
-    el.style.display = 'block';
-  }
-
-  document.getElementById('loginForm').addEventListener('submit', async function(e){
-    e.preventDefault();
-    const requestBtn = document.getElementById('requestBtn');
-    const requestError = document.getElementById('requestError');
-    requestError.style.display = 'none';
-
-    const emailValue = document.getElementById('hostEmail').value.trim();
-    const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if(!EMAIL_PATTERN.test(emailValue)){
-      requestError.textContent = 'Please enter a complete email address, like you@gmail.com.';
-      requestError.style.display = 'block';
-      return;
-    }
-
-    requestBtn.disabled = true;
-    requestBtn.textContent = 'Sending…';
-
-    try{
-      const res = await fetch(API_BASE + '/api/host-auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: document.getElementById('hostEmail').value })
-      });
-      const data = await res.json();
-      if(res.ok){
-        showOnly(sentState);
-      } else {
-        requestError.textContent = data.error || 'Something went wrong. Please try again.';
-        requestError.style.display = 'block';
-        requestBtn.disabled = false;
-        requestBtn.textContent = 'Send Login Link';
-      }
-    } catch(err){
-      requestError.textContent = 'Something went wrong. Please try again.';
-      requestError.style.display = 'block';
-      requestBtn.disabled = false;
-      requestBtn.textContent = 'Send Login Link';
-    }
-  });
-
-  async function verifyLoginLink(){
-    showOnly(verifyingState);
-    try{
-      const res = await fetch(API_BASE + '/api/host-auth?token=' + encodeURIComponent(verifyToken));
-      const data = await res.json();
-      if(res.ok){
-        localStorage.setItem('aerva_host_session', data.sessionToken);
-        localStorage.setItem('aerva_host_email', data.hostEmail);
-        window.location.href = 'host-dashboard.html';
-      } else {
-        document.getElementById('verifyErrorMsg').textContent = data.error || 'This login link is no longer valid.';
-        showOnly(verifyErrorState);
-      }
-    } catch(err){
-      showOnly(verifyErrorState);
-    }
-  }
-
-  if(verifyToken){
-    verifyLoginLink();
-  } else {
-    showOnly(requestState);
-  }
+  window.location.replace('guest-login.html');
 </script>
 
 </body>
