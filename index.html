@@ -3541,6 +3541,10 @@
             <label for="listingBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
             <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" required>
           </div>
+          <div class="field" style="margin-top:12px;">
+            <label for="listingCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
+            <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+          </div>
           <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
           <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
           <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
@@ -4007,7 +4011,8 @@
           // Only takes effect if this currency is admin-enabled for direct
           // international charging server-side (see create-order.js) —
           // otherwise the backend charges INR exactly as it always has.
-          preferredCurrency: currentCurrency
+          preferredCurrency: currentCurrency,
+          couponCode: document.getElementById('listingCouponCode').value.trim() || undefined
         })
       });
       if(!orderRes.ok){
@@ -4015,6 +4020,13 @@
         throw new Error(errData.error || 'Could not start payment. Please try again.');
       }
       order = await orderRes.json();
+      if(order.couponDiscount > 0){
+        // The discount is already baked into what Razorpay will actually
+        // charge (see order.amount below) — this is just confirming to
+        // the guest that their code worked, before the payment popup opens.
+        confirmEl.textContent = `Coupon applied — ${fmt(order.couponDiscount)} off this booking.`;
+        confirmEl.style.display = 'block';
+      }
     } catch(err){
       btn.disabled = false;
       btn.textContent = 'Book Now';
@@ -4152,6 +4164,10 @@
             <label for="expBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
             <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" required>
           </div>
+          <div class="field" style="margin-top:12px;">
+            <label for="expCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
+            <input id="expCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+          </div>
           <button type="button" class="btn solid" id="expBookNowBtn" style="width:100%; margin-top:6px;">Book Experience</button>
           <p id="expBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
           <p id="expBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
@@ -4226,7 +4242,8 @@
         body: JSON.stringify({
           experiences: [{ listingId: exp.id, date, guests }],
           email,
-          preferredCurrency: currentCurrency
+          preferredCurrency: currentCurrency,
+          couponCode: document.getElementById('expCouponCode').value.trim() || undefined
         })
       });
       if(!orderRes.ok){
@@ -4234,6 +4251,10 @@
         throw new Error(errData.error || 'Could not start payment. Please try again.');
       }
       order = await orderRes.json();
+      if(order.couponDiscount > 0){
+        confirmEl.textContent = `Coupon applied — ${fmt(order.couponDiscount)} off this booking.`;
+        confirmEl.style.display = 'block';
+      }
     } catch(err){
       btn.disabled = false;
       btn.textContent = 'Book Experience';
