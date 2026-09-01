@@ -117,12 +117,21 @@
   <p id="adminGreeting" style="font-size:13px; opacity:0.7; margin-top:-16px; margin-bottom:20px;"></p>
   <div class="tabs">
     <button class="tab-btn active" id="tabListingsBtn" onclick="switchTab('listings')">Pending Listings</button>
+    <button class="tab-btn" id="tabLiveBtn" onclick="switchTab('live')">Live Listings</button>
     <button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications</button>
     <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
   </div>
 
   <div id="listingsView">
     <div id="listingsContainer"><p class="empty">Loading…</p></div>
+  </div>
+
+  <div id="liveView" style="display:none;">
+    <div class="deposit-section">
+      <h3>Manage Live Listings</h3>
+      <p>Block temporarily pauses a listing (reversible); Remove is a more final takedown. Either way, guests stop seeing it immediately and nothing already booked is affected — this never deletes the listing's history.</p>
+      <div id="liveListingsContainer"><p class="empty">Loading…</p></div>
+    </div>
   </div>
 
   <div id="verificationsView" style="display:none;">
@@ -448,14 +457,17 @@
     }
   }
 
-  // ---- Tab switching (three tabs now: listings, verifications, deposits) ----
+  // ---- Tab switching (four tabs now: listings, live, verifications, deposits) ----
   function switchTab(tab){
     document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
+    document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
     document.getElementById('tabVerificationsBtn').classList.toggle('active', tab === 'verifications');
     document.getElementById('tabDepositsBtn').classList.toggle('active', tab === 'deposits');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
+    document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
     document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
     document.getElementById('depositsView').style.display = tab === 'deposits' ? 'block' : 'none';
+    if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();
   }
@@ -494,6 +506,85 @@
     }
     btn.disabled = false;
     btn.textContent = 'Process Eligible Refunds';
+  }
+
+  // ---- Live Listings tab: block/unblock/remove/restore ----
+  async function loadLiveListings(){
+    const container = document.getElementById('liveListingsContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?liveListings=1', {
+        headers: authHeaders()
+      });
+      const data = await res.json();
+      renderLiveListings(data.liveListings || []);
+    } catch(err){
+      container.innerHTML = '<p class="error">Could not load listings. Please refresh.</p>';
+    }
+  }
+
+  function renderLiveListings(listings){
+    const container = document.getElementById('liveListingsContainer');
+    if(!listings.length){
+      container.innerHTML = '<p class="empty">No live listings yet.</p>';
+      return;
+    }
+    container.innerHTML = listings.map(l => {
+      const statusLabel = { approved: 'Live', blocked: 'Blocked', removed: 'Removed' }[l.status] || l.status;
+      const reasonLine = l.admin_status_reason ? `<p style="opacity:0.7; font-size:13px;">Reason: ${l.admin_status_reason}</p>` : '';
+      let actions = '';
+      if(l.status === 'approved'){
+        actions = `
+          <button type="button" class="reject-btn" onclick="promptListingStatus(${l.id}, 'block')">Block</button>
+          <button type="button" class="reject-btn" onclick="promptListingStatus(${l.id}, 'remove')">Remove</button>
+        `;
+      } else if(l.status === 'blocked'){
+        actions = `
+          <button type="button" class="approve-btn" onclick="setListingStatus(${l.id}, 'unblock')">Unblock</button>
+          <button type="button" class="reject-btn" onclick="promptListingStatus(${l.id}, 'remove')">Remove</button>
+        `;
+      } else if(l.status === 'removed'){
+        actions = `<button type="button" class="approve-btn" onclick="setListingStatus(${l.id}, 'restore')">Restore</button>`;
+      }
+      return `
+        <div class="dispute-card" id="liveListing-${l.id}">
+          <h4>${l.property_name} <span style="opacity:0.6; font-weight:400;">— ${statusLabel}</span></h4>
+          <div class="dispute-meta">${l.city} · ${l.host_name} (${l.host_email})</div>
+          ${reasonLine}
+          <div class="resolve-row">${actions}</div>
+          <span id="liveListingError-${l.id}" class="error"></span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Block/remove ask for an optional reason (shown to the host by
+  // email) — unblock/restore don't need one, so they skip straight to
+  // setListingStatus.
+  function promptListingStatus(listingId, action){
+    const label = action === 'block' ? 'blocking' : 'removing';
+    const reason = window.prompt(`Reason for ${label} this listing (optional, shown to the host):`, '');
+    if(reason === null) return; // cancelled
+    setListingStatus(listingId, action, reason);
+  }
+
+  async function setListingStatus(listingId, action, reason){
+    const errorEl = document.getElementById(`liveListingError-${listingId}`);
+    if(errorEl) errorEl.textContent = '';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ setListingStatus: { listingId, action, reason: reason || undefined } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        loadLiveListings();
+      } else if(errorEl){
+        errorEl.textContent = data.error || 'Something went wrong.';
+      }
+    } catch(err){
+      if(errorEl) errorEl.textContent = 'Could not reach the server. Please try again.';
+    }
   }
 
   // ---- ID Verifications tab ----
