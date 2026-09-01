@@ -171,16 +171,49 @@ async function validateAndPriceAmenities(sql, listingId, arrival, departure, req
   return { amenityTotal, amenityDetails };
 }
 
-function calculateDiscount(listing, nights, subtotalBeforeDiscount) {
-  if (!listing.discount_type || !listing.discount_value) return 0;
-  if (listing.discount_min_nights && nights < listing.discount_min_nights) return 0;
-  if (listing.discount_type === 'percentage') {
-    return Math.round(subtotalBeforeDiscount * (Number(listing.discount_value) / 100));
+// Computes the discount for one candidate — either the listing's
+// standing discount fields, or one row from listing_promotions — given
+// they've already passed their own eligibility checks (min nights, date
+// range). Shared so both sources price identically.
+function discountAmountFor(discountType, discountValue, subtotalBeforeDiscount) {
+  if (discountType === 'percentage') {
+    return Math.round(subtotalBeforeDiscount * (Number(discountValue) / 100));
   }
-  if (listing.discount_type === 'flat') {
-    return Math.min(Number(listing.discount_value), subtotalBeforeDiscount);
+  if (discountType === 'flat') {
+    return Math.min(Number(discountValue), subtotalBeforeDiscount);
   }
   return 0;
+}
+
+// A stay can be eligible for more than one discount at once: the
+// listing's single "standing" discount (discount_type/discount_value on
+// listings itself) and/or any number of date-scoped promotions
+// (listing_promotions — see update-listing-pricing.js). Rather than
+// stacking them, the guest simply gets whichever single one saves them
+// the most. A promotion applies when the stay's arrival date falls
+// within [start_date, end_date) and nights meets its own min_nights, if
+// any — same inclusive-start/exclusive-end convention used everywhere
+// else in this codebase.
+function calculateDiscount(listing, nights, arrival, subtotalBeforeDiscount, promotions) {
+  const candidates = [];
+
+  if (listing.discount_type && listing.discount_value) {
+    if (!listing.discount_min_nights || nights >= listing.discount_min_nights) {
+      candidates.push(discountAmountFor(listing.discount_type, listing.discount_value, subtotalBeforeDiscount));
+    }
+  }
+
+  for (const promo of promotions || []) {
+    if (!promo.is_active) continue;
+    if (promo.min_nights && nights < promo.min_nights) continue;
+    const arrivalStr = arrival; // already 'YYYY-MM-DD'
+    const startStr = toDateStr(promo.start_date);
+    const endStr = toDateStr(promo.end_date);
+    if (arrivalStr < startStr || arrivalStr >= endStr) continue;
+    candidates.push(discountAmountFor(promo.discount_type, promo.discount_value, subtotalBeforeDiscount));
+  }
+
+  return candidates.length ? Math.max(...candidates) : 0;
 }
 
 // A logged-in guest booking is optional, not required — Aerva still
@@ -268,6 +301,18 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Stay ${i + 1}: invalid dates or guest count` });
       }
 
+      // A stay must include at least one adult (18+) — children and
+      // infants can't be the sole guest(s) on a booking. Enforced here,
+      // not just via the guest-count stepper's floor on the frontend
+      // (index.html's lgCounts), since that's a UI convenience a direct
+      // API call could bypass — this is the actual guarantee. Note this
+      // can't verify anyone's real age; like every booking platform, it
+      // relies on the guest accurately representing their party.
+      const adults = Number(s.adults);
+      if (!adults || adults < 1) {
+        return res.status(400).json({ error: `Stay ${i + 1}: at least one adult (18+) guest is required — children or infants can't book a stay on their own.` });
+      }
+
       // ---- Availability, checked here for real (not just in the search
       // results the guest happened to click through from) ----
       // 1. Host-blocked dates (maintenance, personal use, etc. — see
@@ -303,7 +348,12 @@ module.exports = async (req, res) => {
       const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
       const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
       const beforeDiscount = roomTotal + extraTotal;
-      const discountAmount = calculateDiscount(listing, nights, beforeDiscount);
+      const promoRows = await sql`
+        SELECT discount_type, discount_value, min_nights, start_date, end_date, is_active
+        FROM listing_promotions
+        WHERE listing_id = ${listing.id} AND is_active = TRUE
+      `;
+      const discountAmount = calculateDiscount(listing, nights, s.arrival, beforeDiscount, promoRows);
 
       // Amenities are priced fresh from the database and are never
       // discounted — the discount applies to the room rate only, not to
