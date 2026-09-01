@@ -95,6 +95,7 @@
   .verify-error{font-size:12px; color:#a3402f; margin-top:6px; display:none;}
   .verify-rejection-note{font-size:12.5px; color:#a3402f; margin-bottom:8px;}
 </style>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 <body>
 
@@ -124,6 +125,7 @@
 
 <script>
   const API_BASE = 'https://aerva-in.vercel.app';
+  const RAZORPAY_KEY_ID = 'rzp_test_TRBdgq9nPS2wfy'; // public Key ID only — safe to expose, same key used everywhere else
   // Single login — same session used across the whole site (see
   // guest-auth.js / guest-phone-auth.js). There's no separate host
   // account/session to check for anymore.
@@ -291,6 +293,33 @@
         cancellationHtml = `<div class="deposit-row"><p style="font-size:12px; opacity:0.55;">This stay checks in within 48 hours — no longer cancellable from here. Contact hello@aerva.in if urgent.</p></div>`;
       }
 
+      // Prioritizing a bigger booking: the guest must already have a
+      // coupon before this cancellation is even allowed — same 48-hour
+      // eligibility as a plain cancellation, plus this is genuinely a
+      // separate action, not an alternative reason on the same button,
+      // since it requires paying for and confirming a coupon first.
+      let swapHtml = '';
+      if(canCancel){
+        swapHtml = `
+          <div class="deposit-row">
+            <button type="button" class="dispute-btn" onclick="toggleSwapForm(${b.id})">Prioritize a Bigger Booking</button>
+            <div class="dispute-form" id="swapForm-${b.id}">
+              <p style="font-size:12.5px; opacity:0.7; margin-bottom:8px;">To cancel this booking in favor of a bigger one, you must first buy this guest a compensation coupon — paid by you to Aerva, then issued to the guest. Only once that's confirmed can this booking actually be cancelled.</p>
+              <div id="swapStep1-${b.id}">
+                <label style="font-size:12.5px;">Coupon amount (₹)</label>
+                <input type="number" id="swapAmount-${b.id}" min="1" placeholder="e.g. ${Math.round((Number(b.subtotal) + Number(b.gst)) * 0.10)}" style="width:100%; padding:8px; margin:6px 0 10px; box-sizing:border-box;">
+                <button type="button" class="btn-small" onclick="buyCoupon(${b.id})">Pay &amp; Issue Coupon</button>
+              </div>
+              <div id="swapStep2-${b.id}" style="display:none; margin-top:10px;">
+                <p style="font-size:12.5px; color:#3a7d44;">✓ Coupon issued and emailed to the guest.</p>
+                <button type="button" class="dispute-btn" style="border-color:#a3402f; color:#a3402f;" onclick="confirmSwapCancellation(${b.id})">Now Cancel This Booking</button>
+              </div>
+              <p class="verify-error" id="swapError-${b.id}"></p>
+            </div>
+          </div>
+        `;
+      }
+
       return `
         <div class="booking-row">
           <div class="booking-top">
@@ -305,6 +334,7 @@
           </div>
           ${depositHtml}
           ${cancellationHtml}
+          ${swapHtml}
         </div>
       `;
     }).join('');
@@ -378,6 +408,112 @@
     } catch(err){
       errorEl.textContent = 'Could not cancel this booking. Please try again.';
       errorEl.style.display = 'block';
+    }
+  }
+
+  function toggleSwapForm(orderId){
+    const form = document.getElementById('swapForm-' + orderId);
+    if(form) form.style.display = form.style.display === 'block' ? 'none' : 'block';
+  }
+
+  // Step 1: host pays Aerva for the coupon — a genuinely different kind
+  // of Razorpay transaction than everything else on this site (host is
+  // the one paying, not a guest). Same create-order-then-verify pattern
+  // used throughout the app, just with host-listings.js's coupon-specific
+  // modes instead of create-order.js/verify-payment.js.
+  async function buyCoupon(bookingId){
+    const amountEl = document.getElementById('swapAmount-' + bookingId);
+    const errorEl = document.getElementById('swapError-' + bookingId);
+    errorEl.textContent = '';
+    const amount = Number(amountEl.value);
+    if(!amount || amount <= 0){
+      errorEl.textContent = 'Please enter a valid coupon amount.';
+      return;
+    }
+
+    let orderData;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ buyCouponOrder: { bookingId, amount } })
+      });
+      orderData = await res.json();
+      if(!res.ok){
+        errorEl.textContent = orderData.error || 'Could not start the coupon payment.';
+        return;
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not reach the server. Please try again.';
+      return;
+    }
+
+    if(typeof Razorpay === 'undefined'){
+      errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
+      return;
+    }
+
+    const options = {
+      key: RAZORPAY_KEY_ID,
+      order_id: orderData.razorpayOrderId,
+      amount: orderData.amount,
+      currency: orderData.currency,
+      name: 'Aerva',
+      description: 'Guest compensation coupon',
+      theme: { color: '#a9884f' },
+      handler: async function(response){
+        try{
+          const verifyRes = await fetch(API_BASE + '/api/host-listings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+            body: JSON.stringify({
+              verifyCouponPayment: {
+                couponId: orderData.couponId,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature
+              }
+            })
+          });
+          const verifyData = await verifyRes.json();
+          if(verifyData.verified){
+            document.getElementById('swapStep1-' + bookingId).style.display = 'none';
+            document.getElementById('swapStep2-' + bookingId).style.display = 'block';
+          } else {
+            errorEl.textContent = verifyData.error || 'Could not verify the coupon payment. Please contact hello@aerva.in.';
+          }
+        } catch(err){
+          errorEl.textContent = 'Payment went through, but could not be confirmed automatically. Please contact hello@aerva.in.';
+        }
+      }
+    };
+    const rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(response){
+      errorEl.textContent = 'Payment failed: ' + response.error.description;
+    });
+    rzp.open();
+  }
+
+  // Step 2: now that the coupon exists (confirmed by the backend, not
+  // just assumed from the UI state), the actual cancellation can happen.
+  async function confirmSwapCancellation(orderId){
+    const errorEl = document.getElementById('swapError-' + orderId);
+    errorEl.textContent = '';
+    if(!confirm('This will cancel the booking and refund the guest in full — the coupon has already been issued as compensation. This cannot be undone. Continue?')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ cancelWithCoupon: { orderId } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        loadListings();
+      } else {
+        errorEl.textContent = data.error || 'Could not cancel this booking. Please try again.';
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not cancel this booking. Please try again.';
     }
   }
 
