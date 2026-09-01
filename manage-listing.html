@@ -145,7 +145,34 @@
     <p class="subtitle">Update your nightly rate, offer, or photos anytime — changes apply immediately.</p>
 
     <form id="pricingForm">
-      <div class="field">
+      <div class="eyebrow" style="margin-top:0;">Block Dates <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(maintenance, personal use, or any other reason to close this listing)</span></div>
+      <div class="cal-wrap">
+        <div class="cal-header">
+          <button type="button" class="cal-nav-btn" id="calPrevBtn">&larr;</button>
+          <div class="cal-month-label" id="calMonthLabel"></div>
+          <button type="button" class="cal-nav-btn" id="calNextBtn">&rarr;</button>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="cal-legend">
+          <span><i style="background:#f9f5ef; border:1px solid #ddd0bc;"></i> Open</span>
+          <span><i style="background:#f3d9c4;"></i> Blocked by you</span>
+          <span><i style="background:#e9e2d6;"></i> Booked</span>
+          <span><i style="background:#1c1a17;"></i> Selecting</span>
+        </div>
+        <div class="cal-confirm" id="calConfirm">
+          <p id="calConfirmLabel"></p>
+          <input type="text" id="calConfirmReason" placeholder="Reason (optional), e.g. Maintenance">
+          <div class="cal-confirm-actions">
+            <button type="button" class="cal-confirm-block-btn" id="calConfirmBlockBtn">Block These Dates</button>
+            <button type="button" class="cal-confirm-cancel-btn" id="calConfirmCancelBtn">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-6px; margin-bottom:16px;">Click a date to block it, or click-drag across several. Click an already-blocked date to remove that block.</p>
+      <div id="blockedDatesList"></div>
+      <button type="button" class="add-paid-amenity-btn" id="addBlockedDateBtn">+ Block a Date Range Manually</button>
+
+      <div class="field" style="margin-top:28px;">
         <label for="listLocationSearch">Property Location <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
         <input id="listLocationSearch" type="text" placeholder="Start typing an address…" autocomplete="off">
         <input type="hidden" id="listLatitude">
@@ -284,33 +311,6 @@
       <div id="paidAmenitiesList"></div>
       <button type="button" class="add-paid-amenity-btn" id="addPaidAmenityBtn">+ Add a Paid Amenity</button>
       <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">A one-time fee per stay, not per night. Leave the date fields blank for an amenity that's available year-round.</p>
-
-      <div class="eyebrow" style="margin-top:24px;">Block Dates <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(maintenance, personal use, or any other reason to close this listing)</span></div>
-      <div class="cal-wrap">
-        <div class="cal-header">
-          <button type="button" class="cal-nav-btn" id="calPrevBtn">&larr;</button>
-          <div class="cal-month-label" id="calMonthLabel"></div>
-          <button type="button" class="cal-nav-btn" id="calNextBtn">&rarr;</button>
-        </div>
-        <div class="cal-grid" id="calGrid"></div>
-        <div class="cal-legend">
-          <span><i style="background:#f9f5ef; border:1px solid #ddd0bc;"></i> Open</span>
-          <span><i style="background:#f3d9c4;"></i> Blocked by you</span>
-          <span><i style="background:#e9e2d6;"></i> Booked</span>
-          <span><i style="background:#1c1a17;"></i> Selecting</span>
-        </div>
-        <div class="cal-confirm" id="calConfirm">
-          <p id="calConfirmLabel"></p>
-          <input type="text" id="calConfirmReason" placeholder="Reason (optional), e.g. Maintenance">
-          <div class="cal-confirm-actions">
-            <button type="button" class="cal-confirm-block-btn" id="calConfirmBlockBtn">Block These Dates</button>
-            <button type="button" class="cal-confirm-cancel-btn" id="calConfirmCancelBtn">Cancel</button>
-          </div>
-        </div>
-      </div>
-      <p style="font-size:11.5px; opacity:0.6; margin-top:-6px; margin-bottom:16px;">Click a date to start, click another to select a range (or click-drag), then confirm below. Click an already-blocked date to remove that block.</p>
-      <div id="blockedDatesList"></div>
-      <button type="button" class="add-paid-amenity-btn" id="addBlockedDateBtn">+ Block a Date Range Manually</button>
 
       <div class="eyebrow" style="margin-top:24px;">Promotions <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(run multiple named discounts for different date ranges)</span></div>
       <div class="cal-wrap">
@@ -763,8 +763,8 @@
   }
 
   function onCalMouseDown(dateStr){
-    // Starting a fresh drag on an already-blocked date is handled as a
-    // tap-to-remove instead (see onCalClick) — don't begin a selection there.
+    // Starting a fresh selection on an already-blocked date is handled as
+    // a tap-to-remove instead (see onCalClick) — don't begin one there.
     if(blockedRowFor(dateStr)) return;
     calDragging = true;
     calSelStart = dateStr;
@@ -780,36 +780,24 @@
     if(!calDragging) return;
     calDragging = false;
     calSelEnd = dateStr;
-    if(calSelStart && calSelEnd && calSelStart !== calSelEnd){
-      showCalConfirm();
-    }
-    // A plain click (no movement) falls through to onCalClick below,
-    // which handles the single-day and two-tap cases.
+    // Fires for a single plain click too (start === end, no drag
+    // movement) — that's what makes a single-day block reachable at all,
+    // not just a multi-day drag.
+    if(calSelStart) showCalConfirm();
   }
 
-  // Handles: (a) tapping an already-blocked date to remove it, (b) the
-  // two-tap range selection for touch/simple-click users who don't drag.
+  // Only handles tapping an already-blocked date to remove it — actual
+  // range selection is fully handled by mousedown/mouseenter/mouseup
+  // above, which already covers a plain single click (no movement).
   function onCalClick(dateStr){
     const existingBlock = blockedRowFor(dateStr);
-    if(existingBlock && !calSelStart){
+    if(existingBlock){
       const label = `${existingBlock.startDate} to ${existingBlock.endDate}`;
       if(window.confirm(`Remove this block (${label}${existingBlock.reason ? ', ' + existingBlock.reason : ''})?`)){
         blockedDateRows = blockedDateRows.filter(b => b !== existingBlock);
         renderBlockedDates();
         renderCalendar();
       }
-      return;
-    }
-    if(!calSelStart){
-      calSelStart = dateStr;
-      calSelEnd = dateStr;
-      renderCalendar();
-      return;
-    }
-    if(calSelStart && calSelEnd === calSelStart && dateStr !== calSelStart && !calDragging){
-      // Second tap, different day — completes the range.
-      calSelEnd = dateStr;
-      showCalConfirm();
     }
   }
 
@@ -950,30 +938,21 @@
     if(!promoDragging) return;
     promoDragging = false;
     promoSelEnd = dateStr;
-    if(promoSelStart && promoSelEnd && promoSelStart !== promoSelEnd){
-      showPromoCalConfirm();
-    }
+    // Fires for a single plain click too (start === end) — same fix as
+    // the blocked-dates calendar, so a single-day promotion is reachable.
+    if(promoSelStart) showPromoCalConfirm();
   }
+  // Only handles tapping an existing promotion to remove it — range
+  // selection is fully handled by mousedown/mouseenter/mouseup above.
   function onPromoCalClick(dateStr){
     const existingPromo = promoRowFor(dateStr);
-    if(existingPromo && !promoSelStart){
+    if(existingPromo){
       const label = `${existingPromo.name} (${existingPromo.startDate} to ${existingPromo.endDate})`;
       if(window.confirm(`Remove this promotion — ${label}?`)){
         promotionRows = promotionRows.filter(p => p !== existingPromo);
         renderPromotionsList();
         renderPromoCalendar();
       }
-      return;
-    }
-    if(!promoSelStart){
-      promoSelStart = dateStr;
-      promoSelEnd = dateStr;
-      renderPromoCalendar();
-      return;
-    }
-    if(promoSelStart && promoSelEnd === promoSelStart && dateStr !== promoSelStart && !promoDragging){
-      promoSelEnd = dateStr;
-      showPromoCalConfirm();
     }
   }
 
