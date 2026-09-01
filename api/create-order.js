@@ -208,7 +208,7 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { stays, experiences, email, preferredCurrency } = req.body;
+    const { stays, experiences, email, preferredCurrency, couponCode } = req.body;
     const safeStays = Array.isArray(stays) ? stays : [];
     const safeExperiences = Array.isArray(experiences) ? experiences : [];
 
@@ -379,7 +379,44 @@ module.exports = async (req, res) => {
     }
 
     const gst = Math.round(grandSubtotal * GST_RATE);
-    const totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit;
+    let totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit;
+
+    // ---- Coupon redemption ----
+    // Requires the guest to actually be logged in — a coupon is tied to
+    // one specific guest_id (set when the issuing host bought it, see
+    // host-listings.js's buyCouponOrder), not just an email address, so
+    // there's no way to redeem one anonymously. Applied here, before the
+    // Razorpay order amount is computed, so the discount is real —
+    // baked into what's actually charged, not just displayed.
+    let appliedCouponId = null;
+    let appliedCouponDiscount = 0;
+    if (couponCode && String(couponCode).trim()) {
+      if (!guestId) {
+        return res.status(400).json({ error: 'Please log in to your account to use a coupon.' });
+      }
+      const cleanCode = String(couponCode).trim().toUpperCase();
+      const couponRows = await sql`
+        SELECT id, guest_id, amount, status, expires_at FROM coupons WHERE code = ${cleanCode}
+      `;
+      const coupon = couponRows[0];
+      if (!coupon) {
+        return res.status(400).json({ error: 'This coupon code was not found.' });
+      }
+      if (coupon.guest_id !== guestId) {
+        return res.status(400).json({ error: 'This coupon is not valid for your account.' });
+      }
+      if (coupon.status !== 'active') {
+        return res.status(400).json({ error: coupon.status === 'redeemed' ? 'This coupon has already been used.' : 'This coupon is no longer valid.' });
+      }
+      if (new Date(coupon.expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This coupon has expired.' });
+      }
+      // Never let a coupon discount a booking below zero, and never
+      // discount more than the coupon is actually worth.
+      appliedCouponDiscount = Math.min(Number(coupon.amount), totalRupees);
+      appliedCouponId = coupon.id;
+      totalRupees = Math.max(0, totalRupees - appliedCouponDiscount);
+    }
 
     // Default path, and the ONLY path until International Payments is
     // actually approved and an admin explicitly enables specific
@@ -418,6 +455,8 @@ module.exports = async (req, res) => {
         experienceCount: safeExperiences.length,
         chargeCurrency,
         chargeAmount: chargeAmount || '',
+        couponId: appliedCouponId || '',
+        couponDiscount: appliedCouponDiscount || '',
         // Razorpay notes have a size limit we haven't hit in practice yet,
         // but amenities make this payload meaningfully bigger than before
         // — if bookings with several amenities/dates start failing here,
@@ -436,6 +475,7 @@ module.exports = async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       totalDeposit: grandDeposit,
+      couponDiscount: appliedCouponDiscount || 0,
     });
   } catch (err) {
     console.error('create-order error:', err);

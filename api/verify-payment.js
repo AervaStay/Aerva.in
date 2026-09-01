@@ -27,7 +27,7 @@
 //                once an admin decides how much of a disputed deposit to
 //                pay the host vs. refund the guest.
 
-const crypto = require('crypto');
+const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 
@@ -59,12 +59,7 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Missing payment details' });
     }
 
-    const expectedSignature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest('hex');
-
-    const isValid = expectedSignature === razorpay_signature;
+    const isValid = verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
 
     if (!isValid) {
       // Someone sent a forged/tampered response — do not confirm the booking.
@@ -91,6 +86,13 @@ module.exports = async (req, res) => {
       // International Payments is enabled (see create-order.js).
       const chargeCurrency = order.notes?.chargeCurrency || 'INR';
       const chargeAmount = order.notes?.chargeAmount ? Number(order.notes.chargeAmount) : null;
+      // Applied at checkout — see create-order.js's coupon validation.
+      // Attributed to whichever order row is created FIRST below (a
+      // checkout-level discount, not a per-stay one), so it isn't
+      // double-counted across multiple stays/experiences in one payment.
+      const couponId = order.notes?.couponId ? Number(order.notes.couponId) : null;
+      const couponDiscount = order.notes?.couponDiscount ? Number(order.notes.couponDiscount) : 0;
+      let couponAttributed = false;
 
       const totalSubtotalAllStays = stays.reduce((sum, s) => sum + s.subtotal, 0);
       const totalGuestFeeAllStays = stays.reduce((sum, s) => sum + (Number(s.guestServiceFee) || 0), 0);
@@ -150,24 +152,32 @@ module.exports = async (req, res) => {
           depositReleaseAt = releaseDate.toISOString().split('T')[0];
         }
 
+        const thisRowCouponId = (couponId && !couponAttributed) ? couponId : null;
+        const thisRowCouponDiscount = (couponId && !couponAttributed) ? couponDiscount : 0;
+        if (couponId && !couponAttributed) couponAttributed = true;
+
         const inserted = await sql`
           INSERT INTO orders (
             suite_name, listing_id, guest_id, guest_email, arrival, departure, guests, nights,
             subtotal, discount_amount, gst, guest_service_fee, total,
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
-            charge_currency, charge_amount,
+            charge_currency, charge_amount, coupon_id, coupon_discount,
             razorpay_order_id, razorpay_payment_id, status, order_type
           ) VALUES (
             ${stay.suite}, ${stay.listingId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             ${depositAmount}, ${depositStatus}, ${depositReleaseAt},
-            ${chargeCurrency}, ${chargeAmount},
+            ${chargeCurrency}, ${chargeAmount}, ${thisRowCouponId}, ${thisRowCouponDiscount},
             ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay'
           )
           RETURNING id
         `;
+
+        if (thisRowCouponId) {
+          await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${inserted[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
+        }
         const newOrderId = inserted[0].id;
 
         // Persist which paid amenities (and specific nights) were part of
@@ -197,23 +207,32 @@ module.exports = async (req, res) => {
         const effectiveRate = ex.commissionRate != null ? Number(ex.commissionRate) : FALLBACK_COMMISSION_RATE;
         const payoutAmount = hostRelevantTotal - commissionAmount;
 
-        await sql`
+        const thisRowCouponId = (couponId && !couponAttributed) ? couponId : null;
+        const thisRowCouponDiscount = (couponId && !couponAttributed) ? couponDiscount : 0;
+        if (couponId && !couponAttributed) couponAttributed = true;
+
+        const insertedEx = await sql`
           INSERT INTO orders (
             suite_name, listing_id, guest_id, guest_email, arrival, departure, guests, nights,
             subtotal, discount_amount, gst, guest_service_fee, total,
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
-            charge_currency, charge_amount,
+            charge_currency, charge_amount, coupon_id, coupon_discount,
             razorpay_order_id, razorpay_payment_id, status, order_type
           ) VALUES (
             ${ex.suite}, ${ex.listingId || null}, ${guestId}, ${email}, ${ex.date}, ${ex.date}, ${ex.guests}, 1,
             ${ex.subtotal}, 0, ${gstShare}, ${guestServiceFee}, ${total},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             0, 'none', null,
-            ${chargeCurrency}, ${chargeAmount},
+            ${chargeCurrency}, ${chargeAmount}, ${thisRowCouponId}, ${thisRowCouponDiscount},
             ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'experience'
           )
+          RETURNING id
         `;
+
+        if (thisRowCouponId) {
+          await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${insertedEx[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
+        }
       }
     } catch (dbErr) {
       // A booking that's paid-for but not logged to `orders` is recoverable
