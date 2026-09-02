@@ -58,6 +58,7 @@
   <div id="loginState" style="display:none;">
     <h1>Welcome Back</h1>
     <p class="subtitle">Log in to view your bookings.</p>
+    <p id="switchAccountNote" style="display:none; font-size:12.5px; background:#faf3e6; border:1px solid #ddc9a3; color:#8a6c39; padding:10px 12px; margin-bottom:16px;"></p>
 
     <div class="social-buttons">
       <div id="googleSignInBtn"></div>
@@ -255,6 +256,7 @@
     const params = new URLSearchParams(window.location.search);
     const verifyToken = params.get('verify');
     const resetToken = params.get('resetToken');
+    const switchAccount = params.get('switchAccount') === '1';
 
     if(resetToken){
       pendingResetToken = resetToken;
@@ -278,6 +280,28 @@
       } catch(err){
         showOnly(loginState);
       }
+      return;
+    }
+
+    // Switching accounts (see index.html's "not you?" link) — the
+    // CURRENT session is deliberately left in localStorage untouched.
+    // Skips the "already logged in, redirect straight through" check
+    // below entirely, so the login form actually shows instead of
+    // bouncing right back — but nothing about the old session is
+    // cleared until storeSession() runs for a genuinely new login
+    // (see every mode below: password login, phone verify, Google,
+    // signup verification). Backing out now (closing the tab, hitting
+    // back) leaves the original account exactly as it was.
+    if(switchAccount){
+      const currentEmail = localStorage.getItem('aerva_guest_email');
+      if(currentEmail){
+        const switchNote = document.getElementById('switchAccountNote');
+        if(switchNote){
+          switchNote.textContent = `Currently signed in as ${currentEmail}. Logging in below will switch to that account instead.`;
+          switchNote.style.display = 'block';
+        }
+      }
+      showOnly(loginState);
       return;
     }
 
