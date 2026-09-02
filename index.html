@@ -3698,11 +3698,11 @@
       params.set('lat', geocoded.lat);
       params.set('lng', geocoded.lng);
       params.set('radiusKm', '200');
-      // Sent alongside the coordinates now, not instead of them — see
-      // get-listings.js: this is what stops a listing with incorrect
-      // stored coordinates from showing up in an unrelated search purely
-      // because its (wrong) lat/lng happens to compute within range.
-      if(city) params.set('city', city);
+      // City text is deliberately NOT also sent here — get-listings.js
+      // ignores it when a real distance search is active anyway, and
+      // more importantly shouldn't apply it: a "Mumbai" search should
+      // still surface a nearby Pune listing within 200km, even though
+      // its city field says "Pune," not "Mumbai."
     } else if(city){
       // Geocoding failed — still worth trying the old exact-text match
       // as a fallback rather than silently dropping the filter.
