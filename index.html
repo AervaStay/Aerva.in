@@ -1332,6 +1332,12 @@
           <div class="check-grid">
             <label class="check-item"><input type="checkbox" name="PetTypes" value="Dog"> Dogs</label>
             <label class="check-item"><input type="checkbox" name="PetTypes" value="Cat"> Cats</label>
+            <label class="check-item"><input type="checkbox" name="PetTypes" value="Bird"> Birds</label>
+            <label class="check-item"><input type="checkbox" name="PetTypes" value="Rabbit"> Rabbits</label>
+            <label class="check-item"><input type="checkbox" name="PetTypes" value="Fish"> Fish</label>
+            <label class="check-item"><input type="checkbox" name="PetTypes" value="Hamster"> Hamsters / Small Rodents</label>
+            <label class="check-item"><input type="checkbox" name="PetTypes" value="Turtle"> Turtles / Reptiles</label>
+            <label class="check-item"><input type="checkbox" name="PetTypes" value="Other"> Other (non-wild pet)</label>
           </div>
         </div>
         <div class="field">
@@ -1671,6 +1677,17 @@
   // search-suggestion view stays consistent if the convention ever changes.
   function formatCityArea(listing){
     return listing.area ? `${listing.area}, ${listing.city}` : (listing.city || '');
+  }
+
+  // Display label for a pet type value — same set hosts pick from when
+  // configuring their listing's pet policy (see the "Pet types allowed"
+  // checkboxes on the submission form / manage-listing.html).
+  function petTypeLabel(value){
+    const labels = {
+      Dog: 'Dogs', Cat: 'Cats', Bird: 'Birds', Rabbit: 'Rabbits', Fish: 'Fish',
+      Hamster: 'Hamsters / Small Rodents', Turtle: 'Turtles / Reptiles', Other: 'Other (non-wild pet)'
+    };
+    return labels[value] || value;
   }
 
   function fmtGuest(amountInInr){
@@ -4092,6 +4109,17 @@
                 <span class="guest-count" id="lgCountPets">0</span>
                 <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="inc" aria-label="Increase pets">+</button>
               </div>
+            </div>
+            <div id="lgPetTypesPicker" style="display:none; padding:10px 0 4px;">
+              <p style="font-size:11.5px; opacity:0.7; margin-bottom:8px;">What kind of pet(s) are you bringing? <span style="color:#a3402f;">*</span></p>
+              <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                ${(Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length ? listing.allowed_pet_types : ['Dog', 'Cat']).map(t => `
+                  <label style="display:flex; align-items:center; gap:5px; font-size:13px; border:1px solid var(--line-dark); padding:6px 10px; cursor:pointer;">
+                    <input type="checkbox" class="lg-pet-type-checkbox" value="${t}"> ${petTypeLabel(t)}
+                  </label>
+                `).join('')}
+              </div>
+              <p id="lgPetTypesError" style="font-size:11.5px; color:#a3402f; margin-top:6px; display:none;">Please select what pet(s) you're bringing.</p>
             </div>` : ''}
             <div id="listingAmenitiesPicker"></div>
             <div id="listingPriceSummary" style="display:none;"></div>
@@ -4332,6 +4360,10 @@
       const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
       if(countEl) countEl.textContent = lgCounts[type];
     });
+    if(lgCounts.pets > 0){
+      const initialPicker = container.parentElement.querySelector('#lgPetTypesPicker');
+      if(initialPicker) initialPicker.style.display = 'block';
+    }
     const LG_MAX = { adults: 16, children: 12, infants: 5, pets: 5 };
     container.parentElement.querySelectorAll('.guest-step-btn[data-lg-type]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -4343,6 +4375,14 @@
         lgCounts[type] = next;
         const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
         if(countEl) countEl.textContent = next;
+        if(type === 'pets'){
+          const picker = container.parentElement.querySelector('#lgPetTypesPicker');
+          if(picker) picker.style.display = next > 0 ? 'block' : 'none';
+          if(next === 0){
+            const errorEl = container.parentElement.querySelector('#lgPetTypesError');
+            if(errorEl) errorEl.style.display = 'none';
+          }
+        }
         updateListingPriceSummary(listing, lgArrival, lgDeparture);
       });
     });
@@ -4592,6 +4632,24 @@
       amenityId: Number(amenityId), dates: [...datesSet]
     }));
 
+    // Bringing a pet requires saying what kind — the host picked which
+    // types they're okay with (see the "Pet types allowed" checkboxes on
+    // their listing), and this is what stops "a pet" from meaning
+    // whatever the guest assumed, turtle or otherwise, without the host
+    // ever getting a say.
+    let petTypes = [];
+    if(counts.pets > 0){
+      const modalRoot = document.getElementById('listingModalBody');
+      petTypes = Array.from((modalRoot || document).querySelectorAll('.lg-pet-type-checkbox:checked')).map(cb => cb.value);
+      if(!petTypes.length){
+        const petTypesError = (modalRoot || document).querySelector('#lgPetTypesError');
+        if(petTypesError) petTypesError.style.display = 'block';
+        errorEl.textContent = 'Please select what pet(s) you\'re bringing before booking.';
+        errorEl.style.display = 'block';
+        return;
+      }
+    }
+
     btn.disabled = true;
     btn.textContent = 'Preparing payment…';
 
@@ -4601,7 +4659,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, selectedAmenities: selectedAmenitiesPayload }],
+          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, petTypes, selectedAmenities: selectedAmenitiesPayload }],
           email,
           // Only takes effect if this currency is admin-enabled for direct
           // international charging server-side (see create-order.js) —
