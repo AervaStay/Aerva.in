@@ -330,8 +330,8 @@
   function updateListingTabCounts(){
     const activeCount = currentListings.filter(l => l.status === 'approved').length;
     const inactiveCount = currentListings.length - activeCount;
-    document.getElementById('tabActiveBtn').innerHTML = `Active <span class="tab-count">${activeCount}</span>`;
-    document.getElementById('tabInactiveBtn').innerHTML = `Inactive <span class="tab-count">${inactiveCount}</span>`;
+    document.getElementById('tabActiveBtn').innerHTML = `Active <span class="tab-count">(${activeCount})</span>`;
+    document.getElementById('tabInactiveBtn').innerHTML = `Inactive <span class="tab-count">(${inactiveCount})</span>`;
   }
 
   function renderListingsForCurrentTab(){
