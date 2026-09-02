@@ -27,6 +27,18 @@ const { logAudit } = require('./_audit-log');
 
 const sql = neon(process.env.DATABASE_URL);
 
+// City/area need to end up stored in Latin script — search matching,
+// admin review, and consistency across the site all depend on that. The
+// frontend's Google Places Autocomplete is set to language=en, which
+// handles the vast majority of cases, but a host can still type or paste
+// something directly, so this is the actual enforcement point. Flags
+// anything outside Basic Latin + Latin-1/Extended-A/B (which already
+// covers accented spellings like "São Paulo" or "Zürich" fine) —
+// Devanagari, CJK, Arabic, Cyrillic, etc. all get caught here.
+function hasNonLatinScript(str) {
+  return typeof str === 'string' && /[^\u0000-\u024F\s]/.test(str);
+}
+
 // Aerva's cut on bookings — set by the platform, not the host, same as
 // Airbnb's host service fee. Applied to every new listing at submission time.
 const DEFAULT_COMMISSION_RATE = 15;
@@ -296,6 +308,10 @@ module.exports = async (req, res) => {
         if (!city || !description || !hostName || !hostPhone) {
           console.warn('submit-listing rejected: missing required text fields');
           return res.status(400).json({ error: 'Missing required fields' });
+        }
+        if (hasNonLatinScript(city) || (area && hasNonLatinScript(area))) {
+          console.warn('submit-listing rejected: city/area not in Latin script');
+          return res.status(400).json({ error: 'Please enter the city and area in English (Latin script) — e.g. "Pune", not a local-script spelling.' });
         }
         if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
           console.warn('submit-listing rejected: no exterior photos');
