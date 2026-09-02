@@ -1325,7 +1325,7 @@
       <div class="field">
         <label>Email</label>
         <p id="listHostEmailDisplay" style="font-size:15px; padding:10px 2px; opacity:0.75;"></p>
-        <p style="font-size:11px; opacity:0.55;">This is your logged-in account's email — <a href="guest-login.html" style="color:var(--gold-deep);">not you?</a></p>
+        <p style="font-size:11px; opacity:0.55;">This is your logged-in account's email — <a href="#" id="listSwitchAccountLink" style="color:var(--gold-deep);">not you?</a></p>
       </div>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Offers & Discounts <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></div>
@@ -1356,7 +1356,7 @@
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Commission</div>
       <p style="font-size:13px; line-height:1.7; opacity:0.75; border:1px solid var(--line-dark); padding:14px 16px; background:var(--cream);">
-        Aerva charges <strong>10% commission</strong> on your base booking (room + extra guests) and <strong>5%</strong> on any paid amenities you offer — this comes out of what you receive, and applies the same way for every host, so there's nothing to configure here. Separately, guests pay their own service fee on top, which never affects your payout. Payouts today are tracked internally per booking; automated bank transfers aren't set up yet, so settlement happens manually until that's built.
+        Aerva charges <strong>10% commission</strong> on your base booking and <strong>5%</strong> on paid amenities — the same for every host, nothing to configure.
       </p>
 
       <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
@@ -2167,6 +2167,17 @@
   } else {
     document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
   }
+
+  // "not you?" — goes to guest-login.html in "switch account" mode
+  // (?switchAccount=1). The CURRENT session is deliberately left alone
+  // here — guest-login.html only replaces it once a new login actually
+  // succeeds (see storeSession() there, a plain overwrite). Logging out
+  // immediately on just a click would strand the host with no account
+  // at all if they back out or the new login fails.
+  document.getElementById('listSwitchAccountLink').addEventListener('click', function(e){
+    e.preventDefault();
+    window.location.href = 'guest-login.html?switchAccount=1';
+  });
 
   // ---- Host pricing currency: lets a host entering prices from another
   // country think in their own currency instead of INR. This is entirely
