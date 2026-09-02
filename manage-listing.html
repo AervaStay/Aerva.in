@@ -221,6 +221,7 @@
         <input id="listingArea" type="text" placeholder="e.g. Koregaon Park">
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Shown to guests as "Area, City" — leave blank if there isn't a well-known one for this address.</p>
       </div>
+      <p id="listCityAreaWarning" style="font-size:11.5px; color:#a3402f; margin-top:-8px; margin-bottom:16px; display:none;"></p>
 
       <div class="field">
         <label for="pricingCurrency">Pricing Currency <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— view and edit your prices below in this currency; Aerva stores everything in INR automatically</span></label>
@@ -476,19 +477,40 @@
       function findAddressComponent(types){
         return components.find(c => types.some(t => c.types.includes(t)));
       }
+      // Some administrative divisions genuinely only have a local-script
+      // name on file in Google's data — the page-wide language=en
+      // setting (see the script tag in <head>) has nothing to switch to
+      // in that case. short_name is tried as a fallback (often the
+      // Latin/English form even then); if neither is usable, the field
+      // is deliberately left blank with a warning rather than silently
+      // filled with unreadable text.
+      const nonLatinPattern = /[^\u0000-\u024F\s]/;
+      function latinNameFor(component){
+        if(!component) return null;
+        if(component.long_name && !nonLatinPattern.test(component.long_name)) return component.long_name;
+        if(component.short_name && !nonLatinPattern.test(component.short_name)) return component.short_name;
+        return null;
+      }
       const cityComponent = findAddressComponent(['administrative_area_level_2'])
         || findAddressComponent(['locality'])
         || findAddressComponent(['administrative_area_level_1']);
-      if(cityComponent){
-        document.getElementById('listingCity').value = cityComponent.long_name;
+      const cityName = latinNameFor(cityComponent);
+      const cityWarningEl = document.getElementById('listCityAreaWarning');
+      if(cityWarningEl) cityWarningEl.style.display = 'none';
+      if(cityName){
+        document.getElementById('listingCity').value = cityName;
+      } else if(cityComponent && cityWarningEl){
+        cityWarningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below, or try the PIN/postal code lookup.';
+        cityWarningEl.style.display = 'block';
       }
       const areaComponent = findAddressComponent(['sublocality_level_1', 'sublocality', 'neighborhood'])
         || (() => {
           const locality = findAddressComponent(['locality']);
           return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
         })();
-      if(areaComponent){
-        document.getElementById('listingArea').value = areaComponent.long_name;
+      const areaName = latinNameFor(areaComponent);
+      if(areaName){
+        document.getElementById('listingArea').value = areaName;
       }
     }
 
