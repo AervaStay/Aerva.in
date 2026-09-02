@@ -325,7 +325,7 @@
           </div>
         </div>
         <div class="field">
-          <label for="petFee"><span id="petFeeLabel">Pet Fee (₹ per stay)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if free</span></label>
+          <label for="petFee"><span id="petFeeLabel">Pet Fee (₹ per pet, per stay)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if free</span></label>
           <input id="petFee" type="number" min="0" placeholder="e.g. 500">
         </div>
       </div>
@@ -1167,7 +1167,7 @@
     const symbol = SUPPORTED_CURRENCIES[pricingCurrency].symbol.trim();
     document.getElementById('nightlyRateLabel').textContent = `Nightly Rate (${symbol})`;
     document.getElementById('securityDepositLabel').textContent = `Security Deposit (${symbol})`;
-    document.getElementById('petFeeLabel').textContent = `Pet Fee (${symbol} per stay)`;
+    document.getElementById('petFeeLabel').textContent = `Pet Fee (${symbol} per pet, per stay)`;
     document.getElementById('discountFlatOption').textContent = `Flat amount off (${symbol})`;
     document.getElementById('discountValueLabel').textContent =
       document.getElementById('discountType').value === 'flat' ? `Amount (${symbol})` : 'Amount';
