@@ -73,7 +73,16 @@
   .resolve-btn{background:#1c1a17; color:#f4eadc; border:none; padding:9px 18px; font-size:12.5px; cursor:pointer;}
   .process-results{margin-top:14px; font-size:12.5px;}
   .process-results div{padding:4px 0;}
+  .listing-map-preview{width:100%; max-width:460px; height:220px; background:#efe6d8; border:1px solid #e0d5c0; margin-top:6px;}
+  .listing-map-preview .leaflet-container{font-family:sans-serif;}
+  .address-line{font-size:13px; margin-bottom:10px;}
+  .address-line a{color:#8a6c39; text-decoration:underline;}
 </style>
+<!-- Free OpenStreetMap/Leaflet embed, no API key or billing needed — same
+     approach already used on manage-listing.html — so an admin can see
+     roughly where a submitted address actually pins before approving. -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 </head>
 <body>
 
@@ -434,11 +443,16 @@
         : '';
       const metaLine = isExperience
         ? `${typeTag}${l.experience_category || 'Uncategorized'} · ₹${l.nightly_rate || '—'}${l.experience_price_unit === 'per_person' ? ' per person' : ' flat'}${l.experience_duration_hours ? ' · ' + l.experience_duration_hours + 'h' : ''} · Hosted at: ${l.hosting_property_name || 'not set'} · ${l.host_name} (${l.host_email}, ${l.host_phone})`
-        : `${l.city} · ${l.property_type || ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})`;
+        : `${l.area ? l.area + ', ' : ''}${l.city} · ${l.property_type || ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})`;
+      const addressHtml = (!isExperience && l.formatted_address) ? `
+        <p class="address-line">📍 ${l.formatted_address}${(l.latitude && l.longitude) ? ` — <a href="https://www.google.com/maps?q=${l.latitude},${l.longitude}" target="_blank" rel="noopener">Open in Google Maps</a>` : ''}</p>
+        ${(l.latitude && l.longitude) ? `<div class="listing-map-preview" id="listingMap-${l.id}" data-lat="${l.latitude}" data-lng="${l.longitude}"></div>` : ''}
+      ` : (!isExperience ? '<p class="address-line" style="color:#a3402f;">⚠ No location was set for this listing — worth checking with the host before approving.</p>' : '');
       return `
       <div class="listing" id="listing-${l.id}">
         <h3>${l.property_name}</h3>
         <div class="meta">${metaLine}</div>
+        ${addressHtml}
         <div class="desc">${l.description}</div>
         ${tagListHtml('Amenities', l.amenities)}
         ${tagListHtml('Services', l.services)}
@@ -471,6 +485,31 @@
       </div>
     `;
     }).join('');
+
+    // Initialize the small map preview for every card that has real
+    // coordinates — done after innerHTML is set, since the container
+    // divs don't exist until then.
+    listings.forEach(l => {
+      if(l.latitude && l.longitude){
+        const el = document.getElementById('listingMap-' + l.id);
+        if(el) initListingMapPreview(el, l.latitude, l.longitude, l.property_name);
+      }
+    });
+  }
+
+  // Free OpenStreetMap/Leaflet preview — one map instance per card,
+  // created once and left as-is (unlike manage-listing.html's single
+  // reusable map, these cards aren't edited in place, so no update/reuse
+  // logic is needed here).
+  function initListingMapPreview(container, lat, lng, label){
+    if(!window.L) return;
+    const position = [Number(lat), Number(lng)];
+    const map = L.map(container, { scrollWheelZoom: false }).setView(position, 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19
+    }).addTo(map);
+    L.marker(position).addTo(map).bindPopup(label);
   }
 
   function showRejectPanel(listingId){
