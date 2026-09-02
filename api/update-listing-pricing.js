@@ -174,7 +174,7 @@ module.exports = async (req, res) => {
       // one that does replaces all four fields together, since they only
       // make sense as a set — switching to "No" clears the detail fields
       // rather than leaving a stale count/fee behind.
-      const ALLOWED_PET_TYPES = ['Dog', 'Cat'];
+      const ALLOWED_PET_TYPES = ['Dog', 'Cat', 'Bird', 'Rabbit', 'Fish', 'Hamster', 'Turtle', 'Other'];
       const petFriendlyProvided = petFriendly === true || petFriendly === false;
       const finalPetFriendly = petFriendlyProvided ? petFriendly : before[0].pet_friendly;
       const finalMaxPets = petFriendlyProvided

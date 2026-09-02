@@ -348,7 +348,7 @@ module.exports = async (req, res) => {
     // request sends, and the detail fields (count, types, fee) are only
     // stored at all when the property is actually marked pet-friendly —
     // a "No" answer clears any stray values rather than storing them.
-    const ALLOWED_PET_TYPES = ['Dog', 'Cat'];
+    const ALLOWED_PET_TYPES = ['Dog', 'Cat', 'Bird', 'Rabbit', 'Fish', 'Hamster', 'Turtle', 'Other'];
     const safePetFriendly = petFriendly === true ? true : (petFriendly === false ? false : null);
     const safePetTypes = safePetFriendly === true && Array.isArray(allowedPetTypes)
       ? allowedPetTypes.filter(t => ALLOWED_PET_TYPES.includes(t))

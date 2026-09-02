@@ -284,7 +284,7 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT id, property_name, nightly_rate, discount_type, discount_value,
                discount_min_nights, commission_rate, security_deposit,
-               pet_friendly, max_pets_allowed, pet_fee
+               pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
@@ -376,6 +376,21 @@ module.exports = async (req, res) => {
       if (listing.max_pets_allowed != null && requestedPets > Number(listing.max_pets_allowed)) {
         return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} allows at most ${listing.max_pets_allowed} pet(s).` });
       }
+      // What kind of pet, not just how many — a host who only allows
+      // Dogs shouldn't discover a turtle showed up because "pets" was
+      // just a headcount with no species attached. Every listed type
+      // has to be one the listing actually allows.
+      const requestedPetTypes = Array.isArray(s.petTypes) ? s.petTypes.filter(t => typeof t === 'string') : [];
+      if (requestedPets > 0) {
+        const allowedTypes = Array.isArray(listing.allowed_pet_types) ? listing.allowed_pet_types : [];
+        if (!requestedPetTypes.length) {
+          return res.status(400).json({ error: `Stay ${i + 1}: please specify what kind of pet(s) you're bringing.` });
+        }
+        const disallowed = requestedPetTypes.filter(t => !allowedTypes.includes(t));
+        if (disallowed.length) {
+          return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} doesn't allow ${disallowed.join(', ')}.` });
+        }
+      }
       const petFeeAmount = requestedPets > 0 ? Math.round(Number(listing.pet_fee || 0) * requestedPets) : 0;
 
       const roomPortion = beforeDiscount - discountAmount; // room + extra guests, after discount, never includes amenities
@@ -415,6 +430,7 @@ module.exports = async (req, res) => {
         discountAmount,
         extraGuestCharge: extraTotal, // broken out for the guest-facing summary
         petFeeAmount, // broken out for the guest-facing summary
+        petTypes: requestedPetTypes, // trusted server-side validated list, not re-trusted from the browser at verify time
         roomPortion,
         baseCommission,
         amenityCommission,

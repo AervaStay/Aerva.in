@@ -163,14 +163,14 @@ module.exports = async (req, res) => {
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
             charge_currency, charge_amount, coupon_id, coupon_discount,
-            razorpay_order_id, razorpay_payment_id, status, order_type
+            razorpay_order_id, razorpay_payment_id, status, order_type, pet_types
           ) VALUES (
             ${stay.suite}, ${stay.listingId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             ${depositAmount}, ${depositStatus}, ${depositReleaseAt},
             ${chargeCurrency}, ${chargeAmount}, ${thisRowCouponId}, ${thisRowCouponDiscount},
-            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay'
+            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay', ${JSON.stringify(Array.isArray(stay.petTypes) ? stay.petTypes : [])}
           )
           RETURNING id
         `;

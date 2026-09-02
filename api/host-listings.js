@@ -665,13 +665,13 @@ module.exports = async (req, res) => {
     // stay itself, before that split — payout_amount is what actually
     // lands with the host after commission.
     const bookings = await sql`
-      SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.nights,
+      SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.nights, o.guests,
              o.subtotal, o.discount_amount, o.gst,
              o.commission_rate, o.commission_amount, o.payout_amount,
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
-             o.status, o.created_at
+             o.status, o.created_at, o.pet_types
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
       WHERE l.host_id = ${guest.host_id}
