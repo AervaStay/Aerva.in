@@ -59,7 +59,7 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     try {
       const rows = await sql`
-        SELECT id, property_name, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
+        SELECT id, property_name, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit
@@ -78,7 +78,12 @@ module.exports = async (req, res) => {
         FROM listing_blocked_dates WHERE listing_id = ${listingId} ORDER BY start_date ASC
       `;
 
-      return res.status(200).json({ listing, paidAmenities, blockedDates });
+      const promotions = await sql`
+        SELECT id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active
+        FROM listing_promotions WHERE listing_id = ${listingId} ORDER BY start_date ASC
+      `;
+
+      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions });
     } catch (err) {
       console.error('update-listing-pricing (GET) error:', err);
       return res.status(500).json({ error: 'Could not load your listing right now. Please try again.' });
@@ -89,14 +94,19 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     try {
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
-              exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates,
-              latitude, longitude, formattedAddress,
+              exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, promotions,
+              latitude, longitude, formattedAddress, city, area,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
         return res.status(400).json({ error: 'Please enter a valid nightly rate.' });
       }
+      const safeCity = typeof city === 'string' ? city.trim().slice(0, 100) : '';
+      if (!safeCity) {
+        return res.status(400).json({ error: 'Please enter a city.' });
+      }
+      const safeArea = typeof area === 'string' && area.trim() ? area.trim().slice(0, 100) : null;
 
       const before = await sql`
         SELECT nightly_rate, exterior_photo_urls, interior_photo_urls,
@@ -164,6 +174,7 @@ module.exports = async (req, res) => {
       const updated = await sql`
         UPDATE listings SET
           nightly_rate = ${rate},
+          city = ${safeCity}, area = ${safeArea},
           discount_type = ${discountType || null},
           discount_value = ${discountValue ? Number(discountValue) : null},
           discount_min_nights = ${discountMinNights ? Number(discountMinNights) : null},
@@ -289,13 +300,62 @@ module.exports = async (req, res) => {
         }
       }
 
+      // ---- Sync promotions: same full-replace pattern again. Each
+      // promotion needs a name, a valid discount type/value, and a real
+      // date range — rows missing any of that are skipped rather than
+      // failing the whole save.
+      let promotionsError = null;
+      if (Array.isArray(promotions)) {
+        try {
+          const existingRows = await sql`SELECT id FROM listing_promotions WHERE listing_id = ${listingId}`;
+          const existingIds = new Set(existingRows.map(r => r.id));
+          const submittedIds = new Set();
+
+          for (const p of promotions) {
+            const name = typeof p.name === 'string' ? p.name.trim().slice(0, 100) : '';
+            const discType = p.discountType === 'flat' ? 'flat' : (p.discountType === 'percentage' ? 'percentage' : null);
+            const discValue = Number(p.discountValue);
+            const startDate = typeof p.startDate === 'string' ? p.startDate : null;
+            const endDate = typeof p.endDate === 'string' ? p.endDate : null;
+            if (!name || !discType || !discValue || discValue <= 0 || !startDate || !endDate || endDate <= startDate) continue;
+            const minNights = p.minNights ? Number(p.minNights) : null;
+            const isActive = p.isActive !== false;
+
+            if (p.id && existingIds.has(Number(p.id))) {
+              await sql`
+                UPDATE listing_promotions SET
+                  name = ${name}, discount_type = ${discType}, discount_value = ${discValue},
+                  min_nights = ${minNights}, start_date = ${startDate}, end_date = ${endDate}, is_active = ${isActive}
+                WHERE id = ${Number(p.id)} AND listing_id = ${listingId}
+              `;
+              submittedIds.add(Number(p.id));
+            } else {
+              const inserted = await sql`
+                INSERT INTO listing_promotions (listing_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
+                VALUES (${listingId}, ${name}, ${discType}, ${discValue}, ${minNights}, ${startDate}, ${endDate}, ${isActive})
+                RETURNING id
+              `;
+              submittedIds.add(inserted[0].id);
+            }
+          }
+
+          const idsToDelete = [...existingIds].filter(id => !submittedIds.has(id));
+          if (idsToDelete.length) {
+            await sql`DELETE FROM listing_promotions WHERE id = ANY(${idsToDelete}) AND listing_id = ${listingId}`;
+          }
+        } catch (promoErr) {
+          console.error('Promotions sync failed:', promoErr);
+          promotionsError = 'Your other changes saved, but promotions could not be updated. Please try again.';
+        }
+      }
+
       await logAudit(sql, {
         action: 'listing_pricing_updated', success: true, actorType: 'host', actorIdentifier: listing.host_email,
         targetType: 'listing', targetId: listingId,
-        metadata: { newRate: rate, rateChanged, discountType: discountType || null, paidAmenitiesError: !!paidAmenitiesError, blockedDatesError: !!blockedDatesError }
+        metadata: { newRate: rate, rateChanged, discountType: discountType || null, paidAmenitiesError: !!paidAmenitiesError, blockedDatesError: !!blockedDatesError, promotionsError: !!promotionsError }
       });
 
-      const warning = [paidAmenitiesError, blockedDatesError].filter(Boolean).join(' ') || undefined;
+      const warning = [paidAmenitiesError, blockedDatesError, promotionsError].filter(Boolean).join(' ') || undefined;
       return res.status(200).json({ success: true, warning });
     } catch (err) {
       console.error('update-listing-pricing (POST) error:', err);
