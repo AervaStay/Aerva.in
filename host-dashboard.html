@@ -167,14 +167,19 @@
       const thumbHtml = leadPhoto
         ? `<img class="listing-thumb" src="${leadPhoto}" alt="${l.property_name}">`
         : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
-      const actionHref = l.status === 'draft' ? `index.html?view=list-property&edit=${l.id}` : l.manageLink;
+      const actionHref = (l.status === 'draft' || l.status === 'rejected') ? `index.html?view=list-property&edit=${l.id}` : l.manageLink;
       const actionLink = l.status === 'draft'
         ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Continue Editing</a>`
+        : l.status === 'rejected'
+        ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Edit &amp; Resubmit</a>`
         : `<a class="manage-link" href="${l.manageLink}">Manage Price & Offers</a>`;
       // Clone only makes sense for stay listings right now — there's no
       // Experience submission form yet for a cloned experience to land in.
       const cloneLink = (!l.listing_type || l.listing_type === 'stay')
         ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${l.id})">Clone</button>`
+        : '';
+      const rejectionNoteHtml = (l.status === 'rejected' && l.rejection_reason)
+        ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${l.rejection_reason}</p>`
         : '';
       return `
         <div class="listing-card" data-href="${actionHref}" style="cursor:pointer;">
@@ -182,6 +187,7 @@
           <div class="listing-info">
             <h3>${l.property_name || '(Untitled draft)'}</h3>
             <div class="listing-meta">${l.city || 'No city yet'} · ₹${l.nightly_rate || '—'}/night ${statusBadgeHtml(l.status)}</div>
+            ${rejectionNoteHtml}
           </div>
           <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
             ${actionLink}
