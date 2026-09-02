@@ -26,7 +26,7 @@
     display:inline-block; background:#1c1a17; color:#f4ebe3; padding:12px 24px;
     text-decoration:none; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:30px;
   }
-  .listing-card{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:14px; display:flex; gap:16px; align-items:center;}
+  .listing-card{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:14px; display:flex; gap:16px; align-items:center; transition:border-color .15s ease;}
   .listing-thumb{width:70px; height:70px; object-fit:cover; border-radius:4px; background:#ebdecd; flex:0 0 auto;}
   .listing-thumb-placeholder{
     width:70px; height:70px; border-radius:4px; background:#ebdecd; flex:0 0 auto;
@@ -99,6 +99,14 @@
   .listings-layout{display:grid; grid-template-columns:1fr 400px; gap:24px; align-items:start;}
   @media (max-width: 880px){ .listings-layout{grid-template-columns:1fr;} }
   .listing-card.selected{border-color:#8a6c39; box-shadow:0 0 0 1px #8a6c39;}
+  /* Only an approved card opens the sidebar on click — its own subtle
+     hover cue (border tint) signals that, so a host isn't guessing why
+     some cards behave differently on click than others. */
+  .listing-card[data-status="approved"]:hover{border-color:#8a6c39;}
+  .calendar-hint{
+    font-size:11.5px; color:#8a6c39; margin:6px 0 0; display:flex; align-items:center; gap:4px;
+  }
+  .calendar-hint-muted{color:#8a7f6c;}
   .listing-sidebar{
     position:sticky; top:20px; background:white; border:1px solid #e0d5c0; padding:20px;
     max-height:calc(100vh - 40px); overflow-y:auto;
@@ -191,7 +199,7 @@
       <p class="loading">Loading your listings…</p>
     </div>
     <div class="listing-sidebar" id="listingSidebar">
-      <div class="sidebar-placeholder" id="sidebarPlaceholder">Select a live listing on the left to block dates, run a promotion, or manage paid amenities — right here, no need to open a separate page.</div>
+      <div class="sidebar-placeholder" id="sidebarPlaceholder">Once a listing is approved and live, its calendar, promotions, and paid amenities will show here automatically.</div>
       <div id="sidebarContent" style="display:none;">
         <div class="sidebar-heading" id="sidebarListingName"></div>
         <div class="sidebar-sub">Pricing, photos, and description still live on the full <a href="#" id="sidebarManageLink" style="color:#8a6c39;">Manage Price & Offers</a> page.</div>
@@ -328,6 +336,16 @@
       const rejectionNoteHtml = (l.status === 'rejected' && l.rejection_reason)
         ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${l.rejection_reason}</p>`
         : '';
+      // Only an approved (live) listing has real dates to block or a
+      // promotion to run — everything else (draft/pending/rejected)
+      // doesn't get this hint at all, rather than showing it disabled,
+      // so a host isn't left wondering why a calendar-looking thing on
+      // their unapproved listing does nothing when clicked.
+      const calendarHintHtml = l.status === 'approved'
+        ? `<p class="calendar-hint">📅 Click to manage dates, promotions &amp; amenities</p>`
+        : l.status === 'pending'
+        ? `<p class="calendar-hint calendar-hint-muted">Calendar &amp; promotions unlock once approved</p>`
+        : '';
       return `
         <div class="listing-card" data-href="${actionHref}" data-listing-id="${l.id}" data-status="${l.status}" style="cursor:pointer;">
           ${thumbHtml}
@@ -335,6 +353,7 @@
             <h3>${l.property_name || '(Untitled draft)'}</h3>
             <div class="listing-meta">${l.city || 'No city yet'} · ₹${l.nightly_rate || '—'}/night ${statusBadgeHtml(l.status)}</div>
             ${rejectionNoteHtml}
+            ${calendarHintHtml}
           </div>
           <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
             ${actionLink}
@@ -826,6 +845,12 @@
       renderListings(data.listings || []);
       renderBookings(data.bookings || []);
       renderVerification(data.verification);
+
+      // Default to showing the first live listing's calendar/promotions/
+      // amenities right away, instead of an empty "select one" state —
+      // most hosts land here specifically to manage an active listing.
+      const firstApproved = (data.listings || []).find(l => l.status === 'approved');
+      if(firstApproved) selectListingForSidebar(firstApproved.id);
     } catch(err){
       document.getElementById('listingsContainer').innerHTML = '<p class="empty">Could not load your listings. Please refresh.</p>';
       document.getElementById('bookingsContainer').innerHTML = '<p class="empty">Could not load your bookings. Please refresh.</p>';
