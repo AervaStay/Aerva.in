@@ -1363,7 +1363,7 @@
         <button type="submit" class="btn solid" id="listingSubmitBtn">Submit Listing for Review</button>
         <button type="button" class="btn" id="listingDraftBtn">Save as Draft</button>
       </div>
-      <p style="font-size:11.5px; opacity:0.55; margin-top:4px;">Not ready to finish? Save as a draft — only your property name is required — and pick up right where you left off from your <a href="host-dashboard.html" style="color:var(--gold-deep);">dashboard</a> anytime.</p>
+      <p id="draftHintText" style="font-size:11.5px; opacity:0.55; margin-top:4px;">Not ready to finish? Save as a draft — only your property name is required — and pick up right where you left off from your <a href="host-dashboard.html" style="color:var(--gold-deep);">dashboard</a> anytime.</p>
       <p class="listing-confirm" style="display:none; font-size:13px; opacity:0.75;">Thank you — we've received your listing. Our team reviews every submission personally and will follow up by email within a few days.</p>
       <p class="listing-draft-confirm" style="display:none; font-size:13px; opacity:0.75;">Draft saved — find it anytime on your <a href="host-dashboard.html" style="color:var(--gold-deep);">dashboard</a> to finish it later.</p>
       <p class="listing-error" style="display:none; font-size:13px; color:#a3402f;">Something went wrong sending your listing. Please try again, or email us directly at hello@aerva.in.</p>
@@ -2653,6 +2653,10 @@
     confirmEl.style.display = 'none';
     draftConfirmEl.style.display = 'none';
     errorEl.style.display = 'none';
+    // Reappears at the top of every fresh save attempt (including a
+    // retry after an error) — only hidden for good once a full
+    // submission actually succeeds, see below.
+    document.getElementById('draftHintText').style.display = 'block';
 
     const activeBtn = isDraft ? listingDraftBtn : listingSubmitBtn;
     const otherBtn = isDraft ? listingSubmitBtn : listingDraftBtn;
@@ -2878,6 +2882,7 @@
 
       // Fully done — now it's safe to reset everything for a fresh listing.
       confirmEl.style.display = 'block';
+      document.getElementById('draftHintText').style.display = 'none';
       listingForm.reset();
       exteriorPhotoManager.clear();
       interiorPhotoManager.clear();
