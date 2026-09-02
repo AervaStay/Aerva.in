@@ -199,7 +199,17 @@
         <input type="hidden" id="listFormattedAddress">
         <p id="listLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
         <div id="listingMapPreview" class="listing-map-preview" style="display:none;"></div>
-        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Powers the "distance from you" shown to guests, and the "View on map" link on your listing.</p>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Drag the pin above for a more exact match. Powers the "distance from you" shown to guests, and the "View on map" link on your listing.</p>
+      </div>
+      <div class="field">
+        <label for="listPincode">PIN / Postal Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional — auto-fills City, Area &amp; location)</span></label>
+        <div style="display:flex; gap:8px;">
+          <input id="listPincode" type="text" placeholder="e.g. 411001, or a postal code from anywhere" style="flex:1;">
+          <button type="button" id="listPincodeLookupBtn" style="flex:0 0 auto; padding:0 18px; background:#1c1a17; color:#f4ebe3; border:none; font-size:12px; letter-spacing:0.05em; text-transform:uppercase; cursor:pointer;">Look Up</button>
+        </div>
+        <p id="listPincodeStatus" style="font-size:11.5px; margin-top:4px; display:none;"></p>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Works for Indian PIN codes and postal codes from other countries alike.</p>
+
       </div>
 
       <div class="field">
@@ -395,7 +405,10 @@
   // see the CSS/head comment for why) ----
   // A single map instance is created once, then just re-centered and
   // re-marked afterward — calling L.map() again on the same container
-  // throws, so this checks leafletMapInstance first.
+  // throws, so this checks leafletMapInstance first. The marker is
+  // draggable — dropping it in a slightly different spot is what "fine
+  // tune on the map" means here, and click-anywhere-on-the-map moves it
+  // there directly too, not just dragging the marker itself.
   let leafletMapInstance = null;
   let leafletMarkerInstance = null;
   function updateLeafletPreview(lat, lng){
@@ -410,7 +423,15 @@
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         maxZoom: 19
       }).addTo(leafletMapInstance);
-      leafletMarkerInstance = L.marker(position).addTo(leafletMapInstance);
+      leafletMarkerInstance = L.marker(position, { draggable: true }).addTo(leafletMapInstance);
+      leafletMarkerInstance.on('dragend', () => {
+        const p = leafletMarkerInstance.getLatLng();
+        onLeafletPinMoved(p.lat, p.lng);
+      });
+      leafletMapInstance.on('click', (e) => {
+        leafletMarkerInstance.setLatLng(e.latlng);
+        onLeafletPinMoved(e.latlng.lat, e.latlng.lng);
+      });
     } else {
       leafletMapInstance.setView(position, 14);
       leafletMarkerInstance.setLatLng(position);
@@ -423,30 +444,115 @@
 
   // Called by the Google Maps script once it's loaded (see the script tag
   // in <head>). Same pattern as the listing submission form in
-  // aerva.html — selecting a suggestion captures lat/lng and a clean
-  // formatted address.
+  // index.html — selecting a suggestion captures lat/lng and a clean
+  // formatted address, and now also auto-fills City/Area the same way.
+  //
+  // Shared by three ways of setting a location — Places autocomplete, a
+  // PIN/postal code lookup, and dragging the pin on the map — so all
+  // three fill in the same fields the same way.
+  function applyLocationResult(place, options){
+    options = options || {};
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+
+    document.getElementById('listLatitude').value = lat;
+    document.getElementById('listLongitude').value = lng;
+    document.getElementById('listFormattedAddress').value = place.formatted_address || '';
+    if(!options.skipSearchBoxUpdate){
+      document.getElementById('listLocationSearch').value = place.formatted_address || '';
+    }
+
+    const confirmEl = document.getElementById('listLocationConfirm');
+    confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
+
+    // Same district-over-locality City/Area logic as index.html's
+    // submission form — see the comment there for why. Skipped for a
+    // small drag-to-refine nudge (options.skipCityArea) so it doesn't
+    // casually rewrite a city the host already confirmed.
+    if(!options.skipCityArea){
+      const components = place.address_components || [];
+      function findAddressComponent(types){
+        return components.find(c => types.some(t => c.types.includes(t)));
+      }
+      const cityComponent = findAddressComponent(['administrative_area_level_2'])
+        || findAddressComponent(['locality'])
+        || findAddressComponent(['administrative_area_level_1']);
+      if(cityComponent){
+        document.getElementById('listingCity').value = cityComponent.long_name;
+      }
+      const areaComponent = findAddressComponent(['sublocality_level_1', 'sublocality', 'neighborhood'])
+        || (() => {
+          const locality = findAddressComponent(['locality']);
+          return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
+        })();
+      if(areaComponent){
+        document.getElementById('listingArea').value = areaComponent.long_name;
+      }
+    }
+
+    updateLeafletPreview(lat, lng);
+  }
+
+  // Reverse-geocodes a dragged pin position — refreshes the formatted-
+  // address confirmation text, but deliberately doesn't rewrite City/Area
+  // over what could be a very small, deliberate nudge.
+  function onLeafletPinMoved(lat, lng){
+    document.getElementById('listLatitude').value = lat;
+    document.getElementById('listLongitude').value = lng;
+    if(!window.google || !window.google.maps || !window.google.maps.Geocoder) return;
+    new google.maps.Geocoder().geocode({ location: { lat, lng } }, (results, status) => {
+      if(status === 'OK' && results[0]){
+        applyLocationResult(results[0], { skipCityArea: true });
+      } else {
+        const confirmEl = document.getElementById('listLocationConfirm');
+        confirmEl.textContent = `✓ Location set: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        confirmEl.style.display = 'block';
+      }
+    });
+  }
+
   window.initGoogleMaps = function(){
     const searchInput = document.getElementById('listLocationSearch');
     if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
 
     const autocomplete = new google.maps.places.Autocomplete(searchInput, {
-      fields: ['geometry', 'formatted_address'],
+      fields: ['geometry', 'formatted_address', 'address_components'],
       types: ['geocode', 'establishment']
     });
 
     autocomplete.addListener('place_changed', function(){
-      const place = autocomplete.getPlace();
-      if(!place.geometry || !place.geometry.location) return;
+      applyLocationResult(autocomplete.getPlace(), { skipSearchBoxUpdate: true });
+    });
 
-      document.getElementById('listLatitude').value = place.geometry.location.lat();
-      document.getElementById('listLongitude').value = place.geometry.location.lng();
-      document.getElementById('listFormattedAddress').value = place.formatted_address || '';
-
-      const confirmEl = document.getElementById('listLocationConfirm');
-      confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || '');
-      confirmEl.style.display = 'block';
-
-      updateLeafletPreview(place.geometry.location.lat(), place.geometry.location.lng());
+    // PIN / postal code lookup — works for an Indian PIN code or a
+    // postal/ZIP code from anywhere else, since Geocoder resolves any
+    // address-shaped text, postal codes included.
+    const pincodeInput = document.getElementById('listPincode');
+    const pincodeBtn = document.getElementById('listPincodeLookupBtn');
+    const pincodeStatus = document.getElementById('listPincodeStatus');
+    function lookupPincode(){
+      const code = pincodeInput.value.trim();
+      pincodeStatus.style.display = 'none';
+      if(!code) return;
+      pincodeBtn.disabled = true;
+      pincodeBtn.textContent = 'Looking up…';
+      new google.maps.Geocoder().geocode({ address: code }, (results, status) => {
+        pincodeBtn.disabled = false;
+        pincodeBtn.textContent = 'Look Up';
+        if(status === 'OK' && results[0]){
+          applyLocationResult(results[0]);
+        } else {
+          pincodeStatus.textContent = 'Could not find that PIN/postal code — try the address search above instead.';
+          pincodeStatus.style.color = '#a3402f';
+          pincodeStatus.style.display = 'block';
+        }
+      });
+    }
+    pincodeBtn.addEventListener('click', lookupPincode);
+    pincodeInput.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter'){ e.preventDefault(); lookupPincode(); }
     });
   };
   const MAX_LISTING_PHOTOS = 20;
