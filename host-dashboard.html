@@ -221,6 +221,29 @@
     background:white; border:1px solid #ccc; padding:8px 14px; font-size:11.5px; cursor:pointer;
     color:#1c1a17; letter-spacing:0.03em;
   }
+  /* ---- Airbnb-style settings rows: label + current value, with a
+     plain "Edit"/"Add" link that reveals the actual input form below it
+     — rather than every field sitting open and editable all the time. ---- */
+  .settings-row{
+    display:flex; justify-content:space-between; align-items:flex-start; gap:16px;
+    padding:16px 0; border-bottom:1px solid #e0d5c0;
+  }
+  .settings-row-main{flex:1; min-width:0;}
+  .settings-row:first-of-type{padding-top:0;}
+  .settings-row-label{font-size:15px; font-weight:500; margin-bottom:3px;}
+  .settings-row-value{font-size:13.5px; opacity:0.65;}
+  .settings-edit-link{
+    background:none; border:none; text-decoration:underline; font-size:13px;
+    color:#1c1a17; cursor:pointer; padding:0; white-space:nowrap; flex:0 0 auto;
+  }
+  .settings-edit-form{padding:0 0 16px; border-bottom:1px solid #e0d5c0; display:none;}
+  .settings-edit-form:last-child{border-bottom:none;}
+  .settings-edit-actions{display:flex; gap:8px; margin-top:4px;}
+  .settings-edit-actions button{
+    padding:9px 18px; font-size:11.5px; letter-spacing:0.04em; text-transform:uppercase; cursor:pointer; border:none;
+  }
+  .settings-save-btn{background:#1c1a17; color:#f4ebe3;}
+  .settings-cancel-btn{background:none; border:1px solid #ccc !important; color:#1c1a17;}
   .profile-modal-close{
     position:absolute; top:10px; right:14px; background:none; border:none;
     font-size:22px; cursor:pointer; color:#1c1a17; line-height:1; z-index:2;
@@ -392,51 +415,96 @@
 
       <!-- ---- Personal Details ---- -->
       <div class="profile-tab-panel" id="profilePanelPersonal">
-        <div class="profile-photo-upload-row">
-          <div class="profile-avatar-ring" id="profileModalAvatarRing">
-            <div class="profile-avatar-circle" id="profileModalAvatarCircle">?</div>
+        <div class="settings-row">
+          <div class="settings-row-main" style="display:flex; align-items:center; gap:12px;">
+            <div class="profile-avatar-ring" id="profileModalAvatarRing" style="width:40px; height:40px; flex:0 0 auto;">
+              <div class="profile-avatar-circle" id="profileModalAvatarCircle">?</div>
+            </div>
+            <div>
+              <div class="settings-row-label">Photo</div>
+              <div class="settings-row-value" id="profilePhotoStatusValue">Not added</div>
+            </div>
           </div>
-          <div>
-            <input type="file" id="profilePhotoFileInput" accept="image/*" style="display:none;">
-            <button type="button" class="profile-photo-upload-btn" id="profilePhotoUploadBtn">Change Photo</button>
-            <p class="profile-field-note" id="profilePhotoStatus" style="margin-top:6px;"></p>
+          <button type="button" class="settings-edit-link" id="profilePhotoUploadBtn">Change</button>
+        </div>
+        <input type="file" id="profilePhotoFileInput" accept="image/*" style="display:none;">
+
+        <div class="settings-row">
+          <div class="settings-row-main">
+            <div class="settings-row-label">Name</div>
+            <div class="settings-row-value" id="profileNameDisplay">Not provided</div>
           </div>
+          <button type="button" class="settings-edit-link" data-edit-target="profileNameEditForm">Edit</button>
         </div>
-        <div class="field">
-          <label for="profileName">Name</label>
-          <input type="text" id="profileName" placeholder="Your full name">
+        <div class="settings-edit-form" id="profileNameEditForm">
+          <div class="field">
+            <label for="profileName">Name</label>
+            <input type="text" id="profileName" placeholder="Your full name">
+          </div>
+          <div class="settings-edit-actions">
+            <button type="button" class="settings-save-btn" id="profileNameSaveBtn">Save</button>
+            <button type="button" class="settings-cancel-btn" data-cancel-target="profileNameEditForm">Cancel</button>
+          </div>
+          <p class="profile-save-msg" id="profileNameMsg"></p>
         </div>
-        <div class="field">
-          <label for="profilePhone">Phone</label>
-          <input type="text" id="profilePhone" placeholder="Your phone number">
+
+        <div class="settings-row">
+          <div class="settings-row-main">
+            <div class="settings-row-label">Phone</div>
+            <div class="settings-row-value" id="profilePhoneDisplay">Not provided</div>
+          </div>
+          <button type="button" class="settings-edit-link" data-edit-target="profilePhoneEditForm">Edit</button>
         </div>
-        <div class="field">
-          <label>Email</label>
-          <input type="text" id="profileEmailReadonly" disabled>
-          <p class="profile-field-note">Your login email — can't be changed here.</p>
+        <div class="settings-edit-form" id="profilePhoneEditForm">
+          <div class="field">
+            <label for="profilePhone">Phone</label>
+            <input type="text" id="profilePhone" placeholder="Your phone number">
+          </div>
+          <div class="settings-edit-actions">
+            <button type="button" class="settings-save-btn" id="profilePhoneSaveBtn">Save</button>
+            <button type="button" class="settings-cancel-btn" data-cancel-target="profilePhoneEditForm">Cancel</button>
+          </div>
+          <p class="profile-save-msg" id="profilePhoneMsg"></p>
         </div>
-        <button type="button" class="profile-save-btn" id="profilePersonalSaveBtn">Save Changes</button>
-        <p class="profile-save-msg" id="profilePersonalMsg"></p>
+
+        <div class="settings-row" style="border-bottom:none;">
+          <div class="settings-row-main">
+            <div class="settings-row-label">Email</div>
+            <div class="settings-row-value" id="profileEmailValue">—</div>
+          </div>
+          <span class="settings-row-value" style="opacity:0.5; font-size:12px;">Can't be changed here</span>
+        </div>
       </div>
 
       <!-- ---- Payment Options ---- -->
       <div class="profile-tab-panel" id="profilePanelPayment" style="display:none;">
-        <p class="profile-field-note" id="profileCurrentBankNote" style="margin-bottom:16px;"></p>
         <div class="profile-warning">Changing your bank details will re-trigger PAN and Aadhaar verification, since a payout account change is exactly the kind of thing worth double-checking. Your PAN and Aadhaar documents themselves stay the same — just reviewed again.</div>
-        <div class="field">
-          <label for="profileBankHolder">Account Holder Name</label>
-          <input type="text" id="profileBankHolder" placeholder="As it appears on your bank account">
+        <div class="settings-row" style="border-bottom:none;">
+          <div class="settings-row-main">
+            <div class="settings-row-label">Bank Account</div>
+            <div class="settings-row-value" id="profileCurrentBankNote">No bank details on file yet.</div>
+          </div>
+          <button type="button" class="settings-edit-link" data-edit-target="profileBankEditForm">Edit</button>
         </div>
-        <div class="field">
-          <label for="profileBankAccount">Bank Account Number</label>
-          <input type="text" id="profileBankAccount" placeholder="New account number">
+        <div class="settings-edit-form" id="profileBankEditForm">
+          <div class="field">
+            <label for="profileBankHolder">Account Holder Name</label>
+            <input type="text" id="profileBankHolder" placeholder="As it appears on your bank account">
+          </div>
+          <div class="field">
+            <label for="profileBankAccount">Bank Account Number</label>
+            <input type="text" id="profileBankAccount" placeholder="New account number">
+          </div>
+          <div class="field">
+            <label for="profileBankIfsc">IFSC Code</label>
+            <input type="text" id="profileBankIfsc" placeholder="e.g. HDFC0001234">
+          </div>
+          <div class="settings-edit-actions">
+            <button type="button" class="settings-save-btn" id="profileBankSaveBtn">Save</button>
+            <button type="button" class="settings-cancel-btn" data-cancel-target="profileBankEditForm">Cancel</button>
+          </div>
+          <p class="profile-save-msg" id="profileBankMsg"></p>
         </div>
-        <div class="field">
-          <label for="profileBankIfsc">IFSC Code</label>
-          <input type="text" id="profileBankIfsc" placeholder="e.g. HDFC0001234">
-        </div>
-        <button type="button" class="profile-save-btn" id="profileBankSaveBtn">Save Bank Details</button>
-        <p class="profile-save-msg" id="profileBankMsg"></p>
       </div>
 
       <!-- ---- Verification ---- -->
@@ -930,10 +998,26 @@
     ['profileAvatarRing', 'profileModalAvatarRing'].forEach(id => {
       document.getElementById(id).classList.toggle('verified', verified);
     });
+    document.getElementById('profilePhotoStatusValue').textContent = photoUrl ? 'Added' : 'Not added';
 
     document.getElementById('profileTriggerName').textContent = displayName || 'Profile';
     document.getElementById('profileTriggerSub').textContent = verified ? 'Verified ›' : 'Complete profile ›';
   }
+
+  // ---- Settings-row Edit/Cancel toggling (Personal Details, Payment
+  // Options) — every editable row starts collapsed showing just its
+  // current value, same "Edit" affordance/pattern for both. ----
+  document.querySelectorAll('[data-edit-target]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById(btn.dataset.editTarget).style.display = 'block';
+    });
+  });
+  document.querySelectorAll('[data-cancel-target]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById(btn.dataset.cancelTarget).style.display = 'none';
+      renderVerification(currentVerification); // resets any typed-but-not-saved edits back to the real values
+    });
+  });
 
   function renderVerification(v){
     currentVerification = v;
@@ -962,18 +1046,24 @@
       document.getElementById('verificationBannerBtn').addEventListener('click', () => openProfileModal('verification'));
     }
 
-    // Pre-fill Personal Details + Payment Options every time fresh data
-    // loads, so reopening the modal (or a save elsewhere triggering a
-    // reload) never shows stale values.
+    // Pre-fill both the collapsed display rows AND the (hidden-by-default)
+    // edit form inputs every time fresh data loads, so reopening the
+    // modal — or cancelling an edit — always shows/resets to real values.
+    document.getElementById('profileNameDisplay').textContent = v.hostName || 'Not provided';
     document.getElementById('profileName').value = v.hostName || '';
+    document.getElementById('profilePhoneDisplay').textContent = v.hostPhone || 'Not provided';
     document.getElementById('profilePhone').value = v.hostPhone || '';
-    document.getElementById('profileEmailReadonly').value = hostEmail || '';
+    document.getElementById('profileEmailValue').textContent = hostEmail || '—';
     document.getElementById('profileCurrentBankNote').textContent = v.bankAccountNumberMasked
-      ? `Current: ${v.bankAccountNumberMasked}${v.bankAccountHolderName ? ' (' + v.bankAccountHolderName + ')' : ''}`
+      ? `${v.bankAccountNumberMasked}${v.bankAccountHolderName ? ' (' + v.bankAccountHolderName + ')' : ''}`
       : 'No bank details on file yet.';
     document.getElementById('profileBankHolder').value = '';
     document.getElementById('profileBankAccount').value = '';
     document.getElementById('profileBankIfsc').value = '';
+    // Collapse every edit form back closed on a fresh data load.
+    ['profileNameEditForm', 'profilePhoneEditForm', 'profileBankEditForm'].forEach(id => {
+      document.getElementById(id).style.display = 'none';
+    });
 
     renderProfileVerificationTab(v);
   }
@@ -1167,7 +1257,7 @@
   });
   document.getElementById('profilePhotoFileInput').addEventListener('change', async function(){
     const file = this.files[0];
-    const statusEl = document.getElementById('profilePhotoStatus');
+    const statusEl = document.getElementById('profilePhotoStatusValue');
     if(!file) return;
     statusEl.textContent = 'Uploading…';
     statusEl.style.color = '';
@@ -1185,9 +1275,7 @@
       const data = await res.json();
       if(res.ok){
         currentGuestProfile = { ...(currentGuestProfile || {}), profilePhotoUrl: data.guest.profile_photo_url };
-        updateProfileAvatar();
-        statusEl.textContent = 'Updated.';
-        statusEl.style.color = '#3a7d44';
+        updateProfileAvatar(); // overwrites statusEl back to "Added"
       } else {
         statusEl.textContent = data.error || 'Could not update your photo. Please try again.';
         statusEl.style.color = '#a3402f';
@@ -1199,11 +1287,44 @@
     this.value = '';
   });
 
-  // ---- Personal Details save ----
-  document.getElementById('profilePersonalSaveBtn').addEventListener('click', async function(){
-    const msgEl = document.getElementById('profilePersonalMsg');
+  // ---- Personal Details save: Name and Phone save independently, each
+  // its own row/button, sending only that one field — host-listings.js's
+  // POST already treats hostName/hostPhone as independent optional
+  // fields (COALESCE'd against the existing value), so this was already
+  // safe to split without any backend change. ----
+  document.getElementById('profileNameSaveBtn').addEventListener('click', async function(){
+    const msgEl = document.getElementById('profileNameMsg');
     msgEl.style.display = 'none';
     const hostName = document.getElementById('profileName').value.trim();
+    this.disabled = true;
+    this.textContent = 'Saving…';
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ hostName })
+      });
+      const data = await res.json();
+      if(res.ok){
+        document.getElementById('profileNameEditForm').style.display = 'none';
+        loadListings();
+      } else {
+        msgEl.textContent = data.error || 'Something went wrong. Please try again.';
+        msgEl.style.color = '#a3402f';
+        msgEl.style.display = 'block';
+      }
+    } catch(err){
+      msgEl.textContent = 'Something went wrong. Please try again.';
+      msgEl.style.color = '#a3402f';
+      msgEl.style.display = 'block';
+    }
+    this.disabled = false;
+    this.textContent = 'Save';
+  });
+
+  document.getElementById('profilePhoneSaveBtn').addEventListener('click', async function(){
+    const msgEl = document.getElementById('profilePhoneMsg');
+    msgEl.style.display = 'none';
     const hostPhone = document.getElementById('profilePhone').value.trim();
     this.disabled = true;
     this.textContent = 'Saving…';
@@ -1211,20 +1332,24 @@
       const res = await fetch(API_BASE + '/api/host-listings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-        body: JSON.stringify({ hostName, hostPhone })
+        body: JSON.stringify({ hostPhone })
       });
       const data = await res.json();
-      msgEl.textContent = res.ok ? 'Saved.' : (data.error || 'Something went wrong. Please try again.');
-      msgEl.style.color = res.ok ? '#3a7d44' : '#a3402f';
-      msgEl.style.display = 'block';
-      if(res.ok) loadListings();
+      if(res.ok){
+        document.getElementById('profilePhoneEditForm').style.display = 'none';
+        loadListings();
+      } else {
+        msgEl.textContent = data.error || 'Something went wrong. Please try again.';
+        msgEl.style.color = '#a3402f';
+        msgEl.style.display = 'block';
+      }
     } catch(err){
       msgEl.textContent = 'Something went wrong. Please try again.';
       msgEl.style.color = '#a3402f';
       msgEl.style.display = 'block';
     }
     this.disabled = false;
-    this.textContent = 'Save Changes';
+    this.textContent = 'Save';
   });
 
   // ---- Payment Options (bank details) save ----
@@ -1249,17 +1374,21 @@
         body: JSON.stringify({ bankAccountHolderName, bankAccountNumber, bankIfsc })
       });
       const data = await res.json();
-      msgEl.textContent = res.ok ? 'Saved. If you\'d already submitted PAN or Aadhaar, they\'ve been sent back for review as well.' : (data.error || 'Something went wrong. Please try again.');
-      msgEl.style.color = res.ok ? '#3a7d44' : '#a3402f';
-      msgEl.style.display = 'block';
-      if(res.ok) loadListings();
+      if(res.ok){
+        document.getElementById('profileBankEditForm').style.display = 'none';
+        loadListings();
+      } else {
+        msgEl.textContent = data.error || 'Something went wrong. Please try again.';
+        msgEl.style.color = '#a3402f';
+        msgEl.style.display = 'block';
+      }
     } catch(err){
       msgEl.textContent = 'Something went wrong. Please try again.';
       msgEl.style.color = '#a3402f';
       msgEl.style.display = 'block';
     }
     this.disabled = false;
-    this.textContent = 'Save Bank Details';
+    this.textContent = 'Save';
   });
 
   async function loadGuestProfile(){
@@ -1734,6 +1863,10 @@
   if(sessionToken){
     loadListings();
     loadGuestProfile();
+    // Deep link from index.html's account menu ("Account Settings")
+    if(new URLSearchParams(window.location.search).get('openProfile') === '1'){
+      openProfileModal('personal');
+    }
   }
 </script>
 
