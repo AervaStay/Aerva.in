@@ -75,6 +75,13 @@
   .process-results div{padding:4px 0;}
   .listing-map-preview{width:100%; max-width:460px; height:220px; background:#efe6d8; border:1px solid #e0d5c0; margin-top:6px;}
   .listing-map-preview .leaflet-container{font-family:sans-serif;}
+  /* OpenStreetMap's license requires this stay visible — it can't be
+     removed — but it doesn't need to look like a banner. Shrunk to a
+     barely-there caption instead. */
+  .listing-map-preview .leaflet-control-attribution{
+    font-size:8px; padding:0 4px; background:rgba(255,255,255,0.55); line-height:1.4;
+  }
+  .listing-map-preview .leaflet-control-attribution img{height:8px; vertical-align:middle;}
   .address-line{font-size:13px; margin-bottom:10px;}
   .address-line a{color:#8a6c39; text-decoration:underline;}
 </style>
@@ -505,6 +512,7 @@
     if(!window.L) return;
     const position = [Number(lat), Number(lng)];
     const map = L.map(container, { scrollWheelZoom: false }).setView(position, 14);
+    map.attributionControl.setPrefix(false); // drops Leaflet's own flag/logo — OpenStreetMap's own credit (added via the tile layer below) is what's legally required, this part isn't
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19
