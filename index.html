@@ -3687,6 +3687,11 @@
       params.set('lat', geocoded.lat);
       params.set('lng', geocoded.lng);
       params.set('radiusKm', '200');
+      // Sent alongside the coordinates now, not instead of them — see
+      // get-listings.js: this is what stops a listing with incorrect
+      // stored coordinates from showing up in an unrelated search purely
+      // because its (wrong) lat/lng happens to compute within range.
+      if(city) params.set('city', city);
     } else if(city){
       // Geocoding failed — still worth trying the old exact-text match
       // as a fallback rather than silently dropping the filter.
