@@ -34,6 +34,19 @@
   .actions button{padding:9px 20px; font-size:13px; border:none; cursor:pointer; margin-right:10px;}
   .approve-btn{background:#1c1a17; color:#f4eadc;}
   .reject-btn{background:transparent; border:1px solid #a3402f !important; color:#a3402f;}
+  .reject-panel{
+    background:#f9f5ef; border:1px solid #e0d5c0; padding:16px; margin-top:12px; display:none;
+  }
+  .reject-panel label{display:block; font-size:12px; opacity:0.7; margin-bottom:6px;}
+  .reject-panel select, .reject-panel textarea{
+    width:100%; box-sizing:border-box; padding:10px; font-size:14px; font-family:sans-serif;
+    border:1px solid #ccc; margin-bottom:10px; background:white; color:#1c1a17;
+  }
+  .reject-panel textarea{resize:vertical; min-height:70px;}
+  .reject-panel-actions{display:flex; gap:10px;}
+  .reject-panel-actions button{padding:9px 20px; font-size:13px; border:none; cursor:pointer;}
+  .reject-confirm-btn{background:#a3402f; color:#fff;}
+  .reject-cancel-btn{background:transparent; border:1px solid #ccc !important; color:#1c1a17;}
   .empty{opacity:0.6; text-align:center; padding:60px 0;}
   .error{color:#a3402f; font-size:13px;}
   .success{color:#3a7d44; font-size:13px;}
@@ -433,27 +446,86 @@
         ${photoThumbnailsHtml('Interior', l.interior_photo_urls)}
         <div class="actions">
           <button class="approve-btn" onclick="decide(${l.id}, 'approve')">Approve</button>
-          <button class="reject-btn" onclick="decide(${l.id}, 'reject')">Reject</button>
+          <button class="reject-btn" onclick="showRejectPanel(${l.id})">Reject</button>
+        </div>
+        <div class="reject-panel" id="rejectPanel-${l.id}">
+          <label for="rejectReason-${l.id}">Reason (shown to the host by email)</label>
+          <select id="rejectReason-${l.id}" onchange="toggleRejectOtherField(${l.id})">
+            <option value="">Choose a reason…</option>
+            <option value="Photos are unclear, low quality, or don't show enough of the property.">Photos are unclear or insufficient</option>
+            <option value="Some required details are missing or incomplete (description, pricing, amenities, etc.).">Missing or incomplete details</option>
+            <option value="The photos appear to be stock images, or don't clearly show the actual property.">Photos may not be of the actual property</option>
+            <option value="The listed price doesn't seem consistent with the description or photos provided.">Pricing seems inconsistent</option>
+            <option value="We couldn't verify the property's address from the location provided.">Address could not be verified</option>
+            <option value="This appears to be a duplicate of an existing listing on Aerva.">Duplicate of an existing listing</option>
+            <option value="This listing doesn't currently meet Aerva's quality standards.">Doesn't meet quality standards</option>
+            <option value="__other__">Other (specify below)</option>
+          </select>
+          <textarea id="rejectOtherReason-${l.id}" placeholder="Describe the reason for rejecting this listing…" style="display:none;"></textarea>
+          <p class="error" id="rejectError-${l.id}" style="display:none;"></p>
+          <div class="reject-panel-actions">
+            <button type="button" class="reject-confirm-btn" onclick="confirmReject(${l.id})">Reject &amp; Notify Host</button>
+            <button type="button" class="reject-cancel-btn" onclick="hideRejectPanel(${l.id})">Cancel</button>
+          </div>
         </div>
       </div>
     `;
     }).join('');
   }
 
-  async function decide(listingId, action){
+  function showRejectPanel(listingId){
+    document.getElementById('rejectPanel-' + listingId).style.display = 'block';
+  }
+  function hideRejectPanel(listingId){
+    document.getElementById('rejectPanel-' + listingId).style.display = 'none';
+    document.getElementById('rejectError-' + listingId).style.display = 'none';
+  }
+  function toggleRejectOtherField(listingId){
+    const select = document.getElementById('rejectReason-' + listingId);
+    const otherField = document.getElementById('rejectOtherReason-' + listingId);
+    otherField.style.display = select.value === '__other__' ? 'block' : 'none';
+  }
+  function confirmReject(listingId){
+    const select = document.getElementById('rejectReason-' + listingId);
+    const errorEl = document.getElementById('rejectError-' + listingId);
+    let reason = select.value;
+    if(reason === '__other__'){
+      reason = document.getElementById('rejectOtherReason-' + listingId).value.trim();
+    }
+    if(!reason){
+      errorEl.textContent = 'Please choose or enter a reason — the host needs to know what to fix.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    decide(listingId, 'reject', reason);
+  }
+
+  async function decide(listingId, action, reason){
     try{
       const res = await fetch(API_BASE + '/api/approve-listing', {
         method: 'POST',
         headers: authHeaders(true),
-        body: JSON.stringify({ listingId, action })
+        body: JSON.stringify({ listingId, action, reason })
       });
       if(res.ok){
         document.getElementById('listing-' + listingId).remove();
       } else {
-        alert('Could not update this listing. Please try again.');
+        if(action === 'reject'){
+          const errorEl = document.getElementById('rejectError-' + listingId);
+          errorEl.textContent = 'Could not reject this listing. Please try again.';
+          errorEl.style.display = 'block';
+        } else {
+          alert('Could not update this listing. Please try again.');
+        }
       }
     } catch(err){
-      alert('Could not update this listing. Please try again.');
+      if(action === 'reject'){
+        const errorEl = document.getElementById('rejectError-' + listingId);
+        errorEl.textContent = 'Could not reject this listing. Please try again.';
+        errorEl.style.display = 'block';
+      } else {
+        alert('Could not update this listing. Please try again.');
+      }
     }
   }
 
