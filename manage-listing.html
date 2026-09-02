@@ -183,6 +183,16 @@
       </div>
 
       <div class="field">
+        <label for="listingCity">City <span style="color:#a3402f;">*</span></label>
+        <input id="listingCity" type="text" placeholder="e.g. Pune" required>
+      </div>
+      <div class="field">
+        <label for="listingArea">Area <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional — neighbourhood or locality)</span></label>
+        <input id="listingArea" type="text" placeholder="e.g. Koregaon Park">
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Shown to guests as "Area, City" — leave blank if there isn't a well-known one for this address.</p>
+      </div>
+
+      <div class="field">
         <label for="pricingCurrency">Pricing Currency <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— view and edit your prices below in this currency; Aerva stores everything in INR automatically</span></label>
         <select id="pricingCurrency"></select>
       </div>
@@ -1152,6 +1162,8 @@
       const l = data.listing;
 
       document.getElementById('propertyNameHeading').textContent = l.property_name;
+      document.getElementById('listingCity').value = l.city || '';
+      document.getElementById('listingArea').value = l.area || '';
       if(l.latitude && l.longitude){
         document.getElementById('listLatitude').value = l.latitude;
         document.getElementById('listLongitude').value = l.longitude;
@@ -1273,6 +1285,8 @@
         body: JSON.stringify({
           token,
           nightlyRate: toInr(document.getElementById('nightlyRate').value),
+          city: document.getElementById('listingCity').value,
+          area: document.getElementById('listingArea').value,
           latitude: document.getElementById('listLatitude').value,
           longitude: document.getElementById('listLongitude').value,
           formattedAddress: document.getElementById('listFormattedAddress').value,
