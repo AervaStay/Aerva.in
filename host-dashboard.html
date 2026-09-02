@@ -27,6 +27,14 @@
     text-decoration:none; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:30px;
   }
   .listing-card{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:14px; display:flex; gap:16px; align-items:center; transition:border-color .15s ease;}
+  .listing-tabs{display:flex; gap:8px; margin-bottom:16px;}
+  .listing-tab-btn{
+    background:none; border:1px solid #ddd0bc; padding:9px 18px; font-size:12.5px;
+    cursor:pointer; color:#1c1a17; letter-spacing:0.02em;
+  }
+  .listing-tab-btn .tab-count{opacity:0.55; margin-left:3px;}
+  .listing-tab-btn.active{background:#1c1a17; color:#f4ebe3; border-color:#1c1a17;}
+  .listing-tab-btn.active .tab-count{opacity:0.7;}
   .listing-thumb{width:70px; height:70px; object-fit:cover; border-radius:4px; background:#ebdecd; flex:0 0 auto;}
   .listing-thumb-placeholder{
     width:70px; height:70px; border-radius:4px; background:#ebdecd; flex:0 0 auto;
@@ -195,8 +203,14 @@
   <div id="verificationSection"></div>
 
   <div class="listings-layout">
-    <div id="listingsContainer">
-      <p class="loading">Loading your listings…</p>
+    <div>
+      <div class="listing-tabs" id="listingTabs">
+        <button type="button" class="listing-tab-btn active" data-tab="active" id="tabActiveBtn">Active</button>
+        <button type="button" class="listing-tab-btn" data-tab="inactive" id="tabInactiveBtn">Inactive</button>
+      </div>
+      <div id="listingsContainer">
+        <p class="loading">Loading your listings…</p>
+      </div>
     </div>
     <div class="listing-sidebar" id="listingSidebar">
       <div class="sidebar-placeholder" id="sidebarPlaceholder">Once a listing is approved and live, its calendar, promotions, and paid amenities will show here automatically.</div>
@@ -305,12 +319,34 @@
   }
 
   let currentListings = [];
+  let currentListingsTab = 'active';
 
   function renderListings(listings){
     currentListings = listings;
+    updateListingTabCounts();
+    renderListingsForCurrentTab();
+  }
+
+  function updateListingTabCounts(){
+    const activeCount = currentListings.filter(l => l.status === 'approved').length;
+    const inactiveCount = currentListings.length - activeCount;
+    document.getElementById('tabActiveBtn').innerHTML = `Active <span class="tab-count">${activeCount}</span>`;
+    document.getElementById('tabInactiveBtn').innerHTML = `Inactive <span class="tab-count">${inactiveCount}</span>`;
+  }
+
+  function renderListingsForCurrentTab(){
+    const listings = currentListings.filter(l =>
+      currentListingsTab === 'active' ? l.status === 'approved' : l.status !== 'approved'
+    );
     const container = document.getElementById('listingsContainer');
-    if(!listings.length){
+    if(!currentListings.length){
       container.innerHTML = '<p class="empty">You haven\'t listed a property yet.</p>';
+      return;
+    }
+    if(!listings.length){
+      container.innerHTML = currentListingsTab === 'active'
+        ? '<p class="empty">No live listings yet — approved listings will show up here.</p>'
+        : '<p class="empty">Nothing here — every listing is currently live.</p>';
       return;
     }
     container.innerHTML = listings.map(l => {
@@ -362,6 +398,15 @@
         </div>
       `;
     }).join('');
+
+    // Restore the "selected" highlight if the currently-open sidebar
+    // listing is one of the cards just rendered — otherwise it'd
+    // silently disappear every time this re-renders (e.g. switching
+    // tabs and back) even though the sidebar is still showing it.
+    if(sbListingId != null){
+      const selectedCard = container.querySelector(`.listing-card[data-listing-id="${sbListingId}"]`);
+      if(selectedCard) selectedCard.classList.add('selected');
+    }
   }
 
   // Hands the listing's data to the Add Listing form via localStorage
@@ -870,6 +915,15 @@
       return;
     }
     window.location.href = card.dataset.href;
+  });
+
+  document.getElementById('listingTabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.listing-tab-btn');
+    if(!btn) return;
+    currentListingsTab = btn.dataset.tab;
+    document.getElementById('tabActiveBtn').classList.toggle('active', currentListingsTab === 'active');
+    document.getElementById('tabInactiveBtn').classList.toggle('active', currentListingsTab === 'inactive');
+    renderListingsForCurrentTab();
   });
 
   // ============================================================
