@@ -132,6 +132,12 @@
   /* ---------- SECTION GENERAL ---------- */
   section{position:relative;}
   .pad{padding:130px 0;}
+  /* This section is a dedicated full-page destination (opened fresh via
+     ?view=list-property), not scrolled-past-a-hero content — the generic
+     130px top padding (sized for marketing sections) left a lot of dead
+     space above the form. Kept just enough to clear the fixed header. */
+  #add-listing.pad{padding-top:60px; padding-bottom:90px;}
+  #add-listing .section-head{margin-bottom:36px;}
   .on-dark{background:var(--ink); color:var(--cream);}
   .section-head{max-width:620px; margin-bottom:64px;}
   .section-head h2{font-size:clamp(30px,4vw,44px); line-height:1.15; margin-top:18px; letter-spacing:0.01em;}
