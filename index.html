@@ -575,6 +575,33 @@
   .more-filters-dropdown.open{display:flex;}
   .more-filters-dropdown .search-field{min-width:0;}
   .currency-picker-wrap{position:relative;}
+  /* ---------- Logged-in account avatar + dropdown menu (nav bar) ---------- */
+  .nav-account-wrap{position:relative;}
+  .nav-account-trigger{
+    display:flex; align-items:center; gap:8px; background:none; border:none; cursor:pointer;
+    font-family:'Jost', sans-serif; padding:0;
+  }
+  .nav-avatar-ring{
+    width:30px; height:30px; border-radius:50%; padding:2px; flex:0 0 auto;
+    border:2px solid var(--gold);
+  }
+  .nav-avatar-circle{
+    width:100%; height:100%; border-radius:50%; overflow:hidden; background:var(--gold-deep);
+    display:flex; align-items:center; justify-content:center; color:var(--cream);
+    font-family:Georgia,serif; font-size:12px;
+  }
+  .nav-avatar-circle img{width:100%; height:100%; object-fit:cover; display:block;}
+  .nav-account-name{font-size:12.5px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.75;}
+  .nav-account-menu{
+    position:absolute; top:calc(100% + 12px); right:0; background:var(--cream); border:1px solid var(--line-dark);
+    min-width:200px; padding:8px 0; box-shadow:0 12px 30px rgba(20,17,14,0.16); z-index:60; display:none;
+  }
+  .nav-account-menu.open{display:block;}
+  .nav-account-menu a{
+    display:block; padding:11px 18px; font-size:13px; color:var(--ink); text-decoration:none;
+  }
+  .nav-account-menu a:hover{background:var(--cream-deep);}
+  .nav-account-menu .menu-divider{height:1px; background:var(--line-dark); margin:6px 0;}
   .currency-trigger{
     background:none; border:1px solid var(--line-dark); border-radius:999px; padding:6px 12px;
     font-size:11.5px; letter-spacing:0.05em; color:var(--ink); cursor:pointer; font-family:'Jost', sans-serif;
@@ -826,10 +853,19 @@
         <div class="currency-dropdown" id="currencyDropdown"></div>
       </div>
       <a href="guest-login.html" id="guestLoginLink">Log In</a>
-      <span id="guestAccountBox" style="display:none; align-items:center; gap:14px;">
-        <span id="guestNameDisplay" style="font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
-        <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Listings</a>
-        <a href="#" id="guestLogoutLink">Log Out</a>
+      <span id="guestAccountBox" class="nav-account-wrap" style="display:none;">
+        <button type="button" class="nav-account-trigger" id="navAccountTrigger">
+          <div class="nav-avatar-ring" id="navAvatarRing">
+            <div class="nav-avatar-circle" id="navAvatarCircle">?</div>
+          </div>
+          <span id="guestNameDisplay" class="nav-account-name"></span>
+        </button>
+        <div class="nav-account-menu" id="navAccountMenu">
+          <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Listings</a>
+          <a href="host-dashboard.html?openProfile=1">Account Settings</a>
+          <div class="menu-divider"></div>
+          <a href="#" id="guestLogoutLink">Log Out</a>
+        </div>
       </span>
     </div>
     <button class="nav-toggle" id="navToggle" aria-label="Open menu" aria-expanded="false"><span></span></button>
@@ -844,8 +880,14 @@
   </div>
   <a href="guest-login.html" id="guestLoginLinkMobile">Log In</a>
   <span id="guestAccountBoxMobile" style="display:none; flex-direction:column; gap:18px;">
-    <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
+    <span style="display:flex; align-items:center; gap:10px;">
+      <div class="nav-avatar-ring" id="navAvatarRingMobile" style="width:36px; height:36px;">
+        <div class="nav-avatar-circle" id="navAvatarCircleMobile" style="font-size:14px;">?</div>
+      </div>
+      <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
+    </span>
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Listings</a>
+    <a href="host-dashboard.html?openProfile=1">Account Settings</a>
     <a href="#" id="guestLogoutLinkMobile">Log Out</a>
   </span>
 </nav>
@@ -5544,23 +5586,33 @@
             myListingsLink.style.display = 'inline';
             if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
           }
-          // Resume a saved currency choice from another device — only
-          // when THIS browser has no explicit choice of its own yet, so
-          // it never overrides something the guest just picked here.
-          if(!localStorage.getItem(CURRENCY_STORAGE_KEY)){
-            try{
-              const profileRes = await fetch(SUITES_API_BASE + '/api/guest-profile', {
-                headers: { 'Authorization': 'Bearer ' + token }
-              });
-              if(profileRes.ok){
-                const profileData = await profileRes.json();
-                if(profileData.guest && profileData.guest.preferredCurrency){
+          // Always fetch the profile now — it's what supplies the
+          // avatar (photo or initials) for the new account menu, not
+          // just the currency-resume it originally existed for. The
+          // currency-setting itself stays conditional as before, so a
+          // guest's own in-browser choice is never silently overridden.
+          try{
+            const profileRes = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+              headers: { 'Authorization': 'Bearer ' + token }
+            });
+            if(profileRes.ok){
+              const profileData = await profileRes.json();
+              if(profileData.guest){
+                if(!localStorage.getItem(CURRENCY_STORAGE_KEY) && profileData.guest.preferredCurrency){
                   setCurrency(profileData.guest.preferredCurrency, false);
                 }
+                const photoUrl = profileData.guest.profilePhotoUrl;
+                const initial = (profileData.guest.name || data.guest.email || '?').trim().charAt(0).toUpperCase();
+                const avatarInner = photoUrl ? `<img src="${photoUrl}" alt="Profile photo">` : initial;
+                ['navAvatarCircle', 'navAvatarCircleMobile'].forEach(id => {
+                  const el = document.getElementById(id);
+                  if(el) el.innerHTML = avatarInner;
+                });
               }
-            } catch(err){
-              // Not critical — the location-detected/default currency stays.
             }
+          } catch(err){
+            // Not critical — the avatar just falls back to "?" and the
+            // location-detected/default currency stays.
           }
         } else {
           // Token expired or invalid — quietly fall back to showing
@@ -5583,6 +5635,21 @@
         e.preventDefault();
         clearGuestSession();
         window.location.reload();
+      });
+    }
+
+    // ---- Account dropdown menu (My Listings / Account Settings / Log Out) ----
+    const navAccountTrigger = document.getElementById('navAccountTrigger');
+    const navAccountMenu = document.getElementById('navAccountMenu');
+    if(navAccountTrigger && navAccountMenu){
+      navAccountTrigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navAccountMenu.classList.toggle('open');
+      });
+      document.addEventListener('click', (e) => {
+        if(!navAccountMenu.contains(e.target) && e.target !== navAccountTrigger){
+          navAccountMenu.classList.remove('open');
+        }
       });
     }
 
