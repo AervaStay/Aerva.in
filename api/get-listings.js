@@ -261,10 +261,17 @@ module.exports = async (req, res) => {
     const arrivalFilter = datesFilter ? arrivalRaw : null;
     const departureFilter = datesFilter ? departureRaw : null;
 
-    // If a distance filter is active, it takes priority — city text
-    // matching is skipped entirely rather than combining the two, since
-    // the frontend only ever sends one or the other anyway.
-    const effectiveCityFilter = distanceFilter ? null : cityFilter;
+    // A guest who typed/picked an actual place (turned into a 200km
+    // radius search below) still gets the city/area text filter applied
+    // TOO, not instead — previously, picking a suggestion dropped the
+    // text filter entirely and relied purely on coordinate math, which
+    // meant a listing with incorrect or mismatched stored coordinates
+    // could show up for a search it has nothing to do with (e.g. a
+    // Himachal Pradesh listing appearing in a "Pune" search) — with
+    // nothing else to catch it, since its city/area text was never
+    // checked at all in that mode. Only "Near Me" (no typed place, pure
+    // geolocation) has no text to fall back on, so it's unaffected.
+    const effectiveCityFilter = cityFilter;
 
     // City and date-availability are filtered in SQL — availability
     // specifically needs to check against the orders table, which only
@@ -305,13 +312,20 @@ module.exports = async (req, res) => {
         })
       : listings;
 
-    // A listing with no coordinates at all is excluded when searching by
-    // distance — unlike the guest-count case above, there's no reasonable
-    // benefit-of-the-doubt here: "within 200km" genuinely can't be
-    // evaluated without a location to measure from.
+    // A listing with no coordinates at all can't have a real distance
+    // measured — rather than excluding it outright (punishing a data gap
+    // that isn't the guest's problem), it falls back to a plain city/area
+    // text match instead, same tolerance as the guest-count case above.
+    // A listing WITH coordinates goes strictly by measured distance,
+    // regardless of what its city/area text says — that's the actually
+    // reliable signal once it exists.
     const filtered = distanceFilter
       ? afterGuestsFilter.filter(l => {
-          if (l.latitude == null || l.longitude == null) return false;
+          if (l.latitude == null || l.longitude == null) {
+            if (!cityRaw) return false;
+            const needle = cityRaw.toLowerCase();
+            return (l.city && l.city.toLowerCase().includes(needle)) || (l.area && l.area.toLowerCase().includes(needle));
+          }
           const km = haversineDistanceKm(distanceFilter.lat, distanceFilter.lng, Number(l.latitude), Number(l.longitude));
           return km <= distanceFilter.radiusKm;
         })
