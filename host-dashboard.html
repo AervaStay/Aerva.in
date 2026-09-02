@@ -772,13 +772,21 @@
         `;
       }
 
+      // Real pet species, not just a headcount — see create-order.js's
+      // validation and the guest-facing picker in index.html that
+      // collects this. Only shown when the guest actually declared any.
+      const petTypesHtml = (Array.isArray(b.pet_types) && b.pet_types.length)
+        ? `<div class="booking-dates" style="opacity:0.75;">🐾 ${b.pet_types.join(', ')}</div>`
+        : '';
+
       return `
         <div class="booking-row">
           <div class="booking-top">
             <h4>${b.suite_name}</h4>
             ${statusBadgeHtml(b.status)}
           </div>
-          <div class="booking-dates">${dateRange} · ${b.nights} night${b.nights === 1 ? '' : 's'}</div>
+          <div class="booking-dates">${dateRange} · ${b.nights} night${b.nights === 1 ? '' : 's'}${b.guests ? ' · ' + b.guests + ' guest' + (b.guests === 1 ? '' : 's') : ''}</div>
+          ${petTypesHtml}
           <div class="booking-figures">
             <div><span class="figure-label">Guest Paid (Stay)</span><span class="figure-value">${fmt(guestPaidForStay)}</span></div>
             <div><span class="figure-label">Commission (${b.commission_rate}%)</span><span class="figure-value">− ${fmt(b.commission_amount)}</span></div>
