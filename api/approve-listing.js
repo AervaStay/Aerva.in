@@ -186,7 +186,8 @@ async function sendHostRejectionEmail(listing) {
       <div style="background:#faf3e6; border-left:3px solid #a3402f; padding:14px 18px; margin:16px 0;">
         <p style="margin:0; white-space:pre-wrap;">${listing.rejection_reason}</p>
       </div>
-      <p>Once you've made those changes, reply to this email or contact hello@aerva.in and we'll help you get it resubmitted.</p>
+      <p>Once you've made those changes and submitted them, we'll review your listing again and send you an update.</p>
+      <p><a href="${SITE_BASE}/host-dashboard.html" style="color:#8a6c39;">Go to your dashboard</a> to edit and resubmit this listing.</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this decision? Just reply — a real person reads every message.</p>
     </div>
   `;
