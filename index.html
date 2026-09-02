@@ -2463,6 +2463,14 @@
       if(areaName){
         document.getElementById('listArea').value = areaName;
       }
+      // PIN/postal code — same address_components lookup, populating the
+      // field a host would otherwise have to type in themselves even
+      // though it's right there in the address that was just picked.
+      const postalComponent = findAddressComponent(['postal_code']);
+      const pincodeInput = document.getElementById('listPincode');
+      if(postalComponent && pincodeInput){
+        pincodeInput.value = postalComponent.long_name;
+      }
     }
 
     updateListPinMap(lat, lng);
