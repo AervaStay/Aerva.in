@@ -1225,6 +1225,7 @@
           <input id="listArea" name="Area" type="text" placeholder="e.g. Koregaon Park">
         </div>
       </div>
+      <p id="listCityAreaWarning" style="font-size:11.5px; color:#a3402f; margin-top:-8px; margin-bottom:16px; display:none;"></p>
       <div class="form-row">
         <div class="field">
           <label for="listType">Property Type</label>
@@ -2410,23 +2411,43 @@
     // as a district reliably matches "Pune" the city, and for Aerva's
     // Himachal Pradesh listings (Jibhi/Banjar), the district is
     // "Kullu" — that's the correct City value, not the state name.
-    // Falls back to locality if there's no district-level match, and
-    // to the state only as a last resort for the rare address with
-    // neither, since a state name is still a better starting point
-    // than leaving the field blank. Only overwrites City/Area when
-    // options.skipCityArea isn't set — a drag-to-refine on the map
-    // shouldn't casually rewrite a city the host already confirmed
-    // over a small pin nudge; only an explicit search or PIN lookup does.
+    // Only overwrites City/Area when options.skipCityArea isn't set — a
+    // drag-to-refine on the map shouldn't casually rewrite a city the
+    // host already confirmed over a small pin nudge; only an explicit
+    // search or PIN lookup does.
     if(!options.skipCityArea){
       const components = place.address_components || [];
       function findAddressComponent(types){
         return components.find(c => types.some(t => c.types.includes(t)));
       }
+      // Some administrative divisions genuinely only have a local-script
+      // name on file in Google's data — the page-wide language=en
+      // setting (see the script tag in <head>) has nothing to switch to
+      // in that case and the long_name comes back non-Latin regardless.
+      // short_name is often the Latin/English form even then (e.g. a
+      // postal abbreviation), so it's tried as a fallback before giving
+      // up — and if NEITHER is usable, the field is deliberately left
+      // blank rather than silently filled with unreadable text; a host
+      // typing it in themselves (or the PIN/postal lookup finding a
+      // different, usable name) beats a name most guests can't read.
+      const nonLatinPattern = /[^\u0000-\u024F\s]/;
+      function latinNameFor(component){
+        if(!component) return null;
+        if(component.long_name && !nonLatinPattern.test(component.long_name)) return component.long_name;
+        if(component.short_name && !nonLatinPattern.test(component.short_name)) return component.short_name;
+        return null;
+      }
       const cityComponent = findAddressComponent(['administrative_area_level_2'])
         || findAddressComponent(['locality'])
         || findAddressComponent(['administrative_area_level_1']);
-      if(cityComponent){
-        document.getElementById('listCity').value = cityComponent.long_name;
+      const cityName = latinNameFor(cityComponent);
+      const cityWarningEl = document.getElementById('listCityAreaWarning');
+      if(cityWarningEl) cityWarningEl.style.display = 'none';
+      if(cityName){
+        document.getElementById('listCity').value = cityName;
+      } else if(cityComponent && cityWarningEl){
+        cityWarningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below, or try the PIN/postal code lookup.';
+        cityWarningEl.style.display = 'block';
       }
       // Area: the most specific named place below the city level. Prefer
       // an actual neighbourhood/sublocality; if there isn't one, but
@@ -2438,8 +2459,9 @@
           const locality = findAddressComponent(['locality']);
           return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
         })();
-      if(areaComponent){
-        document.getElementById('listArea').value = areaComponent.long_name;
+      const areaName = latinNameFor(areaComponent);
+      if(areaName){
+        document.getElementById('listArea').value = areaName;
       }
     }
 
