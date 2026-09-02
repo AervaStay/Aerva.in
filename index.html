@@ -1201,6 +1201,20 @@
         <p id="listLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">This powers the "distance from you" shown to guests — pick a suggestion rather than just typing free text.</p>
       </div>
+      <div class="field">
+        <label for="listPincode">PIN / Postal Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional — auto-fills City, Area &amp; location)</span></label>
+        <div style="display:flex; gap:8px;">
+          <input id="listPincode" type="text" placeholder="e.g. 411001, or a postal code from anywhere" style="flex:1;">
+          <button type="button" id="listPincodeLookupBtn" style="flex:0 0 auto; padding:0 18px; background:#1c1a17; color:#f4ebe3; border:none; font-size:12px; letter-spacing:0.05em; text-transform:uppercase; cursor:pointer;">Look Up</button>
+        </div>
+        <p id="listPincodeStatus" style="font-size:11.5px; margin-top:4px; display:none;"></p>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Works for Indian PIN codes and postal codes from other countries alike.</p>
+      </div>
+      <div class="field">
+        <label>Fine-Tune on Map <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(drag the pin for a more exact match)</span></label>
+        <div id="listMapPin" style="width:100%; height:280px; background:#e9e2d6; border:1px solid #ddd0bc; display:none;"></div>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Appears once a location is set above — search, PIN code, or map click all work together; drag the pin itself for the closest possible match.</p>
+      </div>
       <div class="form-row">
         <div class="field">
           <label for="listCity">City <span class="required-mark">*</span></label>
@@ -2358,44 +2372,52 @@
   // location field — selecting a suggestion captures lat/lng and a clean
   // formatted address, and auto-fills the City field so hosts don't have
   // to type the same thing twice.
-  window.initGoogleMaps = function(){
-    const searchInput = document.getElementById('listLocationSearch');
-    if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
+  //
+  // Shared by three different ways of setting a location — Places
+  // autocomplete, a PIN/postal code lookup, and dragging the pin on the
+  // map — so all three fill in the same fields the same way, and none of
+  // them can drift out of sync with each other.
+  let listPinMap = null;
+  let listPinMarker = null;
 
-    const autocomplete = new google.maps.places.Autocomplete(searchInput, {
-      fields: ['geometry', 'formatted_address', 'address_components'],
-      types: ['geocode', 'establishment']
-    });
+  function applyLocationResult(place, options){
+    options = options || {};
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
 
-    autocomplete.addListener('place_changed', function(){
-      const place = autocomplete.getPlace();
-      if(!place.geometry || !place.geometry.location) return;
+    document.getElementById('listLatitude').value = lat;
+    document.getElementById('listLongitude').value = lng;
+    document.getElementById('listFormattedAddress').value = place.formatted_address || '';
+    if(!options.skipSearchBoxUpdate){
+      document.getElementById('listLocationSearch').value = place.formatted_address || '';
+    }
 
-      document.getElementById('listLatitude').value = place.geometry.location.lat();
-      document.getElementById('listLongitude').value = place.geometry.location.lng();
-      document.getElementById('listFormattedAddress').value = place.formatted_address || '';
+    const confirmEl = document.getElementById('listLocationConfirm');
+    confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
 
-      const confirmEl = document.getElementById('listLocationConfirm');
-      confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || '');
-      confirmEl.style.display = 'block';
-
-      // Best-effort auto-fill of City and Area from Google's address
-      // components — a host can still edit either manually afterward.
-      //
-      // City deliberately prefers the DISTRICT-level component
-      // (administrative_area_level_2) over 'locality'. Google's
-      // 'locality' type is inconsistent for Indian addresses — it's
-      // frequently assigned to a smaller named area within a city rather
-      // than the city itself, which is exactly what was showing up in
-      // the City field instead of a proper city name. The district is
-      // far more reliably "the city" in common Indian usage — e.g. "Pune"
-      // as a district reliably matches "Pune" the city, and for Aerva's
-      // Himachal Pradesh listings (Jibhi/Banjar), the district is
-      // "Kullu" — that's the correct City value, not the state name.
-      // Falls back to locality if there's no district-level match, and
-      // to the state only as a last resort for the rare address with
-      // neither, since a state name is still a better starting point
-      // than leaving the field blank.
+    // Best-effort auto-fill of City and Area from Google's address
+    // components — a host can still edit either manually afterward.
+    //
+    // City deliberately prefers the DISTRICT-level component
+    // (administrative_area_level_2) over 'locality'. Google's
+    // 'locality' type is inconsistent for Indian addresses — it's
+    // frequently assigned to a smaller named area within a city rather
+    // than the city itself, which is exactly what was showing up in
+    // the City field instead of a proper city name. The district is
+    // far more reliably "the city" in common Indian usage — e.g. "Pune"
+    // as a district reliably matches "Pune" the city, and for Aerva's
+    // Himachal Pradesh listings (Jibhi/Banjar), the district is
+    // "Kullu" — that's the correct City value, not the state name.
+    // Falls back to locality if there's no district-level match, and
+    // to the state only as a last resort for the rare address with
+    // neither, since a state name is still a better starting point
+    // than leaving the field blank. Only overwrites City/Area when
+    // options.skipCityArea isn't set — a drag-to-refine on the map
+    // shouldn't casually rewrite a city the host already confirmed
+    // over a small pin nudge; only an explicit search or PIN lookup does.
+    if(!options.skipCityArea){
       const components = place.address_components || [];
       function findAddressComponent(types){
         return components.find(c => types.some(t => c.types.includes(t)));
@@ -2419,6 +2441,95 @@
       if(areaComponent){
         document.getElementById('listArea').value = areaComponent.long_name;
       }
+    }
+
+    updateListPinMap(lat, lng);
+  }
+
+  // Draggable pin map — appears once a location is set by any method, and
+  // lets a host nudge it for a more exact match than the address search
+  // alone gives (a street address can resolve to the wrong end of a long
+  // road; dragging the pin fixes that). Clicking anywhere on the map also
+  // moves the pin there directly, not just dragging the marker itself.
+  function updateListPinMap(lat, lng){
+    const container = document.getElementById('listMapPin');
+    if(!container || !window.google || !window.google.maps) return;
+    container.style.display = 'block';
+    const position = { lat: Number(lat), lng: Number(lng) };
+
+    if(!listPinMap){
+      listPinMap = new google.maps.Map(container, { center: position, zoom: 16, streetViewControl: false, mapTypeControl: false });
+      listPinMarker = new google.maps.Marker({ position, map: listPinMap, draggable: true });
+      listPinMarker.addListener('dragend', () => onPinMoved(listPinMarker.getPosition()));
+      listPinMap.addListener('click', (e) => {
+        listPinMarker.setPosition(e.latLng);
+        onPinMoved(e.latLng);
+      });
+    } else {
+      listPinMap.setCenter(position);
+      listPinMarker.setPosition(position);
+    }
+  }
+
+  // Reverse-geocodes the new pin position — mainly to refresh the
+  // formatted-address confirmation text, not to silently rewrite
+  // City/Area over what could be a very small, deliberate nudge.
+  function onPinMoved(latLng){
+    document.getElementById('listLatitude').value = latLng.lat();
+    document.getElementById('listLongitude').value = latLng.lng();
+    if(!window.google.maps.Geocoder) return;
+    new google.maps.Geocoder().geocode({ location: { lat: latLng.lat(), lng: latLng.lng() } }, (results, status) => {
+      if(status === 'OK' && results[0]){
+        applyLocationResult(results[0], { skipCityArea: true });
+      } else {
+        const confirmEl = document.getElementById('listLocationConfirm');
+        confirmEl.textContent = `✓ Location set: ${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}`;
+        confirmEl.style.display = 'block';
+      }
+    });
+  }
+
+  window.initGoogleMaps = function(){
+    const searchInput = document.getElementById('listLocationSearch');
+    if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
+
+    const autocomplete = new google.maps.places.Autocomplete(searchInput, {
+      fields: ['geometry', 'formatted_address', 'address_components'],
+      types: ['geocode', 'establishment']
+    });
+
+    autocomplete.addListener('place_changed', function(){
+      applyLocationResult(autocomplete.getPlace(), { skipSearchBoxUpdate: true });
+    });
+
+    // PIN / postal code lookup — works for an Indian PIN code or a
+    // postal/ZIP code from anywhere else, since Geocoder resolves any
+    // address-shaped text, postal codes included. Populates the exact
+    // same fields as picking a search suggestion does.
+    const pincodeInput = document.getElementById('listPincode');
+    const pincodeBtn = document.getElementById('listPincodeLookupBtn');
+    const pincodeStatus = document.getElementById('listPincodeStatus');
+    function lookupPincode(){
+      const code = pincodeInput.value.trim();
+      pincodeStatus.style.display = 'none';
+      if(!code) return;
+      pincodeBtn.disabled = true;
+      pincodeBtn.textContent = 'Looking up…';
+      new google.maps.Geocoder().geocode({ address: code }, (results, status) => {
+        pincodeBtn.disabled = false;
+        pincodeBtn.textContent = 'Look Up';
+        if(status === 'OK' && results[0]){
+          applyLocationResult(results[0]);
+        } else {
+          pincodeStatus.textContent = 'Could not find that PIN/postal code — try the address search above instead.';
+          pincodeStatus.style.color = '#a3402f';
+          pincodeStatus.style.display = 'block';
+        }
+      });
+    }
+    pincodeBtn.addEventListener('click', lookupPincode);
+    pincodeInput.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter'){ e.preventDefault(); lookupPincode(); }
     });
 
     // Search bar's "Place" field — real-world address suggestions as the
@@ -3010,6 +3121,7 @@
         const confirmEl = document.getElementById('listLocationConfirm');
         confirmEl.textContent = '✓ Location set: ' + (draft.formatted_address || '');
         confirmEl.style.display = 'block';
+        updateListPinMap(draft.latitude, draft.longitude);
       }
       if(draft.property_type) document.getElementById('listType').value = draft.property_type;
       if(draft.bedrooms) document.getElementById('listBedrooms').value = draft.bedrooms;
@@ -3098,6 +3210,7 @@
       const confirmEl = document.getElementById('listLocationConfirm');
       confirmEl.textContent = '✓ Location set: ' + (source.formatted_address || '');
       confirmEl.style.display = 'block';
+      updateListPinMap(source.latitude, source.longitude);
     }
     if(source.property_type) document.getElementById('listType').value = source.property_type;
     if(source.bedrooms) document.getElementById('listBedrooms').value = source.bedrooms;
