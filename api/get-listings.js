@@ -261,17 +261,16 @@ module.exports = async (req, res) => {
     const arrivalFilter = datesFilter ? arrivalRaw : null;
     const departureFilter = datesFilter ? departureRaw : null;
 
-    // A guest who typed/picked an actual place (turned into a 200km
-    // radius search below) still gets the city/area text filter applied
-    // TOO, not instead — previously, picking a suggestion dropped the
-    // text filter entirely and relied purely on coordinate math, which
-    // meant a listing with incorrect or mismatched stored coordinates
-    // could show up for a search it has nothing to do with (e.g. a
-    // Himachal Pradesh listing appearing in a "Pune" search) — with
-    // nothing else to catch it, since its city/area text was never
-    // checked at all in that mode. Only "Near Me" (no typed place, pure
-    // geolocation) has no text to fall back on, so it's unaffected.
-    const effectiveCityFilter = cityFilter;
+    // When a real distance search is active (a guest typed/picked a
+    // place, turned into a 200km radius below), the city/area text is
+    // NOT also required — a "Mumbai" search legitimately should surface
+    // a nearby Pune listing within range, even though its city field
+    // says "Pune," not "Mumbai." That's the actual point of a radius
+    // search. (An earlier version of this required both together, which
+    // broke exactly that — a Mumbai search stopped finding Pune at all.)
+    // Only "Near Me" (no typed place, pure geolocation) has no text
+    // filter to begin with, so it's unaffected either way.
+    const effectiveCityFilter = distanceFilter ? null : cityFilter;
 
     // City and date-availability are filtered in SQL — availability
     // specifically needs to check against the orders table, which only
