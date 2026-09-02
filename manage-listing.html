@@ -951,4 +951,957 @@
 </script>
 
 </body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manage Your Listing — Aerva</title>
+<meta name="robots" content="noindex, nofollow">
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
+<style>
+  body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:480px; margin:0 auto;}
+  .back-home{
+    display:inline-block; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
+    color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:28px;
+  }
+  .back-home:hover{opacity:1;}
+  h1{font-family:Georgia,serif; font-size:24px; margin-bottom:6px;}
+  .subtitle{opacity:0.65; font-size:14px; margin-bottom:32px;}
+  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:20px;}
+  label{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c;}
+  input, select{
+    background:white; border:1px solid #ddd0bc; padding:10px 12px; font-family:'Jost', sans-serif;
+    font-size:15px; color:#1c1a17; width:100%; box-sizing:border-box;
+  }
+  input:focus, select:focus{outline:none; border-color:#8a6c39;}
+  input:disabled, select:disabled, input:read-only{background:#e9e2d6; color:#8a7f6c; cursor:not-allowed; border-color:#ddd0bc;}
+  .form-row{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .btn{
+    background:#1c1a17; color:#f4ebe3; border:none; padding:14px 28px; font-size:12px;
+    letter-spacing:0.1em; text-transform:uppercase; cursor:pointer; width:100%;
+  }
+  .btn:disabled{opacity:0.5; cursor:default;}
+  .confirm{font-size:13px; color:#3a7d44; margin-top:16px; display:none;}
+  .error{font-size:13px; color:#a3402f; margin-top:16px; display:none;}
+  .loading{text-align:center; opacity:0.6; padding:60px 0;}
+  .price-history-note{font-size:11.5px; opacity:0.55; margin-top:6px;}
+  .eyebrow{font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c; margin:32px 0 12px;}
+
+  .photo-preview-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:10px; margin-top:10px;}
+  .photo-preview-item{position:relative; aspect-ratio:1/1; border:1px solid #ddd0bc; overflow:hidden;}
+  .photo-preview-item img{width:100%; height:100%; object-fit:cover; display:block;}
+  .photo-preview-item.is-cover{border:2px solid #a8834a;}
+  .photo-order-badge{
+    position:absolute; top:4px; left:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:11.5px; font-weight:600;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .photo-remove-btn{
+    position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; border:none; cursor:pointer;
+    font-size:14px; line-height:1; display:flex; align-items:center; justify-content:center;
+  }
+  .photo-remove-btn:hover{background:#a3402f;}
+  .photo-cover-btn{
+    position:absolute; bottom:4px; left:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f5c451; border:none; cursor:pointer;
+    font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center;
+  }
+  .photo-cover-btn:hover{background:rgba(28,26,23,1);}
+  .photo-reorder-btns{position:absolute; bottom:4px; right:4px; display:flex; gap:2px;}
+  .photo-reorder-btns button{
+    width:20px; height:22px; border-radius:2px; background:rgba(28,26,23,0.85); color:#f4ebe3;
+    border:none; cursor:pointer; font-size:13px; line-height:1;
+  }
+  .photo-reorder-btns button:hover:not(:disabled){background:rgba(28,26,23,1);}
+  .photo-reorder-btns button:disabled{opacity:0.3; cursor:default;}
+  .add-photos-btn{
+    background:white; border:1px dashed #ddd0bc; padding:10px; font-size:12px; letter-spacing:0.06em;
+    text-transform:uppercase; cursor:pointer; width:100%; margin-top:10px; color:#8a6c39;
+  }
+  .check-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px 16px;}
+  .check-item{display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:normal; letter-spacing:0; text-transform:none; color:#1c1a17; cursor:pointer;}
+  .check-item input{width:auto;}
+  .paid-amenity-row{
+    background:white; border:1px solid #ddd0bc; padding:14px; margin-bottom:10px; display:flex; flex-direction:column; gap:8px;
+  }
+  .paid-amenity-row .row-line{display:grid; grid-template-columns:1fr 100px; gap:10px;}
+  .paid-amenity-row .date-line{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .paid-amenity-row .date-line label{font-size:9.5px; margin-bottom:2px;}
+  .remove-amenity-btn{
+    background:none; border:none; color:#a3402f; font-size:11.5px; letter-spacing:0.04em;
+    cursor:pointer; text-decoration:underline; align-self:flex-start; padding:0;
+  }
+  .weekday-excludes{display:flex; flex-wrap:wrap; gap:10px;}
+  .weekday-excludes label{
+    display:flex; align-items:center; gap:4px; font-size:11.5px; font-weight:normal;
+    letter-spacing:0; text-transform:none; color:#1c1a17; cursor:pointer;
+  }
+  .weekday-excludes input{width:auto; margin:0;}
+  .add-paid-amenity-btn{
+    background:white; border:1px dashed #ddd0bc; padding:12px; font-size:12px; letter-spacing:0.06em;
+    text-transform:uppercase; cursor:pointer; width:100%; color:#8a6c39; margin-top:4px;
+  }
+
+  .listing-map-preview{width:100%; height:220px; background:#e9e2d6; border:1px solid #ddd0bc; margin-top:10px;}
+  .listing-map-preview .leaflet-container{font-family:'Jost', sans-serif;}
+  /* OpenStreetMap's license requires this stay visible — it can't be
+     removed — but it doesn't need to look like a banner. Shrunk to a
+     barely-there caption instead. */
+  .listing-map-preview .leaflet-control-attribution{
+    font-size:8px; padding:0 4px; background:rgba(255,255,255,0.55); line-height:1.4;
+  }
+  .listing-map-preview .leaflet-control-attribution img{height:8px; vertical-align:middle;}
+</style>
+<!--
+  Testing OpenStreetMap via Leaflet.js here ONLY (manage-listing.html) —
+  free, no API key, no billing account, ever, unlike the Google Maps
+  embed on index.html which needs Google Cloud billing enabled. This is
+  a read-only location preview for the host, so Leaflet is a good fit to
+  trial: if this looks good, the same approach can replace (or exist
+  alongside) the Google Maps embed on index.html.
+-->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+</head>
+<body>
+
+<div class="wrap">
+  <a href="host-dashboard.html" class="back-home">&larr; Back to Your Listings</a>
+  <div id="loadingState" class="loading">Loading your listing…</div>
+
+  <div id="formState" style="display:none;">
+    <h1 id="propertyNameHeading"></h1>
+    <p class="subtitle">Update your nightly rate, offer, or photos anytime — changes apply immediately.</p>
+
+    <form id="pricingForm">
+      <div class="field" style="margin-top:0;">
+        <label for="listLocationSearch">Property Location <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
+        <input id="listLocationSearch" type="text" placeholder="Start typing an address…" autocomplete="off">
+        <input type="hidden" id="listLatitude">
+        <input type="hidden" id="listLongitude">
+        <input type="hidden" id="listFormattedAddress">
+        <p id="listLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
+        <div id="listingMapPreview" class="listing-map-preview" style="display:none;"></div>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Drag the pin above for a more exact match. Powers the "distance from you" shown to guests, and the "View on map" link on your listing.</p>
+      </div>
+      <div class="field">
+        <label for="listPincode">PIN / Postal Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-filled when your address provides one)</span></label>
+        <input id="listPincode" type="text" placeholder="e.g. 411001">
+        <p id="listPincodeHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">Filled in automatically once you pick an address above. It's for reference only and doesn't affect the property's actual location — use the address search or map pin for that.</p>
+      </div>
+
+      <div class="field">
+        <label for="listingCity">City <span style="color:#a3402f;">*</span></label>
+        <input id="listingCity" type="text" placeholder="e.g. Pune" required>
+      </div>
+      <div class="field">
+        <label for="listingArea">Area <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional — neighbourhood or locality)</span></label>
+        <input id="listingArea" type="text" placeholder="e.g. Koregaon Park">
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Shown to guests as "Area, City" — leave blank if there isn't a well-known one for this address.</p>
+      </div>
+      <p id="listCityAreaWarning" style="font-size:11.5px; color:#a3402f; margin-top:-8px; margin-bottom:16px; display:none;"></p>
+
+      <div class="field">
+        <label for="pricingCurrency">Pricing Currency <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— view and edit your prices below in this currency; Aerva stores everything in INR automatically</span></label>
+        <select id="pricingCurrency"></select>
+      </div>
+
+      <div class="field">
+        <label for="nightlyRate"><span id="nightlyRateLabel">Nightly Rate (₹)</span></label>
+        <input id="nightlyRate" type="number" min="1" required>
+        <p class="price-history-note">Every change here is recorded, so you can always see your rate history.</p>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="discountType">Discount Type</label>
+          <select id="discountType">
+            <option value="">None</option>
+            <option value="percentage">Percentage off</option>
+            <option value="flat" id="discountFlatOption">Flat amount off (₹)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="discountValue"><span id="discountValueLabel">Amount</span></label>
+          <input id="discountValue" type="number" min="0">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="discountMinNights">Minimum Nights to Qualify</label>
+          <input id="discountMinNights" type="number" min="1">
+        </div>
+        <div class="field">
+          <label for="discountDescription">Short Note <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-generated from your settings)</span></label>
+          <input id="discountDescription" type="text" readonly>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="securityDeposit"><span id="securityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, leave blank if you don't charge one</span></label>
+        <input id="securityDeposit" type="number" min="0" placeholder="e.g. 2000">
+        <p class="price-history-note">Charged to the guest at checkout and held by Aerva for 7 days after checkout. If you don't raise a concern in that window, it's refunded to the guest automatically.</p>
+      </div>
+
+      <div class="eyebrow">Photos</div>
+      <div class="field">
+        <label>Exterior <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(up to 20)</span></label>
+        <div class="photo-preview-grid" id="exteriorPreviewGrid"></div>
+        <input type="file" id="exteriorFileInput" accept="image/*" multiple style="display:none;">
+        <button type="button" class="add-photos-btn" id="addExteriorBtn">+ Add Exterior Photos</button>
+      </div>
+      <div class="field">
+        <label>Interior <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(up to 20)</span></label>
+        <div class="photo-preview-grid" id="interiorPreviewGrid"></div>
+        <input type="file" id="interiorFileInput" accept="image/*" multiple style="display:none;">
+        <button type="button" class="add-photos-btn" id="addInteriorBtn">+ Add Interior Photos</button>
+      </div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-6px; margin-bottom:24px;">Use ‹ › to reorder, ☆ to set a cover photo, × to remove. Interior photos show first by default unless you set a cover.</p>
+
+      <div class="eyebrow">Included Amenities <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(always free, shown on your listing)</span></div>
+      <div class="check-grid" id="amenitiesGrid">
+        <label class="check-item"><input type="checkbox" name="amenity" value="WiFi"> WiFi</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Air Conditioning"> Air Conditioning</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Kitchen"> Kitchen</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Private Pool"> Private Pool</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Parking"> Parking</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Balcony / Terrace"> Balcony / Terrace</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Garden"> Garden</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Fireplace / Heating"> Fireplace / Heating</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="TV / Smart TV"> TV / Smart TV</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Washing Machine"> Washing Machine</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Power Backup"> Power Backup</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Hot Water"> Hot Water</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Refrigerator"> Refrigerator</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Workspace / Desk"> Workspace / Desk</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Elevator / Lift"> Elevator / Lift</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Gym / Fitness Area"> Gym / Fitness Area</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Hot Tub / Jacuzzi"> Hot Tub / Jacuzzi</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="BBQ / Grill"> BBQ / Grill</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Bonfire Area"> Bonfire Area</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Smoke Detector"> Smoke Detector</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="First Aid Kit"> First Aid Kit</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="CCTV / Security"> CCTV / Security</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Crib / Baby-Friendly"> Crib / Baby-Friendly</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Wheelchair Accessible"> Wheelchair Accessible</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Toiletries Provided"> Toiletries Provided</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Linens & Towels"> Linens & Towels</label>
+        <label class="check-item"><input type="checkbox" name="amenity" value="Coffee, Sugar, Salt & Basic Masalas"> Coffee, Sugar, Salt & Basic Masalas</label>
+      </div>
+
+      <div class="eyebrow" style="margin-top:24px;">Included Services <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(always free)</span></div>
+      <div class="check-grid" id="servicesGrid">
+        <label class="check-item"><input type="checkbox" name="service" value="Housekeeping"> Housekeeping</label>
+        <label class="check-item"><input type="checkbox" name="service" value="Breakfast Included"> Breakfast Included</label>
+        <label class="check-item"><input type="checkbox" name="service" value="Airport Pickup"> Airport Pickup</label>
+        <label class="check-item"><input type="checkbox" name="service" value="In-house Chef"> In-house Chef</label>
+        <label class="check-item"><input type="checkbox" name="service" value="Concierge / Local Guide"> Concierge / Local Guide</label>
+        <label class="check-item"><input type="checkbox" name="service" value="Spa / Massage on request"> Spa / Massage on request</label>
+      </div>
+
+      <div class="eyebrow" style="margin-top:24px;">Pet Policy <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(separate from the free amenities above)</span></div>
+      <div class="field">
+        <label>Is this property pet-friendly? <span style="color:#a3402f;">*</span></label>
+        <div style="display:flex; gap:24px; margin-top:6px;">
+          <label class="check-item"><input type="radio" name="petFriendly" value="yes" id="petFriendlyYes"> Yes</label>
+          <label class="check-item"><input type="radio" name="petFriendly" value="no" id="petFriendlyNo"> No</label>
+        </div>
+      </div>
+      <div id="petPolicyDetails" style="display:none;">
+        <div class="field">
+          <label for="maxPetsAllowed">Maximum Pets Allowed Per Stay</label>
+          <input id="maxPetsAllowed" type="number" min="1" max="10" placeholder="e.g. 2">
+        </div>
+        <div class="field">
+          <label>Pet Types Allowed</label>
+          <div class="check-grid">
+            <label class="check-item"><input type="checkbox" name="petType" value="Dog"> Dogs</label>
+            <label class="check-item"><input type="checkbox" name="petType" value="Cat"> Cats</label>
+            <label class="check-item"><input type="checkbox" name="petType" value="Bird"> Birds</label>
+            <label class="check-item"><input type="checkbox" name="petType" value="Rabbit"> Rabbits</label>
+            <label class="check-item"><input type="checkbox" name="petType" value="Fish"> Fish</label>
+            <label class="check-item"><input type="checkbox" name="petType" value="Hamster"> Hamsters / Small Rodents</label>
+            <label class="check-item"><input type="checkbox" name="petType" value="Turtle"> Turtles / Reptiles</label>
+            <label class="check-item"><input type="checkbox" name="petType" value="Other"> Other (non-wild pet)</label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="petFee"><span id="petFeeLabel">Pet Fee (₹ per pet, per stay)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if free</span></label>
+          <input id="petFee" type="number" min="0" placeholder="e.g. 500">
+        </div>
+      </div>
+
+      <div class="eyebrow" style="margin-top:24px;">Paid Amenities <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(guests pay extra to add these at checkout)</span></div>
+      <div id="paidAmenitiesList"></div>
+      <button type="button" class="add-paid-amenity-btn" id="addPaidAmenityBtn">+ Add a Paid Amenity</button>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">A one-time fee per stay, not per night. Leave the date fields blank for an amenity that's available year-round.</p>
+
+      <button type="submit" class="btn" id="submitBtn">Save Changes</button>
+      <p class="confirm" id="confirmMsg">Saved — your changes are live.</p>
+      <p class="error" id="errorMsg"></p>
+    </form>
+  </div>
+
+  <div id="notFoundState" style="display:none;">
+    <h1>Link not valid</h1>
+    <p class="subtitle">This link may have expired or is incorrect. Contact hello@aerva.in if you need a new one.</p>
+  </div>
+</div>
+
+<script>
+  const API_BASE = 'https://aerva-in.vercel.app';
+
+  // ---- Leaflet/OpenStreetMap location preview (testing this here only —
+  // see the CSS/head comment for why) ----
+  // A single map instance is created once, then just re-centered and
+  // re-marked afterward — calling L.map() again on the same container
+  // throws, so this checks leafletMapInstance first. The marker is
+  // draggable — dropping it in a slightly different spot is what "fine
+  // tune on the map" means here, and click-anywhere-on-the-map moves it
+  // there directly too, not just dragging the marker itself.
+  let leafletMapInstance = null;
+  let leafletMarkerInstance = null;
+  function updateLeafletPreview(lat, lng){
+    const container = document.getElementById('listingMapPreview');
+    if(!container || !window.L || !lat || !lng) return;
+    container.style.display = 'block';
+    const position = [Number(lat), Number(lng)];
+    if(!leafletMapInstance){
+      leafletMapInstance = L.map(container, { scrollWheelZoom: false }).setView(position, 14);
+      leafletMapInstance.attributionControl.setPrefix(false); // drops Leaflet's own flag/logo — OpenStreetMap's own credit (added via the tile layer below) is what's legally required, this part isn't
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+      }).addTo(leafletMapInstance);
+      leafletMarkerInstance = L.marker(position, { draggable: true }).addTo(leafletMapInstance);
+      leafletMarkerInstance.on('dragend', () => {
+        const p = leafletMarkerInstance.getLatLng();
+        onLeafletPinMoved(p.lat, p.lng);
+      });
+      leafletMapInstance.on('click', (e) => {
+        leafletMarkerInstance.setLatLng(e.latlng);
+        onLeafletPinMoved(e.latlng.lat, e.latlng.lng);
+      });
+    } else {
+      leafletMapInstance.setView(position, 14);
+      leafletMarkerInstance.setLatLng(position);
+      // The container can go from display:none (no location yet) to
+      // visible after a fresh pick — Leaflet needs telling explicitly
+      // when its container's size just changed, or tiles render wrong.
+      setTimeout(() => leafletMapInstance.invalidateSize(), 0);
+    }
+  }
+
+  // Called by the Google Maps script once it's loaded (see the script tag
+  // in <head>). Same pattern as the listing submission form in
+  // index.html — selecting a suggestion captures lat/lng and a clean
+  // formatted address, and now also auto-fills City/Area the same way.
+  //
+  // Shared by three ways of setting a location — Places autocomplete, a
+  // PIN/postal code lookup, and dragging the pin on the map — so all
+  // three fill in the same fields the same way.
+  function applyLocationResult(place, options){
+    options = options || {};
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+
+    document.getElementById('listLatitude').value = lat;
+    document.getElementById('listLongitude').value = lng;
+    document.getElementById('listFormattedAddress').value = place.formatted_address || '';
+    if(!options.skipSearchBoxUpdate){
+      document.getElementById('listLocationSearch').value = place.formatted_address || '';
+    }
+
+    const confirmEl = document.getElementById('listLocationConfirm');
+    confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
+
+    // Same district-over-locality City/Area logic as index.html's
+    // submission form — see the comment there for why. Skipped for a
+    // small drag-to-refine nudge (options.skipCityArea) so it doesn't
+    // casually rewrite a city the host already confirmed.
+    if(!options.skipCityArea){
+      const components = place.address_components || [];
+      function findAddressComponent(types){
+        return components.find(c => types.some(t => c.types.includes(t)));
+      }
+      // Some administrative divisions genuinely only have a local-script
+      // name on file in Google's data — the page-wide language=en
+      // setting (see the script tag in <head>) has nothing to switch to
+      // in that case. short_name is tried as a fallback (often the
+      // Latin/English form even then); if neither is usable, the field
+      // is deliberately left blank with a warning rather than silently
+      // filled with unreadable text.
+      const nonLatinPattern = /[^\u0000-\u024F\s]/;
+      function latinNameFor(component){
+        if(!component) return null;
+        if(component.long_name && !nonLatinPattern.test(component.long_name)) return component.long_name;
+        if(component.short_name && !nonLatinPattern.test(component.short_name)) return component.short_name;
+        return null;
+      }
+      const cityComponent = findAddressComponent(['administrative_area_level_2'])
+        || findAddressComponent(['locality'])
+        || findAddressComponent(['administrative_area_level_1']);
+      const cityName = latinNameFor(cityComponent);
+      const cityWarningEl = document.getElementById('listCityAreaWarning');
+      if(cityWarningEl) cityWarningEl.style.display = 'none';
+      if(cityName){
+        document.getElementById('listingCity').value = cityName;
+      } else if(cityComponent && cityWarningEl){
+        cityWarningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below.';
+        cityWarningEl.style.display = 'block';
+      }
+      const areaComponent = findAddressComponent(['sublocality_level_1', 'sublocality', 'neighborhood'])
+        || (() => {
+          const locality = findAddressComponent(['locality']);
+          return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
+        })();
+      const areaName = latinNameFor(areaComponent);
+      if(areaName){
+        document.getElementById('listingArea').value = areaName;
+      }
+      // PIN/postal code — populated when the picked address actually has
+      // one on file. Not every address does (rural addresses especially),
+      // so when it's missing this asks the host to fill it in themselves
+      // instead of just leaving the field silently blank with no
+      // explanation for why nothing showed up.
+      const postalComponent = findAddressComponent(['postal_code']);
+      const pincodeInput = document.getElementById('listPincode');
+      const pincodeHint = document.getElementById('listPincodeHint');
+      if(postalComponent && pincodeInput){
+        pincodeInput.value = postalComponent.long_name;
+        if(pincodeHint){
+          pincodeHint.textContent = 'Filled in automatically once you pick an address above. It\'s for reference only and doesn\'t affect the property\'s actual location — use the address search or map pin for that.';
+          pincodeHint.style.color = '';
+        }
+      } else if(pincodeInput && pincodeHint){
+        pincodeInput.value = '';
+        pincodeHint.textContent = 'Your address didn\'t include a PIN/postal code — please enter it yourself.';
+        pincodeHint.style.color = '#a3402f';
+      }
+    }
+
+    updateLeafletPreview(lat, lng);
+  }
+
+  // Reverse-geocodes a dragged pin position — refreshes the formatted-
+  // address confirmation text, but deliberately doesn't rewrite City/Area
+  // over what could be a very small, deliberate nudge.
+  function onLeafletPinMoved(lat, lng){
+    document.getElementById('listLatitude').value = lat;
+    document.getElementById('listLongitude').value = lng;
+    if(!window.google || !window.google.maps || !window.google.maps.Geocoder) return;
+    new google.maps.Geocoder().geocode({ location: { lat, lng } }, (results, status) => {
+      if(status === 'OK' && results[0]){
+        applyLocationResult(results[0], { skipCityArea: true });
+      } else {
+        const confirmEl = document.getElementById('listLocationConfirm');
+        confirmEl.textContent = `✓ Location set: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        confirmEl.style.display = 'block';
+      }
+    });
+  }
+
+  window.initGoogleMaps = function(){
+    const searchInput = document.getElementById('listLocationSearch');
+    if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
+
+    const autocomplete = new google.maps.places.Autocomplete(searchInput, {
+      fields: ['geometry', 'formatted_address', 'address_components'],
+      types: ['geocode', 'establishment']
+    });
+
+    autocomplete.addListener('place_changed', function(){
+      applyLocationResult(autocomplete.getPlace(), { skipSearchBoxUpdate: true });
+    });
+  };
+  const MAX_LISTING_PHOTOS = 20;
+
+  // Pet policy detail fields only make sense once "Yes" is picked —
+  // hidden otherwise, and cleared if switched back to "No" so a stray
+  // value can't get saved alongside a "not pet-friendly" listing.
+  const petPolicyDetails = document.getElementById('petPolicyDetails');
+  const petFriendlyYes = document.getElementById('petFriendlyYes');
+  const petFriendlyNo = document.getElementById('petFriendlyNo');
+  function togglePetPolicyDetails(){
+    const showDetails = petFriendlyYes.checked;
+    petPolicyDetails.style.display = showDetails ? 'block' : 'none';
+    if(!showDetails){
+      document.getElementById('maxPetsAllowed').value = '';
+      document.getElementById('petFee').value = '';
+      petPolicyDetails.querySelectorAll('input[name="petType"]').forEach(cb => { cb.checked = false; });
+    }
+  }
+  petFriendlyYes.addEventListener('change', togglePetPolicyDetails);
+  petFriendlyNo.addEventListener('change', togglePetPolicyDetails);
+
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+
+  const loadingState = document.getElementById('loadingState');
+  const formState = document.getElementById('formState');
+  const notFoundState = document.getElementById('notFoundState');
+
+  // Which single photo (by url, for existing ones, or temp id for new
+  // uploads) is the cover — shared across both categories, same pattern
+  // as the listing submission form.
+  let coverPhotoKey = null;
+
+  // Amount and Minimum Nights are meaningless with no discount active —
+  // disabled (not just visually, but actually non-interactive) whenever
+  // Discount Type is "None".
+  function updateDiscountFieldsState(){
+    const isNone = !document.getElementById('discountType').value;
+    document.getElementById('discountValue').disabled = isNone;
+    document.getElementById('discountMinNights').disabled = isNone;
+  }
+
+  // Short Note is always derived from Discount Type/Amount/Minimum
+  // Nights/Nightly Rate — never typed freely — so it can never drift out
+  // of sync with what the discount actually is, and now always shows
+  // both units (₹ and %) so the host can see what their choice is worth
+  // in the other unit too — same baseline conversion (minimum qualifying
+  // stay, or one night) that guests see on the listing itself.
+  function updateDiscountNote(){
+    const type = document.getElementById('discountType').value;
+    const value = document.getElementById('discountValue').value;
+    const minNights = document.getElementById('discountMinNights').value;
+    const rate = Number(document.getElementById('nightlyRate').value) || 0;
+    const noteEl = document.getElementById('discountDescription');
+
+    if(!type || !value){
+      noteEl.value = '';
+      return;
+    }
+
+    const baselineNights = minNights ? Number(minNights) : 1;
+    const baselineTotal = rate * baselineNights;
+    const numValue = Number(value);
+    let discountText;
+    if(baselineTotal > 0){
+      if(type === 'percentage'){
+        const rupees = Math.round(baselineTotal * (numValue / 100));
+        discountText = `${value}% (≈₹${rupees.toLocaleString('en-IN')}) off`;
+      } else {
+        const percent = Math.round((numValue / baselineTotal) * 100);
+        discountText = `₹${value} (≈${percent}%) off`;
+      }
+    } else {
+      // No nightly rate set yet — can't convert, so just show the one
+      // unit the host actually entered.
+      discountText = type === 'percentage' ? `${value}% off` : `₹${value} off`;
+    }
+    noteEl.value = minNights ? `${discountText} on Min ${minNights} nights` : discountText;
+  }
+  ['discountType','discountValue','discountMinNights','nightlyRate'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => { updateDiscountFieldsState(); updateDiscountNote(); });
+    document.getElementById(id).addEventListener('change', () => { updateDiscountFieldsState(); updateDiscountNote(); });
+  });
+  let nextTempId = 1;
+  const allPhotoManagers = [];
+
+  function refreshAllPhotoPreviews(){
+    allPhotoManagers.forEach(m => m.renderPreviews());
+  }
+
+  // Each item is either { key: url, type: 'existing', url } for a photo
+  // already saved on the listing, or { key: tempId, type: 'new', file }
+  // for one just added and not yet uploaded — both render identically
+  // and share the same reorder/cover/remove controls.
+  function createPhotoManager(previewGridId, fileInputId, addBtnId){
+    const previewGrid = document.getElementById(previewGridId);
+    const fileInput = document.getElementById(fileInputId);
+    const addBtn = document.getElementById(addBtnId);
+    let items = [];
+
+    function move(fromIdx, toIdx){
+      if(toIdx < 0 || toIdx >= items.length) return;
+      const [moved] = items.splice(fromIdx, 1);
+      items.splice(toIdx, 0, moved);
+      renderPreviews();
+    }
+
+    function renderPreviews(){
+      previewGrid.innerHTML = '';
+      items.forEach((item, idx) => {
+        const url = item.type === 'existing' ? item.url : URL.createObjectURL(item.file);
+        const isCover = item.key === coverPhotoKey;
+        const el = document.createElement('div');
+        el.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
+        el.innerHTML = `
+          <img src="${url}" alt="">
+          <span class="photo-order-badge">${idx + 1}</span>
+          <button type="button" data-action="remove" class="photo-remove-btn" aria-label="Remove">×</button>
+          <button type="button" data-action="cover" class="photo-cover-btn" aria-label="Set as cover" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
+          <div class="photo-reorder-btns">
+            <button type="button" data-action="left" ${idx === 0 ? 'disabled' : ''}>‹</button>
+            <button type="button" data-action="right" ${idx === items.length - 1 ? 'disabled' : ''}>›</button>
+          </div>
+        `;
+        el.querySelector('[data-action="remove"]').addEventListener('click', () => {
+          const removedKey = items[idx].key;
+          items.splice(idx, 1);
+          if(coverPhotoKey === removedKey) coverPhotoKey = null;
+          renderPreviews();
+        });
+        el.querySelector('[data-action="cover"]').addEventListener('click', () => {
+          coverPhotoKey = isCover ? null : item.key;
+          refreshAllPhotoPreviews();
+        });
+        el.querySelector('[data-action="left"]').addEventListener('click', () => move(idx, idx - 1));
+        el.querySelector('[data-action="right"]').addEventListener('click', () => move(idx, idx + 1));
+        previewGrid.appendChild(el);
+      });
+    }
+
+    addBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const newFiles = Array.from(fileInput.files);
+      for(const f of newFiles){
+        if(items.length >= MAX_LISTING_PHOTOS) break;
+        items.push({ key: 'new_' + (nextTempId++), type: 'new', file: f });
+      }
+      fileInput.value = '';
+      renderPreviews();
+    });
+
+    const manager = {
+      setExisting: (urls) => {
+        items = (urls || []).map(url => ({ key: url, type: 'existing', url }));
+        renderPreviews();
+      },
+      // Uploads any newly-added files and returns the final ordered list
+      // of URLs (existing ones untouched, new ones uploaded fresh) plus
+      // which key (if any) in this category matches the chosen cover.
+      finalizeUrls: async () => {
+        const urls = [];
+        for(const item of items){
+          if(item.type === 'existing'){
+            urls.push(item.url);
+          } else {
+            const { upload } = await import('https://esm.sh/@vercel/blob/client');
+            const result = await upload(item.file.name, item.file, {
+              access: 'public',
+              handleUploadUrl: API_BASE + '/api/blob-upload'
+            });
+            urls.push(result.url);
+            // A newly-uploaded photo that was chosen as cover needs its
+            // temp key swapped for the real URL now that one exists.
+            if(coverPhotoKey === item.key) coverPhotoKey = result.url;
+          }
+        }
+        return urls;
+      },
+      renderPreviews
+    };
+    allPhotoManagers.push(manager);
+    return manager;
+  }
+
+  const exteriorManager = createPhotoManager('exteriorPreviewGrid', 'exteriorFileInput', 'addExteriorBtn');
+  const interiorManager = createPhotoManager('interiorPreviewGrid', 'interiorFileInput', 'addInteriorBtn');
+
+  // Paid amenity rows — each row is a plain object tracked in this array;
+  // the DOM inputs are just a view onto it, read back at save time.
+  let paidAmenityRows = [];
+  const paidAmenitiesList = document.getElementById('paidAmenitiesList');
+
+  const WEEKDAY_LABELS = [
+    { value: 0, label: 'Sun' }, { value: 1, label: 'Mon' }, { value: 2, label: 'Tue' },
+    { value: 3, label: 'Wed' }, { value: 4, label: 'Thu' }, { value: 5, label: 'Fri' }, { value: 6, label: 'Sat' }
+  ];
+
+  function renderPaidAmenities(){
+    paidAmenitiesList.innerHTML = '';
+    paidAmenityRows.forEach((row, idx) => {
+      if(!row.excludedWeekdays) row.excludedWeekdays = [];
+      const el = document.createElement('div');
+      el.className = 'paid-amenity-row';
+      const weekdayChecks = WEEKDAY_LABELS.map(w =>
+        `<label><input type="checkbox" data-weekday="${w.value}" ${row.excludedWeekdays.includes(w.value) ? 'checked' : ''}> ${w.label}</label>`
+      ).join('');
+      el.innerHTML = `
+        <div class="row-line">
+          <input type="text" placeholder="Name, e.g. Private Chef" data-field="name" value="${row.name || ''}">
+          <input type="number" min="1" placeholder="₹ price/night" data-field="price" value="${row.price || ''}">
+        </div>
+        <div class="date-line">
+          <div>
+            <label>Available From</label>
+            <input type="date" data-field="availableFrom" value="${row.availableFrom || ''}">
+          </div>
+          <div>
+            <label>Available Until</label>
+            <input type="date" data-field="availableUntil" value="${row.availableUntil || ''}">
+          </div>
+        </div>
+        <div>
+          <label style="font-size:9.5px; text-transform:uppercase; letter-spacing:0.1em; color:#8a7f6c; display:block; margin-bottom:6px;">Not Available On <span style="text-transform:none; letter-spacing:0;">(e.g. weekly maintenance day)</span></label>
+          <div class="weekday-excludes">${weekdayChecks}</div>
+        </div>
+        <button type="button" class="remove-amenity-btn" data-action="remove">Remove this amenity</button>
+      `;
+      el.querySelectorAll('[data-field]').forEach(input => {
+        input.addEventListener('input', () => { row[input.dataset.field] = input.value; });
+      });
+      el.querySelectorAll('[data-weekday]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const day = Number(cb.dataset.weekday);
+          if(cb.checked){
+            if(!row.excludedWeekdays.includes(day)) row.excludedWeekdays.push(day);
+          } else {
+            row.excludedWeekdays = row.excludedWeekdays.filter(d => d !== day);
+          }
+        });
+      });
+      el.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        paidAmenityRows.splice(idx, 1);
+        renderPaidAmenities();
+      });
+      paidAmenitiesList.appendChild(el);
+    });
+  }
+
+  document.getElementById('addPaidAmenityBtn').addEventListener('click', () => {
+    paidAmenityRows.push({ id: null, name: '', price: '', availableFrom: '', availableUntil: '', excludedWeekdays: [], isActive: true });
+    renderPaidAmenities();
+  });
+
+  // ---- Pricing currency: lets a host view/edit their listing's INR
+  // prices in their own currency. Purely a display/input convenience —
+  // everything is still stored and charged in INR; see the note on
+  // fmtGuest() in index.html for the same reasoning on the guest side.
+  const SUPPORTED_CURRENCIES = {
+    INR: { symbol: '₹' }, USD: { symbol: '$' }, GBP: { symbol: '£' }, EUR: { symbol: '€' },
+    AUD: { symbol: 'A$' }, CAD: { symbol: 'C$' }, KRW: { symbol: '₩' }, JPY: { symbol: '¥' },
+    SGD: { symbol: 'S$' }, AED: { symbol: 'AED ' }, CHF: { symbol: 'CHF ' }, RUB: { symbol: '₽' },
+  };
+  let currencyRates = {};
+  let currencyRatesLoaded = false;
+  let pricingCurrency = 'INR';
+  const baselineInr = { nightlyRate: 0, securityDeposit: 0, petFee: 0, discountValueFlat: 0 };
+
+  async function fetchPricingCurrencyRates(){
+    try {
+      const res = await fetch(API_BASE + '/api/get-listings?currencyRates=1');
+      if(!res.ok) throw new Error('rate fetch failed');
+      const data = await res.json();
+      if(data && data.rates && data.rates.USD){ currencyRates = data.rates; currencyRatesLoaded = true; }
+    } catch(err){
+      console.error('Could not load currency rates — pricing will show in INR only:', err);
+    }
+  }
+
+  function fromInr(amountInr){
+    if(pricingCurrency === 'INR' || !currencyRatesLoaded || !currencyRates[pricingCurrency]) return amountInr;
+    return Math.round(amountInr * currencyRates[pricingCurrency] * 100) / 100;
+  }
+  function toInr(amountInSelected){
+    const num = Number(amountInSelected) || 0;
+    if(pricingCurrency === 'INR' || !currencyRatesLoaded || !currencyRates[pricingCurrency]) return Math.round(num);
+    return Math.round(num / currencyRates[pricingCurrency]);
+  }
+
+  function populatePricingCurrencySelect(){
+    const sel = document.getElementById('pricingCurrency');
+    sel.innerHTML = Object.keys(SUPPORTED_CURRENCIES).map(code =>
+      `<option value="${code}"${code === pricingCurrency ? ' selected' : ''}>${code} (${SUPPORTED_CURRENCIES[code].symbol.trim()})</option>`
+    ).join('');
+  }
+
+  function updatePricingLabels(){
+    const symbol = SUPPORTED_CURRENCIES[pricingCurrency].symbol.trim();
+    document.getElementById('nightlyRateLabel').textContent = `Nightly Rate (${symbol})`;
+    document.getElementById('securityDepositLabel').textContent = `Security Deposit (${symbol})`;
+    document.getElementById('petFeeLabel').textContent = `Pet Fee (${symbol} per pet, per stay)`;
+    document.getElementById('discountFlatOption').textContent = `Flat amount off (${symbol})`;
+    document.getElementById('discountValueLabel').textContent =
+      document.getElementById('discountType').value === 'flat' ? `Amount (${symbol})` : 'Amount';
+  }
+
+  // Re-derives every displayed price FROM the stored INR baseline —
+  // called on load and whenever the currency selector changes, never
+  // chained off the currently-displayed (possibly already-converted)
+  // value, which would compound rounding error with every switch.
+  function refreshDisplayedPricingFields(){
+    document.getElementById('nightlyRate').value = baselineInr.nightlyRate ? fromInr(baselineInr.nightlyRate) : '';
+    document.getElementById('securityDeposit').value = baselineInr.securityDeposit ? fromInr(baselineInr.securityDeposit) : '';
+    document.getElementById('petFee').value = baselineInr.petFee ? fromInr(baselineInr.petFee) : '';
+    if(document.getElementById('discountType').value === 'flat' && baselineInr.discountValueFlat){
+      document.getElementById('discountValue').value = fromInr(baselineInr.discountValueFlat);
+    }
+    updatePricingLabels();
+  }
+
+  document.getElementById('pricingCurrency').addEventListener('change', function(){
+    pricingCurrency = this.value;
+    refreshDisplayedPricingFields();
+    updateDiscountNote();
+  });
+
+  async function loadListing(){
+    if(!token){
+      loadingState.style.display = 'none';
+      notFoundState.style.display = 'block';
+      return;
+    }
+    try{
+      const res = await fetch(API_BASE + '/api/update-listing-pricing?token=' + encodeURIComponent(token));
+      if(!res.ok) throw new Error('Invalid link');
+      const data = await res.json();
+      const l = data.listing;
+
+      document.getElementById('propertyNameHeading').textContent = l.property_name;
+      document.getElementById('listingCity').value = l.city || '';
+      document.getElementById('listingArea').value = l.area || '';
+      if(l.latitude && l.longitude){
+        document.getElementById('listLatitude').value = l.latitude;
+        document.getElementById('listLongitude').value = l.longitude;
+        document.getElementById('listFormattedAddress').value = l.formatted_address || '';
+        document.getElementById('listLocationSearch').value = l.formatted_address || '';
+        const confirmEl = document.getElementById('listLocationConfirm');
+        confirmEl.textContent = '✓ Location set: ' + (l.formatted_address || '');
+        confirmEl.style.display = 'block';
+        updateLeafletPreview(l.latitude, l.longitude);
+      }
+      // Real INR values from the server, kept aside as the baseline —
+      // display fields get derived FROM this every time the currency
+      // selector changes, rather than converting the already-converted
+      // number (which would compound errors on every switch).
+      baselineInr.nightlyRate = l.nightly_rate || 0;
+      baselineInr.securityDeposit = l.security_deposit || 0;
+      baselineInr.petFee = l.pet_fee || 0;
+      baselineInr.discountValueFlat = l.discount_type === 'flat' ? (l.discount_value || 0) : 0;
+
+      document.getElementById('discountType').value = l.discount_type || '';
+      document.getElementById('discountValue').value = l.discount_type === 'percentage' ? (l.discount_value || '') : '';
+      document.getElementById('discountMinNights').value = l.discount_min_nights || '';
+      await fetchPricingCurrencyRates();
+      populatePricingCurrencySelect();
+      refreshDisplayedPricingFields();
+      // Not set from l.discount_description directly — always regenerated
+      // from the discount fields themselves, so it can't carry forward a
+      // stale hand-typed note from before this became auto-generated.
+      updateDiscountFieldsState();
+      updateDiscountNote();
+
+      const currentAmenities = Array.isArray(l.amenities) ? l.amenities : [];
+      const currentServices = Array.isArray(l.services) ? l.services : [];
+      document.querySelectorAll('input[name="amenity"]').forEach(cb => {
+        cb.checked = currentAmenities.includes(cb.value);
+      });
+      document.querySelectorAll('input[name="service"]').forEach(cb => {
+        cb.checked = currentServices.includes(cb.value);
+      });
+
+      document.getElementById('securityDeposit').value = l.security_deposit || '';
+
+      if(l.pet_friendly === true){
+        petFriendlyYes.checked = true;
+        document.getElementById('maxPetsAllowed').value = l.max_pets_allowed || '';
+        document.getElementById('petFee').value = l.pet_fee || '';
+        const allowedTypes = Array.isArray(l.allowed_pet_types) ? l.allowed_pet_types : [];
+        document.querySelectorAll('input[name="petType"]').forEach(cb => {
+          cb.checked = allowedTypes.includes(cb.value);
+        });
+        togglePetPolicyDetails();
+      } else if(l.pet_friendly === false){
+        petFriendlyNo.checked = true;
+      }
+
+      coverPhotoKey = l.cover_photo_url || null;
+      exteriorManager.setExisting(l.exterior_photo_urls);
+      interiorManager.setExisting(l.interior_photo_urls);
+
+      paidAmenityRows = (data.paidAmenities || []).map(a => ({
+        id: a.id, name: a.name, price: a.price,
+        availableFrom: a.available_from ? a.available_from.slice(0, 10) : '',
+        availableUntil: a.available_until ? a.available_until.slice(0, 10) : '',
+        excludedWeekdays: Array.isArray(a.excluded_weekdays) ? a.excluded_weekdays : [],
+        isActive: a.is_active
+      }));
+      renderPaidAmenities();
+
+      loadingState.style.display = 'none';
+      formState.style.display = 'block';
+    } catch(err){
+      loadingState.style.display = 'none';
+      notFoundState.style.display = 'block';
+    }
+  }
+
+  document.getElementById('pricingForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const submitBtn = document.getElementById('submitBtn');
+    const confirmMsg = document.getElementById('confirmMsg');
+    const errorMsg = document.getElementById('errorMsg');
+    confirmMsg.style.display = 'none';
+    errorMsg.style.display = 'none';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving…';
+
+    try{
+      const [exteriorPhotoUrls, interiorPhotoUrls] = await Promise.all([
+        exteriorManager.finalizeUrls(),
+        interiorManager.finalizeUrls()
+      ]);
+
+      const res = await fetch(API_BASE + '/api/update-listing-pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          nightlyRate: toInr(document.getElementById('nightlyRate').value),
+          city: document.getElementById('listingCity').value,
+          area: document.getElementById('listingArea').value,
+          latitude: document.getElementById('listLatitude').value,
+          longitude: document.getElementById('listLongitude').value,
+          formattedAddress: document.getElementById('listFormattedAddress').value,
+          discountType: document.getElementById('discountType').value,
+          discountValue: document.getElementById('discountType').value === 'flat'
+            ? toInr(document.getElementById('discountValue').value)
+            : document.getElementById('discountValue').value,
+          discountMinNights: document.getElementById('discountMinNights').value,
+          discountDescription: document.getElementById('discountDescription').value,
+          exteriorPhotoUrls,
+          interiorPhotoUrls,
+          coverPhotoUrl: coverPhotoKey,
+          amenities: Array.from(document.querySelectorAll('input[name="amenity"]:checked')).map(cb => cb.value),
+          services: Array.from(document.querySelectorAll('input[name="service"]:checked')).map(cb => cb.value),
+          paidAmenities: paidAmenityRows,
+          securityDeposit: toInr(document.getElementById('securityDeposit').value),
+          petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
+          maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
+          allowedPetTypes: petFriendlyYes.checked ? Array.from(document.querySelectorAll('input[name="petType"]:checked')).map(cb => cb.value) : [],
+          petFee: petFriendlyYes.checked ? toInr(document.getElementById('petFee').value) : ''
+        })
+      });
+      const data = await res.json();
+      if(res.ok){
+        if(data.warning){
+          errorMsg.textContent = data.warning;
+          errorMsg.style.display = 'block';
+        }
+        confirmMsg.style.display = 'block';
+      } else {
+        errorMsg.textContent = data.error || 'Something went wrong. Please try again.';
+        errorMsg.style.display = 'block';
+      }
+    } catch(err){
+      errorMsg.textContent = 'Something went wrong saving your photos. Please try again.';
+      errorMsg.style.display = 'block';
+    }
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Save Changes';
+  });
+
+  loadListing();
+</script>
+
+</body>
 </html>
