@@ -655,7 +655,7 @@ module.exports = async (req, res) => {
   if (req.query.liveListings === '1') {
     try {
       const liveListings = await sql`
-        SELECT id, property_name, city, host_name, host_email, status,
+        SELECT id, property_name, city, area, host_name, host_email, status,
                admin_status_reason, created_at
         FROM listings
         WHERE status IN ('approved', 'blocked', 'removed') AND listing_type = 'stay'
@@ -670,7 +670,7 @@ module.exports = async (req, res) => {
 
   try {
     const listings = await sql`
-      SELECT l.id, l.property_name, l.city, l.property_type, l.bedrooms, l.max_guests,
+      SELECT l.id, l.property_name, l.city, l.area, l.property_type, l.bedrooms, l.max_guests,
              l.nightly_rate, l.description, l.amenities, l.services,
              l.host_name, l.host_email, l.host_phone,
              l.discount_type, l.discount_value, l.discount_min_nights, l.discount_description,

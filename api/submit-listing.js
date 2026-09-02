@@ -117,7 +117,7 @@ async function sendAdminNotification(listing) {
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">${typeLabel}</h2>
-      <p><strong>${listing.property_name}</strong>${listing.city ? ' — ' + listing.city : ''}</p>
+      <p><strong>${listing.property_name}</strong>${listing.area ? ' — ' + listing.area + ', ' + listing.city : listing.city ? ' — ' + listing.city : ''}</p>
       <p>Host: ${listing.host_name} (${listing.host_email}, ${listing.host_phone})</p>
       ${hostingLine}
       <p>${priceLabel}</p>
@@ -169,7 +169,7 @@ module.exports = async (req, res) => {
   try {
     const {
       listingId, isDraft, listingType,
-      propertyName, city, propertyType, bedrooms, maxGuests, nightlyRate,
+      propertyName, city, area, propertyType, bedrooms, maxGuests, nightlyRate,
       description, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
       exteriorPhotoUrls, interiorPhotoUrls, photoHashes,
@@ -352,7 +352,7 @@ module.exports = async (req, res) => {
     if (existingDraft) {
       const updated = await sql`
         UPDATE listings SET
-          property_name = ${propertyName}, city = ${city || null}, property_type = ${propertyType || null},
+          property_name = ${propertyName}, city = ${city || null}, area = ${area || null}, property_type = ${propertyType || null},
           bedrooms = ${bedrooms || null}, max_guests = ${maxGuests || null}, nightly_rate = ${rate},
           description = ${description || null}, amenities = ${JSON.stringify(amenities || [])}, services = ${JSON.stringify(services || [])},
           host_name = ${hostName || null}, host_phone = ${hostPhone || null},
@@ -374,7 +374,7 @@ module.exports = async (req, res) => {
     } else {
       const inserted = await sql`
         INSERT INTO listings (
-          property_name, city, property_type, bedrooms, max_guests, nightly_rate,
+          property_name, city, area, property_type, bedrooms, max_guests, nightly_rate,
           description, amenities, services, host_name, host_email, host_phone, host_id,
           discount_type, discount_value, discount_min_nights, discount_description,
           commission_rate, exterior_photo_urls, interior_photo_urls,
@@ -382,7 +382,7 @@ module.exports = async (req, res) => {
           listing_type, hosting_listing_id, experience_category, experience_price_unit,
           experience_duration_hours, status, photo_hashes
         ) VALUES (
-          ${propertyName}, ${city || null}, ${propertyType || null}, ${bedrooms || null},
+          ${propertyName}, ${city || null}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
           ${description || null}, ${JSON.stringify(amenities || [])}, ${JSON.stringify(services || [])},
           ${hostName || null}, ${authenticatedHostEmail}, ${hostPhone || null}, ${hostId},
