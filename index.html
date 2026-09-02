@@ -2328,14 +2328,14 @@
       // frequently assigned to a smaller named area within a city rather
       // than the city itself, which is exactly what was showing up in
       // the City field instead of a proper city name. The district is
-      // far more reliably "the city" in common Indian usage (e.g. "Pune"
-      // as a district reliably matches "Pune" the city). Falls back to
-      // locality if there's no district-level match, and to the state
-      // as a last resort for addresses too rural to have either — even
-      // so, this is a starting point, not a guarantee: Aerva's own
-      // Himachal Pradesh listings use the STATE name as their "city" by
-      // convention, which no address component alone can infer, so
-      // always worth a host's quick check either way.
+      // far more reliably "the city" in common Indian usage — e.g. "Pune"
+      // as a district reliably matches "Pune" the city, and for Aerva's
+      // Himachal Pradesh listings (Jibhi/Banjar), the district is
+      // "Kullu" — that's the correct City value, not the state name.
+      // Falls back to locality if there's no district-level match, and
+      // to the state only as a last resort for the rare address with
+      // neither, since a state name is still a better starting point
+      // than leaving the field blank.
       const components = place.address_components || [];
       function findAddressComponent(types){
         return components.find(c => types.some(t => c.types.includes(t)));
