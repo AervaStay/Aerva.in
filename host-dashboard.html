@@ -7,7 +7,7 @@
 <meta name="robots" content="noindex, nofollow">
 <style>
   body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
-  .wrap{max-width:760px; margin:0 auto;}
+  .wrap{max-width:1100px; margin:0 auto;}
   .back-home{
     display:inline-block; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
     color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:20px;
@@ -94,6 +94,79 @@
   .verify-box .btn-small:disabled{opacity:0.5; cursor:default;}
   .verify-error{font-size:12px; color:#a3402f; margin-top:6px; display:none;}
   .verify-rejection-note{font-size:12.5px; color:#a3402f; margin-bottom:8px;}
+
+  /* ---------- Listings two-column layout + right-side sidebar ---------- */
+  .listings-layout{display:grid; grid-template-columns:1fr 400px; gap:24px; align-items:start;}
+  @media (max-width: 880px){ .listings-layout{grid-template-columns:1fr;} }
+  .listing-card.selected{border-color:#8a6c39; box-shadow:0 0 0 1px #8a6c39;}
+  .listing-sidebar{
+    position:sticky; top:20px; background:white; border:1px solid #e0d5c0; padding:20px;
+    max-height:calc(100vh - 40px); overflow-y:auto;
+  }
+  .sidebar-placeholder{font-size:13.5px; opacity:0.6; text-align:center; padding:40px 10px;}
+  .sidebar-heading{font-family:Georgia,serif; font-size:17px; margin-bottom:2px;}
+  .sidebar-sub{font-size:12px; opacity:0.6; margin-bottom:18px;}
+  .sidebar-section-title{
+    font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7f6c; margin:22px 0 10px;
+  }
+  .sidebar-section-title:first-of-type{margin-top:0;}
+
+  /* ---- Calendar (blocked dates + promotions) — ported from
+     manage-listing.html, same interaction model and styling. ---- */
+  .cal-wrap{background:#faf7f2; border:1px solid #ddd0bc; padding:14px; margin-bottom:12px; user-select:none;}
+  .cal-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;}
+  .cal-header .cal-month-label{font-family:Georgia,serif; font-size:14px;}
+  .cal-nav-btn{
+    background:none; border:1px solid #ddd0bc; width:26px; height:26px; cursor:pointer;
+    font-size:13px; color:#1c1a17; line-height:1;
+  }
+  .cal-nav-btn:hover{border-color:#8a6c39;}
+  .cal-grid{display:grid; grid-template-columns:repeat(7, 1fr); gap:2px;}
+  .cal-weekday{font-size:8.5px; text-transform:uppercase; letter-spacing:0.05em; color:#8a7f6c; text-align:center; padding:3px 0;}
+  .cal-day{
+    aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; font-size:11px;
+    background:white; border:1px solid transparent; cursor:pointer; border-radius:2px; color:#1c1a17;
+  }
+  .cal-day:hover:not(.cal-day--disabled){border-color:#8a6c39;}
+  .cal-day--empty{visibility:hidden; cursor:default;}
+  .cal-day--past{opacity:0.3; cursor:default;}
+  .cal-day--past:hover{border-color:transparent;}
+  .cal-day--booked{background:#e9e2d6; color:#8a7f6c; cursor:not-allowed; text-decoration:line-through;}
+  .cal-day--booked:hover{border-color:transparent;}
+  .cal-day--blocked{background:#f3d9c4; color:#8a4a1c;}
+  .cal-day--promo{background:#d9e8d4; color:#2f5c2a;}
+  .cal-day--selected{background:#1c1a17; color:#f4ebe3;}
+  .cal-legend{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:9.5px; opacity:0.75;}
+  .cal-legend span{display:inline-flex; align-items:center; gap:4px;}
+  .cal-legend i{width:8px; height:8px; display:inline-block; border-radius:2px;}
+  .cal-confirm{background:white; border:1px solid #ddd0bc; padding:10px; margin-top:10px; display:none;}
+  .cal-confirm p{font-size:12px; margin:0 0 8px;}
+  .cal-confirm input, .cal-confirm select{
+    width:100%; box-sizing:border-box; padding:8px; font-size:13px; font-family:'Jost', sans-serif;
+    border:1px solid #ccc; margin-bottom:8px; background:white; color:#1c1a17;
+  }
+  .promo-confirm-fields{display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;}
+  .promo-confirm-fields input, .promo-confirm-fields select{margin-bottom:0;}
+  .cal-confirm-actions{display:flex; gap:6px;}
+  .cal-confirm-actions button{
+    flex:1; padding:8px; font-size:10.5px; letter-spacing:0.05em; text-transform:uppercase; cursor:pointer; border:none;
+  }
+  .cal-confirm-block-btn, .promo-confirm-add-btn{background:#1c1a17; color:#f4ebe3;}
+  .cal-confirm-cancel-btn, .promo-confirm-cancel-btn{background:white; border:1px solid #ddd0bc !important; color:#1c1a17;}
+  .sidebar-list-row{background:#faf7f2; border:1px solid #e0d5c0; padding:10px 12px; margin-bottom:8px; font-size:12.5px;}
+  .sidebar-list-row .remove-row-btn{
+    background:none; border:none; color:#a3402f; text-decoration:underline; cursor:pointer; font-size:11.5px; padding:0; margin-top:4px;
+  }
+  .sidebar-add-btn{
+    background:white; border:1px dashed #ddd0bc; padding:9px; font-size:11px; letter-spacing:0.05em;
+    text-transform:uppercase; cursor:pointer; width:100%; color:#8a6c39; margin-bottom:6px;
+  }
+  .sidebar-save-btn{
+    background:#1c1a17; color:#f4ebe3; border:none; padding:11px; font-size:12px; letter-spacing:0.05em;
+    text-transform:uppercase; cursor:pointer; width:100%; margin-top:18px;
+  }
+  .sidebar-save-btn:disabled{opacity:0.5; cursor:default;}
+  .sidebar-save-msg{font-size:12px; margin-top:8px; display:none;}
 </style>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
@@ -113,8 +186,82 @@
 
   <div id="verificationSection"></div>
 
-  <div id="listingsContainer">
-    <p class="loading">Loading your listings…</p>
+  <div class="listings-layout">
+    <div id="listingsContainer">
+      <p class="loading">Loading your listings…</p>
+    </div>
+    <div class="listing-sidebar" id="listingSidebar">
+      <div class="sidebar-placeholder" id="sidebarPlaceholder">Select a live listing on the left to block dates, run a promotion, or manage paid amenities — right here, no need to open a separate page.</div>
+      <div id="sidebarContent" style="display:none;">
+        <div class="sidebar-heading" id="sidebarListingName"></div>
+        <div class="sidebar-sub">Pricing, photos, and description still live on the full <a href="#" id="sidebarManageLink" style="color:#8a6c39;">Manage Price & Offers</a> page.</div>
+
+        <div class="sidebar-section-title">Block Dates</div>
+        <div class="cal-wrap">
+          <div class="cal-header">
+            <button type="button" class="cal-nav-btn" id="sbCalPrevBtn">&larr;</button>
+            <div class="cal-month-label" id="sbCalMonthLabel"></div>
+            <button type="button" class="cal-nav-btn" id="sbCalNextBtn">&rarr;</button>
+          </div>
+          <div class="cal-grid" id="sbCalGrid"></div>
+          <div class="cal-legend">
+            <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
+            <span><i style="background:#f3d9c4;"></i> Blocked</span>
+            <span><i style="background:#e9e2d6;"></i> Booked</span>
+          </div>
+          <div class="cal-confirm" id="sbCalConfirm">
+            <p id="sbCalConfirmLabel"></p>
+            <input type="text" id="sbCalConfirmReason" placeholder="Reason (optional)">
+            <div class="cal-confirm-actions">
+              <button type="button" class="cal-confirm-block-btn" id="sbCalConfirmBlockBtn">Block</button>
+              <button type="button" class="cal-confirm-cancel-btn" id="sbCalConfirmCancelBtn">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked date to remove it.</p>
+        <div id="sbBlockedList"></div>
+
+        <div class="sidebar-section-title">Promotions</div>
+        <div class="cal-wrap">
+          <div class="cal-header">
+            <button type="button" class="cal-nav-btn" id="sbPromoCalPrevBtn">&larr;</button>
+            <div class="cal-month-label" id="sbPromoCalMonthLabel"></div>
+            <button type="button" class="cal-nav-btn" id="sbPromoCalNextBtn">&rarr;</button>
+          </div>
+          <div class="cal-grid" id="sbPromoCalGrid"></div>
+          <div class="cal-legend">
+            <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
+            <span><i style="background:#d9e8d4;"></i> Promotion</span>
+            <span><i style="background:#e9e2d6;"></i> Booked</span>
+          </div>
+          <div class="cal-confirm" id="sbPromoCalConfirm">
+            <p id="sbPromoCalConfirmLabel"></p>
+            <input type="text" id="sbPromoConfirmName" placeholder="Promotion name, e.g. Diwali Sale">
+            <div class="promo-confirm-fields">
+              <select id="sbPromoConfirmType">
+                <option value="percentage">% off</option>
+                <option value="flat">₹ off</option>
+              </select>
+              <input type="number" id="sbPromoConfirmValue" placeholder="Amount" min="0">
+            </div>
+            <input type="number" id="sbPromoConfirmMinNights" placeholder="Minimum nights (optional)" min="1">
+            <div class="cal-confirm-actions">
+              <button type="button" class="promo-confirm-add-btn" id="sbPromoConfirmAddBtn">Add Promotion</button>
+              <button type="button" class="promo-confirm-cancel-btn" id="sbPromoConfirmCancelBtn">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click an existing promotion's dates to remove it.</p>
+        <div id="sbPromotionsList"></div>
+
+        <div class="sidebar-section-title">Paid Amenities</div>
+        <div id="sbAmenitiesList"></div>
+        <button type="button" class="sidebar-add-btn" id="sbAddAmenityBtn">+ Add a Paid Amenity</button>
+
+        <button type="button" class="sidebar-save-btn" id="sidebarSaveBtn">Save Changes</button>
+        <p class="sidebar-save-msg" id="sidebarSaveMsg"></p>
+      </div>
+    </div>
   </div>
 
   <h2 class="section-heading">Your Earnings</h2>
@@ -182,7 +329,7 @@
         ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${l.rejection_reason}</p>`
         : '';
       return `
-        <div class="listing-card" data-href="${actionHref}" style="cursor:pointer;">
+        <div class="listing-card" data-href="${actionHref}" data-listing-id="${l.id}" data-status="${l.status}" style="cursor:pointer;">
           ${thumbHtml}
           <div class="listing-info">
             <h3>${l.property_name || '(Untitled draft)'}</h3>
@@ -685,14 +832,416 @@
     }
   }
 
-  // Whole-card click: anywhere on the card jumps to its own action link's
-  // destination — except the link itself, which already navigates and
-  // would otherwise double-trigger.
+  // Whole-card click: an approved listing selects it into the right-side
+  // sidebar (block dates / promotions / paid amenities, right here); a
+  // draft or rejected listing still jumps straight to its edit flow,
+  // same as before — those don't have a live calendar to manage yet.
   document.getElementById('listingsContainer').addEventListener('click', (e) => {
     if(e.target.closest('a.manage-link')) return;
     const card = e.target.closest('.listing-card');
     if(!card || !card.dataset.href) return;
+    if(card.dataset.status === 'approved'){
+      selectListingForSidebar(Number(card.dataset.listingId));
+      return;
+    }
     window.location.href = card.dataset.href;
+  });
+
+  // ============================================================
+  // Right-side sidebar: block dates, promotions, paid amenities for
+  // whichever approved listing was just clicked. Ported from
+  // manage-listing.html — same calendar interaction model, same
+  // full-replace sync pattern for the lists, same shared date-string
+  // helpers, just scoped under an "sb" (sidebar) prefix so nothing here
+  // collides with anything else on this page.
+  // ============================================================
+  let sbListingId = null;
+  let sbToken = null;
+  let sbNightlyRate = null, sbCity = null, sbArea = null;
+  let sbDiscountType = null, sbDiscountValue = null, sbDiscountMinNights = null, sbDiscountDescription = null, sbSecurityDeposit = null;
+
+  function sbToDateStr(d){
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  function sbTodayStr(){ const t = new Date(); t.setHours(0,0,0,0); return sbToDateStr(t); }
+  function sbInRange(dateStr, rangeStart, rangeEnd){ return dateStr >= rangeStart && dateStr < rangeEnd; }
+  function sbNextDay(dateStr){ const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + 1); return sbToDateStr(d); }
+
+  let sbBookedRanges = [];
+  function sbDateIsBooked(dateStr){ return sbBookedRanges.some(r => sbInRange(dateStr, r.arrival, r.departure)); }
+
+  async function selectListingForSidebar(listingId){
+    const listing = currentListings.find(l => l.id === listingId);
+    if(!listing || !listing.manageLink) return;
+
+    document.querySelectorAll('.listing-card').forEach(c => c.classList.toggle('selected', Number(c.dataset.listingId) === listingId));
+    document.getElementById('sidebarPlaceholder').style.display = 'none';
+    document.getElementById('sidebarContent').style.display = 'block';
+    document.getElementById('sidebarListingName').textContent = listing.property_name;
+    document.getElementById('sidebarManageLink').href = listing.manageLink;
+    document.getElementById('sidebarSaveMsg').style.display = 'none';
+
+    const tokenMatch = listing.manageLink.match(/[?&]token=([^&]+)/);
+    sbToken = tokenMatch ? tokenMatch[1] : null;
+    sbListingId = listingId;
+    if(!sbToken) return;
+
+    try{
+      const res = await fetch(API_BASE + '/api/update-listing-pricing?token=' + encodeURIComponent(sbToken));
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not load');
+      const l = data.listing;
+
+      // Carried forward unchanged on save — the sidebar only edits
+      // blocked dates, promotions, and paid amenities, but
+      // update-listing-pricing.js's save expects the full pricing form,
+      // so these ride along untouched to avoid wiping them out.
+      sbNightlyRate = l.nightly_rate;
+      sbCity = l.city;
+      sbArea = l.area;
+      sbDiscountType = l.discount_type;
+      sbDiscountValue = l.discount_value;
+      sbDiscountMinNights = l.discount_min_nights;
+      sbDiscountDescription = l.discount_description;
+      sbSecurityDeposit = l.security_deposit;
+
+      sbBlockedDateRows = (data.blockedDates || []).map(b => ({
+        id: b.id, startDate: b.start_date ? b.start_date.slice(0, 10) : '',
+        endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || ''
+      }));
+      sbPromotionRows = (data.promotions || []).map(p => ({
+        id: p.id, name: p.name, discountType: p.discount_type, discountValue: Number(p.discount_value),
+        minNights: p.min_nights || null,
+        startDate: p.start_date ? p.start_date.slice(0, 10) : '', endDate: p.end_date ? p.end_date.slice(0, 10) : '',
+        isActive: p.is_active
+      }));
+      sbAmenityRows = (data.paidAmenities || []).map(a => ({
+        id: a.id, name: a.name, description: a.description, price: a.price,
+        availableFrom: a.available_from || '', availableUntil: a.available_until || '',
+        excludedWeekdays: Array.isArray(a.excluded_weekdays) ? a.excluded_weekdays : [], isActive: a.is_active
+      }));
+
+      sbRenderBlockedList();
+      sbRenderPromotionsList();
+      sbRenderAmenitiesList();
+      sbRenderCalendar();
+      sbRenderPromoCalendar();
+
+      // Real bookings, for shading both calendars — public endpoint, no
+      // auth needed, same one the guest-facing calendar reads from.
+      try{
+        const bookedRes = await fetch(API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
+        const bookedData = await bookedRes.json();
+        sbBookedRanges = bookedData.bookedRanges || [];
+      } catch(err){
+        sbBookedRanges = [];
+      }
+      sbRenderCalendar();
+      sbRenderPromoCalendar();
+    } catch(err){
+      document.getElementById('sidebarContent').innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not load this listing\'s details. Please refresh and try again.</p>';
+    }
+  }
+
+  // ---- Blocked-dates calendar ----
+  let sbBlockedDateRows = [];
+  let sbCalMonth = new Date(); sbCalMonth.setDate(1); sbCalMonth.setHours(0,0,0,0);
+  let sbCalSelStart = null, sbCalSelEnd = null, sbCalDragging = false;
+
+  function sbBlockedRowFor(dateStr){
+    return sbBlockedDateRows.find(b => b.startDate && b.endDate && sbInRange(dateStr, b.startDate, b.endDate));
+  }
+  function sbRenderCalendar(){
+    const grid = document.getElementById('sbCalGrid');
+    document.getElementById('sbCalMonthLabel').textContent = sbCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    const year = sbCalMonth.getFullYear(), month = sbCalMonth.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const startWeekday = new Date(year, month, 1).getDay();
+    let html = ['S','M','T','W','T','F','S'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
+    for(let i = 0; i < startWeekday; i++) html += `<div class="cal-day cal-day--empty"></div>`;
+    const today = sbTodayStr();
+    for(let day = 1; day <= daysInMonth; day++){
+      const dateStr = sbToDateStr(new Date(year, month, day));
+      const isPast = dateStr < today;
+      const booked = sbDateIsBooked(dateStr);
+      const blockedRow = sbBlockedRowFor(dateStr);
+      let selecting = false;
+      if(sbCalSelStart && sbCalSelEnd){
+        const selMin = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
+        const selMax = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
+        selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
+      }
+      let cls = 'cal-day';
+      if(isPast) cls += ' cal-day--past cal-day--disabled';
+      else if(booked) cls += ' cal-day--booked';
+      else if(selecting) cls += ' cal-day--selected';
+      else if(blockedRow) cls += ' cal-day--blocked';
+      html += `<div class="${cls}" data-date="${dateStr}" title="${blockedRow && blockedRow.reason ? blockedRow.reason : ''}">${day}</div>`;
+    }
+    grid.innerHTML = html;
+    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
+      cell.addEventListener('mousedown', () => sbOnCalMouseDown(cell.dataset.date));
+      cell.addEventListener('mouseenter', () => sbOnCalMouseEnter(cell.dataset.date));
+      cell.addEventListener('mouseup', () => sbOnCalMouseUp(cell.dataset.date));
+      cell.addEventListener('click', () => sbOnCalClick(cell.dataset.date));
+    });
+  }
+  function sbOnCalMouseDown(dateStr){
+    if(sbBlockedRowFor(dateStr)) return;
+    sbCalDragging = true; sbCalSelStart = dateStr; sbCalSelEnd = dateStr;
+    sbRenderCalendar();
+  }
+  function sbOnCalMouseEnter(dateStr){
+    if(!sbCalDragging || !sbCalSelStart) return;
+    sbCalSelEnd = dateStr; sbRenderCalendar();
+  }
+  function sbOnCalMouseUp(dateStr){
+    if(!sbCalDragging) return;
+    sbCalDragging = false; sbCalSelEnd = dateStr;
+    if(sbCalSelStart) sbShowCalConfirm();
+  }
+  function sbOnCalClick(dateStr){
+    const existing = sbBlockedRowFor(dateStr);
+    if(existing){
+      if(window.confirm(`Remove this block (${existing.startDate} to ${existing.endDate}${existing.reason ? ', ' + existing.reason : ''})?`)){
+        sbBlockedDateRows = sbBlockedDateRows.filter(b => b !== existing);
+        sbRenderBlockedList(); sbRenderCalendar();
+      }
+    }
+  }
+  function sbShowCalConfirm(){
+    const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
+    const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
+    document.getElementById('sbCalConfirmLabel').textContent = start === endInclusive ? `Block ${start}?` : `Block ${start} to ${endInclusive}?`;
+    document.getElementById('sbCalConfirmReason').value = '';
+    document.getElementById('sbCalConfirm').style.display = 'block';
+  }
+  function sbHideCalConfirm(){
+    sbCalSelStart = null; sbCalSelEnd = null; sbCalDragging = false;
+    document.getElementById('sbCalConfirm').style.display = 'none';
+    sbRenderCalendar();
+  }
+  document.getElementById('sbCalConfirmBlockBtn').addEventListener('click', () => {
+    const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
+    const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
+    sbBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('sbCalConfirmReason').value.trim() });
+    sbRenderBlockedList(); sbHideCalConfirm();
+  });
+  document.getElementById('sbCalConfirmCancelBtn').addEventListener('click', sbHideCalConfirm);
+  document.getElementById('sbCalPrevBtn').addEventListener('click', () => { sbCalMonth.setMonth(sbCalMonth.getMonth() - 1); sbRenderCalendar(); });
+  document.getElementById('sbCalNextBtn').addEventListener('click', () => { sbCalMonth.setMonth(sbCalMonth.getMonth() + 1); sbRenderCalendar(); });
+  document.addEventListener('mouseup', () => { if(sbCalDragging){ sbCalDragging = false; if(sbCalSelStart && sbCalSelEnd) sbShowCalConfirm(); } });
+
+  function sbRenderBlockedList(){
+    const list = document.getElementById('sbBlockedList');
+    if(!sbBlockedDateRows.length){ list.innerHTML = ''; return; }
+    list.innerHTML = sbBlockedDateRows.map((b, idx) => `
+      <div class="sidebar-list-row">
+        ${b.startDate} to ${b.endDate}${b.reason ? ' — ' + b.reason : ''}
+        <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        sbBlockedDateRows.splice(Number(btn.dataset.idx), 1);
+        sbRenderBlockedList(); sbRenderCalendar();
+      });
+    });
+  }
+
+  // ---- Promotions calendar ----
+  let sbPromotionRows = [];
+  let sbPromoCalMonth = new Date(); sbPromoCalMonth.setDate(1); sbPromoCalMonth.setHours(0,0,0,0);
+  let sbPromoSelStart = null, sbPromoSelEnd = null, sbPromoDragging = false;
+
+  function sbPromoRowFor(dateStr){
+    return sbPromotionRows.find(p => p.startDate && p.endDate && sbInRange(dateStr, p.startDate, p.endDate));
+  }
+  function sbRenderPromoCalendar(){
+    const grid = document.getElementById('sbPromoCalGrid');
+    document.getElementById('sbPromoCalMonthLabel').textContent = sbPromoCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    const year = sbPromoCalMonth.getFullYear(), month = sbPromoCalMonth.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const startWeekday = new Date(year, month, 1).getDay();
+    let html = ['S','M','T','W','T','F','S'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
+    for(let i = 0; i < startWeekday; i++) html += `<div class="cal-day cal-day--empty"></div>`;
+    const today = sbTodayStr();
+    for(let day = 1; day <= daysInMonth; day++){
+      const dateStr = sbToDateStr(new Date(year, month, day));
+      const isPast = dateStr < today;
+      const booked = sbDateIsBooked(dateStr);
+      const promoRow = sbPromoRowFor(dateStr);
+      let selecting = false;
+      if(sbPromoSelStart && sbPromoSelEnd){
+        const selMin = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelStart : sbPromoSelEnd;
+        const selMax = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelEnd : sbPromoSelStart;
+        selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
+      }
+      let cls = 'cal-day';
+      if(isPast) cls += ' cal-day--past cal-day--disabled';
+      else if(booked) cls += ' cal-day--booked';
+      else if(selecting) cls += ' cal-day--selected';
+      else if(promoRow) cls += ' cal-day--promo';
+      const title = promoRow ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}` : '';
+      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}</div>`;
+    }
+    grid.innerHTML = html;
+    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
+      cell.addEventListener('mousedown', () => sbOnPromoMouseDown(cell.dataset.date));
+      cell.addEventListener('mouseenter', () => sbOnPromoMouseEnter(cell.dataset.date));
+      cell.addEventListener('mouseup', () => sbOnPromoMouseUp(cell.dataset.date));
+      cell.addEventListener('click', () => sbOnPromoClick(cell.dataset.date));
+    });
+  }
+  function sbOnPromoMouseDown(dateStr){
+    if(sbPromoRowFor(dateStr)) return;
+    sbPromoDragging = true; sbPromoSelStart = dateStr; sbPromoSelEnd = dateStr;
+    sbRenderPromoCalendar();
+  }
+  function sbOnPromoMouseEnter(dateStr){
+    if(!sbPromoDragging || !sbPromoSelStart) return;
+    sbPromoSelEnd = dateStr; sbRenderPromoCalendar();
+  }
+  function sbOnPromoMouseUp(dateStr){
+    if(!sbPromoDragging) return;
+    sbPromoDragging = false; sbPromoSelEnd = dateStr;
+    if(sbPromoSelStart) sbShowPromoConfirm();
+  }
+  function sbOnPromoClick(dateStr){
+    const existing = sbPromoRowFor(dateStr);
+    if(existing){
+      if(window.confirm(`Remove this promotion — ${existing.name} (${existing.startDate} to ${existing.endDate})?`)){
+        sbPromotionRows = sbPromotionRows.filter(p => p !== existing);
+        sbRenderPromotionsList(); sbRenderPromoCalendar();
+      }
+    }
+  }
+  function sbShowPromoConfirm(){
+    const start = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelStart : sbPromoSelEnd;
+    const endInclusive = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelEnd : sbPromoSelStart;
+    document.getElementById('sbPromoCalConfirmLabel').textContent = start === endInclusive ? `New promotion for ${start}` : `New promotion for ${start} to ${endInclusive}`;
+    document.getElementById('sbPromoConfirmName').value = '';
+    document.getElementById('sbPromoConfirmType').value = 'percentage';
+    document.getElementById('sbPromoConfirmValue').value = '';
+    document.getElementById('sbPromoConfirmMinNights').value = '';
+    document.getElementById('sbPromoCalConfirm').style.display = 'block';
+  }
+  function sbHidePromoConfirm(){
+    sbPromoSelStart = null; sbPromoSelEnd = null; sbPromoDragging = false;
+    document.getElementById('sbPromoCalConfirm').style.display = 'none';
+    sbRenderPromoCalendar();
+  }
+  document.getElementById('sbPromoConfirmAddBtn').addEventListener('click', () => {
+    const start = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelStart : sbPromoSelEnd;
+    const endInclusive = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelEnd : sbPromoSelStart;
+    const name = document.getElementById('sbPromoConfirmName').value.trim();
+    const discountType = document.getElementById('sbPromoConfirmType').value;
+    const discountValue = Number(document.getElementById('sbPromoConfirmValue').value);
+    const minNights = document.getElementById('sbPromoConfirmMinNights').value;
+    if(!name){ alert('Please give this promotion a name.'); return; }
+    if(!discountValue || discountValue <= 0){ alert('Please enter a discount amount greater than 0.'); return; }
+    if(discountType === 'percentage' && discountValue > 100){ alert('A percentage discount can\'t be more than 100.'); return; }
+    sbPromotionRows.push({ id: null, name, discountType, discountValue, minNights: minNights ? Number(minNights) : null, startDate: start, endDate: sbNextDay(endInclusive), isActive: true });
+    sbRenderPromotionsList(); sbHidePromoConfirm();
+  });
+  document.getElementById('sbPromoConfirmCancelBtn').addEventListener('click', sbHidePromoConfirm);
+  document.getElementById('sbPromoCalPrevBtn').addEventListener('click', () => { sbPromoCalMonth.setMonth(sbPromoCalMonth.getMonth() - 1); sbRenderPromoCalendar(); });
+  document.getElementById('sbPromoCalNextBtn').addEventListener('click', () => { sbPromoCalMonth.setMonth(sbPromoCalMonth.getMonth() + 1); sbRenderPromoCalendar(); });
+  document.addEventListener('mouseup', () => { if(sbPromoDragging){ sbPromoDragging = false; if(sbPromoSelStart && sbPromoSelEnd) sbShowPromoConfirm(); } });
+
+  function sbRenderPromotionsList(){
+    const list = document.getElementById('sbPromotionsList');
+    if(!sbPromotionRows.length){ list.innerHTML = ''; return; }
+    list.innerHTML = sbPromotionRows.map((p, idx) => {
+      const discountLabel = p.discountType === 'flat' ? `₹${p.discountValue} off` : `${p.discountValue}% off`;
+      return `
+        <div class="sidebar-list-row">
+          <strong>${p.name}</strong><br>${p.startDate} to ${p.endDate} — ${discountLabel}${p.minNights ? `, ${p.minNights}+ nights` : ''}
+          <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
+        </div>
+      `;
+    }).join('');
+    list.querySelectorAll('[data-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        sbPromotionRows.splice(Number(btn.dataset.idx), 1);
+        sbRenderPromotionsList(); sbRenderPromoCalendar();
+      });
+    });
+  }
+
+  // ---- Paid amenities (same full-replace sync pattern) ----
+  let sbAmenityRows = [];
+  function sbRenderAmenitiesList(){
+    const list = document.getElementById('sbAmenitiesList');
+    if(!sbAmenityRows.length){ list.innerHTML = ''; return; }
+    list.innerHTML = sbAmenityRows.map((a, idx) => `
+      <div class="sidebar-list-row">
+        <input type="text" data-field="name" data-idx="${idx}" placeholder="Name, e.g. Airport pickup" value="${a.name || ''}" style="width:100%; margin-bottom:6px; padding:6px; font-size:12.5px; border:1px solid #ccc;">
+        <input type="number" data-field="price" data-idx="${idx}" placeholder="Price (₹)" value="${a.price || ''}" min="0" style="width:100%; margin-bottom:6px; padding:6px; font-size:12.5px; border:1px solid #ccc;">
+        <button type="button" class="remove-row-btn" data-remove-idx="${idx}">Remove</button>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-field]').forEach(input => {
+      input.addEventListener('input', () => { sbAmenityRows[Number(input.dataset.idx)][input.dataset.field] = input.value; });
+    });
+    list.querySelectorAll('[data-remove-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        sbAmenityRows.splice(Number(btn.dataset.removeIdx), 1);
+        sbRenderAmenitiesList();
+      });
+    });
+  }
+  document.getElementById('sbAddAmenityBtn').addEventListener('click', () => {
+    sbAmenityRows.push({ id: null, name: '', description: null, price: '', availableFrom: '', availableUntil: '', excludedWeekdays: [], isActive: true });
+    sbRenderAmenitiesList();
+  });
+
+  // ---- Save: sends the edited blocked dates / promotions / amenities,
+  // plus the listing's OTHER pricing-form fields carried forward
+  // unchanged — update-listing-pricing.js expects the whole form each
+  // time, not a true partial update. ----
+  document.getElementById('sidebarSaveBtn').addEventListener('click', async () => {
+    if(!sbToken) return;
+    const btn = document.getElementById('sidebarSaveBtn');
+    const msgEl = document.getElementById('sidebarSaveMsg');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    msgEl.style.display = 'none';
+    try{
+      const res = await fetch(API_BASE + '/api/update-listing-pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: sbToken,
+          nightlyRate: sbNightlyRate,
+          city: sbCity,
+          area: sbArea,
+          discountType: sbDiscountType,
+          discountValue: sbDiscountValue,
+          discountMinNights: sbDiscountMinNights,
+          discountDescription: sbDiscountDescription,
+          securityDeposit: sbSecurityDeposit,
+          blockedDates: sbBlockedDateRows,
+          promotions: sbPromotionRows,
+          paidAmenities: sbAmenityRows.filter(a => a.name && a.price)
+        })
+      });
+      const data = await res.json();
+      if(res.ok){
+        msgEl.textContent = data.warning || 'Saved.';
+        msgEl.style.color = data.warning ? '#a3402f' : '#3a7d44';
+      } else {
+        msgEl.textContent = data.error || 'Could not save. Please try again.';
+        msgEl.style.color = '#a3402f';
+      }
+    } catch(err){
+      msgEl.textContent = 'Could not save. Please try again.';
+      msgEl.style.color = '#a3402f';
+    }
+    msgEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Save Changes';
   });
 
   if(sessionToken){
