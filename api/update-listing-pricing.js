@@ -35,6 +35,21 @@ const { logAudit } = require('./_audit-log');
 
 const sql = neon(process.env.DATABASE_URL);
 
+// City/area need to be enterable in ANY script when it's the actual
+// place name (Google's Places Autocomplete is set to language=en on the
+// frontend now, which handles the vast majority of cases), but the
+// stored value itself must end up in Latin script — search matching,
+// admin review, and consistency across the site all depend on that. This
+// checks for characters outside Basic Latin + the Latin-1/Extended-A/B
+// ranges (which already cover accented characters like "São Paulo" or
+// "Zürich" fine) — anything beyond that (Devanagari, CJK, Arabic,
+// Cyrillic, etc.) gets caught here as a last line of defense, since a
+// host could still paste or type something directly regardless of what
+// the autocomplete suggests.
+function hasNonLatinScript(str) {
+  return /[^\u0000-\u024F\s]/.test(str);
+}
+
 function requireListingId(req) {
   const token = req.method === 'GET' ? req.query.token : (req.body || {}).token;
   const payload = token ? verifyToken(token) : null;
@@ -106,7 +121,13 @@ module.exports = async (req, res) => {
       if (!safeCity) {
         return res.status(400).json({ error: 'Please enter a city.' });
       }
+      if (hasNonLatinScript(safeCity)) {
+        return res.status(400).json({ error: 'Please enter the city in English (Latin script) — e.g. "Pune", not a local-script spelling.' });
+      }
       const safeArea = typeof area === 'string' && area.trim() ? area.trim().slice(0, 100) : null;
+      if (safeArea && hasNonLatinScript(safeArea)) {
+        return res.status(400).json({ error: 'Please enter the area in English (Latin script) — e.g. "Koregaon Park", not a local-script spelling.' });
+      }
 
       const before = await sql`
         SELECT nightly_rate, exterior_photo_urls, interior_photo_urls,
