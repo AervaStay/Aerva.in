@@ -1457,7 +1457,7 @@
 </footer>
 
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&callback=initGoogleMaps"></script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <script>
   // Builds 'YYYY-MM-DD' from a Date object's LOCAL calendar fields —
   // deliberately NOT toISOString(), which converts to UTC first. For
@@ -2738,6 +2738,17 @@
           errorEl.style.display = 'block';
           return;
         }
+      }
+      // City/area need to be in English (Latin script) — see
+      // submit-listing.js for why; this is just the faster, earlier
+      // version of the same check the server enforces regardless.
+      const nonLatinPattern = /[^\u0000-\u024F\s]/;
+      const cityValue = document.getElementById('listCity').value.trim();
+      const areaValue = document.getElementById('listArea').value.trim();
+      if(nonLatinPattern.test(cityValue) || nonLatinPattern.test(areaValue)){
+        errorEl.textContent = 'Please enter the city and area in English (Latin script) — e.g. "Pune", not a local-script spelling.';
+        errorEl.style.display = 'block';
+        return;
       }
       if(exteriorPhotoManager.getFiles().length === 0 && !(listingSubmissionState.exteriorUrls && listingSubmissionState.exteriorUrls.length)){
         errorEl.textContent = 'Please attach at least 1 exterior photo.';
