@@ -283,7 +283,8 @@ module.exports = async (req, res) => {
       // no matter what the browser sends.
       const rows = await sql`
         SELECT id, property_name, nightly_rate, discount_type, discount_value,
-               discount_min_nights, commission_rate, security_deposit
+               discount_min_nights, commission_rate, security_deposit,
+               pet_friendly, max_pets_allowed, pet_fee
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
@@ -365,10 +366,28 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Stay ${i + 1}: ${amenityError}` });
       }
 
+      // Pets — charged PER PET, per stay (not a single flat fee no
+      // matter how many), validated against the listing's own policy the
+      // same way amenities are: never trusted from the browser alone.
+      const requestedPets = Number(s.pets) || 0;
+      if (requestedPets > 0 && !listing.pet_friendly) {
+        return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} doesn't allow pets.` });
+      }
+      if (listing.max_pets_allowed != null && requestedPets > Number(listing.max_pets_allowed)) {
+        return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} allows at most ${listing.max_pets_allowed} pet(s).` });
+      }
+      const petFeeAmount = requestedPets > 0 ? Math.round(Number(listing.pet_fee || 0) * requestedPets) : 0;
+
       const roomPortion = beforeDiscount - discountAmount; // room + extra guests, after discount, never includes amenities
-      const staySubtotal = roomPortion + amenityTotal;
+      const staySubtotal = roomPortion + amenityTotal + petFeeAmount;
       const baseCommission = Math.round(roomPortion * (BASE_COMMISSION_RATE / 100));
-      const amenityCommission = Math.round(amenityTotal * (AMENITY_COMMISSION_RATE / 100));
+      // Pet fee is commissioned at the same rate as paid amenities — both
+      // are optional, host-set extras layered on top of the room rate,
+      // not the base booking itself. Folded into amenityCommission
+      // (rather than a new field) so verify-payment.js's existing
+      // commissionAmount = baseCommission + amenityCommission logic picks
+      // it up automatically, with no changes needed there.
+      const amenityCommission = Math.round((amenityTotal + petFeeAmount) * (AMENITY_COMMISSION_RATE / 100));
       // Flat rate on the whole stay subtotal — added on top of what the
       // guest pays, never subtracted from what the host receives.
       const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
@@ -395,6 +414,7 @@ module.exports = async (req, res) => {
         subtotal: staySubtotal,
         discountAmount,
         extraGuestCharge: extraTotal, // broken out for the guest-facing summary
+        petFeeAmount, // broken out for the guest-facing summary
         roomPortion,
         baseCommission,
         amenityCommission,
