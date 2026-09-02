@@ -206,8 +206,15 @@ module.exports = async (req, res) => {
       if (!existingDraft || existingDraft.host_id !== hostId) {
         return res.status(403).json({ error: 'You do not have permission to edit this listing.' });
       }
-      if (existingDraft.status !== 'draft') {
-        return res.status(400).json({ error: 'Only drafts can be edited this way — approved or pending listings go through the review team.' });
+      // Drafts can be edited freely. A rejected listing can also be
+      // edited and resubmitted — see the newStatus/UPDATE logic below,
+      // which clears rejection_reason and puts it back into the normal
+      // 'pending' review queue, same as any other submission. Nothing
+      // else (approved, pending, blocked, removed) goes through this
+      // self-service path — those go through the review team or admin
+      // moderation instead.
+      if (existingDraft.status !== 'draft' && existingDraft.status !== 'rejected') {
+        return res.status(400).json({ error: 'Only drafts and rejected listings can be edited this way — approved or pending listings go through the review team.' });
       }
     }
 
@@ -350,6 +357,11 @@ module.exports = async (req, res) => {
 
     let listing;
     if (existingDraft) {
+      // Resubmitting a rejected listing clears the old rejection_reason —
+      // it no longer applies once the host has made changes and put it
+      // back up for review. A fresh reason gets set the normal way if
+      // it's rejected again.
+      const clearRejectionReason = existingDraft.status === 'rejected' && newStatus === 'pending';
       const updated = await sql`
         UPDATE listings SET
           property_name = ${propertyName}, city = ${city || null}, area = ${area || null}, property_type = ${propertyType || null},
@@ -366,7 +378,8 @@ module.exports = async (req, res) => {
           experience_category = ${safeExperienceCategory}, experience_price_unit = ${safeExperiencePriceUnit},
           experience_duration_hours = ${safeExperienceDuration},
           photo_hashes = ${safePhotoHashesToStore},
-          status = ${newStatus}
+          status = ${newStatus},
+          rejection_reason = CASE WHEN ${clearRejectionReason} THEN NULL ELSE rejection_reason END
         WHERE id = ${listingId}
         RETURNING *
       `;
