@@ -11,14 +11,32 @@
 // an empty list, same as a brand-new account.
 //
 //   GET  — as above, now also returns `verification`: the host's
-//          Aadhaar/bank verification status, and each booking now
+//          PAN/Aadhaar/bank verification status, plus their name/phone
+//          for the profile's Personal Details tab. Each booking now
 //          includes its deposit fields (amount, status, release date,
 //          any dispute already raised).
-//   POST { aadhaarDocumentUrl? , bankAccountNumber?, bankIfsc?,
-//          bankAccountHolderName? } — submits (or resubmits) whichever
-//          section is included. Locked once a section is 'verified'
-//          (contact support to change verified info, rather than letting
-//          it be silently overwritten).
+//   POST { panNumber?, panDocumentUrl? } — submits PAN, once ever. Like
+//          Aadhaar below, this is permanently locked the moment a PAN
+//          document exists on file, regardless of the review outcome —
+//          contact support for any change after that, never a silent
+//          self-service overwrite of identity documents.
+//   POST { aadhaarDocumentUrl? } — submits Aadhaar, once ever — same
+//          "permanently locked once submitted" rule as PAN above. This
+//          used to allow a resubmit after a rejection; it no longer does,
+//          to match PAN's stricter policy.
+//   POST { bankAccountNumber?, bankIfsc?, bankAccountHolderName? } —
+//          unlike PAN/Aadhaar, bank details CAN be changed anytime,
+//          because a host's payout account can legitimately change. But
+//          changing it is exactly the kind of action a compromised
+//          account would take, so a change here re-triggers review of
+//          everything: bank_status resets to pending_review as usual,
+//          and if PAN/Aadhaar were already submitted, THEIR status also
+//          resets to pending_review (same document, freshly re-checked)
+//          rather than staying "verified" through an unrelated-looking
+//          payout change.
+//   POST { hostName?, hostPhone? } — updates the host's own profile
+//          name/phone (Personal Details tab). Not identity-sensitive the
+//          way PAN/Aadhaar/bank are, so no re-verification triggered.
 //   POST { raiseDispute: { orderId, reason } } — flags a concern on one
 //          of this host's bookings' held security deposits, before it
 //          would otherwise auto-refund to the guest 7 days after
@@ -483,26 +501,46 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'List a property first to create your host account.' });
       }
 
-      const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName } = req.body || {};
-      const current = await sql`SELECT aadhaar_status, bank_status FROM hosts WHERE id = ${guest.host_id}`;
+      const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName, panNumber, panDocumentUrl, hostName, hostPhone } = req.body || {};
+      const current = await sql`
+        SELECT aadhaar_status, aadhaar_document_url, aadhaar_rejection_reason,
+               bank_status, pan_status, pan_document_url, pan_rejection_reason
+        FROM hosts WHERE id = ${guest.host_id}
+      `;
       const host = current[0];
+      let didSomething = false;
 
-      if (typeof aadhaarDocumentUrl === 'string' && aadhaarDocumentUrl.startsWith('https://')) {
-        if (host.aadhaar_status === 'verified') {
-          return res.status(400).json({ error: 'Your Aadhaar is already approved. Contact hello@aerva.in to change it.' });
+      // ---- PAN: submit once, then permanently locked ----
+      if (typeof panDocumentUrl === 'string' && panDocumentUrl.startsWith('https://')) {
+        if (host.pan_document_url) {
+          return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
         }
-        if (host.aadhaar_status === 'pending_review') {
-          return res.status(400).json({ error: 'Your Aadhaar is already submitted and awaiting review.' });
+        const cleanPan = typeof panNumber === 'string' ? panNumber.trim().toUpperCase() : '';
+        if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(cleanPan)) {
+          return res.status(400).json({ error: 'Please enter a valid 10-character PAN, e.g. ABCDE1234F.' });
+        }
+        await sql`
+          UPDATE hosts SET pan_number = ${cleanPan}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
+          WHERE id = ${guest.host_id}
+        `;
+        await logAudit(sql, {
+          action: 'host_pan_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
+          targetType: 'host', targetId: guest.host_id
+        });
+        didSomething = true;
+      }
+
+      // ---- Aadhaar: submit once, then permanently locked (same policy
+      // as PAN above — no more resubmitting after a rejection either) ----
+      if (typeof aadhaarDocumentUrl === 'string' && aadhaarDocumentUrl.startsWith('https://')) {
+        if (host.aadhaar_document_url) {
+          return res.status(400).json({ error: 'Your Aadhaar has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
         }
         // Uploading a file only confirms a file was uploaded — it says
-        // nothing about whose document it actually is. This used to jump
-        // straight to 'verified', which meant literally any HTTPS URL
-        // (including someone else's ID) was accepted as "verified" with
-        // zero actual checking. Real verification now happens as a human
-        // admin review (see get-pending-listings.js's ?verifications=1
-        // mode and its verifyDocument POST action) — pending_review is
-        // the correct state until that review happens, matching what
-        // host-dashboard.html's badge/label logic already expected.
+        // nothing about whose document it actually is. Real verification
+        // happens as a human admin review (see get-pending-listings.js's
+        // ?verifications=1 mode) — pending_review is the correct state
+        // until that review happens.
         await sql`
           UPDATE hosts SET aadhaar_document_url = ${aadhaarDocumentUrl}, aadhaar_status = 'pending_review', aadhaar_rejection_reason = NULL
           WHERE id = ${guest.host_id}
@@ -511,22 +549,13 @@ module.exports = async (req, res) => {
           action: 'host_aadhaar_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
           targetType: 'host', targetId: guest.host_id
         });
+        didSomething = true;
       }
 
+      // ---- Bank: can always be changed, but doing so re-triggers a
+      // full identity re-check, not just the bank details themselves ----
       const hasBankInfo = bankAccountNumber && bankIfsc && bankAccountHolderName;
       if (hasBankInfo) {
-        if (host.bank_status === 'verified') {
-          return res.status(400).json({ error: 'Your bank details are already approved. Contact hello@aerva.in to change them.' });
-        }
-        if (host.bank_status === 'pending_review') {
-          return res.status(400).json({ error: 'Your bank details are already submitted and awaiting review.' });
-        }
-        // Format checks only (real account number pattern, real IFSC
-        // pattern) — this was already the comment's stated intent, but
-        // the code below it still auto-approved on format alone. Same
-        // fix as Aadhaar: pending_review until an admin actually looks
-        // at it, not an automatic "verified" the moment the numbers look
-        // shaped right.
         const cleanAccountNumber = String(bankAccountNumber).replace(/\s/g, '');
         const cleanIfsc = String(bankIfsc).trim().toUpperCase();
         if (!/^\d{6,20}$/.test(cleanAccountNumber)) {
@@ -535,20 +564,52 @@ module.exports = async (req, res) => {
         if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
           return res.status(400).json({ error: 'Please enter a valid IFSC code.' });
         }
+        // Only reset PAN/Aadhaar back to pending_review if they'd
+        // actually been submitted before — nothing to "re-check" for a
+        // PAN/Aadhaar that was never on file in the first place.
+        const aadhaarSubmitted = !!host.aadhaar_document_url;
+        const panSubmitted = !!host.pan_document_url;
+        const reAadhaarStatus = aadhaarSubmitted ? 'pending_review' : host.aadhaar_status;
+        const rePanStatus = panSubmitted ? 'pending_review' : host.pan_status;
+        const reAadhaarReason = aadhaarSubmitted ? null : host.aadhaar_rejection_reason;
+        const rePanReason = panSubmitted ? null : host.pan_rejection_reason;
         await sql`
           UPDATE hosts SET
             bank_account_number = ${cleanAccountNumber}, bank_ifsc = ${cleanIfsc},
             bank_account_holder_name = ${String(bankAccountHolderName).trim().slice(0, 100)},
-            bank_status = 'pending_review', bank_rejection_reason = NULL
+            bank_status = 'pending_review', bank_rejection_reason = NULL,
+            aadhaar_status = ${reAadhaarStatus}, aadhaar_rejection_reason = ${reAadhaarReason},
+            pan_status = ${rePanStatus}, pan_rejection_reason = ${rePanReason}
           WHERE id = ${guest.host_id}
         `;
         await logAudit(sql, {
           action: 'host_bank_details_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-          targetType: 'host', targetId: guest.host_id
+          targetType: 'host', targetId: guest.host_id,
+          metadata: { retriggeredAadhaar: aadhaarSubmitted, retriggeredPan: panSubmitted }
         });
+        didSomething = true;
       }
 
-      if (!aadhaarDocumentUrl && !hasBankInfo) {
+      // ---- Personal details: name/phone, not identity-sensitive ----
+      if (typeof hostName === 'string' || typeof hostPhone === 'string') {
+        const safeName = typeof hostName === 'string' ? hostName.trim().slice(0, 100) : undefined;
+        const safePhone = typeof hostPhone === 'string' ? hostPhone.trim().slice(0, 20) : undefined;
+        if (safeName || safePhone) {
+          await sql`
+            UPDATE hosts SET
+              name = COALESCE(${safeName ?? null}, name),
+              phone = COALESCE(${safePhone ?? null}, phone)
+            WHERE id = ${guest.host_id}
+          `;
+          await logAudit(sql, {
+            action: 'host_profile_updated', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
+            targetType: 'host', targetId: guest.host_id
+          });
+          didSomething = true;
+        }
+      }
+
+      if (!didSomething) {
         return res.status(400).json({ error: 'Nothing to submit.' });
       }
 
@@ -623,18 +684,30 @@ module.exports = async (req, res) => {
     // re-displays the full number once submitted, so there's one fewer
     // place it exists in full anywhere in the UI.
     const hostRows = await sql`
-      SELECT aadhaar_status, aadhaar_rejection_reason,
-             bank_status, bank_rejection_reason, bank_account_number, bank_account_holder_name
+      SELECT name, phone, aadhaar_status, aadhaar_rejection_reason, aadhaar_document_url,
+             bank_status, bank_rejection_reason, bank_account_number, bank_account_holder_name, bank_ifsc,
+             pan_status, pan_rejection_reason, pan_document_url, pan_number
       FROM hosts WHERE id = ${guest.host_id}
     `;
     const h = hostRows[0];
     const verification = h ? {
+      hostName: h.name,
+      hostPhone: h.phone,
       aadhaarStatus: h.aadhaar_status,
       aadhaarRejectionReason: h.aadhaar_rejection_reason,
+      aadhaarSubmitted: !!h.aadhaar_document_url,
       bankStatus: h.bank_status,
       bankRejectionReason: h.bank_rejection_reason,
       bankAccountNumberMasked: h.bank_account_number ? '••••' + h.bank_account_number.slice(-4) : null,
-      bankAccountHolderName: h.bank_account_holder_name
+      bankAccountHolderName: h.bank_account_holder_name,
+      bankIfsc: h.bank_ifsc,
+      panStatus: h.pan_status,
+      panRejectionReason: h.pan_rejection_reason,
+      panSubmitted: !!h.pan_document_url,
+      // PAN is shown, unlike the bank account number — it's not a
+      // payment credential the way an account number is, and a host
+      // benefits from being able to confirm exactly what's on file.
+      panNumberMasked: h.pan_number || null
     } : null;
 
     return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, verification });
