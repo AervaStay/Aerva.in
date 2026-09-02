@@ -317,25 +317,28 @@
   .suites-empty{text-align:center; padding:40px 20px; opacity:0.6; font-size:14px; grid-column:1/-1;}
   .suites-loading{text-align:center; padding:40px 20px; opacity:0.5; font-size:14px; grid-column:1/-1;}
 
-  /* ---------- CATEGORY ICON NAV ---------- */
-  .category-nav{
-    background:var(--cream); border-bottom:1px solid var(--line-dark);
-    padding:14px 0; margin-top:76px;
-  }
-  .category-nav .wrap{
-    display:flex; align-items:center; justify-content:center; gap:56px; flex-wrap:wrap;
+  /* ---------- CATEGORY ICON NAV — now inline in the header, between
+     the logo and the currency/account links, rather than its own
+     full-width row below. Compact horizontal layout (icon beside label)
+     instead of the old stacked one, to fit the header's height. ---------- */
+  .header-category-nav{
+    display:flex; align-items:center; gap:26px; flex-wrap:nowrap;
   }
   .category-item{
-    display:flex; flex-direction:column; align-items:center; gap:8px;
-    font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase;
-    color:var(--ink); opacity:0.62; padding-bottom:10px; border-bottom:2px solid transparent;
-    transition:opacity .25s ease, border-color .25s ease;
+    display:flex; flex-direction:row; align-items:center; gap:6px;
+    font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--ink); opacity:0.62; padding-bottom:2px; border-bottom:2px solid transparent;
+    transition:opacity .25s ease, border-color .25s ease; white-space:nowrap;
   }
-  .category-item svg{width:22px; height:22px; stroke:var(--gold-deep); fill:none; stroke-width:1.4;}
+  .category-item svg{width:16px; height:16px; stroke:var(--gold-deep); fill:none; stroke-width:1.4;}
   .category-item:hover{opacity:0.9;}
   .category-item.active{opacity:1; border-color:var(--gold);}
-  @media (max-width:640px){
-    .category-nav{display:none;}
+  @media (max-width:1100px){
+    .header-category-nav{gap:16px;}
+    .category-item{font-size:10px;}
+  }
+  @media (max-width:900px){
+    .header-category-nav{display:none;}
   }
 
   /* ---------- PILL SEARCH BAR ---------- */
@@ -799,6 +802,24 @@
       </span>
     
     </a>
+    <div class="header-category-nav">
+      <a href="#" class="category-item active" id="catAll">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-6-4-9s1.5-6.4 4-9z"/></svg>
+        All
+      </a>
+      <a href="#suites" class="category-item">
+        <svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7"/><path d="M6 10v9h12v-9"/><path d="M10 19v-5h4v5"/></svg>
+        Suites
+      </a>
+      <a href="index.html?view=experiences" target="_blank" rel="noopener" class="category-item" id="catExperience">
+        <svg viewBox="0 0 24 24"><path d="M12 3a5 5 0 0 1 5 5c0 3-2 5-5 8-3-3-5-5-5-8a5 5 0 0 1 5-5z"/><path d="M9 20h6M10 16l-1 4M14 16l1 4"/></svg>
+        Aerva Experience
+      </a>
+      <a href="index.html?view=list-property" target="_blank" rel="noopener" class="category-item">
+        <svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="1.5"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        List Property
+      </a>
+    </div>
     <div class="nav-links">
       <div class="currency-picker-wrap">
         <button type="button" class="currency-trigger" id="currencyTriggerBtn" aria-label="Change display currency">INR</button>
@@ -829,30 +850,10 @@
   </span>
 </nav>
 
-<!-- ================= CATEGORY NAV ================= -->
-<div class="category-nav">
-  <div class="wrap">
-    <a href="#" class="category-item active" id="catAll">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-6-4-9s1.5-6.4 4-9z"/></svg>
-      All
-    </a>
-    <a href="#suites" class="category-item">
-      <svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7"/><path d="M6 10v9h12v-9"/><path d="M10 19v-5h4v5"/></svg>
-      Suites
-    </a>
-    <a href="index.html?view=experiences" target="_blank" rel="noopener" class="category-item" id="catExperience">
-      <svg viewBox="0 0 24 24"><path d="M12 3a5 5 0 0 1 5 5c0 3-2 5-5 8-3-3-5-5-5-8a5 5 0 0 1 5-5z"/><path d="M9 20h6M10 16l-1 4M14 16l1 4"/></svg>
-      Aerva Experience
-    </a>
-    <a href="index.html?view=list-property" target="_blank" rel="noopener" class="category-item">
-      <svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="1.5"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-      List Property
-    </a>
-  </div>
-</div>
+<!-- ================= (category nav moved into the header above) ================= -->
 
 <!-- ================= SUITES ================= -->
-<section class="pad" id="suites" style="background:var(--cream-deep); padding-top:20px;">
+<section class="pad" id="suites" style="background:var(--cream-deep); padding-top:96px;">
   <div class="wrap">
     <div class="section-head center-head reveal">
       <div class="eyebrow">Where You Stay</div>
@@ -4732,7 +4733,7 @@
   }
 
   function showExperienceDetailPage(exp){
-    const catNav = document.querySelector('.category-nav');
+    const catNav = document.querySelector('.header-category-nav');
     if(catNav) catNav.style.display = 'none';
     document.getElementById('suites').style.display = 'none';
     const expSection = document.getElementById('experiences');
@@ -4758,7 +4759,7 @@
   }
 
   function showFullListingPage(listing){
-    const catNav = document.querySelector('.category-nav');
+    const catNav = document.querySelector('.header-category-nav');
     if(catNav) catNav.style.display = 'none';
     document.getElementById('suites').style.display = 'none';
     document.getElementById('listingFullViewBody').innerHTML = buildListingDetailHtml(listing);
@@ -5400,13 +5401,13 @@
     // detail pages: hide everything else, show only the one section.
     const requestedView = new URLSearchParams(window.location.search).get('view');
     if(requestedView === 'experiences'){
-      const catNav = document.querySelector('.category-nav');
+      const catNav = document.querySelector('.header-category-nav');
       if(catNav) catNav.style.display = 'none';
       document.getElementById('suites').style.display = 'none';
       document.getElementById('experiences').style.display = 'block';
       loadExperiences();
     } else if(requestedView === 'list-property'){
-      const catNav = document.querySelector('.category-nav');
+      const catNav = document.querySelector('.header-category-nav');
       if(catNav) catNav.style.display = 'none';
       document.getElementById('suites').style.display = 'none';
       document.getElementById('add-listing').style.display = 'block';
