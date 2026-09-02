@@ -660,6 +660,7 @@
   }
   .field input::placeholder{color:rgba(28,26,23,0.35);}
   .field input:focus, .field select:focus{outline:none; border-color:var(--gold-deep);}
+  .field input:read-only{color:rgba(28,26,23,0.55); cursor:default;}
   .reserve-form .btn{margin-top:10px; align-self:flex-start;}
   .confirm{font-size:13px; opacity:0.65; padding-top:6px;}
   .sum-row{display:flex; justify-content:space-between; font-size:13.5px; padding:5px 0; opacity:0.8;}
@@ -1336,8 +1337,8 @@
           <input id="listDiscountMinNights" name="Discount Min Nights" type="number" min="1" placeholder="e.g. 3">
         </div>
         <div class="field">
-          <label for="listDiscountNote">Short Note (shown to guests)</label>
-          <input id="listDiscountNote" name="Discount Description" type="text" placeholder="e.g. 10% off stays of 3+ nights">
+          <label for="listDiscountNote">Short Note <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-generated from your settings)</span></label>
+          <input id="listDiscountNote" name="Discount Description" type="text" readonly>
         </div>
       </div>
 
@@ -2185,6 +2186,50 @@
   });
   document.getElementById('listDiscountType').addEventListener('change', updateHostPricingLabels);
 
+  // Short Note is always derived from Discount Type/Amount/Minimum
+  // Nights/Nightly Rate — never typed freely — so it can never drift out
+  // of sync with what the discount actually is (this used to be a plain
+  // free-text field a host could edit independently of the real
+  // settings, which is exactly how it could end up showing numbers that
+  // don't match what's actually configured). Shows both units (₹ and %)
+  // so the host can see what their choice is worth in the other unit
+  // too — same logic as the equivalent field in manage-listing.html.
+  function updateDiscountNote(){
+    const type = document.getElementById('listDiscountType').value;
+    const value = document.getElementById('listDiscountValue').value;
+    const minNights = document.getElementById('listDiscountMinNights').value;
+    const rate = Number(document.getElementById('listPrice').value) || 0;
+    const noteEl = document.getElementById('listDiscountNote');
+
+    if(!type || !value){
+      noteEl.value = '';
+      return;
+    }
+
+    const baselineNights = minNights ? Number(minNights) : 1;
+    const baselineTotal = rate * baselineNights;
+    const numValue = Number(value);
+    let discountText;
+    if(baselineTotal > 0){
+      if(type === 'percentage'){
+        const rupees = Math.round(baselineTotal * (numValue / 100));
+        discountText = `${value}% (≈₹${rupees.toLocaleString('en-IN')}) off`;
+      } else {
+        const percent = Math.round((numValue / baselineTotal) * 100);
+        discountText = `₹${value} (≈${percent}%) off`;
+      }
+    } else {
+      // No nightly rate entered yet — can't convert, so just show the
+      // one unit the host actually entered.
+      discountText = type === 'percentage' ? `${value}% off` : `₹${value} off`;
+    }
+    noteEl.value = minNights ? `${discountText} on Min ${minNights} nights` : discountText;
+  }
+  ['listDiscountType', 'listDiscountValue', 'listDiscountMinNights', 'listPrice'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateDiscountNote);
+    document.getElementById(id).addEventListener('change', updateDiscountNote);
+  });
+
   // Called by initCurrency() once real currency detection/rates have
   // actually finished — only updates the DEFAULT if the host hasn't
   // already changed the selector themselves in the meantime.
@@ -2851,7 +2896,7 @@
       if(draft.discount_type) document.getElementById('listDiscountType').value = draft.discount_type;
       document.getElementById('listDiscountValue').value = draft.discount_value || '';
       document.getElementById('listDiscountMinNights').value = draft.discount_min_nights || '';
-      document.getElementById('listDiscountNote').value = draft.discount_description || '';
+      updateDiscountNote(); // recompute rather than trust a possibly-stale saved note — see updateDiscountNote()
       (draft.amenities || []).forEach(v => {
         const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
         if(box) box.checked = true;
@@ -2936,7 +2981,7 @@
     if(source.discount_type) document.getElementById('listDiscountType').value = source.discount_type;
     document.getElementById('listDiscountValue').value = source.discount_value || '';
     document.getElementById('listDiscountMinNights').value = source.discount_min_nights || '';
-    document.getElementById('listDiscountNote').value = source.discount_description || '';
+    updateDiscountNote(); // recompute rather than trust a possibly-stale saved note — see updateDiscountNote()
     (source.amenities || []).forEach(v => {
       const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
       if(box) box.checked = true;
