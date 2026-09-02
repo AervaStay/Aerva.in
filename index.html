@@ -1154,9 +1154,15 @@
       </div>
       <div class="form-row">
         <div class="field">
-          <label for="listCity">City / Area <span class="required-mark">*</span></label>
-          <input id="listCity" name="City" type="text" placeholder="e.g. Goa, Candolim" required>
+          <label for="listCity">City <span class="required-mark">*</span></label>
+          <input id="listCity" name="City" type="text" placeholder="e.g. Pune" required>
         </div>
+        <div class="field">
+          <label for="listArea">Area <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional — neighbourhood or locality)</span></label>
+          <input id="listArea" name="Area" type="text" placeholder="e.g. Koregaon Park">
+        </div>
+      </div>
+      <div class="form-row">
         <div class="field">
           <label for="listType">Property Type</label>
           <select id="listType" name="Property Type">
@@ -1168,8 +1174,6 @@
             <option>Other</option>
           </select>
         </div>
-      </div>
-      <div class="form-row">
         <div class="field">
           <label for="listBedrooms">Bedrooms</label>
           <select id="listBedrooms" name="Bedrooms">
@@ -1181,6 +1185,8 @@
             <option>5+</option>
           </select>
         </div>
+      </div>
+      <div class="form-row">
         <div class="field">
           <label for="listGuests">Max Guests</label>
           <select id="listGuests" name="Max Guests">
@@ -1600,6 +1606,13 @@
   // Falls back to plain, correct INR whenever a real conversion isn't
   // available yet, rather than ever pairing a foreign symbol with an
   // amount that was never actually converted.
+  // "Area, City" when a listing has an area set, otherwise just "City" —
+  // the one shared place this formatting lives, so every card/detail/
+  // search-suggestion view stays consistent if the convention ever changes.
+  function formatCityArea(listing){
+    return listing.area ? `${listing.area}, ${listing.city}` : (listing.city || '');
+  }
+
   function fmtGuest(amountInInr){
     if(currentCurrency === 'INR' || !currencyRatesLoaded){
       return SUPPORTED_CURRENCIES.INR.symbol + amountInInr.toLocaleString('en-IN');
@@ -2306,13 +2319,24 @@
       confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || '');
       confirmEl.style.display = 'block';
 
-      // Best-effort auto-fill of the City field from Google's address
-      // components — a host can still edit it manually afterward.
+      // Best-effort auto-fill of City and Area from Google's address
+      // components — a host can still edit either manually afterward.
+      // City stays the broad match used for search (locality, or the
+      // district-level admin area as a fallback for places without a
+      // named locality). Area is the more specific neighbourhood-level
+      // component, when Google returns one — not every address has one,
+      // so this is left blank rather than guessed at.
       const cityComponent = (place.address_components || []).find(c =>
         c.types.includes('locality') || c.types.includes('administrative_area_level_2')
       );
       if(cityComponent){
         document.getElementById('listCity').value = cityComponent.long_name;
+      }
+      const areaComponent = (place.address_components || []).find(c =>
+        c.types.includes('sublocality') || c.types.includes('sublocality_level_1') || c.types.includes('neighborhood')
+      );
+      if(areaComponent){
+        document.getElementById('listArea').value = areaComponent.long_name;
       }
     });
 
@@ -2361,7 +2385,7 @@
           html += '<div class="place-suggest-heading">Your Listings</div>';
           html += matchingListings.map(l => `
             <button type="button" class="place-suggest-item" data-type="listing" data-id="${l.id}">
-              <strong>${l.property_name}</strong><span>${l.city}</span>
+              <strong>${l.property_name}</strong><span>${formatCityArea(l)}</span>
             </button>
           `).join('');
         }
@@ -2386,7 +2410,7 @@
               // No coordinates on this listing yet — fall back to
               // filling in its city as plain text search instead of
               // leaving the suggestion inert.
-              searchPlaceInput.value = listing.city || listing.property_name;
+              searchPlaceInput.value = formatCityArea(listing) || listing.property_name;
               document.getElementById('searchPlaceLat').value = '';
               document.getElementById('searchPlaceLng').value = '';
               closeSuggestions();
@@ -2424,7 +2448,7 @@
           const thisQueryId = ++latestQueryId;
           const queryLower = query.toLowerCase();
           const matchingListings = approvedListings
-            .filter(l => (l.property_name || '').toLowerCase().includes(queryLower) || (l.city || '').toLowerCase().includes(queryLower))
+            .filter(l => (l.property_name || '').toLowerCase().includes(queryLower) || (l.city || '').toLowerCase().includes(queryLower) || (l.area || '').toLowerCase().includes(queryLower))
             .slice(0, 5);
 
           autocompleteService.getPlacePredictions({ input: query, types: ['geocode'] }, (predictions, status) => {
@@ -2619,7 +2643,7 @@
       // to fix, not just an arbitrary one.
       const requiredChecks = [
         { value: document.getElementById('listLatitude').value, message: 'Please select your property\'s location from the address suggestions.' },
-        { value: document.getElementById('listCity').value.trim(), message: 'Please enter the city or area.' },
+        { value: document.getElementById('listCity').value.trim(), message: 'Please enter the city.' },
         { value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' },
         { value: document.getElementById('listDescription').value.trim(), message: 'Please tell us a bit about the property.' }
       ];
@@ -2729,6 +2753,7 @@
           isDraft: isDraft,
           propertyName: document.getElementById('listPropertyName').value,
           city: document.getElementById('listCity').value,
+          area: document.getElementById('listArea').value,
           propertyType: document.getElementById('listType').value,
           bedrooms: document.getElementById('listBedrooms').value,
           maxGuests: document.getElementById('listGuests').value,
@@ -2796,6 +2821,7 @@
         const formData = new FormData();
         formData.append('Property Name', document.getElementById('listPropertyName').value);
         formData.append('City', document.getElementById('listCity').value);
+        formData.append('Area', document.getElementById('listArea').value);
         formData.append('Property Type', document.getElementById('listType').value);
         formData.append('Bedrooms', document.getElementById('listBedrooms').value);
         formData.append('Max Guests', document.getElementById('listGuests').value);
@@ -2877,6 +2903,7 @@
       updateHostPricingLabels();
       document.getElementById('listPropertyName').value = draft.property_name || '';
       document.getElementById('listCity').value = draft.city || '';
+      document.getElementById('listArea').value = draft.area || '';
       if(draft.latitude && draft.longitude){
         document.getElementById('listLatitude').value = draft.latitude;
         document.getElementById('listLongitude').value = draft.longitude;
@@ -2962,6 +2989,7 @@
     // for guests browsing both. Everything else is genuinely worth
     // reusing as a starting point.
     document.getElementById('listCity').value = source.city || '';
+    document.getElementById('listArea').value = source.area || '';
     if(source.latitude && source.longitude){
       document.getElementById('listLatitude').value = source.latitude;
       document.getElementById('listLongitude').value = source.longitude;
@@ -3261,7 +3289,7 @@
       ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' <span style="font-size:12px; opacity:0.65;">/ person</span>' : ' <span style="font-size:12px; opacity:0.65;">/ group</span>'}`
       : 'Price on enquiry';
     const hostedAtLine = exp.hosting_property_name
-      ? `Hosted at ${exp.hosting_property_name}${exp.hosting_city ? ', ' + exp.hosting_city : ''}`
+      ? `Hosted at ${exp.hosting_property_name}${exp.hosting_area ? ', ' + exp.hosting_area + ', ' + exp.hosting_city : exp.hosting_city ? ', ' + exp.hosting_city : ''}`
       : '';
 
     const card = document.createElement('div');
@@ -3412,7 +3440,7 @@
       </div>
       <div class="suite-body">
         <h3>${listing.property_name}</h3>
-        <div class="loc">${listing.city}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
         ${distanceHtml}
         ${mapLinkHtml}
         ${amenitiesHtml}
@@ -3785,7 +3813,7 @@
     return `
       <div class="listing-modal-content">
         <h2>${listing.property_name}</h2>
-        <div class="loc">${listing.city}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
         <div class="listing-three-col">
           <div class="listing-col-booking">
             <div class="listing-modal-section-title" style="margin-top:16px;">Check Availability &amp; Price</div>
@@ -4464,7 +4492,7 @@
         </div>
         <div class="suite-body">
           <h3>${exp.hosting_property_name}</h3>
-          <div class="loc">${exp.hosting_city || ''}</div>
+          <div class="loc">${exp.hosting_area ? exp.hosting_area + ', ' + exp.hosting_city : (exp.hosting_city || '')}</div>
           ${hostingIsBookable ? `
             <div class="price">${fmtGuest(Number(exp.hosting_nightly_rate))}/night</div>
             <p style="font-size:12.5px; color:var(--gold-deep); margin-top:8px;">Also staying here? Tap to view availability and book your stay alongside this experience — opens in a new tab, booked separately from the experience itself.</p>
