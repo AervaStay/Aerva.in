@@ -1202,13 +1202,9 @@
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">This powers the "distance from you" shown to guests — pick a suggestion rather than just typing free text.</p>
       </div>
       <div class="field">
-        <label for="listPincode">PIN / Postal Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional — auto-fills City, Area &amp; location)</span></label>
-        <div style="display:flex; gap:8px;">
-          <input id="listPincode" type="text" placeholder="e.g. 411001, or a postal code from anywhere" style="flex:1;">
-          <button type="button" id="listPincodeLookupBtn" style="flex:0 0 auto; padding:0 18px; background:#1c1a17; color:#f4ebe3; border:none; font-size:12px; letter-spacing:0.05em; text-transform:uppercase; cursor:pointer;">Look Up</button>
-        </div>
-        <p id="listPincodeStatus" style="font-size:11.5px; margin-top:4px; display:none;"></p>
-        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Works for Indian PIN codes and postal codes from other countries alike.</p>
+        <label for="listPincode">PIN / Postal Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-filled when your address provides one)</span></label>
+        <input id="listPincode" type="text" placeholder="e.g. 411001">
+        <p id="listPincodeHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">Filled in automatically once you pick an address above. It's for reference only and doesn't affect the property's actual location — use the address search or map pin for that.</p>
       </div>
       <div class="field">
         <label>Fine-Tune on Map <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(drag the pin for a more exact match)</span></label>
@@ -2446,7 +2442,7 @@
       if(cityName){
         document.getElementById('listCity').value = cityName;
       } else if(cityComponent && cityWarningEl){
-        cityWarningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below, or try the PIN/postal code lookup.';
+        cityWarningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below.';
         cityWarningEl.style.display = 'block';
       }
       // Area: the most specific named place below the city level. Prefer
@@ -2463,13 +2459,24 @@
       if(areaName){
         document.getElementById('listArea').value = areaName;
       }
-      // PIN/postal code — same address_components lookup, populating the
-      // field a host would otherwise have to type in themselves even
-      // though it's right there in the address that was just picked.
+      // PIN/postal code — populated when the picked address actually has
+      // one on file. Not every address does (rural addresses especially),
+      // so when it's missing this asks the host to fill it in themselves
+      // instead of just leaving the field silently blank with no
+      // explanation for why nothing showed up.
       const postalComponent = findAddressComponent(['postal_code']);
       const pincodeInput = document.getElementById('listPincode');
+      const pincodeHint = document.getElementById('listPincodeHint');
       if(postalComponent && pincodeInput){
         pincodeInput.value = postalComponent.long_name;
+        if(pincodeHint){
+          pincodeHint.textContent = 'Filled in automatically once you pick an address above. It\'s for reference only and doesn\'t affect the property\'s actual location — use the address search or map pin for that.';
+          pincodeHint.style.color = '';
+        }
+      } else if(pincodeInput && pincodeHint){
+        pincodeInput.value = '';
+        pincodeHint.textContent = 'Your address didn\'t include a PIN/postal code — please enter it yourself.';
+        pincodeHint.style.color = '#a3402f';
       }
     }
 
@@ -2530,36 +2537,6 @@
 
     autocomplete.addListener('place_changed', function(){
       applyLocationResult(autocomplete.getPlace(), { skipSearchBoxUpdate: true });
-    });
-
-    // PIN / postal code lookup — works for an Indian PIN code or a
-    // postal/ZIP code from anywhere else, since Geocoder resolves any
-    // address-shaped text, postal codes included. Populates the exact
-    // same fields as picking a search suggestion does.
-    const pincodeInput = document.getElementById('listPincode');
-    const pincodeBtn = document.getElementById('listPincodeLookupBtn');
-    const pincodeStatus = document.getElementById('listPincodeStatus');
-    function lookupPincode(){
-      const code = pincodeInput.value.trim();
-      pincodeStatus.style.display = 'none';
-      if(!code) return;
-      pincodeBtn.disabled = true;
-      pincodeBtn.textContent = 'Looking up…';
-      new google.maps.Geocoder().geocode({ address: code }, (results, status) => {
-        pincodeBtn.disabled = false;
-        pincodeBtn.textContent = 'Look Up';
-        if(status === 'OK' && results[0]){
-          applyLocationResult(results[0]);
-        } else {
-          pincodeStatus.textContent = 'Could not find that PIN/postal code — try the address search above instead.';
-          pincodeStatus.style.color = '#a3402f';
-          pincodeStatus.style.display = 'block';
-        }
-      });
-    }
-    pincodeBtn.addEventListener('click', lookupPincode);
-    pincodeInput.addEventListener('keydown', (e) => {
-      if(e.key === 'Enter'){ e.preventDefault(); lookupPincode(); }
     });
 
     // Search bar's "Place" field — real-world address suggestions as the
