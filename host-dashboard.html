@@ -193,6 +193,34 @@
     background:#f4ebe3; max-width:560px; width:100%; max-height:88vh; overflow-y:auto;
     position:relative; border:1px solid #e0d5c0;
   }
+  /* ---------- Top-right profile trigger: avatar + name ---------- */
+  .profile-trigger-cluster{display:flex; align-items:center; gap:14px;}
+  .profile-avatar-btn{
+    background:none; border:none; cursor:pointer; display:flex; align-items:center; gap:10px; padding:0;
+    font-family:'Jost', sans-serif;
+  }
+  .profile-avatar-ring{
+    width:44px; height:44px; border-radius:50%; padding:2.5px; flex:0 0 auto;
+    border:2.5px solid #d9a25c; /* orange default — verification incomplete */
+    transition:border-color .2s ease;
+  }
+  .profile-avatar-ring.verified{border-color:#4d9a56;} /* green — fully verified */
+  .profile-avatar-circle{
+    width:100%; height:100%; border-radius:50%; overflow:hidden; background:#8a6c39;
+    display:flex; align-items:center; justify-content:center; color:#f4ebe3;
+    font-family:Georgia,serif; font-size:16px;
+  }
+  .profile-avatar-circle img{width:100%; height:100%; object-fit:cover; display:block;}
+  .profile-trigger-text{text-align:left;}
+  .profile-trigger-name{font-size:13.5px; color:#1c1a17; display:block;}
+  .profile-trigger-sub{font-size:11px; opacity:0.55; display:block;}
+  .profile-photo-upload-row{display:flex; align-items:center; gap:14px; margin-bottom:20px;}
+  .profile-photo-upload-row .profile-avatar-ring{width:64px; height:64px;}
+  .profile-photo-upload-row .profile-avatar-circle{font-size:22px;}
+  .profile-photo-upload-btn{
+    background:white; border:1px solid #ccc; padding:8px 14px; font-size:11.5px; cursor:pointer;
+    color:#1c1a17; letter-spacing:0.03em;
+  }
   .profile-modal-close{
     position:absolute; top:10px; right:14px; background:none; border:none;
     font-size:22px; cursor:pointer; color:#1c1a17; line-height:1; z-index:2;
@@ -242,9 +270,19 @@
   <div class="top-row">
     <div>
       <h1>Your Listings<span class="host-badge" id="hostBadge" style="display:none;"></span></h1>
-      <button type="button" class="host-email" id="hostProfileTrigger" style="background:none; border:none; cursor:pointer; padding:0; text-decoration:underline; text-underline-offset:2px;"></button>
     </div>
-    <button class="logout-btn" id="logoutBtn">Log Out</button>
+    <div class="profile-trigger-cluster">
+      <button type="button" class="profile-avatar-btn" id="hostProfileTrigger">
+        <div class="profile-avatar-ring" id="profileAvatarRing">
+          <div class="profile-avatar-circle" id="profileAvatarCircle">?</div>
+        </div>
+        <span class="profile-trigger-text">
+          <span class="profile-trigger-name" id="profileTriggerName">Profile</span>
+          <span class="profile-trigger-sub" id="profileTriggerSub">›</span>
+        </span>
+      </button>
+      <button class="logout-btn" id="logoutBtn">Log Out</button>
+    </div>
   </div>
 
   <div id="verificationBanner" style="display:none;"></div>
@@ -354,6 +392,16 @@
 
       <!-- ---- Personal Details ---- -->
       <div class="profile-tab-panel" id="profilePanelPersonal">
+        <div class="profile-photo-upload-row">
+          <div class="profile-avatar-ring" id="profileModalAvatarRing">
+            <div class="profile-avatar-circle" id="profileModalAvatarCircle">?</div>
+          </div>
+          <div>
+            <input type="file" id="profilePhotoFileInput" accept="image/*" style="display:none;">
+            <button type="button" class="profile-photo-upload-btn" id="profilePhotoUploadBtn">Change Photo</button>
+            <p class="profile-field-note" id="profilePhotoStatus" style="margin-top:6px;"></p>
+          </div>
+        </div>
         <div class="field">
           <label for="profileName">Name</label>
           <input type="text" id="profileName" placeholder="Your full name">
@@ -409,11 +457,22 @@
   const sessionToken = localStorage.getItem('aerva_guest_session');
   const hostEmail = localStorage.getItem('aerva_guest_email');
 
+  // Declared early (before any function that reads them gets called) —
+  // let bindings aren't usable before their own declaration line runs,
+  // and updateProfileAvatar() below is called immediately, before real
+  // data has loaded.
+  let currentVerification = null;
+  let currentGuestProfile = null;
+
   if(!sessionToken){
     window.location.href = 'guest-login.html';
   }
 
-  document.getElementById('hostProfileTrigger').textContent = hostEmail ? `${hostEmail} · Profile ›` : 'Profile ›';
+  // Shows a sensible fallback (initials from email, orange ring) before
+  // the real profile/verification data has loaded — updateProfileAvatar
+  // is a function declaration, hoisted, so this is safe to call before
+  // its definition appears later in this same script.
+  updateProfileAvatar();
 
   document.getElementById('logoutBtn').addEventListener('click', () => {
     localStorage.removeItem('aerva_guest_session');
@@ -842,27 +901,53 @@
     }
   }
 
-  let currentVerification = null;
-
   // 'verified' is the underlying status value (unchanged in the
   // database/API), but shown to hosts as "Approved" — friendlier
   // wording for something that's granted automatically on submission.
   const verifyStatusLabel = (status) => status === 'verified' ? 'Approved' : String(status || '').replace('_', ' ');
 
+  // Ring color is the "at a glance" verification signal: green once PAN
+  // + Aadhaar + Bank are all approved, orange otherwise — same
+  // completeness check the banner below uses, kept in one place so they
+  // can never disagree with each other.
+  function isFullyVerified(v){
+    return !!v && v.panStatus === 'verified' && v.aadhaarStatus === 'verified' && v.bankStatus === 'verified';
+  }
+
+  // Updates both the top-right avatar and the (identical, larger) one
+  // inside the Personal Details tab — same photo, same ring color,
+  // rendered twice since one lives outside the modal and one inside it.
+  function updateProfileAvatar(){
+    const photoUrl = currentGuestProfile && currentGuestProfile.profilePhotoUrl;
+    const displayName = (currentGuestProfile && currentGuestProfile.name) || (currentVerification && currentVerification.hostName) || hostEmail || '';
+    const initial = displayName ? displayName.trim().charAt(0).toUpperCase() : '?';
+    const innerHtml = photoUrl ? `<img src="${photoUrl}" alt="Profile photo">` : initial;
+    const verified = isFullyVerified(currentVerification);
+
+    ['profileAvatarCircle', 'profileModalAvatarCircle'].forEach(id => {
+      document.getElementById(id).innerHTML = innerHtml;
+    });
+    ['profileAvatarRing', 'profileModalAvatarRing'].forEach(id => {
+      document.getElementById(id).classList.toggle('verified', verified);
+    });
+
+    document.getElementById('profileTriggerName').textContent = displayName || 'Profile';
+    document.getElementById('profileTriggerSub').textContent = verified ? 'Verified ›' : 'Complete profile ›';
+  }
+
   function renderVerification(v){
     currentVerification = v;
     if(!v){
       document.getElementById('verificationBanner').style.display = 'none';
+      updateProfileAvatar();
       return;
     }
 
-    document.getElementById('hostProfileTrigger').textContent = v.hostName
-      ? `${v.hostName} · Profile ›`
-      : (hostEmail ? `${hostEmail} · Profile ›` : 'Profile ›');
+    updateProfileAvatar();
 
     // Compact banner instead of a full always-visible box — the real
     // detail now lives in the Profile modal's Verification tab.
-    const allDone = v.panStatus === 'verified' && v.aadhaarStatus === 'verified' && v.bankStatus === 'verified';
+    const allDone = isFullyVerified(v);
     const bannerEl = document.getElementById('verificationBanner');
     if(allDone){
       bannerEl.style.display = 'none';
@@ -1070,6 +1155,50 @@
     btn.addEventListener('click', () => switchProfileTab(btn.dataset.profileTab));
   });
 
+  // ---- Profile photo upload — uploads immediately on file selection
+  // (same "act right away" pattern as PAN/Aadhaar document uploads),
+  // rather than waiting for the separate Personal Details "Save Changes"
+  // button, since a photo isn't really a form field to batch with the
+  // rest. Stored on the guest account (guest-profile.js), not the host
+  // record — it's the same photo whether this person is acting as a
+  // guest or a host, since they're the same login either way. ----
+  document.getElementById('profilePhotoUploadBtn').addEventListener('click', () => {
+    document.getElementById('profilePhotoFileInput').click();
+  });
+  document.getElementById('profilePhotoFileInput').addEventListener('change', async function(){
+    const file = this.files[0];
+    const statusEl = document.getElementById('profilePhotoStatus');
+    if(!file) return;
+    statusEl.textContent = 'Uploading…';
+    statusEl.style.color = '';
+    try{
+      const { upload } = await import('https://esm.sh/@vercel/blob/client');
+      const result = await upload(file.name, file, {
+        access: 'public',
+        handleUploadUrl: API_BASE + '/api/blob-upload'
+      });
+      const res = await fetch(API_BASE + '/api/guest-profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ profilePhotoUrl: result.url })
+      });
+      const data = await res.json();
+      if(res.ok){
+        currentGuestProfile = { ...(currentGuestProfile || {}), profilePhotoUrl: data.guest.profile_photo_url };
+        updateProfileAvatar();
+        statusEl.textContent = 'Updated.';
+        statusEl.style.color = '#3a7d44';
+      } else {
+        statusEl.textContent = data.error || 'Could not update your photo. Please try again.';
+        statusEl.style.color = '#a3402f';
+      }
+    } catch(err){
+      statusEl.textContent = 'Upload failed. Please try again.';
+      statusEl.style.color = '#a3402f';
+    }
+    this.value = '';
+  });
+
   // ---- Personal Details save ----
   document.getElementById('profilePersonalSaveBtn').addEventListener('click', async function(){
     const msgEl = document.getElementById('profilePersonalMsg');
@@ -1132,6 +1261,21 @@
     this.disabled = false;
     this.textContent = 'Save Bank Details';
   });
+
+  async function loadGuestProfile(){
+    try{
+      const res = await fetch(API_BASE + '/api/guest-profile', {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      const data = await res.json();
+      if(res.ok){
+        currentGuestProfile = data.guest;
+        updateProfileAvatar();
+      }
+    } catch(err){
+      // Non-fatal — the avatar just falls back to initials/no photo.
+    }
+  }
 
   async function loadListings(){
     try{
@@ -1589,6 +1733,7 @@
 
   if(sessionToken){
     loadListings();
+    loadGuestProfile();
   }
 </script>
 
