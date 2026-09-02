@@ -2889,8 +2889,9 @@
         headers: { 'Authorization': 'Bearer ' + hostSessionToken }
       });
       const data = await res.json();
-      const draft = (data.listings || []).find(l => String(l.id) === String(editId) && l.status === 'draft');
-      if(!draft) return;
+      const editableListing = (data.listings || []).find(l => String(l.id) === String(editId) && (l.status === 'draft' || l.status === 'rejected'));
+      if(!editableListing) return;
+      const draft = editableListing; // kept as "draft" below — same pre-fill logic serves both cases
 
       listingSubmissionState.currentListingId = draft.id;
       // Stored draft values are always real INR — reset the pricing
@@ -2948,7 +2949,9 @@
 
       const errorEl = listingForm.querySelector('.listing-error');
       errorEl.style.color = 'var(--gold-deep)';
-      errorEl.textContent = 'Resuming your draft — your text details are filled in, but you\'ll need to re-attach your photos (browsers don\'t allow us to pre-load previously uploaded files for security reasons).';
+      errorEl.textContent = draft.status === 'rejected'
+        ? `Editing your rejected listing. Reason given: "${draft.rejection_reason || 'not specified'}" — make the needed changes below, then submit to send it back for review. You'll need to re-attach your photos (browsers don't allow us to pre-load previously uploaded files for security reasons).`
+        : 'Resuming your draft — your text details are filled in, but you\'ll need to re-attach your photos (browsers don\'t allow us to pre-load previously uploaded files for security reasons).';
       errorEl.style.display = 'block';
 
       window.scrollTo({ top: listingForm.offsetTop - 100, behavior: 'smooth' });
