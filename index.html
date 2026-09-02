@@ -1275,7 +1275,7 @@
           </div>
         </div>
         <div class="field">
-          <label for="listPetFee"><span id="listPetFeeLabel">Pet fee (₹ per stay)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if you don't charge one</span></label>
+          <label for="listPetFee"><span id="listPetFeeLabel">Pet fee (₹ per pet, per stay)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— leave blank if you don't charge one</span></label>
           <input id="listPetFee" name="Pet Fee" type="number" min="0" placeholder="e.g. 500">
         </div>
       </div>
@@ -2185,7 +2185,7 @@
     const symbol = SUPPORTED_CURRENCIES[hostPricingCurrency].symbol.trim();
     document.getElementById('listPriceLabel').textContent = `Expected Nightly Rate (${symbol})`;
     document.getElementById('listSecurityDepositLabel').textContent = `Security Deposit (${symbol})`;
-    document.getElementById('listPetFeeLabel').textContent = `Pet fee (${symbol} per stay)`;
+    document.getElementById('listPetFeeLabel').textContent = `Pet fee (${symbol} per pet, per stay)`;
     document.getElementById('listDiscountFlatOption').textContent = `Flat amount off (${symbol})`;
     const discountTypeEl = document.getElementById('listDiscountType');
     document.getElementById('listDiscountValueLabel').textContent =
@@ -2321,20 +2321,41 @@
 
       // Best-effort auto-fill of City and Area from Google's address
       // components — a host can still edit either manually afterward.
-      // City stays the broad match used for search (locality, or the
-      // district-level admin area as a fallback for places without a
-      // named locality). Area is the more specific neighbourhood-level
-      // component, when Google returns one — not every address has one,
-      // so this is left blank rather than guessed at.
-      const cityComponent = (place.address_components || []).find(c =>
-        c.types.includes('locality') || c.types.includes('administrative_area_level_2')
-      );
+      //
+      // City deliberately prefers the DISTRICT-level component
+      // (administrative_area_level_2) over 'locality'. Google's
+      // 'locality' type is inconsistent for Indian addresses — it's
+      // frequently assigned to a smaller named area within a city rather
+      // than the city itself, which is exactly what was showing up in
+      // the City field instead of a proper city name. The district is
+      // far more reliably "the city" in common Indian usage (e.g. "Pune"
+      // as a district reliably matches "Pune" the city). Falls back to
+      // locality if there's no district-level match, and to the state
+      // as a last resort for addresses too rural to have either — even
+      // so, this is a starting point, not a guarantee: Aerva's own
+      // Himachal Pradesh listings use the STATE name as their "city" by
+      // convention, which no address component alone can infer, so
+      // always worth a host's quick check either way.
+      const components = place.address_components || [];
+      function findAddressComponent(types){
+        return components.find(c => types.some(t => c.types.includes(t)));
+      }
+      const cityComponent = findAddressComponent(['administrative_area_level_2'])
+        || findAddressComponent(['locality'])
+        || findAddressComponent(['administrative_area_level_1']);
       if(cityComponent){
         document.getElementById('listCity').value = cityComponent.long_name;
       }
-      const areaComponent = (place.address_components || []).find(c =>
-        c.types.includes('sublocality') || c.types.includes('sublocality_level_1') || c.types.includes('neighborhood')
-      );
+      // Area: the most specific named place below the city level. Prefer
+      // an actual neighbourhood/sublocality; if there isn't one, but
+      // 'locality' exists and wasn't already used as the City above (i.e.
+      // a district was found instead), that locality IS effectively the
+      // area — e.g. district "Pune" + locality "Koregaon Park".
+      const areaComponent = findAddressComponent(['sublocality_level_1', 'sublocality', 'neighborhood'])
+        || (() => {
+          const locality = findAddressComponent(['locality']);
+          return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
+        })();
       if(areaComponent){
         document.getElementById('listArea').value = areaComponent.long_name;
       }
@@ -3420,7 +3441,7 @@
         ? listing.allowed_pet_types.join(' & ') + ' welcome'
         : 'Pet-friendly';
       const petFeeNote = listing.pet_fee && Number(listing.pet_fee) > 0
-        ? ` · ₹${Number(listing.pet_fee).toLocaleString('en-IN')} pet fee`
+        ? ` · ₹${Number(listing.pet_fee).toLocaleString('en-IN')}/pet`
         : ' · No pet fee';
       petPolicyHtml = `<div class="amenity-tags"><span class="amenity-tag">${petTypes}${petFeeNote}</span></div>`;
     }
@@ -3788,7 +3809,7 @@
         ? `Up to ${listing.max_pets_allowed} pet${Number(listing.max_pets_allowed) === 1 ? '' : 's'}`
         : 'No stated limit on how many';
       const feeLine = listing.pet_fee && Number(listing.pet_fee) > 0
-        ? `${fmt(Number(listing.pet_fee))} pet fee per stay`
+        ? `${fmt(Number(listing.pet_fee))} per pet, per stay`
         : 'No pet fee';
       petPolicyHtml = `
         <div class="listing-modal-section-title">Pet Policy</div>
@@ -3863,7 +3884,7 @@
             <div class="guest-row">
               <div class="guest-row-text">
                 <div class="guest-row-title">Pets</div>
-                <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? fmt(Number(listing.pet_fee)) + ' fee per stay' : 'No pet fee'}</div>
+                <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? fmt(Number(listing.pet_fee)) + ' per pet, per stay' : 'No pet fee'}</div>
               </div>
               <div class="guest-stepper">
                 <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="dec" aria-label="Decrease pets">−</button>
@@ -4258,7 +4279,7 @@
     const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
     const beforeDiscount = roomTotal + extraTotal;
     const discountAmount = calculateDiscount(listing, nights, beforeDiscount);
-    const petFeeAmount = counts.pets > 0 && listing.pet_fee ? Number(listing.pet_fee) : 0;
+    const petFeeAmount = counts.pets > 0 && listing.pet_fee ? Number(listing.pet_fee) * counts.pets : 0;
 
     // Amenities are priced client-side here only for display — same as
     // updatePricing() — the real, trusted total is recalculated
@@ -4283,7 +4304,7 @@
     rows.push(`<div class="sum-row"><span>${fmtGuest(rate)} × ${nights} night${nights === 1 ? '' : 's'}</span><span>${fmtGuest(roomTotal)}</span></div>`);
     if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmtGuest(extraTotal)}</span></div>`);
     if(discountAmount > 0) rows.push(`<div class="sum-row"><span>Offer applied</span><span>−${fmtGuest(discountAmount)}</span></div>`);
-    if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
+    if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee (${counts.pets} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
     if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmtGuest(amenityTotal)}</span></div>`);
     rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
@@ -4379,7 +4400,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, selectedAmenities: selectedAmenitiesPayload }],
+          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, selectedAmenities: selectedAmenitiesPayload }],
           email,
           // Only takes effect if this currency is admin-enabled for direct
           // international charging server-side (see create-order.js) —
