@@ -311,23 +311,24 @@
 
   <div id="verificationBanner" style="display:none;"></div>
 
-  <a href="index.html?view=list-property" class="add-listing-link">List a New Property</a>
+  <div id="myListingsSection">
+    <a href="index.html?view=list-property" class="add-listing-link">List a New Property</a>
 
-  <div class="listings-layout">
-    <div>
-      <div class="listing-tabs" id="listingTabs">
-        <button type="button" class="listing-tab-btn active" data-tab="active" id="tabActiveBtn">Active</button>
-        <button type="button" class="listing-tab-btn" data-tab="inactive" id="tabInactiveBtn">Inactive</button>
+    <div class="listings-layout">
+      <div>
+        <div class="listing-tabs" id="listingTabs">
+          <button type="button" class="listing-tab-btn active" data-tab="active" id="tabActiveBtn">Active</button>
+          <button type="button" class="listing-tab-btn" data-tab="inactive" id="tabInactiveBtn">Inactive</button>
+        </div>
+        <div id="listingsContainer">
+          <p class="loading">Loading your listings…</p>
+        </div>
       </div>
-      <div id="listingsContainer">
-        <p class="loading">Loading your listings…</p>
-      </div>
-    </div>
-    <div class="listing-sidebar" id="listingSidebar">
-      <div class="sidebar-placeholder" id="sidebarPlaceholder">Once a listing is approved and live, its calendar, promotions, and paid amenities will show here automatically.</div>
-      <div id="sidebarContent" style="display:none;">
-        <div class="sidebar-heading" id="sidebarListingName"></div>
-        <div class="sidebar-sub">Pricing, photos, and description still live on the full <a href="#" id="sidebarManageLink" style="color:#8a6c39;">Manage Price & Offers</a> page.</div>
+      <div class="listing-sidebar" id="listingSidebar">
+        <div class="sidebar-placeholder" id="sidebarPlaceholder">Once a listing is approved and live, its calendar, promotions, and paid amenities will show here automatically.</div>
+        <div id="sidebarContent" style="display:none;">
+          <div class="sidebar-heading" id="sidebarListingName"></div>
+          <div class="sidebar-sub">Pricing, photos, and description still live on the full <a href="#" id="sidebarManageLink" style="color:#8a6c39;">Manage Price & Offers</a> page.</div>
 
         <div class="sidebar-section-title">Block Dates</div>
         <div class="cal-wrap">
@@ -394,6 +395,15 @@
         <button type="button" class="sidebar-save-btn" id="sidebarSaveBtn">Save Changes</button>
         <p class="sidebar-save-msg" id="sidebarSaveMsg"></p>
       </div>
+    </div>
+    </div>
+  </div>
+
+  <div id="experiencesSection">
+    <h2 class="section-heading" style="margin-top:36px;">Aerva Experience</h2>
+    <a href="index.html?view=list-experience" class="add-listing-link">List an Experience</a>
+    <div id="experienceCardsContainer">
+      <p class="loading">Loading your experiences…</p>
     </div>
   </div>
 
@@ -698,13 +708,68 @@
   }
 
   let currentListings = [];
+  let currentExperiences = [];
   let currentListingsTab = 'active';
 
   function renderListings(listings){
-    currentListings = listings;
+    // Split once, right at the source — everywhere else in this file
+    // (tabs, counts, the Active/Inactive cards, the hosting-property
+    // dropdown) only ever deals with stays now; experiences get their
+    // own separate "Aerva Experience" section below instead of being
+    // mixed into the same list.
+    currentListings = listings.filter(l => !l.listing_type || l.listing_type === 'stay');
+    currentExperiences = listings.filter(l => l.listing_type === 'experience');
+
+    // A host with zero properties has nothing for this whole section to
+    // show — not even an empty state worth taking up space for, since
+    // "List a New Property" up top already covers that entry point.
+    document.getElementById('myListingsSection').style.display = currentListings.length ? 'block' : 'none';
+
     updateListingTabCounts();
     renderListingsForCurrentTab();
+    renderExperienceCards();
     populateExperienceHostingDropdown();
+  }
+
+  function renderExperienceCards(){
+    const container = document.getElementById('experienceCardsContainer');
+    if(!container) return;
+    if(!currentExperiences.length){
+      container.innerHTML = '<p class="empty">You haven\'t listed an experience yet.</p>';
+      return;
+    }
+    container.innerHTML = currentExperiences.map(exp => {
+      const interiorPhotos = Array.isArray(exp.interior_photo_urls) ? exp.interior_photo_urls : [];
+      const exteriorPhotos = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
+      const leadPhoto = exp.cover_photo_url || interiorPhotos[0] || exteriorPhotos[0];
+      const thumbHtml = leadPhoto
+        ? `<img class="listing-thumb" src="${leadPhoto}" alt="${exp.property_name}">`
+        : `<div class="listing-thumb-placeholder">${(exp.property_name || '?').charAt(0).toUpperCase()}</div>`;
+      const editUrl = `index.html?view=list-experience&edit=${exp.id}`;
+      const rejectionNoteHtml = (exp.status === 'rejected' && exp.rejection_reason)
+        ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${exp.rejection_reason}</p>`
+        : '';
+      const stayNote = exp.experience_type === 'with_stay' ? 'Includes a stay' : 'Experience only';
+      return `
+        <div class="listing-card" data-href="${editUrl}" style="cursor:pointer;">
+          ${thumbHtml}
+          <div class="listing-info">
+            <h3>${exp.property_name || '(Untitled)'}</h3>
+            <div class="listing-meta">${stayNote} · ₹${exp.nightly_rate || '—'}${exp.experience_price_unit === 'per_person' ? '/person' : ''} ${statusBadgeHtml(exp.status)}</div>
+            ${rejectionNoteHtml}
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
+            <a class="manage-link" href="${editUrl}">Edit Experience</a>
+          </div>
+        </div>
+      `;
+    }).join('');
+    container.querySelectorAll('.listing-card').forEach(card => {
+      card.addEventListener('click', (e) => {
+        if(e.target.closest('a.manage-link')) return;
+        window.location.href = card.dataset.href;
+      });
+    });
   }
 
   // Only an approved, live listing makes sense to offer as an
@@ -914,27 +979,16 @@
       const thumbHtml = leadPhoto
         ? `<img class="listing-thumb" src="${leadPhoto}" alt="${l.property_name}">`
         : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
-      const isExperience = l.listing_type === 'experience';
-      const editUrlBase = isExperience ? 'index.html?view=list-experience&edit=' : 'index.html?view=list-property&edit=';
-      const actionHref = (l.status === 'draft' || l.status === 'rejected') ? `${editUrlBase}${l.id}` : (isExperience ? `${editUrlBase}${l.id}` : l.manageLink);
+      // currentListings is filtered to stays only now (see renderListings)
+      // — experiences render separately in the "Aerva Experience" section,
+      // so every card reaching this point is always a property.
+      const actionHref = (l.status === 'draft' || l.status === 'rejected') ? `index.html?view=list-property&edit=${l.id}` : l.manageLink;
       const actionLink = l.status === 'draft'
-        ? `<a class="manage-link" href="${editUrlBase}${l.id}">Continue Editing</a>`
+        ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Continue Editing</a>`
         : l.status === 'rejected'
-        ? `<a class="manage-link" href="${editUrlBase}${l.id}">Edit &amp; Resubmit</a>`
-        // An experience has no separate "manage pricing" endpoint the way
-        // a stay does (see submit-listing.js's comments on why) — editing
-        // one, approved or not, goes through the same List Experience
-        // page in edit mode instead of manage-listing.html, which was
-        // built entirely around stay-specific fields (WiFi, Kitchen, Pet
-        // Policy, etc.) that make no sense for an experience.
-        : isExperience
-        ? `<a class="manage-link" href="${editUrlBase}${l.id}">Edit Experience</a>`
+        ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Edit &amp; Resubmit</a>`
         : `<a class="manage-link" href="${l.manageLink}">Manage Price & Offers</a>`;
-      // Clone only makes sense for stay listings right now — there's no
-      // Experience submission form yet for a cloned experience to land in.
-      const cloneLink = (!l.listing_type || l.listing_type === 'stay')
-        ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${l.id})">Clone</button>`
-        : '';
+      const cloneLink = `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${l.id})">Clone</button>`;
       const rejectionNoteHtml = (l.status === 'rejected' && l.rejection_reason)
         ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${l.rejection_reason}</p>`
         : '';
