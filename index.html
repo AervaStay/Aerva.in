@@ -4949,6 +4949,20 @@
       </div>
     ` : '';
 
+    // Separate, full photo gallery for the stay itself — the "Hosted At"
+    // card above only shows one thumbnail, which isn't really enough to
+    // judge a place a guest might also be staying at. Deliberately kept
+    // as its own clearly-labeled section (not mixed into the experience's
+    // own photos above) so it's obvious which photos are the experience
+    // and which are the accommodation.
+    const hostingExteriorPhotos = Array.isArray(exp.hosting_exterior_photo_urls) ? exp.hosting_exterior_photo_urls : [];
+    const hostingInteriorPhotos = Array.isArray(exp.hosting_interior_photo_urls) ? exp.hosting_interior_photo_urls : [];
+    const hostingAllPhotos = [...hostingInteriorPhotos, ...hostingExteriorPhotos];
+    const hostingPhotosHtml = (exp.hosting_property_name && hostingAllPhotos.length) ? `
+      <div class="listing-modal-section-title">The Stay — ${exp.hosting_property_name}</div>
+      <div class="listing-modal-photos">${hostingAllPhotos.map(url => `<img src="${url}" alt="${exp.hosting_property_name}" loading="lazy">`).join('')}</div>
+    ` : '';
+
     // A without-stay experience has no hosting property to show instead
     // — its own address is the whole point of where a guest needs to go.
     const addressHtml = (!exp.hosting_property_name && (exp.formatted_address || exp.city)) ? `
@@ -4956,6 +4970,27 @@
       <p class="loc" style="margin-bottom:16px;">📍 ${exp.formatted_address || exp.city}</p>
       ${(exp.latitude && exp.longitude) ? `<a href="https://www.google.com/maps?q=${exp.latitude},${exp.longitude}" target="_blank" rel="noopener" style="font-size:12.5px; color:var(--gold-deep); text-decoration:underline;">Open in Google Maps</a>` : ''}
     ` : '';
+
+    // Logistics — all host-defined (see the "List Experience" form),
+    // shown as-is rather than Aerva interpreting or enforcing any of it.
+    const meetingPointLine = exp.experience_meeting_point_type === 'common_point'
+      ? (exp.experience_meeting_point_details || 'A common meeting point (details from host)')
+      : 'At the property/hotel';
+    const logisticsRows = [];
+    if(exp.experience_start_time) logisticsRows.push(`<div class="sum-row"><span>Start Time</span><span>${exp.experience_start_time}</span></div>`);
+    logisticsRows.push(`<div class="sum-row"><span>Meeting Point</span><span>${meetingPointLine}</span></div>`);
+    logisticsRows.push(`<div class="sum-row"><span>Travel/Transport</span><span>${exp.experience_arranges_travel ? 'Arranged by host' : 'Not included — guests make their own way there'}</span></div>`);
+    const travelDetailsLine = (exp.experience_arranges_travel && exp.experience_travel_details)
+      ? `<p style="font-size:12.5px; opacity:0.75; margin-top:4px;">${exp.experience_travel_details}</p>` : '';
+    const refundPolicyHtml = exp.experience_refund_policy ? `
+      <p style="font-size:12.5px; opacity:0.75; margin-top:10px;"><strong>If you don't reach the meeting point:</strong> ${exp.experience_refund_policy}</p>
+    ` : '';
+    const logisticsHtml = `
+      <div class="listing-modal-section-title">Good to Know</div>
+      ${logisticsRows.join('')}
+      ${travelDetailsLine}
+      ${refundPolicyHtml}
+    `;
 
     return `
       ${photosHtml}
@@ -4966,7 +5001,9 @@
         </div>
         ${exp.experience_category ? `<div class="loc">${exp.experience_category}${durationLine ? ' · ' + durationLine : ''}</div>` : ''}
         <p class="desc">${exp.description}</p>
+        ${logisticsHtml}
         ${hostingHtml}
+        ${hostingPhotosHtml}
         ${addressHtml}
         <div class="listing-modal-section-title">Book This Experience</div>
         <div class="field">
