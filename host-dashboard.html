@@ -285,6 +285,7 @@
   }
 </style>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 </head>
 <body>
 
@@ -544,6 +545,16 @@
           </select>
           <p class="profile-field-note" id="expHostingListingNote">Only your approved, live listings can host a stay.</p>
         </div>
+        <div class="field" id="expLocationField" style="display:none;">
+          <label for="expLocationSearch">Experience Location <span style="color:#a3402f;">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
+          <input id="expLocationSearch" type="text" placeholder="Start typing an address…" autocomplete="off" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif;">
+          <input type="hidden" id="expLatitude">
+          <input type="hidden" id="expLongitude">
+          <input type="hidden" id="expFormattedAddress">
+          <p id="expLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
+          <div id="expMapPin" style="width:100%; height:220px; background:#e9e2d6; border:1px solid #ddd0bc; margin-top:8px; display:none;"></div>
+          <p class="profile-field-note">Required for a without-stay experience — this is what shows guests where to actually go. Drag the pin for a more exact match.</p>
+        </div>
         <div class="field">
           <label for="expCategory">Category</label>
           <select id="expCategory" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
@@ -659,16 +670,95 @@
     }
   }
 
+  // ---- Experience location (without-stay only) — same address search
+  // + draggable pin pattern as index.html's listing form, ported here
+  // since a without-stay experience needs its own location the way a
+  // with-stay one gets for free from its hosting property. ----
+  let expPinMap = null, expPinMarker = null;
+
+  function applyExpLocationResult(place){
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+    document.getElementById('expLatitude').value = lat;
+    document.getElementById('expLongitude').value = lng;
+    document.getElementById('expFormattedAddress').value = place.formatted_address || '';
+    const confirmEl = document.getElementById('expLocationConfirm');
+    confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
+    updateExpPinMap(lat, lng);
+  }
+
+  function updateExpPinMap(lat, lng){
+    const container = document.getElementById('expMapPin');
+    if(!container || !window.google || !window.google.maps) return;
+    container.style.display = 'block';
+    const position = { lat: Number(lat), lng: Number(lng) };
+    if(!expPinMap){
+      expPinMap = new google.maps.Map(container, { center: position, zoom: 15, streetViewControl: false, mapTypeControl: false });
+      expPinMarker = new google.maps.Marker({ position, map: expPinMap, draggable: true });
+      expPinMarker.addListener('dragend', () => onExpPinMoved(expPinMarker.getPosition()));
+      expPinMap.addListener('click', (e) => {
+        expPinMarker.setPosition(e.latLng);
+        onExpPinMoved(e.latLng);
+      });
+    } else {
+      expPinMap.setCenter(position);
+      expPinMarker.setPosition(position);
+    }
+  }
+
+  function onExpPinMoved(latLng){
+    document.getElementById('expLatitude').value = latLng.lat();
+    document.getElementById('expLongitude').value = latLng.lng();
+    if(!window.google.maps.Geocoder) return;
+    new google.maps.Geocoder().geocode({ location: { lat: latLng.lat(), lng: latLng.lng() } }, (results, status) => {
+      const confirmEl = document.getElementById('expLocationConfirm');
+      if(status === 'OK' && results[0]){
+        document.getElementById('expFormattedAddress').value = results[0].formatted_address || '';
+        confirmEl.textContent = '✓ Location set: ' + (results[0].formatted_address || `${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}`);
+      } else {
+        confirmEl.textContent = `✓ Location set: ${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}`;
+      }
+      confirmEl.style.display = 'block';
+    });
+  }
+
+  window.initGoogleMaps = function(){
+    const searchInput = document.getElementById('expLocationSearch');
+    if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
+    const autocomplete = new google.maps.places.Autocomplete(searchInput, {
+      fields: ['geometry', 'formatted_address'],
+      types: ['geocode', 'establishment']
+    });
+    autocomplete.addListener('place_changed', function(){
+      applyExpLocationResult(autocomplete.getPlace());
+    });
+  };
+
   // "Which property hosts the stay" only matters — and only shows — once
   // "Yes" is picked above. Picking "No" hides and clears it, so a
   // leftover selection from switching back and forth never gets sent for
   // a without-stay experience.
   document.querySelectorAll('input[name="expType"]').forEach(radio => {
     radio.addEventListener('change', () => {
-      const showField = document.getElementById('expTypeWithStay').checked;
-      const fieldEl = document.getElementById('expHostingListingField');
-      fieldEl.style.display = showField ? 'block' : 'none';
-      if(!showField) document.getElementById('expHostingListing').value = '';
+      const withStay = document.getElementById('expTypeWithStay').checked;
+      const hostingFieldEl = document.getElementById('expHostingListingField');
+      hostingFieldEl.style.display = withStay ? 'block' : 'none';
+      if(!withStay) document.getElementById('expHostingListing').value = '';
+
+      // Location is the mirror case — only a without-stay experience
+      // needs its own address (a with-stay one borrows the hosting
+      // property's location instead, see submit-listing.js).
+      const locationFieldEl = document.getElementById('expLocationField');
+      locationFieldEl.style.display = withStay ? 'none' : 'block';
+      if(withStay){
+        document.getElementById('expLocationSearch').value = '';
+        document.getElementById('expLatitude').value = '';
+        document.getElementById('expLongitude').value = '';
+        document.getElementById('expFormattedAddress').value = '';
+        document.getElementById('expLocationConfirm').style.display = 'none';
+      }
     });
   });
 
@@ -2031,17 +2121,24 @@
     const price = document.getElementById('expPrice').value;
     const priceUnit = document.getElementById('expPriceUnit').value;
     const duration = document.getElementById('expDuration').value;
+    const latitude = document.getElementById('expLatitude').value;
+    const longitude = document.getElementById('expLongitude').value;
+    const formattedAddress = document.getElementById('expFormattedAddress').value;
 
     // Same checks the backend enforces (see submit-listing.js) — caught
     // here first so the host isn't left guessing which field was the
     // problem after a round trip. Order matters: expType has to be
-    // checked before hostingListingId, since whether a hosting property
-    // is even required depends on the answer to that question.
+    // checked before hostingListingId/location, since which of those is
+    // even required depends on the answer to that question.
     if(!name){ msgEl.textContent = 'Please give your experience a name.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!description){ msgEl.textContent = 'Please add a description.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!expTypeInput){ msgEl.textContent = 'Please say whether this experience includes a stay.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(expTypeInput.value === 'with_stay' && !hostingListingId){
       msgEl.textContent = 'Please choose which of your properties hosts the included stay — or choose "No" above if this experience doesn\'t include one.';
+      msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return;
+    }
+    if(expTypeInput.value === 'without_stay' && (!latitude || !longitude)){
+      msgEl.textContent = 'Please select this experience\'s location from the address suggestions.';
       msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return;
     }
     if(!category){ msgEl.textContent = 'Please choose a category.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
@@ -2065,6 +2162,9 @@
           nightlyRate: Number(price),
           experiencePriceUnit: priceUnit,
           experienceDurationHours: duration ? Number(duration) : null,
+          latitude: latitude || null,
+          longitude: longitude || null,
+          formattedAddress: formattedAddress || null,
           hostName: (currentVerification && currentVerification.hostName) || '',
           hostPhone: (currentVerification && currentVerification.hostPhone) || '',
           exteriorPhotoUrls: expPhotoUrls,
@@ -2083,6 +2183,12 @@
         document.getElementById('expCategory').value = '';
         document.querySelectorAll('input[name="expType"]').forEach(r => r.checked = false);
         document.getElementById('expHostingListingField').style.display = 'none';
+        document.getElementById('expLocationSearch').value = '';
+        document.getElementById('expLatitude').value = '';
+        document.getElementById('expLongitude').value = '';
+        document.getElementById('expFormattedAddress').value = '';
+        document.getElementById('expLocationConfirm').style.display = 'none';
+        document.getElementById('expLocationField').style.display = 'none';
         document.getElementById('expPrice').value = '';
         document.getElementById('expPriceUnit').value = 'per_person';
         document.getElementById('expDuration').value = '';
