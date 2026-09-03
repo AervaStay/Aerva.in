@@ -411,7 +411,6 @@
       <button type="button" class="profile-tab-btn active" data-profile-tab="personal" id="profileTabPersonalBtn">Personal Details</button>
       <button type="button" class="profile-tab-btn" data-profile-tab="payment" id="profileTabPaymentBtn">Payment Options</button>
       <button type="button" class="profile-tab-btn" data-profile-tab="verification" id="profileTabVerificationBtn">Verification</button>
-      <button type="button" class="profile-tab-btn" data-profile-tab="experience" id="profileTabExperienceBtn">List Experience</button>
     </div>
     <div class="profile-modal-body">
 
@@ -514,86 +513,110 @@
         <div id="profileVerificationContent" class="verify-box" style="margin-bottom:0;"></div>
       </div>
 
-      <!-- ---- List Experience ---- -->
-      <div class="profile-tab-panel" id="profilePanelExperience" style="display:none;">
-        <p class="profile-field-note" style="margin-bottom:18px;">Runs alongside a property — a cooking class, a guided hike, a local tour. Submitted experiences go through the same review as new listings before they go live under Aerva Experience.</p>
+    </div>
+  </div>
+</div>
 
-        <div class="field">
-          <label for="expName">Experience Name</label>
-          <input type="text" id="expName" placeholder="e.g. Sunset Kayaking on the Pavana">
-        </div>
-        <div class="field">
-          <label for="expDescription">Description</label>
-          <textarea id="expDescription" rows="4" placeholder="What does this experience include? What should a guest expect?" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif; resize:vertical;"></textarea>
-        </div>
-        <div class="field">
-          <label>Does this experience include a stay?</label>
-          <div style="display:flex; gap:16px; margin-top:4px;">
-            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
-              <input type="radio" name="expType" id="expTypeWithStay" value="with_stay"> Yes — includes an overnight stay
-            </label>
-            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
-              <input type="radio" name="expType" id="expTypeWithoutStay" value="without_stay"> No — just the experience itself
-            </label>
-          </div>
-          <p class="profile-field-note">A host can list a without-stay experience with no property at all — a hosting property is only needed if the experience includes a stay.</p>
-        </div>
-        <div class="field" id="expHostingListingField" style="display:none;">
-          <label for="expHostingListing">Which Property Hosts the Stay</label>
-          <select id="expHostingListing" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
-            <option value="">— Select one of your live listings —</option>
-          </select>
-          <p class="profile-field-note" id="expHostingListingNote">Only your approved, live listings can host a stay.</p>
-        </div>
-        <div class="field" id="expLocationField" style="display:none;">
-          <label for="expLocationSearch">Experience Location <span style="color:#a3402f;">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
-          <input id="expLocationSearch" type="text" placeholder="Start typing an address…" autocomplete="off" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif;">
-          <input type="hidden" id="expLatitude">
-          <input type="hidden" id="expLongitude">
-          <input type="hidden" id="expFormattedAddress">
-          <p id="expLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
-          <div id="expMapPin" style="width:100%; height:220px; background:#e9e2d6; border:1px solid #ddd0bc; margin-top:8px; display:none;"></div>
-          <p class="profile-field-note">Required for a without-stay experience — this is what shows guests where to actually go. Drag the pin for a more exact match.</p>
-        </div>
-        <div class="field">
-          <label for="expCategory">Category</label>
-          <select id="expCategory" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
-            <option value="">— Select a category —</option>
-            <option value="Food & Drink">Food & Drink</option>
-            <option value="Adventure & Outdoors">Adventure & Outdoors</option>
-            <option value="Arts & Culture">Arts & Culture</option>
-            <option value="Wellness & Spa">Wellness & Spa</option>
-            <option value="Nature & Wildlife">Nature & Wildlife</option>
-            <option value="Local Tours">Local Tours</option>
-            <option value="Other">Other</option>
-          </select>
-        </div>
-        <div class="field" style="display:flex; gap:12px;">
-          <div style="flex:1;">
-            <label for="expPrice">Price (₹)</label>
-            <input type="number" id="expPrice" min="1" placeholder="e.g. 1500">
-          </div>
-          <div style="flex:1;">
-            <label for="expPriceUnit">Priced</label>
-            <select id="expPriceUnit" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
-              <option value="per_person">Per person</option>
-              <option value="flat">Flat rate</option>
-            </select>
-          </div>
-        </div>
-        <div class="field">
-          <label for="expDuration">Duration in Hours <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></label>
-          <input type="number" id="expDuration" min="0.5" step="0.5" placeholder="e.g. 3">
-        </div>
-        <div class="field">
-          <label for="expPhotos">Photos</label>
-          <input type="file" id="expPhotos" accept="image/*" multiple>
-          <p class="profile-field-note" id="expPhotoCount">At least 1 photo is required.</p>
-        </div>
-        <button type="button" class="profile-save-btn" id="expSubmitBtn">Submit Experience</button>
-        <p class="profile-save-msg" id="expSubmitMsg"></p>
+<!-- ================= LIST EXPERIENCE MODAL (separate from Profile) ================= -->
+<div class="profile-modal-overlay" id="experienceModalOverlay" style="display:none;">
+  <div class="profile-modal">
+    <button type="button" class="profile-modal-close" id="experienceModalCloseBtn" aria-label="Close">&times;</button>
+    <div class="profile-modal-body" style="padding-top:36px;">
+      <h3 style="font-family:Georgia,serif; font-size:19px; margin-bottom:4px;">List an Experience</h3>
+      <p class="profile-field-note" style="margin-bottom:18px;">Runs alongside a property — a cooking class, a guided hike, a local tour. Submitted experiences go through the same review as new listings before they go live under Aerva Experience.</p>
+
+      <div class="field">
+        <label for="expName">Experience Name</label>
+        <input type="text" id="expName" placeholder="e.g. Sunset Kayaking on the Pavana">
       </div>
-
+      <div class="field">
+        <label for="expDescription">Description</label>
+        <textarea id="expDescription" rows="4" placeholder="What does this experience include? What should a guest expect?" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif; resize:vertical;"></textarea>
+      </div>
+      <div class="field">
+        <label>Does this experience include a stay?</label>
+        <div style="display:flex; gap:16px; margin-top:4px;">
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+            <input type="radio" name="expType" id="expTypeWithStay" value="with_stay"> Yes — includes an overnight stay
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+            <input type="radio" name="expType" id="expTypeWithoutStay" value="without_stay"> No — just the experience itself
+          </label>
+        </div>
+        <p class="profile-field-note">A host can list a without-stay experience with no property at all — a hosting property is only needed if the experience includes a stay.</p>
+      </div>
+      <div class="field" id="expHostingListingField" style="display:none;">
+        <label for="expHostingListing">Which Property Hosts the Stay</label>
+        <select id="expHostingListing" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
+          <option value="">— Select one of your live listings —</option>
+        </select>
+        <p class="profile-field-note" id="expHostingListingNote">Only your approved, live listings can host a stay.</p>
+      </div>
+      <div class="field" id="expLocationField" style="display:none;">
+        <label for="expLocationSearch">Experience Location <span style="color:#a3402f;">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
+        <input id="expLocationSearch" type="text" placeholder="Start typing an address…" autocomplete="off" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif;">
+        <input type="hidden" id="expLatitude">
+        <input type="hidden" id="expLongitude">
+        <input type="hidden" id="expFormattedAddress">
+        <p id="expLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
+        <div id="expMapPin" style="width:100%; height:220px; background:#e9e2d6; border:1px solid #ddd0bc; margin-top:8px; display:none;"></div>
+        <p class="profile-field-note">Drag the pin for a more exact match.</p>
+      </div>
+      <div class="field" id="expCityAreaField" style="display:none;">
+        <div style="display:flex; gap:12px;">
+          <div style="flex:1;">
+            <label for="expCity">City <span style="color:#a3402f;">*</span></label>
+            <input type="text" id="expCity" placeholder="e.g. Pune" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif;">
+          </div>
+          <div style="flex:1;">
+            <label for="expArea">Area <span style="color:#a3402f;">*</span></label>
+            <input type="text" id="expArea" placeholder="e.g. Koregaon Park" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif;">
+          </div>
+        </div>
+        <p class="profile-field-note" id="expCityAreaWarning" style="color:#a3402f; display:none;"></p>
+      </div>
+      <div class="field" id="expPincodeField" style="display:none;">
+        <label for="expPincode">PIN / Postal Code <span style="color:#a3402f;">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-filled when your address provides one)</span></label>
+        <input type="text" id="expPincode" placeholder="e.g. 411001" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif;">
+        <p class="profile-field-note" id="expPincodeHint">Filled in automatically once you pick an address above. If your address didn't include one, please enter it yourself.</p>
+      </div>
+      <div class="field">
+        <label for="expCategory">Category</label>
+        <select id="expCategory" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
+          <option value="">— Select a category —</option>
+          <option value="Food & Drink">Food & Drink</option>
+          <option value="Adventure & Outdoors">Adventure & Outdoors</option>
+          <option value="Arts & Culture">Arts & Culture</option>
+          <option value="Wellness & Spa">Wellness & Spa</option>
+          <option value="Nature & Wildlife">Nature & Wildlife</option>
+          <option value="Local Tours">Local Tours</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="field" style="display:flex; gap:12px;">
+        <div style="flex:1;">
+          <label for="expPrice">Price (₹)</label>
+          <input type="number" id="expPrice" min="1" placeholder="e.g. 1500">
+        </div>
+        <div style="flex:1;">
+          <label for="expPriceUnit">Priced</label>
+          <select id="expPriceUnit" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
+            <option value="per_person">Per person</option>
+            <option value="flat">Flat rate</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="expDuration">Duration in Hours <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></label>
+        <input type="number" id="expDuration" min="0.5" step="0.5" placeholder="e.g. 3">
+      </div>
+      <div class="field">
+        <label for="expPhotos">Photos</label>
+        <input type="file" id="expPhotos" accept="image/*" multiple>
+        <p class="profile-field-note" id="expPhotoCount">At least 1 photo is required.</p>
+      </div>
+      <button type="button" class="profile-save-btn" id="expSubmitBtn">Submit Experience</button>
+      <p class="profile-save-msg" id="expSubmitMsg"></p>
     </div>
   </div>
 </div>
@@ -687,6 +710,56 @@
     confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
     confirmEl.style.display = 'block';
     updateExpPinMap(lat, lng);
+
+    // Same district-over-locality City/Area extraction, Latin-script
+    // guard, and postal-code lookup as index.html's listing form — see
+    // the comments there for why each rule exists. Ported here since a
+    // without-stay experience needs the exact same address handling a
+    // new stay listing does.
+    const components = place.address_components || [];
+    function findAddressComponent(types){
+      return components.find(c => types.some(t => c.types.includes(t)));
+    }
+    const nonLatinPattern = /[^\u0000-\u024F\s]/;
+    function latinNameFor(component){
+      if(!component) return null;
+      if(component.long_name && !nonLatinPattern.test(component.long_name)) return component.long_name;
+      if(component.short_name && !nonLatinPattern.test(component.short_name)) return component.short_name;
+      return null;
+    }
+    const cityComponent = findAddressComponent(['administrative_area_level_2'])
+      || findAddressComponent(['locality'])
+      || findAddressComponent(['administrative_area_level_1']);
+    const cityName = latinNameFor(cityComponent);
+    const warningEl = document.getElementById('expCityAreaWarning');
+    warningEl.style.display = 'none';
+    if(cityName){
+      document.getElementById('expCity').value = cityName;
+    } else if(cityComponent){
+      warningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below.';
+      warningEl.style.display = 'block';
+    }
+    const areaComponent = findAddressComponent(['sublocality_level_1', 'sublocality', 'neighborhood'])
+      || (() => {
+        const locality = findAddressComponent(['locality']);
+        return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
+      })();
+    const areaName = latinNameFor(areaComponent);
+    if(areaName){
+      document.getElementById('expArea').value = areaName;
+    }
+    const postalComponent = findAddressComponent(['postal_code']);
+    const pincodeInput = document.getElementById('expPincode');
+    const pincodeHint = document.getElementById('expPincodeHint');
+    if(postalComponent){
+      pincodeInput.value = postalComponent.long_name;
+      pincodeHint.textContent = 'Filled in automatically once you pick an address above. If your address didn\'t include one, please enter it yourself.';
+      pincodeHint.style.color = '';
+    } else {
+      pincodeInput.value = '';
+      pincodeHint.textContent = 'Your address didn\'t include a PIN/postal code — please enter it yourself.';
+      pincodeHint.style.color = '#a3402f';
+    }
   }
 
   function updateExpPinMap(lat, lng){
@@ -728,7 +801,7 @@
     const searchInput = document.getElementById('expLocationSearch');
     if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
     const autocomplete = new google.maps.places.Autocomplete(searchInput, {
-      fields: ['geometry', 'formatted_address'],
+      fields: ['geometry', 'formatted_address', 'address_components'],
       types: ['geocode', 'establishment']
     });
     autocomplete.addListener('place_changed', function(){
@@ -747,17 +820,26 @@
       hostingFieldEl.style.display = withStay ? 'block' : 'none';
       if(!withStay) document.getElementById('expHostingListing').value = '';
 
-      // Location is the mirror case — only a without-stay experience
-      // needs its own address (a with-stay one borrows the hosting
-      // property's location instead, see submit-listing.js).
+      // Location/City/Area/Pincode are all the mirror case — only a
+      // without-stay experience needs its own address (a with-stay one
+      // borrows the hosting property's location instead, see
+      // submit-listing.js).
       const locationFieldEl = document.getElementById('expLocationField');
+      const cityAreaFieldEl = document.getElementById('expCityAreaField');
+      const pincodeFieldEl = document.getElementById('expPincodeField');
       locationFieldEl.style.display = withStay ? 'none' : 'block';
+      cityAreaFieldEl.style.display = withStay ? 'none' : 'block';
+      pincodeFieldEl.style.display = withStay ? 'none' : 'block';
       if(withStay){
         document.getElementById('expLocationSearch').value = '';
         document.getElementById('expLatitude').value = '';
         document.getElementById('expLongitude').value = '';
         document.getElementById('expFormattedAddress').value = '';
         document.getElementById('expLocationConfirm').style.display = 'none';
+        document.getElementById('expCity').value = '';
+        document.getElementById('expArea').value = '';
+        document.getElementById('expPincode').value = '';
+        document.getElementById('expCityAreaWarning').style.display = 'none';
       }
     });
   });
@@ -1439,11 +1521,26 @@
     document.getElementById('profileModalOverlay').style.display = 'none';
   }
   function switchProfileTab(tab){
-    ['personal', 'payment', 'verification', 'experience'].forEach(t => {
+    ['personal', 'payment', 'verification'].forEach(t => {
       document.getElementById('profileTab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn').classList.toggle('active', t === tab);
       document.getElementById('profilePanel' + t.charAt(0).toUpperCase() + t.slice(1)).style.display = t === tab ? 'block' : 'none';
     });
   }
+
+  // ---- List Experience modal — deliberately its OWN separate overlay,
+  // not a tab inside the Profile modal, so it doesn't read as "just
+  // another account setting." ----
+  function openExperienceModal(){
+    document.getElementById('experienceModalOverlay').style.display = 'flex';
+  }
+  function closeExperienceModal(){
+    document.getElementById('experienceModalOverlay').style.display = 'none';
+  }
+  document.getElementById('experienceModalCloseBtn').addEventListener('click', closeExperienceModal);
+  document.getElementById('experienceModalOverlay').addEventListener('click', (e) => {
+    if(e.target.id === 'experienceModalOverlay') closeExperienceModal();
+  });
+
   document.getElementById('hostProfileTrigger').addEventListener('click', () => openProfileModal('personal'));
   document.getElementById('profileModalCloseBtn').addEventListener('click', closeProfileModal);
   document.getElementById('profileModalOverlay').addEventListener('click', (e) => {
@@ -2124,6 +2221,9 @@
     const latitude = document.getElementById('expLatitude').value;
     const longitude = document.getElementById('expLongitude').value;
     const formattedAddress = document.getElementById('expFormattedAddress').value;
+    const city = document.getElementById('expCity').value.trim();
+    const area = document.getElementById('expArea').value.trim();
+    const pincode = document.getElementById('expPincode').value.trim();
 
     // Same checks the backend enforces (see submit-listing.js) — caught
     // here first so the host isn't left guessing which field was the
@@ -2137,9 +2237,14 @@
       msgEl.textContent = 'Please choose which of your properties hosts the included stay — or choose "No" above if this experience doesn\'t include one.';
       msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return;
     }
-    if(expTypeInput.value === 'without_stay' && (!latitude || !longitude)){
-      msgEl.textContent = 'Please select this experience\'s location from the address suggestions.';
-      msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return;
+    if(expTypeInput.value === 'without_stay'){
+      if(!latitude || !longitude){
+        msgEl.textContent = 'Please select this experience\'s location from the address suggestions.';
+        msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return;
+      }
+      if(!city){ msgEl.textContent = 'Please enter the city.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+      if(!area){ msgEl.textContent = 'Please enter the area.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+      if(!pincode){ msgEl.textContent = 'Please enter the PIN/postal code.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     }
     if(!category){ msgEl.textContent = 'Please choose a category.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!price || Number(price) <= 0){ msgEl.textContent = 'Please set a price.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
@@ -2165,6 +2270,9 @@
           latitude: latitude || null,
           longitude: longitude || null,
           formattedAddress: formattedAddress || null,
+          city: city || null,
+          area: area || null,
+          pincode: pincode || null,
           hostName: (currentVerification && currentVerification.hostName) || '',
           hostPhone: (currentVerification && currentVerification.hostPhone) || '',
           exteriorPhotoUrls: expPhotoUrls,
@@ -2175,8 +2283,9 @@
       if(res.ok){
         msgEl.textContent = 'Submitted — we\'ll review it and it\'ll go live under Aerva Experience once approved.';
         msgEl.style.color = '#3a7d44';
-        // Reset the form for a fresh submission, same as the main
-        // listing form does after a successful submit.
+        msgEl.style.display = 'block';
+        // Reset the form for next time, same as the main listing form
+        // does after a successful submit.
         document.getElementById('expName').value = '';
         document.getElementById('expDescription').value = '';
         document.getElementById('expHostingListing').value = '';
@@ -2189,18 +2298,30 @@
         document.getElementById('expFormattedAddress').value = '';
         document.getElementById('expLocationConfirm').style.display = 'none';
         document.getElementById('expLocationField').style.display = 'none';
+        document.getElementById('expCity').value = '';
+        document.getElementById('expArea').value = '';
+        document.getElementById('expCityAreaField').style.display = 'none';
+        document.getElementById('expCityAreaWarning').style.display = 'none';
+        document.getElementById('expPincode').value = '';
+        document.getElementById('expPincodeField').style.display = 'none';
         document.getElementById('expPrice').value = '';
         document.getElementById('expPriceUnit').value = 'per_person';
         document.getElementById('expDuration').value = '';
         expPhotoUrls = [];
         renderExpPhotoCount();
+        // Closes the whole modal once submitted — briefly shows the
+        // confirmation, then leaves, rather than sitting open on an
+        // empty, just-reset form with nothing left to do.
+        setTimeout(closeExperienceModal, 2000);
       } else {
         msgEl.textContent = data.error || 'Something went wrong. Please try again.';
         msgEl.style.color = '#a3402f';
+        msgEl.style.display = 'block';
       }
     } catch(err){
       msgEl.textContent = 'Something went wrong. Please try again.';
       msgEl.style.color = '#a3402f';
+      msgEl.style.display = 'block';
     }
     msgEl.style.display = 'block';
     this.disabled = false;
@@ -2210,14 +2331,18 @@
   if(sessionToken){
     loadListings();
     loadGuestProfile();
-    // Deep link from index.html's account menu ("Account Settings" /
-    // "List Experience") — profileTab picks which tab opens; defaults
-    // to Personal Details when not specified (or given an unknown value).
+    // Deep links from index.html's account menu — "Account Settings"
+    // opens the Profile modal; "List Experience" opens its own separate
+    // modal entirely (see openExperienceModal above — deliberately not
+    // a Profile tab).
     const deepLinkParams = new URLSearchParams(window.location.search);
     if(deepLinkParams.get('openProfile') === '1'){
-      const validTabs = ['personal', 'payment', 'verification', 'experience'];
+      const validTabs = ['personal', 'payment', 'verification'];
       const requestedTab = deepLinkParams.get('profileTab');
       openProfileModal(validTabs.includes(requestedTab) ? requestedTab : 'personal');
+    }
+    if(deepLinkParams.get('openExperience') === '1'){
+      openExperienceModal();
     }
   }
 </script>
