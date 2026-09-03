@@ -187,7 +187,8 @@ module.exports = async (req, res) => {
       exteriorPhotoUrls, interiorPhotoUrls, photoHashes,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
       securityDeposit,
-      hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceType
+      hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceType,
+      latitude, longitude, formattedAddress
     } = req.body;
     // Defaults to 'stay' for every existing caller — only the new
     // Experience submission path sends 'experience' explicitly.
@@ -275,7 +276,7 @@ module.exports = async (req, res) => {
     // draft/real, since a bad reference shouldn't even save as a draft.
     let hostingListing = null;
     if (isExperience && hostingListingId) {
-      const hostingRows = await sql`SELECT id, host_id, property_name, city FROM listings WHERE id = ${hostingListingId} AND listing_type = 'stay'`;
+      const hostingRows = await sql`SELECT id, host_id, property_name, city, latitude, longitude, formatted_address FROM listings WHERE id = ${hostingListingId} AND listing_type = 'stay'`;
       hostingListing = hostingRows[0];
       if (!hostingListing || hostingListing.host_id !== hostId) {
         return res.status(400).json({ error: 'That hosting property could not be found among your own listings.' });
@@ -297,6 +298,13 @@ module.exports = async (req, res) => {
         // a host can list one before ever listing a property.
         if (experienceType === 'with_stay' && !hostingListing) {
           return res.status(400).json({ error: 'Please choose which of your properties hosts the included stay.' });
+        }
+        // A with-stay experience gets its location from the hosting
+        // property automatically — but a without-stay one has no
+        // property to borrow a location from, so it needs its own
+        // address, same as a new stay listing requires one.
+        if (experienceType === 'without_stay' && (!latitude || !longitude)) {
+          return res.status(400).json({ error: 'Please select this experience\'s location from the address suggestions.' });
         }
         if (!experienceCategory || !String(experienceCategory).trim()) {
           return res.status(400).json({ error: 'Please choose a category for this experience.' });
@@ -383,6 +391,29 @@ module.exports = async (req, res) => {
     // property genuinely has no city, which is fine now that the column
     // allows null (see schema.sql).
     const safeCity = isExperience ? (hostingListing ? hostingListing.city : null) : (city || null);
+    // Same idea for the actual map location — a with-stay experience
+    // borrows the hosting property's coordinates (required there
+    // already, see validation above); a without-stay one submits its
+    // own, required by the same validation, so this never ends up empty
+    // for a real (non-draft) without-stay experience.
+    const isValidLat = (v) => v != null && !isNaN(Number(v)) && Math.abs(Number(v)) <= 90;
+    const isValidLng = (v) => v != null && !isNaN(Number(v)) && Math.abs(Number(v)) <= 180;
+    let safeLatitude = null, safeLongitude = null, safeFormattedAddress = null;
+    if (isExperience) {
+      if (hostingListing) {
+        safeLatitude = hostingListing.latitude;
+        safeLongitude = hostingListing.longitude;
+        safeFormattedAddress = hostingListing.formatted_address;
+      } else if (isValidLat(latitude) && isValidLng(longitude)) {
+        safeLatitude = Number(latitude);
+        safeLongitude = Number(longitude);
+        safeFormattedAddress = formattedAddress || null;
+      }
+    } else if (isValidLat(latitude) && isValidLng(longitude)) {
+      safeLatitude = Number(latitude);
+      safeLongitude = Number(longitude);
+      safeFormattedAddress = formattedAddress || null;
+    }
 
     const safePhotoHashesToStore = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
 
@@ -408,6 +439,7 @@ module.exports = async (req, res) => {
           listing_type = ${safeListingType}, hosting_listing_id = ${safeHostingListingId},
           experience_category = ${safeExperienceCategory}, experience_price_unit = ${safeExperiencePriceUnit},
           experience_duration_hours = ${safeExperienceDuration}, experience_type = ${safeExperienceType},
+          latitude = ${safeLatitude}, longitude = ${safeLongitude}, formatted_address = ${safeFormattedAddress},
           photo_hashes = ${safePhotoHashesToStore},
           status = ${newStatus},
           rejection_reason = CASE WHEN ${clearRejectionReason} THEN NULL ELSE rejection_reason END
@@ -424,7 +456,7 @@ module.exports = async (req, res) => {
           commission_rate, exterior_photo_urls, interior_photo_urls,
           pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
           listing_type, hosting_listing_id, experience_category, experience_price_unit,
-          experience_duration_hours, experience_type, status, photo_hashes
+          experience_duration_hours, experience_type, latitude, longitude, formatted_address, status, photo_hashes
         ) VALUES (
           ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
@@ -435,7 +467,7 @@ module.exports = async (req, res) => {
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
           ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit},
           ${safeListingType}, ${safeHostingListingId}, ${safeExperienceCategory}, ${safeExperiencePriceUnit},
-          ${safeExperienceDuration}, ${safeExperienceType}, ${newStatus}, ${safePhotoHashesToStore}
+          ${safeExperienceDuration}, ${safeExperienceType}, ${safeLatitude}, ${safeLongitude}, ${safeFormattedAddress}, ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
       `;
