@@ -884,11 +884,11 @@
     
     </a>
     <div class="header-category-nav">
-      <a href="#" class="category-item active" id="catAll">
+      <a href="index.html" class="category-item active" id="catAll">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-6-4-9s1.5-6.4 4-9z"/></svg>
         All
       </a>
-      <a href="index.html" class="category-item">
+      <a href="index.html?view=suites" class="category-item" id="catSuites">
         <svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7"/><path d="M6 10v9h12v-9"/><path d="M10 19v-5h4v5"/></svg>
         Suites
       </a>
@@ -961,9 +961,9 @@
 <section class="pad" id="suites" style="background:var(--cream-deep); padding-top:96px;">
   <div class="wrap">
     <div class="section-head center-head reveal">
-      <div class="eyebrow">Where You Stay</div>
-      <h2>Homes, personally chosen.</h2>
-      <p style="margin-left:auto; margin-right:auto;">Every Aerva home is reviewed and approved individually — never a template, never bulk-listed.</p>
+      <div class="eyebrow" id="browseEyebrow">Where You Stay</div>
+      <h2 id="browseHeading">Homes, personally chosen.</h2>
+      <p style="margin-left:auto; margin-right:auto;" id="browseSubhead">Every Aerva home is reviewed and approved individually — never a template, never bulk-listed.</p>
     </div>
   </div>
   <div class="filter-bg-wrap" id="filterBgWrap">
@@ -1122,24 +1122,6 @@
   </div>
 </section>
 
-<!-- ================= AERVA EXPERIENCE ================= -->
-<section class="pad" id="experiences" style="display:none;">
-  <div class="wrap">
-    <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-      Back to all homes
-    </a>
-    <div class="section-head center-head reveal">
-      <div class="eyebrow">Aerva Experience</div>
-      <h2>Moments, not just a stay.</h2>
-      <p style="margin-left:auto; margin-right:auto;">Guided treks, cooking classes, local tours — hosted at or near an Aerva property, bookable on their own or alongside a stay.</p>
-    </div>
-    <div class="suite-grid reveal" id="experiencesContainer">
-      <div class="suites-loading">Loading experiences…</div>
-    </div>
-  </div>
-</section>
-
 <div class="divider-strip" style="background:var(--cream-deep);">
   <div class="wrap starline" aria-hidden="true">
     <span class="rule" style="flex:1; max-width:220px;"></span>
@@ -1171,9 +1153,10 @@
 </section>
 
 <!-- ================= EXPERIENCE DETAIL PAGE ================= -->
-<!-- Shown instead of the homepage when this tab was opened with
-     ?experience=<id> — clicking an experience card opens exactly this in
-     a new tab (see the click handler on #experiencesContainer). -->
+<!-- Shown for a direct/shared ?experience=<id> link, or via
+     showExperienceDetailPage() as a fallback — normal browsing opens the
+     same content inline as a modal instead (see openExperienceDetail
+     and the combined grid's click handler on #suitesContainer). -->
 <section class="pad" id="experienceFullView" style="display:none;">
   <div class="wrap">
     <a href="index.html?view=experiences" class="link" style="margin-bottom:22px; display:inline-flex;">
@@ -1966,10 +1949,11 @@
   }
 
   // Re-renders whatever's currently on screen so a currency switch takes
-  // effect immediately, without a full page reload.
+  // effect immediately, without a full page reload. applyFiltersAndRender
+  // now covers both suite and experience cards together (see the
+  // combined-grid rewrite), so a single call handles both.
   function applyCurrencyToPage(){
     if(typeof applyFiltersAndRender === 'function' && document.getElementById('suitesContainer')) applyFiltersAndRender();
-    if(typeof renderExperienceCards === 'function' && experiencesLoaded) renderExperienceCards();
   }
 
   function updateCurrencyTriggerLabel(){
@@ -4299,16 +4283,16 @@
     localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
   }
 
-  // ---- Aerva Experience: browsing state, lazy-loaded only when the
-  // guest actually opens that tab (or links directly to one experience),
-  // never fetched on every page load. ----
+  // ---- Aerva Experience: fetched eagerly alongside listings now (see
+  // initSite), since the combined "All" view needs both immediately —
+  // no longer lazy-loaded only when the Experience filter is opened. ----
   let approvedExperiences = [];
   let experiencesById = {};
   let experiencesLoaded = false;
+  let currentCategoryFilter = 'all'; // 'all' | 'suites' | 'experiences'
 
   async function loadExperiences(){
     if(experiencesLoaded) return;
-    const container = document.getElementById('experiencesContainer');
     try{
       const res = await fetch(SUITES_API_BASE + '/api/get-listings?experiences=1');
       if(!res.ok) throw new Error('Failed to load experiences');
@@ -4317,33 +4301,12 @@
       experiencesById = {};
       approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
       experiencesLoaded = true;
-      renderExperienceCards();
+      applyFiltersAndRender();
     } catch(err){
-      if(container) container.innerHTML = '<div class="suites-empty">Could not load experiences right now. Please refresh, or check back shortly.</div>';
+      // Non-fatal — the combined grid still shows suites correctly even
+      // if experiences specifically failed to load; applyFiltersAndRender
+      // just treats approvedExperiences as empty in that case.
     }
-  }
-
-  function renderExperienceCards(){
-    const container = document.getElementById('experiencesContainer');
-    if(!container) return;
-    if(approvedExperiences.length === 0){
-      container.innerHTML = '<div class="suites-empty">No experiences are live yet — check back soon.</div>';
-      return;
-    }
-    container.innerHTML = '';
-    approvedExperiences.forEach((exp, index) => {
-      const card = buildExperienceCard(exp, index);
-      container.appendChild(card);
-      // Same reveal-on-scroll animation the suite cards use — but the
-      // page-load IntersectionObserver setup only ever scans elements
-      // that existed in the DOM at that moment (see the .reveal setup
-      // near the top). Experience cards are fetched and added later,
-      // asynchronously, so without re-registering each one here
-      // individually, they'd carry the .reveal class's default
-      // opacity:0 forever and never actually become visible — which is
-      // exactly what was happening.
-      io.observe(card);
-    });
   }
 
   function buildExperienceCard(exp, index){
@@ -4554,17 +4517,16 @@
   function applyFiltersAndRender(){
     const container = document.getElementById('suitesContainer');
 
-    if(approvedListings.length === 0){
-      container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="index.html?view=list-property" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
-      return;
-    }
-
-    let list = approvedListings.slice();
+    // Price/pet filters are stay-specific concepts (nightly rate, pet
+    // policy) — they only ever narrow the suites portion of the list.
+    // Experiences are included as-is regardless of those two filters,
+    // same as they always were on their own separate view.
+    let suiteList = approvedListings.slice();
 
     const minPrice = document.getElementById('minPrice').value;
     const maxPrice = document.getElementById('maxPrice').value;
-    if(minPrice) list = list.filter(l => l.nightly_rate && Number(l.nightly_rate) >= Number(minPrice));
-    if(maxPrice) list = list.filter(l => l.nightly_rate && Number(l.nightly_rate) <= Number(maxPrice));
+    if(minPrice) suiteList = suiteList.filter(l => l.nightly_rate && Number(l.nightly_rate) >= Number(minPrice));
+    if(maxPrice) suiteList = suiteList.filter(l => l.nightly_rate && Number(l.nightly_rate) <= Number(maxPrice));
 
     // Bringing a pet narrows results to homes the host has actually
     // marked pet-friendly, and further excludes any that cap pets below
@@ -4572,32 +4534,61 @@
     // the dedicated Pet Policy section, never guessed from anything else.
     const wantsPetFriendly = guestCounts.pets > 0;
     if(wantsPetFriendly){
-      list = list.filter(l => l.pet_friendly === true && (!l.max_pets_allowed || Number(l.max_pets_allowed) >= guestCounts.pets));
+      suiteList = suiteList.filter(l => l.pet_friendly === true && (!l.max_pets_allowed || Number(l.max_pets_allowed) >= guestCounts.pets));
     }
 
     const sortOrder = document.getElementById('sortPrice').value;
-    if(sortOrder === 'asc') list.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
-    else if(sortOrder === 'desc') list.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
+    if(sortOrder === 'asc') suiteList.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
+    else if(sortOrder === 'desc') suiteList.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
     else if(guestLocation){
       // "Recommended" (no explicit price sort) becomes "nearest first" once
       // the guest has shared their location via the Near Me button — a
       // listing with no coordinates sorts last rather than being dropped.
-      list.sort((a, b) => {
+      suiteList.sort((a, b) => {
         const da = (a.latitude && a.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(a.latitude), Number(a.longitude)) : Infinity;
         const db = (b.latitude && b.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(b.latitude), Number(b.longitude)) : Infinity;
         return da - db;
       });
     }
 
-    container.innerHTML = '';
-    if(list.length === 0){
-      container.innerHTML = wantsPetFriendly
-        ? '<div class="suites-empty">No pet-friendly homes match your other filters — try widening your price range or removing pets.</div>'
-        : '<div class="suites-empty">No homes match these filters — try widening your price range.</div>';
+    const experienceList = approvedExperiences.slice();
+
+    // "All" interleaves both card types into one grid; "Suites" and
+    // "Aerva Experience" are just filtered views of that exact same
+    // underlying data — not separate sections/fetches anymore.
+    const showSuites = currentCategoryFilter === 'all' || currentCategoryFilter === 'suites';
+    const showExperiences = currentCategoryFilter === 'all' || currentCategoryFilter === 'experiences';
+
+    if(approvedListings.length === 0 && approvedExperiences.length === 0){
+      container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="index.html?view=list-property" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
       return;
     }
-    list.forEach((listing, index) => {
-      const card = buildSuiteCard(listing, index);
+
+    const finalSuites = showSuites ? suiteList : [];
+    const finalExperiences = showExperiences ? experienceList : [];
+
+    container.innerHTML = '';
+    if(finalSuites.length === 0 && finalExperiences.length === 0){
+      let message;
+      if(currentCategoryFilter === 'suites' && wantsPetFriendly) message = 'No pet-friendly homes match your other filters — try widening your price range or removing pets.';
+      else if(currentCategoryFilter === 'suites') message = 'No homes match these filters — try widening your price range.';
+      else if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
+      else message = 'Nothing matches these filters yet — try widening your price range.';
+      container.innerHTML = `<div class="suites-empty">${message}</div>`;
+      return;
+    }
+
+    // Suites first, then experiences — a stable, predictable order
+    // rather than an interleaved shuffle, so results don't visually
+    // reorder themselves every time a filter changes.
+    let index = 0;
+    finalSuites.forEach(listing => {
+      const card = buildSuiteCard(listing, index++);
+      container.appendChild(card);
+      io.observe(card);
+    });
+    finalExperiences.forEach(exp => {
+      const card = buildExperienceCard(exp, index++);
       container.appendChild(card);
       io.observe(card);
     });
@@ -6281,6 +6272,14 @@
     if(!card) return;
     e.preventDefault();
 
+    // Suite and experience cards now share this same combined grid (see
+    // applyFiltersAndRender) — each card carries its own type-specific
+    // data attribute, so a click routes to the right detail view.
+    if(card.dataset.experienceId){
+      openExperienceDetail(card.dataset.experienceId);
+      return;
+    }
+
     // Opens the same detail view (calendar + photos + booking, all on
     // one screen) right here as a modal — no new tab, no extra click
     // "inside" the listing first. The current search's dates/guests
@@ -6288,13 +6287,6 @@
     // live searchArrivalDate/searchDepartureDate/guestCounts variables
     // directly when there's no ?listing= URL to read them from instead.
     openListingDetail(card.dataset.listingId);
-  });
-
-  document.getElementById('experiencesContainer').addEventListener('click', (e) => {
-    const card = e.target.closest('.suite-card');
-    if(!card || !card.dataset.experienceId) return;
-    e.preventDefault();
-    openExperienceDetail(card.dataset.experienceId);
   });
 
   document.getElementById('searchBtn').addEventListener('click', performSearch);
@@ -6833,6 +6825,13 @@
     applyFiltersAndRender();
     initReserveForm();
 
+    // Experiences are now needed immediately for the combined "All" view
+    // (not just when the guest specifically opens the Experience filter),
+    // so this fetch always runs — applyFiltersAndRender() runs again on
+    // its own once this resolves (see loadExperiences), merging
+    // experience cards into the grid already showing suites.
+    loadExperiences();
+
     // If this tab was opened as a direct link to one listing (see the
     // suite-card click handler), show that instead of the homepage grid.
     const requestedListingId = new URLSearchParams(window.location.search).get('listing');
@@ -6841,10 +6840,7 @@
       return;
     }
 
-    // Same for a direct link to one experience — experiences aren't
-    // fetched by default (see loadExperiences), so this is the one case
-    // that needs an eager fetch rather than waiting for the guest to open
-    // the Aerva Experience tab.
+    // Same for a direct link to one experience.
     const requestedExperienceId = new URLSearchParams(window.location.search).get('experience');
     if(requestedExperienceId){
       await loadExperiences();
@@ -6854,24 +6850,75 @@
       }
     }
 
-    // Aerva Experience and List Property each open in their own new tab
-    // as ?view=<name> — the header's 4 main tabs (All/Suites/Aerva
-    // Experience/Host With Aerva) stay visible here too, same as on the
-    // homepage, so a guest can always jump straight to another section
-    // without having to use the "Back to all homes" link first.
+    // List Property and List Experience are still their own separate
+    // full pages. "All"/"Suites"/"Aerva Experience" are no longer
+    // separate sections at all — they're the SAME combined grid,
+    // filtered differently (see setCategoryFilter) — so a ?view= of
+    // 'suites' or 'experiences' here just sets the initial filter state
+    // rather than swapping to a different section.
     const requestedView = new URLSearchParams(window.location.search).get('view');
-    if(requestedView === 'experiences'){
-      document.getElementById('suites').style.display = 'none';
-      document.getElementById('experiences').style.display = 'block';
-      loadExperiences();
-    } else if(requestedView === 'list-property'){
+    if(requestedView === 'list-property'){
       document.getElementById('suites').style.display = 'none';
       document.getElementById('add-listing').style.display = 'block';
     } else if(requestedView === 'list-experience'){
       document.getElementById('suites').style.display = 'none';
       document.getElementById('list-experience').style.display = 'block';
+    } else if(requestedView === 'suites'){
+      setCategoryFilter('suites');
+    } else if(requestedView === 'experiences'){
+      setCategoryFilter('experiences');
     }
   }
+
+  // Switches which cards show in the one combined grid — 'all' shows
+  // suites and experiences together, 'suites'/'experiences' show just
+  // that type. Updates the active nav tab and the section's own
+  // heading/subhead to match, then re-renders from whatever data is
+  // already loaded (no re-fetch needed, this is purely a display filter).
+  function setCategoryFilter(filter){
+    currentCategoryFilter = filter;
+    document.getElementById('catAll').classList.toggle('active', filter === 'all');
+    document.getElementById('catSuites').classList.toggle('active', filter === 'suites');
+    document.getElementById('catExperience').classList.toggle('active', filter === 'experiences');
+
+    const eyebrowEl = document.getElementById('browseEyebrow');
+    const headingEl = document.getElementById('browseHeading');
+    const subheadEl = document.getElementById('browseSubhead');
+    if(filter === 'suites'){
+      eyebrowEl.textContent = 'Where You Stay';
+      headingEl.textContent = 'Homes, personally chosen.';
+      subheadEl.textContent = 'Every Aerva home is reviewed and approved individually — never a template, never bulk-listed.';
+    } else if(filter === 'experiences'){
+      eyebrowEl.textContent = 'Aerva Experience';
+      headingEl.textContent = 'Moments, not just a stay.';
+      subheadEl.textContent = 'Guided treks, cooking classes, local tours — hosted at or near an Aerva property, bookable on their own or alongside a stay.';
+    } else {
+      eyebrowEl.textContent = 'Discover Aerva';
+      headingEl.textContent = 'Homes and moments, together.';
+      subheadEl.textContent = 'Every stay and every experience on Aerva, reviewed and approved individually — browse both at once, or filter to just one.';
+    }
+    applyFiltersAndRender();
+  }
+
+  // All three tabs stay real, navigable links (so a direct visit or a
+  // bookmark to ?view=suites still works correctly via initSite above) —
+  // but when the guest is already sitting on this same combined grid,
+  // clicking one just switches the filter instantly instead of doing a
+  // full page reload for what is, underneath, the exact same data.
+  ['catAll', 'catSuites', 'catExperience'].forEach(id => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('click', (e) => {
+      const suitesSection = document.getElementById('suites');
+      if(!suitesSection || suitesSection.style.display === 'none') return; // let it navigate normally
+      e.preventDefault();
+      const filter = id === 'catAll' ? 'all' : id === 'catSuites' ? 'suites' : 'experiences';
+      const url = filter === 'all' ? 'index.html' : `index.html?view=${filter}`;
+      window.history.pushState({}, '', url);
+      setCategoryFilter(filter);
+      window.scrollTo({ top: suitesSection.offsetTop - 90, behavior: 'smooth' });
+    });
+  });
 
   // ---- Currency picker: builds both the desktop and mobile dropdowns
   // from SUPPORTED_CURRENCIES, so they can never drift out of sync with
