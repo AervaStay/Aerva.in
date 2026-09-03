@@ -281,9 +281,9 @@
   }
 
   .listing-modal-content{padding:28px 30px 34px;}
-  .listing-modal-content h2, .exp-detail-sidebar h2{font-size:26px; margin-bottom:6px;}
-  .listing-modal-content .loc, .exp-detail-sidebar .loc{font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep);}
-  .listing-modal-content .desc, .exp-detail-sidebar .desc{font-size:14.5px; line-height:1.8; opacity:0.8; margin-top:20px; white-space:pre-wrap;}
+  .listing-modal-content h2{font-size:26px; margin-bottom:6px;}
+  .listing-modal-content .loc{font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep);}
+  .listing-modal-content .desc{font-size:14.5px; line-height:1.8; opacity:0.8; margin-top:20px; white-space:pre-wrap;}
   .listing-modal-section-title{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c; margin:26px 0 10px;}
   .listing-modal-amenity-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px 20px;}
   .listing-modal-amenity-grid span{font-size:13.5px; opacity:0.8;}
@@ -324,24 +324,6 @@
   .exp-view-listing-btn:hover{background:var(--ink); color:var(--cream);}
   .exp-view-listing-btn svg{width:13px; height:13px; stroke:currentColor;}
 
-  /* ---------- EXPERIENCE DETAIL: left sidebar (booking + info) + main
-     column (big scrollable photo cards up top) — booking widget reads
-     first since that's what most guests came to do, photos sit
-     alongside rather than forcing a scroll past them first. ---------- */
-  .exp-detail-layout{display:grid; grid-template-columns:1fr 1.25fr; gap:32px; align-items:start; padding:28px 30px 34px;}
-  @media (max-width:900px){ .exp-detail-layout{grid-template-columns:1fr;} }
-  .exp-detail-sidebar{min-width:0;}
-  .exp-detail-main{min-width:0; display:flex; flex-direction:column; gap:24px;}
-  /* Same card frame image 2's design used for "Hosted At" — white
-     border, rounded corners, soft shadow — now shared by both the
-     experience's own hero photo card and the stay card, so they read as
-     one consistent visual language rather than two different styles. */
-  .exp-photo-card{
-    background:var(--cream); border:2px solid #fff; border-radius:8px; overflow:hidden;
-    box-shadow:0 2px 10px rgba(28,26,23,0.08);
-  }
-  .exp-photo-card .suite-photo{aspect-ratio:4/3.4;}
-  .exp-photo-card-body{padding:22px;}
   @media (max-width:640px){
     .listing-modal-overlay{padding:0;}
     .listing-modal{max-width:none; max-height:100vh; height:100vh;}
@@ -4631,34 +4613,6 @@
     return `<div class="photo-collage" data-lightbox-photos data-listing-id="${listingId}">${tiles}</div>`;
   }
 
-  // Card-framed, horizontally-scrollable photo carousel (same slider +
-  // dot-indicator pattern the grid cards use) — every photo stays
-  // reachable by swiping, unlike the collage above which caps out at 4
-  // visible tiles. Used specifically for the experience detail page's
-  // hero photo and "Your Stay" cards, where a single big image deserves
-  // more room than a browsing-grid card gets. Tapping any photo still
-  // opens the same full lightbox, wired through the same delegated
-  // click handler and lightboxId convention as the collage.
-  function buildScrollablePhotoCardHtml(photos, altText, lightboxId){
-    if(!photos.length){
-      const initial = (altText || '?').trim().charAt(0).toUpperCase();
-      return `<div class="exp-photo-card"><div class="suite-photo"><div class="suite-photo-placeholder"><span>${initial}</span></div></div></div>`;
-    }
-    if(photos.length === 1){
-      return `<div class="exp-photo-card"><div class="suite-photo" data-lightbox-photos data-listing-id="${lightboxId}"><img src="${photos[0]}" alt="${altText}" loading="lazy" data-lightbox-index="0"></div></div>`;
-    }
-    const slides = photos.map((url, i) => `<img src="${url}" alt="${altText}" loading="lazy" data-lightbox-index="${i}">`).join('');
-    const dots = photos.map(() => '<span></span>').join('');
-    return `
-      <div class="exp-photo-card">
-        <div class="suite-photo" data-lightbox-photos data-listing-id="${lightboxId}">
-          <div class="suite-photo-slider">${slides}</div>
-          <div class="suite-photo-dots">${dots}</div>
-        </div>
-      </div>
-    `;
-  }
-
   let lightboxPhotos = [];
   let lightboxIndex = 0;
 
@@ -5688,10 +5642,11 @@
     if(exp.cover_photo_url && allPhotos.includes(exp.cover_photo_url)){
       allPhotos = [exp.cover_photo_url, ...allPhotos.filter(url => url !== exp.cover_photo_url)];
     }
-    // Big, card-framed, horizontally-scrollable hero photo — every photo
-    // reachable by swiping (not capped at 4 like the collage), tapping
-    // any of them opens the same full lightbox with slide arrows.
-    const photosHtml = buildScrollablePhotoCardHtml(allPhotos, exp.property_name, 'exp-' + exp.id);
+    // Same 4-photo collage + lightbox, same 3-column layout (booking |
+    // photos+description | map) the listing detail page already uses —
+    // this used to be its own different-looking layout; now the two
+    // detail pages read as the same product instead of two different ones.
+    const photosHtml = buildPhotoCollageHtml(allPhotos, exp.property_name, 'exp-' + exp.id);
 
     const priceLine = exp.price
       ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
@@ -5707,52 +5662,34 @@
     if(exp.hosting_cover_photo_url && hostingAllPhotos.includes(exp.hosting_cover_photo_url)){
       hostingAllPhotos = [exp.hosting_cover_photo_url, ...hostingAllPhotos.filter(url => url !== exp.hosting_cover_photo_url)];
     }
-    // Same card-framed, scrollable treatment as the hero photo — the
-    // stay's own photos and info show right here, inline. Nothing about
-    // this card navigates anywhere on its own; only the explicit "View
+    // The stay's own photos and info show right here, inline — nothing
+    // about this card navigates anywhere. Only the explicit "View
     // Listing" button does, and only on a deliberate click, in a new
     // tab, so the guest never loses their place on this experience.
-    const hostingPhotoInner = hostingAllPhotos.length
-      ? (hostingAllPhotos.length === 1
-          ? `<div class="suite-photo" data-lightbox-photos data-listing-id="exp-hosting-${exp.id}"><img src="${hostingAllPhotos[0]}" alt="${exp.hosting_property_name}" loading="lazy" data-lightbox-index="0"></div>`
-          : `<div class="suite-photo" data-lightbox-photos data-listing-id="exp-hosting-${exp.id}">
-               <div class="suite-photo-slider">${hostingAllPhotos.map((url, i) => `<img src="${url}" alt="${exp.hosting_property_name}" loading="lazy" data-lightbox-index="${i}">`).join('')}</div>
-               <div class="suite-photo-dots">${hostingAllPhotos.map(() => '<span></span>').join('')}</div>
-             </div>`)
-      : `<div class="suite-photo"><div class="suite-photo-placeholder"><span>${(exp.hosting_property_name || '?').charAt(0).toUpperCase()}</span></div></div>`;
+    const hostingPhotosHtml = hostingAllPhotos.length ? buildPhotoCollageHtml(hostingAllPhotos, exp.hosting_property_name, 'exp-hosting-' + exp.id) : '';
     const hostingHtml = exp.hosting_property_name ? `
-      <div>
-        <div class="listing-modal-section-title" style="margin-top:0;">Hosted At</div>
-        <div class="exp-photo-card">
-          ${hostingPhotoInner}
-          <div class="exp-photo-card-body">
-            <h4 style="font-size:18px; font-weight:500; font-family:'Bodoni Moda', serif;">${exp.hosting_property_name}</h4>
+      <div class="listing-modal-section-title">Hosted At</div>
+      <div class="exp-stay-card">
+        ${hostingPhotosHtml ? `<div style="margin-bottom:16px;">${hostingPhotosHtml}</div>` : ''}
+        <div class="exp-stay-card-head">
+          <div>
+            <h4>${exp.hosting_property_name}</h4>
             <div class="exp-stay-card-loc">${exp.hosting_area ? exp.hosting_area + ', ' + exp.hosting_city : (exp.hosting_city || '')}</div>
-            ${hostingIsBookable ? `<div class="exp-stay-card-price" style="margin-top:6px;">From <strong>${fmtGuest(Number(exp.hosting_nightly_rate))}</strong>/night</div>` : ''}
-            ${hostingIsBookable ? `
-              <a href="index.html?listing=${exp.hosting_listing_id}" target="_blank" rel="noopener" class="exp-view-listing-btn">
-                View Listing
-                <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-              </a>
-              <p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Booked separately from this experience, on its own page.</p>
-            ` : `<p style="font-size:12.5px; opacity:0.6; margin-top:8px;">This property isn't currently bookable as a stay.</p>`}
           </div>
+          ${hostingIsBookable ? `<div class="exp-stay-card-price">From <strong>${fmtGuest(Number(exp.hosting_nightly_rate))}</strong>/night</div>` : ''}
         </div>
+        ${hostingIsBookable ? `
+          <a href="index.html?listing=${exp.hosting_listing_id}" target="_blank" rel="noopener" class="exp-view-listing-btn">
+            View Listing
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+          <p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Booked separately from this experience, on its own page.</p>
+        ` : `<p style="font-size:12.5px; opacity:0.6; margin-top:8px;">This property isn't currently bookable as a stay.</p>`}
       </div>
-    ` : '';
-
-    // A without-stay experience has no hosting property to show instead
-    // — its own address is the whole point of where a guest needs to go.
-    const addressHtml = (!exp.hosting_property_name && (exp.formatted_address || exp.city)) ? `
-      <div class="listing-modal-section-title">Address</div>
-      <p class="loc" style="margin-bottom:16px;">📍 ${exp.formatted_address || exp.city}</p>
-      ${(exp.latitude && exp.longitude) ? `<a href="https://www.google.com/maps?q=${exp.latitude},${exp.longitude}" target="_blank" rel="noopener" style="font-size:12.5px; color:var(--gold-deep); text-decoration:underline;">Open in Google Maps</a>` : ''}
     ` : '';
 
     // Logistics — all host-defined (see the "List Experience" form),
     // shown as-is rather than Aerva interpreting or enforcing any of it.
-    // Icon-labeled grid rather than plain rows, since these are facts to
-    // scan, not a bill.
     const meetingPointLine = exp.experience_meeting_point_type === 'common_point'
       ? (exp.experience_meeting_point_details || 'A common meeting point (details from host)')
       : 'At the property/hotel';
@@ -5791,69 +5728,82 @@
       <p style="font-size:12.5px; opacity:0.75; margin-top:6px; padding-top:14px; border-top:1px solid var(--line-dark);"><strong>If you don't reach the meeting point:</strong> ${exp.experience_refund_policy}</p>
     ` : '';
     const logisticsHtml = `
-      <div class="listing-modal-section-title" style="margin-top:16px;">Good to Know</div>
+      <div class="listing-modal-section-title">Good to Know</div>
       ${logisticsGridHtml}
       ${refundPolicyHtml}
     `;
 
-    // Left sidebar carries everything a guest reads and acts on — title,
-    // what it is, the facts, and the booking form itself. The main
-    // column alongside it holds the big scrollable photo cards, mirroring
-    // the listing detail page's own booking-widget-on-the-left convention
-    // rather than the old top-to-bottom single-column stack.
+    const mapLinkHtml = (exp.latitude && exp.longitude)
+      ? `<a href="https://www.google.com/maps/search/?api=1&query=${exp.latitude},${exp.longitude}" target="_blank" rel="noopener" class="link" style="font-size:13px;">View on map</a>`
+      : '';
+
+    // Same title-and-location-above, three-column-below structure the
+    // listing detail page uses: booking on the left, photos + description
+    // in the middle, map on the right. Logistics/Hosted-At/Address sit
+    // below the grid, same as amenities/pet-policy do on the listing page.
     return `
-      <div class="exp-detail-layout">
-        <div class="exp-detail-sidebar">
-          <h2>${exp.property_name}</h2>
-          <div class="suite-badges" style="position:static; flex-direction:row; margin:8px 0;">
-            ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
-          </div>
-          ${exp.experience_category ? `<div class="loc">${exp.experience_category}${durationLine ? ' · ' + durationLine : ''}</div>` : ''}
-          <p class="desc">${exp.description}</p>
-          ${logisticsHtml}
-          ${addressHtml}
-          <div class="listing-modal-section-title">Book This Experience</div>
-          <div class="field">
-            <label for="expBookDate">Date</label>
-            <input type="date" id="expBookDate" min="${toLocalDateStr(new Date(Date.now() + 86400000))}">
-          </div>
-          <div class="guest-row" style="border:none; padding-top:16px;">
-            <div class="guest-row-text">
-              <div class="guest-row-title">Guests</div>
-              <div class="guest-row-sub">How many are joining</div>
-            </div>
-            <div class="guest-stepper">
-              <button type="button" class="guest-step-btn" id="expGuestsDec" aria-label="Decrease guests">−</button>
-              <span class="guest-count" id="expGuestsCount">1</span>
-              <button type="button" class="guest-step-btn" id="expGuestsInc" aria-label="Increase guests">+</button>
-            </div>
-          </div>
-          <div id="expPriceSummary" style="display:none;"></div>
-          <div id="expBookingAction" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+      <div class="listing-modal-content">
+        <h2>${exp.property_name}</h2>
+        <div class="suite-badges" style="position:static; flex-direction:row; margin:8px 0;">
+          ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
+        </div>
+        <div class="loc">${exp.experience_category || ''}${durationLine ? ' · ' + durationLine : ''}</div>
+        <div class="listing-three-col">
+          <div class="listing-col-booking">
+            <div class="listing-modal-section-title" style="margin-top:16px;">Book This Experience</div>
             <div class="field">
-              <label for="expBookEmail">Email <span style="color:#a3402f;">*</span></label>
-              <input id="expBookEmail" type="email" placeholder="you@email.com" required>
+              <label for="expBookDate">Date</label>
+              <input type="date" id="expBookDate" min="${toLocalDateStr(new Date(Date.now() + 86400000))}">
             </div>
-            <div class="field" style="margin-top:12px;">
-              <label for="expBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
-              <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" required>
+            <div class="guest-row" style="padding-top:16px;">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Guests</div>
+                <div class="guest-row-sub">How many are joining</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" id="expGuestsDec" aria-label="Decrease guests">−</button>
+                <span class="guest-count" id="expGuestsCount">1</span>
+                <button type="button" class="guest-step-btn" id="expGuestsInc" aria-label="Increase guests">+</button>
+              </div>
             </div>
-            <div class="field" style="margin-top:12px;">
-              <label for="expCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
-              <input id="expCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+            <div id="expPriceSummary" style="display:none;"></div>
+            <div id="expBookingAction" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+              <div class="field">
+                <label for="expBookEmail">Email <span style="color:#a3402f;">*</span></label>
+                <input id="expBookEmail" type="email" placeholder="you@email.com" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="expBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="expCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
+                <input id="expCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+              </div>
+              <button type="button" class="btn solid" id="expBookNowBtn" style="width:100%; margin-top:6px;">Book Experience</button>
+              <p id="expBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
+              <p id="expBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
             </div>
-            <button type="button" class="btn solid" id="expBookNowBtn" style="width:100%; margin-top:6px;">Book Experience</button>
-            <p id="expBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
-            <p id="expBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
+            <div class="listing-modal-price-row">
+              <div><div class="price">${priceLine}</div></div>
+            </div>
           </div>
-          <div class="listing-modal-price-row">
-            <div><div class="price">${priceLine}</div></div>
+          <div class="listing-col-photos">
+            <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
+            ${photosHtml}
+            <p class="desc" style="margin-top:16px;">${exp.description}</p>
+          </div>
+          <div class="listing-col-map">
+            <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
+            ${!exp.hosting_property_name && (exp.formatted_address || exp.city) ? `<p class="loc" style="margin-bottom:10px; text-transform:none; letter-spacing:normal; font-size:13px; opacity:0.8;">📍 ${exp.formatted_address || exp.city}</p>` : ''}
+            ${(exp.latitude && exp.longitude) ? `
+              <div class="listing-map-embed" id="expMapEmbed"></div>
+              <div style="margin-top:8px;">${mapLinkHtml}</div>
+            ` : `<p style="font-size:13px; opacity:0.6;">No location set for this experience yet.</p>`}
           </div>
         </div>
-        <div class="exp-detail-main">
-          ${photosHtml}
-          ${hostingHtml}
-        </div>
+        ${logisticsHtml}
+        ${hostingHtml}
       </div>
     `;
   }
@@ -5995,14 +5945,17 @@
   }
 
   function showExperienceDetailPage(exp){
-    const catNav = document.querySelector('.header-category-nav');
-    if(catNav) catNav.style.display = 'none';
     document.getElementById('suites').style.display = 'none';
     const expSection = document.getElementById('experiences');
     if(expSection) expSection.style.display = 'none';
     document.getElementById('experienceFullViewBody').innerHTML = buildExperienceDetailHtml(exp);
     document.getElementById('experienceFullView').style.display = 'block';
     document.title = exp.property_name + ' — Aerva Experience';
+
+    const mapEl = document.getElementById('expMapEmbed');
+    if(mapEl && exp.latitude && exp.longitude){
+      initListingMapEmbed(mapEl, exp.latitude, exp.longitude, exp.property_name);
+    }
 
     const guestsCountEl = document.getElementById('expGuestsCount');
     document.getElementById('expGuestsDec').addEventListener('click', () => {
@@ -6021,8 +5974,6 @@
   }
 
   function showFullListingPage(listing){
-    const catNav = document.querySelector('.header-category-nav');
-    if(catNav) catNav.style.display = 'none';
     document.getElementById('suites').style.display = 'none';
     document.getElementById('listingFullViewBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingFullView').style.display = 'block';
@@ -6657,25 +6608,20 @@
       }
     }
 
-    // Aerva Experience and List Property are no longer sections you
-    // scroll to on the main browsing page — each opens in its own new
-    // tab as ?view=<name>, same in spirit as the listing/experience
-    // detail pages: hide everything else, show only the one section.
+    // Aerva Experience and List Property each open in their own new tab
+    // as ?view=<name> — the header's 4 main tabs (All/Suites/Aerva
+    // Experience/Host With Aerva) stay visible here too, same as on the
+    // homepage, so a guest can always jump straight to another section
+    // without having to use the "Back to all homes" link first.
     const requestedView = new URLSearchParams(window.location.search).get('view');
     if(requestedView === 'experiences'){
-      const catNav = document.querySelector('.header-category-nav');
-      if(catNav) catNav.style.display = 'none';
       document.getElementById('suites').style.display = 'none';
       document.getElementById('experiences').style.display = 'block';
       loadExperiences();
     } else if(requestedView === 'list-property'){
-      const catNav = document.querySelector('.header-category-nav');
-      if(catNav) catNav.style.display = 'none';
       document.getElementById('suites').style.display = 'none';
       document.getElementById('add-listing').style.display = 'block';
     } else if(requestedView === 'list-experience'){
-      const catNav = document.querySelector('.header-category-nav');
-      if(catNav) catNav.style.display = 'none';
       document.getElementById('suites').style.display = 'none';
       document.getElementById('list-experience').style.display = 'block';
     }
