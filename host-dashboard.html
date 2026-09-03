@@ -611,6 +611,45 @@
         <input type="number" id="expDuration" min="0.5" step="0.5" placeholder="e.g. 3">
       </div>
       <div class="field">
+        <label for="expStartTime">Start Time</label>
+        <input type="time" id="expStartTime" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif;">
+      </div>
+      <div class="field">
+        <label>Do you arrange travel/transport for guests?</label>
+        <div style="display:flex; gap:16px; margin-top:4px;">
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+            <input type="radio" name="expArrangesTravel" id="expArrangesTravelYes" value="yes"> Yes
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+            <input type="radio" name="expArrangesTravel" id="expArrangesTravelNo" value="no"> No — guests make their own way there
+          </label>
+        </div>
+      </div>
+      <div class="field" id="expTravelDetailsField" style="display:none;">
+        <label for="expTravelDetails">Travel/Transport Details</label>
+        <textarea id="expTravelDetails" rows="3" placeholder="What's included — pickup location, vehicle type, timing, anything a guest should know" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif; resize:vertical;"></textarea>
+      </div>
+      <div class="field">
+        <label>Meeting Point</label>
+        <div style="display:flex; gap:16px; margin-top:4px; flex-wrap:wrap;">
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+            <input type="radio" name="expMeetingPointType" id="expMeetingPointHotel" value="hotel"> At the property/hotel
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+            <input type="radio" name="expMeetingPointType" id="expMeetingPointCommon" value="common_point"> A common meeting point
+          </label>
+        </div>
+      </div>
+      <div class="field" id="expMeetingPointDetailsField" style="display:none;">
+        <label for="expMeetingPointDetails">Meeting Point Details</label>
+        <textarea id="expMeetingPointDetails" rows="2" placeholder="e.g. Main gate of Empress Garden, Camp Area" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif; resize:vertical;"></textarea>
+      </div>
+      <div class="field">
+        <label for="expRefundPolicy">Refund Policy — If a Guest Doesn't Reach the Meeting Point</label>
+        <textarea id="expRefundPolicy" rows="3" placeholder="e.g. Full refund if cancelled 24h before; no refund for a same-day no-show" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif; resize:vertical;"></textarea>
+        <p class="profile-field-note">This is your own policy, shown to guests as-is — Aerva doesn't set or enforce it.</p>
+      </div>
+      <div class="field">
         <label for="expPhotos">Photos</label>
         <input type="file" id="expPhotos" accept="image/*" multiple>
         <p class="profile-field-note" id="expPhotoCount">At least 1 photo is required.</p>
@@ -2206,6 +2245,21 @@
     this.value = '';
   });
 
+  document.querySelectorAll('input[name="expArrangesTravel"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const showDetails = document.getElementById('expArrangesTravelYes').checked;
+      document.getElementById('expTravelDetailsField').style.display = showDetails ? 'block' : 'none';
+      if(!showDetails) document.getElementById('expTravelDetails').value = '';
+    });
+  });
+  document.querySelectorAll('input[name="expMeetingPointType"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const showDetails = document.getElementById('expMeetingPointCommon').checked;
+      document.getElementById('expMeetingPointDetailsField').style.display = showDetails ? 'block' : 'none';
+      if(!showDetails) document.getElementById('expMeetingPointDetails').value = '';
+    });
+  });
+
   document.getElementById('expSubmitBtn').addEventListener('click', async function(){
     const msgEl = document.getElementById('expSubmitMsg');
     msgEl.style.display = 'none';
@@ -2224,6 +2278,12 @@
     const city = document.getElementById('expCity').value.trim();
     const area = document.getElementById('expArea').value.trim();
     const pincode = document.getElementById('expPincode').value.trim();
+    const startTime = document.getElementById('expStartTime').value;
+    const arrangesTravelInput = document.querySelector('input[name="expArrangesTravel"]:checked');
+    const travelDetails = document.getElementById('expTravelDetails').value.trim();
+    const meetingPointTypeInput = document.querySelector('input[name="expMeetingPointType"]:checked');
+    const meetingPointDetails = document.getElementById('expMeetingPointDetails').value.trim();
+    const refundPolicy = document.getElementById('expRefundPolicy').value.trim();
 
     // Same checks the backend enforces (see submit-listing.js) — caught
     // here first so the host isn't left guessing which field was the
@@ -2248,6 +2308,16 @@
     }
     if(!category){ msgEl.textContent = 'Please choose a category.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!price || Number(price) <= 0){ msgEl.textContent = 'Please set a price.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(!startTime){ msgEl.textContent = 'Please set a start time.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(!arrangesTravelInput){ msgEl.textContent = 'Please say whether you arrange travel/transport for guests.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(arrangesTravelInput.value === 'yes' && !travelDetails){
+      msgEl.textContent = 'Please describe the travel/transport arrangement.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return;
+    }
+    if(!meetingPointTypeInput){ msgEl.textContent = 'Please choose a meeting point option.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(meetingPointTypeInput.value === 'common_point' && !meetingPointDetails){
+      msgEl.textContent = 'Please describe the meeting point.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return;
+    }
+    if(!refundPolicy){ msgEl.textContent = 'Please describe your refund policy if a guest doesn\'t reach the meeting point.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!expPhotoUrls.length){ msgEl.textContent = 'Please add at least 1 photo.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
 
     this.disabled = true;
@@ -2273,6 +2343,12 @@
           city: city || null,
           area: area || null,
           pincode: pincode || null,
+          experienceStartTime: startTime,
+          experienceArrangesTravel: arrangesTravelInput.value === 'yes',
+          experienceTravelDetails: arrangesTravelInput.value === 'yes' ? travelDetails : null,
+          experienceMeetingPointType: meetingPointTypeInput.value,
+          experienceMeetingPointDetails: meetingPointTypeInput.value === 'common_point' ? meetingPointDetails : null,
+          experienceRefundPolicy: refundPolicy,
           hostName: (currentVerification && currentVerification.hostName) || '',
           hostPhone: (currentVerification && currentVerification.hostPhone) || '',
           exteriorPhotoUrls: expPhotoUrls,
@@ -2307,6 +2383,14 @@
         document.getElementById('expPrice').value = '';
         document.getElementById('expPriceUnit').value = 'per_person';
         document.getElementById('expDuration').value = '';
+        document.getElementById('expStartTime').value = '';
+        document.querySelectorAll('input[name="expArrangesTravel"]').forEach(r => r.checked = false);
+        document.getElementById('expTravelDetails').value = '';
+        document.getElementById('expTravelDetailsField').style.display = 'none';
+        document.querySelectorAll('input[name="expMeetingPointType"]').forEach(r => r.checked = false);
+        document.getElementById('expMeetingPointDetails').value = '';
+        document.getElementById('expMeetingPointDetailsField').style.display = 'none';
+        document.getElementById('expRefundPolicy').value = '';
         expPhotoUrls = [];
         renderExpPhotoCount();
         // Closes the whole modal once submitted — briefly shows the
