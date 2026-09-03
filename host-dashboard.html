@@ -914,11 +914,21 @@
       const thumbHtml = leadPhoto
         ? `<img class="listing-thumb" src="${leadPhoto}" alt="${l.property_name}">`
         : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
-      const actionHref = (l.status === 'draft' || l.status === 'rejected') ? `index.html?view=list-property&edit=${l.id}` : l.manageLink;
+      const isExperience = l.listing_type === 'experience';
+      const editUrlBase = isExperience ? 'index.html?view=list-experience&edit=' : 'index.html?view=list-property&edit=';
+      const actionHref = (l.status === 'draft' || l.status === 'rejected') ? `${editUrlBase}${l.id}` : (isExperience ? `${editUrlBase}${l.id}` : l.manageLink);
       const actionLink = l.status === 'draft'
-        ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Continue Editing</a>`
+        ? `<a class="manage-link" href="${editUrlBase}${l.id}">Continue Editing</a>`
         : l.status === 'rejected'
-        ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Edit &amp; Resubmit</a>`
+        ? `<a class="manage-link" href="${editUrlBase}${l.id}">Edit &amp; Resubmit</a>`
+        // An experience has no separate "manage pricing" endpoint the way
+        // a stay does (see submit-listing.js's comments on why) — editing
+        // one, approved or not, goes through the same List Experience
+        // page in edit mode instead of manage-listing.html, which was
+        // built entirely around stay-specific fields (WiFi, Kitchen, Pet
+        // Policy, etc.) that make no sense for an experience.
+        : isExperience
+        ? `<a class="manage-link" href="${editUrlBase}${l.id}">Edit Experience</a>`
         : `<a class="manage-link" href="${l.manageLink}">Manage Price & Offers</a>`;
       // Clone only makes sense for stay listings right now — there's no
       // Experience submission form yet for a cloned experience to land in.
@@ -939,7 +949,7 @@
         ? `<p class="calendar-hint calendar-hint-muted">Calendar &amp; promotions unlock once approved</p>`
         : '';
       return `
-        <div class="listing-card" data-href="${actionHref}" data-listing-id="${l.id}" data-status="${l.status}" style="cursor:pointer;">
+        <div class="listing-card" data-href="${actionHref}" data-listing-id="${l.id}" data-status="${l.status}" data-listing-type="${l.listing_type || 'stay'}" style="cursor:pointer;">
           ${thumbHtml}
           <div class="listing-info">
             <h3>${l.property_name || '(Untitled draft)'}</h3>
@@ -1772,10 +1782,11 @@
       renderBookings(data.bookings || []);
       renderVerification(data.verification);
 
-      // Default to showing the first live listing's calendar/promotions/
-      // amenities right away, instead of an empty "select one" state —
-      // most hosts land here specifically to manage an active listing.
-      const firstApproved = (data.listings || []).find(l => l.status === 'approved');
+      // Default to showing the first live STAY listing's calendar/
+      // promotions/amenities right away — an experience has no such
+      // sidebar (see the click handler below), so it's excluded from
+      // this auto-select entirely.
+      const firstApproved = (data.listings || []).find(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay'));
       if(firstApproved) selectListingForSidebar(firstApproved.id);
     } catch(err){
       document.getElementById('listingsContainer').innerHTML = '<p class="empty">Could not load your listings. Please refresh.</p>';
@@ -1783,15 +1794,16 @@
     }
   }
 
-  // Whole-card click: an approved listing selects it into the right-side
-  // sidebar (block dates / promotions / paid amenities, right here); a
-  // draft or rejected listing still jumps straight to its edit flow,
-  // same as before — those don't have a live calendar to manage yet.
+  // Whole-card click: an approved STAY listing selects it into the
+  // right-side sidebar (block dates / promotions / paid amenities, right
+  // here). An approved EXPERIENCE has no such sidebar — it jumps
+  // straight to its edit page instead, same as a draft or rejected
+  // listing already does.
   document.getElementById('listingsContainer').addEventListener('click', (e) => {
     if(e.target.closest('a.manage-link')) return;
     const card = e.target.closest('.listing-card');
     if(!card || !card.dataset.href) return;
-    if(card.dataset.status === 'approved'){
+    if(card.dataset.status === 'approved' && card.dataset.listingType === 'stay'){
       selectListingForSidebar(Number(card.dataset.listingId));
       return;
     }
