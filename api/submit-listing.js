@@ -288,17 +288,21 @@ module.exports = async (req, res) => {
           console.warn('submit-listing rejected: missing required experience text fields');
           return res.status(400).json({ error: 'Missing required fields' });
         }
-        if (!hostingListing) {
-          return res.status(400).json({ error: 'Please choose which of your properties hosts this experience.' });
+        if (experienceType !== 'with_stay' && experienceType !== 'without_stay') {
+          return res.status(400).json({ error: 'Please choose whether this experience includes a stay.' });
+        }
+        // A hosting property is only required when the experience
+        // actually bundles a stay — that's where the stay itself comes
+        // from. A without-stay experience needs no property at all, so
+        // a host can list one before ever listing a property.
+        if (experienceType === 'with_stay' && !hostingListing) {
+          return res.status(400).json({ error: 'Please choose which of your properties hosts the included stay.' });
         }
         if (!experienceCategory || !String(experienceCategory).trim()) {
           return res.status(400).json({ error: 'Please choose a category for this experience.' });
         }
         if (experiencePriceUnit !== 'per_person' && experiencePriceUnit !== 'flat') {
           return res.status(400).json({ error: 'Please choose how this experience is priced.' });
-        }
-        if (experienceType !== 'with_stay' && experienceType !== 'without_stay') {
-          return res.status(400).json({ error: 'Please choose whether this experience includes a stay.' });
         }
         if (!nightlyRate || Number(nightlyRate) <= 0) {
           return res.status(400).json({ error: 'Please set a price for this experience.' });
