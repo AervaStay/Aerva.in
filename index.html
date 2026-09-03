@@ -3095,7 +3095,11 @@
             .filter(l => (l.property_name || '').toLowerCase().includes(queryLower) || (l.city || '').toLowerCase().includes(queryLower) || (l.area || '').toLowerCase().includes(queryLower))
             .slice(0, 5);
 
-          autocompleteService.getPlacePredictions({ input: query, types: ['geocode'] }, (predictions, status) => {
+          // Restricted to India for the same reason as geocodePlace() —
+          // Aerva only operates here, and an unrestricted prediction list
+          // can surface an unrelated place with a similar name elsewhere
+          // in the world ahead of the actual Indian town being searched for.
+          autocompleteService.getPlacePredictions({ input: query, types: ['geocode'], componentRestrictions: { country: 'in' } }, (predictions, status) => {
             // A newer keystroke already started a fresher request — drop
             // this now-stale response rather than overwriting a more
             // current dropdown with old results.
@@ -4630,7 +4634,12 @@
         return;
       }
       if(!placesGeocoder) placesGeocoder = new google.maps.Geocoder();
-      placesGeocoder.geocode({ address: placeText }, (results, status) => {
+      // Restricted to India — Aerva only has listings/experiences here,
+      // and an unrestricted geocode of a short or lesser-known place
+      // name (e.g. "Jibhi", a small Himachal Pradesh town) can otherwise
+      // resolve ambiguously to an unrelated place with a similar or
+      // partially-matching name anywhere in the world.
+      placesGeocoder.geocode({ address: placeText, componentRestrictions: { country: 'IN' } }, (results, status) => {
         if(status === 'OK' && results && results[0]){
           const loc = results[0].geometry.location;
           resolve({ lat: loc.lat(), lng: loc.lng() });
@@ -4704,11 +4713,39 @@
       listingsById = {};
       approvedListings.forEach(l => { listingsById[l.id] = l; });
 
+      // Same location filter now applies to experiences too — same
+      // params, same 200km radius, just against the experiences=1 mode
+      // instead. Guests/dates don't carry over here since experiences
+      // don't have a capacity or booking-window concept at search time
+      // the way a stay's guest count does.
+      const expParams = new URLSearchParams({ experiences: '1' });
+      if(geocoded){
+        expParams.set('lat', geocoded.lat);
+        expParams.set('lng', geocoded.lng);
+        expParams.set('radiusKm', '200');
+      } else if(city){
+        expParams.set('city', city);
+      }
+      try{
+        const expRes = await fetch(SUITES_API_BASE + '/api/get-listings?' + expParams.toString());
+        if(expRes.ok){
+          const expData = await expRes.json();
+          approvedExperiences = expData.experiences || [];
+          experiencesById = {};
+          approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
+          experiencesLoaded = true;
+        }
+      } catch(expErr){
+        // Non-fatal — the search still shows correctly-filtered suites
+        // even if the experiences half of the request specifically failed.
+      }
+
       const hasFilters = city || guests || (arrival && departure);
       if(hasFilters){
-        statusEl.textContent = approvedListings.length
-          ? `Showing ${approvedListings.length} home${approvedListings.length === 1 ? '' : 's'} matching your search.`
-          : 'No homes match your search — try different dates, guests, or place.';
+        const totalResults = approvedListings.length + approvedExperiences.length;
+        statusEl.textContent = totalResults
+          ? `Showing ${totalResults} result${totalResults === 1 ? '' : 's'} matching your search.`
+          : 'Nothing matches your search — try different dates, guests, or place.';
         statusEl.style.display = 'block';
       }
 
