@@ -4021,7 +4021,19 @@
       return;
     }
     container.innerHTML = '';
-    approvedExperiences.forEach((exp, index) => container.appendChild(buildExperienceCard(exp, index)));
+    approvedExperiences.forEach((exp, index) => {
+      const card = buildExperienceCard(exp, index);
+      container.appendChild(card);
+      // Same reveal-on-scroll animation the suite cards use — but the
+      // page-load IntersectionObserver setup only ever scans elements
+      // that existed in the DOM at that moment (see the .reveal setup
+      // near the top). Experience cards are fetched and added later,
+      // asynchronously, so without re-registering each one here
+      // individually, they'd carry the .reveal class's default
+      // opacity:0 forever and never actually become visible — which is
+      // exactly what was happening.
+      io.observe(card);
+    });
   }
 
   function buildExperienceCard(exp, index){
