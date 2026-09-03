@@ -3532,7 +3532,10 @@
       : 'Price on enquiry';
     const hostedAtLine = exp.hosting_property_name
       ? `Hosted at ${exp.hosting_property_name}${exp.hosting_area ? ', ' + exp.hosting_area + ', ' + exp.hosting_city : exp.hosting_city ? ', ' + exp.hosting_city : ''}`
-      : '';
+      // Without-stay experiences have no hosting property to borrow a
+      // location from — they carry their own address instead (see
+      // submit-listing.js), so that's what shows here for those.
+      : (exp.formatted_address || exp.city || '');
 
     const card = document.createElement('div');
     card.className = 'suite-card reveal';
@@ -4789,6 +4792,14 @@
       </div>
     ` : '';
 
+    // A without-stay experience has no hosting property to show instead
+    // — its own address is the whole point of where a guest needs to go.
+    const addressHtml = (!exp.hosting_property_name && (exp.formatted_address || exp.city)) ? `
+      <div class="listing-modal-section-title">Address</div>
+      <p class="loc" style="margin-bottom:16px;">📍 ${exp.formatted_address || exp.city}</p>
+      ${(exp.latitude && exp.longitude) ? `<a href="https://www.google.com/maps?q=${exp.latitude},${exp.longitude}" target="_blank" rel="noopener" style="font-size:12.5px; color:var(--gold-deep); text-decoration:underline;">Open in Google Maps</a>` : ''}
+    ` : '';
+
     return `
       ${photosHtml}
       <div class="listing-modal-content">
@@ -4796,6 +4807,7 @@
         ${exp.experience_category ? `<div class="loc">${exp.experience_category}${durationLine ? ' · ' + durationLine : ''}</div>` : ''}
         <p class="desc">${exp.description}</p>
         ${hostingHtml}
+        ${addressHtml}
         <div class="listing-modal-section-title">Book This Experience</div>
         <div class="field">
           <label for="expBookDate">Date</label>
