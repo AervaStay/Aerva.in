@@ -296,6 +296,33 @@
     padding-top:20px; border-top:1px solid var(--line-dark);
   }
   .listing-modal-price-row .price{font-size:20px;}
+
+  /* ---------- EXPERIENCE DETAIL: logistics grid + inline stay card ---------- */
+  .exp-logistics-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px 24px; margin:14px 0;}
+  @media (max-width:640px){ .exp-logistics-grid{grid-template-columns:1fr;} }
+  .exp-logistics-item{display:flex; gap:12px; align-items:flex-start;}
+  .exp-logistics-icon{
+    flex:0 0 auto; width:34px; height:34px; border-radius:50%; background:var(--cream-deep);
+    display:flex; align-items:center; justify-content:center; margin-top:1px;
+  }
+  .exp-logistics-icon svg{width:16px; height:16px; stroke:var(--gold-deep); fill:none; stroke-width:1.6;}
+  .exp-logistics-label{font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c; margin-bottom:3px;}
+  .exp-logistics-value{font-size:13.5px; line-height:1.5;}
+  .exp-stay-card{
+    border:1px solid var(--line-dark); background:var(--cream-deep); padding:22px;
+    margin-top:12px; border-radius:2px;
+  }
+  .exp-stay-card-head{display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;}
+  .exp-stay-card-head h4{font-size:18px; font-weight:500; font-family:'Bodoni Moda', serif;}
+  .exp-stay-card-loc{font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:var(--gold-deep); margin-top:6px;}
+  .exp-stay-card-price{font-size:14px; opacity:0.85; white-space:nowrap;}
+  .exp-view-listing-btn{
+    display:inline-flex; align-items:center; gap:6px; margin-top:14px;
+    font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink);
+    border:1px solid var(--ink); padding:11px 22px; transition:background .25s ease, color .25s ease;
+  }
+  .exp-view-listing-btn:hover{background:var(--ink); color:var(--cream);}
+  .exp-view-listing-btn svg{width:13px; height:13px; stroke:currentColor;}
   @media (max-width:640px){
     .listing-modal-overlay{padding:0;}
     .listing-modal{max-width:none; max-height:100vh; height:100vh;}
@@ -4150,10 +4177,27 @@
     const initial = (exp.property_name || '?').trim().charAt(0).toUpperCase();
     const exteriorPhotos = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
     const interiorPhotos = Array.isArray(exp.interior_photo_urls) ? exp.interior_photo_urls : [];
-    const photoUrl = exp.cover_photo_url || exteriorPhotos[0] || interiorPhotos[0] || null;
-    const photoHtml = photoUrl
-      ? `<img src="${photoUrl}" alt="${exp.property_name}" loading="lazy">`
-      : `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
+    let allPhotos = [...exteriorPhotos, ...interiorPhotos];
+    if(exp.cover_photo_url && allPhotos.includes(exp.cover_photo_url)){
+      allPhotos = [exp.cover_photo_url, ...allPhotos.filter(url => url !== exp.cover_photo_url)];
+    }
+    // Same horizontally-scrollable, dot-indicator carousel the suite
+    // cards already use (see buildSuiteCard) — experiences only ever
+    // showed their single cover photo before, which undersold places
+    // with several good shots.
+    let photoHtml;
+    if(allPhotos.length === 0){
+      photoHtml = `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
+    } else if(allPhotos.length === 1){
+      photoHtml = `<img src="${allPhotos[0]}" alt="${exp.property_name}" loading="lazy">`;
+    } else {
+      const slides = allPhotos.map(url => `<img src="${url}" alt="${exp.property_name}" loading="lazy">`).join('');
+      const dots = allPhotos.map(() => '<span></span>').join('');
+      photoHtml = `
+        <div class="suite-photo-slider">${slides}</div>
+        <div class="suite-photo-dots">${dots}</div>
+      `;
+    }
 
     const priceLine = exp.price
       ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' <span style="font-size:12px; opacity:0.65;">/ person</span>' : ' <span style="font-size:12px; opacity:0.65;">/ group</span>'}`
@@ -4588,7 +4632,8 @@
     // list (same order used to build the collage), not just what's
     // visibly rendered, so "+N photos" genuinely shows everything.
     let fullList = Array.from(wrap.querySelectorAll('img')).map(img => img.src);
-    const listing = listingsById[wrap.dataset.listingId];
+    const rawId = wrap.dataset.listingId;
+    const listing = listingsById[rawId];
     if(listing){
       const ext = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
       const intr = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
@@ -4597,6 +4642,33 @@
         all = [listing.cover_photo_url, ...all.filter(u => u !== listing.cover_photo_url)];
       }
       if(all.length) fullList = all;
+    } else if(typeof rawId === 'string' && rawId.startsWith('exp-hosting-')){
+      // The "Your Stay" collage inside an experience's detail page (see
+      // buildExperienceDetailHtml) — uses the hosting property's OWN
+      // photo fields, kept on the experience object itself rather than
+      // in listingsById (experiences aren't stay listings).
+      const exp = experiencesById[rawId.replace('exp-hosting-', '')];
+      if(exp){
+        const ext = Array.isArray(exp.hosting_exterior_photo_urls) ? exp.hosting_exterior_photo_urls : [];
+        const intr = Array.isArray(exp.hosting_interior_photo_urls) ? exp.hosting_interior_photo_urls : [];
+        let all = [...intr, ...ext];
+        if(exp.hosting_cover_photo_url && all.includes(exp.hosting_cover_photo_url)){
+          all = [exp.hosting_cover_photo_url, ...all.filter(u => u !== exp.hosting_cover_photo_url)];
+        }
+        if(all.length) fullList = all;
+      }
+    } else if(typeof rawId === 'string' && rawId.startsWith('exp-')){
+      // The experience's own photo collage at the top of its detail page.
+      const exp = experiencesById[rawId.replace('exp-', '')];
+      if(exp){
+        const ext = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
+        const intr = Array.isArray(exp.interior_photo_urls) ? exp.interior_photo_urls : [];
+        let all = [...intr, ...ext];
+        if(exp.cover_photo_url && all.includes(exp.cover_photo_url)){
+          all = [exp.cover_photo_url, ...all.filter(u => u !== exp.cover_photo_url)];
+        }
+        if(all.length) fullList = all;
+      }
     }
     openPhotoLightbox(fullList, Number(tile.dataset.lightboxIndex));
   });
@@ -5540,9 +5612,12 @@
     if(exp.cover_photo_url && allPhotos.includes(exp.cover_photo_url)){
       allPhotos = [exp.cover_photo_url, ...allPhotos.filter(url => url !== exp.cover_photo_url)];
     }
-    const photosHtml = allPhotos.length
-      ? `<div class="listing-modal-photos">${allPhotos.map(url => `<img src="${url}" alt="${exp.property_name}" loading="lazy">`).join('')}</div>`
-      : '';
+    // Same 4-photo collage + lightbox the listing detail page uses
+    // (buildPhotoCollageHtml/openPhotoLightbox, both already shared,
+    // click-delegated code) — a big improvement over the old
+    // horizontal-scroll strip, and keeps the two detail pages feeling
+    // like the same product rather than two different ones.
+    const photosHtml = buildPhotoCollageHtml(allPhotos, exp.property_name, 'exp-' + exp.id);
 
     const priceLine = exp.price
       ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
@@ -5552,35 +5627,37 @@
     // Only offered as a cross-sell when the hosting property is itself an
     // approved, bookable stay — never for a pending/rejected/no-rate one.
     const hostingIsBookable = exp.hosting_listing_id && exp.hosting_status === 'approved' && exp.hosting_nightly_rate;
-    const hostingHtml = exp.hosting_property_name ? `
-      <div class="listing-modal-section-title">Hosted At</div>
-      <div class="suite-card" style="max-width:360px; ${hostingIsBookable ? 'cursor:pointer;' : ''}" ${hostingIsBookable ? `onclick="window.open('index.html?listing=${exp.hosting_listing_id}', '_blank')"` : ''}>
-        <div class="suite-photo">
-          ${exp.hosting_cover_photo_url ? `<img src="${exp.hosting_cover_photo_url}" alt="${exp.hosting_property_name}" loading="lazy">` : `<div class="suite-photo-placeholder"><span>${(exp.hosting_property_name || '?').charAt(0).toUpperCase()}</span></div>`}
-        </div>
-        <div class="suite-body">
-          <h3>${exp.hosting_property_name}</h3>
-          <div class="loc">${exp.hosting_area ? exp.hosting_area + ', ' + exp.hosting_city : (exp.hosting_city || '')}</div>
-          ${hostingIsBookable ? `
-            <div class="price">${fmtGuest(Number(exp.hosting_nightly_rate))}/night</div>
-            <p style="font-size:12.5px; color:var(--gold-deep); margin-top:8px;">Also staying here? Tap to view availability and book your stay alongside this experience — opens in a new tab, booked separately from the experience itself.</p>
-          ` : `<p style="font-size:12.5px; opacity:0.6; margin-top:8px;">This property isn't currently bookable as a stay.</p>`}
-        </div>
-      </div>
-    ` : '';
-
-    // Separate, full photo gallery for the stay itself — the "Hosted At"
-    // card above only shows one thumbnail, which isn't really enough to
-    // judge a place a guest might also be staying at. Deliberately kept
-    // as its own clearly-labeled section (not mixed into the experience's
-    // own photos above) so it's obvious which photos are the experience
-    // and which are the accommodation.
     const hostingExteriorPhotos = Array.isArray(exp.hosting_exterior_photo_urls) ? exp.hosting_exterior_photo_urls : [];
     const hostingInteriorPhotos = Array.isArray(exp.hosting_interior_photo_urls) ? exp.hosting_interior_photo_urls : [];
-    const hostingAllPhotos = [...hostingInteriorPhotos, ...hostingExteriorPhotos];
-    const hostingPhotosHtml = (exp.hosting_property_name && hostingAllPhotos.length) ? `
-      <div class="listing-modal-section-title">The Stay — ${exp.hosting_property_name}</div>
-      <div class="listing-modal-photos">${hostingAllPhotos.map(url => `<img src="${url}" alt="${exp.hosting_property_name}" loading="lazy">`).join('')}</div>
+    let hostingAllPhotos = [...hostingInteriorPhotos, ...hostingExteriorPhotos];
+    if(exp.hosting_cover_photo_url && hostingAllPhotos.includes(exp.hosting_cover_photo_url)){
+      hostingAllPhotos = [exp.hosting_cover_photo_url, ...hostingAllPhotos.filter(url => url !== exp.hosting_cover_photo_url)];
+    }
+    // The whole point of this redesign: the stay's own photos and info
+    // show right here, inline — nothing about this card itself navigates
+    // anywhere. Only the explicit "View Listing" button does, and only
+    // on a deliberate click, in a new tab, so the guest never loses their
+    // place on the experience they were looking at.
+    const hostingPhotosHtml = hostingAllPhotos.length ? buildPhotoCollageHtml(hostingAllPhotos, exp.hosting_property_name, 'exp-hosting-' + exp.id) : '';
+    const hostingHtml = exp.hosting_property_name ? `
+      <div class="listing-modal-section-title">Your Stay</div>
+      <div class="exp-stay-card">
+        ${hostingPhotosHtml ? `<div style="margin-bottom:16px;">${hostingPhotosHtml}</div>` : ''}
+        <div class="exp-stay-card-head">
+          <div>
+            <h4>${exp.hosting_property_name}</h4>
+            <div class="exp-stay-card-loc">${exp.hosting_area ? exp.hosting_area + ', ' + exp.hosting_city : (exp.hosting_city || '')}</div>
+          </div>
+          ${hostingIsBookable ? `<div class="exp-stay-card-price">From <strong>${fmtGuest(Number(exp.hosting_nightly_rate))}</strong>/night</div>` : ''}
+        </div>
+        ${hostingIsBookable ? `
+          <a href="index.html?listing=${exp.hosting_listing_id}" target="_blank" rel="noopener" class="exp-view-listing-btn">
+            View Listing
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+          <p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Booked separately from this experience, on its own page.</p>
+        ` : `<p style="font-size:12.5px; opacity:0.6; margin-top:8px;">This property isn't currently bookable as a stay.</p>`}
+      </div>
     ` : '';
 
     // A without-stay experience has no hosting property to show instead
@@ -5593,22 +5670,48 @@
 
     // Logistics — all host-defined (see the "List Experience" form),
     // shown as-is rather than Aerva interpreting or enforcing any of it.
+    // Redesigned from plain price-summary-style rows into a proper
+    // icon-labeled grid, since these are facts to scan, not a bill.
     const meetingPointLine = exp.experience_meeting_point_type === 'common_point'
       ? (exp.experience_meeting_point_details || 'A common meeting point (details from host)')
       : 'At the property/hotel';
-    const logisticsRows = [];
-    if(exp.experience_start_time) logisticsRows.push(`<div class="sum-row"><span>Start Time</span><span>${exp.experience_start_time}</span></div>`);
-    logisticsRows.push(`<div class="sum-row"><span>Meeting Point</span><span>${meetingPointLine}</span></div>`);
-    logisticsRows.push(`<div class="sum-row"><span>Travel/Transport</span><span>${exp.experience_arranges_travel ? 'Arranged by host' : 'Not included — guests make their own way there'}</span></div>`);
-    const travelDetailsLine = (exp.experience_arranges_travel && exp.experience_travel_details)
-      ? `<p style="font-size:12.5px; opacity:0.75; margin-top:4px;">${exp.experience_travel_details}</p>` : '';
+    const travelValue = exp.experience_arranges_travel
+      ? `Arranged by host${exp.experience_travel_details ? ' — ' + exp.experience_travel_details : ''}`
+      : 'Not included — guests make their own way there';
+    const logisticsItems = [];
+    if(exp.experience_start_time){
+      logisticsItems.push({
+        icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+        label: 'Start Time', value: exp.experience_start_time
+      });
+    }
+    logisticsItems.push({
+      icon: '<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+      label: 'Meeting Point', value: meetingPointLine
+    });
+    logisticsItems.push({
+      icon: '<rect x="3" y="7" width="18" height="13" rx="1.5"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+      label: 'Travel / Transport', value: travelValue
+    });
+    const logisticsGridHtml = `
+      <div class="exp-logistics-grid">
+        ${logisticsItems.map(item => `
+          <div class="exp-logistics-item">
+            <div class="exp-logistics-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">${item.icon}</svg></div>
+            <div>
+              <div class="exp-logistics-label">${item.label}</div>
+              <div class="exp-logistics-value">${item.value}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
     const refundPolicyHtml = exp.experience_refund_policy ? `
-      <p style="font-size:12.5px; opacity:0.75; margin-top:10px;"><strong>If you don't reach the meeting point:</strong> ${exp.experience_refund_policy}</p>
+      <p style="font-size:12.5px; opacity:0.75; margin-top:6px; padding-top:14px; border-top:1px solid var(--line-dark);"><strong>If you don't reach the meeting point:</strong> ${exp.experience_refund_policy}</p>
     ` : '';
     const logisticsHtml = `
       <div class="listing-modal-section-title">Good to Know</div>
-      ${logisticsRows.join('')}
-      ${travelDetailsLine}
+      ${logisticsGridHtml}
       ${refundPolicyHtml}
     `;
 
@@ -5623,7 +5726,6 @@
         <p class="desc">${exp.description}</p>
         ${logisticsHtml}
         ${hostingHtml}
-        ${hostingPhotosHtml}
         ${addressHtml}
         <div class="listing-modal-section-title">Book This Experience</div>
         <div class="field">
