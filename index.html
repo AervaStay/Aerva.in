@@ -161,7 +161,12 @@
   .phil-copy .cap{font-family:'Bodoni Moda', serif; font-style:italic; font-size:24px; color:var(--gold-deep); margin-top:30px; line-height:1.5; font-weight:400;}
 
   /* ---------- SUITES ---------- */
-  .suite-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(280px,1fr)); gap:36px;}
+  /* auto-fill, not auto-fit — with only 1 or 2 results, auto-fit
+     collapses the empty tracks and stretches the remaining card(s) to
+     fill the whole row, turning a single result into a giant banner
+     instead of a properly-sized card. auto-fill keeps those tracks as
+     empty implicit columns instead, so a lone card stays card-sized. */
+  .suite-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:36px;}
   .suite-card{
     background:var(--cream); display:flex; flex-direction:column; border:2px solid #ffffff;
     border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(28,26,23,0.08);
@@ -4787,44 +4792,63 @@
     if(arrival && departure){ params.set('arrival', arrival); params.set('departure', departure); }
 
     try{
-      const url = SUITES_API_BASE + '/api/get-listings' + (params.toString() ? '?' + params.toString() : '');
-      const res = await fetch(url);
-      if(!res.ok) throw new Error('Search failed');
-      const data = await res.json();
-      approvedListings = data.listings || [];
-      listingsById = {};
-      approvedListings.forEach(l => { listingsById[l.id] = l; });
+      // Scoped to whichever tab is actually active — searching while on
+      // "Aerva Experience" only touches experience results, and switching
+      // to "Suites" afterward shows suites completely unaffected by that
+      // search (and vice versa). Only "All" updates both together, since
+      // that view is showing both anyway.
+      const searchSuites = currentCategoryFilter !== 'experiences';
+      const searchExperiences = currentCategoryFilter !== 'suites';
+      let suitesCount = approvedListings.length;
+      let experiencesCount = approvedExperiences.length;
+
+      if(searchSuites){
+        const url = SUITES_API_BASE + '/api/get-listings' + (params.toString() ? '?' + params.toString() : '');
+        const res = await fetch(url);
+        if(!res.ok) throw new Error('Search failed');
+        const data = await res.json();
+        approvedListings = data.listings || [];
+        listingsById = {};
+        approvedListings.forEach(l => { listingsById[l.id] = l; });
+        suitesCount = approvedListings.length;
+      }
 
       // Same location filter now applies to experiences too — same
       // params, same 200km radius, just against the experiences=1 mode
       // instead. Guests/dates don't carry over here since experiences
       // don't have a capacity or booking-window concept at search time
       // the way a stay's guest count does.
-      const expParams = new URLSearchParams({ experiences: '1' });
-      if(geocoded){
-        expParams.set('lat', geocoded.lat);
-        expParams.set('lng', geocoded.lng);
-        expParams.set('radiusKm', '200');
-      } else if(city){
-        expParams.set('city', city);
-      }
-      try{
-        const expRes = await fetch(SUITES_API_BASE + '/api/get-listings?' + expParams.toString());
-        if(expRes.ok){
-          const expData = await expRes.json();
-          approvedExperiences = expData.experiences || [];
-          experiencesById = {};
-          approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
-          experiencesLoaded = true;
+      if(searchExperiences){
+        const expParams = new URLSearchParams({ experiences: '1' });
+        if(geocoded){
+          expParams.set('lat', geocoded.lat);
+          expParams.set('lng', geocoded.lng);
+          expParams.set('radiusKm', '200');
+        } else if(city){
+          expParams.set('city', city);
         }
-      } catch(expErr){
-        // Non-fatal — the search still shows correctly-filtered suites
-        // even if the experiences half of the request specifically failed.
+        try{
+          const expRes = await fetch(SUITES_API_BASE + '/api/get-listings?' + expParams.toString());
+          if(expRes.ok){
+            const expData = await expRes.json();
+            approvedExperiences = expData.experiences || [];
+            experiencesById = {};
+            approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
+            experiencesLoaded = true;
+            experiencesCount = approvedExperiences.length;
+          }
+        } catch(expErr){
+          // Non-fatal — the search still shows correctly-filtered suites
+          // even if the experiences half of the request specifically failed.
+        }
       }
 
       const hasFilters = city || guests || (arrival && departure);
       if(hasFilters){
-        const totalResults = approvedListings.length + approvedExperiences.length;
+        // Only counts whichever type(s) this search actually touched —
+        // a suites-only search reporting an experience count that didn't
+        // change would be misleading about what was actually searched.
+        const totalResults = (searchSuites ? suitesCount : 0) + (searchExperiences ? experiencesCount : 0);
         statusEl.textContent = totalResults
           ? `Showing ${totalResults} result${totalResults === 1 ? '' : 's'} matching your search.`
           : 'Nothing matches your search — try different dates, guests, or place.';
