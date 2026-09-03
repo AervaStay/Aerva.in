@@ -3514,7 +3514,12 @@
         headers: { 'Authorization': 'Bearer ' + hostSessionToken }
       });
       const data = await res.json();
-      const approved = (data.listings || []).filter(l => l.status === 'approved');
+      // listing_type check guards against an experience listing itself
+      // showing up as a "hosting property" option — only a real stay can
+      // host an experience's included stay. Also defensively treats a
+      // missing listing_type as 'stay' (older rows saved before this
+      // column existed).
+      const approved = (data.listings || []).filter(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay'));
       select.innerHTML = '<option value="">— Select one of your live listings —</option>' +
         approved.map(l => `<option value="${l.id}">${l.property_name}${l.city ? ' (' + l.city + ')' : ''}</option>`).join('');
       const noteEl = document.getElementById('expHostingListingNote');
@@ -3532,6 +3537,105 @@
     }
   }
   if(experienceForm) populateExperienceHostingDropdown();
+
+  // ---- Resuming an existing experience via ?edit=<id> in the URL ----
+  // Unlike the property form, an experience's photos ARE pre-filled here
+  // (as URLs, not re-uploaded files) — expPhotoUrls is just a flat array
+  // of URLs sent to the backend, not tied to actual File objects the way
+  // the property form's retry-safe upload cache is, so there's no
+  // "browsers can't pre-load files" limitation to work around here.
+  let editingExperienceId = null;
+  (async function resumeExperienceEditIfLinked(){
+    const params = new URLSearchParams(window.location.search);
+    const editId = params.get('edit');
+    if(!editId || !hostSessionToken || !experienceForm) return;
+
+    try{
+      const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + hostSessionToken }
+      });
+      const data = await res.json();
+      const existing = (data.listings || []).find(l => String(l.id) === String(editId) && l.listing_type === 'experience');
+      if(!existing) return;
+
+      editingExperienceId = existing.id;
+      document.getElementById('expName').value = existing.property_name || '';
+      document.getElementById('expDescription').value = existing.description || '';
+      document.getElementById('expCategory').value = existing.experience_category || '';
+      document.getElementById('expHostName').value = existing.host_name || '';
+      document.getElementById('expHostPhone').value = existing.host_phone || '';
+      document.getElementById('expPrice').value = existing.nightly_rate || '';
+      document.getElementById('expPriceUnit').value = existing.experience_price_unit || 'per_person';
+      document.getElementById('expDuration').value = existing.experience_duration_hours || '';
+      document.getElementById('expStartTime').value = existing.experience_start_time || '';
+
+      if(existing.experience_type === 'with_stay'){
+        document.getElementById('expTypeWithStay').checked = true;
+        document.getElementById('expHostingListingField').style.display = 'block';
+        // The dropdown is populated async (see populateExperienceHostingDropdown
+        // above) — wait for it before trying to select a value in it.
+        const trySelectHosting = () => {
+          const select = document.getElementById('expHostingListing');
+          if(existing.hosting_listing_id && select.querySelector(`option[value="${existing.hosting_listing_id}"]`)){
+            select.value = existing.hosting_listing_id;
+          } else {
+            setTimeout(trySelectHosting, 200);
+          }
+        };
+        trySelectHosting();
+      } else if(existing.experience_type === 'without_stay'){
+        document.getElementById('expTypeWithoutStay').checked = true;
+        document.getElementById('expLocationField').style.display = 'block';
+        document.getElementById('expCityAreaField').style.display = 'block';
+        document.getElementById('expPincodeField').style.display = 'block';
+        if(existing.latitude && existing.longitude){
+          document.getElementById('expLatitude').value = existing.latitude;
+          document.getElementById('expLongitude').value = existing.longitude;
+          document.getElementById('expFormattedAddress').value = existing.formatted_address || '';
+          document.getElementById('expLocationSearch').value = existing.formatted_address || '';
+          const confirmEl = document.getElementById('expLocationConfirm');
+          confirmEl.textContent = '✓ Location set: ' + (existing.formatted_address || '');
+          confirmEl.style.display = 'block';
+          updateExpPinMap(existing.latitude, existing.longitude);
+        }
+        document.getElementById('expCity').value = existing.city || '';
+        document.getElementById('expArea').value = existing.area || '';
+        document.getElementById('expPincode').value = existing.pincode || '';
+      }
+
+      if(existing.experience_arranges_travel){
+        document.getElementById('expArrangesTravelYes').checked = true;
+        document.getElementById('expTravelDetailsField').style.display = 'block';
+        document.getElementById('expTravelDetails').value = existing.experience_travel_details || '';
+      } else {
+        document.getElementById('expArrangesTravelNo').checked = true;
+      }
+      if(existing.experience_meeting_point_type === 'common_point'){
+        document.getElementById('expMeetingPointCommon').checked = true;
+        document.getElementById('expMeetingPointDetailsField').style.display = 'block';
+        document.getElementById('expMeetingPointDetails').value = existing.experience_meeting_point_details || '';
+      } else if(existing.experience_meeting_point_type === 'hotel'){
+        document.getElementById('expMeetingPointHotel').checked = true;
+      }
+      document.getElementById('expRefundPolicy').value = existing.experience_refund_policy || '';
+
+      // Existing photos carry over as-is (see the note above this
+      // function) — the host can remove the ones they don't want by
+      // just not resubmitting them isn't supported yet in this simple
+      // count-only UI, but new ones can still be added on top.
+      const existingPhotos = [...(existing.exterior_photo_urls || []), ...(existing.interior_photo_urls || [])];
+      if(existingPhotos.length){
+        expPhotoUrls = existingPhotos;
+        renderExpPhotoCount();
+      }
+
+      document.querySelector('#list-experience h2').textContent = 'Edit Your Experience';
+      document.getElementById('expSubmitBtn').textContent = 'Save Changes';
+      window.scrollTo({ top: experienceForm.offsetTop - 100, behavior: 'smooth' });
+    } catch(err){
+      console.warn('Could not load experience to edit:', err);
+    }
+  })();
 
   if(document.getElementById('expTypeWithStay')){
     document.querySelectorAll('input[name="expType"]').forEach(radio => {
@@ -3656,6 +3760,7 @@
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
           body: JSON.stringify({
             isDraft: false,
+            listingId: editingExperienceId,
             listingType: 'experience',
             propertyName: name,
             description: description,
@@ -3685,11 +3790,16 @@
         });
         const data = await res.json();
         if(res.ok){
+          confirmEl.textContent = editingExperienceId
+            ? (data.status === 'approved'
+                ? 'Changes saved — already live under Aerva Experience.'
+                : 'Changes saved — we\'ll review it again and it\'ll go back live once approved.')
+            : 'Thank you — we\'ve received your experience. Our team reviews every submission personally and will follow up by email within a few days.';
           confirmEl.style.display = 'block';
           // Closes the form itself once submitted — briefly shows the
           // "thank you" confirmation, then leaves, same as the property
           // listing form does after a successful submit.
-          setTimeout(() => { window.location.href = 'index.html'; }, 2000);
+          setTimeout(() => { window.location.href = 'host-dashboard.html'; }, 2000);
         } else {
           errorEl.textContent = data.error || 'Something went wrong. Please try again.';
           errorEl.style.display = 'block';
