@@ -888,11 +888,11 @@
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-6-4-9s1.5-6.4 4-9z"/></svg>
         All
       </a>
-      <a href="#suites" class="category-item">
+      <a href="index.html" class="category-item">
         <svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7"/><path d="M6 10v9h12v-9"/><path d="M10 19v-5h4v5"/></svg>
         Suites
       </a>
-      <a href="index.html?view=experiences" target="_blank" rel="noopener" class="category-item" id="catExperience">
+      <a href="index.html?view=experiences" class="category-item" id="catExperience">
         <svg viewBox="0 0 24 24"><path d="M12 3a5 5 0 0 1 5 5c0 3-2 5-5 8-3-3-5-5-5-8a5 5 0 0 1 5-5z"/><path d="M9 20h6M10 16l-1 4M14 16l1 4"/></svg>
         Aerva Experience
       </a>
@@ -1176,9 +1176,9 @@
      a new tab (see the click handler on #experiencesContainer). -->
 <section class="pad" id="experienceFullView" style="display:none;">
   <div class="wrap">
-    <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
+    <a href="index.html?view=experiences" class="link" style="margin-bottom:22px; display:inline-flex;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-      Back to all homes
+      Back to Aerva Experience
     </a>
     <div id="experienceFullViewBody"></div>
   </div>
@@ -4921,6 +4921,13 @@
       initListingMapEmbed(mapEl, listing.latitude, listing.longitude, listing.property_name);
     }
     loadListingExperiences(listing);
+    // This modal previously never actually rendered — buildListingDetailHtml
+    // only sets up the "Loading availability…" placeholder markup, the
+    // real calendar (and the Book Now button's click handler) were only
+    // ever wired up by showFullListingPage, so this modal path silently
+    // never worked before now.
+    renderAvailabilityCalendar(listing);
+    document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
   }
 
   // "This property also offers…" — with-stay experiences hosted at this
@@ -5083,14 +5090,18 @@
       if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => bookedNights.add(n));
     });
 
-    // Carried over from the main search (see the suite-card click handler)
-    // via URL params, since a new tab shares no JS state with the one
-    // that opened it. Only honored if it's actually still a valid,
-    // available range for THIS listing — a date that looked free on the
-    // search results a moment ago could theoretically already be taken.
+    // Carried over from the main search — via URL params when this is
+    // the full standalone listing page (?listing=<id>&arrival=...,
+    // reached by a direct link with no shared JS state), or directly
+    // from the live search bar's own variables when this is the modal
+    // opened straight from a search-results click (same page, same JS
+    // scope, nothing needs to round-trip through a URL at all). Only
+    // honored if it's actually still a valid, available range for THIS
+    // listing — a date that looked free on the search results a moment
+    // ago could theoretically already be taken.
     const carriedParams = new URLSearchParams(window.location.search);
-    const carriedArrival = carriedParams.get('arrival') || '';
-    const carriedDeparture = carriedParams.get('departure') || '';
+    const carriedArrival = carriedParams.get('arrival') || (typeof searchArrivalDate !== 'undefined' ? searchArrivalDate : '') || '';
+    const carriedDeparture = carriedParams.get('departure') || (typeof searchDepartureDate !== 'undefined' ? searchDepartureDate : '') || '';
     const todayIsoForValidation = toLocalDateStr(new Date());
     let initialArrival = '';
     let initialDeparture = '';
@@ -5202,12 +5213,18 @@
 
     // ---- Guest stepper wiring ----
     const lgCounts = { adults: 1, children: 0, infants: 0, pets: 0 };
-    // Same carry-over as dates above — only overrides the default if the
-    // main search actually had guests selected.
+    // Same carry-over as dates above — URL params for the standalone
+    // page's direct-link case, falling back to the live search bar's own
+    // guestCounts variable for the modal-from-search-results case.
+    const liveGuestCounts = (typeof guestCounts !== 'undefined') ? guestCounts : null;
     if(carriedParams.get('adults')) lgCounts.adults = Math.max(1, parseInt(carriedParams.get('adults'), 10) || 1);
+    else if(liveGuestCounts && liveGuestCounts.adults) lgCounts.adults = liveGuestCounts.adults;
     if(carriedParams.get('children')) lgCounts.children = parseInt(carriedParams.get('children'), 10) || 0;
+    else if(liveGuestCounts && liveGuestCounts.children) lgCounts.children = liveGuestCounts.children;
     if(carriedParams.get('infants')) lgCounts.infants = parseInt(carriedParams.get('infants'), 10) || 0;
+    else if(liveGuestCounts && liveGuestCounts.infants) lgCounts.infants = liveGuestCounts.infants;
     if(carriedParams.get('pets')) lgCounts.pets = parseInt(carriedParams.get('pets'), 10) || 0;
+    else if(liveGuestCounts && liveGuestCounts.pets) lgCounts.pets = liveGuestCounts.pets;
     ['adults', 'children', 'infants', 'pets'].forEach(type => {
       const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
       if(countEl) countEl.textContent = lgCounts[type];
@@ -5944,6 +5961,40 @@
     rzp.open();
   }
 
+  // Opens the experience's detail view inline, as a modal — same shell
+  // as openListingDetail uses for stays, same booking widget wiring as
+  // showExperienceDetailPage (the standalone page, still used for direct
+  // ?experience=<id> links) — just inserted into the modal instead of
+  // swapping the whole page out, so a click from search results shows
+  // the calendar/photos/booking immediately with no extra navigation.
+  function openExperienceDetail(experienceId){
+    const exp = experiencesById[experienceId];
+    if(!exp) return;
+    document.getElementById('listingModalBody').innerHTML = buildExperienceDetailHtml(exp);
+    document.getElementById('listingModalOverlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    const mapEl = document.getElementById('expMapEmbed');
+    if(mapEl && exp.latitude && exp.longitude){
+      initListingMapEmbed(mapEl, exp.latitude, exp.longitude, exp.property_name);
+    }
+
+    const guestsCountEl = document.getElementById('expGuestsCount');
+    document.getElementById('expGuestsDec').addEventListener('click', () => {
+      const next = Math.max(1, Number(guestsCountEl.textContent) - 1);
+      guestsCountEl.textContent = next;
+      updateExperiencePriceSummary(exp);
+    });
+    document.getElementById('expGuestsInc').addEventListener('click', () => {
+      const next = Math.min(50, Number(guestsCountEl.textContent) + 1);
+      guestsCountEl.textContent = next;
+      updateExperiencePriceSummary(exp);
+    });
+    document.getElementById('expBookDate').addEventListener('change', () => updateExperiencePriceSummary(exp));
+    document.getElementById('expBookNowBtn').addEventListener('click', () => handleExperienceBookNow(exp));
+    updateExperiencePriceSummary(exp);
+  }
+
   function showExperienceDetailPage(exp){
     document.getElementById('suites').style.display = 'none';
     const expSection = document.getElementById('experiences');
@@ -6029,26 +6080,20 @@
     if(!card) return;
     e.preventDefault();
 
-    // Carry the current search's dates and guest counts into the new
-    // tab as URL params, so the listing page's booking widget opens
-    // already showing what was searched for instead of starting blank —
-    // a new tab has no shared memory with this one, so this is the only
-    // way for that state to travel across.
-    const params = new URLSearchParams({ listing: card.dataset.listingId });
-    if(searchArrivalDate) params.set('arrival', searchArrivalDate);
-    if(searchDepartureDate) params.set('departure', searchDepartureDate);
-    if(guestCounts.adults) params.set('adults', guestCounts.adults);
-    if(guestCounts.children) params.set('children', guestCounts.children);
-    if(guestCounts.infants) params.set('infants', guestCounts.infants);
-    if(guestCounts.pets) params.set('pets', guestCounts.pets);
-    window.open('index.html?' + params.toString(), '_blank');
+    // Opens the same detail view (calendar + photos + booking, all on
+    // one screen) right here as a modal — no new tab, no extra click
+    // "inside" the listing first. The current search's dates/guests
+    // carry straight over since renderAvailabilityCalendar reads the
+    // live searchArrivalDate/searchDepartureDate/guestCounts variables
+    // directly when there's no ?listing= URL to read them from instead.
+    openListingDetail(card.dataset.listingId);
   });
 
   document.getElementById('experiencesContainer').addEventListener('click', (e) => {
     const card = e.target.closest('.suite-card');
     if(!card || !card.dataset.experienceId) return;
     e.preventDefault();
-    window.open('index.html?experience=' + encodeURIComponent(card.dataset.experienceId), '_blank');
+    openExperienceDetail(card.dataset.experienceId);
   });
 
   document.getElementById('searchBtn').addEventListener('click', performSearch);
