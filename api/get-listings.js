@@ -228,8 +228,12 @@ module.exports = async (req, res) => {
           e.exterior_photo_urls, e.interior_photo_urls, e.cover_photo_url,
           e.host_name, e.created_at,
           e.hosting_listing_id, e.city, e.latitude, e.longitude, e.formatted_address,
+          e.experience_arranges_travel, e.experience_travel_details,
+          e.experience_meeting_point_type, e.experience_meeting_point_details,
+          e.experience_start_time, e.experience_refund_policy,
           h.property_name AS hosting_property_name, h.city AS hosting_city, h.area AS hosting_area,
           h.nightly_rate AS hosting_nightly_rate, h.cover_photo_url AS hosting_cover_photo_url,
+          h.exterior_photo_urls AS hosting_exterior_photo_urls, h.interior_photo_urls AS hosting_interior_photo_urls,
           h.status AS hosting_status
         FROM listings e
         LEFT JOIN listings h ON h.id = e.hosting_listing_id
@@ -254,7 +258,10 @@ module.exports = async (req, res) => {
         SELECT id, property_name, description, experience_category, experience_type,
                nightly_rate AS price, experience_price_unit, experience_duration_hours,
                exterior_photo_urls, interior_photo_urls, cover_photo_url,
-               city, latitude, longitude, formatted_address
+               city, latitude, longitude, formatted_address,
+               experience_arranges_travel, experience_travel_details,
+               experience_meeting_point_type, experience_meeting_point_details,
+               experience_start_time, experience_refund_policy
         FROM listings
         WHERE status = 'approved' AND listing_type = 'experience' AND hosting_listing_id = ${hostingId}
         ORDER BY created_at DESC
