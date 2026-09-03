@@ -5776,16 +5776,21 @@
             guestLoginLinkMobile.style.display = 'none';
             guestAccountBoxMobile.style.display = 'flex';
           }
-          // Only shown once this account has actually listed a property —
-          // account_type flips to 'guest_host' automatically the moment
-          // that happens (see schema.sql / submit-listing.js), so this
-          // stays accurate with nothing to keep in sync manually.
+          // "My Listings" only shows once this account has actually
+          // listed a property — account_type flips to 'guest_host'
+          // automatically the moment that happens (see schema.sql /
+          // submit-listing.js). "List Experience" is deliberately NOT
+          // gated the same way — a host can list an experience without
+          // ever having listed a property first (a without-stay
+          // experience needs no property at all; see the "Hosted At"
+          // rule in submit-listing.js), so it's shown to any logged-in
+          // account.
           if(data.guest.accountType === 'guest_host'){
             myListingsLink.style.display = 'inline';
             if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
-            if(listExperienceLink) listExperienceLink.style.display = 'block';
-            if(listExperienceLinkMobile) listExperienceLinkMobile.style.display = 'block';
           }
+          if(listExperienceLink) listExperienceLink.style.display = 'block';
+          if(listExperienceLinkMobile) listExperienceLinkMobile.style.display = 'block';
           // Always fetch the profile now — it's what supplies the
           // avatar (photo or initials) for the new account menu, not
           // just the currency-resume it originally existed for. The
