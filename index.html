@@ -1635,12 +1635,44 @@
       <div class="field" id="expMeetingPointDetailsField" style="display:none;">
         <label for="expMeetingPointDetails">Meeting Point Details <span class="required-mark">*</span></label>
         <textarea id="expMeetingPointDetails" rows="2" placeholder="e.g. Main gate of Empress Garden, Camp Area" style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;"></textarea>
+        <label for="expMeetingPointSearch" style="margin-top:10px; display:block;">Meeting Point Location <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
+        <input id="expMeetingPointSearch" type="text" placeholder="Start typing an address…" autocomplete="off">
+        <input type="hidden" id="expMeetingPointLat">
+        <input type="hidden" id="expMeetingPointLng">
+        <input type="hidden" id="expMeetingPointAddress">
+        <p id="expMeetingPointConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
+        <div id="expMeetingPointMap" style="width:100%; height:220px; background:#e9e2d6; border:1px solid #ddd0bc; margin-top:8px; display:none;"></div>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">This is what's actually pinned on the map guests see — separate from the experience's own address, since the meeting point can be a different spot.</p>
       </div>
       <div class="field">
         <label for="expRefundPolicy">Refund Policy — If a Guest Doesn't Reach the Meeting Point <span class="required-mark">*</span></label>
         <textarea id="expRefundPolicy" rows="3" placeholder="e.g. Full refund if cancelled 24h before; no refund for a same-day no-show" style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;"></textarea>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">This is your own policy, shown to guests as-is — Aerva doesn't set or enforce it.</p>
       </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Instructions</div>
+      <div class="field">
+        <label for="expInstructions">What Should Guests Know Before They Arrive? <span class="required-mark">*</span></label>
+        <textarea id="expInstructions" rows="4" placeholder="What to bring or wear, fitness level needed, anything a guest should prepare or expect" style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;"></textarea>
+      </div>
+      <div class="field">
+        <label for="expSpecialInstructions">Special Instructions <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— for pregnant guests, elderly, medical conditions, disabilities, or children/infants (optional)</span></label>
+        <textarea id="expSpecialInstructions" rows="3" placeholder="e.g. Not recommended for pregnant guests or those with mobility difficulties — includes a steep 20-minute climb" style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;"></textarea>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Leave blank if this experience has no special considerations — shown to guests exactly as written.</p>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Availability <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional — leave blank if this runs year-round)</span></div>
+      <div class="form-row">
+        <div class="field">
+          <label for="expAvailableFrom">Available From</label>
+          <input type="date" id="expAvailableFrom">
+        </div>
+        <div class="field">
+          <label for="expAvailableUntil">Available Until</label>
+          <input type="date" id="expAvailableUntil">
+        </div>
+      </div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-8px;">If set, guests can only pick a booking date within this range — useful for a seasonal experience rather than one available year-round.</p>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Photos</div>
       <div class="field">
@@ -2871,6 +2903,60 @@
     });
   }
 
+  // Meeting point location — simpler than the experience's own location
+  // picker above: no city/area/pincode extraction needed, just a pin and
+  // a formatted address, since this is purely "where does a guest
+  // actually go," not a full address record.
+  let expMeetingPointMap = null, expMeetingPointMarker = null;
+
+  function applyExpMeetingPointResult(place){
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+    document.getElementById('expMeetingPointLat').value = lat;
+    document.getElementById('expMeetingPointLng').value = lng;
+    document.getElementById('expMeetingPointAddress').value = place.formatted_address || '';
+    const confirmEl = document.getElementById('expMeetingPointConfirm');
+    confirmEl.textContent = '✓ Meeting point set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
+    updateExpMeetingPointMap(lat, lng);
+  }
+
+  function updateExpMeetingPointMap(lat, lng){
+    const container = document.getElementById('expMeetingPointMap');
+    if(!container || !window.google || !window.google.maps) return;
+    container.style.display = 'block';
+    const position = { lat: Number(lat), lng: Number(lng) };
+    if(!expMeetingPointMap){
+      expMeetingPointMap = new google.maps.Map(container, { center: position, zoom: 15, streetViewControl: false, mapTypeControl: false });
+      expMeetingPointMarker = new google.maps.Marker({ position, map: expMeetingPointMap, draggable: true });
+      expMeetingPointMarker.addListener('dragend', () => onExpMeetingPointMoved(expMeetingPointMarker.getPosition()));
+      expMeetingPointMap.addListener('click', (e) => {
+        expMeetingPointMarker.setPosition(e.latLng);
+        onExpMeetingPointMoved(e.latLng);
+      });
+    } else {
+      expMeetingPointMap.setCenter(position);
+      expMeetingPointMarker.setPosition(position);
+    }
+  }
+
+  function onExpMeetingPointMoved(latLng){
+    document.getElementById('expMeetingPointLat').value = latLng.lat();
+    document.getElementById('expMeetingPointLng').value = latLng.lng();
+    if(!window.google.maps.Geocoder) return;
+    new google.maps.Geocoder().geocode({ location: { lat: latLng.lat(), lng: latLng.lng() } }, (results, status) => {
+      const confirmEl = document.getElementById('expMeetingPointConfirm');
+      if(status === 'OK' && results[0]){
+        document.getElementById('expMeetingPointAddress').value = results[0].formatted_address || '';
+        confirmEl.textContent = '✓ Meeting point set: ' + (results[0].formatted_address || `${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}`);
+      } else {
+        confirmEl.textContent = `✓ Meeting point set: ${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}`;
+      }
+      confirmEl.style.display = 'block';
+    });
+  }
+
   window.initGoogleMaps = function(){
     const searchInput = document.getElementById('listLocationSearch');
     if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
@@ -2896,6 +2982,21 @@
       });
       expAutocomplete.addListener('place_changed', function(){
         applyExpLocationResult(expAutocomplete.getPlace());
+      });
+    }
+
+    // A third, independent instance for the meeting point — deliberately
+    // separate from the experience's own location above, since a
+    // common-point meeting spot can be a genuinely different place (e.g.
+    // a trailhead, not the experience's own listed address).
+    const expMeetingPointSearchInput = document.getElementById('expMeetingPointSearch');
+    if(expMeetingPointSearchInput){
+      const expMeetingPointAutocomplete = new google.maps.places.Autocomplete(expMeetingPointSearchInput, {
+        fields: ['geometry', 'formatted_address'],
+        types: ['geocode', 'establishment']
+      });
+      expMeetingPointAutocomplete.addListener('place_changed', function(){
+        applyExpMeetingPointResult(expMeetingPointAutocomplete.getPlace());
       });
     }
 
@@ -3671,10 +3772,24 @@
         document.getElementById('expMeetingPointCommon').checked = true;
         document.getElementById('expMeetingPointDetailsField').style.display = 'block';
         document.getElementById('expMeetingPointDetails').value = existing.experience_meeting_point_details || '';
+        if(existing.experience_meeting_point_lat && existing.experience_meeting_point_lng){
+          document.getElementById('expMeetingPointLat').value = existing.experience_meeting_point_lat;
+          document.getElementById('expMeetingPointLng').value = existing.experience_meeting_point_lng;
+          document.getElementById('expMeetingPointAddress').value = existing.experience_meeting_point_address || '';
+          document.getElementById('expMeetingPointSearch').value = existing.experience_meeting_point_address || '';
+          const mpConfirmEl = document.getElementById('expMeetingPointConfirm');
+          mpConfirmEl.textContent = '✓ Meeting point set: ' + (existing.experience_meeting_point_address || '');
+          mpConfirmEl.style.display = 'block';
+          updateExpMeetingPointMap(existing.experience_meeting_point_lat, existing.experience_meeting_point_lng);
+        }
       } else if(existing.experience_meeting_point_type === 'hotel'){
         document.getElementById('expMeetingPointHotel').checked = true;
       }
       document.getElementById('expRefundPolicy').value = existing.experience_refund_policy || '';
+      document.getElementById('expInstructions').value = existing.experience_instructions || '';
+      document.getElementById('expSpecialInstructions').value = existing.experience_special_instructions || '';
+      if(existing.experience_available_from) document.getElementById('expAvailableFrom').value = String(existing.experience_available_from).slice(0, 10);
+      if(existing.experience_available_until) document.getElementById('expAvailableUntil').value = String(existing.experience_available_until).slice(0, 10);
 
       // Existing photos carry over as-is (see the note above this
       // function) — the host can remove the ones they don't want by
@@ -3727,7 +3842,14 @@
       radio.addEventListener('change', () => {
         const showDetails = document.getElementById('expMeetingPointCommon').checked;
         document.getElementById('expMeetingPointDetailsField').style.display = showDetails ? 'block' : 'none';
-        if(!showDetails) document.getElementById('expMeetingPointDetails').value = '';
+        if(!showDetails){
+          document.getElementById('expMeetingPointDetails').value = '';
+          document.getElementById('expMeetingPointSearch').value = '';
+          document.getElementById('expMeetingPointLat').value = '';
+          document.getElementById('expMeetingPointLng').value = '';
+          document.getElementById('expMeetingPointAddress').value = '';
+          document.getElementById('expMeetingPointConfirm').style.display = 'none';
+        }
       });
     });
 
@@ -3781,7 +3903,14 @@
       const travelDetails = document.getElementById('expTravelDetails').value.trim();
       const meetingPointTypeInput = document.querySelector('input[name="expMeetingPointType"]:checked');
       const meetingPointDetails = document.getElementById('expMeetingPointDetails').value.trim();
+      const meetingPointLat = document.getElementById('expMeetingPointLat').value;
+      const meetingPointLng = document.getElementById('expMeetingPointLng').value;
+      const meetingPointAddress = document.getElementById('expMeetingPointAddress').value;
       const refundPolicy = document.getElementById('expRefundPolicy').value.trim();
+      const instructions = document.getElementById('expInstructions').value.trim();
+      const specialInstructions = document.getElementById('expSpecialInstructions').value.trim();
+      const availableFrom = document.getElementById('expAvailableFrom').value;
+      const availableUntil = document.getElementById('expAvailableUntil').value;
 
       // Same checks the backend enforces (see submit-listing.js).
       if(!name){ errorEl.textContent = 'Please give your experience a name.'; errorEl.style.display = 'block'; return; }
@@ -3806,7 +3935,14 @@
       if(arrangesTravelInput.value === 'yes' && !travelDetails){ errorEl.textContent = 'Please describe the travel/transport arrangement.'; errorEl.style.display = 'block'; return; }
       if(!meetingPointTypeInput){ errorEl.textContent = 'Please choose a meeting point option.'; errorEl.style.display = 'block'; return; }
       if(meetingPointTypeInput.value === 'common_point' && !meetingPointDetails){ errorEl.textContent = 'Please describe the meeting point.'; errorEl.style.display = 'block'; return; }
+      if(meetingPointTypeInput.value === 'common_point' && (!meetingPointLat || !meetingPointLng)){
+        errorEl.textContent = 'Please select the meeting point location from the address suggestions.'; errorEl.style.display = 'block'; return;
+      }
       if(!refundPolicy){ errorEl.textContent = 'Please describe your refund policy if a guest doesn\'t reach the meeting point.'; errorEl.style.display = 'block'; return; }
+      if(!instructions){ errorEl.textContent = 'Please add instructions for this experience.'; errorEl.style.display = 'block'; return; }
+      if(availableFrom && availableUntil && availableUntil < availableFrom){
+        errorEl.textContent = 'The "available until" date must be after the "available from" date.'; errorEl.style.display = 'block'; return;
+      }
       if(!expPhotoUrls.length){ errorEl.textContent = 'Please add at least 1 photo.'; errorEl.style.display = 'block'; return; }
 
       this.disabled = true;
@@ -3839,6 +3975,13 @@
             experienceMeetingPointType: meetingPointTypeInput.value,
             experienceMeetingPointDetails: meetingPointTypeInput.value === 'common_point' ? meetingPointDetails : null,
             experienceRefundPolicy: refundPolicy,
+            experienceMeetingPointLat: meetingPointTypeInput.value === 'common_point' ? meetingPointLat : null,
+            experienceMeetingPointLng: meetingPointTypeInput.value === 'common_point' ? meetingPointLng : null,
+            experienceMeetingPointAddress: meetingPointTypeInput.value === 'common_point' ? meetingPointAddress : null,
+            experienceInstructions: instructions,
+            experienceSpecialInstructions: specialInstructions || null,
+            experienceAvailableFrom: availableFrom || null,
+            experienceAvailableUntil: availableUntil || null,
             hostName: hostName,
             hostPhone: hostPhone,
             exteriorPhotoUrls: expPhotoUrls,
@@ -5670,6 +5813,25 @@
       : 'Price on enquiry';
     const durationLine = exp.experience_duration_hours ? `${exp.experience_duration_hours} hour${Number(exp.experience_duration_hours) === 1 ? '' : 's'}` : '';
 
+    // Availability window (optional, host-set — see the "List Experience"
+    // form) — when present, constrains which dates a guest can even pick
+    // in the first place, same as a listing's booked-date greying-out,
+    // just expressed as native min/max rather than a custom calendar.
+    const tomorrowIso = toLocalDateStr(new Date(Date.now() + 86400000));
+    const availableFromIso = exp.experience_available_from ? String(exp.experience_available_from).slice(0, 10) : null;
+    const availableUntilIso = exp.experience_available_until ? String(exp.experience_available_until).slice(0, 10) : null;
+    const bookDateMin = (availableFromIso && availableFromIso > tomorrowIso) ? availableFromIso : tomorrowIso;
+    const bookDateMax = availableUntilIso || null;
+    const availabilityNoteHtml = (availableFromIso || availableUntilIso) ? `
+      <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">
+        ${availableFromIso && availableUntilIso
+          ? `Available ${new Date(availableFromIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(availableUntilIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`
+          : availableFromIso
+          ? `Available from ${new Date(availableFromIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`
+          : `Available through ${new Date(availableUntilIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`}
+      </p>
+    ` : '';
+
     // Only offered as a cross-sell when the hosting property is itself an
     // approved, bookable stay — never for a pending/rejected/no-rate one.
     const hostingIsBookable = exp.hosting_listing_id && exp.hosting_status === 'approved' && exp.hosting_nightly_rate;
@@ -5750,6 +5912,33 @@
       ${refundPolicyHtml}
     `;
 
+    // A common meeting point has its own actual pinned location,
+    // separate from the experience's own address — shown as its own
+    // small map so a guest can see exactly where to go, not just read a
+    // text description of it.
+    const meetingPointMapHtml = (exp.experience_meeting_point_type === 'common_point' && exp.experience_meeting_point_lat && exp.experience_meeting_point_lng) ? `
+      <div class="listing-modal-section-title">Meeting Point Map</div>
+      <div class="listing-map-embed" id="expMeetingPointMapEmbed" style="aspect-ratio:16/9;"></div>
+      <div style="margin-top:8px;">
+        <a href="https://www.google.com/maps/search/?api=1&query=${exp.experience_meeting_point_lat},${exp.experience_meeting_point_lng}" target="_blank" rel="noopener" class="link" style="font-size:13px;">View on map</a>
+      </div>
+    ` : '';
+
+    const instructionsHtml = exp.experience_instructions ? `
+      <div class="listing-modal-section-title">Instructions</div>
+      <p style="font-size:13.5px; line-height:1.8; opacity:0.85; white-space:pre-wrap;">${exp.experience_instructions}</p>
+    ` : '';
+
+    // Kept visually distinct (its own bordered box, not just another
+    // paragraph) since this is the kind of thing a guest specifically
+    // needs to notice before booking, not casually skim past.
+    const specialInstructionsHtml = exp.experience_special_instructions ? `
+      <div class="listing-modal-section-title">Special Instructions</div>
+      <div style="border:1px solid var(--line-dark); background:var(--cream-deep); padding:14px 16px; font-size:13px; line-height:1.7; opacity:0.9;">
+        ${exp.experience_special_instructions}
+      </div>
+    ` : '';
+
     const mapLinkHtml = (exp.latitude && exp.longitude)
       ? `<a href="https://www.google.com/maps/search/?api=1&query=${exp.latitude},${exp.longitude}" target="_blank" rel="noopener" class="link" style="font-size:13px;">View on map</a>`
       : '';
@@ -5770,7 +5959,8 @@
             <div class="listing-modal-section-title" style="margin-top:16px;">Book This Experience</div>
             <div class="field">
               <label for="expBookDate">Date</label>
-              <input type="date" id="expBookDate" min="${toLocalDateStr(new Date(Date.now() + 86400000))}">
+              <input type="date" id="expBookDate" min="${bookDateMin}"${bookDateMax ? ` max="${bookDateMax}"` : ''}>
+              ${availabilityNoteHtml}
             </div>
             <div class="guest-row" style="padding-top:16px;">
               <div class="guest-row-text">
@@ -5820,6 +6010,9 @@
           </div>
         </div>
         ${logisticsHtml}
+        ${meetingPointMapHtml}
+        ${instructionsHtml}
+        ${specialInstructionsHtml}
         ${hostingHtml}
       </div>
     `;
@@ -5978,6 +6171,10 @@
     if(mapEl && exp.latitude && exp.longitude){
       initListingMapEmbed(mapEl, exp.latitude, exp.longitude, exp.property_name);
     }
+    const meetingMapEl = document.getElementById('expMeetingPointMapEmbed');
+    if(meetingMapEl && exp.experience_meeting_point_lat && exp.experience_meeting_point_lng){
+      initListingMapEmbed(meetingMapEl, exp.experience_meeting_point_lat, exp.experience_meeting_point_lng, 'Meeting Point');
+    }
 
     const guestsCountEl = document.getElementById('expGuestsCount');
     document.getElementById('expGuestsDec').addEventListener('click', () => {
@@ -6006,6 +6203,10 @@
     const mapEl = document.getElementById('expMapEmbed');
     if(mapEl && exp.latitude && exp.longitude){
       initListingMapEmbed(mapEl, exp.latitude, exp.longitude, exp.property_name);
+    }
+    const meetingMapEl = document.getElementById('expMeetingPointMapEmbed');
+    if(meetingMapEl && exp.experience_meeting_point_lat && exp.experience_meeting_point_lng){
+      initListingMapEmbed(meetingMapEl, exp.experience_meeting_point_lat, exp.experience_meeting_point_lng, 'Meeting Point');
     }
 
     const guestsCountEl = document.getElementById('expGuestsCount');
