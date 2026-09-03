@@ -402,6 +402,10 @@
   <div id="experiencesSection">
     <h2 class="section-heading" style="margin-top:36px;">Aerva Experience</h2>
     <a href="index.html?view=list-experience" class="add-listing-link">List an Experience</a>
+    <div class="listing-tabs" id="experienceTabs">
+      <button type="button" class="listing-tab-btn active" data-tab="active" id="expTabActiveBtn">Active</button>
+      <button type="button" class="listing-tab-btn" data-tab="inactive" id="expTabInactiveBtn">Inactive</button>
+    </div>
     <div id="experienceCardsContainer">
       <p class="loading">Loading your experiences…</p>
     </div>
@@ -710,6 +714,7 @@
   let currentListings = [];
   let currentExperiences = [];
   let currentListingsTab = 'active';
+  let currentExperiencesTab = 'active';
 
   function renderListings(listings){
     // Split once, right at the source — everywhere else in this file
@@ -734,11 +739,27 @@
   function renderExperienceCards(){
     const container = document.getElementById('experienceCardsContainer');
     if(!container) return;
+    const activeCount = currentExperiences.filter(e => e.status === 'approved').length;
+    const inactiveCount = currentExperiences.length - activeCount;
+    const expTabActiveBtn = document.getElementById('expTabActiveBtn');
+    const expTabInactiveBtn = document.getElementById('expTabInactiveBtn');
+    if(expTabActiveBtn) expTabActiveBtn.innerHTML = `Active <span class="tab-count">(${activeCount})</span>`;
+    if(expTabInactiveBtn) expTabInactiveBtn.innerHTML = `Inactive <span class="tab-count">(${inactiveCount})</span>`;
+
     if(!currentExperiences.length){
       container.innerHTML = '<p class="empty">You haven\'t listed an experience yet.</p>';
       return;
     }
-    container.innerHTML = currentExperiences.map(exp => {
+    const experiences = currentExperiences.filter(e =>
+      currentExperiencesTab === 'active' ? e.status === 'approved' : e.status !== 'approved'
+    );
+    if(!experiences.length){
+      container.innerHTML = currentExperiencesTab === 'active'
+        ? '<p class="empty">No live experiences yet — approved experiences will show up here.</p>'
+        : '<p class="empty">Nothing here — every experience is currently live.</p>';
+      return;
+    }
+    container.innerHTML = experiences.map(exp => {
       const interiorPhotos = Array.isArray(exp.interior_photo_urls) ? exp.interior_photo_urls : [];
       const exteriorPhotos = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
       const leadPhoto = exp.cover_photo_url || interiorPhotos[0] || exteriorPhotos[0];
@@ -1871,6 +1892,15 @@
     document.getElementById('tabActiveBtn').classList.toggle('active', currentListingsTab === 'active');
     document.getElementById('tabInactiveBtn').classList.toggle('active', currentListingsTab === 'inactive');
     renderListingsForCurrentTab();
+  });
+
+  document.getElementById('experienceTabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.listing-tab-btn');
+    if(!btn) return;
+    currentExperiencesTab = btn.dataset.tab;
+    document.getElementById('expTabActiveBtn').classList.toggle('active', currentExperiencesTab === 'active');
+    document.getElementById('expTabInactiveBtn').classList.toggle('active', currentExperiencesTab === 'inactive');
+    renderExperienceCards();
   });
 
   // ============================================================
