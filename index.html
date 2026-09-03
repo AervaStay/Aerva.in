@@ -863,6 +863,7 @@
         <div class="nav-account-menu" id="navAccountMenu">
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Listings</a>
           <a href="host-dashboard.html?openProfile=1">Account Settings</a>
+          <a href="host-dashboard.html?openProfile=1&profileTab=experience" id="listExperienceLink" style="display:none;">List Experience</a>
           <div class="menu-divider"></div>
           <a href="#" id="guestLogoutLink">Log Out</a>
         </div>
@@ -888,6 +889,7 @@
     </span>
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Listings</a>
     <a href="host-dashboard.html?openProfile=1">Account Settings</a>
+    <a href="host-dashboard.html?openProfile=1&profileTab=experience" id="listExperienceLinkMobile" style="display:none;">List Experience</a>
     <a href="#" id="guestLogoutLinkMobile">Log Out</a>
   </span>
 </nav>
@@ -5747,6 +5749,8 @@
     const guestNameDisplayMobile = document.getElementById('guestNameDisplayMobile');
     const myListingsLinkMobile = document.getElementById('myListingsLinkMobile');
     const guestLogoutLinkMobile = document.getElementById('guestLogoutLinkMobile');
+    const listExperienceLink = document.getElementById('listExperienceLink');
+    const listExperienceLinkMobile = document.getElementById('listExperienceLinkMobile');
 
     function clearGuestSession(){
       localStorage.removeItem('aerva_guest_session');
@@ -5779,6 +5783,8 @@
           if(data.guest.accountType === 'guest_host'){
             myListingsLink.style.display = 'inline';
             if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
+            if(listExperienceLink) listExperienceLink.style.display = 'block';
+            if(listExperienceLinkMobile) listExperienceLinkMobile.style.display = 'block';
           }
           // Always fetch the profile now — it's what supplies the
           // avatar (photo or initials) for the new account menu, not
