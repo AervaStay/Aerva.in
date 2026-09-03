@@ -376,6 +376,13 @@ module.exports = async (req, res) => {
     const safeExperiencePriceUnit = isExperience && (experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : null;
     const safeExperienceDuration = isExperience && experienceDurationHours ? Number(experienceDurationHours) : null;
     const safeExperienceType = isExperience && (experienceType === 'with_stay' || experienceType === 'without_stay') ? experienceType : null;
+    // An experience has no separate address of its own — it's hosted
+    // "at" a property. When there IS a hosting listing, its city carries
+    // over (so search/filtering still works for the experience the same
+    // way it does for stays); a without-stay experience with no hosting
+    // property genuinely has no city, which is fine now that the column
+    // allows null (see schema.sql).
+    const safeCity = isExperience ? (hostingListing ? hostingListing.city : null) : (city || null);
 
     const safePhotoHashesToStore = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
 
@@ -388,7 +395,7 @@ module.exports = async (req, res) => {
       const clearRejectionReason = existingDraft.status === 'rejected' && newStatus === 'pending';
       const updated = await sql`
         UPDATE listings SET
-          property_name = ${propertyName}, city = ${city || null}, area = ${area || null}, property_type = ${propertyType || null},
+          property_name = ${propertyName}, city = ${safeCity}, area = ${area || null}, property_type = ${propertyType || null},
           bedrooms = ${bedrooms || null}, max_guests = ${maxGuests || null}, nightly_rate = ${rate},
           description = ${description || null}, amenities = ${JSON.stringify(amenities || [])}, services = ${JSON.stringify(services || [])},
           host_name = ${hostName || null}, host_phone = ${hostPhone || null},
@@ -419,7 +426,7 @@ module.exports = async (req, res) => {
           listing_type, hosting_listing_id, experience_category, experience_price_unit,
           experience_duration_hours, experience_type, status, photo_hashes
         ) VALUES (
-          ${propertyName}, ${city || null}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
+          ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
           ${description || null}, ${JSON.stringify(amenities || [])}, ${JSON.stringify(services || [])},
           ${hostName || null}, ${authenticatedHostEmail}, ${hostPhone || null}, ${hostId},
