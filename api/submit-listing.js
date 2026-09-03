@@ -188,7 +188,10 @@ module.exports = async (req, res) => {
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
       securityDeposit,
       hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceType,
-      latitude, longitude, formattedAddress, pincode
+      latitude, longitude, formattedAddress, pincode,
+      experienceArrangesTravel, experienceTravelDetails,
+      experienceMeetingPointType, experienceMeetingPointDetails,
+      experienceStartTime, experienceRefundPolicy
     } = req.body;
     // Defaults to 'stay' for every existing caller — only the new
     // Experience submission path sends 'experience' explicitly.
@@ -331,6 +334,29 @@ module.exports = async (req, res) => {
         if (!nightlyRate || Number(nightlyRate) <= 0) {
           return res.status(400).json({ error: 'Please set a price for this experience.' });
         }
+        // Logistics — all host-defined, all mandatory. A guest booking
+        // sight-unseen needs to know whether they'll be picked up, where
+        // to actually go, when to be there, and what happens if they
+        // aren't — none of this is optional information for a real
+        // booking, even though none of it is enforced by Aerva itself.
+        if (typeof experienceArrangesTravel !== 'boolean') {
+          return res.status(400).json({ error: 'Please say whether you arrange travel/transport for guests.' });
+        }
+        if (experienceArrangesTravel && (!experienceTravelDetails || !String(experienceTravelDetails).trim())) {
+          return res.status(400).json({ error: 'Please describe the travel/transport arrangement.' });
+        }
+        if (experienceMeetingPointType !== 'hotel' && experienceMeetingPointType !== 'common_point') {
+          return res.status(400).json({ error: 'Please choose a meeting point option.' });
+        }
+        if (experienceMeetingPointType === 'common_point' && (!experienceMeetingPointDetails || !String(experienceMeetingPointDetails).trim())) {
+          return res.status(400).json({ error: 'Please describe the meeting point.' });
+        }
+        if (!experienceStartTime || !String(experienceStartTime).trim()) {
+          return res.status(400).json({ error: 'Please set a start time for this experience.' });
+        }
+        if (!experienceRefundPolicy || !String(experienceRefundPolicy).trim()) {
+          return res.status(400).json({ error: 'Please describe your refund policy if a guest doesn\'t reach the meeting point.' });
+        }
         if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
           console.warn('submit-listing rejected: no experience photos');
           return res.status(400).json({ error: 'At least 1 photo is required' });
@@ -446,6 +472,16 @@ module.exports = async (req, res) => {
       ? (hostingListing ? hostingListing.pincode : (pincode ? String(pincode).trim().slice(0, 20) : null))
       : (pincode ? String(pincode).trim().slice(0, 20) : null);
 
+    // Logistics fields — experience-only, same "only ever kept for
+    // listing_type = 'experience' rows" rule as the other experience
+    // fields above.
+    const safeArrangesTravel = isExperience ? (typeof experienceArrangesTravel === 'boolean' ? experienceArrangesTravel : null) : null;
+    const safeTravelDetails = isExperience && safeArrangesTravel && experienceTravelDetails ? String(experienceTravelDetails).trim().slice(0, 1000) : null;
+    const safeMeetingPointType = isExperience && (experienceMeetingPointType === 'hotel' || experienceMeetingPointType === 'common_point') ? experienceMeetingPointType : null;
+    const safeMeetingPointDetails = isExperience && safeMeetingPointType === 'common_point' && experienceMeetingPointDetails ? String(experienceMeetingPointDetails).trim().slice(0, 500) : null;
+    const safeStartTime = isExperience && experienceStartTime ? String(experienceStartTime).trim().slice(0, 20) : null;
+    const safeRefundPolicy = isExperience && experienceRefundPolicy ? String(experienceRefundPolicy).trim().slice(0, 1000) : null;
+
     const safePhotoHashesToStore = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
 
     let listing;
@@ -472,6 +508,9 @@ module.exports = async (req, res) => {
           experience_duration_hours = ${safeExperienceDuration}, experience_type = ${safeExperienceType},
           latitude = ${safeLatitude}, longitude = ${safeLongitude}, formatted_address = ${safeFormattedAddress},
           pincode = ${safePincode},
+          experience_arranges_travel = ${safeArrangesTravel}, experience_travel_details = ${safeTravelDetails},
+          experience_meeting_point_type = ${safeMeetingPointType}, experience_meeting_point_details = ${safeMeetingPointDetails},
+          experience_start_time = ${safeStartTime}, experience_refund_policy = ${safeRefundPolicy},
           photo_hashes = ${safePhotoHashesToStore},
           status = ${newStatus},
           rejection_reason = CASE WHEN ${clearRejectionReason} THEN NULL ELSE rejection_reason END
@@ -488,7 +527,10 @@ module.exports = async (req, res) => {
           commission_rate, exterior_photo_urls, interior_photo_urls,
           pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
           listing_type, hosting_listing_id, experience_category, experience_price_unit,
-          experience_duration_hours, experience_type, latitude, longitude, formatted_address, pincode, status, photo_hashes
+          experience_duration_hours, experience_type, latitude, longitude, formatted_address, pincode,
+          experience_arranges_travel, experience_travel_details, experience_meeting_point_type,
+          experience_meeting_point_details, experience_start_time, experience_refund_policy,
+          status, photo_hashes
         ) VALUES (
           ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
@@ -499,7 +541,10 @@ module.exports = async (req, res) => {
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
           ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit},
           ${safeListingType}, ${safeHostingListingId}, ${safeExperienceCategory}, ${safeExperiencePriceUnit},
-          ${safeExperienceDuration}, ${safeExperienceType}, ${safeLatitude}, ${safeLongitude}, ${safeFormattedAddress}, ${safePincode}, ${newStatus}, ${safePhotoHashesToStore}
+          ${safeExperienceDuration}, ${safeExperienceType}, ${safeLatitude}, ${safeLongitude}, ${safeFormattedAddress}, ${safePincode},
+          ${safeArrangesTravel}, ${safeTravelDetails}, ${safeMeetingPointType},
+          ${safeMeetingPointDetails}, ${safeStartTime}, ${safeRefundPolicy},
+          ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
       `;
