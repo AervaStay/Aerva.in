@@ -224,7 +224,7 @@ module.exports = async (req, res) => {
       const experiences = await sql`
         SELECT
           e.id, e.property_name, e.description, e.experience_category,
-          e.nightly_rate AS price, e.experience_price_unit, e.experience_duration_hours,
+          e.nightly_rate AS price, e.experience_price_unit, e.experience_duration_hours, e.experience_type,
           e.exterior_photo_urls, e.interior_photo_urls, e.cover_photo_url,
           e.host_name, e.created_at,
           e.hosting_listing_id,
@@ -237,6 +237,28 @@ module.exports = async (req, res) => {
         ORDER BY e.created_at DESC
       `;
       return res.status(200).json({ experiences });
+    }
+
+    // ?experiencesFor=<listingId> — every approved experience hosted AT
+    // this specific stay listing, for the listing detail page to offer
+    // as an add-on. 'with_stay' ones can be booked in the SAME order as
+    // this stay (create-order.js already accepts a stays[] and an
+    // experiences[] together in one request — no new checkout needed);
+    // 'without_stay' ones are just shown as a separate thing to book.
+    if (req.query.experiencesFor) {
+      const hostingId = Number(req.query.experiencesFor);
+      if (!hostingId || isNaN(hostingId)) {
+        return res.status(400).json({ error: 'Invalid listing id' });
+      }
+      const experiencesFor = await sql`
+        SELECT id, property_name, description, experience_category, experience_type,
+               nightly_rate AS price, experience_price_unit, experience_duration_hours,
+               exterior_photo_urls, interior_photo_urls, cover_photo_url
+        FROM listings
+        WHERE status = 'approved' AND listing_type = 'experience' AND hosting_listing_id = ${hostingId}
+        ORDER BY created_at DESC
+      `;
+      return res.status(200).json({ experiences: experiencesFor });
     }
 
     const cityRaw = typeof req.query.city === 'string' ? req.query.city.trim() : '';
