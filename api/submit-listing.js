@@ -217,7 +217,7 @@ module.exports = async (req, res) => {
     // verify it's really this host's own draft before touching it.
     let existingDraft = null;
     if (listingId) {
-      const rows = await sql`SELECT id, host_id, status FROM listings WHERE id = ${listingId}`;
+      const rows = await sql`SELECT id, host_id, status, listing_type FROM listings WHERE id = ${listingId}`;
       existingDraft = rows[0];
       if (!existingDraft || existingDraft.host_id !== hostId) {
         return res.status(403).json({ error: 'You do not have permission to edit this listing.' });
@@ -227,9 +227,23 @@ module.exports = async (req, res) => {
       // which clears rejection_reason and puts it back into the normal
       // 'pending' review queue, same as any other submission. Nothing
       // else (approved, pending, blocked, removed) goes through this
-      // self-service path — those go through the review team or admin
-      // moderation instead.
-      if (existingDraft.status !== 'draft' && existingDraft.status !== 'rejected') {
+      // self-service path for a STAY listing — those go through the
+      // review team or admin moderation instead, via a separate
+      // dedicated endpoint (update-listing-pricing.js) built specifically
+      // for editing an already-approved stay without re-review.
+      //
+      // Experiences are the deliberate exception: unlike stays, there's
+      // no separate "edit an approved experience" endpoint — building one
+      // would mean a 13th serverless function, over Vercel's Hobby-plan
+      // cap (see the 12-function constraint noted throughout this
+      // codebase). So an experience's OWNER can edit it here regardless
+      // of its current status, approved included — see newStatus below
+      // for how an approved experience's status is deliberately left
+      // untouched by this (edits go live immediately, same "no
+      // re-review needed for an edit" spirit stays get from their own
+      // separate endpoint).
+      const isExistingExperience = existingDraft.listing_type === 'experience';
+      if (!isExistingExperience && existingDraft.status !== 'draft' && existingDraft.status !== 'rejected') {
         return res.status(400).json({ error: 'Only drafts and rejected listings can be edited this way — approved or pending listings go through the review team.' });
       }
     }
@@ -407,7 +421,14 @@ module.exports = async (req, res) => {
     }
     const safeExteriorUrls = sanitizePhotoUrls(exteriorPhotoUrls);
     const safeInteriorUrls = sanitizePhotoUrls(interiorPhotoUrls);
-    const newStatus = isDraft ? 'draft' : 'pending';
+    // Editing an already-approved experience (the only status besides
+    // draft/rejected that reaches this point — see the permission check
+    // above) shouldn't demote it back to pending and off the live site
+    // for routine edits; only a real new submission, or resubmitting a
+    // draft/rejected one, should go through review as 'pending'.
+    const newStatus = isDraft
+      ? 'draft'
+      : (existingDraft && existingDraft.status === 'approved' ? 'approved' : 'pending');
 
     // Pet policy — deliberately kept separate from the free amenities
     // list. Only "Dog" and "Cat" are ever accepted regardless of what the
@@ -569,7 +590,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.status(200).json({ success: true, id: listing.id, isDraft: !!isDraft });
+    return res.status(200).json({ success: true, id: listing.id, isDraft: !!isDraft, status: listing.status });
   } catch (err) {
     console.error('submit-listing error:', err);
     return res.status(500).json({ error: 'Could not save listing' });
