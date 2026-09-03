@@ -864,7 +864,7 @@
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Listings</a>
           <a href="host-dashboard.html?openProfile=1">Account Settings</a>
           <div class="menu-divider"></div>
-          <a href="host-dashboard.html?openProfile=1&profileTab=experience" id="listExperienceLink" style="display:none;">List Experience</a>
+          <a href="host-dashboard.html?openExperience=1" id="listExperienceLink" style="display:none;">List Experience</a>
           <div class="menu-divider"></div>
           <a href="#" id="guestLogoutLink">Log Out</a>
         </div>
@@ -891,7 +891,7 @@
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Listings</a>
     <a href="host-dashboard.html?openProfile=1">Account Settings</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
-    <a href="host-dashboard.html?openProfile=1&profileTab=experience" id="listExperienceLinkMobile" style="display:none;">List Experience</a>
+    <a href="host-dashboard.html?openExperience=1" id="listExperienceLinkMobile" style="display:none;">List Experience</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
     <a href="#" id="guestLogoutLinkMobile">Log Out</a>
   </span>
@@ -1207,9 +1207,9 @@
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">This powers the "distance from you" shown to guests — pick a suggestion rather than just typing free text.</p>
       </div>
       <div class="field">
-        <label for="listPincode">PIN / Postal Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-filled when your address provides one)</span></label>
-        <input id="listPincode" type="text" placeholder="e.g. 411001">
-        <p id="listPincodeHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">Filled in automatically once you pick an address above. It's for reference only and doesn't affect the property's actual location — use the address search or map pin for that.</p>
+        <label for="listPincode">PIN / Postal Code <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-filled when your address provides one)</span></label>
+        <input id="listPincode" type="text" placeholder="e.g. 411001" required>
+        <p id="listPincodeHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">Filled in automatically once you pick an address above. If your address didn't include one, please enter it yourself.</p>
       </div>
       <div class="field">
         <label>Fine-Tune on Map <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(drag the pin for a more exact match)</span></label>
@@ -1222,8 +1222,8 @@
           <input id="listCity" name="City" type="text" placeholder="e.g. Pune" required>
         </div>
         <div class="field">
-          <label for="listArea">Area <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional — neighbourhood or locality)</span></label>
-          <input id="listArea" name="Area" type="text" placeholder="e.g. Koregaon Park">
+          <label for="listArea">Area <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(neighbourhood or locality)</span></label>
+          <input id="listArea" name="Area" type="text" placeholder="e.g. Koregaon Park" required>
         </div>
       </div>
       <p id="listCityAreaWarning" style="font-size:11.5px; color:#a3402f; margin-top:-8px; margin-bottom:16px; display:none;"></p>
@@ -2869,6 +2869,8 @@
       const requiredChecks = [
         { value: document.getElementById('listLatitude').value, message: 'Please select your property\'s location from the address suggestions.' },
         { value: document.getElementById('listCity').value.trim(), message: 'Please enter the city.' },
+        { value: document.getElementById('listArea').value.trim(), message: 'Please enter the area.' },
+        { value: document.getElementById('listPincode').value.trim(), message: 'Please enter the PIN/postal code.' },
         { value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' },
         { value: document.getElementById('listDescription').value.trim(), message: 'Please tell us a bit about the property.' }
       ];
@@ -3017,6 +3019,7 @@
           latitude: document.getElementById('listLatitude').value,
           longitude: document.getElementById('listLongitude').value,
           formattedAddress: document.getElementById('listFormattedAddress').value,
+          pincode: document.getElementById('listPincode').value,
           exteriorPhotoUrls: exteriorPhotoUrls,
           interiorPhotoUrls: interiorPhotoUrls,
           coverPhotoUrl: coverPhotoUrl,
@@ -3095,6 +3098,10 @@
       document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
       activeBtn.disabled = false;
       otherBtn.disabled = false;
+      // Closes the form itself once submitted — briefly shows the "thank
+      // you" confirmation, then leaves the listing view, rather than
+      // sitting on an empty, just-reset form with nothing left to do.
+      setTimeout(() => { window.location.href = 'index.html'; }, 2000);
       activeBtn.textContent = 'Submitted';
     } catch(err){
       console.error('Listing submission failed:', err);
