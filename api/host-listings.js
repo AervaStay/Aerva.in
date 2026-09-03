@@ -642,7 +642,10 @@ module.exports = async (req, res) => {
              listing_type, hosting_listing_id, experience_category, experience_price_unit,
              experience_duration_hours, experience_type, experience_arranges_travel,
              experience_travel_details, experience_meeting_point_type,
-             experience_meeting_point_details, experience_start_time, experience_refund_policy
+             experience_meeting_point_details, experience_start_time, experience_refund_policy,
+             experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
+             experience_instructions, experience_special_instructions,
+             experience_available_from, experience_available_until
       FROM listings
       WHERE host_id = ${guest.host_id}
       ORDER BY created_at DESC

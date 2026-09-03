@@ -231,6 +231,9 @@ module.exports = async (req, res) => {
           e.experience_arranges_travel, e.experience_travel_details,
           e.experience_meeting_point_type, e.experience_meeting_point_details,
           e.experience_start_time, e.experience_refund_policy,
+          e.experience_meeting_point_lat, e.experience_meeting_point_lng, e.experience_meeting_point_address,
+          e.experience_instructions, e.experience_special_instructions,
+          e.experience_available_from, e.experience_available_until,
           h.property_name AS hosting_property_name, h.city AS hosting_city, h.area AS hosting_area,
           h.nightly_rate AS hosting_nightly_rate, h.cover_photo_url AS hosting_cover_photo_url,
           h.exterior_photo_urls AS hosting_exterior_photo_urls, h.interior_photo_urls AS hosting_interior_photo_urls,
@@ -261,7 +264,10 @@ module.exports = async (req, res) => {
                city, latitude, longitude, formatted_address,
                experience_arranges_travel, experience_travel_details,
                experience_meeting_point_type, experience_meeting_point_details,
-               experience_start_time, experience_refund_policy
+               experience_start_time, experience_refund_policy,
+               experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
+               experience_instructions, experience_special_instructions,
+               experience_available_from, experience_available_until
         FROM listings
         WHERE status = 'approved' AND listing_type = 'experience' AND hosting_listing_id = ${hostingId}
         ORDER BY created_at DESC

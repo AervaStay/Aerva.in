@@ -456,7 +456,8 @@ module.exports = async (req, res) => {
       seenExperienceIds.add(ex.listingId);
 
       const rows = await sql`
-        SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate
+        SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate,
+               experience_available_from, experience_available_until
         FROM listings
         WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
       `;
@@ -466,6 +467,16 @@ module.exports = async (req, res) => {
       }
       if (!experience.nightly_rate) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} doesn't have a price set yet.` });
+      }
+      // Optional host-set season/date-range this experience actually
+      // runs in — the guest's date picker already constrains this via
+      // min/max, but that's client-side only, so it's re-checked here
+      // for real before any money moves.
+      if (experience.experience_available_from && ex.date < experience.experience_available_from) {
+        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available until ${experience.experience_available_from}.` });
+      }
+      if (experience.experience_available_until && ex.date > experience.experience_available_until) {
+        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available after ${experience.experience_available_until}.` });
       }
 
       const guests = Number(ex.guests) || 1;

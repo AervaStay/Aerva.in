@@ -191,7 +191,10 @@ module.exports = async (req, res) => {
       latitude, longitude, formattedAddress, pincode,
       experienceArrangesTravel, experienceTravelDetails,
       experienceMeetingPointType, experienceMeetingPointDetails,
-      experienceStartTime, experienceRefundPolicy
+      experienceStartTime, experienceRefundPolicy,
+      experienceAvailableFrom, experienceAvailableUntil,
+      experienceMeetingPointLat, experienceMeetingPointLng, experienceMeetingPointAddress,
+      experienceInstructions, experienceSpecialInstructions
     } = req.body;
     // Defaults to 'stay' for every existing caller — only the new
     // Experience submission path sends 'experience' explicitly.
@@ -365,11 +368,24 @@ module.exports = async (req, res) => {
         if (experienceMeetingPointType === 'common_point' && (!experienceMeetingPointDetails || !String(experienceMeetingPointDetails).trim())) {
           return res.status(400).json({ error: 'Please describe the meeting point.' });
         }
+        // A common meeting point needs an actual pinned location a guest
+        // can navigate to, not just a text description — "at the
+        // property/hotel" already has an implicit location (the property
+        // itself), which is why this only applies to the 'common_point' case.
+        if (experienceMeetingPointType === 'common_point' && (!experienceMeetingPointLat || !experienceMeetingPointLng)) {
+          return res.status(400).json({ error: 'Please select the meeting point location from the address suggestions.' });
+        }
         if (!experienceStartTime || !String(experienceStartTime).trim()) {
           return res.status(400).json({ error: 'Please set a start time for this experience.' });
         }
         if (!experienceRefundPolicy || !String(experienceRefundPolicy).trim()) {
           return res.status(400).json({ error: 'Please describe your refund policy if a guest doesn\'t reach the meeting point.' });
+        }
+        if (!experienceInstructions || !String(experienceInstructions).trim()) {
+          return res.status(400).json({ error: 'Please add instructions for this experience.' });
+        }
+        if (experienceAvailableFrom && experienceAvailableUntil && experienceAvailableUntil < experienceAvailableFrom) {
+          return res.status(400).json({ error: 'The "available until" date must be after the "available from" date.' });
         }
         if (!Array.isArray(exteriorPhotoUrls) || exteriorPhotoUrls.length === 0) {
           console.warn('submit-listing rejected: no experience photos');
@@ -502,6 +518,23 @@ module.exports = async (req, res) => {
     const safeMeetingPointDetails = isExperience && safeMeetingPointType === 'common_point' && experienceMeetingPointDetails ? String(experienceMeetingPointDetails).trim().slice(0, 500) : null;
     const safeStartTime = isExperience && experienceStartTime ? String(experienceStartTime).trim().slice(0, 20) : null;
     const safeRefundPolicy = isExperience && experienceRefundPolicy ? String(experienceRefundPolicy).trim().slice(0, 1000) : null;
+    // Only meaningful (and only ever collected) for a 'common_point'
+    // meeting point — "at the property/hotel" already has an implicit
+    // location, nothing separate to pin.
+    const isValidMeetingLat = (v) => v != null && !isNaN(Number(v)) && Math.abs(Number(v)) <= 90;
+    const isValidMeetingLng = (v) => v != null && !isNaN(Number(v)) && Math.abs(Number(v)) <= 180;
+    const safeMeetingPointLat = isExperience && safeMeetingPointType === 'common_point' && isValidMeetingLat(experienceMeetingPointLat) ? Number(experienceMeetingPointLat) : null;
+    const safeMeetingPointLng = isExperience && safeMeetingPointType === 'common_point' && isValidMeetingLng(experienceMeetingPointLng) ? Number(experienceMeetingPointLng) : null;
+    const safeMeetingPointAddress = isExperience && safeMeetingPointType === 'common_point' && experienceMeetingPointAddress ? String(experienceMeetingPointAddress).trim().slice(0, 500) : null;
+    const safeInstructions = isExperience && experienceInstructions ? String(experienceInstructions).trim().slice(0, 2000) : null;
+    const safeSpecialInstructions = isExperience && experienceSpecialInstructions ? String(experienceSpecialInstructions).trim().slice(0, 2000) : null;
+    // Optional season/date-range the experience actually runs in — a
+    // guest's booking date picker is constrained to this range when set
+    // (see index.html), but an experience with neither set is simply
+    // bookable any time, same as before this existed.
+    const isValidDateStr = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const safeAvailableFrom = isExperience && isValidDateStr(experienceAvailableFrom) ? experienceAvailableFrom : null;
+    const safeAvailableUntil = isExperience && isValidDateStr(experienceAvailableUntil) ? experienceAvailableUntil : null;
 
     const safePhotoHashesToStore = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
 
@@ -532,6 +565,10 @@ module.exports = async (req, res) => {
           experience_arranges_travel = ${safeArrangesTravel}, experience_travel_details = ${safeTravelDetails},
           experience_meeting_point_type = ${safeMeetingPointType}, experience_meeting_point_details = ${safeMeetingPointDetails},
           experience_start_time = ${safeStartTime}, experience_refund_policy = ${safeRefundPolicy},
+          experience_meeting_point_lat = ${safeMeetingPointLat}, experience_meeting_point_lng = ${safeMeetingPointLng},
+          experience_meeting_point_address = ${safeMeetingPointAddress},
+          experience_instructions = ${safeInstructions}, experience_special_instructions = ${safeSpecialInstructions},
+          experience_available_from = ${safeAvailableFrom}, experience_available_until = ${safeAvailableUntil},
           photo_hashes = ${safePhotoHashesToStore},
           status = ${newStatus},
           rejection_reason = CASE WHEN ${clearRejectionReason} THEN NULL ELSE rejection_reason END
@@ -551,6 +588,9 @@ module.exports = async (req, res) => {
           experience_duration_hours, experience_type, latitude, longitude, formatted_address, pincode,
           experience_arranges_travel, experience_travel_details, experience_meeting_point_type,
           experience_meeting_point_details, experience_start_time, experience_refund_policy,
+          experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
+          experience_instructions, experience_special_instructions,
+          experience_available_from, experience_available_until,
           status, photo_hashes
         ) VALUES (
           ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
@@ -565,6 +605,9 @@ module.exports = async (req, res) => {
           ${safeExperienceDuration}, ${safeExperienceType}, ${safeLatitude}, ${safeLongitude}, ${safeFormattedAddress}, ${safePincode},
           ${safeArrangesTravel}, ${safeTravelDetails}, ${safeMeetingPointType},
           ${safeMeetingPointDetails}, ${safeStartTime}, ${safeRefundPolicy},
+          ${safeMeetingPointLat}, ${safeMeetingPointLng}, ${safeMeetingPointAddress},
+          ${safeInstructions}, ${safeSpecialInstructions},
+          ${safeAvailableFrom}, ${safeAvailableUntil},
           ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
