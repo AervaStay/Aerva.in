@@ -4204,6 +4204,88 @@
     btn.appendChild(document.createTextNode(' ' + text));
   }
 
+  // ---- Auto location prompt, once per browser, right after login ----
+  // The manual "Near Me" button below only ever SORTS by distance —
+  // everything stays visible, just reordered. This is different: right
+  // after a guest is confirmed logged in, it asks for location once, and
+  // if granted, actually FILTERS the grid down to what's within 200km,
+  // same radius/mechanism as typing a place into the search bar — not
+  // just a reorder. Gated by a localStorage flag so a returning guest
+  // isn't re-prompted on every single page load, only the first time
+  // this browser sees them logged in.
+  const LOCATION_PROMPTED_KEY = 'aerva_location_prompted';
+
+  async function promptLocationOnceForGuest(){
+    if(localStorage.getItem(LOCATION_PROMPTED_KEY)) return;
+    if(!navigator.geolocation){
+      localStorage.setItem(LOCATION_PROMPTED_KEY, '1');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      async function(position){
+        localStorage.setItem(LOCATION_PROMPTED_KEY, '1');
+        guestLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
+        const nearMeBtn = document.getElementById('showDistanceBtn');
+        if(nearMeBtn) setNearMeLabel(nearMeBtn, 'Showing nearest first');
+
+        // Real 200km filter, not just a sort — same lat/lng/radiusKm
+        // params and the same two endpoints performSearch() already uses,
+        // just fed the device's own coordinates directly instead of
+        // geocoding a typed place name.
+        const container = document.getElementById('suitesContainer');
+        try{
+          const listingsRes = await fetch(SUITES_API_BASE + `/api/get-listings?lat=${guestLocation.lat}&lng=${guestLocation.lng}&radiusKm=200`);
+          if(listingsRes.ok){
+            const listingsData = await listingsRes.json();
+            approvedListings = listingsData.listings || [];
+            listingsById = {};
+            approvedListings.forEach(l => { listingsById[l.id] = l; });
+          }
+        } catch(err){
+          // Non-fatal — whatever was already loaded stays showing.
+        }
+        try{
+          const expRes = await fetch(SUITES_API_BASE + `/api/get-listings?experiences=1&lat=${guestLocation.lat}&lng=${guestLocation.lng}&radiusKm=200`);
+          if(expRes.ok){
+            const expData = await expRes.json();
+            approvedExperiences = expData.experiences || [];
+            experiencesById = {};
+            approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
+            experiencesLoaded = true;
+          }
+        } catch(err){
+          // Non-fatal — same reasoning as above.
+        }
+
+        const statusEl = document.getElementById('searchStatus');
+        if(statusEl){
+          const total = approvedListings.length + approvedExperiences.length;
+          statusEl.textContent = total
+            ? `Showing ${total} result${total === 1 ? '' : 's'} near you.`
+            : 'Nothing within 200km of you yet — showing everything instead.';
+          statusEl.style.display = 'block';
+        }
+        // Nothing at all nearby is more useful shown as "everything" than
+        // an empty grid the guest never asked to be shown — falls back to
+        // a normal unfiltered reload rather than leaving it blank.
+        if(approvedListings.length === 0 && approvedExperiences.length === 0){
+          guestLocation = null;
+          initSite();
+          return;
+        }
+        applyFiltersAndRender();
+      },
+      function(err){
+        // Denied or failed — just remember we asked, so this never nags
+        // a guest who said no (or whose browser/device can't provide it)
+        // on every subsequent page load. Browsing continues completely
+        // normally, unfiltered, same as before this feature existed.
+        localStorage.setItem(LOCATION_PROMPTED_KEY, '1');
+      },
+      { timeout: 10000 }
+    );
+  }
+
   document.getElementById('showDistanceBtn').addEventListener('click', function(){
     if(!navigator.geolocation){
       alert('Your browser doesn\'t support location access.');
@@ -7183,6 +7265,11 @@
           }
           if(listExperienceLink) listExperienceLink.style.display = 'block';
           if(listExperienceLinkMobile) listExperienceLinkMobile.style.display = 'block';
+          // Location prompt, once per browser, only for a confirmed
+          // logged-in guest — see promptLocationOnceForGuest for the
+          // full reasoning. Fires and forgets; doesn't block anything
+          // else in this function from continuing.
+          promptLocationOnceForGuest();
           // Always fetch the profile now — it's what supplies the
           // avatar (photo or initials) for the new account menu, not
           // just the currency-resume it originally existed for. The
