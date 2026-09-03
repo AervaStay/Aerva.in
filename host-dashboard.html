@@ -410,6 +410,7 @@
       <button type="button" class="profile-tab-btn active" data-profile-tab="personal" id="profileTabPersonalBtn">Personal Details</button>
       <button type="button" class="profile-tab-btn" data-profile-tab="payment" id="profileTabPaymentBtn">Payment Options</button>
       <button type="button" class="profile-tab-btn" data-profile-tab="verification" id="profileTabVerificationBtn">Verification</button>
+      <button type="button" class="profile-tab-btn" data-profile-tab="experience" id="profileTabExperienceBtn">List Experience</button>
     </div>
     <div class="profile-modal-body">
 
@@ -512,6 +513,75 @@
         <div id="profileVerificationContent" class="verify-box" style="margin-bottom:0;"></div>
       </div>
 
+      <!-- ---- List Experience ---- -->
+      <div class="profile-tab-panel" id="profilePanelExperience" style="display:none;">
+        <p class="profile-field-note" style="margin-bottom:18px;">Runs alongside a property — a cooking class, a guided hike, a local tour. Submitted experiences go through the same review as new listings before they go live under Aerva Experience.</p>
+
+        <div class="field">
+          <label for="expName">Experience Name</label>
+          <input type="text" id="expName" placeholder="e.g. Sunset Kayaking on the Pavana">
+        </div>
+        <div class="field">
+          <label for="expDescription">Description</label>
+          <textarea id="expDescription" rows="4" placeholder="What does this experience include? What should a guest expect?" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif; resize:vertical;"></textarea>
+        </div>
+        <div class="field">
+          <label for="expHostingListing">Hosted At</label>
+          <select id="expHostingListing" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
+            <option value="">— Select one of your live listings —</option>
+          </select>
+          <p class="profile-field-note">Only your approved, live listings can host an experience.</p>
+        </div>
+        <div class="field">
+          <label for="expCategory">Category</label>
+          <select id="expCategory" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
+            <option value="">— Select a category —</option>
+            <option value="Food & Drink">Food & Drink</option>
+            <option value="Adventure & Outdoors">Adventure & Outdoors</option>
+            <option value="Arts & Culture">Arts & Culture</option>
+            <option value="Wellness & Spa">Wellness & Spa</option>
+            <option value="Nature & Wildlife">Nature & Wildlife</option>
+            <option value="Local Tours">Local Tours</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Does this experience include a stay?</label>
+          <div style="display:flex; gap:16px; margin-top:4px;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+              <input type="radio" name="expType" value="with_stay"> Yes — includes an overnight stay at the property above
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+              <input type="radio" name="expType" value="without_stay"> No — just the experience itself
+            </label>
+          </div>
+        </div>
+        <div class="field" style="display:flex; gap:12px;">
+          <div style="flex:1;">
+            <label for="expPrice">Price (₹)</label>
+            <input type="number" id="expPrice" min="1" placeholder="e.g. 1500">
+          </div>
+          <div style="flex:1;">
+            <label for="expPriceUnit">Priced</label>
+            <select id="expPriceUnit" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
+              <option value="per_person">Per person</option>
+              <option value="flat">Flat rate</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="expDuration">Duration in Hours <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></label>
+          <input type="number" id="expDuration" min="0.5" step="0.5" placeholder="e.g. 3">
+        </div>
+        <div class="field">
+          <label for="expPhotos">Photos</label>
+          <input type="file" id="expPhotos" accept="image/*" multiple>
+          <p class="profile-field-note" id="expPhotoCount">At least 1 photo is required.</p>
+        </div>
+        <button type="button" class="profile-save-btn" id="expSubmitBtn">Submit Experience</button>
+        <p class="profile-save-msg" id="expSubmitMsg"></p>
+      </div>
+
     </div>
   </div>
 </div>
@@ -560,6 +630,21 @@
     currentListings = listings;
     updateListingTabCounts();
     renderListingsForCurrentTab();
+    populateExperienceHostingDropdown();
+  }
+
+  // Only an approved, live listing makes sense to offer as an
+  // experience's hosting property — pointing an experience at a draft or
+  // pending listing would show guests a "Hosted at..." link that leads
+  // nowhere live yet.
+  function populateExperienceHostingDropdown(){
+    const select = document.getElementById('expHostingListing');
+    if(!select) return;
+    const approved = currentListings.filter(l => l.status === 'approved');
+    const currentValue = select.value;
+    select.innerHTML = '<option value="">— Select one of your live listings —</option>' +
+      approved.map(l => `<option value="${l.id}">${l.property_name}${l.city ? ' (' + l.city + ')' : ''}</option>`).join('');
+    if(approved.some(l => String(l.id) === currentValue)) select.value = currentValue;
   }
 
   function updateListingTabCounts(){
@@ -1239,7 +1324,7 @@
     document.getElementById('profileModalOverlay').style.display = 'none';
   }
   function switchProfileTab(tab){
-    ['personal', 'payment', 'verification'].forEach(t => {
+    ['personal', 'payment', 'verification', 'experience'].forEach(t => {
       document.getElementById('profileTab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn').classList.toggle('active', t === tab);
       document.getElementById('profilePanel' + t.charAt(0).toUpperCase() + t.slice(1)).style.display = t === tab ? 'block' : 'none';
     });
@@ -1868,12 +1953,134 @@
     btn.disabled = false; btn.textContent = 'Save Changes';
   });
 
+  // ---- List Experience ----
+  // Photos upload one at a time as they're picked (same instant-action
+  // pattern as PAN/Aadhaar/profile photo above), tracked in this array
+  // rather than re-reading the file input at submit time — a browser
+  // file input can't have files added to it programmatically, so this
+  // is the only way multiple selections (or re-picking after removing
+  // one) accumulate correctly.
+  let expPhotoUrls = [];
+
+  function renderExpPhotoCount(){
+    const el = document.getElementById('expPhotoCount');
+    if(!el) return;
+    el.textContent = expPhotoUrls.length > 0
+      ? `${expPhotoUrls.length} photo${expPhotoUrls.length === 1 ? '' : 's'} uploaded.`
+      : 'At least 1 photo is required.';
+    el.style.color = expPhotoUrls.length > 0 ? '#3a7d44' : '';
+  }
+
+  document.getElementById('expPhotos').addEventListener('change', async function(){
+    const files = Array.from(this.files || []);
+    if(!files.length) return;
+    const countEl = document.getElementById('expPhotoCount');
+    countEl.textContent = 'Uploading…';
+    countEl.style.color = '';
+    try{
+      const { upload } = await import('https://esm.sh/@vercel/blob/client');
+      for(const file of files){
+        const result = await upload(file.name, file, {
+          access: 'public',
+          handleUploadUrl: API_BASE + '/api/blob-upload'
+        });
+        expPhotoUrls.push(result.url);
+      }
+    } catch(err){
+      countEl.textContent = 'Some photos failed to upload — please try again.';
+      countEl.style.color = '#a3402f';
+    }
+    renderExpPhotoCount();
+    this.value = '';
+  });
+
+  document.getElementById('expSubmitBtn').addEventListener('click', async function(){
+    const msgEl = document.getElementById('expSubmitMsg');
+    msgEl.style.display = 'none';
+
+    const name = document.getElementById('expName').value.trim();
+    const description = document.getElementById('expDescription').value.trim();
+    const hostingListingId = document.getElementById('expHostingListing').value;
+    const category = document.getElementById('expCategory').value;
+    const expTypeInput = document.querySelector('input[name="expType"]:checked');
+    const price = document.getElementById('expPrice').value;
+    const priceUnit = document.getElementById('expPriceUnit').value;
+    const duration = document.getElementById('expDuration').value;
+
+    // Same checks the backend enforces (see submit-listing.js) — caught
+    // here first so the host isn't left guessing which field was the
+    // problem after a round trip.
+    if(!name){ msgEl.textContent = 'Please give your experience a name.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(!description){ msgEl.textContent = 'Please add a description.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(!hostingListingId){ msgEl.textContent = 'Please choose which of your listings hosts this experience.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(!category){ msgEl.textContent = 'Please choose a category.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(!expTypeInput){ msgEl.textContent = 'Please say whether this experience includes a stay.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(!price || Number(price) <= 0){ msgEl.textContent = 'Please set a price.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(!expPhotoUrls.length){ msgEl.textContent = 'Please add at least 1 photo.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+
+    this.disabled = true;
+    this.textContent = 'Submitting…';
+    try{
+      const res = await fetch(API_BASE + '/api/submit-listing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({
+          isDraft: false,
+          listingType: 'experience',
+          propertyName: name,
+          description: description,
+          hostingListingId: Number(hostingListingId),
+          experienceCategory: category,
+          experienceType: expTypeInput.value,
+          nightlyRate: Number(price),
+          experiencePriceUnit: priceUnit,
+          experienceDurationHours: duration ? Number(duration) : null,
+          hostName: (currentVerification && currentVerification.hostName) || '',
+          hostPhone: (currentVerification && currentVerification.hostPhone) || '',
+          exteriorPhotoUrls: expPhotoUrls,
+          interiorPhotoUrls: []
+        })
+      });
+      const data = await res.json();
+      if(res.ok){
+        msgEl.textContent = 'Submitted — we\'ll review it and it\'ll go live under Aerva Experience once approved.';
+        msgEl.style.color = '#3a7d44';
+        // Reset the form for a fresh submission, same as the main
+        // listing form does after a successful submit.
+        document.getElementById('expName').value = '';
+        document.getElementById('expDescription').value = '';
+        document.getElementById('expHostingListing').value = '';
+        document.getElementById('expCategory').value = '';
+        document.querySelectorAll('input[name="expType"]').forEach(r => r.checked = false);
+        document.getElementById('expPrice').value = '';
+        document.getElementById('expPriceUnit').value = 'per_person';
+        document.getElementById('expDuration').value = '';
+        expPhotoUrls = [];
+        renderExpPhotoCount();
+      } else {
+        msgEl.textContent = data.error || 'Something went wrong. Please try again.';
+        msgEl.style.color = '#a3402f';
+      }
+    } catch(err){
+      msgEl.textContent = 'Something went wrong. Please try again.';
+      msgEl.style.color = '#a3402f';
+    }
+    msgEl.style.display = 'block';
+    this.disabled = false;
+    this.textContent = 'Submit Experience';
+  });
+
   if(sessionToken){
     loadListings();
     loadGuestProfile();
-    // Deep link from index.html's account menu ("Account Settings")
-    if(new URLSearchParams(window.location.search).get('openProfile') === '1'){
-      openProfileModal('personal');
+    // Deep link from index.html's account menu ("Account Settings" /
+    // "List Experience") — profileTab picks which tab opens; defaults
+    // to Personal Details when not specified (or given an unknown value).
+    const deepLinkParams = new URLSearchParams(window.location.search);
+    if(deepLinkParams.get('openProfile') === '1'){
+      const validTabs = ['personal', 'payment', 'verification', 'experience'];
+      const requestedTab = deepLinkParams.get('profileTab');
+      openProfileModal(validTabs.includes(requestedTab) ? requestedTab : 'personal');
     }
   }
 </script>
