@@ -188,7 +188,7 @@ module.exports = async (req, res) => {
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
       securityDeposit,
       hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceType,
-      latitude, longitude, formattedAddress
+      latitude, longitude, formattedAddress, pincode
     } = req.body;
     // Defaults to 'stay' for every existing caller — only the new
     // Experience submission path sends 'experience' explicitly.
@@ -276,7 +276,7 @@ module.exports = async (req, res) => {
     // draft/real, since a bad reference shouldn't even save as a draft.
     let hostingListing = null;
     if (isExperience && hostingListingId) {
-      const hostingRows = await sql`SELECT id, host_id, property_name, city, latitude, longitude, formatted_address FROM listings WHERE id = ${hostingListingId} AND listing_type = 'stay'`;
+      const hostingRows = await sql`SELECT id, host_id, property_name, city, latitude, longitude, formatted_address, pincode FROM listings WHERE id = ${hostingListingId} AND listing_type = 'stay'`;
       hostingListing = hostingRows[0];
       if (!hostingListing || hostingListing.host_id !== hostId) {
         return res.status(400).json({ error: 'That hosting property could not be found among your own listings.' });
@@ -301,10 +301,26 @@ module.exports = async (req, res) => {
         }
         // A with-stay experience gets its location from the hosting
         // property automatically — but a without-stay one has no
-        // property to borrow a location from, so it needs its own
-        // address, same as a new stay listing requires one.
-        if (experienceType === 'without_stay' && (!latitude || !longitude)) {
-          return res.status(400).json({ error: 'Please select this experience\'s location from the address suggestions.' });
+        // property to borrow a location from, so it needs its own full
+        // address, same requirement a new stay listing has: location,
+        // city, area, and PIN/postal code are all mandatory, not just
+        // lat/lng.
+        if (experienceType === 'without_stay') {
+          if (!latitude || !longitude) {
+            return res.status(400).json({ error: 'Please select this experience\'s location from the address suggestions.' });
+          }
+          if (!city || !String(city).trim()) {
+            return res.status(400).json({ error: 'Please enter the city for this experience.' });
+          }
+          if (!area || !String(area).trim()) {
+            return res.status(400).json({ error: 'Please enter the area for this experience.' });
+          }
+          if (!pincode || !String(pincode).trim()) {
+            return res.status(400).json({ error: 'Please enter the PIN/postal code for this experience.' });
+          }
+          if (hasNonLatinScript(city) || hasNonLatinScript(area)) {
+            return res.status(400).json({ error: 'Please enter the city and area in English (Latin script) — e.g. "Pune", not a local-script spelling.' });
+          }
         }
         if (!experienceCategory || !String(experienceCategory).trim()) {
           return res.status(400).json({ error: 'Please choose a category for this experience.' });
@@ -323,6 +339,15 @@ module.exports = async (req, res) => {
         if (!city || !description || !hostName || !hostPhone) {
           console.warn('submit-listing rejected: missing required text fields');
           return res.status(400).json({ error: 'Missing required fields' });
+        }
+        if (!area || !String(area).trim()) {
+          return res.status(400).json({ error: 'Please enter the area.' });
+        }
+        if (!pincode || !String(pincode).trim()) {
+          return res.status(400).json({ error: 'Please enter the PIN/postal code.' });
+        }
+        if (!latitude || !longitude) {
+          return res.status(400).json({ error: 'Please select your property\'s location from the address suggestions.' });
         }
         if (hasNonLatinScript(city) || (area && hasNonLatinScript(area))) {
           console.warn('submit-listing rejected: city/area not in Latin script');
@@ -390,7 +415,7 @@ module.exports = async (req, res) => {
     // way it does for stays); a without-stay experience with no hosting
     // property genuinely has no city, which is fine now that the column
     // allows null (see schema.sql).
-    const safeCity = isExperience ? (hostingListing ? hostingListing.city : null) : (city || null);
+    const safeCity = isExperience ? (hostingListing ? hostingListing.city : (city || null)) : (city || null);
     // Same idea for the actual map location — a with-stay experience
     // borrows the hosting property's coordinates (required there
     // already, see validation above); a without-stay one submits its
@@ -414,6 +439,12 @@ module.exports = async (req, res) => {
       safeLongitude = Number(longitude);
       safeFormattedAddress = formattedAddress || null;
     }
+    // Pincode follows the exact same borrow-from-hosting-property logic
+    // as city — a with-stay experience has no PIN code field of its own
+    // to fill in, so it inherits the hosting property's.
+    const safePincode = isExperience
+      ? (hostingListing ? hostingListing.pincode : (pincode ? String(pincode).trim().slice(0, 20) : null))
+      : (pincode ? String(pincode).trim().slice(0, 20) : null);
 
     const safePhotoHashesToStore = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
 
@@ -440,6 +471,7 @@ module.exports = async (req, res) => {
           experience_category = ${safeExperienceCategory}, experience_price_unit = ${safeExperiencePriceUnit},
           experience_duration_hours = ${safeExperienceDuration}, experience_type = ${safeExperienceType},
           latitude = ${safeLatitude}, longitude = ${safeLongitude}, formatted_address = ${safeFormattedAddress},
+          pincode = ${safePincode},
           photo_hashes = ${safePhotoHashesToStore},
           status = ${newStatus},
           rejection_reason = CASE WHEN ${clearRejectionReason} THEN NULL ELSE rejection_reason END
@@ -456,7 +488,7 @@ module.exports = async (req, res) => {
           commission_rate, exterior_photo_urls, interior_photo_urls,
           pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
           listing_type, hosting_listing_id, experience_category, experience_price_unit,
-          experience_duration_hours, experience_type, latitude, longitude, formatted_address, status, photo_hashes
+          experience_duration_hours, experience_type, latitude, longitude, formatted_address, pincode, status, photo_hashes
         ) VALUES (
           ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
@@ -467,7 +499,7 @@ module.exports = async (req, res) => {
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
           ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit},
           ${safeListingType}, ${safeHostingListingId}, ${safeExperienceCategory}, ${safeExperiencePriceUnit},
-          ${safeExperienceDuration}, ${safeExperienceType}, ${safeLatitude}, ${safeLongitude}, ${safeFormattedAddress}, ${newStatus}, ${safePhotoHashesToStore}
+          ${safeExperienceDuration}, ${safeExperienceType}, ${safeLatitude}, ${safeLongitude}, ${safeFormattedAddress}, ${safePincode}, ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
       `;
