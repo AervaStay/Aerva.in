@@ -184,6 +184,7 @@
     font-size:10px; letter-spacing:0.1em; text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
   .suite-badge-discount{ background:#a3402f; color:#fff; }
+  .suite-badge-stay{ background:#4d9a56; color:#fff; }
   .suite-photo-slider{
     width:100%; height:100%; display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
     -webkit-overflow-scrolling:touch; scrollbar-width:none;
@@ -3552,7 +3553,10 @@
     card.innerHTML = `
       <div class="suite-photo">
         ${photoHtml}
-        ${exp.experience_category ? `<div class="suite-badges"><span class="suite-badge">${exp.experience_category}</span></div>` : ''}
+        <div class="suite-badges">
+          ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
+          ${exp.experience_category ? `<span class="suite-badge">${exp.experience_category}</span>` : ''}
+        </div>
       </div>
       <div class="suite-body">
         <h3>${exp.property_name}</h3>
@@ -4137,6 +4141,7 @@
               <p id="lgPetTypesError" style="font-size:11.5px; color:#a3402f; margin-top:6px; display:none;">Please select what pet(s) you're bringing.</p>
             </div>` : ''}
             <div id="listingAmenitiesPicker"></div>
+            <div id="listingExperiencesPicker"></div>
             <div id="listingPriceSummary" style="display:none;"></div>
             <div id="listingBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
               <div class="field">
@@ -4193,6 +4198,116 @@
     if(mapEl && listing.latitude && listing.longitude){
       initListingMapEmbed(mapEl, listing.latitude, listing.longitude, listing.property_name);
     }
+    loadListingExperiences(listing);
+  }
+
+  // "This property also offers…" — with-stay experiences hosted at this
+  // listing that a guest can add to the SAME booking. create-order.js
+  // already accepts a stays[] and an experiences[] together in one
+  // request (no new checkout needed) — this is just the picker that
+  // feeds that array. Without-stay experiences hosted here are shown
+  // too, but as a plain link to book separately, not an add-on toggle —
+  // they're not part of "the same booking" the way a with-stay one is.
+  async function loadListingExperiences(listing){
+    const container = document.getElementById('listingExperiencesPicker');
+    if(!container) return;
+    container.innerHTML = '';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?experiencesFor=' + encodeURIComponent(listing.id));
+      if(!res.ok) return;
+      const data = await res.json();
+      const experiences = Array.isArray(data.experiences) ? data.experiences : [];
+      if(!experiences.length) return;
+      renderAvailabilityCalendar._lgExperienceOptions = renderAvailabilityCalendar._lgExperienceOptions || {};
+      renderAvailabilityCalendar._lgExperienceOptions[listing.id] = experiences;
+      renderListingExperiencesPicker(listing);
+    } catch(err){
+      // Non-fatal — the booking flow works fine with no experiences shown.
+    }
+  }
+
+  function renderListingExperiencesPicker(listing){
+    const container = document.getElementById('listingExperiencesPicker');
+    if(!container) return;
+    const experiences = ((renderAvailabilityCalendar._lgExperienceOptions || {})[listing.id]) || [];
+    if(!experiences.length){ container.innerHTML = ''; return; }
+
+    renderAvailabilityCalendar._lgSelectedExperience = renderAvailabilityCalendar._lgSelectedExperience || {};
+    const selected = renderAvailabilityCalendar._lgSelectedExperience[listing.id] || null;
+
+    const withStay = experiences.filter(e => e.experience_type === 'with_stay');
+    const withoutStay = experiences.filter(e => e.experience_type !== 'with_stay');
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1 };
+    const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
+
+    const withStayHtml = withStay.length ? `
+      <div class="listing-modal-section-title">This Property Also Offers</div>
+      ${withStay.map(exp => {
+        const isChecked = selected && String(selected.listingId) === String(exp.id);
+        const priceLine = exp.price
+          ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
+          : 'Price on enquiry';
+        return `
+          <div class="listing-modal-paid-amenity" style="align-items:flex-start; flex-direction:column; gap:8px; padding:12px 0;">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; width:100%;">
+              <input type="checkbox" class="lg-experience-checkbox" data-experience-id="${exp.id}" ${isChecked ? 'checked' : ''}>
+              <span style="flex:1;"><strong>${exp.property_name}</strong> — ${priceLine}</span>
+            </label>
+            ${isChecked ? `
+              <div style="display:flex; gap:10px; padding-left:26px; width:100%; box-sizing:border-box;">
+                <input type="date" class="lg-experience-date" data-experience-id="${exp.id}"
+                  value="${selected.date || dates.arrival || ''}"
+                  min="${dates.arrival || ''}" max="${dates.departure || ''}"
+                  style="flex:1; padding:8px; font-size:13px; border:1px solid var(--line-dark);">
+                <input type="number" class="lg-experience-guests" data-experience-id="${exp.id}" min="1"
+                  value="${selected.guests || counts.adults || 1}"
+                  style="width:70px; padding:8px; font-size:13px; border:1px solid var(--line-dark);" title="Guests">
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('')}
+    ` : '';
+
+    const withoutStayHtml = withoutStay.length ? `
+      <div class="listing-modal-section-title">Also Nearby</div>
+      ${withoutStay.map(exp => `
+        <div class="listing-modal-paid-amenity">
+          <span><a href="index.html?experience=${exp.id}" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">${exp.property_name}</a></span>
+          <span>${exp.price ? fmtGuest(Number(exp.price)) + (exp.experience_price_unit === 'per_person' ? '/person' : '/group') : ''}</span>
+        </div>
+      `).join('')}
+    ` : '';
+
+    container.innerHTML = withStayHtml + withoutStayHtml;
+
+    container.querySelectorAll('.lg-experience-checkbox').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if(cb.checked){
+          const exp = withStay.find(e => String(e.id) === cb.dataset.experienceId);
+          renderAvailabilityCalendar._lgSelectedExperience[listing.id] = {
+            listingId: exp.id, date: dates.arrival || '', guests: counts.adults || 1
+          };
+        } else {
+          delete renderAvailabilityCalendar._lgSelectedExperience[listing.id];
+        }
+        renderListingExperiencesPicker(listing);
+        updateListingPriceSummary(listing, dates.arrival, dates.departure);
+      });
+    });
+    container.querySelectorAll('.lg-experience-date').forEach(input => {
+      input.addEventListener('change', () => {
+        const sel = renderAvailabilityCalendar._lgSelectedExperience[listing.id];
+        if(sel) sel.date = input.value;
+      });
+    });
+    container.querySelectorAll('.lg-experience-guests').forEach(input => {
+      input.addEventListener('change', () => {
+        const sel = renderAvailabilityCalendar._lgSelectedExperience[listing.id];
+        if(sel) sel.guests = Math.max(1, Number(input.value) || 1);
+        updateListingPriceSummary(listing, dates.arrival, dates.departure);
+      });
+    });
   }
 
   function closeListingDetail(){
@@ -4514,6 +4629,11 @@
     // _lgCounts above.
     renderAvailabilityCalendar._lgDates = renderAvailabilityCalendar._lgDates || {};
     renderAvailabilityCalendar._lgDates[listing.id] = { arrival, departure };
+    // Refreshes the experience date input's min/max to match the new
+    // stay dates, and defaults a freshly-checked experience's date to
+    // the new arrival — same reasoning as the amenities picker re-render
+    // right above every date change.
+    if(typeof renderListingExperiencesPicker === 'function') renderListingExperiencesPicker(listing);
 
     if(!arrival || !departure){
       summaryEl.style.display = 'none';
@@ -4562,12 +4682,28 @@
     if(discountAmount > 0) rows.push(`<div class="sum-row"><span>Offer applied</span><span>−${fmtGuest(discountAmount)}</span></div>`);
     if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee (${counts.pets} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
     if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmtGuest(amenityTotal)}</span></div>`);
+    // Experience add-on is priced and charged as its own separate line
+    // in the same order (see create-order.js's experiences[] handling) —
+    // shown here too so the total the guest sees before paying already
+    // includes it, not just the stay itself.
+    const selectedExperience = (renderAvailabilityCalendar._lgSelectedExperience || {})[listing.id] || null;
+    let experienceTotal = 0;
+    if(selectedExperience){
+      const expOptions = ((renderAvailabilityCalendar._lgExperienceOptions || {})[listing.id]) || [];
+      const exp = expOptions.find(e => String(e.id) === String(selectedExperience.listingId));
+      if(exp && exp.price){
+        experienceTotal = exp.experience_price_unit === 'per_person'
+          ? Number(exp.price) * (selectedExperience.guests || 1)
+          : Number(exp.price);
+        rows.push(`<div class="sum-row"><span>${exp.property_name}</span><span>${fmtGuest(experienceTotal)}</span></div>`);
+      }
+    }
     rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
       rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (held 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
     }
 
-    const grandTotalInr = total + (listing.security_deposit ? Number(listing.security_deposit) : 0);
+    const grandTotalInr = total + (listing.security_deposit ? Number(listing.security_deposit) : 0) + experienceTotal;
     // Payment always actually happens in INR (see the note on fmtGuest) —
     // when showing a converted currency, say so explicitly right here,
     // not just at the final payment button, so there's no surprise later.
@@ -4665,6 +4801,19 @@
       }
     }
 
+    // If the guest checked a with-stay experience add-on, it needs a
+    // date before it can be booked — same requirement create-order.js
+    // enforces server-side.
+    const selectedExperience = (renderAvailabilityCalendar._lgSelectedExperience || {})[listing.id] || null;
+    if(selectedExperience && !selectedExperience.date){
+      errorEl.textContent = 'Please pick a date for the experience you added.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const selectedExperiencesPayload = selectedExperience
+      ? [{ listingId: selectedExperience.listingId, date: selectedExperience.date, guests: selectedExperience.guests || 1 }]
+      : [];
+
     btn.disabled = true;
     btn.textContent = 'Preparing payment…';
 
@@ -4675,6 +4824,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, petTypes, selectedAmenities: selectedAmenitiesPayload }],
+          experiences: selectedExperiencesPayload,
           email,
           // Only takes effect if this currency is admin-enabled for direct
           // international charging server-side (see create-order.js) —
@@ -4811,6 +4961,9 @@
       ${photosHtml}
       <div class="listing-modal-content">
         <h2>${exp.property_name}</h2>
+        <div class="suite-badges" style="position:static; flex-direction:row; margin:8px 0;">
+          ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
+        </div>
         ${exp.experience_category ? `<div class="loc">${exp.experience_category}${durationLine ? ' · ' + durationLine : ''}</div>` : ''}
         <p class="desc">${exp.description}</p>
         ${hostingHtml}
