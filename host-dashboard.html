@@ -526,11 +526,23 @@
           <textarea id="expDescription" rows="4" placeholder="What does this experience include? What should a guest expect?" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; font-family:'Jost', sans-serif; resize:vertical;"></textarea>
         </div>
         <div class="field">
-          <label for="expHostingListing">Hosted At</label>
+          <label>Does this experience include a stay?</label>
+          <div style="display:flex; gap:16px; margin-top:4px;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+              <input type="radio" name="expType" id="expTypeWithStay" value="with_stay"> Yes — includes an overnight stay
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+              <input type="radio" name="expType" id="expTypeWithoutStay" value="without_stay"> No — just the experience itself
+            </label>
+          </div>
+          <p class="profile-field-note">A host can list a without-stay experience with no property at all — a hosting property is only needed if the experience includes a stay.</p>
+        </div>
+        <div class="field" id="expHostingListingField" style="display:none;">
+          <label for="expHostingListing">Which Property Hosts the Stay</label>
           <select id="expHostingListing" style="width:100%; box-sizing:border-box; padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17; font-family:'Jost', sans-serif;">
             <option value="">— Select one of your live listings —</option>
           </select>
-          <p class="profile-field-note">Only your approved, live listings can host an experience.</p>
+          <p class="profile-field-note" id="expHostingListingNote">Only your approved, live listings can host a stay.</p>
         </div>
         <div class="field">
           <label for="expCategory">Category</label>
@@ -544,17 +556,6 @@
             <option value="Local Tours">Local Tours</option>
             <option value="Other">Other</option>
           </select>
-        </div>
-        <div class="field">
-          <label>Does this experience include a stay?</label>
-          <div style="display:flex; gap:16px; margin-top:4px;">
-            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
-              <input type="radio" name="expType" value="with_stay"> Yes — includes an overnight stay at the property above
-            </label>
-            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
-              <input type="radio" name="expType" value="without_stay"> No — just the experience itself
-            </label>
-          </div>
         </div>
         <div class="field" style="display:flex; gap:12px;">
           <div style="flex:1;">
@@ -645,7 +646,31 @@
     select.innerHTML = '<option value="">— Select one of your live listings —</option>' +
       approved.map(l => `<option value="${l.id}">${l.property_name}${l.city ? ' (' + l.city + ')' : ''}</option>`).join('');
     if(approved.some(l => String(l.id) === currentValue)) select.value = currentValue;
+
+    const noteEl = document.getElementById('expHostingListingNote');
+    if(noteEl){
+      if(approved.length === 0){
+        noteEl.textContent = 'You don\'t have any approved listings yet — list a property first, or choose "No" above for a without-stay experience instead.';
+        noteEl.style.color = '#a3402f';
+      } else {
+        noteEl.textContent = 'Only your approved, live listings can host a stay.';
+        noteEl.style.color = '';
+      }
+    }
   }
+
+  // "Which property hosts the stay" only matters — and only shows — once
+  // "Yes" is picked above. Picking "No" hides and clears it, so a
+  // leftover selection from switching back and forth never gets sent for
+  // a without-stay experience.
+  document.querySelectorAll('input[name="expType"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const showField = document.getElementById('expTypeWithStay').checked;
+      const fieldEl = document.getElementById('expHostingListingField');
+      fieldEl.style.display = showField ? 'block' : 'none';
+      if(!showField) document.getElementById('expHostingListing').value = '';
+    });
+  });
 
   function updateListingTabCounts(){
     const activeCount = currentListings.filter(l => l.status === 'approved').length;
@@ -2009,12 +2034,17 @@
 
     // Same checks the backend enforces (see submit-listing.js) — caught
     // here first so the host isn't left guessing which field was the
-    // problem after a round trip.
+    // problem after a round trip. Order matters: expType has to be
+    // checked before hostingListingId, since whether a hosting property
+    // is even required depends on the answer to that question.
     if(!name){ msgEl.textContent = 'Please give your experience a name.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!description){ msgEl.textContent = 'Please add a description.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
-    if(!hostingListingId){ msgEl.textContent = 'Please choose which of your listings hosts this experience.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
-    if(!category){ msgEl.textContent = 'Please choose a category.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!expTypeInput){ msgEl.textContent = 'Please say whether this experience includes a stay.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
+    if(expTypeInput.value === 'with_stay' && !hostingListingId){
+      msgEl.textContent = 'Please choose which of your properties hosts the included stay — or choose "No" above if this experience doesn\'t include one.';
+      msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return;
+    }
+    if(!category){ msgEl.textContent = 'Please choose a category.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!price || Number(price) <= 0){ msgEl.textContent = 'Please set a price.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
     if(!expPhotoUrls.length){ msgEl.textContent = 'Please add at least 1 photo.'; msgEl.style.color = '#a3402f'; msgEl.style.display = 'block'; return; }
 
@@ -2029,7 +2059,7 @@
           listingType: 'experience',
           propertyName: name,
           description: description,
-          hostingListingId: Number(hostingListingId),
+          hostingListingId: hostingListingId ? Number(hostingListingId) : null,
           experienceCategory: category,
           experienceType: expTypeInput.value,
           nightlyRate: Number(price),
@@ -2052,6 +2082,7 @@
         document.getElementById('expHostingListing').value = '';
         document.getElementById('expCategory').value = '';
         document.querySelectorAll('input[name="expType"]').forEach(r => r.checked = false);
+        document.getElementById('expHostingListingField').style.display = 'none';
         document.getElementById('expPrice').value = '';
         document.getElementById('expPriceUnit').value = 'per_person';
         document.getElementById('expDuration').value = '';
