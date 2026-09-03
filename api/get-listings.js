@@ -221,6 +221,18 @@ module.exports = async (req, res) => {
     // approved stay listing, offer the "also book your stay here"
     // cross-sell without a second round trip.
     if (req.query.experiences === '1') {
+      // Same lat/lng/radiusKm distance filter stays use — a location
+      // search should narrow experiences down exactly the same way it
+      // narrows suites, not leave every experience in India showing
+      // regardless of where the guest actually searched.
+      const expLatRaw = typeof req.query.lat === 'string' ? Number(req.query.lat) : null;
+      const expLngRaw = typeof req.query.lng === 'string' ? Number(req.query.lng) : null;
+      const expRadiusRaw = typeof req.query.radiusKm === 'string' ? Number(req.query.radiusKm) : null;
+      const expDistanceFilter = (expLatRaw != null && !isNaN(expLatRaw) && expLngRaw != null && !isNaN(expLngRaw) && expRadiusRaw != null && !isNaN(expRadiusRaw))
+        ? { lat: expLatRaw, lng: expLngRaw, radiusKm: expRadiusRaw }
+        : null;
+      const expCityRaw = typeof req.query.city === 'string' ? req.query.city.trim() : '';
+
       const experiences = await sql`
         SELECT
           e.id, e.property_name, e.description, e.experience_category,
@@ -243,7 +255,23 @@ module.exports = async (req, res) => {
         WHERE e.status = 'approved' AND e.listing_type = 'experience'
         ORDER BY e.created_at DESC
       `;
-      return res.status(200).json({ experiences });
+
+      // Same "no coordinates falls back to city text, otherwise strict
+      // distance" rule the suites filter below uses (see the comment
+      // there for the reasoning) — kept consistent between the two.
+      const filteredExperiences = expDistanceFilter
+        ? experiences.filter(e => {
+            if (e.latitude == null || e.longitude == null) {
+              if (!expCityRaw) return false;
+              const needle = expCityRaw.toLowerCase();
+              return (e.city && e.city.toLowerCase().includes(needle));
+            }
+            const km = haversineDistanceKm(expDistanceFilter.lat, expDistanceFilter.lng, Number(e.latitude), Number(e.longitude));
+            return km <= expDistanceFilter.radiusKm;
+          })
+        : experiences;
+
+      return res.status(200).json({ experiences: filteredExperiences });
     }
 
     // ?experiencesFor=<listingId> — every approved experience hosted AT
