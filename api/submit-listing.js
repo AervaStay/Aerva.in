@@ -187,7 +187,7 @@ module.exports = async (req, res) => {
       exteriorPhotoUrls, interiorPhotoUrls, photoHashes,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
       securityDeposit,
-      hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours
+      hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceType
     } = req.body;
     // Defaults to 'stay' for every existing caller — only the new
     // Experience submission path sends 'experience' explicitly.
@@ -297,6 +297,9 @@ module.exports = async (req, res) => {
         if (experiencePriceUnit !== 'per_person' && experiencePriceUnit !== 'flat') {
           return res.status(400).json({ error: 'Please choose how this experience is priced.' });
         }
+        if (experienceType !== 'with_stay' && experienceType !== 'without_stay') {
+          return res.status(400).json({ error: 'Please choose whether this experience includes a stay.' });
+        }
         if (!nightlyRate || Number(nightlyRate) <= 0) {
           return res.status(400).json({ error: 'Please set a price for this experience.' });
         }
@@ -368,6 +371,7 @@ module.exports = async (req, res) => {
     const safeExperienceCategory = isExperience && experienceCategory ? String(experienceCategory).trim().slice(0, 60) : null;
     const safeExperiencePriceUnit = isExperience && (experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : null;
     const safeExperienceDuration = isExperience && experienceDurationHours ? Number(experienceDurationHours) : null;
+    const safeExperienceType = isExperience && (experienceType === 'with_stay' || experienceType === 'without_stay') ? experienceType : null;
 
     const safePhotoHashesToStore = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
 
@@ -392,7 +396,7 @@ module.exports = async (req, res) => {
           security_deposit = ${safeSecurityDeposit},
           listing_type = ${safeListingType}, hosting_listing_id = ${safeHostingListingId},
           experience_category = ${safeExperienceCategory}, experience_price_unit = ${safeExperiencePriceUnit},
-          experience_duration_hours = ${safeExperienceDuration},
+          experience_duration_hours = ${safeExperienceDuration}, experience_type = ${safeExperienceType},
           photo_hashes = ${safePhotoHashesToStore},
           status = ${newStatus},
           rejection_reason = CASE WHEN ${clearRejectionReason} THEN NULL ELSE rejection_reason END
@@ -409,7 +413,7 @@ module.exports = async (req, res) => {
           commission_rate, exterior_photo_urls, interior_photo_urls,
           pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
           listing_type, hosting_listing_id, experience_category, experience_price_unit,
-          experience_duration_hours, status, photo_hashes
+          experience_duration_hours, experience_type, status, photo_hashes
         ) VALUES (
           ${propertyName}, ${city || null}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
           ${maxGuests || null}, ${rate},
@@ -420,7 +424,7 @@ module.exports = async (req, res) => {
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
           ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit},
           ${safeListingType}, ${safeHostingListingId}, ${safeExperienceCategory}, ${safeExperiencePriceUnit},
-          ${safeExperienceDuration}, ${newStatus}, ${safePhotoHashesToStore}
+          ${safeExperienceDuration}, ${safeExperienceType}, ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
       `;
