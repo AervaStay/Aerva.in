@@ -865,7 +865,7 @@
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Listings</a>
           <a href="host-dashboard.html?openProfile=1">Account Settings</a>
           <div class="menu-divider"></div>
-          <a href="host-dashboard.html?openExperience=1" id="listExperienceLink" style="display:none;">List Experience</a>
+          <a href="index.html?view=list-experience" target="_blank" rel="noopener" id="listExperienceLink" style="display:none;">List Experience</a>
           <div class="menu-divider"></div>
           <a href="#" id="guestLogoutLink">Log Out</a>
         </div>
@@ -892,7 +892,7 @@
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Listings</a>
     <a href="host-dashboard.html?openProfile=1">Account Settings</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
-    <a href="host-dashboard.html?openExperience=1" id="listExperienceLinkMobile" style="display:none;">List Experience</a>
+    <a href="index.html?view=list-experience" target="_blank" rel="noopener" id="listExperienceLinkMobile" style="display:none;">List Experience</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
     <a href="#" id="guestLogoutLinkMobile">Log Out</a>
   </span>
@@ -1433,6 +1433,170 @@
       <p class="listing-confirm" style="display:none; font-size:13px; opacity:0.75;">Thank you — we've received your listing. Our team reviews every submission personally and will follow up by email within a few days.</p>
       <p class="listing-draft-confirm" style="display:none; font-size:13px; opacity:0.75;">Draft saved — find it anytime on your <a href="host-dashboard.html" style="color:var(--gold-deep);">dashboard</a> to finish it later.</p>
       <p class="listing-error" style="display:none; font-size:13px; color:#a3402f;">Something went wrong sending your listing. Please try again, or email us directly at hello@aerva.in.</p>
+    </form>
+  </div>
+</section>
+
+<!-- ================= LIST EXPERIENCE (full page, same pattern as List Property) ================= -->
+<section class="pad" id="list-experience" style="background:var(--cream-deep); display:none;">
+  <div class="wrap">
+    <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      Back to all homes
+    </a>
+    <div class="section-head center-head reveal">
+      <div class="eyebrow">For Property Owners</div>
+      <h2>List an Experience with Aerva.</h2>
+      <p style="margin-left:auto; margin-right:auto;">A cooking class, a guided hike, a local tour — runs alongside a property. Tell us about it below and our team will review it personally.</p>
+    </div>
+  </div>
+  <div class="wrap" style="max-width:760px;">
+    <div id="expLoggedOutGate" style="display:none; text-align:center; padding:20px 0 40px;">
+      <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">Log in to list an experience — the same account you use to book stays.</p>
+      <a href="guest-login.html" class="btn solid">Log In</a>
+    </div>
+    <form class="reserve-form reveal" id="experienceForm" autocomplete="off">
+
+      <div class="eyebrow" style="margin-bottom:-4px;">Experience Details</div>
+      <div class="field">
+        <label for="expName">Experience Name <span class="required-mark">*</span></label>
+        <input id="expName" type="text" placeholder="e.g. Sunset Kayaking on the Pavana" required>
+      </div>
+      <div class="field">
+        <label for="expDescription">Description <span class="required-mark">*</span></label>
+        <textarea id="expDescription" rows="4" placeholder="What does this experience include? What should a guest expect?" style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;" required></textarea>
+      </div>
+      <div class="field">
+        <label for="expCategory">Category <span class="required-mark">*</span></label>
+        <select id="expCategory" required>
+          <option value="">— Select a category —</option>
+          <option value="Food & Drink">Food & Drink</option>
+          <option value="Adventure & Outdoors">Adventure & Outdoors</option>
+          <option value="Arts & Culture">Arts & Culture</option>
+          <option value="Wellness & Spa">Wellness & Spa</option>
+          <option value="Nature & Wildlife">Nature & Wildlife</option>
+          <option value="Local Tours">Local Tours</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="expHostName">Your Name <span class="required-mark">*</span></label>
+          <input type="text" id="expHostName" placeholder="Full name" required>
+        </div>
+        <div class="field">
+          <label for="expHostPhone">Your Phone <span class="required-mark">*</span></label>
+          <input type="tel" id="expHostPhone" placeholder="10-digit mobile number" required>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="expPrice">Price (₹) <span class="required-mark">*</span></label>
+          <input type="number" id="expPrice" min="1" placeholder="e.g. 1500" required>
+        </div>
+        <div class="field">
+          <label for="expPriceUnit">Priced</label>
+          <select id="expPriceUnit">
+            <option value="per_person">Per person</option>
+            <option value="flat">Flat rate</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="expDuration">Duration in Hours <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></label>
+          <input type="number" id="expDuration" min="0.5" step="0.5" placeholder="e.g. 3">
+        </div>
+        <div class="field">
+          <label for="expStartTime">Start Time <span class="required-mark">*</span></label>
+          <input type="time" id="expStartTime" required>
+        </div>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Does This Include a Stay?</div>
+      <div class="field">
+        <div class="check-grid">
+          <label class="check-item"><input type="radio" name="expType" id="expTypeWithStay" value="with_stay"> Yes — includes an overnight stay</label>
+          <label class="check-item"><input type="radio" name="expType" id="expTypeWithoutStay" value="without_stay"> No — just the experience itself</label>
+        </div>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">A host can list a without-stay experience with no property at all — a hosting property is only needed if the experience includes a stay.</p>
+      </div>
+      <div class="field" id="expHostingListingField" style="display:none;">
+        <label for="expHostingListing">Which Property Hosts the Stay</label>
+        <select id="expHostingListing">
+          <option value="">— Select one of your live listings —</option>
+        </select>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;" id="expHostingListingNote">Only your approved, live listings can host a stay.</p>
+      </div>
+
+      <div class="field" id="expLocationField" style="display:none;">
+        <label for="expLocationSearch">Experience Location <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(search and select from suggestions)</span></label>
+        <input id="expLocationSearch" type="text" placeholder="Start typing an address…" autocomplete="off">
+        <input type="hidden" id="expLatitude">
+        <input type="hidden" id="expLongitude">
+        <input type="hidden" id="expFormattedAddress">
+        <p id="expLocationConfirm" style="font-size:11.5px; color:#3a7d44; margin-top:4px; display:none;"></p>
+        <div id="expMapPin" style="width:100%; height:280px; background:#e9e2d6; border:1px solid #ddd0bc; margin-top:8px; display:none;"></div>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Drag the pin for a more exact match.</p>
+      </div>
+      <div class="form-row" id="expCityAreaField" style="display:none;">
+        <div class="field">
+          <label for="expCity">City <span class="required-mark">*</span></label>
+          <input type="text" id="expCity" placeholder="e.g. Pune">
+        </div>
+        <div class="field">
+          <label for="expArea">Area <span class="required-mark">*</span></label>
+          <input type="text" id="expArea" placeholder="e.g. Koregaon Park">
+        </div>
+      </div>
+      <p id="expCityAreaWarning" style="font-size:11.5px; color:#a3402f; margin-top:-8px; margin-bottom:0; display:none;"></p>
+      <div class="field" id="expPincodeField" style="display:none;">
+        <label for="expPincode">PIN / Postal Code <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-filled when your address provides one)</span></label>
+        <input type="text" id="expPincode" placeholder="e.g. 411001">
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;" id="expPincodeHint">Filled in automatically once you pick an address above. If your address didn't include one, please enter it yourself.</p>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Logistics</div>
+      <div class="field">
+        <label>Do you arrange travel/transport for guests? <span class="required-mark">*</span></label>
+        <div class="check-grid">
+          <label class="check-item"><input type="radio" name="expArrangesTravel" id="expArrangesTravelYes" value="yes"> Yes</label>
+          <label class="check-item"><input type="radio" name="expArrangesTravel" id="expArrangesTravelNo" value="no"> No — guests make their own way there</label>
+        </div>
+      </div>
+      <div class="field" id="expTravelDetailsField" style="display:none;">
+        <label for="expTravelDetails">Travel/Transport Details <span class="required-mark">*</span></label>
+        <textarea id="expTravelDetails" rows="3" placeholder="What's included — pickup location, vehicle type, timing, anything a guest should know" style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;"></textarea>
+      </div>
+      <div class="field">
+        <label>Meeting Point <span class="required-mark">*</span></label>
+        <div class="check-grid">
+          <label class="check-item"><input type="radio" name="expMeetingPointType" id="expMeetingPointHotel" value="hotel"> At the property/hotel</label>
+          <label class="check-item"><input type="radio" name="expMeetingPointType" id="expMeetingPointCommon" value="common_point"> A common meeting point</label>
+        </div>
+      </div>
+      <div class="field" id="expMeetingPointDetailsField" style="display:none;">
+        <label for="expMeetingPointDetails">Meeting Point Details <span class="required-mark">*</span></label>
+        <textarea id="expMeetingPointDetails" rows="2" placeholder="e.g. Main gate of Empress Garden, Camp Area" style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;"></textarea>
+      </div>
+      <div class="field">
+        <label for="expRefundPolicy">Refund Policy — If a Guest Doesn't Reach the Meeting Point <span class="required-mark">*</span></label>
+        <textarea id="expRefundPolicy" rows="3" placeholder="e.g. Full refund if cancelled 24h before; no refund for a same-day no-show" style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;"></textarea>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">This is your own policy, shown to guests as-is — Aerva doesn't set or enforce it.</p>
+      </div>
+
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Photos</div>
+      <div class="field">
+        <label for="expPhotos">Photos <span class="required-mark">*</span></label>
+        <input type="file" id="expPhotos" accept="image/*" multiple>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;" id="expPhotoCount">At least 1 photo is required.</p>
+      </div>
+
+      <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
+        <button type="button" class="btn solid" id="expSubmitBtn">Submit Experience for Review</button>
+      </div>
+      <p class="listing-confirm" id="expConfirmMsg" style="display:none; font-size:13px; opacity:0.75;">Thank you — we've received your experience. Our team reviews every submission personally and will follow up by email within a few days.</p>
+      <p class="listing-error" id="expErrorMsg" style="display:none; font-size:13px; color:#a3402f;"></p>
     </form>
   </div>
 </section>
@@ -2549,6 +2713,107 @@
     });
   }
 
+  // ---- List Experience page: location picker (same pattern as the
+  // property listing form's own applyLocationResult, just scoped to the
+  // separate expXxx fields so the two forms never interfere) ----
+  let expPinMap = null, expPinMarker = null;
+
+  function applyExpLocationResult(place){
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+    document.getElementById('expLatitude').value = lat;
+    document.getElementById('expLongitude').value = lng;
+    document.getElementById('expFormattedAddress').value = place.formatted_address || '';
+    const confirmEl = document.getElementById('expLocationConfirm');
+    confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
+    updateExpPinMap(lat, lng);
+
+    // Same district-over-locality City/Area extraction, Latin-script
+    // guard, and postal-code lookup as the property form's own
+    // applyLocationResult — see that function for why each rule exists.
+    const components = place.address_components || [];
+    function findAddressComponent(types){
+      return components.find(c => types.some(t => c.types.includes(t)));
+    }
+    const nonLatinPattern = /[^\u0000-\u024F\s]/;
+    function latinNameFor(component){
+      if(!component) return null;
+      if(component.long_name && !nonLatinPattern.test(component.long_name)) return component.long_name;
+      if(component.short_name && !nonLatinPattern.test(component.short_name)) return component.short_name;
+      return null;
+    }
+    const cityComponent = findAddressComponent(['administrative_area_level_2'])
+      || findAddressComponent(['locality'])
+      || findAddressComponent(['administrative_area_level_1']);
+    const cityName = latinNameFor(cityComponent);
+    const warningEl = document.getElementById('expCityAreaWarning');
+    warningEl.style.display = 'none';
+    if(cityName){
+      document.getElementById('expCity').value = cityName;
+    } else if(cityComponent){
+      warningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below.';
+      warningEl.style.display = 'block';
+    }
+    const areaComponent = findAddressComponent(['sublocality_level_1', 'sublocality', 'neighborhood'])
+      || (() => {
+        const locality = findAddressComponent(['locality']);
+        return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
+      })();
+    const areaName = latinNameFor(areaComponent);
+    if(areaName){
+      document.getElementById('expArea').value = areaName;
+    }
+    const postalComponent = findAddressComponent(['postal_code']);
+    const pincodeInput = document.getElementById('expPincode');
+    const pincodeHint = document.getElementById('expPincodeHint');
+    if(postalComponent){
+      pincodeInput.value = postalComponent.long_name;
+      pincodeHint.textContent = 'Filled in automatically once you pick an address above. If your address didn\'t include one, please enter it yourself.';
+      pincodeHint.style.color = '';
+    } else {
+      pincodeInput.value = '';
+      pincodeHint.textContent = 'Your address didn\'t include a PIN/postal code — please enter it yourself.';
+      pincodeHint.style.color = '#a3402f';
+    }
+  }
+
+  function updateExpPinMap(lat, lng){
+    const container = document.getElementById('expMapPin');
+    if(!container || !window.google || !window.google.maps) return;
+    container.style.display = 'block';
+    const position = { lat: Number(lat), lng: Number(lng) };
+    if(!expPinMap){
+      expPinMap = new google.maps.Map(container, { center: position, zoom: 15, streetViewControl: false, mapTypeControl: false });
+      expPinMarker = new google.maps.Marker({ position, map: expPinMap, draggable: true });
+      expPinMarker.addListener('dragend', () => onExpPinMoved(expPinMarker.getPosition()));
+      expPinMap.addListener('click', (e) => {
+        expPinMarker.setPosition(e.latLng);
+        onExpPinMoved(e.latLng);
+      });
+    } else {
+      expPinMap.setCenter(position);
+      expPinMarker.setPosition(position);
+    }
+  }
+
+  function onExpPinMoved(latLng){
+    document.getElementById('expLatitude').value = latLng.lat();
+    document.getElementById('expLongitude').value = latLng.lng();
+    if(!window.google.maps.Geocoder) return;
+    new google.maps.Geocoder().geocode({ location: { lat: latLng.lat(), lng: latLng.lng() } }, (results, status) => {
+      const confirmEl = document.getElementById('expLocationConfirm');
+      if(status === 'OK' && results[0]){
+        document.getElementById('expFormattedAddress').value = results[0].formatted_address || '';
+        confirmEl.textContent = '✓ Location set: ' + (results[0].formatted_address || `${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}`);
+      } else {
+        confirmEl.textContent = `✓ Location set: ${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}`;
+      }
+      confirmEl.style.display = 'block';
+    });
+  }
+
   window.initGoogleMaps = function(){
     const searchInput = document.getElementById('listLocationSearch');
     if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
@@ -2561,6 +2826,21 @@
     autocomplete.addListener('place_changed', function(){
       applyLocationResult(autocomplete.getPlace(), { skipSearchBoxUpdate: true });
     });
+
+    // Same Places Autocomplete, wired to the List Experience page's own
+    // location field — separate DOM elements from the property form
+    // above, so this is a second, independent Autocomplete instance
+    // rather than reusing the one above.
+    const expSearchInput = document.getElementById('expLocationSearch');
+    if(expSearchInput){
+      const expAutocomplete = new google.maps.places.Autocomplete(expSearchInput, {
+        fields: ['geometry', 'formatted_address', 'address_components'],
+        types: ['geocode', 'establishment']
+      });
+      expAutocomplete.addListener('place_changed', function(){
+        applyExpLocationResult(expAutocomplete.getPlace());
+      });
+    }
 
     // Search bar's "Place" field — real-world address suggestions as the
     // guest types, not just cities that already have listings.
@@ -3206,8 +3486,226 @@
     }
   })();
 
-  // ---- Clone an existing listing into a new one ----
-  // Handed off via localStorage from host-dashboard.html's Clone button
+  // ================= LIST EXPERIENCE PAGE JS =================
+  const experienceForm = document.getElementById('experienceForm');
+  if(!hostSessionToken){
+    const gate = document.getElementById('expLoggedOutGate');
+    if(gate) gate.style.display = 'block';
+    if(experienceForm) experienceForm.style.display = 'none';
+  }
+
+  let expPhotoUrls = [];
+  function renderExpPhotoCount(){
+    const el = document.getElementById('expPhotoCount');
+    if(!el) return;
+    el.textContent = expPhotoUrls.length > 0
+      ? `${expPhotoUrls.length} photo${expPhotoUrls.length === 1 ? '' : 's'} uploaded.`
+      : 'At least 1 photo is required.';
+    el.style.color = expPhotoUrls.length > 0 ? '#3a7d44' : '';
+  }
+
+  // Only an approved, live listing makes sense to offer as an
+  // experience's hosting property.
+  async function populateExperienceHostingDropdown(){
+    const select = document.getElementById('expHostingListing');
+    if(!select || !hostSessionToken) return;
+    try{
+      const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + hostSessionToken }
+      });
+      const data = await res.json();
+      const approved = (data.listings || []).filter(l => l.status === 'approved');
+      select.innerHTML = '<option value="">— Select one of your live listings —</option>' +
+        approved.map(l => `<option value="${l.id}">${l.property_name}${l.city ? ' (' + l.city + ')' : ''}</option>`).join('');
+      const noteEl = document.getElementById('expHostingListingNote');
+      if(noteEl){
+        if(approved.length === 0){
+          noteEl.textContent = 'You don\'t have any approved listings yet — list a property first, or choose "No" above for a without-stay experience instead.';
+          noteEl.style.color = '#a3402f';
+        } else {
+          noteEl.textContent = 'Only your approved, live listings can host a stay.';
+          noteEl.style.color = '';
+        }
+      }
+    } catch(err){
+      // Non-fatal — the dropdown just stays on its placeholder.
+    }
+  }
+  if(experienceForm) populateExperienceHostingDropdown();
+
+  if(document.getElementById('expTypeWithStay')){
+    document.querySelectorAll('input[name="expType"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const withStay = document.getElementById('expTypeWithStay').checked;
+        document.getElementById('expHostingListingField').style.display = withStay ? 'block' : 'none';
+        if(!withStay) document.getElementById('expHostingListing').value = '';
+        document.getElementById('expLocationField').style.display = withStay ? 'none' : 'block';
+        document.getElementById('expCityAreaField').style.display = withStay ? 'none' : 'block';
+        document.getElementById('expPincodeField').style.display = withStay ? 'none' : 'block';
+        if(withStay){
+          document.getElementById('expLocationSearch').value = '';
+          document.getElementById('expLatitude').value = '';
+          document.getElementById('expLongitude').value = '';
+          document.getElementById('expFormattedAddress').value = '';
+          document.getElementById('expLocationConfirm').style.display = 'none';
+          document.getElementById('expCity').value = '';
+          document.getElementById('expArea').value = '';
+          document.getElementById('expCityAreaWarning').style.display = 'none';
+          document.getElementById('expPincode').value = '';
+        }
+      });
+    });
+    document.querySelectorAll('input[name="expArrangesTravel"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const showDetails = document.getElementById('expArrangesTravelYes').checked;
+        document.getElementById('expTravelDetailsField').style.display = showDetails ? 'block' : 'none';
+        if(!showDetails) document.getElementById('expTravelDetails').value = '';
+      });
+    });
+    document.querySelectorAll('input[name="expMeetingPointType"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const showDetails = document.getElementById('expMeetingPointCommon').checked;
+        document.getElementById('expMeetingPointDetailsField').style.display = showDetails ? 'block' : 'none';
+        if(!showDetails) document.getElementById('expMeetingPointDetails').value = '';
+      });
+    });
+
+    document.getElementById('expPhotos').addEventListener('change', async function(){
+      const files = Array.from(this.files || []);
+      if(!files.length) return;
+      const countEl = document.getElementById('expPhotoCount');
+      countEl.textContent = 'Uploading…';
+      countEl.style.color = '';
+      try{
+        const { upload } = await import('https://esm.sh/@vercel/blob/client');
+        for(const file of files){
+          const result = await upload(file.name, file, {
+            access: 'public',
+            handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload'
+          });
+          expPhotoUrls.push(result.url);
+        }
+      } catch(err){
+        countEl.textContent = 'Some photos failed to upload — please try again.';
+        countEl.style.color = '#a3402f';
+      }
+      renderExpPhotoCount();
+      this.value = '';
+    });
+
+    document.getElementById('expSubmitBtn').addEventListener('click', async function(){
+      const errorEl = document.getElementById('expErrorMsg');
+      const confirmEl = document.getElementById('expConfirmMsg');
+      errorEl.style.display = 'none';
+      confirmEl.style.display = 'none';
+
+      const name = document.getElementById('expName').value.trim();
+      const description = document.getElementById('expDescription').value.trim();
+      const hostingListingId = document.getElementById('expHostingListing').value;
+      const category = document.getElementById('expCategory').value;
+      const hostName = document.getElementById('expHostName').value.trim();
+      const hostPhone = document.getElementById('expHostPhone').value.trim();
+      const expTypeInput = document.querySelector('input[name="expType"]:checked');
+      const price = document.getElementById('expPrice').value;
+      const priceUnit = document.getElementById('expPriceUnit').value;
+      const duration = document.getElementById('expDuration').value;
+      const startTime = document.getElementById('expStartTime').value;
+      const latitude = document.getElementById('expLatitude').value;
+      const longitude = document.getElementById('expLongitude').value;
+      const formattedAddress = document.getElementById('expFormattedAddress').value;
+      const city = document.getElementById('expCity').value.trim();
+      const area = document.getElementById('expArea').value.trim();
+      const pincode = document.getElementById('expPincode').value.trim();
+      const arrangesTravelInput = document.querySelector('input[name="expArrangesTravel"]:checked');
+      const travelDetails = document.getElementById('expTravelDetails').value.trim();
+      const meetingPointTypeInput = document.querySelector('input[name="expMeetingPointType"]:checked');
+      const meetingPointDetails = document.getElementById('expMeetingPointDetails').value.trim();
+      const refundPolicy = document.getElementById('expRefundPolicy').value.trim();
+
+      // Same checks the backend enforces (see submit-listing.js).
+      if(!name){ errorEl.textContent = 'Please give your experience a name.'; errorEl.style.display = 'block'; return; }
+      if(!description){ errorEl.textContent = 'Please add a description.'; errorEl.style.display = 'block'; return; }
+      if(!hostName){ errorEl.textContent = 'Please enter your name.'; errorEl.style.display = 'block'; return; }
+      if(!hostPhone){ errorEl.textContent = 'Please enter your phone number.'; errorEl.style.display = 'block'; return; }
+      if(!expTypeInput){ errorEl.textContent = 'Please say whether this experience includes a stay.'; errorEl.style.display = 'block'; return; }
+      if(expTypeInput.value === 'with_stay' && !hostingListingId){
+        errorEl.textContent = 'Please choose which of your properties hosts the included stay — or choose "No" above if this experience doesn\'t include one.';
+        errorEl.style.display = 'block'; return;
+      }
+      if(expTypeInput.value === 'without_stay'){
+        if(!latitude || !longitude){ errorEl.textContent = 'Please select this experience\'s location from the address suggestions.'; errorEl.style.display = 'block'; return; }
+        if(!city){ errorEl.textContent = 'Please enter the city.'; errorEl.style.display = 'block'; return; }
+        if(!area){ errorEl.textContent = 'Please enter the area.'; errorEl.style.display = 'block'; return; }
+        if(!pincode){ errorEl.textContent = 'Please enter the PIN/postal code.'; errorEl.style.display = 'block'; return; }
+      }
+      if(!category){ errorEl.textContent = 'Please choose a category.'; errorEl.style.display = 'block'; return; }
+      if(!price || Number(price) <= 0){ errorEl.textContent = 'Please set a price.'; errorEl.style.display = 'block'; return; }
+      if(!startTime){ errorEl.textContent = 'Please set a start time.'; errorEl.style.display = 'block'; return; }
+      if(!arrangesTravelInput){ errorEl.textContent = 'Please say whether you arrange travel/transport for guests.'; errorEl.style.display = 'block'; return; }
+      if(arrangesTravelInput.value === 'yes' && !travelDetails){ errorEl.textContent = 'Please describe the travel/transport arrangement.'; errorEl.style.display = 'block'; return; }
+      if(!meetingPointTypeInput){ errorEl.textContent = 'Please choose a meeting point option.'; errorEl.style.display = 'block'; return; }
+      if(meetingPointTypeInput.value === 'common_point' && !meetingPointDetails){ errorEl.textContent = 'Please describe the meeting point.'; errorEl.style.display = 'block'; return; }
+      if(!refundPolicy){ errorEl.textContent = 'Please describe your refund policy if a guest doesn\'t reach the meeting point.'; errorEl.style.display = 'block'; return; }
+      if(!expPhotoUrls.length){ errorEl.textContent = 'Please add at least 1 photo.'; errorEl.style.display = 'block'; return; }
+
+      this.disabled = true;
+      this.textContent = 'Submitting…';
+      try{
+        const res = await fetch(LISTINGS_API_BASE + '/api/submit-listing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+          body: JSON.stringify({
+            isDraft: false,
+            listingType: 'experience',
+            propertyName: name,
+            description: description,
+            hostingListingId: hostingListingId ? Number(hostingListingId) : null,
+            experienceCategory: category,
+            experienceType: expTypeInput.value,
+            nightlyRate: Number(price),
+            experiencePriceUnit: priceUnit,
+            experienceDurationHours: duration ? Number(duration) : null,
+            latitude: latitude || null,
+            longitude: longitude || null,
+            formattedAddress: formattedAddress || null,
+            city: city || null,
+            area: area || null,
+            pincode: pincode || null,
+            experienceStartTime: startTime,
+            experienceArrangesTravel: arrangesTravelInput.value === 'yes',
+            experienceTravelDetails: arrangesTravelInput.value === 'yes' ? travelDetails : null,
+            experienceMeetingPointType: meetingPointTypeInput.value,
+            experienceMeetingPointDetails: meetingPointTypeInput.value === 'common_point' ? meetingPointDetails : null,
+            experienceRefundPolicy: refundPolicy,
+            hostName: hostName,
+            hostPhone: hostPhone,
+            exteriorPhotoUrls: expPhotoUrls,
+            interiorPhotoUrls: []
+          })
+        });
+        const data = await res.json();
+        if(res.ok){
+          confirmEl.style.display = 'block';
+          // Closes the form itself once submitted — briefly shows the
+          // "thank you" confirmation, then leaves, same as the property
+          // listing form does after a successful submit.
+          setTimeout(() => { window.location.href = 'index.html'; }, 2000);
+        } else {
+          errorEl.textContent = data.error || 'Something went wrong. Please try again.';
+          errorEl.style.display = 'block';
+          this.disabled = false;
+          this.textContent = 'Submit Experience for Review';
+        }
+      } catch(err){
+        errorEl.textContent = 'Something went wrong. Please try again.';
+        errorEl.style.display = 'block';
+        this.disabled = false;
+        this.textContent = 'Submit Experience for Review';
+      }
+    });
+  }
+
+
   // (that page already has the full listing data loaded — no need for a
   // second fetch). Read once, then cleared immediately, so refreshing
   // this page or navigating back to it doesn't silently reapply stale
@@ -5861,6 +6359,11 @@
       if(catNav) catNav.style.display = 'none';
       document.getElementById('suites').style.display = 'none';
       document.getElementById('add-listing').style.display = 'block';
+    } else if(requestedView === 'list-experience'){
+      const catNav = document.querySelector('.header-category-nav');
+      if(catNav) catNav.style.display = 'none';
+      document.getElementById('suites').style.display = 'none';
+      document.getElementById('list-experience').style.display = 'block';
     }
   }
 
