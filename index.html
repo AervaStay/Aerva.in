@@ -1814,6 +1814,7 @@
         <label for="expPhotos">Photos <span class="required-mark">*</span></label>
         <input type="file" id="expPhotos" accept="image/*" multiple>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;" id="expPhotoCount">At least 1 photo is required.</p>
+        <div class="photo-preview-grid" id="expPhotoPreviewGrid"></div>
       </div>
 
       <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
@@ -4001,11 +4002,58 @@
   let expPhotoUrls = [];
   function renderExpPhotoCount(){
     const el = document.getElementById('expPhotoCount');
-    if(!el) return;
-    el.textContent = expPhotoUrls.length > 0
-      ? `${expPhotoUrls.length} photo${expPhotoUrls.length === 1 ? '' : 's'} uploaded.`
-      : 'At least 1 photo is required.';
-    el.style.color = expPhotoUrls.length > 0 ? '#3a7d44' : '';
+    if(el){
+      el.textContent = expPhotoUrls.length > 0
+        ? `${expPhotoUrls.length} photo${expPhotoUrls.length === 1 ? '' : 's'} uploaded.`
+        : 'At least 1 photo is required.';
+      el.style.color = expPhotoUrls.length > 0 ? '#3a7d44' : '';
+    }
+    renderExpPhotoPreviews();
+  }
+
+  // Visible thumbnail grid for the experience's photos — same
+  // reorder/remove controls and CSS classes the property listing form's
+  // own photo manager uses (see createPhotoManager/manage-listing.html),
+  // just simpler: experiences upload each photo to a real URL
+  // immediately on selection (see the 'change' handler below) rather
+  // than staging local files until submit, so every entry in
+  // expPhotoUrls is already a real, directly-displayable URL — existing
+  // ones from editing and newly-added ones render identically, no
+  // separate "existing vs new" bookkeeping needed the way manage-listing
+  // needs it for not-yet-uploaded files.
+  function renderExpPhotoPreviews(){
+    const grid = document.getElementById('expPhotoPreviewGrid');
+    if(!grid) return;
+    grid.innerHTML = '';
+    expPhotoUrls.forEach((url, idx) => {
+      const item = document.createElement('div');
+      item.className = 'photo-preview-item' + (idx === 0 ? ' is-cover' : '');
+      item.innerHTML = `
+        <img src="${url}" alt="">
+        <span class="photo-order-badge">${idx + 1}</span>
+        <button type="button" data-action="remove" class="photo-remove-btn" aria-label="Remove this photo">×</button>
+        ${idx === 0 ? '<span class="photo-cover-btn" title="First photo is used as the cover" style="cursor:default;">★</span>' : ''}
+        <div class="photo-reorder-btns">
+          <button type="button" data-action="left" aria-label="Move earlier" ${idx === 0 ? 'disabled' : ''}>‹</button>
+          <button type="button" data-action="right" aria-label="Move later" ${idx === expPhotoUrls.length - 1 ? 'disabled' : ''}>›</button>
+        </div>
+      `;
+      item.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        expPhotoUrls.splice(idx, 1);
+        renderExpPhotoCount();
+      });
+      item.querySelector('[data-action="left"]').addEventListener('click', () => {
+        if(idx === 0) return;
+        [expPhotoUrls[idx - 1], expPhotoUrls[idx]] = [expPhotoUrls[idx], expPhotoUrls[idx - 1]];
+        renderExpPhotoPreviews();
+      });
+      item.querySelector('[data-action="right"]').addEventListener('click', () => {
+        if(idx === expPhotoUrls.length - 1) return;
+        [expPhotoUrls[idx + 1], expPhotoUrls[idx]] = [expPhotoUrls[idx], expPhotoUrls[idx + 1]];
+        renderExpPhotoPreviews();
+      });
+      grid.appendChild(item);
+    });
   }
 
   // Only an approved, live listing makes sense to offer as an
@@ -4137,10 +4185,9 @@
       if(existing.experience_available_from) document.getElementById('expAvailableFrom').value = String(existing.experience_available_from).slice(0, 10);
       if(existing.experience_available_until) document.getElementById('expAvailableUntil').value = String(existing.experience_available_until).slice(0, 10);
 
-      // Existing photos carry over as-is (see the note above this
-      // function) — the host can remove the ones they don't want by
-      // just not resubmitting them isn't supported yet in this simple
-      // count-only UI, but new ones can still be added on top.
+      // Existing photos carry over and now show as real thumbnails (see
+      // renderExpPhotoPreviews) — a host can remove any of them, reorder
+      // them, or add new ones on top, same as the property listing form.
       const existingPhotos = [...(existing.exterior_photo_urls || []), ...(existing.interior_photo_urls || [])];
       if(existingPhotos.length){
         expPhotoUrls = existingPhotos;
