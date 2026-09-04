@@ -189,6 +189,29 @@ module.exports = async (req, res) => {
         return res.status(200).json({ templates });
       }
 
+      // Guest-facing quick-question picker inside the chat window itself
+      // — the same templates a host wrote in their own template manager,
+      // but fetched by conversationId (proving the requester is actually
+      // part of that conversation) rather than by host ownership, since
+      // the guest obviously isn't the host. Only templates for this
+      // exact listing, plus the host's account-wide ones (listing_id IS
+      // NULL), are returned — never another listing's.
+      if (mode === 'conversationTemplates') {
+        const conversationId = Number(req.query.conversationId);
+        if (!conversationId) return res.status(400).json({ error: 'Missing conversation.' });
+        const convRows = await sql`SELECT id, guest_id, host_id, listing_id FROM conversations WHERE id = ${conversationId}`;
+        const conv = convRows[0];
+        if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
+        if (conv.guest_id !== guestId && conv.host_id !== guestId) return res.status(403).json({ error: 'Not your conversation.' });
+
+        const templates = await sql`
+          SELECT id, body FROM message_templates
+          WHERE host_id = ${conv.host_id} AND (listing_id = ${conv.listing_id} OR listing_id IS NULL)
+          ORDER BY sort_order ASC, created_at ASC
+        `;
+        return res.status(200).json({ templates });
+      }
+
       const guestRows = await sql`
         SELECT id, email, phone, name, profile_photo_url, preferred_currency, created_at
         FROM guests WHERE id = ${guestId}
