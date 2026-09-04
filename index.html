@@ -4000,6 +4000,11 @@
   }
 
   let expPhotoUrls = [];
+  // Explicit host choice — null means "no explicit choice yet," in which
+  // case the first photo is treated as the cover, same fallback
+  // submit-listing.js itself uses if this is never set.
+  let expCoverPhotoUrl = null;
+
   function renderExpPhotoCount(){
     const el = document.getElementById('expPhotoCount');
     if(el){
@@ -4012,35 +4017,46 @@
   }
 
   // Visible thumbnail grid for the experience's photos — same
-  // reorder/remove controls and CSS classes the property listing form's
-  // own photo manager uses (see createPhotoManager/manage-listing.html),
-  // just simpler: experiences upload each photo to a real URL
-  // immediately on selection (see the 'change' handler below) rather
-  // than staging local files until submit, so every entry in
-  // expPhotoUrls is already a real, directly-displayable URL — existing
-  // ones from editing and newly-added ones render identically, no
-  // separate "existing vs new" bookkeeping needed the way manage-listing
-  // needs it for not-yet-uploaded files.
+  // reorder/remove/cover-choice controls and CSS classes the property
+  // listing form's own photo manager uses (see
+  // createPhotoManager/manage-listing.html), just simpler: experiences
+  // upload each photo to a real URL immediately on selection (see the
+  // 'change' handler below) rather than staging local files until
+  // submit, so every entry in expPhotoUrls is already a real, directly-
+  // displayable URL — existing ones from editing and newly-added ones
+  // render identically, no separate "existing vs new" bookkeeping needed
+  // the way manage-listing needs it for not-yet-uploaded files.
   function renderExpPhotoPreviews(){
     const grid = document.getElementById('expPhotoPreviewGrid');
     if(!grid) return;
+    // If the current cover choice got removed (or none was ever made),
+    // the first photo is the effective cover — matches the backend's own
+    // fallback exactly, so the star shown here never lies about what
+    // will actually be saved.
+    const effectiveCover = (expCoverPhotoUrl && expPhotoUrls.includes(expCoverPhotoUrl)) ? expCoverPhotoUrl : expPhotoUrls[0];
     grid.innerHTML = '';
     expPhotoUrls.forEach((url, idx) => {
+      const isCover = url === effectiveCover;
       const item = document.createElement('div');
-      item.className = 'photo-preview-item' + (idx === 0 ? ' is-cover' : '');
+      item.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
       item.innerHTML = `
         <img src="${url}" alt="">
         <span class="photo-order-badge">${idx + 1}</span>
         <button type="button" data-action="remove" class="photo-remove-btn" aria-label="Remove this photo">×</button>
-        ${idx === 0 ? '<span class="photo-cover-btn" title="First photo is used as the cover" style="cursor:default;">★</span>' : ''}
+        <button type="button" data-action="cover" class="photo-cover-btn" aria-label="Set as cover photo" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
         <div class="photo-reorder-btns">
           <button type="button" data-action="left" aria-label="Move earlier" ${idx === 0 ? 'disabled' : ''}>‹</button>
           <button type="button" data-action="right" aria-label="Move later" ${idx === expPhotoUrls.length - 1 ? 'disabled' : ''}>›</button>
         </div>
       `;
       item.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        if(expCoverPhotoUrl === url) expCoverPhotoUrl = null;
         expPhotoUrls.splice(idx, 1);
         renderExpPhotoCount();
+      });
+      item.querySelector('[data-action="cover"]').addEventListener('click', () => {
+        expCoverPhotoUrl = url;
+        renderExpPhotoPreviews();
       });
       item.querySelector('[data-action="left"]').addEventListener('click', () => {
         if(idx === 0) return;
@@ -4187,10 +4203,18 @@
 
       // Existing photos carry over and now show as real thumbnails (see
       // renderExpPhotoPreviews) — a host can remove any of them, reorder
-      // them, or add new ones on top, same as the property listing form.
+      // them, choose a different cover, or add new ones on top, same as
+      // the property listing form.
       const existingPhotos = [...(existing.exterior_photo_urls || []), ...(existing.interior_photo_urls || [])];
       if(existingPhotos.length){
         expPhotoUrls = existingPhotos;
+        // Pre-fills the star on whichever photo was already chosen as
+        // cover — without this, editing would silently reset the cover
+        // back to "first photo" the moment the form re-renders, even if
+        // the host had deliberately picked a different one before.
+        expCoverPhotoUrl = existing.cover_photo_url && existingPhotos.includes(existing.cover_photo_url)
+          ? existing.cover_photo_url
+          : null;
         renderExpPhotoCount();
       }
 
@@ -4378,7 +4402,8 @@
             hostName: hostName,
             hostPhone: hostPhone,
             exteriorPhotoUrls: expPhotoUrls,
-            interiorPhotoUrls: []
+            interiorPhotoUrls: [],
+            coverPhotoUrl: (expCoverPhotoUrl && expPhotoUrls.includes(expCoverPhotoUrl)) ? expCoverPhotoUrl : (expPhotoUrls[0] || null)
           })
         });
         const data = await res.json();
