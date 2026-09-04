@@ -437,6 +437,16 @@ module.exports = async (req, res) => {
     }
     const safeExteriorUrls = sanitizePhotoUrls(exteriorPhotoUrls);
     const safeInteriorUrls = sanitizePhotoUrls(interiorPhotoUrls);
+    // A sensible default cover photo, set only on a brand-new submission
+    // (the UPDATE path below never touches this column) — interior-first,
+    // matching the site's own display convention elsewhere. Previously
+    // this was left NULL until a host manually chose one later in
+    // "Manage Price & Offers," which meant most listings had no cover
+    // photo at all for a long stretch after going live — breaking
+    // anything that specifically wanted cover photos only (e.g. the
+    // homepage hero slideshow). A host can still override this default
+    // any time from Manage Price & Offers.
+    const defaultCoverPhotoUrl = safeInteriorUrls[0] || safeExteriorUrls[0] || null;
     // Editing an already-approved experience (the only status besides
     // draft/rejected that reaches this point — see the permission check
     // above) shouldn't demote it back to pending and off the live site
@@ -591,6 +601,7 @@ module.exports = async (req, res) => {
           experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
           experience_instructions, experience_special_instructions,
           experience_available_from, experience_available_until,
+          cover_photo_url,
           status, photo_hashes
         ) VALUES (
           ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
@@ -608,6 +619,7 @@ module.exports = async (req, res) => {
           ${safeMeetingPointLat}, ${safeMeetingPointLng}, ${safeMeetingPointAddress},
           ${safeInstructions}, ${safeSpecialInstructions},
           ${safeAvailableFrom}, ${safeAvailableUntil},
+          ${defaultCoverPhotoUrl},
           ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
