@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Your Listings — Aerva</title>
+<title>My Collection — Aerva</title>
 <meta name="robots" content="noindex, nofollow">
 <style>
   body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
@@ -293,7 +293,7 @@
   <a href="index.html" class="back-home">&larr; Back to Aerva</a>
   <div class="top-row">
     <div>
-      <h1>Your Listings<span class="host-badge" id="hostBadge" style="display:none;"></span></h1>
+      <h1>My Collection<span class="host-badge" id="hostBadge" style="display:none;"></span></h1>
     </div>
     <div class="profile-trigger-cluster">
       <button type="button" class="profile-avatar-btn" id="hostProfileTrigger">
@@ -312,13 +312,15 @@
   <div id="verificationBanner" style="display:none;"></div>
 
   <div class="listing-tabs" id="dashboardMainTabs" style="margin-top:8px;">
-    <button type="button" class="listing-tab-btn active" data-main-tab="listings" id="mainTabListings">My Listings</button>
-    <button type="button" class="listing-tab-btn" data-main-tab="experiences" id="mainTabExperiences">Aerva Experience</button>
+    <button type="button" class="listing-tab-btn active" data-main-tab="listings" id="mainTabListings">My Collection</button>
     <button type="button" class="listing-tab-btn" data-main-tab="messages" id="mainTabMessages">Messages</button>
   </div>
 
   <div id="myListingsSection">
-    <a href="index.html?view=list-property" class="add-listing-link">List a New Property</a>
+    <div style="display:flex; gap:12px; flex-wrap:wrap;">
+      <a href="index.html?view=list-property" class="add-listing-link">List a New Property</a>
+      <a href="index.html?view=list-experience" class="add-listing-link" style="background:none; border:1px solid #1c1a17; color:#1c1a17;">List an Experience</a>
+    </div>
 
     <div class="listings-layout">
       <div>
@@ -331,7 +333,9 @@
         </div>
       </div>
       <div class="listing-sidebar" id="listingSidebar">
-        <div class="sidebar-placeholder" id="sidebarPlaceholder">Once a listing is approved and live, its calendar, promotions, and paid amenities will show here automatically.</div>
+        <div class="sidebar-placeholder" id="sidebarPlaceholder">Click one of your live listings or experiences to manage it here.</div>
+
+        <!-- Stay sidebar: full toolset (dates + promotions + amenities). -->
         <div id="sidebarContent" style="display:none;">
           <div class="sidebar-heading" id="sidebarListingName"></div>
           <div class="sidebar-sub">Pricing, photos, and description still live on the full <a href="#" id="sidebarManageLink" style="color:#8a6c39;">Manage Price & Offers</a> page.</div>
@@ -400,26 +404,13 @@
 
         <button type="button" class="sidebar-save-btn" id="sidebarSaveBtn">Save Changes</button>
         <p class="sidebar-save-msg" id="sidebarSaveMsg"></p>
-      </div>
-    </div>
-    </div>
-  </div>
-
-  <div id="experiencesSection" style="display:none;">
-    <h2 class="section-heading" style="margin-top:36px;">Aerva Experience</h2>
-    <a href="index.html?view=list-experience" class="add-listing-link">List an Experience</a>
-    <div class="listing-tabs" id="experienceTabs">
-      <button type="button" class="listing-tab-btn active" data-tab="active" id="expTabActiveBtn">Active</button>
-      <button type="button" class="listing-tab-btn" data-tab="inactive" id="expTabInactiveBtn">Inactive</button>
-    </div>
-    <div class="listings-layout">
-      <div>
-        <div id="experienceCardsContainer">
-          <p class="loading">Loading your experiences…</p>
         </div>
-      </div>
-      <div class="listing-sidebar" id="expCalendarSidebar">
-        <div class="sidebar-placeholder" id="expCalendarPlaceholder">Click one of your live experiences to block off dates it isn't running.</div>
+
+        <!-- Experience sidebar: blocked dates only — no promotions/
+             amenities concept for an experience. Shares the same
+             right-hand column as the stay sidebar above; only one of
+             the two shows at a time (see selectListingForSidebar /
+             selectExperienceForCalendar). -->
         <div id="expCalendarContent" style="display:none;">
           <div class="sidebar-heading" id="expCalendarExpName"></div>
           <div class="sidebar-sub">Name, description, and everything else still lives on the full <a href="#" id="expCalendarEditLink" style="color:#8a6c39;">Edit Experience</a> page.</div>
@@ -447,6 +438,37 @@
           </div>
           <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked date to remove it.</p>
           <div id="expBlockedList"></div>
+
+          <div class="sidebar-section-title">Promotions</div>
+          <div class="cal-wrap">
+            <div class="cal-header">
+              <button type="button" class="cal-nav-btn" id="expPromoCalPrevBtn">&larr;</button>
+              <div class="cal-month-label" id="expPromoCalMonthLabel"></div>
+              <button type="button" class="cal-nav-btn" id="expPromoCalNextBtn">&rarr;</button>
+            </div>
+            <div class="cal-grid" id="expPromoCalGrid"></div>
+            <div class="cal-legend">
+              <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
+              <span><i style="background:#d9e8d4;"></i> Promotion</span>
+            </div>
+            <div class="cal-confirm" id="expPromoCalConfirm">
+              <p id="expPromoCalConfirmLabel"></p>
+              <input type="text" id="expPromoConfirmName" placeholder="Promotion name, e.g. Off-Season Special">
+              <div class="promo-confirm-fields">
+                <select id="expPromoConfirmType">
+                  <option value="percentage">% off</option>
+                  <option value="flat">₹ off</option>
+                </select>
+                <input type="number" id="expPromoConfirmValue" placeholder="Amount" min="0">
+              </div>
+              <div class="cal-confirm-actions">
+                <button type="button" class="promo-confirm-add-btn" id="expPromoConfirmAddBtn">Add Promotion</button>
+                <button type="button" class="promo-confirm-cancel-btn" id="expPromoConfirmCancelBtn">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click an existing promotion's dates to remove it.</p>
+          <div id="expPromotionsList"></div>
 
           <button type="button" class="sidebar-save-btn" id="expCalendarSaveBtn">Save Changes</button>
           <p class="sidebar-save-msg" id="expCalendarSaveMsg"></p>
@@ -805,16 +827,13 @@
   let currentListings = [];
   let currentExperiences = [];
   let currentListingsTab = 'active';
-  let currentExperiencesTab = 'active';
   let currentMainTab = 'listings';
 
   function switchMainTab(tab){
     currentMainTab = tab;
     document.getElementById('myListingsSection').style.display = tab === 'listings' ? 'block' : 'none';
-    document.getElementById('experiencesSection').style.display = tab === 'experiences' ? 'block' : 'none';
     document.getElementById('messagesSection').style.display = tab === 'messages' ? 'block' : 'none';
     document.getElementById('mainTabListings').classList.toggle('active', tab === 'listings');
-    document.getElementById('mainTabExperiences').classList.toggle('active', tab === 'experiences');
     document.getElementById('mainTabMessages').classList.toggle('active', tab === 'messages');
     if(tab === 'messages') loadHostInbox();
   }
@@ -825,108 +844,25 @@
     switchMainTab(btn.dataset.mainTab);
   });
 
-  // The account dropdown's "My Experience" link (see index.html) points
-  // here as host-dashboard.html#experiencesSection — that fragment now
-  // just decides which tab opens by default, rather than scrolling to an
-  // anchor the way it did before there were separate tabs to switch between.
+  // The account dropdown's "My Experience" link (see index.html) used to
+  // point here as #experiencesSection to pick a separate tab — Listings
+  // and Experiences are now one merged section, so this just lands on
+  // the (only) Listings tab, same as any other visit here.
   if(window.location.hash === '#experiencesSection'){
-    switchMainTab('experiences');
+    switchMainTab('listings');
   }
 
   function renderListings(listings){
-    // Split once, right at the source — everywhere else in this file
-    // (tabs, counts, the Active/Inactive cards, the hosting-property
-    // dropdown) only ever deals with stays now; experiences get their
-    // own separate "Aerva Experience" tab below instead of being mixed
-    // into the same list or the same scroll.
+    // Split once — the combined list below re-merges them for display,
+    // but keeping them split makes per-type things (the hosting-property
+    // dropdown, cloning, which sidebar a click opens) simple to reason
+    // about without re-checking listing_type everywhere.
     currentListings = listings.filter(l => !l.listing_type || l.listing_type === 'stay');
     currentExperiences = listings.filter(l => l.listing_type === 'experience');
 
-    // A host with zero properties has nothing for the "My Listings" tab
-    // itself to show — hide the tab entirely rather than leave a button
-    // that just opens an empty page ("List a New Property" up top already
-    // covers that entry point). If that tab happened to be the active one,
-    // switch to Aerva Experience instead of leaving nothing visible at all.
-    const hasListings = currentListings.length > 0;
-    const mainTabListingsBtn = document.getElementById('mainTabListings');
-    if(mainTabListingsBtn) mainTabListingsBtn.style.display = hasListings ? 'inline-block' : 'none';
-    if(!hasListings && currentMainTab === 'listings'){
-      switchMainTab('experiences');
-    }
-
     updateListingTabCounts();
     renderListingsForCurrentTab();
-    renderExperienceCards();
     populateExperienceHostingDropdown();
-  }
-
-  function renderExperienceCards(){
-    const container = document.getElementById('experienceCardsContainer');
-    if(!container) return;
-    const activeCount = currentExperiences.filter(e => e.status === 'approved').length;
-    const inactiveCount = currentExperiences.length - activeCount;
-    const expTabActiveBtn = document.getElementById('expTabActiveBtn');
-    const expTabInactiveBtn = document.getElementById('expTabInactiveBtn');
-    if(expTabActiveBtn) expTabActiveBtn.innerHTML = `Active <span class="tab-count">(${activeCount})</span>`;
-    if(expTabInactiveBtn) expTabInactiveBtn.innerHTML = `Inactive <span class="tab-count">(${inactiveCount})</span>`;
-
-    if(!currentExperiences.length){
-      container.innerHTML = '<p class="empty">You haven\'t listed an experience yet.</p>';
-      return;
-    }
-    const experiences = currentExperiences.filter(e =>
-      currentExperiencesTab === 'active' ? e.status === 'approved' : e.status !== 'approved'
-    );
-    if(!experiences.length){
-      container.innerHTML = currentExperiencesTab === 'active'
-        ? '<p class="empty">No live experiences yet — approved experiences will show up here.</p>'
-        : '<p class="empty">Nothing here — every experience is currently live.</p>';
-      return;
-    }
-    container.innerHTML = experiences.map(exp => {
-      const interiorPhotos = Array.isArray(exp.interior_photo_urls) ? exp.interior_photo_urls : [];
-      const exteriorPhotos = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
-      const leadPhoto = exp.cover_photo_url || interiorPhotos[0] || exteriorPhotos[0];
-      const thumbHtml = leadPhoto
-        ? `<img class="listing-thumb" src="${leadPhoto}" alt="${exp.property_name}">`
-        : `<div class="listing-thumb-placeholder">${(exp.property_name || '?').charAt(0).toUpperCase()}</div>`;
-      const editUrl = `index.html?view=list-experience&edit=${exp.id}`;
-      const rejectionNoteHtml = (exp.status === 'rejected' && exp.rejection_reason)
-        ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${exp.rejection_reason}</p>`
-        : '';
-      const stayNote = exp.experience_type === 'with_stay' ? 'Includes a stay' : 'Experience only';
-      // Approved experiences open the blocked-dates calendar on click,
-      // same as an approved stay listing does — draft/rejected ones have
-      // nothing to block dates on yet, so they still go straight to the
-      // edit form instead.
-      const calendarHintHtml = exp.status === 'approved'
-        ? `<p class="calendar-hint">📅 Click to block dates it isn't running</p>`
-        : `<p class="calendar-hint calendar-hint-muted">Calendar unlocks once approved</p>`;
-      return `
-        <div class="listing-card" data-experience-id="${exp.id}" data-status="${exp.status}" data-href="${editUrl}" style="cursor:pointer;">
-          ${thumbHtml}
-          <div class="listing-info">
-            <h3>${exp.property_name || '(Untitled)'}</h3>
-            <div class="listing-meta">${stayNote} · ₹${exp.nightly_rate || '—'}${exp.experience_price_unit === 'per_person' ? '/person' : ''} ${statusBadgeHtml(exp.status)}</div>
-            ${rejectionNoteHtml}
-            ${calendarHintHtml}
-          </div>
-          <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
-            <a class="manage-link" href="${editUrl}">Edit Experience</a>
-          </div>
-        </div>
-      `;
-    }).join('');
-    container.querySelectorAll('.listing-card').forEach(card => {
-      card.addEventListener('click', (e) => {
-        if(e.target.closest('a.manage-link')) return;
-        if(card.dataset.status === 'approved'){
-          selectExperienceForCalendar(Number(card.dataset.experienceId));
-          return;
-        }
-        window.location.href = card.dataset.href;
-      });
-    });
   }
 
   // Only an approved, live listing makes sense to offer as an
@@ -1330,82 +1266,111 @@
   });
 
   function updateListingTabCounts(){
-    const activeCount = currentListings.filter(l => l.status === 'approved').length;
-    const inactiveCount = currentListings.length - activeCount;
+    const all = [...currentListings, ...currentExperiences];
+    const activeCount = all.filter(l => l.status === 'approved').length;
+    const inactiveCount = all.length - activeCount;
     document.getElementById('tabActiveBtn').innerHTML = `Active <span class="tab-count">(${activeCount})</span>`;
     document.getElementById('tabInactiveBtn').innerHTML = `Inactive <span class="tab-count">(${inactiveCount})</span>`;
   }
 
-  function renderListingsForCurrentTab(){
-    const listings = currentListings.filter(l =>
-      currentListingsTab === 'active' ? l.status === 'approved' : l.status !== 'approved'
-    );
-    const container = document.getElementById('listingsContainer');
-    if(!currentListings.length){
-      container.innerHTML = '<p class="empty">You haven\'t listed a property yet.</p>';
-      return;
-    }
-    if(!listings.length){
-      container.innerHTML = currentListingsTab === 'active'
-        ? '<p class="empty">No live listings yet — approved listings will show up here.</p>'
-        : '<p class="empty">Nothing here — every listing is currently live.</p>';
-      return;
-    }
-    container.innerHTML = listings.map(l => {
-      // Cover choice leads if set, otherwise interior, matching the same
-      // convention used on the live site's Suites cards.
-      const interiorPhotos = Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : [];
-      const exteriorPhotos = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
-      const leadPhoto = l.cover_photo_url || interiorPhotos[0] || exteriorPhotos[0];
-      const thumbHtml = leadPhoto
-        ? `<img class="listing-thumb" src="${leadPhoto}" alt="${l.property_name}">`
-        : `<div class="listing-thumb-placeholder">${(l.property_name || '?').charAt(0).toUpperCase()}</div>`;
-      // currentListings is filtered to stays only now (see renderListings)
-      // — experiences render separately in the "Aerva Experience" section,
-      // so every card reaching this point is always a property.
-      const actionHref = (l.status === 'draft' || l.status === 'rejected') ? `index.html?view=list-property&edit=${l.id}` : l.manageLink;
-      const actionLink = l.status === 'draft'
-        ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Continue Editing</a>`
-        : l.status === 'rejected'
-        ? `<a class="manage-link" href="index.html?view=list-property&edit=${l.id}">Edit &amp; Resubmit</a>`
-        : `<a class="manage-link" href="${l.manageLink}">Manage Price & Offers</a>`;
-      const cloneLink = `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${l.id})">Clone</button>`;
-      const rejectionNoteHtml = (l.status === 'rejected' && l.rejection_reason)
-        ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${l.rejection_reason}</p>`
-        : '';
-      // Only an approved (live) listing has real dates to block or a
-      // promotion to run — everything else (draft/pending/rejected)
-      // doesn't get this hint at all, rather than showing it disabled,
-      // so a host isn't left wondering why a calendar-looking thing on
-      // their unapproved listing does nothing when clicked.
-      const calendarHintHtml = l.status === 'approved'
-        ? `<p class="calendar-hint">📅 Click to manage dates, promotions &amp; amenities</p>`
-        : l.status === 'pending'
-        ? `<p class="calendar-hint calendar-hint-muted">Calendar &amp; promotions unlock once approved</p>`
-        : '';
+  // Builds one card for either a stay listing or an experience — same
+  // markup shape either way, just different meta line, edit link, and
+  // click-target (stay → full sidebar; experience → blocked-dates-only
+  // sidebar), via the data-listing-type attribute the click handler
+  // below reads.
+  function buildDashboardCard(item, isExperience){
+    const interiorPhotos = Array.isArray(item.interior_photo_urls) ? item.interior_photo_urls : [];
+    const exteriorPhotos = Array.isArray(item.exterior_photo_urls) ? item.exterior_photo_urls : [];
+    const leadPhoto = item.cover_photo_url || interiorPhotos[0] || exteriorPhotos[0];
+    const thumbHtml = leadPhoto
+      ? `<img class="listing-thumb" src="${leadPhoto}" alt="${item.property_name}">`
+      : `<div class="listing-thumb-placeholder">${(item.property_name || '?').charAt(0).toUpperCase()}</div>`;
+    const rejectionNoteHtml = (item.status === 'rejected' && item.rejection_reason)
+      ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${item.rejection_reason}</p>`
+      : '';
+
+    if(isExperience){
+      const editUrl = `index.html?view=list-experience&edit=${item.id}`;
+      const stayNote = item.experience_type === 'with_stay' ? 'Includes a stay' : 'Experience only';
+      const calendarHintHtml = item.status === 'approved'
+        ? `<p class="calendar-hint">📅 Click to block dates it isn't running</p>`
+        : `<p class="calendar-hint calendar-hint-muted">Calendar unlocks once approved</p>`;
       return `
-        <div class="listing-card" data-href="${actionHref}" data-listing-id="${l.id}" data-status="${l.status}" data-listing-type="${l.listing_type || 'stay'}" style="cursor:pointer;">
+        <div class="listing-card" data-href="${editUrl}" data-experience-id="${item.id}" data-status="${item.status}" data-listing-type="experience" style="cursor:pointer;">
           ${thumbHtml}
           <div class="listing-info">
-            <h3>${l.property_name || '(Untitled draft)'}</h3>
-            <div class="listing-meta">${l.city || 'No city yet'} · ₹${l.nightly_rate || '—'}/night ${statusBadgeHtml(l.status)}</div>
+            <h3>${item.property_name || '(Untitled)'} <span style="font-size:10px; opacity:0.5; text-transform:uppercase; letter-spacing:0.04em;">Experience</span></h3>
+            <div class="listing-meta">${stayNote} · ₹${item.nightly_rate || '—'}${item.experience_price_unit === 'per_person' ? '/person' : ''} ${statusBadgeHtml(item.status)}</div>
             ${rejectionNoteHtml}
             ${calendarHintHtml}
           </div>
           <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
-            ${actionLink}
-            ${cloneLink}
+            <a class="manage-link" href="${editUrl}">Edit Experience</a>
           </div>
         </div>
       `;
-    }).join('');
+    }
+
+    const actionHref = (item.status === 'draft' || item.status === 'rejected') ? `index.html?view=list-property&edit=${item.id}` : item.manageLink;
+    const actionLink = item.status === 'draft'
+      ? `<a class="manage-link" href="index.html?view=list-property&edit=${item.id}">Continue Editing</a>`
+      : item.status === 'rejected'
+      ? `<a class="manage-link" href="index.html?view=list-property&edit=${item.id}">Edit &amp; Resubmit</a>`
+      : `<a class="manage-link" href="${item.manageLink}">Manage Price & Offers</a>`;
+    const cloneLink = `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${item.id})">Clone</button>`;
+    const calendarHintHtml = item.status === 'approved'
+      ? `<p class="calendar-hint">📅 Click to manage dates, promotions &amp; amenities</p>`
+      : item.status === 'pending'
+      ? `<p class="calendar-hint calendar-hint-muted">Calendar &amp; promotions unlock once approved</p>`
+      : '';
+    return `
+      <div class="listing-card" data-href="${actionHref}" data-listing-id="${item.id}" data-status="${item.status}" data-listing-type="stay" style="cursor:pointer;">
+        ${thumbHtml}
+        <div class="listing-info">
+          <h3>${item.property_name || '(Untitled draft)'}</h3>
+          <div class="listing-meta">${item.city || 'No city yet'} · ₹${item.nightly_rate || '—'}/night ${statusBadgeHtml(item.status)}</div>
+          ${rejectionNoteHtml}
+          ${calendarHintHtml}
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
+          ${actionLink}
+          ${cloneLink}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderListingsForCurrentTab(){
+    const container = document.getElementById('listingsContainer');
+    const allItems = [...currentListings, ...currentExperiences];
+    if(!allItems.length){
+      container.innerHTML = '<p class="empty">You haven\'t listed a property or experience yet.</p>';
+      return;
+    }
+    const stays = currentListings.filter(l => currentListingsTab === 'active' ? l.status === 'approved' : l.status !== 'approved');
+    const experiences = currentExperiences.filter(e => currentListingsTab === 'active' ? e.status === 'approved' : e.status !== 'approved');
+    if(!stays.length && !experiences.length){
+      container.innerHTML = currentListingsTab === 'active'
+        ? '<p class="empty">Nothing live yet — approved listings and experiences will show up here.</p>'
+        : '<p class="empty">Nothing here — everything is currently live.</p>';
+      return;
+    }
+    // Properties first, then experiences — a stable, predictable order
+    // rather than interleaving, so cards don't visually reshuffle every
+    // time this re-renders.
+    container.innerHTML = stays.map(l => buildDashboardCard(l, false)).join('')
+      + experiences.map(e => buildDashboardCard(e, true)).join('');
 
     // Restore the "selected" highlight if the currently-open sidebar
-    // listing is one of the cards just rendered — otherwise it'd
-    // silently disappear every time this re-renders (e.g. switching
+    // listing/experience is one of the cards just rendered — otherwise
+    // it'd silently disappear every time this re-renders (e.g. switching
     // tabs and back) even though the sidebar is still showing it.
     if(sbListingId != null){
       const selectedCard = container.querySelector(`.listing-card[data-listing-id="${sbListingId}"]`);
+      if(selectedCard) selectedCard.classList.add('selected');
+    }
+    if(expCalListingId != null){
+      const selectedCard = container.querySelector(`.listing-card[data-experience-id="${expCalListingId}"]`);
       if(selectedCard) selectedCard.classList.add('selected');
     }
   }
@@ -2217,12 +2182,14 @@
       renderBookings(data.bookings || []);
       renderVerification(data.verification);
 
-      // Default to showing the first live STAY listing's calendar/
-      // promotions/amenities right away — an experience has no such
-      // sidebar (see the click handler below), so it's excluded from
-      // this auto-select entirely.
-      const firstApproved = (data.listings || []).find(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay'));
-      if(firstApproved) selectListingForSidebar(firstApproved.id);
+      // Default to showing the first live item's sidebar right away —
+      // a stay first if there is one (full toolset), otherwise the
+      // first live experience (blocked-dates-only sidebar) — matches
+      // the merged list's own stays-then-experiences ordering.
+      const firstApprovedStay = (data.listings || []).find(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay'));
+      const firstApprovedExperience = (data.listings || []).find(l => l.status === 'approved' && l.listing_type === 'experience');
+      if(firstApprovedStay) selectListingForSidebar(firstApprovedStay.id);
+      else if(firstApprovedExperience) selectExperienceForCalendar(firstApprovedExperience.id);
     } catch(err){
       document.getElementById('listingsContainer').innerHTML = '<p class="empty">Could not load your listings. Please refresh.</p>';
       document.getElementById('bookingsContainer').innerHTML = '<p class="empty">Could not load your bookings. Please refresh.</p>';
@@ -2230,16 +2197,21 @@
   }
 
   // Whole-card click: an approved STAY listing selects it into the
-  // right-side sidebar (block dates / promotions / paid amenities, right
-  // here). An approved EXPERIENCE has no such sidebar — it jumps
-  // straight to its edit page instead, same as a draft or rejected
-  // listing already does.
+  // full sidebar (block dates / promotions / paid amenities). An
+  // approved EXPERIENCE selects it into the same right-hand column, but
+  // shows the simpler blocked-dates-only sidebar instead (see
+  // selectExperienceForCalendar). Anything not approved just goes
+  // straight to its edit page.
   document.getElementById('listingsContainer').addEventListener('click', (e) => {
     if(e.target.closest('a.manage-link')) return;
     const card = e.target.closest('.listing-card');
     if(!card || !card.dataset.href) return;
     if(card.dataset.status === 'approved' && card.dataset.listingType === 'stay'){
       selectListingForSidebar(Number(card.dataset.listingId));
+      return;
+    }
+    if(card.dataset.status === 'approved' && card.dataset.listingType === 'experience'){
+      selectExperienceForCalendar(Number(card.dataset.experienceId));
       return;
     }
     window.location.href = card.dataset.href;
@@ -2252,15 +2224,6 @@
     document.getElementById('tabActiveBtn').classList.toggle('active', currentListingsTab === 'active');
     document.getElementById('tabInactiveBtn').classList.toggle('active', currentListingsTab === 'inactive');
     renderListingsForCurrentTab();
-  });
-
-  document.getElementById('experienceTabs').addEventListener('click', (e) => {
-    const btn = e.target.closest('.listing-tab-btn');
-    if(!btn) return;
-    currentExperiencesTab = btn.dataset.tab;
-    document.getElementById('expTabActiveBtn').classList.toggle('active', currentExperiencesTab === 'active');
-    document.getElementById('expTabInactiveBtn').classList.toggle('active', currentExperiencesTab === 'inactive');
-    renderExperienceCards();
   });
 
   // ============================================================
@@ -2293,8 +2256,9 @@
     const listing = currentListings.find(l => l.id === listingId);
     if(!listing || !listing.manageLink) return;
 
-    document.querySelectorAll('.listing-card').forEach(c => c.classList.toggle('selected', Number(c.dataset.listingId) === listingId));
+    document.querySelectorAll('.listing-card').forEach(c => c.classList.toggle('selected', c.dataset.listingId != null && Number(c.dataset.listingId) === listingId && c.dataset.listingType === 'stay'));
     document.getElementById('sidebarPlaceholder').style.display = 'none';
+    document.getElementById('expCalendarContent').style.display = 'none';
     document.getElementById('sidebarContent').style.display = 'block';
     document.getElementById('sidebarListingName').textContent = listing.property_name;
     document.getElementById('sidebarManageLink').href = listing.manageLink;
@@ -2483,6 +2447,9 @@
   let expCalToken = null;
   let expCalNightlyRate = null, expCalCity = null, expCalArea = null;
   let expCalBlockedDateRows = [];
+  let expPromotionRows = [];
+  let expPromoCalMonth = new Date(); expPromoCalMonth.setDate(1); expPromoCalMonth.setHours(0,0,0,0);
+  let expPromoSelStart = null, expPromoSelEnd = null, expPromoDragging = false;
   let expCalMonth = new Date(); expCalMonth.setDate(1); expCalMonth.setHours(0,0,0,0);
   let expCalSelStart = null, expCalSelEnd = null, expCalDragging = false;
 
@@ -2490,8 +2457,9 @@
     const exp = currentExperiences.find(e => e.id === experienceId);
     if(!exp || !exp.manageLink) return;
 
-    document.querySelectorAll('#experienceCardsContainer .listing-card').forEach(c => c.classList.toggle('selected', Number(c.dataset.experienceId) === experienceId));
-    document.getElementById('expCalendarPlaceholder').style.display = 'none';
+    document.querySelectorAll('.listing-card').forEach(c => c.classList.toggle('selected', c.dataset.experienceId != null && Number(c.dataset.experienceId) === experienceId));
+    document.getElementById('sidebarPlaceholder').style.display = 'none';
+    document.getElementById('sidebarContent').style.display = 'none';
     document.getElementById('expCalendarContent').style.display = 'block';
     document.getElementById('expCalendarExpName').textContent = exp.property_name;
     document.getElementById('expCalendarEditLink').href = `index.html?view=list-experience&edit=${exp.id}`;
@@ -2508,10 +2476,10 @@
       if(!res.ok) throw new Error(data.error || 'Could not load');
       const l = data.listing;
 
-      // Carried forward unchanged on save — this panel only edits
-      // blocked dates, but the save endpoint expects the full pricing
-      // shape, so these ride along untouched (same pattern as the sb*
-      // block above).
+      // Carried forward unchanged on save — this panel edits blocked
+      // dates and promotions, but the save endpoint expects the full
+      // pricing shape, so these ride along untouched (same pattern as
+      // the sb* block above).
       expCalNightlyRate = l.nightly_rate;
       expCalCity = l.city;
       expCalArea = l.area;
@@ -2520,8 +2488,16 @@
         id: b.id, startDate: b.start_date ? b.start_date.slice(0, 10) : '',
         endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || ''
       }));
+      expPromotionRows = (data.promotions || []).map(p => ({
+        id: p.id, name: p.name, discountType: p.discount_type, discountValue: Number(p.discount_value),
+        minNights: null,
+        startDate: p.start_date ? p.start_date.slice(0, 10) : '', endDate: p.end_date ? p.end_date.slice(0, 10) : '',
+        isActive: p.is_active
+      }));
       expCalRenderBlockedList();
       expCalRenderCalendar();
+      expRenderPromotionsList();
+      expRenderPromoCalendar();
     } catch(err){
       document.getElementById('expCalendarContent').innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not load this experience\'s calendar. Please refresh and try again.</p>';
     }
@@ -2626,6 +2602,124 @@
     });
   }
 
+  // Experience promotions calendar — same interaction model as the stay
+  // sidebar's own promotions calendar above, minus "minimum nights"
+  // (an experience is a single-day booking, not a multi-night stay, so
+  // that field doesn't apply here). Shares the same save endpoint and
+  // sbInRange/sbNextDay/sbToDateStr/sbTodayStr helpers.
+  function expPromoRowFor(dateStr){
+    return expPromotionRows.find(p => p.startDate && p.endDate && sbInRange(dateStr, p.startDate, p.endDate));
+  }
+  function expRenderPromoCalendar(){
+    const grid = document.getElementById('expPromoCalGrid');
+    if(!grid) return;
+    document.getElementById('expPromoCalMonthLabel').textContent = expPromoCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    const year = expPromoCalMonth.getFullYear(), month = expPromoCalMonth.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const startWeekday = new Date(year, month, 1).getDay();
+    let html = ['S','M','T','W','T','F','S'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
+    for(let i = 0; i < startWeekday; i++) html += `<div class="cal-day cal-day--empty"></div>`;
+    const today = sbTodayStr();
+    for(let day = 1; day <= daysInMonth; day++){
+      const dateStr = sbToDateStr(new Date(year, month, day));
+      const isPast = dateStr < today;
+      const promoRow = expPromoRowFor(dateStr);
+      let selecting = false;
+      if(expPromoSelStart && expPromoSelEnd){
+        const selMin = expPromoSelStart <= expPromoSelEnd ? expPromoSelStart : expPromoSelEnd;
+        const selMax = expPromoSelStart <= expPromoSelEnd ? expPromoSelEnd : expPromoSelStart;
+        selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
+      }
+      let cls = 'cal-day';
+      if(isPast) cls += ' cal-day--past cal-day--disabled';
+      else if(selecting) cls += ' cal-day--selected';
+      else if(promoRow) cls += ' cal-day--promo';
+      const title = promoRow ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}` : '';
+      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}</div>`;
+    }
+    grid.innerHTML = html;
+    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past)').forEach(cell => {
+      cell.addEventListener('mousedown', () => expOnPromoMouseDown(cell.dataset.date));
+      cell.addEventListener('mouseenter', () => expOnPromoMouseEnter(cell.dataset.date));
+      cell.addEventListener('mouseup', () => expOnPromoMouseUp(cell.dataset.date));
+      cell.addEventListener('click', () => expOnPromoClick(cell.dataset.date));
+    });
+  }
+  function expOnPromoMouseDown(dateStr){
+    if(expPromoRowFor(dateStr)) return;
+    expPromoDragging = true; expPromoSelStart = dateStr; expPromoSelEnd = dateStr;
+    expRenderPromoCalendar();
+  }
+  function expOnPromoMouseEnter(dateStr){
+    if(!expPromoDragging || !expPromoSelStart) return;
+    expPromoSelEnd = dateStr; expRenderPromoCalendar();
+  }
+  function expOnPromoMouseUp(dateStr){
+    if(!expPromoDragging) return;
+    expPromoDragging = false; expPromoSelEnd = dateStr;
+    if(expPromoSelStart) expShowPromoConfirm();
+  }
+  function expOnPromoClick(dateStr){
+    const existing = expPromoRowFor(dateStr);
+    if(existing){
+      if(window.confirm(`Remove this promotion — ${existing.name} (${existing.startDate} to ${existing.endDate})?`)){
+        expPromotionRows = expPromotionRows.filter(p => p !== existing);
+        expRenderPromotionsList(); expRenderPromoCalendar();
+      }
+    }
+  }
+  function expShowPromoConfirm(){
+    const start = expPromoSelStart <= expPromoSelEnd ? expPromoSelStart : expPromoSelEnd;
+    const endInclusive = expPromoSelStart <= expPromoSelEnd ? expPromoSelEnd : expPromoSelStart;
+    document.getElementById('expPromoCalConfirmLabel').textContent = start === endInclusive ? `New promotion for ${start}` : `New promotion for ${start} to ${endInclusive}`;
+    document.getElementById('expPromoConfirmName').value = '';
+    document.getElementById('expPromoConfirmType').value = 'percentage';
+    document.getElementById('expPromoConfirmValue').value = '';
+    document.getElementById('expPromoCalConfirm').style.display = 'block';
+  }
+  function expHidePromoConfirm(){
+    expPromoSelStart = null; expPromoSelEnd = null; expPromoDragging = false;
+    document.getElementById('expPromoCalConfirm').style.display = 'none';
+    expRenderPromoCalendar();
+  }
+  document.getElementById('expPromoConfirmAddBtn').addEventListener('click', () => {
+    const start = expPromoSelStart <= expPromoSelEnd ? expPromoSelStart : expPromoSelEnd;
+    const endInclusive = expPromoSelStart <= expPromoSelEnd ? expPromoSelEnd : expPromoSelStart;
+    const name = document.getElementById('expPromoConfirmName').value.trim();
+    const discountType = document.getElementById('expPromoConfirmType').value;
+    const discountValue = Number(document.getElementById('expPromoConfirmValue').value);
+    if(!name){ alert('Please give this promotion a name.'); return; }
+    if(!discountValue || discountValue <= 0){ alert('Please enter a discount amount greater than 0.'); return; }
+    if(discountType === 'percentage' && discountValue > 100){ alert('A percentage discount can\'t be more than 100.'); return; }
+    expPromotionRows.push({ id: null, name, discountType, discountValue, minNights: null, startDate: start, endDate: sbNextDay(endInclusive), isActive: true });
+    expRenderPromotionsList(); expHidePromoConfirm();
+  });
+  document.getElementById('expPromoConfirmCancelBtn').addEventListener('click', expHidePromoConfirm);
+  document.getElementById('expPromoCalPrevBtn').addEventListener('click', () => { expPromoCalMonth.setMonth(expPromoCalMonth.getMonth() - 1); expRenderPromoCalendar(); });
+  document.getElementById('expPromoCalNextBtn').addEventListener('click', () => { expPromoCalMonth.setMonth(expPromoCalMonth.getMonth() + 1); expRenderPromoCalendar(); });
+  document.addEventListener('mouseup', () => { if(expPromoDragging){ expPromoDragging = false; if(expPromoSelStart && expPromoSelEnd) expShowPromoConfirm(); } });
+
+  function expRenderPromotionsList(){
+    const list = document.getElementById('expPromotionsList');
+    if(!list) return;
+    if(!expPromotionRows.length){ list.innerHTML = ''; return; }
+    list.innerHTML = expPromotionRows.map((p, idx) => {
+      const discountLabel = p.discountType === 'flat' ? `₹${p.discountValue} off` : `${p.discountValue}% off`;
+      return `
+        <div class="sidebar-list-row">
+          <strong>${p.name}</strong><br>${p.startDate} to ${p.endDate} — ${discountLabel}
+          <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
+        </div>
+      `;
+    }).join('');
+    list.querySelectorAll('[data-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        expPromotionRows.splice(Number(btn.dataset.idx), 1);
+        expRenderPromotionsList(); expRenderPromoCalendar();
+      });
+    });
+  }
+
   document.getElementById('expCalendarSaveBtn').addEventListener('click', async () => {
     if(!expCalToken) return;
     const btn = document.getElementById('expCalendarSaveBtn');
@@ -2641,7 +2735,8 @@
           nightlyRate: expCalNightlyRate,
           city: expCalCity,
           area: expCalArea,
-          blockedDates: expCalBlockedDateRows
+          blockedDates: expCalBlockedDateRows,
+          promotions: expPromotionRows
         })
       });
       const data = await res.json();
