@@ -77,7 +77,8 @@ module.exports = async (req, res) => {
         SELECT id, property_name, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address,
-               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit
+               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
+               experience_price_unit
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -111,7 +112,7 @@ module.exports = async (req, res) => {
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, promotions,
               latitude, longitude, formattedAddress, city, area,
-              petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit } = req.body || {};
+              petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -210,7 +211,8 @@ module.exports = async (req, res) => {
           formatted_address = COALESCE(${formattedAddress || null}, formatted_address),
           pet_friendly = ${finalPetFriendly}, max_pets_allowed = ${finalMaxPets},
           allowed_pet_types = ${JSON.stringify(finalPetTypes)}, pet_fee = ${finalPetFee},
-          security_deposit = ${finalSecurityDeposit}
+          security_deposit = ${finalSecurityDeposit},
+          experience_price_unit = COALESCE(${(experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : null}, experience_price_unit)
         WHERE id = ${listingId}
         RETURNING id, property_name, host_email
       `;
