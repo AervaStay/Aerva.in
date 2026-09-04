@@ -1052,10 +1052,8 @@
         </button>
         <div class="nav-account-menu" id="navAccountMenu">
           <a href="index.html?view=my-bookings">My Bookings</a>
-          <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Listings</a>
+          <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Collection</a>
           <a href="host-dashboard.html?openProfile=1">Account Settings</a>
-          <div class="menu-divider"></div>
-          <a href="host-dashboard.html#experiencesSection" id="listExperienceLink" style="display:none;">My Experience</a>
           <div class="menu-divider"></div>
           <a href="#" id="guestLogoutLink">Log Out</a>
         </div>
@@ -1080,10 +1078,8 @@
       <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
     </span>
     <a href="index.html?view=my-bookings">My Bookings</a>
-    <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Listings</a>
+    <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Collection</a>
     <a href="host-dashboard.html?openProfile=1">Account Settings</a>
-    <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
-    <a href="host-dashboard.html#experiencesSection" id="listExperienceLinkMobile" style="display:none;">My Experience</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
     <a href="#" id="guestLogoutLinkMobile">Log Out</a>
   </span>
@@ -8054,8 +8050,6 @@
     const guestNameDisplayMobile = document.getElementById('guestNameDisplayMobile');
     const myListingsLinkMobile = document.getElementById('myListingsLinkMobile');
     const guestLogoutLinkMobile = document.getElementById('guestLogoutLinkMobile');
-    const listExperienceLink = document.getElementById('listExperienceLink');
-    const listExperienceLinkMobile = document.getElementById('listExperienceLinkMobile');
 
     function clearGuestSession(){
       localStorage.removeItem('aerva_guest_session');
@@ -8094,8 +8088,6 @@
             myListingsLink.style.display = 'inline';
             if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
           }
-          if(listExperienceLink) listExperienceLink.style.display = 'block';
-          if(listExperienceLinkMobile) listExperienceLinkMobile.style.display = 'block';
           // Location prompt, once per browser, only for a confirmed
           // logged-in guest — see promptLocationOnceForGuest for the
           // full reasoning. Fires and forgets; doesn't block anything
