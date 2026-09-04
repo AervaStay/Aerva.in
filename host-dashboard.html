@@ -338,7 +338,11 @@
         <!-- Stay sidebar: full toolset (dates + promotions + amenities). -->
         <div id="sidebarContent" style="display:none;">
           <div class="sidebar-heading" id="sidebarListingName"></div>
-          <div class="sidebar-sub">Pricing, photos, and description still live on the full <a href="#" id="sidebarManageLink" style="color:#8a6c39;">Manage Price & Offers</a> page.</div>
+          <div class="sidebar-sub">Photos and description still live on the full <a href="#" id="sidebarManageLink" style="color:#8a6c39;">Manage</a> page — price, dates, promotions, and amenities are all right here.</div>
+
+        <div class="sidebar-section-title" style="margin-top:0;">Price</div>
+        <label style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7f6c; display:block; margin-bottom:6px;">Nightly Rate (₹)</label>
+        <input type="number" id="sbNightlyRateInput" min="1" placeholder="e.g. 5000" style="width:100%; box-sizing:border-box; padding:9px 11px; font-size:14px; border:1px solid #ddd0bc; margin-bottom:16px;">
 
         <div class="sidebar-section-title">Block Dates</div>
         <div class="cal-wrap">
@@ -413,7 +417,22 @@
              selectExperienceForCalendar). -->
         <div id="expCalendarContent" style="display:none;">
           <div class="sidebar-heading" id="expCalendarExpName"></div>
-          <div class="sidebar-sub">Name, description, and everything else still lives on the full <a href="#" id="expCalendarEditLink" style="color:#8a6c39;">Edit Experience</a> page.</div>
+          <div class="sidebar-sub">Name, description, and everything else still lives on the full <a href="#" id="expCalendarEditLink" style="color:#8a6c39;">Manage</a> page — price, dates, and promotions are all right here.</div>
+
+          <div class="sidebar-section-title" style="margin-top:0;">Price</div>
+          <div style="display:flex; gap:8px; margin-bottom:16px;">
+            <div style="flex:1;">
+              <label style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7f6c; display:block; margin-bottom:6px;">Price (₹)</label>
+              <input type="number" id="expPriceInput" min="1" placeholder="e.g. 3000" style="width:100%; box-sizing:border-box; padding:9px 11px; font-size:14px; border:1px solid #ddd0bc;">
+            </div>
+            <div style="flex:1;">
+              <label style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7f6c; display:block; margin-bottom:6px;">Priced</label>
+              <select id="expPriceUnitInput" style="width:100%; box-sizing:border-box; padding:9px 11px; font-size:14px; border:1px solid #ddd0bc; background:white; color:#1c1a17;">
+                <option value="per_person">Per person</option>
+                <option value="flat">Flat rate</option>
+              </select>
+            </div>
+          </div>
 
           <div class="sidebar-section-title">Block Dates</div>
           <div class="cal-wrap">
@@ -1293,7 +1312,7 @@
       const editUrl = `index.html?view=list-experience&edit=${item.id}`;
       const stayNote = item.experience_type === 'with_stay' ? 'Includes a stay' : 'Experience only';
       const calendarHintHtml = item.status === 'approved'
-        ? `<p class="calendar-hint">📅 Click to block dates it isn't running</p>`
+        ? `<p class="calendar-hint">📅 Click to manage price, dates &amp; promotions</p>`
         : `<p class="calendar-hint calendar-hint-muted">Calendar unlocks once approved</p>`;
       return `
         <div class="listing-card" data-href="${editUrl}" data-experience-id="${item.id}" data-status="${item.status}" data-listing-type="experience" style="cursor:pointer;">
@@ -1305,7 +1324,7 @@
             ${calendarHintHtml}
           </div>
           <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
-            <a class="manage-link" href="${editUrl}">Edit Experience</a>
+            <a class="manage-link" href="${editUrl}">Manage</a>
           </div>
         </div>
       `;
@@ -1316,10 +1335,10 @@
       ? `<a class="manage-link" href="index.html?view=list-property&edit=${item.id}">Continue Editing</a>`
       : item.status === 'rejected'
       ? `<a class="manage-link" href="index.html?view=list-property&edit=${item.id}">Edit &amp; Resubmit</a>`
-      : `<a class="manage-link" href="${item.manageLink}">Manage Price & Offers</a>`;
+      : `<a class="manage-link" href="${item.manageLink}">Manage</a>`;
     const cloneLink = `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${item.id})">Clone</button>`;
     const calendarHintHtml = item.status === 'approved'
-      ? `<p class="calendar-hint">📅 Click to manage dates, promotions &amp; amenities</p>`
+      ? `<p class="calendar-hint">📅 Click to manage price, dates, promotions &amp; amenities</p>`
       : item.status === 'pending'
       ? `<p class="calendar-hint calendar-hint-muted">Calendar &amp; promotions unlock once approved</p>`
       : '';
@@ -2275,11 +2294,14 @@
       if(!res.ok) throw new Error(data.error || 'Could not load');
       const l = data.listing;
 
-      // Carried forward unchanged on save — the sidebar only edits
-      // blocked dates, promotions, and paid amenities, but
-      // update-listing-pricing.js's save expects the full pricing form,
-      // so these ride along untouched to avoid wiping them out.
+      // sbNightlyRate is now genuinely editable here (see
+      // #sbNightlyRateInput) — pre-filled with the current rate, but the
+      // save handler below reads the input's live value, not this
+      // variable directly, so a host's edit actually takes effect. Only
+      // truly carried forward untouched now: city/area/discount/deposit,
+      // none of which this sidebar exposes any editing for.
       sbNightlyRate = l.nightly_rate;
+      document.getElementById('sbNightlyRateInput').value = l.nightly_rate || '';
       sbCity = l.city;
       sbArea = l.area;
       sbDiscountType = l.discount_type;
@@ -2476,11 +2498,13 @@
       if(!res.ok) throw new Error(data.error || 'Could not load');
       const l = data.listing;
 
-      // Carried forward unchanged on save — this panel edits blocked
-      // dates and promotions, but the save endpoint expects the full
-      // pricing shape, so these ride along untouched (same pattern as
-      // the sb* block above).
+      // expCalNightlyRate/priceUnit are genuinely editable here now (see
+      // #expPriceInput/#expPriceUnitInput) — pre-filled with the current
+      // values, but the save handler reads the live inputs, not these
+      // variables directly.
       expCalNightlyRate = l.nightly_rate;
+      document.getElementById('expPriceInput').value = l.nightly_rate || '';
+      document.getElementById('expPriceUnitInput').value = l.experience_price_unit || 'per_person';
       expCalCity = l.city;
       expCalArea = l.area;
 
@@ -2724,6 +2748,15 @@
     if(!expCalToken) return;
     const btn = document.getElementById('expCalendarSaveBtn');
     const msgEl = document.getElementById('expCalendarSaveMsg');
+    const priceInput = document.getElementById('expPriceInput');
+    const newPrice = Number(priceInput.value);
+    if(!newPrice || newPrice <= 0){
+      msgEl.textContent = 'Please enter a valid price.';
+      msgEl.style.color = '#a3402f';
+      msgEl.style.display = 'block';
+      return;
+    }
+    const newPriceUnit = document.getElementById('expPriceUnitInput').value;
     btn.disabled = true; btn.textContent = 'Saving…';
     msgEl.style.display = 'none';
     try{
@@ -2732,7 +2765,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token: expCalToken,
-          nightlyRate: expCalNightlyRate,
+          nightlyRate: newPrice,
+          experiencePriceUnit: newPriceUnit,
           city: expCalCity,
           area: expCalArea,
           blockedDates: expCalBlockedDateRows,
@@ -2741,6 +2775,13 @@
       });
       const data = await res.json();
       if(res.ok){
+        expCalNightlyRate = newPrice;
+        const expInMemory = currentExperiences.find(e => e.id === expCalListingId);
+        if(expInMemory){
+          expInMemory.nightly_rate = newPrice;
+          expInMemory.experience_price_unit = newPriceUnit;
+        }
+        renderListingsForCurrentTab();
         msgEl.textContent = data.warning || 'Saved.';
         msgEl.style.color = data.warning ? '#a3402f' : '#3a7d44';
       } else {
@@ -2910,6 +2951,14 @@
     if(!sbToken) return;
     const btn = document.getElementById('sidebarSaveBtn');
     const msgEl = document.getElementById('sidebarSaveMsg');
+    const rateInput = document.getElementById('sbNightlyRateInput');
+    const newRate = Number(rateInput.value);
+    if(!newRate || newRate <= 0){
+      msgEl.textContent = 'Please enter a valid nightly rate.';
+      msgEl.style.color = '#a3402f';
+      msgEl.style.display = 'block';
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Saving…';
     msgEl.style.display = 'none';
     try{
@@ -2918,7 +2967,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token: sbToken,
-          nightlyRate: sbNightlyRate,
+          nightlyRate: newRate,
           city: sbCity,
           area: sbArea,
           discountType: sbDiscountType,
@@ -2933,6 +2982,10 @@
       });
       const data = await res.json();
       if(res.ok){
+        sbNightlyRate = newRate;
+        const listingInMemory = currentListings.find(l => l.id === sbListingId);
+        if(listingInMemory) listingInMemory.nightly_rate = newRate;
+        renderListingsForCurrentTab();
         msgEl.textContent = data.warning || 'Saved.';
         msgEl.style.color = data.warning ? '#a3402f' : '#3a7d44';
       } else {
