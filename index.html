@@ -1051,6 +1051,7 @@
           <span id="guestNameDisplay" class="nav-account-name"></span>
         </button>
         <div class="nav-account-menu" id="navAccountMenu">
+          <a href="index.html?view=my-bookings">My Bookings</a>
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Listings</a>
           <a href="host-dashboard.html?openProfile=1">Account Settings</a>
           <div class="menu-divider"></div>
@@ -1078,6 +1079,7 @@
       </div>
       <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
     </span>
+    <a href="index.html?view=my-bookings">My Bookings</a>
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Listings</a>
     <a href="host-dashboard.html?openProfile=1">Account Settings</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
@@ -1825,6 +1827,46 @@
     </form>
   </div>
 </section>
+
+<!-- ================= MY BOOKINGS ================= -->
+<section class="pad" id="my-bookings" style="background:var(--cream-deep); display:none;">
+  <div class="wrap">
+    <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      Back to all homes
+    </a>
+    <div class="section-head center-head reveal">
+      <div class="eyebrow">Your Trips</div>
+      <h2>My Bookings</h2>
+    </div>
+    <div id="myBookingsContainer" style="max-width:720px; margin:0 auto;">
+      <p class="loading">Loading your bookings…</p>
+    </div>
+  </div>
+</section>
+
+<!-- Chat window — opened from a confirmed booking in My Bookings, or from
+     a host's inbox in host-dashboard.html. Reused for both viewer roles;
+     buildChatWidget()/openChatForOrder() adapt the labels/behavior. -->
+<div class="listing-modal-overlay" id="chatModalOverlay" style="display:none;">
+  <div class="listing-modal" style="max-width:480px; height:min(640px, 88vh); display:flex; flex-direction:column;">
+    <button class="listing-modal-close" id="chatModalClose" aria-label="Close">×</button>
+    <div style="padding:20px 24px 14px; border-bottom:1px solid var(--line-dark); flex:0 0 auto;">
+      <div class="listing-modal-section-title" style="margin:0;" id="chatModalTitle">Chat</div>
+    </div>
+    <div id="chatMessagesContainer" style="flex:1 1 auto; overflow-y:auto; padding:18px 24px; display:flex; flex-direction:column; gap:10px;"></div>
+    <div id="chatTemplatesRow" style="padding:0 24px; display:flex; gap:8px; overflow-x:auto; flex:0 0 auto;"></div>
+    <div style="padding:14px 24px 20px; border-top:1px solid var(--line-dark); flex:0 0 auto;">
+      <p id="chatWarning" style="display:none; font-size:11.5px; color:#a3402f; margin-bottom:8px;">Phone numbers, emails, and social media handles can't be shared here — Aerva keeps all communication on-platform.</p>
+      <div style="display:flex; gap:8px; align-items:flex-end;">
+        <textarea id="chatInput" rows="1" placeholder="Type a message…" style="flex:1; resize:none; background:transparent; border:1px solid var(--line-dark); padding:10px 12px; font-family:'Jost', sans-serif; font-size:14px; color:var(--ink); max-height:100px;"></textarea>
+        <button type="button" class="pill-search-submit" id="chatSendBtn" aria-label="Send" style="flex:0 0 auto; width:44px; height:44px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ================= FOOTER ================= -->
 <footer>
@@ -5235,6 +5277,199 @@
   // every time — cheap either way, but tidier.
   let placesGeocoder = null;
 
+  // ---- My Bookings + Chat ----
+  function guestAuthToken(){ return localStorage.getItem('aerva_guest_session'); }
+
+  async function loadMyBookings(){
+    const container = document.getElementById('myBookingsContainer');
+    const token = guestAuthToken();
+    if(!token){
+      container.innerHTML = '<p class="suites-empty">Please <a href="guest-login.html" style="color:var(--gold-deep); text-decoration:underline;">log in</a> to see your bookings.</p>';
+      return;
+    }
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', { headers: { 'Authorization': 'Bearer ' + token } });
+      if(!res.ok) throw new Error('Failed to load');
+      const data = await res.json();
+      const bookings = data.bookings || [];
+      if(!bookings.length){
+        container.innerHTML = '<p class="suites-empty">No bookings yet — once you book a stay or experience, it\'ll show up here.</p>';
+        return;
+      }
+      container.innerHTML = bookings.map(b => {
+        const dateLine = b.arrival === b.departure
+          ? new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+          : `${new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – ${new Date(b.departure).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+        // Messaging only ever unlocks for a confirmed (paid) booking —
+        // matches the same rule messages.js/guest-profile.js enforces
+        // server-side; this button simply doesn't exist for anything else,
+        // rather than existing and failing when clicked.
+        const chatBtnHtml = b.status === 'paid'
+          ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${b.suite_name}" style="margin-top:10px;">Message Host</button>`
+          : '';
+        return `
+          <div class="listing-card" style="margin-bottom:14px;">
+            <div class="listing-info">
+              <h3>${b.suite_name}</h3>
+              <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(b.status)}</div>
+              ${chatBtnHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+      container.querySelectorAll('[data-order-id]').forEach(btn => {
+        btn.addEventListener('click', () => openChatForOrder(Number(btn.dataset.orderId), btn.dataset.listingName));
+      });
+    } catch(err){
+      container.innerHTML = '<p class="suites-empty">Could not load your bookings right now. Please refresh.</p>';
+    }
+  }
+
+  function statusBadgeHtmlGuest(status){
+    const label = status === 'paid' ? 'Confirmed' : status === 'refunded' ? 'Refunded' : status === 'cancelled' ? 'Cancelled' : status;
+    const color = status === 'paid' ? '#3a7d44' : '#8a7f6c';
+    return `<span style="color:${color}; text-transform:uppercase; font-size:11px; letter-spacing:0.06em;">${label}</span>`;
+  }
+
+  let chatCurrentConversationId = null;
+  let chatCurrentOrderId = null;
+
+  async function openChatForOrder(orderId, listingName){
+    const token = guestAuthToken();
+    if(!token) return;
+    chatCurrentOrderId = orderId;
+    document.getElementById('chatModalTitle').textContent = listingName || 'Chat';
+    document.getElementById('chatMessagesContainer').innerHTML = '<p class="loading">Loading…</p>';
+    document.getElementById('chatTemplatesRow').innerHTML = '';
+    document.getElementById('chatModalOverlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${orderId}`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      if(!res.ok){
+        document.getElementById('chatMessagesContainer').innerHTML = `<p class="suites-empty">${data.error || 'Could not open this conversation.'}</p>`;
+        return;
+      }
+      chatCurrentConversationId = data.conversationId;
+      document.getElementById('chatModalTitle').textContent = data.listingName || listingName || 'Chat';
+      renderChatMessages(data.messages || [], data.viewerRole);
+      loadChatTemplates(data.conversationId);
+    } catch(err){
+      document.getElementById('chatMessagesContainer').innerHTML = '<p class="suites-empty">Could not open this conversation. Please try again.</p>';
+    }
+  }
+
+  function renderChatMessages(messages, viewerRole){
+    const container = document.getElementById('chatMessagesContainer');
+    if(!messages.length){
+      container.innerHTML = '<p style="font-size:13px; opacity:0.6; text-align:center;">Say hello — your host will see this once you send it.</p>';
+      return;
+    }
+    container.innerHTML = messages.map(m => {
+      const isMine = m.sender_type === viewerRole;
+      return `
+        <div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;">
+          <div style="background:${isMine ? 'var(--ink)' : 'var(--cream-deep)'}; color:${isMine ? 'var(--cream)' : 'var(--ink)'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${m.display_text}</div>
+          ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
+        </div>
+      `;
+    }).join('');
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function loadChatTemplates(conversationId){
+    const token = guestAuthToken();
+    const row = document.getElementById('chatTemplatesRow');
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversationTemplates&conversationId=${conversationId}`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      const templates = data.templates || [];
+      if(!templates.length){ row.innerHTML = ''; return; }
+      row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${t.body}</button>`).join('');
+      row.querySelectorAll('[data-template]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.getElementById('chatInput').value = btn.dataset.template;
+          document.getElementById('chatInput').focus();
+        });
+      });
+    } catch(err){
+      row.innerHTML = '';
+    }
+  }
+
+  // Soft, client-side-only heads-up — not the real enforcement (that's
+  // server-side in guest-profile.js's redactContactInfo, which always
+  // runs regardless of what happens here). This just warns before
+  // sending rather than after, for a better experience; it deliberately
+  // doesn't block sending outright, since a false positive here shouldn't
+  // stop someone from sending an otherwise-innocent message — the server
+  // is what actually strips anything real.
+  function looksLikeContactInfo(text){
+    if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text)) return true;
+    const digitRun = text.match(/(\+?\d[\d\s\-.()]{6,}\d)/);
+    if (digitRun && (digitRun[0].match(/\d/g) || []).length >= 7) return true;
+    if (/\b(instagram|insta|facebook|whatsapp|telegram)\b/i.test(text)) return true;
+    return false;
+  }
+
+  document.getElementById('chatInput').addEventListener('input', function(){
+    document.getElementById('chatWarning').style.display = looksLikeContactInfo(this.value) ? 'block' : 'none';
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+  });
+
+  async function sendChatMessage(){
+    const input = document.getElementById('chatInput');
+    const text = input.value.trim();
+    if(!text || !chatCurrentConversationId) return;
+    const token = guestAuthToken();
+    input.disabled = true;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ mode: 'send', conversationId: chatCurrentConversationId, text })
+      });
+      const data = await res.json();
+      if(res.ok){
+        input.value = '';
+        document.getElementById('chatWarning').style.display = 'none';
+        // Re-fetch rather than locally append — keeps this in sync with
+        // whatever the server actually stored (the redacted version),
+        // rather than briefly showing the guest's own unfiltered text.
+        const convRes = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${chatCurrentOrderId}`, {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const convData = await convRes.json();
+        if(convRes.ok) renderChatMessages(convData.messages || [], convData.viewerRole);
+      }
+    } catch(err){
+      // Silently retryable — the message just doesn't appear; the guest can try again.
+    }
+    input.disabled = false;
+    input.focus();
+  }
+
+  document.getElementById('chatSendBtn').addEventListener('click', sendChatMessage);
+  document.getElementById('chatInput').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChatMessage(); }
+  });
+  document.getElementById('chatModalClose').addEventListener('click', () => {
+    document.getElementById('chatModalOverlay').style.display = 'none';
+    document.body.style.overflow = '';
+  });
+  document.getElementById('chatModalOverlay').addEventListener('click', (e) => {
+    if(e.target.id === 'chatModalOverlay'){
+      document.getElementById('chatModalOverlay').style.display = 'none';
+      document.body.style.overflow = '';
+    }
+  });
+
   async function performSearch(){
     const arrival = searchArrivalDate;
     const departure = searchDepartureDate;
@@ -7656,6 +7891,11 @@
       document.body.classList.remove('showing-hero');
       document.getElementById('suites').style.display = 'none';
       document.getElementById('list-experience').style.display = 'block';
+    } else if(requestedView === 'my-bookings'){
+      document.body.classList.remove('showing-hero');
+      document.getElementById('suites').style.display = 'none';
+      document.getElementById('my-bookings').style.display = 'block';
+      loadMyBookings();
     } else if(requestedView === 'suites'){
       setCategoryFilter('suites');
     } else if(requestedView === 'experiences'){
