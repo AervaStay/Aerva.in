@@ -184,7 +184,7 @@ module.exports = async (req, res) => {
       propertyName, city, area, propertyType, bedrooms, maxGuests, nightlyRate,
       description, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
-      exteriorPhotoUrls, interiorPhotoUrls, photoHashes,
+      exteriorPhotoUrls, interiorPhotoUrls, photoHashes, coverPhotoUrl,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
       securityDeposit,
       hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceType,
@@ -444,9 +444,16 @@ module.exports = async (req, res) => {
     // "Manage Price & Offers," which meant most listings had no cover
     // photo at all for a long stretch after going live — breaking
     // anything that specifically wanted cover photos only (e.g. the
-    // homepage hero slideshow). A host can still override this default
-    // any time from Manage Price & Offers.
+    // homepage hero slideshow). A host can still explicitly choose one
+    // (the List Experience form's photo grid now has a clickable cover
+    // star, same as the property form) — that choice wins whenever it's
+    // actually one of the photos being saved; only falls back to this
+    // auto-default when no explicit choice was made at all.
     const defaultCoverPhotoUrl = safeInteriorUrls[0] || safeExteriorUrls[0] || null;
+    const allSubmittedPhotoUrls = [...safeExteriorUrls, ...safeInteriorUrls];
+    const safeCoverPhotoUrl = (coverPhotoUrl && allSubmittedPhotoUrls.includes(coverPhotoUrl))
+      ? coverPhotoUrl
+      : defaultCoverPhotoUrl;
     // Editing an already-approved experience (the only status besides
     // draft/rejected that reaches this point — see the permission check
     // above) shouldn't demote it back to pending and off the live site
@@ -579,6 +586,7 @@ module.exports = async (req, res) => {
           experience_meeting_point_address = ${safeMeetingPointAddress},
           experience_instructions = ${safeInstructions}, experience_special_instructions = ${safeSpecialInstructions},
           experience_available_from = ${safeAvailableFrom}, experience_available_until = ${safeAvailableUntil},
+          cover_photo_url = ${safeCoverPhotoUrl},
           photo_hashes = ${safePhotoHashesToStore},
           status = ${newStatus},
           rejection_reason = CASE WHEN ${clearRejectionReason} THEN NULL ELSE rejection_reason END
@@ -619,7 +627,7 @@ module.exports = async (req, res) => {
           ${safeMeetingPointLat}, ${safeMeetingPointLng}, ${safeMeetingPointAddress},
           ${safeInstructions}, ${safeSpecialInstructions},
           ${safeAvailableFrom}, ${safeAvailableUntil},
-          ${defaultCoverPhotoUrl},
+          ${safeCoverPhotoUrl},
           ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
