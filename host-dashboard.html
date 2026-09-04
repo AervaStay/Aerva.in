@@ -314,6 +314,7 @@
   <div class="listing-tabs" id="dashboardMainTabs" style="margin-top:8px;">
     <button type="button" class="listing-tab-btn active" data-main-tab="listings" id="mainTabListings">My Listings</button>
     <button type="button" class="listing-tab-btn" data-main-tab="experiences" id="mainTabExperiences">Aerva Experience</button>
+    <button type="button" class="listing-tab-btn" data-main-tab="messages" id="mainTabMessages">Messages</button>
   </div>
 
   <div id="myListingsSection">
@@ -454,9 +455,56 @@
     </div>
   </div>
 
+  <div id="messagesSection" style="display:none;">
+    <h2 class="section-heading" style="margin-top:36px;">Messages</h2>
+
+    <div class="listings-layout">
+      <div>
+        <div id="hostInboxContainer">
+          <p class="loading">Loading conversations…</p>
+        </div>
+
+        <h3 class="section-heading" style="font-size:16px; margin-top:36px;">Quick-Reply Templates</h3>
+        <p style="font-size:12.5px; opacity:0.6; margin-top:-8px; margin-bottom:14px;">Guests see these as tappable questions inside the chat window — write the ones you get asked most often (check-in time, WiFi, parking, etc.).</p>
+        <div id="templateListContainer"></div>
+        <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+          <select id="templateListingSelect" style="flex:1; min-width:160px; padding:9px 10px; border:1px solid #ddd0bc; background:white; font-size:13px;">
+            <option value="">All my listings</option>
+          </select>
+          <input type="text" id="templateBodyInput" placeholder="e.g. Check-in is 2 PM, checkout is 11 AM" style="flex:2; min-width:220px; padding:9px 12px; border:1px solid #ddd0bc; font-size:13px;">
+          <button type="button" class="filter-clear" id="addTemplateBtn">Add Template</button>
+        </div>
+        <p id="templateSaveMsg" style="font-size:12px; margin-top:8px; display:none;"></p>
+      </div>
+      <div class="listing-sidebar">
+        <div class="sidebar-placeholder">Click a conversation on the left to open it.</div>
+      </div>
+    </div>
+  </div>
+
   <h2 class="section-heading">Your Earnings</h2>
   <div id="bookingsContainer">
     <p class="loading">Loading your bookings…</p>
+  </div>
+</div>
+
+<!-- Chat window — same widget shape as index.html's guest-facing one,
+     adapted for the host role. -->
+<div class="listing-sidebar" id="hostChatModalOverlay" style="display:none; position:fixed; inset:0; background:rgba(20,17,14,0.5); z-index:200; align-items:center; justify-content:center;">
+  <div style="background:#f4ebe3; width:min(480px, 92vw); height:min(640px, 88vh); display:flex; flex-direction:column; border:1px solid #ddd0bc; position:relative;">
+    <button type="button" id="hostChatModalClose" aria-label="Close" style="position:absolute; top:10px; right:14px; background:none; border:none; font-size:22px; cursor:pointer; line-height:1;">×</button>
+    <div style="padding:20px 24px 14px; border-bottom:1px solid #ddd0bc; flex:0 0 auto;">
+      <div class="sidebar-section-title" style="margin:0;" id="hostChatModalTitle">Chat</div>
+    </div>
+    <div id="hostChatMessagesContainer" style="flex:1 1 auto; overflow-y:auto; padding:18px 24px; display:flex; flex-direction:column; gap:10px;"></div>
+    <div id="hostChatTemplatesRow" style="padding:0 24px; display:flex; gap:8px; overflow-x:auto; flex:0 0 auto;"></div>
+    <div style="padding:14px 24px 20px; border-top:1px solid #ddd0bc; flex:0 0 auto;">
+      <p id="hostChatWarning" style="display:none; font-size:11.5px; color:#a3402f; margin-bottom:8px;">Phone numbers, emails, and social media handles can't be shared here — Aerva keeps all communication on-platform.</p>
+      <div style="display:flex; gap:8px; align-items:flex-end;">
+        <textarea id="hostChatInput" rows="1" placeholder="Type a message…" style="flex:1; resize:none; background:white; border:1px solid #ddd0bc; padding:10px 12px; font-family:inherit; font-size:14px; max-height:100px;"></textarea>
+        <button type="button" id="hostChatSendBtn" aria-label="Send" style="flex:0 0 auto; width:44px; height:44px; border-radius:50%; background:#8a6c39; border:none; color:white; cursor:pointer;">→</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -764,8 +812,11 @@
     currentMainTab = tab;
     document.getElementById('myListingsSection').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('experiencesSection').style.display = tab === 'experiences' ? 'block' : 'none';
+    document.getElementById('messagesSection').style.display = tab === 'messages' ? 'block' : 'none';
     document.getElementById('mainTabListings').classList.toggle('active', tab === 'listings');
     document.getElementById('mainTabExperiences').classList.toggle('active', tab === 'experiences');
+    document.getElementById('mainTabMessages').classList.toggle('active', tab === 'messages');
+    if(tab === 'messages') loadHostInbox();
   }
 
   document.getElementById('dashboardMainTabs').addEventListener('click', (e) => {
@@ -902,6 +953,230 @@
       }
     }
   }
+
+  // ============================================================
+  // Messages — host inbox, chat window, and quick-reply templates.
+  // Same guest-profile.js modes the guest-facing chat in index.html
+  // uses; sessionToken here IS the host's account (shared login, see
+  // the note near the top of this file).
+  // ============================================================
+  async function loadHostInbox(){
+    const container = document.getElementById('hostInboxContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/guest-profile?mode=hostConversations', {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Failed to load');
+      const conversations = data.conversations || [];
+      if(!conversations.length){
+        container.innerHTML = '<p class="empty">No conversations yet — these open automatically once a guest with a confirmed booking messages you.</p>';
+      } else {
+        container.innerHTML = conversations.map(c => `
+          <div class="listing-card" data-conversation-id="${c.id}" data-listing-name="${c.property_name}" data-guest-email="${c.guest_email}" style="cursor:pointer;">
+            <div class="listing-info">
+              <h3>${c.property_name}</h3>
+              <div class="listing-meta">${c.guest_email}</div>
+              ${c.last_message ? `<p style="font-size:12.5px; opacity:0.7; margin-top:4px;">${c.last_message}</p>` : ''}
+            </div>
+          </div>
+        `).join('');
+        container.querySelectorAll('[data-conversation-id]').forEach(card => {
+          card.addEventListener('click', () => openHostChat(Number(card.dataset.conversationId), card.dataset.listingName, card.dataset.guestEmail));
+        });
+      }
+    } catch(err){
+      container.innerHTML = '<p class="empty" style="color:#a3402f;">Could not load your conversations right now. Please refresh.</p>';
+    }
+    loadTemplateManager();
+    populateTemplateListingSelect();
+  }
+
+  let hostChatCurrentConversationId = null;
+
+  async function openHostChat(conversationId, listingName, guestEmail){
+    hostChatCurrentConversationId = conversationId;
+    document.getElementById('hostChatModalTitle').textContent = `${listingName} — ${guestEmail}`;
+    document.getElementById('hostChatMessagesContainer').innerHTML = '<p class="loading">Loading…</p>';
+    document.getElementById('hostChatModalOverlay').style.display = 'flex';
+
+    // There's no direct "get by conversationId" GET mode — conversation
+    // reads are keyed by orderId (see guest-profile.js), and the inbox
+    // list doesn't carry the orderId along. Re-deriving it via the
+    // conversations table directly would need a new endpoint mode; for
+    // now this reads messages the same way the guest side's initial
+    // fetch populates them — the conversation already exists by the time
+    // it shows up in the inbox, so this just needs its message list.
+    try{
+      const res = await fetch(API_BASE + `/api/guest-profile?mode=hostConversationMessages&conversationId=${conversationId}`, {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Failed to load');
+      renderHostChatMessages(data.messages || []);
+      loadHostChatTemplates(conversationId);
+    } catch(err){
+      document.getElementById('hostChatMessagesContainer').innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not open this conversation.</p>';
+    }
+  }
+
+  function renderHostChatMessages(messages){
+    const container = document.getElementById('hostChatMessagesContainer');
+    if(!messages.length){
+      container.innerHTML = '<p style="font-size:13px; opacity:0.6; text-align:center;">No messages yet.</p>';
+      return;
+    }
+    container.innerHTML = messages.map(m => {
+      const isMine = m.sender_type === 'host';
+      return `
+        <div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;">
+          <div style="background:${isMine ? '#1c1a17' : '#ebdecd'}; color:${isMine ? '#f4ebe3' : '#1c1a17'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${m.display_text}</div>
+          ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
+        </div>
+      `;
+    }).join('');
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function loadHostChatTemplates(conversationId){
+    const row = document.getElementById('hostChatTemplatesRow');
+    try{
+      const res = await fetch(API_BASE + `/api/guest-profile?mode=conversationTemplates&conversationId=${conversationId}`, {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      const data = await res.json();
+      const templates = data.templates || [];
+      row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${t.body}</button>`).join('');
+      row.querySelectorAll('[data-template]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.getElementById('hostChatInput').value = btn.dataset.template;
+          document.getElementById('hostChatInput').focus();
+        });
+      });
+    } catch(err){
+      row.innerHTML = '';
+    }
+  }
+
+  function looksLikeContactInfoHost(text){
+    if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text)) return true;
+    const digitRun = text.match(/(\+?\d[\d\s\-.()]{6,}\d)/);
+    if (digitRun && (digitRun[0].match(/\d/g) || []).length >= 7) return true;
+    if (/\b(instagram|insta|facebook|whatsapp|telegram)\b/i.test(text)) return true;
+    return false;
+  }
+  document.getElementById('hostChatInput').addEventListener('input', function(){
+    document.getElementById('hostChatWarning').style.display = looksLikeContactInfoHost(this.value) ? 'block' : 'none';
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+  });
+
+  async function sendHostChatMessage(){
+    const input = document.getElementById('hostChatInput');
+    const text = input.value.trim();
+    if(!text || !hostChatCurrentConversationId) return;
+    input.disabled = true;
+    try{
+      const res = await fetch(API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ mode: 'send', conversationId: hostChatCurrentConversationId, text })
+      });
+      if(res.ok){
+        input.value = '';
+        document.getElementById('hostChatWarning').style.display = 'none';
+        openHostChat(hostChatCurrentConversationId, document.getElementById('hostChatModalTitle').textContent.split(' — ')[0], document.getElementById('hostChatModalTitle').textContent.split(' — ')[1]);
+      }
+    } catch(err){ /* retryable — message just doesn't appear */ }
+    input.disabled = false;
+    input.focus();
+  }
+  document.getElementById('hostChatSendBtn').addEventListener('click', sendHostChatMessage);
+  document.getElementById('hostChatInput').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendHostChatMessage(); }
+  });
+  document.getElementById('hostChatModalClose').addEventListener('click', () => {
+    document.getElementById('hostChatModalOverlay').style.display = 'none';
+  });
+
+  // ---- Template manager ----
+  let hostAllTemplates = [];
+  async function loadTemplateManager(){
+    const container = document.getElementById('templateListContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/guest-profile?mode=templates', {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      const data = await res.json();
+      hostAllTemplates = data.templates || [];
+      if(!hostAllTemplates.length){
+        container.innerHTML = '<p style="font-size:12.5px; opacity:0.6;">No templates yet — add one below.</p>';
+        return;
+      }
+      container.innerHTML = hostAllTemplates.map(t => {
+        const listing = currentListings.find(l => l.id === t.listing_id);
+        return `
+          <div class="sidebar-list-row">
+            ${t.body}${listing ? ` <span style="opacity:0.5;">(${listing.property_name})</span>` : ' <span style="opacity:0.5;">(all listings)</span>'}
+            <button type="button" class="remove-row-btn" data-template-id="${t.id}">Remove</button>
+          </div>
+        `;
+      }).join('');
+      container.querySelectorAll('[data-template-id]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await fetch(API_BASE + '/api/guest-profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+            body: JSON.stringify({ mode: 'deleteTemplate', templateId: Number(btn.dataset.templateId) })
+          });
+          loadTemplateManager();
+        });
+      });
+    } catch(err){
+      container.innerHTML = '<p style="font-size:12.5px; color:#a3402f;">Could not load templates.</p>';
+    }
+  }
+
+  function populateTemplateListingSelect(){
+    const select = document.getElementById('templateListingSelect');
+    if(!select) return;
+    const approved = currentListings.filter(l => l.status === 'approved');
+    select.innerHTML = '<option value="">All my listings</option>' +
+      approved.map(l => `<option value="${l.id}">${l.property_name}</option>`).join('');
+  }
+
+  document.getElementById('addTemplateBtn').addEventListener('click', async () => {
+    const body = document.getElementById('templateBodyInput').value.trim();
+    const listingId = document.getElementById('templateListingSelect').value;
+    const msgEl = document.getElementById('templateSaveMsg');
+    if(!body){
+      msgEl.textContent = 'Write something first.';
+      msgEl.style.color = '#a3402f';
+      msgEl.style.display = 'block';
+      return;
+    }
+    try{
+      const res = await fetch(API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ mode: 'saveTemplate', listingId: listingId ? Number(listingId) : null, body })
+      });
+      const data = await res.json();
+      if(res.ok){
+        document.getElementById('templateBodyInput').value = '';
+        msgEl.textContent = 'Added.';
+        msgEl.style.color = '#3a7d44';
+        loadTemplateManager();
+      } else {
+        msgEl.textContent = data.error || 'Could not save.';
+        msgEl.style.color = '#a3402f';
+      }
+    } catch(err){
+      msgEl.textContent = 'Could not save. Please try again.';
+      msgEl.style.color = '#a3402f';
+    }
+    msgEl.style.display = 'block';
+  });
 
   // ---- Experience location (without-stay only) — same address search
   // + draggable pin pattern as index.html's listing form, ported here
