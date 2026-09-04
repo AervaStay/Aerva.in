@@ -187,7 +187,7 @@ module.exports = async (req, res) => {
       exteriorPhotoUrls, interiorPhotoUrls, photoHashes, coverPhotoUrl,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
       securityDeposit,
-      hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceType,
+      hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceDurationDays, experienceType,
       latitude, longitude, formattedAddress, pincode,
       experienceArrangesTravel, experienceTravelDetails,
       experienceMeetingPointType, experienceMeetingPointDetails,
@@ -488,6 +488,11 @@ module.exports = async (req, res) => {
     const safeExperienceCategory = isExperience && experienceCategory ? String(experienceCategory).trim().slice(0, 60) : null;
     const safeExperiencePriceUnit = isExperience && (experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : null;
     const safeExperienceDuration = isExperience && experienceDurationHours ? Number(experienceDurationHours) : null;
+    // Defaults to 1 (single-day) whenever not explicitly set — every
+    // existing experience predating this field behaves exactly as before.
+    const safeExperienceDurationDays = isExperience && experienceDurationDays && Number(experienceDurationDays) >= 1
+      ? Math.round(Number(experienceDurationDays))
+      : (isExperience ? 1 : null);
     const safeExperienceType = isExperience && (experienceType === 'with_stay' || experienceType === 'without_stay') ? experienceType : null;
     // An experience has no separate address of its own — it's hosted
     // "at" a property. When there IS a hosting listing, its city carries
@@ -576,7 +581,7 @@ module.exports = async (req, res) => {
           security_deposit = ${safeSecurityDeposit},
           listing_type = ${safeListingType}, hosting_listing_id = ${safeHostingListingId},
           experience_category = ${safeExperienceCategory}, experience_price_unit = ${safeExperiencePriceUnit},
-          experience_duration_hours = ${safeExperienceDuration}, experience_type = ${safeExperienceType},
+          experience_duration_hours = ${safeExperienceDuration}, experience_duration_days = ${safeExperienceDurationDays}, experience_type = ${safeExperienceType},
           latitude = ${safeLatitude}, longitude = ${safeLongitude}, formatted_address = ${safeFormattedAddress},
           pincode = ${safePincode},
           experience_arranges_travel = ${safeArrangesTravel}, experience_travel_details = ${safeTravelDetails},
@@ -603,7 +608,7 @@ module.exports = async (req, res) => {
           commission_rate, exterior_photo_urls, interior_photo_urls,
           pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
           listing_type, hosting_listing_id, experience_category, experience_price_unit,
-          experience_duration_hours, experience_type, latitude, longitude, formatted_address, pincode,
+          experience_duration_hours, experience_duration_days, experience_type, latitude, longitude, formatted_address, pincode,
           experience_arranges_travel, experience_travel_details, experience_meeting_point_type,
           experience_meeting_point_details, experience_start_time, experience_refund_policy,
           experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
@@ -621,7 +626,7 @@ module.exports = async (req, res) => {
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
           ${safePetFriendly}, ${safeMaxPets}, ${JSON.stringify(safePetTypes)}, ${safePetFee}, ${safeSecurityDeposit},
           ${safeListingType}, ${safeHostingListingId}, ${safeExperienceCategory}, ${safeExperiencePriceUnit},
-          ${safeExperienceDuration}, ${safeExperienceType}, ${safeLatitude}, ${safeLongitude}, ${safeFormattedAddress}, ${safePincode},
+          ${safeExperienceDuration}, ${safeExperienceDurationDays}, ${safeExperienceType}, ${safeLatitude}, ${safeLongitude}, ${safeFormattedAddress}, ${safePincode},
           ${safeArrangesTravel}, ${safeTravelDetails}, ${safeMeetingPointType},
           ${safeMeetingPointDetails}, ${safeStartTime}, ${safeRefundPolicy},
           ${safeMeetingPointLat}, ${safeMeetingPointLng}, ${safeMeetingPointAddress},

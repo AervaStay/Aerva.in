@@ -640,7 +640,7 @@ module.exports = async (req, res) => {
              latitude, longitude, formatted_address, pincode,
              exterior_photo_urls, interior_photo_urls, cover_photo_url, created_at,
              listing_type, hosting_listing_id, experience_category, experience_price_unit,
-             experience_duration_hours, experience_type, experience_arranges_travel,
+             experience_duration_hours, experience_duration_days, experience_type, experience_arranges_travel,
              experience_travel_details, experience_meeting_point_type,
              experience_meeting_point_details, experience_start_time, experience_refund_policy,
              experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,

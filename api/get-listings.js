@@ -236,7 +236,7 @@ module.exports = async (req, res) => {
       const experiences = await sql`
         SELECT
           e.id, e.property_name, e.description, e.experience_category,
-          e.nightly_rate AS price, e.experience_price_unit, e.experience_duration_hours, e.experience_type,
+          e.nightly_rate AS price, e.experience_price_unit, e.experience_duration_hours, e.experience_duration_days, e.experience_type,
           e.exterior_photo_urls, e.interior_photo_urls, e.cover_photo_url,
           e.host_name, e.created_at,
           e.hosting_listing_id, e.city, e.latitude, e.longitude, e.formatted_address,
@@ -287,7 +287,7 @@ module.exports = async (req, res) => {
       }
       const experiencesFor = await sql`
         SELECT id, property_name, description, experience_category, experience_type,
-               nightly_rate AS price, experience_price_unit, experience_duration_hours,
+               nightly_rate AS price, experience_price_unit, experience_duration_hours, experience_duration_days,
                exterior_photo_urls, interior_photo_urls, cover_photo_url,
                city, latitude, longitude, formatted_address,
                experience_arranges_travel, experience_travel_details,

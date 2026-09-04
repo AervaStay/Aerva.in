@@ -193,11 +193,11 @@ module.exports = async (req, res) => {
         }
       }
 
-      // Experience bookings — much simpler than stays: no discount, no
-      // extra-guest charge, no deposit, one "night" standing in for the
-      // single day of the experience (arrival = departure = that date),
-      // so every existing query reading arrival/departure/nights keeps
-      // working without special-casing order_type = 'experience' rows.
+      // Experience bookings — arrival/departure and nights now reflect
+      // the real span of a multi-day experience (a 3-day trek, etc.),
+      // computed by create-order.js from the host's set duration, not
+      // hardcoded to a single day anymore — every existing query reading
+      // arrival/departure/nights still works unchanged either way.
       for (const ex of experiences) {
         const guestServiceFee = Number(ex.guestServiceFee) || 0;
         const gstShare = grandSubtotalAll > 0 ? Math.round((ex.subtotal / grandSubtotalAll) * gstPool) : 0;
@@ -220,7 +220,7 @@ module.exports = async (req, res) => {
             charge_currency, charge_amount, coupon_id, coupon_discount,
             razorpay_order_id, razorpay_payment_id, status, order_type
           ) VALUES (
-            ${ex.suite}, ${ex.listingId || null}, ${guestId}, ${email}, ${ex.date}, ${ex.date}, ${ex.guests}, 1,
+            ${ex.suite}, ${ex.listingId || null}, ${guestId}, ${email}, ${ex.date}, ${ex.endDate || ex.date}, ${ex.guests}, ${ex.durationDays || 1},
             ${ex.subtotal}, 0, ${gstShare}, ${guestServiceFee}, ${total},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             0, 'none', null,

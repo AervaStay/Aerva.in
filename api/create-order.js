@@ -85,6 +85,14 @@ function calculateNights(arrival, departure) {
   return Math.round((departureDate - arrivalDate) / (1000 * 60 * 60 * 24));
 }
 
+// 'YYYY-MM-DD' + N days -> 'YYYY-MM-DD', for computing a multi-day
+// experience's end date from its start date and the host's set duration.
+function addDaysToDateStr(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 // Every night of a stay as 'YYYY-MM-DD' strings: arrival up to (not
 // including) departure — the same convention calculateNights already
 // implies (departure is checkout day, not a night stayed).
@@ -457,7 +465,7 @@ module.exports = async (req, res) => {
 
       const rows = await sql`
         SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate,
-               experience_available_from, experience_available_until
+               experience_available_from, experience_available_until, experience_duration_days
         FROM listings
         WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
       `;
@@ -468,15 +476,40 @@ module.exports = async (req, res) => {
       if (!experience.nightly_rate) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} doesn't have a price set yet.` });
       }
+
+      // Multi-day experiences (a 3-day trek, etc.) — the guest picks a
+      // single start date; the end date (exclusive, same convention as
+      // a stay's own arrival/departure) is computed from the host's set
+      // duration, never trusted from the request itself.
+      const durationDays = experience.experience_duration_days && experience.experience_duration_days >= 1
+        ? experience.experience_duration_days
+        : 1;
+      const endDateExclusive = addDaysToDateStr(ex.date, durationDays);
+
       // Optional host-set season/date-range this experience actually
       // runs in — the guest's date picker already constrains this via
       // min/max, but that's client-side only, so it's re-checked here
-      // for real before any money moves.
+      // for real before any money moves. Checked against the END of a
+      // multi-day booking too, not just its start.
       if (experience.experience_available_from && ex.date < experience.experience_available_from) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available until ${experience.experience_available_from}.` });
       }
-      if (experience.experience_available_until && ex.date > experience.experience_available_until) {
+      if (experience.experience_available_until && addDaysToDateStr(ex.date, durationDays - 1) > experience.experience_available_until) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available after ${experience.experience_available_until}.` });
+      }
+
+      // Host-blocked dates, checked across the FULL span of a multi-day
+      // booking — same overlap rule stays already use (see the stay
+      // loop above), not just an exact match on the start date.
+      const experienceBlockedRows = await sql`
+        SELECT 1 FROM listing_blocked_dates
+        WHERE listing_id = ${ex.listingId}
+          AND start_date < ${endDateExclusive}::date
+          AND end_date > ${ex.date}::date
+        LIMIT 1
+      `;
+      if (experienceBlockedRows[0]) {
+        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available for those dates.` });
       }
 
       const guests = Number(ex.guests) || 1;
@@ -497,6 +530,8 @@ module.exports = async (req, res) => {
         listingId: experience.id,
         suite: experience.property_name,
         date: ex.date,
+        endDate: endDateExclusive,
+        durationDays,
         guests,
         subtotal,
         commissionRate,
