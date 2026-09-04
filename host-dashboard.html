@@ -311,6 +311,11 @@
 
   <div id="verificationBanner" style="display:none;"></div>
 
+  <div class="listing-tabs" id="dashboardMainTabs" style="margin-top:8px;">
+    <button type="button" class="listing-tab-btn active" data-main-tab="listings" id="mainTabListings">My Listings</button>
+    <button type="button" class="listing-tab-btn" data-main-tab="experiences" id="mainTabExperiences">Aerva Experience</button>
+  </div>
+
   <div id="myListingsSection">
     <a href="index.html?view=list-property" class="add-listing-link">List a New Property</a>
 
@@ -399,7 +404,7 @@
     </div>
   </div>
 
-  <div id="experiencesSection">
+  <div id="experiencesSection" style="display:none;">
     <h2 class="section-heading" style="margin-top:36px;">Aerva Experience</h2>
     <a href="index.html?view=list-experience" class="add-listing-link">List an Experience</a>
     <div class="listing-tabs" id="experienceTabs">
@@ -715,20 +720,50 @@
   let currentExperiences = [];
   let currentListingsTab = 'active';
   let currentExperiencesTab = 'active';
+  let currentMainTab = 'listings';
+
+  function switchMainTab(tab){
+    currentMainTab = tab;
+    document.getElementById('myListingsSection').style.display = tab === 'listings' ? 'block' : 'none';
+    document.getElementById('experiencesSection').style.display = tab === 'experiences' ? 'block' : 'none';
+    document.getElementById('mainTabListings').classList.toggle('active', tab === 'listings');
+    document.getElementById('mainTabExperiences').classList.toggle('active', tab === 'experiences');
+  }
+
+  document.getElementById('dashboardMainTabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.listing-tab-btn');
+    if(!btn) return;
+    switchMainTab(btn.dataset.mainTab);
+  });
+
+  // The account dropdown's "My Experience" link (see index.html) points
+  // here as host-dashboard.html#experiencesSection — that fragment now
+  // just decides which tab opens by default, rather than scrolling to an
+  // anchor the way it did before there were separate tabs to switch between.
+  if(window.location.hash === '#experiencesSection'){
+    switchMainTab('experiences');
+  }
 
   function renderListings(listings){
     // Split once, right at the source — everywhere else in this file
     // (tabs, counts, the Active/Inactive cards, the hosting-property
     // dropdown) only ever deals with stays now; experiences get their
-    // own separate "Aerva Experience" section below instead of being
-    // mixed into the same list.
+    // own separate "Aerva Experience" tab below instead of being mixed
+    // into the same list or the same scroll.
     currentListings = listings.filter(l => !l.listing_type || l.listing_type === 'stay');
     currentExperiences = listings.filter(l => l.listing_type === 'experience');
 
-    // A host with zero properties has nothing for this whole section to
-    // show — not even an empty state worth taking up space for, since
-    // "List a New Property" up top already covers that entry point.
-    document.getElementById('myListingsSection').style.display = currentListings.length ? 'block' : 'none';
+    // A host with zero properties has nothing for the "My Listings" tab
+    // itself to show — hide the tab entirely rather than leave a button
+    // that just opens an empty page ("List a New Property" up top already
+    // covers that entry point). If that tab happened to be the active one,
+    // switch to Aerva Experience instead of leaving nothing visible at all.
+    const hasListings = currentListings.length > 0;
+    const mainTabListingsBtn = document.getElementById('mainTabListings');
+    if(mainTabListingsBtn) mainTabListingsBtn.style.display = hasListings ? 'inline-block' : 'none';
+    if(!hasListings && currentMainTab === 'listings'){
+      switchMainTab('experiences');
+    }
 
     updateListingTabCounts();
     renderListingsForCurrentTab();
