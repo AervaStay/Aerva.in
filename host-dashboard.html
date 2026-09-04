@@ -411,8 +411,46 @@
       <button type="button" class="listing-tab-btn active" data-tab="active" id="expTabActiveBtn">Active</button>
       <button type="button" class="listing-tab-btn" data-tab="inactive" id="expTabInactiveBtn">Inactive</button>
     </div>
-    <div id="experienceCardsContainer">
-      <p class="loading">Loading your experiences…</p>
+    <div class="listings-layout">
+      <div>
+        <div id="experienceCardsContainer">
+          <p class="loading">Loading your experiences…</p>
+        </div>
+      </div>
+      <div class="listing-sidebar" id="expCalendarSidebar">
+        <div class="sidebar-placeholder" id="expCalendarPlaceholder">Click one of your live experiences to block off dates it isn't running.</div>
+        <div id="expCalendarContent" style="display:none;">
+          <div class="sidebar-heading" id="expCalendarExpName"></div>
+          <div class="sidebar-sub">Name, description, and everything else still lives on the full <a href="#" id="expCalendarEditLink" style="color:#8a6c39;">Edit Experience</a> page.</div>
+
+          <div class="sidebar-section-title">Block Dates</div>
+          <div class="cal-wrap">
+            <div class="cal-header">
+              <button type="button" class="cal-nav-btn" id="expCalPrevBtn">&larr;</button>
+              <div class="cal-month-label" id="expCalMonthLabel"></div>
+              <button type="button" class="cal-nav-btn" id="expCalNextBtn">&rarr;</button>
+            </div>
+            <div class="cal-grid" id="expCalGrid"></div>
+            <div class="cal-legend">
+              <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
+              <span><i style="background:#f3d9c4;"></i> Blocked</span>
+            </div>
+            <div class="cal-confirm" id="expCalConfirm">
+              <p id="expCalConfirmLabel"></p>
+              <input type="text" id="expCalConfirmReason" placeholder="Reason (optional)">
+              <div class="cal-confirm-actions">
+                <button type="button" class="cal-confirm-block-btn" id="expCalConfirmBlockBtn">Block</button>
+                <button type="button" class="cal-confirm-cancel-btn" id="expCalConfirmCancelBtn">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked date to remove it.</p>
+          <div id="expBlockedList"></div>
+
+          <button type="button" class="sidebar-save-btn" id="expCalendarSaveBtn">Save Changes</button>
+          <p class="sidebar-save-msg" id="expCalendarSaveMsg"></p>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -806,13 +844,21 @@
         ? `<p style="font-size:12.5px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${exp.rejection_reason}</p>`
         : '';
       const stayNote = exp.experience_type === 'with_stay' ? 'Includes a stay' : 'Experience only';
+      // Approved experiences open the blocked-dates calendar on click,
+      // same as an approved stay listing does — draft/rejected ones have
+      // nothing to block dates on yet, so they still go straight to the
+      // edit form instead.
+      const calendarHintHtml = exp.status === 'approved'
+        ? `<p class="calendar-hint">📅 Click to block dates it isn't running</p>`
+        : `<p class="calendar-hint calendar-hint-muted">Calendar unlocks once approved</p>`;
       return `
-        <div class="listing-card" data-href="${editUrl}" style="cursor:pointer;">
+        <div class="listing-card" data-experience-id="${exp.id}" data-status="${exp.status}" data-href="${editUrl}" style="cursor:pointer;">
           ${thumbHtml}
           <div class="listing-info">
             <h3>${exp.property_name || '(Untitled)'}</h3>
             <div class="listing-meta">${stayNote} · ₹${exp.nightly_rate || '—'}${exp.experience_price_unit === 'per_person' ? '/person' : ''} ${statusBadgeHtml(exp.status)}</div>
             ${rejectionNoteHtml}
+            ${calendarHintHtml}
           </div>
           <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
             <a class="manage-link" href="${editUrl}">Edit Experience</a>
@@ -823,6 +869,10 @@
     container.querySelectorAll('.listing-card').forEach(card => {
       card.addEventListener('click', (e) => {
         if(e.target.closest('a.manage-link')) return;
+        if(card.dataset.status === 'approved'){
+          selectExperienceForCalendar(Number(card.dataset.experienceId));
+          return;
+        }
         window.location.href = card.dataset.href;
       });
     });
@@ -2142,6 +2192,198 @@
       });
     });
   }
+
+  // ============================================================
+  // Experience blocked-dates calendar — same interaction model, same
+  // shared date-string helpers, same update-listing-pricing.js endpoint
+  // as the stay listing sidebar above (see the "sb" block's own header
+  // comment) — that endpoint isn't actually stay-specific despite its
+  // name; it just needs a valid nightlyRate and city to save, which
+  // every approved experience already has (nightly_rate is its price,
+  // city is either its own or inherited from its hosting property — see
+  // submit-listing.js), so no backend changes were needed at all here.
+  // Scoped under an "exp" prefix so nothing collides with the "sb" ones.
+  // ============================================================
+  let expCalListingId = null;
+  let expCalToken = null;
+  let expCalNightlyRate = null, expCalCity = null, expCalArea = null;
+  let expCalBlockedDateRows = [];
+  let expCalMonth = new Date(); expCalMonth.setDate(1); expCalMonth.setHours(0,0,0,0);
+  let expCalSelStart = null, expCalSelEnd = null, expCalDragging = false;
+
+  async function selectExperienceForCalendar(experienceId){
+    const exp = currentExperiences.find(e => e.id === experienceId);
+    if(!exp || !exp.manageLink) return;
+
+    document.querySelectorAll('#experienceCardsContainer .listing-card').forEach(c => c.classList.toggle('selected', Number(c.dataset.experienceId) === experienceId));
+    document.getElementById('expCalendarPlaceholder').style.display = 'none';
+    document.getElementById('expCalendarContent').style.display = 'block';
+    document.getElementById('expCalendarExpName').textContent = exp.property_name;
+    document.getElementById('expCalendarEditLink').href = `index.html?view=list-experience&edit=${exp.id}`;
+    document.getElementById('expCalendarSaveMsg').style.display = 'none';
+
+    const tokenMatch = exp.manageLink.match(/[?&]token=([^&]+)/);
+    expCalToken = tokenMatch ? tokenMatch[1] : null;
+    expCalListingId = experienceId;
+    if(!expCalToken) return;
+
+    try{
+      const res = await fetch(API_BASE + '/api/update-listing-pricing?token=' + encodeURIComponent(expCalToken));
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not load');
+      const l = data.listing;
+
+      // Carried forward unchanged on save — this panel only edits
+      // blocked dates, but the save endpoint expects the full pricing
+      // shape, so these ride along untouched (same pattern as the sb*
+      // block above).
+      expCalNightlyRate = l.nightly_rate;
+      expCalCity = l.city;
+      expCalArea = l.area;
+
+      expCalBlockedDateRows = (data.blockedDates || []).map(b => ({
+        id: b.id, startDate: b.start_date ? b.start_date.slice(0, 10) : '',
+        endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || ''
+      }));
+      expCalRenderBlockedList();
+      expCalRenderCalendar();
+    } catch(err){
+      document.getElementById('expCalendarContent').innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not load this experience\'s calendar. Please refresh and try again.</p>';
+    }
+  }
+
+  function expCalBlockedRowFor(dateStr){
+    return expCalBlockedDateRows.find(b => b.startDate && b.endDate && sbInRange(dateStr, b.startDate, b.endDate));
+  }
+  function expCalRenderCalendar(){
+    const grid = document.getElementById('expCalGrid');
+    document.getElementById('expCalMonthLabel').textContent = expCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    const year = expCalMonth.getFullYear(), month = expCalMonth.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const startWeekday = new Date(year, month, 1).getDay();
+    let html = ['S','M','T','W','T','F','S'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
+    for(let i = 0; i < startWeekday; i++) html += `<div class="cal-day cal-day--empty"></div>`;
+    const today = sbTodayStr();
+    for(let day = 1; day <= daysInMonth; day++){
+      const dateStr = sbToDateStr(new Date(year, month, day));
+      const isPast = dateStr < today;
+      const blockedRow = expCalBlockedRowFor(dateStr);
+      let selecting = false;
+      if(expCalSelStart && expCalSelEnd){
+        const selMin = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
+        const selMax = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
+        selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
+      }
+      let cls = 'cal-day';
+      if(isPast) cls += ' cal-day--past cal-day--disabled';
+      else if(selecting) cls += ' cal-day--selected';
+      else if(blockedRow) cls += ' cal-day--blocked';
+      html += `<div class="${cls}" data-date="${dateStr}" title="${blockedRow && blockedRow.reason ? blockedRow.reason : ''}">${day}</div>`;
+    }
+    grid.innerHTML = html;
+    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past)').forEach(cell => {
+      cell.addEventListener('mousedown', () => expCalOnMouseDown(cell.dataset.date));
+      cell.addEventListener('mouseenter', () => expCalOnMouseEnter(cell.dataset.date));
+      cell.addEventListener('mouseup', () => expCalOnMouseUp(cell.dataset.date));
+      cell.addEventListener('click', () => expCalOnClick(cell.dataset.date));
+    });
+  }
+  function expCalOnMouseDown(dateStr){
+    if(expCalBlockedRowFor(dateStr)) return;
+    expCalDragging = true; expCalSelStart = dateStr; expCalSelEnd = dateStr;
+    expCalRenderCalendar();
+  }
+  function expCalOnMouseEnter(dateStr){
+    if(!expCalDragging || !expCalSelStart) return;
+    expCalSelEnd = dateStr; expCalRenderCalendar();
+  }
+  function expCalOnMouseUp(dateStr){
+    if(!expCalDragging) return;
+    expCalDragging = false; expCalSelEnd = dateStr;
+    if(expCalSelStart) expCalShowConfirm();
+  }
+  function expCalOnClick(dateStr){
+    const existing = expCalBlockedRowFor(dateStr);
+    if(existing){
+      if(window.confirm(`Remove this block (${existing.startDate} to ${existing.endDate}${existing.reason ? ', ' + existing.reason : ''})?`)){
+        expCalBlockedDateRows = expCalBlockedDateRows.filter(b => b !== existing);
+        expCalRenderBlockedList(); expCalRenderCalendar();
+      }
+    }
+  }
+  function expCalShowConfirm(){
+    const start = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
+    const endInclusive = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
+    document.getElementById('expCalConfirmLabel').textContent = start === endInclusive ? `Block ${start}?` : `Block ${start} to ${endInclusive}?`;
+    document.getElementById('expCalConfirmReason').value = '';
+    document.getElementById('expCalConfirm').style.display = 'block';
+  }
+  function expCalHideConfirm(){
+    expCalSelStart = null; expCalSelEnd = null; expCalDragging = false;
+    document.getElementById('expCalConfirm').style.display = 'none';
+    expCalRenderCalendar();
+  }
+  document.getElementById('expCalConfirmBlockBtn').addEventListener('click', () => {
+    const start = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
+    const endInclusive = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
+    expCalBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('expCalConfirmReason').value.trim() });
+    expCalRenderBlockedList(); expCalHideConfirm();
+  });
+  document.getElementById('expCalConfirmCancelBtn').addEventListener('click', expCalHideConfirm);
+  document.getElementById('expCalPrevBtn').addEventListener('click', () => { expCalMonth.setMonth(expCalMonth.getMonth() - 1); expCalRenderCalendar(); });
+  document.getElementById('expCalNextBtn').addEventListener('click', () => { expCalMonth.setMonth(expCalMonth.getMonth() + 1); expCalRenderCalendar(); });
+  document.addEventListener('mouseup', () => { if(expCalDragging){ expCalDragging = false; if(expCalSelStart && expCalSelEnd) expCalShowConfirm(); } });
+
+  function expCalRenderBlockedList(){
+    const list = document.getElementById('expBlockedList');
+    if(!expCalBlockedDateRows.length){ list.innerHTML = ''; return; }
+    list.innerHTML = expCalBlockedDateRows.map((b, idx) => `
+      <div class="sidebar-list-row">
+        ${b.startDate} to ${b.endDate}${b.reason ? ' — ' + b.reason : ''}
+        <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        expCalBlockedDateRows.splice(Number(btn.dataset.idx), 1);
+        expCalRenderBlockedList(); expCalRenderCalendar();
+      });
+    });
+  }
+
+  document.getElementById('expCalendarSaveBtn').addEventListener('click', async () => {
+    if(!expCalToken) return;
+    const btn = document.getElementById('expCalendarSaveBtn');
+    const msgEl = document.getElementById('expCalendarSaveMsg');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    msgEl.style.display = 'none';
+    try{
+      const res = await fetch(API_BASE + '/api/update-listing-pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: expCalToken,
+          nightlyRate: expCalNightlyRate,
+          city: expCalCity,
+          area: expCalArea,
+          blockedDates: expCalBlockedDateRows
+        })
+      });
+      const data = await res.json();
+      if(res.ok){
+        msgEl.textContent = data.warning || 'Saved.';
+        msgEl.style.color = data.warning ? '#a3402f' : '#3a7d44';
+      } else {
+        msgEl.textContent = data.error || 'Could not save. Please try again.';
+        msgEl.style.color = '#a3402f';
+      }
+    } catch(err){
+      msgEl.textContent = 'Could not save. Please try again.';
+      msgEl.style.color = '#a3402f';
+    }
+    msgEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Save Changes';
+  });
 
   // ---- Promotions calendar ----
   let sbPromotionRows = [];
