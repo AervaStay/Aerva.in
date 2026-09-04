@@ -2844,15 +2844,18 @@
     return null;
   }
 
-  // Single best match for free-text typed without picking a suggestion —
-  // replaces the old geocodePlace().
+  // Single best match for free-text typed without picking a suggestion.
+  // Returns a flat {lat, lng} — used where only plain coordinates are
+  // needed (performSearch's free-text fallback), not the full Google-
+  // shaped place object freeSearchSuggestions/nominatimToGoogleShape
+  // produce for the autocomplete dropdowns.
   async function freeForwardGeocode(query){
     if(!query) return null;
     try{
       const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&addressdetails=1&countrycodes=in&limit=1`);
       if(res.ok){
         const data = await res.json();
-        if(Array.isArray(data) && data.length) return nominatimToGoogleShape(data[0]);
+        if(Array.isArray(data) && data.length) return { lat: Number(data[0].lat), lng: Number(data[0].lon) };
       }
     } catch(err){ /* fall through to Google below */ }
 
@@ -3188,61 +3191,135 @@
     confirmEl.style.display = 'block';
   }
 
-  window.initGoogleMaps = function(){
-    const searchInput = document.getElementById('listLocationSearch');
-    if(!searchInput || !window.google || !window.google.maps || !window.google.maps.places) return;
+  // Shared free-autocomplete dropdown, reused by all three host-form
+  // location fields (property, experience, meeting point) — same
+  // Nominatim-first/Google-fallback pattern as the guest search bar,
+  // just simpler (single result, no "matching listings" merge needed).
+  // Replaces the old per-field google.maps.places.Autocomplete widgets.
+  function wireFreeAddressAutocomplete(inputId, dropdownId, onSelect){
+    const inputEl = document.getElementById(inputId);
+    const dropdownEl = document.getElementById(dropdownId);
+    if(!inputEl || !dropdownEl) return;
 
-    const autocomplete = new google.maps.places.Autocomplete(searchInput, {
-      fields: ['geometry', 'formatted_address', 'address_components'],
-      types: ['geocode', 'establishment']
-    });
+    let autocompleteService = null;
+    let placesService = null;
+    let debounceTimer = null;
+    let latestQueryId = 0;
 
-    autocomplete.addListener('place_changed', function(){
-      applyLocationResult(autocomplete.getPlace(), { skipSearchBoxUpdate: true });
-    });
+    function closeDropdown(){
+      dropdownEl.innerHTML = '';
+      dropdownEl.style.display = 'none';
+    }
 
-    // Same Places Autocomplete, wired to the List Experience page's own
-    // location field — separate DOM elements from the property form
-    // above, so this is a second, independent Autocomplete instance
-    // rather than reusing the one above.
-    const expSearchInput = document.getElementById('expLocationSearch');
-    if(expSearchInput){
-      const expAutocomplete = new google.maps.places.Autocomplete(expSearchInput, {
-        fields: ['geometry', 'formatted_address', 'address_components'],
-        types: ['geocode', 'establishment']
-      });
-      expAutocomplete.addListener('place_changed', function(){
-        applyExpLocationResult(expAutocomplete.getPlace());
+    function renderFreeResults(places){
+      if(!places.length){ closeDropdown(); return; }
+      dropdownEl.innerHTML = places.map((p, i) => `
+        <button type="button" class="place-suggest-item" data-index="${i}">${p.formatted_address}</button>
+      `).join('');
+      dropdownEl.style.display = 'block';
+      dropdownEl.querySelectorAll('.place-suggest-item').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          onSelect(places[Number(btn.dataset.index)]);
+          closeDropdown();
+        });
       });
     }
 
-    // A third, independent instance for the meeting point — deliberately
-    // separate from the experience's own location above, since a
-    // common-point meeting spot can be a genuinely different place (e.g.
-    // a trailhead, not the experience's own listed address).
-    const expMeetingPointSearchInput = document.getElementById('expMeetingPointSearch');
-    if(expMeetingPointSearchInput){
-      const expMeetingPointAutocomplete = new google.maps.places.Autocomplete(expMeetingPointSearchInput, {
-        fields: ['geometry', 'formatted_address'],
-        types: ['geocode', 'establishment']
-      });
-      expMeetingPointAutocomplete.addListener('place_changed', function(){
-        applyExpMeetingPointResult(expMeetingPointAutocomplete.getPlace());
+    function renderGooglePredictions(predictions){
+      if(!predictions.length){ closeDropdown(); return; }
+      dropdownEl.innerHTML = predictions.map(p => `
+        <button type="button" class="place-suggest-item" data-place-id="${p.place_id}">${p.description}</button>
+      `).join('');
+      dropdownEl.style.display = 'block';
+      dropdownEl.querySelectorAll('.place-suggest-item').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if(!placesService) return;
+          placesService.getDetails({ placeId: btn.dataset.placeId, fields: ['geometry', 'formatted_address', 'address_components'] }, (result, status) => {
+            if(status === 'OK' && result.geometry && result.geometry.location){
+              onSelect(result);
+            }
+          });
+          closeDropdown();
+        });
       });
     }
 
-    // Search bar's "Place" field — real-world address suggestions as the
-    // guest types, not just cities that already have listings.
-    //
-    // Uses a CUSTOM dropdown rather than Google's native Autocomplete
-    // widget — the native one renders its own suggestion list that can't
-    // have extra items (like matching listings) injected into it. Instead
-    // this calls Google's headless prediction API directly and combines
-    // the results with a simple client-side match against current
-    // listings, rendering both together.
-    const searchPlaceInput = document.getElementById('searchCity');
-    const placeSuggestionsEl = document.getElementById('placeSuggestions');
-    if(searchPlaceInput && placeSuggestionsEl){
+    inputEl.addEventListener('input', function(){
+      const query = this.value.trim();
+      clearTimeout(debounceTimer);
+      if(!query){ closeDropdown(); return; }
+
+      // Debounced ~350ms — gentle on Nominatim's ~1 request/second usage
+      // policy.
+      debounceTimer = setTimeout(async () => {
+        const thisQueryId = ++latestQueryId;
+        const freeResults = await freeSearchSuggestions(query);
+        if(thisQueryId !== latestQueryId) return; // a newer keystroke superseded this
+
+        if(freeResults !== null){
+          // Nominatim answered (even with zero results) — done, no need
+          // to also spend a Google request on the same query.
+          renderFreeResults(freeResults);
+          return;
+        }
+
+        // Nominatim itself failed — only now does this fall back to Google.
+        if(!window.google || !window.google.maps || !window.google.maps.places){
+          closeDropdown();
+          return;
+        }
+        if(!autocompleteService) autocompleteService = new google.maps.places.AutocompleteService();
+        if(!placesService) placesService = new google.maps.places.PlacesService(document.createElement('div'));
+        autocompleteService.getPlacePredictions({ input: query, types: ['geocode', 'establishment'], componentRestrictions: { country: 'in' } }, (predictions, status) => {
+          if(thisQueryId !== latestQueryId) return;
+          renderGooglePredictions((status === 'OK' && predictions) ? predictions.slice(0, 6) : []);
+        });
+      }, 350);
+    });
+
+    document.addEventListener('click', function(e){
+      if(!dropdownEl.contains(e.target) && e.target !== inputEl){
+        setTimeout(closeDropdown, 150);
+      }
+    });
+  }
+
+  // Wired immediately (not waiting on Google's async callback below) —
+  // Leaflet and Nominatim don't depend on Google being loaded at all, and
+  // the free-first design means these three fields work correctly even
+  // if Google Maps never finishes loading (or is blocked) at all.
+  wireFreeAddressAutocomplete('listLocationSearch', 'listLocationSuggestions', (place) => {
+    applyLocationResult(place, { skipSearchBoxUpdate: true });
+  });
+  wireFreeAddressAutocomplete('expLocationSearch', 'expLocationSuggestions', (place) => {
+    applyExpLocationResult(place);
+  });
+  wireFreeAddressAutocomplete('expMeetingPointSearch', 'expMeetingPointSuggestions', (place) => {
+    applyExpMeetingPointResult(place);
+  });
+
+  // Kept only as a compatibility stub — the Google Maps script tag below
+  // still references this as its callback= target, and would error if it
+  // didn't exist. Everything it used to do now happens above,
+  // unconditionally, the moment this script runs.
+  window.initGoogleMaps = function(){};
+
+  (function wireSearchBarAutocomplete(){
+      // Search bar's "Place" field — real-world address suggestions as
+      // the guest types, not just cities that already have listings.
+      //
+      // Uses a CUSTOM dropdown rather than Google's native Autocomplete
+      // widget — the native one renders its own suggestion list that
+      // can't have extra items (like matching listings) injected into
+      // it. Instead this calls the free/Google prediction sources
+      // directly and combines the results with a simple client-side
+      // match against current listings, rendering both together.
+      const searchPlaceInput = document.getElementById('searchCity');
+      const placeSuggestionsEl = document.getElementById('placeSuggestions');
+      if(!searchPlaceInput || !placeSuggestionsEl) return;
+
       // Google's AutocompleteService/PlacesService are only reached now if
       // Nominatim itself fails (see freeSearchSuggestions) — kept ready as
       // the fallback path, not the primary one.
@@ -3399,8 +3476,7 @@
           setTimeout(closeSuggestions, 150);
         }
       });
-    }
-  };
+  })();
 
   // Which single photo (by id) is the host's chosen cover/lead photo —
   // shared across both managers since the cover can come from either
@@ -5087,34 +5163,6 @@
   // every time — cheap either way, but tidier.
   let placesGeocoder = null;
 
-  // Converts whatever the guest typed into the Place field into
-  // coordinates, so search can be "within 200km of this place" instead of
-  // an exact text match against a listing's city field — the latter finds
-  // nothing if a guest searches "Jibhi" but the only listing nearby is
-  // tagged "Pune", even though it's a perfectly reasonable result.
-  function geocodePlace(placeText){
-    return new Promise((resolve) => {
-      if(!placeText || !window.google || !window.google.maps){
-        resolve(null);
-        return;
-      }
-      if(!placesGeocoder) placesGeocoder = new google.maps.Geocoder();
-      // Restricted to India — Aerva only has listings/experiences here,
-      // and an unrestricted geocode of a short or lesser-known place
-      // name (e.g. "Jibhi", a small Himachal Pradesh town) can otherwise
-      // resolve ambiguously to an unrelated place with a similar or
-      // partially-matching name anywhere in the world.
-      placesGeocoder.geocode({ address: placeText, componentRestrictions: { country: 'IN' } }, (results, status) => {
-        if(status === 'OK' && results && results[0]){
-          const loc = results[0].geometry.location;
-          resolve({ lat: loc.lat(), lng: loc.lng() });
-        } else {
-          resolve(null);
-        }
-      });
-    });
-  }
-
   async function performSearch(){
     const arrival = searchArrivalDate;
     const departure = searchDepartureDate;
@@ -5142,12 +5190,13 @@
     // falls back to no location filter at all, rather than blocking search.
     // If the guest picked a real suggestion, we already have exact
     // coordinates — no need to geocode the same text again. Only fall
-    // back to geocoding when they typed freely without selecting one.
+    // back to geocoding when they typed freely without selecting one —
+    // freeForwardGeocode tries Nominatim first, Google only if that fails.
     const selectedLat = document.getElementById('searchPlaceLat').value;
     const selectedLng = document.getElementById('searchPlaceLng').value;
     const geocoded = (selectedLat && selectedLng)
       ? { lat: Number(selectedLat), lng: Number(selectedLng) }
-      : (city ? await geocodePlace(city) : null);
+      : (city ? await freeForwardGeocode(city) : null);
 
     if(city) saveRecentSearch(city, geocoded ? geocoded.lat : '', geocoded ? geocoded.lng : '');
 
