@@ -110,6 +110,17 @@
   body.showing-hero header:not(.scrolled) .nav-toggle::before,
   body.showing-hero header:not(.scrolled) .nav-toggle::after{ background:#fdf8f2; }
   body.showing-hero header:not(.scrolled) .nav-avatar-ring{ border-color:#f0dcc3; }
+  /* .nav-account-menu (My Listings/Account Settings/etc.) is nested
+     inside .nav-links in the markup, so the ".nav-links a" rule above
+     was also matching its links — even though that dropdown always sits
+     on its own opaque cream background and needs the normal dark text
+     regardless of whether the header behind its trigger button is
+     transparent. Explicitly reset back to the normal dark color here,
+     with enough specificity (adds .nav-account-menu) to win over the
+     broader rule above. */
+  body.showing-hero header:not(.scrolled) .nav-account-menu a{
+    color:var(--ink); text-shadow:none;
+  }
   nav.wrap{display:flex; align-items:center; justify-content:space-between;}
   .wordmark{
     font-family:'Bodoni Moda', serif; font-size:21px; letter-spacing:0.32em;
