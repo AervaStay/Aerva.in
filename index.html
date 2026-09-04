@@ -74,6 +74,34 @@
     border-bottom:1px solid var(--line-dark);
     box-shadow:0 1px 0 rgba(0,0,0,0.03);
   }
+  /* While transparent (unscrolled, floating over the hero photo), the
+     logo/nav text was still using the same dark --ink color it uses
+     everywhere else on the site — nearly invisible against a bright
+     photo. Switched to light/cream specifically for this state; reverts
+     to the normal dark colors the instant .scrolled applies (the opaque
+     cream background under it makes dark text legible again by then). */
+  /* Scoped to body.showing-hero — only present on the default browsing
+     view (see initSite/switchMainTab-equivalent JS), where the header is
+     actually floating over the hero photo. Removed on every other
+     full-page view (List Property, a listing/experience detail page,
+     etc.) so this light text never ends up sitting on those pages' plain
+     cream background instead, where it would be just as unreadable as
+     the original dark-on-photo problem this is fixing. */
+  body.showing-hero header:not(.scrolled) .wordmark,
+  body.showing-hero header:not(.scrolled) .nav-wordmark,
+  body.showing-hero header:not(.scrolled) .nav-links a,
+  body.showing-hero header:not(.scrolled) .category-item,
+  body.showing-hero header:not(.scrolled) .currency-trigger,
+  body.showing-hero header:not(.scrolled) #guestLoginLink,
+  body.showing-hero header:not(.scrolled) .nav-account-name{
+    color:#fdf8f2; text-shadow:0 1px 6px rgba(0,0,0,0.35);
+  }
+  body.showing-hero header:not(.scrolled) .category-item svg{ stroke:#f0dcc3; }
+  body.showing-hero header:not(.scrolled) .currency-trigger{ border-color:rgba(253,248,242,0.5); }
+  body.showing-hero header:not(.scrolled) .nav-toggle span,
+  body.showing-hero header:not(.scrolled) .nav-toggle::before,
+  body.showing-hero header:not(.scrolled) .nav-toggle::after{ background:#fdf8f2; }
+  body.showing-hero header:not(.scrolled) .nav-avatar-ring{ border-color:#f0dcc3; }
   nav.wrap{display:flex; align-items:center; justify-content:space-between;}
   .wordmark{
     font-family:'Bodoni Moda', serif; font-size:21px; letter-spacing:0.32em;
@@ -167,6 +195,11 @@
      instead of a properly-sized card. auto-fill keeps those tracks as
      empty implicit columns instead, so a lone card stays card-sized. */
   .suite-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:36px;}
+  .browse-row-head{margin:48px 0 22px;}
+  .browse-row-head h3{
+    font-family:'Bodoni Moda', serif; font-weight:400; font-size:24px; color:var(--ink);
+  }
+  #recentlyViewedRow .suite-grid, #nearbyRow .suite-grid{margin-bottom:8px;}
   .suite-card{
     background:var(--cream); display:flex; flex-direction:column; border:2px solid #ffffff;
     border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(28,26,23,0.08);
@@ -498,9 +531,19 @@
   /* Darkens the photos enough that the (fully opaque) search/filter boxes
      on top stay perfectly legible — the slideshow shows through only in
      the padding around those boxes, never behind their own text. */
+  /* Darkens the photos enough that the (fully opaque) search/filter boxes
+     on top stay perfectly legible — the slideshow shows through only in
+     the padding around those boxes, never behind their own text. Darker
+     at the very top too, specifically so the logo/nav stay readable
+     against a bright sky or light-colored photo while the header itself
+     is still transparent (before .scrolled kicks in) — a flat top-to-
+     bottom fade wasn't dark enough right behind the header specifically. */
   .filter-bg-overlay{
     position:absolute; inset:0; z-index:1;
-    background:linear-gradient(180deg, rgba(20,17,14,0.22) 0%, rgba(20,17,14,0.15) 40%, rgba(20,17,14,0.62) 100%);
+    background:linear-gradient(180deg,
+      rgba(20,17,14,0.58) 0%, rgba(20,17,14,0.34) 14%,
+      rgba(20,17,14,0.2) 32%, rgba(20,17,14,0.28) 55%,
+      rgba(20,17,14,0.66) 100%);
   }
   .filter-bg-wrap .wrap{position:relative; z-index:2;}
   .hero-eyebrow-line{
@@ -910,7 +953,7 @@
   .required-mark{color:#a3402f;}
 </style>
 </head>
-<body>
+<body class="showing-hero">
 
 <header id="siteHeader">
   <nav class="wrap">
@@ -1155,6 +1198,21 @@
       <p class="search-status" id="searchStatus" style="display:none;"></p>
     </div>
   </div>
+
+  <div class="wrap" id="recentlyViewedRow" style="display:none;">
+    <div class="browse-row-head">
+      <h3>Recently Viewed</h3>
+    </div>
+    <div class="suite-grid" id="recentlyViewedContainer"></div>
+  </div>
+
+  <div class="wrap" id="nearbyRow" style="display:none;">
+    <div class="browse-row-head">
+      <h3>Near You</h3>
+    </div>
+    <div class="suite-grid" id="nearbyContainer"></div>
+  </div>
+
   <div class="wrap">
     <div class="suite-grid reveal" id="suitesContainer">
       <div class="suites-loading">Loading homes…</div>
@@ -4640,8 +4698,109 @@
     return card;
   }
 
+  // ---- Recently Viewed & Near You rows ----
+  // Two extra rows between the hero and the main grid. Both respect
+  // whichever tab is active (All/Suites/Aerva Experience) the same way
+  // the main grid does, and never show the same card twice between the
+  // two of them — Recently Viewed takes priority; Near You excludes
+  // anything already shown there.
+  const RECENTLY_VIEWED_KEY = 'aerva_recently_viewed';
+  const RECENTLY_VIEWED_MAX = 20;
+
+  function trackRecentlyViewed(type, id){
+    let list = [];
+    try{ list = JSON.parse(localStorage.getItem(RECENTLY_VIEWED_KEY)) || []; } catch(e){ list = []; }
+    list = list.filter(entry => !(entry.type === type && String(entry.id) === String(id)));
+    list.unshift({ type, id, viewedAt: Date.now() });
+    localStorage.setItem(RECENTLY_VIEWED_KEY, JSON.stringify(list.slice(0, RECENTLY_VIEWED_MAX)));
+  }
+
+  function getRecentlyViewedEntries(){
+    let list = [];
+    try{ list = JSON.parse(localStorage.getItem(RECENTLY_VIEWED_KEY)) || []; } catch(e){ list = []; }
+    // 'suites'/'experiences' narrow to one type; 'all' keeps both, in the
+    // same most-recent-first order they were actually viewed in.
+    return list.filter(entry => {
+      if(currentCategoryFilter === 'suites') return entry.type === 'stay';
+      if(currentCategoryFilter === 'experiences') return entry.type === 'experience';
+      return true;
+    });
+  }
+
+  function renderRecentlyViewedRow(){
+    const row = document.getElementById('recentlyViewedRow');
+    const container = document.getElementById('recentlyViewedContainer');
+    if(!row || !container) return;
+    const entries = getRecentlyViewedEntries();
+
+    const cards = [];
+    entries.forEach(entry => {
+      // A previously-viewed listing/experience may since have been
+      // removed, unapproved, or blocked — skip it silently rather than
+      // showing a broken or stale card.
+      if(entry.type === 'stay' && listingsById[entry.id]) cards.push({ type: 'stay', data: listingsById[entry.id] });
+      else if(entry.type === 'experience' && experiencesById[entry.id]) cards.push({ type: 'experience', data: experiencesById[entry.id] });
+    });
+
+    if(cards.length === 0){
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = 'block';
+    container.innerHTML = '';
+    cards.forEach((item, i) => {
+      const card = item.type === 'stay' ? buildSuiteCard(item.data, i) : buildExperienceCard(item.data, i);
+      container.appendChild(card);
+    });
+  }
+
+  function renderNearbyRow(){
+    const row = document.getElementById('nearbyRow');
+    const container = document.getElementById('nearbyContainer');
+    if(!row || !container) return;
+
+    // Only shows once a location is actually known — from the manual
+    // "Near Me" button or the auto-prompt-on-login (see
+    // promptLocationOnceForGuest). Never asks for location on its own.
+    if(!guestLocation){
+      row.style.display = 'none';
+      return;
+    }
+
+    const shownIds = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
+    const withDistance = (list, type) => list
+      .filter(item => item.latitude && item.longitude)
+      .filter(item => !shownIds.has(type + ':' + item.id))
+      .map(item => ({ type, data: item, km: haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(item.latitude), Number(item.longitude)) }))
+      .filter(item => item.km <= 200);
+
+    let candidates = [];
+    if(currentCategoryFilter !== 'experiences') candidates = candidates.concat(withDistance(approvedListings, 'stay'));
+    if(currentCategoryFilter !== 'suites') candidates = candidates.concat(withDistance(approvedExperiences, 'experience'));
+    candidates.sort((a, b) => a.km - b.km);
+    candidates = candidates.slice(0, 8);
+
+    if(candidates.length === 0){
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = 'block';
+    container.innerHTML = '';
+    candidates.forEach((item, i) => {
+      const card = item.type === 'stay' ? buildSuiteCard(item.data, i) : buildExperienceCard(item.data, i);
+      container.appendChild(card);
+    });
+  }
+
   function applyFiltersAndRender(){
     const container = document.getElementById('suitesContainer');
+
+    // Called first, unconditionally — the main grid below has an early
+    // return for its own empty states, but these two rows are
+    // independent of that and should always stay in sync with whatever
+    // just changed (search, filter switch, currency, etc).
+    renderRecentlyViewedRow();
+    renderNearbyRow();
 
     // Price/pet filters are stay-specific concepts (nightly rate, pet
     // policy) — they only ever narrow the suites portion of the list.
@@ -5225,6 +5384,7 @@
   function openListingDetail(listingId){
     const listing = listingsById[listingId];
     if(!listing) return;
+    trackRecentlyViewed('stay', listingId);
     document.getElementById('listingModalBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingModalOverlay').style.display = 'flex';
     document.body.style.overflow = 'hidden';
@@ -6419,6 +6579,7 @@
   function openExperienceDetail(experienceId){
     const exp = experiencesById[experienceId];
     if(!exp) return;
+    trackRecentlyViewed('experience', experienceId);
     document.getElementById('listingModalBody').innerHTML = buildExperienceDetailHtml(exp);
     document.getElementById('listingModalOverlay').style.display = 'flex';
     document.body.style.overflow = 'hidden';
@@ -6449,6 +6610,8 @@
   }
 
   function showExperienceDetailPage(exp){
+    trackRecentlyViewed('experience', exp.id);
+    document.body.classList.remove('showing-hero');
     document.getElementById('suites').style.display = 'none';
     const expSection = document.getElementById('experiences');
     if(expSection) expSection.style.display = 'none';
@@ -6482,6 +6645,8 @@
   }
 
   function showFullListingPage(listing){
+    trackRecentlyViewed('stay', listing.id);
+    document.body.classList.remove('showing-hero');
     document.getElementById('suites').style.display = 'none';
     document.getElementById('listingFullViewBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingFullView').style.display = 'block';
@@ -6528,7 +6693,7 @@
     document.getElementById('reserve').scrollIntoView({ behavior: 'smooth' });
   }
 
-  document.getElementById('suitesContainer').addEventListener('click', (e) => {
+  function handleCardGridClick(e){
     // "View on map" opens Google Maps in a new tab — let it behave
     // completely normally, not trigger the card's own click action.
     if(e.target.closest('a[target="_blank"]')) return;
@@ -6537,9 +6702,10 @@
     if(!card) return;
     e.preventDefault();
 
-    // Suite and experience cards now share this same combined grid (see
-    // applyFiltersAndRender) — each card carries its own type-specific
-    // data attribute, so a click routes to the right detail view.
+    // Suite and experience cards share the same card markup everywhere
+    // (main grid, Recently Viewed, Near You) — each card carries its own
+    // type-specific data attribute, so a click routes to the right
+    // detail view regardless of which row it was clicked from.
     if(card.dataset.experienceId){
       openExperienceDetail(card.dataset.experienceId);
       return;
@@ -6552,7 +6718,10 @@
     // live searchArrivalDate/searchDepartureDate/guestCounts variables
     // directly when there's no ?listing= URL to read them from instead.
     openListingDetail(card.dataset.listingId);
-  });
+  }
+  document.getElementById('suitesContainer').addEventListener('click', handleCardGridClick);
+  document.getElementById('recentlyViewedContainer').addEventListener('click', handleCardGridClick);
+  document.getElementById('nearbyContainer').addEventListener('click', handleCardGridClick);
 
   document.getElementById('searchBtn').addEventListener('click', performSearch);
 
@@ -7027,8 +7196,11 @@
     if(!slidesEl) return;
 
     // The admin's chosen photos win if any are set (see admin.html and
-    // get-pending-listings.js's POST mode); otherwise fall back to every
-    // approved listing's own cover photo, same as before.
+    // get-pending-listings.js's POST mode); otherwise falls back to
+    // approved listings' own cover photos ONLY — never a random exterior
+    // or interior shot as a substitute. A listing with no cover photo set
+    // is simply left out of the slideshow rather than represented by
+    // some other photo it never chose to lead with.
     let photos = [];
     try {
       const res = await fetch(SUITES_API_BASE + '/api/get-listings?siteBackground=1');
@@ -7041,13 +7213,7 @@
     }
 
     if(photos.length === 0){
-      photos = approvedListings
-        .map(l => {
-          const exterior = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
-          const interior = Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : [];
-          return l.cover_photo_url || exterior[0] || interior[0] || null;
-        })
-        .filter(Boolean);
+      photos = approvedListings.map(l => l.cover_photo_url).filter(Boolean);
     }
 
     if(photos.length === 0) return;
@@ -7143,9 +7309,11 @@
     // rather than swapping to a different section.
     const requestedView = new URLSearchParams(window.location.search).get('view');
     if(requestedView === 'list-property'){
+      document.body.classList.remove('showing-hero');
       document.getElementById('suites').style.display = 'none';
       document.getElementById('add-listing').style.display = 'block';
     } else if(requestedView === 'list-experience'){
+      document.body.classList.remove('showing-hero');
       document.getElementById('suites').style.display = 'none';
       document.getElementById('list-experience').style.display = 'block';
     } else if(requestedView === 'suites'){
