@@ -181,6 +181,25 @@ module.exports = async (req, res) => {
         return res.status(200).json({ conversations });
       }
 
+      // Host inbox reads messages by conversationId directly, rather than
+      // orderId the way the guest side's initial "open a chat" call does
+      // (mode=conversation) — the inbox list doesn't carry an orderId
+      // along, only the conversation's own id.
+      if (mode === 'hostConversationMessages') {
+        const conversationId = Number(req.query.conversationId);
+        if (!conversationId) return res.status(400).json({ error: 'Missing conversation.' });
+        const convRows = await sql`SELECT id, host_id FROM conversations WHERE id = ${conversationId}`;
+        const conv = convRows[0];
+        if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
+        if (conv.host_id !== guestId) return res.status(403).json({ error: 'Not your conversation.' });
+
+        const messages = await sql`
+          SELECT id, sender_type, display_text, was_redacted, created_at
+          FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
+        `;
+        return res.status(200).json({ messages });
+      }
+
       if (mode === 'templates') {
         const templates = await sql`
           SELECT id, listing_id, body, sort_order FROM message_templates
