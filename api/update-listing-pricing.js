@@ -78,7 +78,7 @@ module.exports = async (req, res) => {
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
-               experience_price_unit
+               experience_price_unit, commission_rate
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
