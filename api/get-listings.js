@@ -242,7 +242,12 @@ module.exports = async (req, res) => {
       // actual booking time in create-order.js instead).
       const expArrivalRaw = typeof req.query.arrival === 'string' ? req.query.arrival.trim() : '';
       const expDepartureRaw = typeof req.query.departure === 'string' ? req.query.departure.trim() : '';
-      const expDatesFilter = expArrivalRaw && expDepartureRaw;
+      // Must be a real boolean, not just a truthy value — this gets sent
+      // straight into a SQL NOT(...) below, and `&&` on two strings
+      // returns the second string itself, not true/false. Sending a raw
+      // date string where Postgres expects a boolean is a type error on
+      // every single request, which is exactly what was happening here.
+      const expDatesFilter = !!(expArrivalRaw && expDepartureRaw);
 
       const experiences = await sql`
         SELECT
