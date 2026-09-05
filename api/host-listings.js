@@ -678,9 +678,11 @@ module.exports = async (req, res) => {
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
-             o.status, o.created_at, o.pet_types
+             o.status, o.created_at, o.pet_types,
+             o.guest_email, g.name AS guest_name
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
+      LEFT JOIN guests g ON g.id = o.guest_id
       WHERE l.host_id = ${guest.host_id}
       ORDER BY o.created_at DESC
       LIMIT 100
