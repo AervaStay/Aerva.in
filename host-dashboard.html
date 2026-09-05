@@ -104,8 +104,19 @@
   .verify-rejection-note{font-size:12.5px; color:#a3402f; margin-bottom:8px;}
 
   /* ---------- Listings two-column layout + right-side sidebar ---------- */
-  .listings-layout{display:grid; grid-template-columns:1fr 400px; gap:24px; align-items:start;}
+  .listings-layout{display:grid; grid-template-columns:1fr 680px; gap:24px; align-items:start;}
+  @media (max-width: 1180px){ .listings-layout{grid-template-columns:1fr 400px;} }
   @media (max-width: 880px){ .listings-layout{grid-template-columns:1fr;} }
+  .sidebar-inner-layout{display:grid; grid-template-columns:1fr 240px; gap:20px; align-items:start;}
+  @media (max-width: 1180px){ .sidebar-inner-layout{grid-template-columns:1fr;} }
+  .price-summary-box{
+    background:#faf7f2; border:1px solid #ddd0bc; padding:16px; position:sticky; top:20px;
+  }
+  .price-summary-row{display:flex; justify-content:space-between; font-size:12.5px; padding:6px 0; border-bottom:1px solid #e6dcc8;}
+  .price-summary-row:last-child{border-bottom:none;}
+  .price-summary-row.total{font-weight:600; font-size:14px; padding-top:10px; margin-top:4px; border-top:1px solid #ddd0bc; border-bottom:none;}
+  .price-summary-row .label{opacity:0.7;}
+  .price-summary-promo-note{font-size:11px; color:#3a7d44; margin-top:10px; padding-top:10px; border-top:1px dashed #ddd0bc;}
   .listing-card.selected{border-color:#8a6c39; box-shadow:0 0 0 1px #8a6c39;}
   /* Only an approved card opens the sidebar on click — its own subtle
      hover cue (border tint) signals that, so a host isn't guessing why
@@ -340,6 +351,9 @@
           <div class="sidebar-heading" id="sidebarListingName"></div>
           <div class="sidebar-sub">Photos and description still live on the full <a href="#" id="sidebarManageLink" style="color:#8a6c39;">Manage</a> page — price, dates, promotions, and amenities are all right here.</div>
 
+          <div class="sidebar-inner-layout">
+            <div>
+
         <div class="sidebar-section-title" style="margin-top:0;">Price</div>
         <label style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7f6c; display:block; margin-bottom:6px;">Nightly Rate (₹)</label>
         <input type="number" id="sbNightlyRateInput" min="1" placeholder="e.g. 5000" style="width:100%; box-sizing:border-box; padding:9px 11px; font-size:14px; border:1px solid #ddd0bc; margin-bottom:16px;">
@@ -408,6 +422,20 @@
 
         <button type="button" class="sidebar-save-btn" id="sidebarSaveBtn">Save Changes</button>
         <p class="sidebar-save-msg" id="sidebarSaveMsg"></p>
+            </div>
+            <div class="price-summary-box">
+              <div class="sidebar-section-title" style="margin-top:0;">Your Payout</div>
+              <div class="price-summary-row"><span class="label">Nightly Rate</span><span id="sbSummaryRate">₹0</span></div>
+              <div class="price-summary-row"><span class="label" id="sbSummaryCommissionLabel">Commission</span><span id="sbSummaryCommission">− ₹0</span></div>
+              <div class="price-summary-row total"><span class="label">Per Night</span><span id="sbSummaryPayout">₹0</span></div>
+              <p style="font-size:10.5px; opacity:0.6; margin-top:10px;">Before any active promotion discount is applied to a guest's stay.</p>
+              <div id="sbSummaryPromoPreview" style="display:none;">
+                <div class="price-summary-promo-note">
+                  <div class="price-summary-row" style="border:none; padding:2px 0;"><span class="label">With this promotion</span><span id="sbSummaryPromoPayout"></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Experience sidebar: blocked dates only — no promotions/
@@ -418,6 +446,9 @@
         <div id="expCalendarContent" style="display:none;">
           <div class="sidebar-heading" id="expCalendarExpName"></div>
           <div class="sidebar-sub">Name, description, and everything else still lives on the full <a href="#" id="expCalendarEditLink" style="color:#8a6c39;">Manage</a> page — price, dates, and promotions are all right here.</div>
+
+          <div class="sidebar-inner-layout">
+            <div>
 
           <div class="sidebar-section-title" style="margin-top:0;">Price</div>
           <div style="display:flex; gap:8px; margin-bottom:16px;">
@@ -491,6 +522,20 @@
 
           <button type="button" class="sidebar-save-btn" id="expCalendarSaveBtn">Save Changes</button>
           <p class="sidebar-save-msg" id="expCalendarSaveMsg"></p>
+            </div>
+            <div class="price-summary-box">
+              <div class="sidebar-section-title" style="margin-top:0;">Your Payout</div>
+              <div class="price-summary-row"><span class="label" id="expSummaryPriceLabel">Price</span><span id="expSummaryRate">₹0</span></div>
+              <div class="price-summary-row"><span class="label" id="expSummaryCommissionLabel">Commission</span><span id="expSummaryCommission">− ₹0</span></div>
+              <div class="price-summary-row total"><span class="label">Payout</span><span id="expSummaryPayout">₹0</span></div>
+              <p style="font-size:10.5px; opacity:0.6; margin-top:10px;">Before any active promotion discount is applied to a guest's booking.</p>
+              <div id="expSummaryPromoPreview" style="display:none;">
+                <div class="price-summary-promo-note">
+                  <div class="price-summary-row" style="border:none; padding:2px 0;"><span class="label">With this promotion</span><span id="expSummaryPromoPayout"></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -2256,6 +2301,43 @@
   let sbListingId = null;
   let sbToken = null;
   let sbNightlyRate = null, sbCity = null, sbArea = null;
+  let sbCommissionRate = 15;
+
+  // Live "what will I actually get" preview — recalculates on every
+  // keystroke in the price field, and again whenever a new promotion is
+  // being composed in the confirm popup, so a host never has to do this
+  // math themselves or wait for a save to find out.
+  function sbUpdatePriceSummary(){
+    const rate = Number(document.getElementById('sbNightlyRateInput').value) || 0;
+    const commissionAmount = Math.round(rate * (sbCommissionRate / 100));
+    const payout = rate - commissionAmount;
+    document.getElementById('sbSummaryRate').textContent = '₹' + rate.toLocaleString('en-IN');
+    document.getElementById('sbSummaryCommissionLabel').textContent = `Commission (${sbCommissionRate}%)`;
+    document.getElementById('sbSummaryCommission').textContent = '− ₹' + commissionAmount.toLocaleString('en-IN');
+    document.getElementById('sbSummaryPayout').textContent = '₹' + payout.toLocaleString('en-IN');
+  }
+  document.getElementById('sbNightlyRateInput').addEventListener('input', sbUpdatePriceSummary);
+
+  // Live preview while composing a new promotion — shows what the
+  // payout would actually be for a night booked during it, updating as
+  // the host types the discount amount, before they've even saved it.
+  function sbUpdatePromoPreview(){
+    const previewEl = document.getElementById('sbSummaryPromoPreview');
+    const rate = Number(document.getElementById('sbNightlyRateInput').value) || 0;
+    const discountType = document.getElementById('sbPromoConfirmType').value;
+    const discountValue = Number(document.getElementById('sbPromoConfirmValue').value) || 0;
+    if(!rate || !discountValue){ previewEl.style.display = 'none'; return; }
+    const discountedRate = discountType === 'flat'
+      ? Math.max(0, rate - discountValue)
+      : Math.max(0, rate - Math.round(rate * (discountValue / 100)));
+    const discountedPayout = discountedRate - Math.round(discountedRate * (sbCommissionRate / 100));
+    document.getElementById('sbSummaryPromoPayout').textContent = '₹' + discountedPayout.toLocaleString('en-IN') + '/night';
+    previewEl.style.display = 'block';
+  }
+  document.getElementById('sbPromoConfirmType').addEventListener('input', sbUpdatePromoPreview);
+  document.getElementById('sbPromoConfirmValue').addEventListener('input', sbUpdatePromoPreview);
+  document.getElementById('sbPromoConfirmType').addEventListener('change', sbUpdatePromoPreview);
+
   let sbDiscountType = null, sbDiscountValue = null, sbDiscountMinNights = null, sbDiscountDescription = null, sbSecurityDeposit = null;
 
   function sbToDateStr(d){
@@ -2302,6 +2384,8 @@
       // none of which this sidebar exposes any editing for.
       sbNightlyRate = l.nightly_rate;
       document.getElementById('sbNightlyRateInput').value = l.nightly_rate || '';
+      sbCommissionRate = l.commission_rate || 15;
+      sbUpdatePriceSummary();
       sbCity = l.city;
       sbArea = l.area;
       sbDiscountType = l.discount_type;
@@ -2468,6 +2552,40 @@
   let expCalListingId = null;
   let expCalToken = null;
   let expCalNightlyRate = null, expCalCity = null, expCalArea = null;
+  let expCalCommissionRate = 15;
+  let expCalPriceUnit = 'per_person';
+
+  function expUpdatePriceSummary(){
+    const rate = Number(document.getElementById('expPriceInput').value) || 0;
+    const priceUnit = document.getElementById('expPriceUnitInput').value;
+    const commissionAmount = Math.round(rate * (expCalCommissionRate / 100));
+    const payout = rate - commissionAmount;
+    document.getElementById('expSummaryPriceLabel').textContent = priceUnit === 'per_person' ? 'Price (per person)' : 'Price (flat)';
+    document.getElementById('expSummaryRate').textContent = '₹' + rate.toLocaleString('en-IN');
+    document.getElementById('expSummaryCommissionLabel').textContent = `Commission (${expCalCommissionRate}%)`;
+    document.getElementById('expSummaryCommission').textContent = '− ₹' + commissionAmount.toLocaleString('en-IN');
+    document.getElementById('expSummaryPayout').textContent = '₹' + payout.toLocaleString('en-IN');
+  }
+  document.getElementById('expPriceInput').addEventListener('input', expUpdatePriceSummary);
+  document.getElementById('expPriceUnitInput').addEventListener('change', expUpdatePriceSummary);
+
+  function expUpdatePromoPreview(){
+    const previewEl = document.getElementById('expSummaryPromoPreview');
+    const rate = Number(document.getElementById('expPriceInput').value) || 0;
+    const discountType = document.getElementById('expPromoConfirmType').value;
+    const discountValue = Number(document.getElementById('expPromoConfirmValue').value) || 0;
+    if(!rate || !discountValue){ previewEl.style.display = 'none'; return; }
+    const discountedRate = discountType === 'flat'
+      ? Math.max(0, rate - discountValue)
+      : Math.max(0, rate - Math.round(rate * (discountValue / 100)));
+    const discountedPayout = discountedRate - Math.round(discountedRate * (expCalCommissionRate / 100));
+    document.getElementById('expSummaryPromoPayout').textContent = '₹' + discountedPayout.toLocaleString('en-IN');
+    previewEl.style.display = 'block';
+  }
+  document.getElementById('expPromoConfirmType').addEventListener('input', expUpdatePromoPreview);
+  document.getElementById('expPromoConfirmValue').addEventListener('input', expUpdatePromoPreview);
+  document.getElementById('expPromoConfirmType').addEventListener('change', expUpdatePromoPreview);
+
   let expCalBlockedDateRows = [];
   let expPromotionRows = [];
   let expPromoCalMonth = new Date(); expPromoCalMonth.setDate(1); expPromoCalMonth.setHours(0,0,0,0);
@@ -2505,6 +2623,8 @@
       expCalNightlyRate = l.nightly_rate;
       document.getElementById('expPriceInput').value = l.nightly_rate || '';
       document.getElementById('expPriceUnitInput').value = l.experience_price_unit || 'per_person';
+      expCalCommissionRate = l.commission_rate || 15;
+      expUpdatePriceSummary();
       expCalCity = l.city;
       expCalArea = l.area;
 
@@ -2700,10 +2820,12 @@
     document.getElementById('expPromoConfirmType').value = 'percentage';
     document.getElementById('expPromoConfirmValue').value = '';
     document.getElementById('expPromoCalConfirm').style.display = 'block';
+    document.getElementById('expSummaryPromoPreview').style.display = 'none';
   }
   function expHidePromoConfirm(){
     expPromoSelStart = null; expPromoSelEnd = null; expPromoDragging = false;
     document.getElementById('expPromoCalConfirm').style.display = 'none';
+    document.getElementById('expSummaryPromoPreview').style.display = 'none';
     expRenderPromoCalendar();
   }
   document.getElementById('expPromoConfirmAddBtn').addEventListener('click', () => {
@@ -2872,10 +2994,12 @@
     document.getElementById('sbPromoConfirmValue').value = '';
     document.getElementById('sbPromoConfirmMinNights').value = '';
     document.getElementById('sbPromoCalConfirm').style.display = 'block';
+    document.getElementById('sbSummaryPromoPreview').style.display = 'none';
   }
   function sbHidePromoConfirm(){
     sbPromoSelStart = null; sbPromoSelEnd = null; sbPromoDragging = false;
     document.getElementById('sbPromoCalConfirm').style.display = 'none';
+    document.getElementById('sbSummaryPromoPreview').style.display = 'none';
     sbRenderPromoCalendar();
   }
   document.getElementById('sbPromoConfirmAddBtn').addEventListener('click', () => {
