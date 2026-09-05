@@ -30,6 +30,7 @@
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
+const PDFDocument = require('pdfkit');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -42,6 +43,120 @@ const sql = neon(process.env.DATABASE_URL);
 // placed before this split existed (where stay.baseCommission /
 // amenityCommission won't be present in the stored notes).
 const FALLBACK_COMMISSION_RATE = 15;
+
+// Builds a simple, single-page-per-item PDF summarizing everything in
+// this booking — generated fresh from the SAME trusted stays/experiences
+// data pulled from Razorpay's order notes above, never from anything the
+// browser sends, same reasoning as the DB inserts below. Returns a
+// Buffer (pdfkit streams to memory here, never touches disk — this is a
+// serverless function with no persistent filesystem to write to).
+function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, chargeCurrency){
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const fmt = (n) => `Rs. ${Number(n).toLocaleString('en-IN')}`;
+    const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+    doc.fontSize(22).font('Helvetica-Bold').text('Aerva', { align: 'center' });
+    doc.fontSize(11).font('Helvetica').fillColor('#8a6c39').text('Booking Confirmation', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(9).fillColor('#888').text(`Reference: ${razorpayOrderId}`, { align: 'center' });
+    doc.moveDown(2);
+    doc.fillColor('#000');
+
+    let grandTotal = 0;
+
+    stays.forEach((s) => {
+      doc.fontSize(15).font('Helvetica-Bold').text(s.suite);
+      doc.moveDown(0.3);
+      doc.fontSize(10).font('Helvetica').fillColor('#333');
+      doc.text(`Check-in: ${fmtDate(s.arrival)}`);
+      doc.text(`Check-out: ${fmtDate(s.departure)}`);
+      doc.text(`${s.nights} night${s.nights === 1 ? '' : 's'} · ${s.guests} guest${s.guests === 1 ? '' : 's'}`);
+      doc.font('Helvetica-Bold').text(`Amount: ${fmt(s.subtotal)}`);
+      doc.fillColor('#000');
+      doc.moveDown(1.2);
+      grandTotal += Number(s.subtotal) || 0;
+    });
+
+    experiences.forEach((ex) => {
+      doc.fontSize(15).font('Helvetica-Bold').text(ex.suite);
+      doc.moveDown(0.3);
+      doc.fontSize(10).font('Helvetica').fillColor('#333');
+      const isMultiDay = ex.durationDays && ex.durationDays > 1 && ex.endDate;
+      if(isMultiDay){
+        doc.text(`${fmtDate(ex.date)} to ${fmtDate(new Date(new Date(ex.endDate).getTime() - 86400000))}`);
+        doc.text(`${ex.durationDays} days · ${ex.guests} guest${ex.guests === 1 ? '' : 's'}`);
+      } else {
+        doc.text(`Date: ${fmtDate(ex.date)}`);
+        doc.text(`${ex.guests} guest${ex.guests === 1 ? '' : 's'}`);
+      }
+      doc.font('Helvetica-Bold').text(`Amount: ${fmt(ex.subtotal)}`);
+      doc.fillColor('#000');
+      doc.moveDown(1.2);
+      grandTotal += Number(ex.subtotal) || 0;
+    });
+
+    doc.moveDown(0.5);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#ddd0bc').stroke();
+    doc.moveDown(0.8);
+    doc.fontSize(13).font('Helvetica-Bold').text(`Total: ${fmt(grandTotal)}${chargeCurrency && chargeCurrency !== 'INR' ? ' (charged in ' + chargeCurrency + ')' : ''}`, { align: 'right' });
+
+    doc.moveDown(3);
+    doc.fontSize(9).font('Helvetica').fillColor('#888').text('Thank you for booking with Aerva. For any questions, contact hello@aerva.in.', { align: 'center' });
+
+    doc.end();
+  });
+}
+
+// Same Resend pattern used everywhere else on the site (see guest-auth.js)
+// — attachments are just base64-encoded content plus a filename, no
+// special handling needed beyond what fetch/JSON already do.
+async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer){
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set — booking confirmation email not sent.');
+    return;
+  }
+  const itemNames = [...stays.map(s => s.suite), ...experiences.map(e => e.suite)];
+  const itemsListHtml = itemNames.map(name => `<li>${name}</li>`).join('');
+
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">Your booking is confirmed</h2>
+      <p>Thank you for booking with Aerva:</p>
+      <ul>${itemsListHtml}</ul>
+      <p>Your full booking details — dates, amounts, and everything else — are attached as a PDF to this email.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Reply to this email or write to hello@aerva.in.</p>
+    </div>
+  `;
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'Aerva <hello@aerva.in>',
+      to: email,
+      subject: 'Your Aerva Booking Confirmation',
+      html,
+      attachments: [
+        { filename: 'aerva-booking-confirmation.pdf', content: pdfBuffer.toString('base64') }
+      ]
+    })
+  });
+
+  if (!res.ok) {
+    let detail;
+    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
+    console.error('Booking confirmation email failed:', res.status, detail);
+  }
+}
 
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
@@ -239,6 +354,21 @@ module.exports = async (req, res) => {
       // (the payment itself is safely recorded in Razorpay's own dashboard).
       // Don't fail the guest's confirmation over a logging problem.
       console.error('Could not write order(s) to database:', dbErr);
+    }
+
+    // PDF + email confirmation — deliberately its own try/catch, separate
+    // from the DB insert above. A guest's booking is already confirmed
+    // and paid for by this point; a failed email should never turn that
+    // into an error response. Skipped entirely if there's no email on
+    // file at all (shouldn't happen in practice — create-order.js
+    // requires one — but this is defensive either way).
+    if (email) {
+      try {
+        const pdfBuffer = await generateBookingConfirmationPdf(stays, experiences, razorpay_order_id, chargeCurrency);
+        await sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer);
+      } catch (emailErr) {
+        console.error('Could not send booking confirmation email:', emailErr);
+      }
     }
 
     return res.status(200).json({ verified: true });
