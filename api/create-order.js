@@ -465,7 +465,8 @@ module.exports = async (req, res) => {
 
       const rows = await sql`
         SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate,
-               experience_available_from, experience_available_until, experience_duration_days
+               experience_available_from, experience_available_until, experience_duration_days,
+               discount_type, discount_value, discount_min_nights
         FROM listings
         WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
       `;
@@ -518,7 +519,23 @@ module.exports = async (req, res) => {
       }
 
       const price = Number(experience.nightly_rate);
-      const subtotal = experience.experience_price_unit === 'per_person' ? price * guests : price;
+      const subtotalBeforeDiscount = experience.experience_price_unit === 'per_person' ? price * guests : price;
+
+      // Same discount logic stays use — the listing's own standing
+      // discount and/or any date-scoped promotions (see
+      // update-listing-pricing.js) — previously never applied to
+      // experiences at all, so a host's promotion calendar was purely
+      // cosmetic for anything booked here. "Nights" doesn't really apply
+      // to an experience, but calculateDiscount only uses it for a
+      // minNights gate, so durationDays stands in for it — a promotion
+      // requiring "2+ nights" on a 1-day experience simply never
+      // qualifies, which is the correct behavior either way.
+      const experiencePromoRows = await sql`
+        SELECT is_active, discount_type, discount_value, min_nights, start_date, end_date
+        FROM listing_promotions
+        WHERE listing_id = ${ex.listingId} AND is_active = TRUE AND end_date > CURRENT_DATE
+      `;
+      const subtotal = subtotalBeforeDiscount - calculateDiscount(experience, durationDays, ex.date, subtotalBeforeDiscount, experiencePromoRows);
       const commissionRate = BASE_COMMISSION_RATE;
       const commissionAmount = Math.round(subtotal * (commissionRate / 100));
       const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
