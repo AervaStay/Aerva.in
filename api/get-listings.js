@@ -233,6 +233,17 @@ module.exports = async (req, res) => {
         : null;
       const expCityRaw = typeof req.query.city === 'string' ? req.query.city.trim() : '';
 
+      // A guest searching specific dates shouldn't see an experience
+      // that's actually blocked (or already booked) across the whole
+      // span they'd need — same overlap rule the stays query above uses,
+      // and same multi-day-aware span (a guest searching a single day
+      // still only needs that one day free, so a multi-day experience's
+      // own duration doesn't factor in here — it's checked properly at
+      // actual booking time in create-order.js instead).
+      const expArrivalRaw = typeof req.query.arrival === 'string' ? req.query.arrival.trim() : '';
+      const expDepartureRaw = typeof req.query.departure === 'string' ? req.query.departure.trim() : '';
+      const expDatesFilter = expArrivalRaw && expDepartureRaw;
+
       const experiences = await sql`
         SELECT
           e.id, e.property_name, e.description, e.experience_category,
@@ -253,6 +264,23 @@ module.exports = async (req, res) => {
         FROM listings e
         LEFT JOIN listings h ON h.id = e.hosting_listing_id
         WHERE e.status = 'approved' AND e.listing_type = 'experience'
+          AND (
+            NOT ${expDatesFilter} OR (
+              NOT EXISTS (
+                SELECT 1 FROM orders o
+                WHERE o.listing_id = e.id
+                  AND o.status = 'paid'
+                  AND o.arrival < ${expDatesFilter ? expDepartureRaw : null}::date
+                  AND o.departure > ${expDatesFilter ? expArrivalRaw : null}::date
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM listing_blocked_dates b
+                WHERE b.listing_id = e.id
+                  AND b.start_date < ${expDatesFilter ? expDepartureRaw : null}::date
+                  AND b.end_date > ${expDatesFilter ? expArrivalRaw : null}::date
+              )
+            )
+          )
         ORDER BY e.created_at DESC
       `;
 
@@ -354,12 +382,20 @@ module.exports = async (req, res) => {
       WHERE status = 'approved' AND listing_type = 'stay'
         AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter} OR area ILIKE ${effectiveCityFilter})
         AND (
-          ${arrivalFilter}::date IS NULL OR NOT EXISTS (
-            SELECT 1 FROM orders o
-            WHERE o.listing_id = listings.id
-              AND o.status = 'paid'
-              AND o.arrival < ${departureFilter}::date
-              AND o.departure > ${arrivalFilter}::date
+          ${arrivalFilter}::date IS NULL OR (
+            NOT EXISTS (
+              SELECT 1 FROM orders o
+              WHERE o.listing_id = listings.id
+                AND o.status = 'paid'
+                AND o.arrival < ${departureFilter}::date
+                AND o.departure > ${arrivalFilter}::date
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM listing_blocked_dates b
+              WHERE b.listing_id = listings.id
+                AND b.start_date < ${departureFilter}::date
+                AND b.end_date > ${arrivalFilter}::date
+            )
           )
         )
       ORDER BY created_at DESC
