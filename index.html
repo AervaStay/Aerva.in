@@ -317,6 +317,23 @@
     border:none; cursor:pointer; font-size:20px; line-height:1; z-index:5;
   }
   .listing-modal-body{overflow-y:auto; flex:1; min-height:0;}
+  /* A full-page listing/experience view (opened via a direct/shared link,
+     not the modal) has no fixed close button the way the modal does —
+     without this, scrolling down into the calendar or description
+     leaves no visible way back except the browser's own back button.
+     Sticks to the top of the viewport instead of scrolling away with
+     the rest of the content. */
+  .sticky-back-bar{
+    position:sticky; top:0; z-index:50; background:rgba(244,235,227,0.92);
+    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    margin:0 -40px 22px; padding:14px 40px; border-bottom:1px solid var(--line-dark);
+  }
+  .sticky-back-bar a{ margin-bottom:0 !important; }
+  .map-recenter-btn{
+    width:34px !important; height:34px !important; display:flex; align-items:center; justify-content:center;
+    background:white; cursor:pointer; color:var(--ink); border:none;
+  }
+  .map-recenter-btn:hover{ background:var(--cream-deep); }
   .listing-modal-photos{
     display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch;
     scrollbar-width:none;
@@ -1003,6 +1020,7 @@
     .foot-grid{grid-template-columns:1fr 1fr; row-gap:36px;}
     .form-row{grid-template-columns:1fr;}
     .wrap{padding:0 24px;}
+    .sticky-back-bar{margin:0 -24px 22px; padding:14px 24px;}
     .pad{padding:92px 0;}
     .hero-logo{width:min(180px, 58vw);}
   }
@@ -1308,10 +1326,12 @@
      tab (see the click handler on #suitesContainer). -->
 <section class="pad" id="listingFullView" style="display:none;">
   <div class="wrap">
+    <div class="sticky-back-bar">
     <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
       Back to all homes
     </a>
+    </div>
     <div id="listingFullViewBody"></div>
   </div>
 </section>
@@ -1323,10 +1343,12 @@
      and the combined grid's click handler on #suitesContainer). -->
 <section class="pad" id="experienceFullView" style="display:none;">
   <div class="wrap">
+    <div class="sticky-back-bar">
     <a href="index.html?view=experiences" class="link" style="margin-bottom:22px; display:inline-flex;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
       Back to Aerva Experience
     </a>
+    </div>
     <div id="experienceFullViewBody"></div>
   </div>
 </section>
@@ -4930,13 +4952,20 @@
     // cards already use (see buildSuiteCard) — experiences only ever
     // showed their single cover photo before, which undersold places
     // with several good shots.
+    // A broken/expired photo URL previously left the whole card visually
+    // blank (no fallback), which on a background close to the page's own
+    // color made an entire clickable card look like empty space with no
+    // indication anything was there. onerror swaps to the same lettered
+    // placeholder a zero-photo listing already gets, so a card can never
+    // render invisibly again regardless of why a photo failed to load.
+    const imgFallback = `onerror="this.replaceWith(Object.assign(document.createElement('div'), {className:'suite-photo-placeholder', innerHTML:'<span>${initial}</span>'}))"`;
     let photoHtml;
     if(allPhotos.length === 0){
       photoHtml = `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
     } else if(allPhotos.length === 1){
-      photoHtml = `<img src="${allPhotos[0]}" alt="${exp.property_name}" loading="lazy">`;
+      photoHtml = `<img src="${allPhotos[0]}" alt="${exp.property_name}" loading="lazy" ${imgFallback}>`;
     } else {
-      const slides = allPhotos.map(url => `<img src="${url}" alt="${exp.property_name}" loading="lazy">`).join('');
+      const slides = allPhotos.map(url => `<img src="${url}" alt="${exp.property_name}" loading="lazy" ${imgFallback}>`).join('');
       const dots = allPhotos.map(() => '<span></span>').join('');
       photoHtml = `
         <div class="suite-photo-slider">${slides}</div>
@@ -5047,13 +5076,17 @@
       allPhotos = [listing.cover_photo_url, ...allPhotos.filter(url => url !== listing.cover_photo_url)];
     }
 
+    // Same fallback as buildExperienceCard above — a broken/expired photo
+    // URL swaps to the lettered placeholder instead of leaving the card
+    // visually blank.
+    const imgFallback = `onerror="this.replaceWith(Object.assign(document.createElement('div'), {className:'suite-photo-placeholder', innerHTML:'<span>${initial}</span>'}))"`;
     let photoHtml;
     if(allPhotos.length === 0){
       photoHtml = `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
     } else if(allPhotos.length === 1){
-      photoHtml = `<img src="${allPhotos[0]}" alt="${listing.property_name}" loading="lazy">`;
+      photoHtml = `<img src="${allPhotos[0]}" alt="${listing.property_name}" loading="lazy" ${imgFallback}>`;
     } else {
-      const slides = allPhotos.map(url => `<img src="${url}" alt="${listing.property_name}" loading="lazy">`).join('');
+      const slides = allPhotos.map(url => `<img src="${url}" alt="${listing.property_name}" loading="lazy" ${imgFallback}>`).join('');
       const dots = allPhotos.map(() => '<span></span>').join('');
       photoHtml = `
         <div class="suite-photo-slider">${slides}</div>
@@ -5853,12 +5886,31 @@
   function initListingMapEmbed(container, lat, lng, label){
     if(!container) return;
     if(window.L){
-      const map = L.map(container, { zoomControl: true, attributionControl: true }).setView([Number(lat), Number(lng)], 14);
+      const centerPosition = [Number(lat), Number(lng)];
+      const map = L.map(container, { zoomControl: true, attributionControl: true }).setView(centerPosition, 14);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       }).addTo(map);
-      L.marker([Number(lat), Number(lng)], { title: label }).addTo(map);
+      L.marker(centerPosition, { title: label }).addTo(map);
+
+      // Recenter control — without this, panning away from the pin (easy
+      // to do by accident while zooming/scrolling on a small screen)
+      // leaves no way back to the property's actual location short of
+      // reloading the whole page.
+      const RecenterControl = L.Control.extend({
+        options: { position: 'topleft' },
+        onAdd: function(){
+          const btn = L.DomUtil.create('button', 'leaflet-bar leaflet-control map-recenter-btn');
+          btn.type = 'button';
+          btn.title = 'Recenter map';
+          btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
+          L.DomEvent.disableClickPropagation(btn);
+          L.DomEvent.on(btn, 'click', () => map.setView(centerPosition, 14));
+          return btn;
+        }
+      });
+      map.addControl(new RecenterControl());
       return;
     }
     // Leaflet not available yet (or failed to load) — wait briefly for it,
