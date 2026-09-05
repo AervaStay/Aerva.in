@@ -5553,9 +5553,11 @@
 
       // Same location filter now applies to experiences too — same
       // params, same 200km radius, just against the experiences=1 mode
-      // instead. Guests/dates don't carry over here since experiences
-      // don't have a capacity or booking-window concept at search time
-      // the way a stay's guest count does.
+      // instead. Dates now carry over too — a searched date range that
+      // overlaps a host-blocked range (or an existing booking) excludes
+      // that experience from results, same rule stays already have.
+      // Guest count still doesn't carry over — experiences don't have a
+      // capacity concept at search time the way a stay's guest count does.
       if(searchExperiences){
         const expParams = new URLSearchParams({ experiences: '1' });
         if(geocoded){
@@ -5564,6 +5566,10 @@
           expParams.set('radiusKm', '200');
         } else if(city){
           expParams.set('city', city);
+        }
+        if(arrival && departure){
+          expParams.set('arrival', arrival);
+          expParams.set('departure', departure);
         }
         try{
           const expRes = await fetch(SUITES_API_BASE + '/api/get-listings?' + expParams.toString());
