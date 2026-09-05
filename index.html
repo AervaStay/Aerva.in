@@ -249,6 +249,17 @@
     font-family:'Bodoni Moda', serif; font-weight:400; font-size:24px; color:var(--ink);
   }
   #recentlyViewedRow .suite-grid, #nearbyRow .suite-grid{margin-bottom:8px;}
+  /* Dimmed and slightly desaturated, not hidden outright — a guest
+     should still be able to see what exists and consider other dates,
+     but it should read at a glance as "not bookable right now," never
+     mistaken for a normal, available result. */
+  .suite-card--unavailable{opacity:0.55; filter:grayscale(35%); cursor:default;}
+  .suite-card--unavailable:hover{transform:none !important; box-shadow:0 2px 10px rgba(28,26,23,0.08) !important; border-color:#ffffff !important;}
+  .suite-card--unavailable .suite-unavailable-badge{
+    position:absolute; top:12px; left:12px; z-index:2;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:10px; letter-spacing:0.06em;
+    text-transform:uppercase; padding:5px 10px; border-radius:3px;
+  }
   .suite-card{
     background:var(--cream); display:flex; flex-direction:column; border:2px solid #ffffff;
     border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(28,26,23,0.08);
@@ -1264,6 +1275,14 @@
     <div class="suite-grid reveal" id="suitesContainer">
       <div class="suites-loading">Loading homes…</div>
     </div>
+  </div>
+
+  <div class="wrap" id="unavailableRow" style="display:none;">
+    <div class="browse-row-head">
+      <h3>Not Available for Your Dates</h3>
+      <p style="font-size:13px; opacity:0.6; margin-top:4px;">These match your search, but are already booked or blocked for the dates you picked.</p>
+    </div>
+    <div class="suite-grid" id="unavailableContainer"></div>
   </div>
 </section>
 
@@ -3047,7 +3066,7 @@
 
     if(!listPinMap){
       listPinMap = L.map(container, { zoomControl: true }).setView(position, 16);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       }).addTo(listPinMap);
       listPinMarker = L.marker(position, { draggable: true }).addTo(listPinMap);
@@ -3151,7 +3170,7 @@
     const position = [Number(lat), Number(lng)];
     if(!expPinMap){
       expPinMap = L.map(container, { zoomControl: true }).setView(position, 15);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       }).addTo(expPinMap);
       expPinMarker = L.marker(position, { draggable: true }).addTo(expPinMap);
@@ -3206,7 +3225,7 @@
     const position = [Number(lat), Number(lng)];
     if(!expMeetingPointMap){
       expMeetingPointMap = L.map(container, { zoomControl: true }).setView(position, 15);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       }).addTo(expMeetingPointMap);
       expMeetingPointMarker = L.marker(position, { draggable: true }).addTo(expMeetingPointMap);
@@ -5224,11 +5243,26 @@
 
     if(approvedListings.length === 0 && approvedExperiences.length === 0){
       container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="index.html?view=list-property" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
+      document.getElementById('unavailableRow').style.display = 'none';
       return;
     }
 
-    const finalSuites = showSuites ? suiteList : [];
-    const finalExperiences = showExperiences ? experienceList : [];
+    // is_available only ever means something once dates were actually
+    // searched (see get-listings.js — every row is is_available:true
+    // when no dates were given at all). A listing/experience that's
+    // unavailable for the searched dates is split out here rather than
+    // just excluded outright, so it can show in its own row below
+    // instead of silently vanishing with no explanation.
+    const datesWereSearched = !!(searchArrivalDate && searchDepartureDate);
+    const availableSuites = datesWereSearched ? suiteList.filter(l => l.is_available !== false) : suiteList;
+    const unavailableSuites = datesWereSearched ? suiteList.filter(l => l.is_available === false) : [];
+    const availableExperiences = datesWereSearched ? experienceList.filter(e => e.is_available !== false) : experienceList;
+    const unavailableExperiences = datesWereSearched ? experienceList.filter(e => e.is_available === false) : [];
+
+    const finalSuites = showSuites ? availableSuites : [];
+    const finalExperiences = showExperiences ? availableExperiences : [];
+    const finalUnavailableSuites = showSuites ? unavailableSuites : [];
+    const finalUnavailableExperiences = showExperiences ? unavailableExperiences : [];
 
     container.innerHTML = '';
     if(finalSuites.length === 0 && finalExperiences.length === 0){
@@ -5236,25 +5270,57 @@
       if(currentCategoryFilter === 'suites' && wantsPetFriendly) message = 'No pet-friendly homes match your other filters — try widening your price range or removing pets.';
       else if(currentCategoryFilter === 'suites') message = 'No homes match these filters — try widening your price range.';
       else if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
+      else if(datesWereSearched && (finalUnavailableSuites.length || finalUnavailableExperiences.length)) message = 'Nothing available for those dates — see what\'s unavailable below, or try different dates.';
       else message = 'Nothing matches these filters yet — try widening your price range.';
       container.innerHTML = `<div class="suites-empty">${message}</div>`;
-      return;
+    } else {
+      // Suites first, then experiences — a stable, predictable order
+      // rather than an interleaved shuffle, so results don't visually
+      // reorder themselves every time a filter changes.
+      let index = 0;
+      finalSuites.forEach(listing => {
+        const card = buildSuiteCard(listing, index++);
+        container.appendChild(card);
+        io.observe(card);
+      });
+      finalExperiences.forEach(exp => {
+        const card = buildExperienceCard(exp, index++);
+        container.appendChild(card);
+        io.observe(card);
+      });
     }
 
-    // Suites first, then experiences — a stable, predictable order
-    // rather than an interleaved shuffle, so results don't visually
-    // reorder themselves every time a filter changes.
-    let index = 0;
-    finalSuites.forEach(listing => {
-      const card = buildSuiteCard(listing, index++);
-      container.appendChild(card);
-      io.observe(card);
-    });
-    finalExperiences.forEach(exp => {
-      const card = buildExperienceCard(exp, index++);
-      container.appendChild(card);
-      io.observe(card);
-    });
+    // ---- Unavailable-for-these-dates row ----
+    const unavailableRow = document.getElementById('unavailableRow');
+    const unavailableContainer = document.getElementById('unavailableContainer');
+    const totalUnavailable = finalUnavailableSuites.length + finalUnavailableExperiences.length;
+    if(!datesWereSearched || totalUnavailable === 0){
+      unavailableRow.style.display = 'none';
+    } else {
+      unavailableRow.style.display = 'block';
+      unavailableContainer.innerHTML = '';
+      let uIndex = 0;
+      finalUnavailableSuites.forEach(listing => {
+        const card = buildSuiteCard(listing, uIndex++);
+        card.classList.add('suite-card--unavailable');
+        card.style.position = 'relative';
+        const badge = document.createElement('div');
+        badge.className = 'suite-unavailable-badge';
+        badge.textContent = 'Not Available';
+        card.insertBefore(badge, card.firstChild);
+        unavailableContainer.appendChild(card);
+      });
+      finalUnavailableExperiences.forEach(exp => {
+        const card = buildExperienceCard(exp, uIndex++);
+        card.classList.add('suite-card--unavailable');
+        card.style.position = 'relative';
+        const badge = document.createElement('div');
+        badge.className = 'suite-unavailable-badge';
+        badge.textContent = 'Not Available';
+        card.insertBefore(badge, card.firstChild);
+        unavailableContainer.appendChild(card);
+      });
+    }
   }
 
   // Real address suggestions for the search Place field are wired up in
@@ -5740,7 +5806,7 @@
     if(!container) return;
     if(window.L){
       const map = L.map(container, { zoomControl: true, attributionControl: true }).setView([Number(lat), Number(lng)], 14);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       }).addTo(map);
