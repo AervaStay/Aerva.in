@@ -1621,31 +1621,8 @@
         <p style="font-size:11px; opacity:0.55;">This is your logged-in account's email — <a href="#" id="listSwitchAccountLink" style="color:var(--gold-deep);">not you?</a></p>
       </div>
 
-      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Offers & Discounts <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></div>
-      <div class="form-row">
-        <div class="field">
-          <label for="listDiscountType">Discount Type</label>
-          <select id="listDiscountType" name="Discount Type">
-            <option value="">None</option>
-            <option value="percentage">Percentage off</option>
-            <option value="flat" id="listDiscountFlatOption">Flat amount off (₹)</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="listDiscountValue"><span id="listDiscountValueLabel">Amount</span></label>
-          <input id="listDiscountValue" name="Discount Value" type="number" min="0" placeholder="e.g. 10">
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="field">
-          <label for="listDiscountMinNights">Minimum Nights to Qualify</label>
-          <input id="listDiscountMinNights" name="Discount Min Nights" type="number" min="1" placeholder="e.g. 3">
-        </div>
-        <div class="field">
-          <label for="listDiscountNote">Short Note <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(auto-generated from your settings)</span></label>
-          <input id="listDiscountNote" name="Discount Description" type="text" readonly>
-        </div>
-      </div>
+      <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Offers & Discounts</div>
+      <p style="font-size:12.5px; opacity:0.65;">Set these after your listing is approved — from your <a href="host-dashboard.html" style="color:var(--gold-deep);">Collection</a>, click into this listing's calendar. Managing offers there, in one place, means there's never a question of which discount actually applies for a given date.</p>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Commission</div>
       <p style="font-size:13px; line-height:1.7; opacity:0.75; border:1px solid var(--line-dark); padding:14px 16px; background:var(--cream);">
@@ -2782,10 +2759,6 @@
     document.getElementById('listPriceLabel').textContent = `Expected Nightly Rate (${symbol})`;
     document.getElementById('listSecurityDepositLabel').textContent = `Security Deposit (${symbol})`;
     document.getElementById('listPetFeeLabel').textContent = `Pet fee (${symbol} per pet, per stay)`;
-    document.getElementById('listDiscountFlatOption').textContent = `Flat amount off (${symbol})`;
-    const discountTypeEl = document.getElementById('listDiscountType');
-    document.getElementById('listDiscountValueLabel').textContent =
-      discountTypeEl.value === 'flat' ? `Amount (${symbol})` : 'Amount';
   }
   updateHostPricingLabels();
 
@@ -2793,51 +2766,12 @@
     hostPricingCurrency = listPricingCurrencySelect.value;
     updateHostPricingLabels();
   });
-  document.getElementById('listDiscountType').addEventListener('change', updateHostPricingLabels);
 
-  // Short Note is always derived from Discount Type/Amount/Minimum
-  // Nights/Nightly Rate — never typed freely — so it can never drift out
-  // of sync with what the discount actually is (this used to be a plain
-  // free-text field a host could edit independently of the real
-  // settings, which is exactly how it could end up showing numbers that
-  // don't match what's actually configured). Shows both units (₹ and %)
-  // so the host can see what their choice is worth in the other unit
-  // too — same logic as the equivalent field in manage-listing.html.
-  function updateDiscountNote(){
-    const type = document.getElementById('listDiscountType').value;
-    const value = document.getElementById('listDiscountValue').value;
-    const minNights = document.getElementById('listDiscountMinNights').value;
-    const rate = Number(document.getElementById('listPrice').value) || 0;
-    const noteEl = document.getElementById('listDiscountNote');
-
-    if(!type || !value){
-      noteEl.value = '';
-      return;
-    }
-
-    const baselineNights = minNights ? Number(minNights) : 1;
-    const baselineTotal = rate * baselineNights;
-    const numValue = Number(value);
-    let discountText;
-    if(baselineTotal > 0){
-      if(type === 'percentage'){
-        const rupees = Math.round(baselineTotal * (numValue / 100));
-        discountText = `${value}% (≈₹${rupees.toLocaleString('en-IN')}) off`;
-      } else {
-        const percent = Math.round((numValue / baselineTotal) * 100);
-        discountText = `₹${value} (≈${percent}%) off`;
-      }
-    } else {
-      // No nightly rate entered yet — can't convert, so just show the
-      // one unit the host actually entered.
-      discountText = type === 'percentage' ? `${value}% off` : `₹${value} off`;
-    }
-    noteEl.value = minNights ? `${discountText} on Min ${minNights} nights` : discountText;
-  }
-  ['listDiscountType', 'listDiscountValue', 'listDiscountMinNights', 'listPrice'].forEach(id => {
-    document.getElementById(id).addEventListener('input', updateDiscountNote);
-    document.getElementById(id).addEventListener('change', updateDiscountNote);
-  });
+  // Discount fields removed from this form entirely — offers are now
+  // only ever set from the calendar (host-dashboard.html), never here,
+  // so there's exactly one place they can be configured and no chance of
+  // a "standing discount" silently competing with a calendar promotion
+  // in a way that's confusing to explain to a guest.
 
   // Called by initCurrency() once real currency detection/rates have
   // actually finished — only updates the DEFAULT if the host hasn't
@@ -3904,16 +3838,6 @@
           securityDeposit: hostAmountToInr(document.getElementById('listSecurityDeposit').value),
           hostName: document.getElementById('listHostName').value,
           hostPhone: document.getElementById('listHostPhone').value,
-          discountType: document.getElementById('listDiscountType').value,
-          // Only a flat-amount discount is a real currency value needing
-          // conversion — a percentage is already unit-less and must never
-          // be run through hostAmountToInr (that would treat "10" as
-          // "10 <currency>" and mangle it into some unrelated INR number).
-          discountValue: document.getElementById('listDiscountType').value === 'flat'
-            ? hostAmountToInr(document.getElementById('listDiscountValue').value)
-            : document.getElementById('listDiscountValue').value,
-          discountMinNights: document.getElementById('listDiscountMinNights').value,
-          discountDescription: document.getElementById('listDiscountNote').value,
           latitude: document.getElementById('listLatitude').value,
           longitude: document.getElementById('listLongitude').value,
           formattedAddress: document.getElementById('listFormattedAddress').value,
@@ -3972,10 +3896,6 @@
           collectCheckedValues('PetTypes').forEach(v => formData.append('Pet Types', v));
           formData.append('Pet Fee', document.getElementById('listPetFee').value);
         }
-        formData.append('Discount Type', document.getElementById('listDiscountType').value);
-        formData.append('Discount Value', document.getElementById('listDiscountValue').value);
-        formData.append('Discount Min Nights', document.getElementById('listDiscountMinNights').value);
-        formData.append('Discount Description', document.getElementById('listDiscountNote').value);
         formData.append('Host Name', document.getElementById('listHostName').value);
         formData.append('Phone', document.getElementById('listHostPhone').value);
         formData.append('Host Email', hostSessionEmail || '');
@@ -4064,10 +3984,6 @@
       document.getElementById('listDescription').value = draft.description || '';
       document.getElementById('listHostName').value = draft.host_name || '';
       document.getElementById('listHostPhone').value = draft.host_phone || '';
-      if(draft.discount_type) document.getElementById('listDiscountType').value = draft.discount_type;
-      document.getElementById('listDiscountValue').value = draft.discount_value || '';
-      document.getElementById('listDiscountMinNights').value = draft.discount_min_nights || '';
-      updateDiscountNote(); // recompute rather than trust a possibly-stale saved note — see updateDiscountNote()
       (draft.amenities || []).forEach(v => {
         const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
         if(box) box.checked = true;
@@ -4597,10 +4513,6 @@
     document.getElementById('listDescription').value = source.description || '';
     document.getElementById('listHostName').value = source.host_name || '';
     document.getElementById('listHostPhone').value = source.host_phone || '';
-    if(source.discount_type) document.getElementById('listDiscountType').value = source.discount_type;
-    document.getElementById('listDiscountValue').value = source.discount_value || '';
-    document.getElementById('listDiscountMinNights').value = source.discount_min_nights || '';
-    updateDiscountNote(); // recompute rather than trust a possibly-stale saved note — see updateDiscountNote()
     (source.amenities || []).forEach(v => {
       const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
       if(box) box.checked = true;
