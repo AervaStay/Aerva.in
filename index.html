@@ -5292,13 +5292,22 @@
     const finalUnavailableSuites = showSuites ? unavailableSuites : [];
     const finalUnavailableExperiences = showExperiences ? unavailableExperiences : [];
 
+    // Computed early since both the empty-state message below and the
+    // unavailable row itself (further down) need it — only worth
+    // mentioning/showing at all if the guest actually looked at one of
+    // these unavailable results before.
+    const viewedKeys = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
+    const viewedUnavailableSuites = finalUnavailableSuites.filter(l => viewedKeys.has('stay:' + l.id));
+    const viewedUnavailableExperiences = finalUnavailableExperiences.filter(e => viewedKeys.has('experience:' + e.id));
+    const hasViewedUnavailable = viewedUnavailableSuites.length > 0 || viewedUnavailableExperiences.length > 0;
+
     container.innerHTML = '';
     if(finalSuites.length === 0 && finalExperiences.length === 0){
       let message;
       if(currentCategoryFilter === 'suites' && wantsPetFriendly) message = 'No pet-friendly homes match your other filters — try widening your price range or removing pets.';
       else if(currentCategoryFilter === 'suites') message = 'No homes match these filters — try widening your price range.';
       else if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
-      else if(datesWereSearched && (finalUnavailableSuites.length || finalUnavailableExperiences.length)) message = 'Nothing available for those dates — see what\'s unavailable below, or try different dates.';
+      else if(datesWereSearched && hasViewedUnavailable) message = 'Nothing available for those dates — see what\'s unavailable below, or try different dates.';
       else message = 'Nothing matches these filters yet — try widening your price range.';
       container.innerHTML = `<div class="suites-empty">${message}</div>`;
     } else {
@@ -5319,16 +5328,27 @@
     }
 
     // ---- Unavailable-for-these-dates row ----
+    // Only worth showing at all if at least one of these unavailable
+    // results is something the guest actually looked at — otherwise it's
+    // just clutter about listings they never expressed interest in. The
+    // ones they did view are sorted first within the row. (viewedKeys /
+    // hasViewedUnavailable computed earlier, above, since the empty-
+    // state message needs the same check.)
     const unavailableRow = document.getElementById('unavailableRow');
     const unavailableContainer = document.getElementById('unavailableContainer');
-    const totalUnavailable = finalUnavailableSuites.length + finalUnavailableExperiences.length;
-    if(!datesWereSearched || totalUnavailable === 0){
+
+    if(!datesWereSearched || !hasViewedUnavailable){
       unavailableRow.style.display = 'none';
     } else {
       unavailableRow.style.display = 'block';
       unavailableContainer.innerHTML = '';
       let uIndex = 0;
-      finalUnavailableSuites.forEach(listing => {
+      // Viewed-and-unavailable listings lead the row; everything else
+      // unavailable follows after, same two arrays just reordered so the
+      // guest's own recently-viewed picks are the first thing they see.
+      const orderedSuites = [...viewedUnavailableSuites, ...finalUnavailableSuites.filter(l => !viewedKeys.has('stay:' + l.id))];
+      const orderedExperiences = [...viewedUnavailableExperiences, ...finalUnavailableExperiences.filter(e => !viewedKeys.has('experience:' + e.id))];
+      orderedSuites.forEach(listing => {
         const card = buildSuiteCard(listing, uIndex++);
         card.classList.add('suite-card--unavailable');
         card.style.position = 'relative';
@@ -5338,7 +5358,7 @@
         card.insertBefore(badge, card.firstChild);
         unavailableContainer.appendChild(card);
       });
-      finalUnavailableExperiences.forEach(exp => {
+      orderedExperiences.forEach(exp => {
         const card = buildExperienceCard(exp, uIndex++);
         card.classList.add('suite-card--unavailable');
         card.style.position = 'relative';
