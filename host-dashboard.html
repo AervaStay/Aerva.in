@@ -158,10 +158,18 @@
   .cal-day--empty{visibility:hidden; cursor:default;}
   .cal-day--past{opacity:0.3; cursor:default;}
   .cal-day--past:hover{border-color:transparent;}
-  .cal-day--booked{background:#e9e2d6; color:#8a7f6c; cursor:not-allowed; text-decoration:line-through;}
-  .cal-day--booked:hover{border-color:transparent;}
+  .cal-day--booked{
+    background:#e9e2d6; color:#6b6255; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 0;
+  }
+  .cal-day--booked:hover{border-color:#8a6c39;}
+  .cal-day-guest{font-size:7.5px; line-height:1; text-transform:uppercase; letter-spacing:0.02em; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 2px;}
   .cal-day--blocked{background:#f3d9c4; color:#8a4a1c;}
-  .cal-day--promo{background:#d9e8d4; color:#2f5c2a;}
+  .cal-day--promo{
+    background:#d9e8d4; color:#2f5c2a;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 0;
+  }
+  .cal-day-promo-value{font-size:7.5px; line-height:1; font-weight:600;}
   .cal-day--selected{background:#1c1a17; color:#f4ebe3;}
   .cal-legend{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:9.5px; opacity:0.75;}
   .cal-legend span{display:inline-flex; align-items:center; gap:4px;}
@@ -2243,7 +2251,8 @@
         badgeEl.style.display = 'inline-block';
       }
       renderListings(data.listings || []);
-      renderBookings(data.bookings || []);
+      allHostBookings = data.bookings || [];
+      renderBookings(allHostBookings);
       renderVerification(data.verification);
 
       // Default to showing the first live item's sidebar right away —
@@ -2352,6 +2361,34 @@
 
   let sbBookedRanges = [];
   function sbDateIsBooked(dateStr){ return sbBookedRanges.some(r => sbInRange(dateStr, r.arrival, r.departure)); }
+
+  // The host's own full booking list (from host-listings.js — never the
+  // public get-listings.js availability endpoint, which deliberately
+  // never exposes guest identity to anyone browsing the site). Used to
+  // look up who's actually booked on a given date, for both the stay and
+  // experience calendars.
+  let allHostBookings = [];
+  function findBookingForListingDate(listingId, dateStr){
+    return allHostBookings.find(b =>
+      b.listing_id === listingId && b.status !== 'cancelled' &&
+      sbInRange(dateStr, sbToDateStr(new Date(b.arrival)), sbToDateStr(new Date(b.departure)))
+    );
+  }
+
+  function showBookingDetailsPopup(booking){
+    const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
+    const arrival = new Date(booking.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    const departure = new Date(booking.departure).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    alert(
+      `${booking.guest_name || booking.guest_email}\n` +
+      `${arrival} \u2192 ${departure} (${booking.nights} night${booking.nights === 1 ? '' : 's'})\n` +
+      `${booking.guests} guest${booking.guests === 1 ? '' : 's'}\n\n` +
+      `Guest paid: ${fmt(Number(booking.subtotal) + Number(booking.gst))}\n` +
+      `Your payout: ${fmt(booking.payout_amount)}\n` +
+      `Status: ${booking.status}` +
+      (booking.guest_email ? `\n\nContact: ${booking.guest_email}` : '')
+    );
+  }
 
   async function selectListingForSidebar(listingId){
     const listing = currentListings.find(l => l.id === listingId);
@@ -2465,7 +2502,20 @@
       else if(booked) cls += ' cal-day--booked';
       else if(selecting) cls += ' cal-day--selected';
       else if(blockedRow) cls += ' cal-day--blocked';
-      html += `<div class="${cls}" data-date="${dateStr}" title="${blockedRow && blockedRow.reason ? blockedRow.reason : ''}">${day}</div>`;
+      // A booked cell shows who's staying, right on the calendar — first
+      // name (or the part of the email before @ if no name is on file)
+      // so it fits in a small cell; clicking it opens the full details.
+      let bookedLabelHtml = '';
+      let cellTitle = blockedRow && blockedRow.reason ? blockedRow.reason : '';
+      if(booked && sbListingId != null){
+        const booking = findBookingForListingDate(sbListingId, dateStr);
+        if(booking){
+          const shortName = (booking.guest_name || booking.guest_email.split('@')[0]).split(' ')[0];
+          bookedLabelHtml = `<span class="cal-day-guest">${shortName}</span>`;
+          cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
+        }
+      }
+      html += `<div class="${cls}" data-date="${dateStr}" title="${cellTitle}">${day}${bookedLabelHtml}</div>`;
     }
     grid.innerHTML = html;
     grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
@@ -2473,6 +2523,13 @@
       cell.addEventListener('mouseenter', () => sbOnCalMouseEnter(cell.dataset.date));
       cell.addEventListener('mouseup', () => sbOnCalMouseUp(cell.dataset.date));
       cell.addEventListener('click', () => sbOnCalClick(cell.dataset.date));
+    });
+    grid.querySelectorAll('.cal-day--booked').forEach(cell => {
+      cell.style.cursor = 'pointer';
+      cell.addEventListener('click', () => {
+        const booking = findBookingForListingDate(sbListingId, cell.dataset.date);
+        if(booking) showBookingDetailsPopup(booking);
+      });
     });
   }
   function sbOnCalMouseDown(dateStr){
@@ -2778,8 +2835,10 @@
       if(isPast) cls += ' cal-day--past cal-day--disabled';
       else if(selecting) cls += ' cal-day--selected';
       else if(promoRow) cls += ' cal-day--promo';
+      const discountLabel = promoRow ? (promoRow.discountType === 'flat' ? `₹${promoRow.discountValue}` : `${promoRow.discountValue}%`) : '';
       const title = promoRow ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}` : '';
-      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}</div>`;
+      const promoLabelHtml = promoRow ? `<span class="cal-day-promo-value">${discountLabel}</span>` : '';
+      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}${promoLabelHtml}</div>`;
     }
     grid.innerHTML = html;
     grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past)').forEach(cell => {
@@ -2951,8 +3010,10 @@
       else if(booked) cls += ' cal-day--booked';
       else if(selecting) cls += ' cal-day--selected';
       else if(promoRow) cls += ' cal-day--promo';
+      const discountLabel = promoRow ? (promoRow.discountType === 'flat' ? `₹${promoRow.discountValue}` : `${promoRow.discountValue}%`) : '';
       const title = promoRow ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}` : '';
-      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}</div>`;
+      const promoLabelHtml = promoRow ? `<span class="cal-day-promo-value">${discountLabel}</span>` : '';
+      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}${promoLabelHtml}</div>`;
     }
     grid.innerHTML = html;
     grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
