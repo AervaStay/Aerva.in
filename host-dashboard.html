@@ -484,6 +484,7 @@
             <div class="cal-legend">
               <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
               <span><i style="background:#f3d9c4;"></i> Blocked</span>
+              <span><i style="background:#e9e2d6;"></i> Booked</span>
             </div>
             <div class="cal-confirm" id="expCalConfirm">
               <p id="expCalConfirmLabel"></p>
@@ -598,6 +599,16 @@
         <textarea id="hostChatInput" rows="1" placeholder="Type a message…" style="flex:1; resize:none; background:white; border:1px solid #ddd0bc; padding:10px 12px; font-family:inherit; font-size:14px; max-height:100px;"></textarea>
         <button type="button" id="hostChatSendBtn" aria-label="Send" style="flex:0 0 auto; width:44px; height:44px; border-radius:50%; background:#8a6c39; border:none; color:white; cursor:pointer;">→</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= BOOKING DETAILS MODAL ================= -->
+<div class="profile-modal-overlay" id="bookingDetailsOverlay" style="display:none;">
+  <div class="profile-modal" style="max-width:420px;">
+    <button type="button" class="profile-modal-close" id="bookingDetailsCloseBtn" aria-label="Close">&times;</button>
+    <div class="profile-modal-body" style="padding-top:36px;">
+      <div id="bookingDetailsBody"></div>
     </div>
   </div>
 </div>
@@ -2379,16 +2390,56 @@
     const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
     const arrival = new Date(booking.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     const departure = new Date(booking.departure).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-    alert(
-      `${booking.guest_name || booking.guest_email}\n` +
-      `${arrival} \u2192 ${departure} (${booking.nights} night${booking.nights === 1 ? '' : 's'})\n` +
-      `${booking.guests} guest${booking.guests === 1 ? '' : 's'}\n\n` +
-      `Guest paid: ${fmt(Number(booking.subtotal) + Number(booking.gst))}\n` +
-      `Your payout: ${fmt(booking.payout_amount)}\n` +
-      `Status: ${booking.status}` +
-      (booking.guest_email ? `\n\nContact: ${booking.guest_email}` : '')
-    );
+    const statusColors = { paid: '#3a7d44', refunded: '#8a6c39', cancelled: '#a3402f' };
+    document.getElementById('bookingDetailsBody').innerHTML = `
+      <h3 style="font-family:Georgia,serif; font-size:19px; margin-bottom:4px;">${booking.guest_name || booking.guest_email}</h3>
+      <p style="font-size:12.5px; opacity:0.6; margin-bottom:20px;">${booking.suite_name}</p>
+
+      <div class="settings-row" style="border-bottom:1px solid #e0d5c0;">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:13px;">Dates</div>
+          <div class="settings-row-value">${arrival} → ${departure} (${booking.nights} night${booking.nights === 1 ? '' : 's'})</div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:13px;">Guests</div>
+          <div class="settings-row-value">${booking.guests}</div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:13px;">Guest Paid</div>
+          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst))}</div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:13px;">Your Payout</div>
+          <div class="settings-row-value payout-value">${fmt(booking.payout_amount)}</div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:13px;">Status</div>
+          <div class="settings-row-value"><span class="status-badge status-${booking.status}">${booking.status}</span></div>
+        </div>
+      </div>
+      <div class="settings-row" style="border-bottom:none;">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:13px;">Contact</div>
+          <div class="settings-row-value">${booking.guest_email}</div>
+        </div>
+      </div>
+    `;
+    document.getElementById('bookingDetailsOverlay').style.display = 'flex';
   }
+  document.getElementById('bookingDetailsCloseBtn').addEventListener('click', () => {
+    document.getElementById('bookingDetailsOverlay').style.display = 'none';
+  });
+  document.getElementById('bookingDetailsOverlay').addEventListener('click', (e) => {
+    if(e.target.id === 'bookingDetailsOverlay') document.getElementById('bookingDetailsOverlay').style.display = 'none';
+  });
 
   async function selectListingForSidebar(listingId){
     const listing = currentListings.find(l => l.id === listingId);
@@ -2720,6 +2771,7 @@
       const dateStr = sbToDateStr(new Date(year, month, day));
       const isPast = dateStr < today;
       const blockedRow = expCalBlockedRowFor(dateStr);
+      const booking = expCalListingId != null ? findBookingForListingDate(expCalListingId, dateStr) : null;
       let selecting = false;
       if(expCalSelStart && expCalSelEnd){
         const selMin = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
@@ -2728,16 +2780,30 @@
       }
       let cls = 'cal-day';
       if(isPast) cls += ' cal-day--past cal-day--disabled';
+      else if(booking) cls += ' cal-day--booked';
       else if(selecting) cls += ' cal-day--selected';
       else if(blockedRow) cls += ' cal-day--blocked';
-      html += `<div class="${cls}" data-date="${dateStr}" title="${blockedRow && blockedRow.reason ? blockedRow.reason : ''}">${day}</div>`;
+      let bookedLabelHtml = '';
+      let cellTitle = blockedRow && blockedRow.reason ? blockedRow.reason : '';
+      if(booking){
+        const shortName = (booking.guest_name || booking.guest_email.split('@')[0]).split(' ')[0];
+        bookedLabelHtml = `<span class="cal-day-guest">${shortName}</span>`;
+        cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
+      }
+      html += `<div class="${cls}" data-date="${dateStr}" title="${cellTitle}">${day}${bookedLabelHtml}</div>`;
     }
     grid.innerHTML = html;
-    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past)').forEach(cell => {
+    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
       cell.addEventListener('mousedown', () => expCalOnMouseDown(cell.dataset.date));
       cell.addEventListener('mouseenter', () => expCalOnMouseEnter(cell.dataset.date));
       cell.addEventListener('mouseup', () => expCalOnMouseUp(cell.dataset.date));
       cell.addEventListener('click', () => expCalOnClick(cell.dataset.date));
+    });
+    grid.querySelectorAll('.cal-day--booked').forEach(cell => {
+      cell.addEventListener('click', () => {
+        const booking = findBookingForListingDate(expCalListingId, cell.dataset.date);
+        if(booking) showBookingDetailsPopup(booking);
+      });
     });
   }
   function expCalOnMouseDown(dateStr){
