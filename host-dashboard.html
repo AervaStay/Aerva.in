@@ -2629,7 +2629,7 @@
     if(existing){
       if(window.confirm(`Remove this block (${existing.startDate} to ${existing.endDate}${existing.reason ? ', ' + existing.reason : ''})?`)){
         sbBlockedDateRows = sbBlockedDateRows.filter(b => b !== existing);
-        sbRenderBlockedList(); sbRenderCalendar();
+        sbRenderBlockedList(); sbRenderCalendar(); sbRenderPromoCalendar();
       }
     }
   }
@@ -2649,7 +2649,7 @@
     const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
     const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
     sbBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('sbCalConfirmReason').value.trim() });
-    sbRenderBlockedList(); sbHideCalConfirm();
+    sbRenderBlockedList(); sbHideCalConfirm(); sbRenderPromoCalendar();
   });
   document.getElementById('sbCalConfirmCancelBtn').addEventListener('click', sbHideCalConfirm);
   document.getElementById('sbCalPrevBtn').addEventListener('click', () => { sbCalMonth.setMonth(sbCalMonth.getMonth() - 1); sbRenderCalendar(); });
@@ -2668,7 +2668,7 @@
     list.querySelectorAll('[data-idx]').forEach(btn => {
       btn.addEventListener('click', () => {
         sbBlockedDateRows.splice(Number(btn.dataset.idx), 1);
-        sbRenderBlockedList(); sbRenderCalendar();
+        sbRenderBlockedList(); sbRenderCalendar(); sbRenderPromoCalendar();
       });
     });
   }
@@ -2853,7 +2853,7 @@
     if(existing){
       if(window.confirm(`Remove this block (${existing.startDate} to ${existing.endDate}${existing.reason ? ', ' + existing.reason : ''})?`)){
         expCalBlockedDateRows = expCalBlockedDateRows.filter(b => b !== existing);
-        expCalRenderBlockedList(); expCalRenderCalendar();
+        expCalRenderBlockedList(); expCalRenderCalendar(); expRenderPromoCalendar();
       }
     }
   }
@@ -2873,7 +2873,7 @@
     const start = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
     const endInclusive = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
     expCalBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('expCalConfirmReason').value.trim() });
-    expCalRenderBlockedList(); expCalHideConfirm();
+    expCalRenderBlockedList(); expCalHideConfirm(); expRenderPromoCalendar();
   });
   document.getElementById('expCalConfirmCancelBtn').addEventListener('click', expCalHideConfirm);
   document.getElementById('expCalPrevBtn').addEventListener('click', () => { expCalMonth.setMonth(expCalMonth.getMonth() - 1); expCalRenderCalendar(); });
@@ -2892,7 +2892,7 @@
     list.querySelectorAll('[data-idx]').forEach(btn => {
       btn.addEventListener('click', () => {
         expCalBlockedDateRows.splice(Number(btn.dataset.idx), 1);
-        expCalRenderBlockedList(); expCalRenderCalendar();
+        expCalRenderBlockedList(); expCalRenderCalendar(); expRenderPromoCalendar();
       });
     });
   }
