@@ -148,34 +148,40 @@
     font-size:13px; color:#1c1a17; line-height:1;
   }
   .cal-nav-btn:hover{border-color:#8a6c39;}
-  .cal-grid{display:grid; grid-template-columns:repeat(7, 1fr); gap:2px;}
+  .cal-grid{display:grid; grid-template-columns:repeat(7, 1fr); gap:4px;}
   .cal-weekday{font-size:8.5px; text-transform:uppercase; letter-spacing:0.05em; color:#8a7f6c; text-align:center; padding:3px 0;}
+  /* Dark rounded card, every date — the date sits small at top, the
+     actual nightly rate sits larger below it, so a host reading the
+     calendar sees price at a glance on every single day, not just the
+     ones with something special going on. State (blocked/promo/booked/
+     past) layers on top of this same base shape via a modifier class,
+     rather than each state having its own completely different look. */
   .cal-day{
-    aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; font-size:14px;
-    background:white; border:1px solid transparent; cursor:pointer; border-radius:2px; color:#1c1a17;
+    aspect-ratio:1/1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:#1c1a17; color:#f4ebe3; border:1px solid transparent; border-radius:12px;
+    cursor:pointer; gap:2px; position:relative; padding:2px;
   }
   .cal-day:hover:not(.cal-day--disabled){border-color:#8a6c39;}
-  .cal-day--empty{visibility:hidden; cursor:default;}
-  .cal-day--past{opacity:0.3; cursor:default;}
+  .cal-day-date{font-size:11px; opacity:0.65; line-height:1;}
+  .cal-day-price{font-size:13px; font-weight:600; line-height:1;}
+  .cal-day--empty{visibility:hidden; cursor:default; background:transparent;}
+  .cal-day--past{opacity:0.35; cursor:default;}
   .cal-day--past:hover{border-color:transparent;}
-  .cal-day--booked{
-    background:#e9e2d6; color:#6b6255; cursor:pointer;
-    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 0;
-  }
+  .cal-day--booked{background:#4a463d; cursor:pointer;}
   .cal-day--booked:hover{border-color:#8a6c39;}
-  .cal-day-guest{font-size:8.5px; line-height:1; text-transform:uppercase; letter-spacing:0.02em; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 2px;}
-  .cal-day--blocked{background:#f3d9c4; color:#8a4a1c; text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#8a4a1c;}
-  .cal-day--promo{
-    background:#d9e8d4; color:#2f5c2a;
-    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 0;
-  }
-  .cal-day-promo-value{font-size:7.5px; line-height:1; font-weight:600;}
+  .cal-day-guest{font-size:8.5px; line-height:1; text-transform:uppercase; letter-spacing:0.02em; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 2px; opacity:0.85;}
+  .cal-day--blocked .cal-day-date{text-decoration:line-through;}
+  .cal-day--blocked{position:relative; background:#000000;}
+  .cal-day--blocked::after{content:''; position:absolute; left:15%; right:15%; top:50%; height:2px; background:#f4ebe3; transform:translateY(-50%); opacity:0.7; pointer-events:none;}
+  .cal-day--promo{background:#2f5c2a;}
+  .cal-day--promo .cal-day-price{color:#c9e8bf;}
   /* A promoted date that's also host-blocked — struck through rather
      than a third color, since it's really "this promotion is scheduled
      here, but the date itself won't actually be bookable" — one visual
      signal, not two overlapping ones to decode. */
-  .cal-day--promo-blocked{opacity:0.7; text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#2f5c2a;}
-  .cal-day--selected{background:#1c1a17; color:#f4ebe3;}
+  .cal-day--promo-blocked{opacity:0.8; position:relative;}
+  .cal-day--promo-blocked::after{content:''; position:absolute; left:15%; right:15%; top:50%; height:2px; background:#f4ebe3; transform:translateY(-50%); opacity:0.7; pointer-events:none;}
+  .cal-day--selected{background:#8a6c39; border-color:#8a6c39;}
   .cal-legend{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:9.5px; opacity:0.75;}
   .cal-legend span{display:inline-flex; align-items:center; gap:4px;}
   .cal-legend i{width:8px; height:8px; display:inline-block; border-radius:2px;}
@@ -371,21 +377,27 @@
         <label style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7f6c; display:block; margin-bottom:6px;">Nightly Rate (₹)</label>
         <input type="number" id="sbNightlyRateInput" min="1" placeholder="e.g. 5000" style="width:100%; box-sizing:border-box; padding:9px 11px; font-size:14px; border:1px solid #ddd0bc; margin-bottom:16px;">
 
-        <div class="sidebar-section-title">Promotions</div>
+        <div class="sidebar-section-title" style="margin-top:0;">Availability &amp; Pricing</div>
         <div class="cal-wrap">
           <div class="cal-header">
-            <button type="button" class="cal-nav-btn" id="sbPromoCalPrevBtn">&larr;</button>
-            <div class="cal-month-label" id="sbPromoCalMonthLabel"></div>
-            <button type="button" class="cal-nav-btn" id="sbPromoCalNextBtn">&rarr;</button>
+            <button type="button" class="cal-nav-btn" id="sbCalPrevBtn">&larr;</button>
+            <div class="cal-month-label" id="sbCalMonthLabel"></div>
+            <button type="button" class="cal-nav-btn" id="sbCalNextBtn">&rarr;</button>
           </div>
-          <div class="cal-grid" id="sbPromoCalGrid"></div>
+          <div class="cal-grid" id="sbCalGrid"></div>
           <div class="cal-legend">
-            <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
-            <span><i style="background:#d9e8d4;"></i> Promotion</span>
-            <span><i style="background:#e9e2d6;"></i> Booked</span>
+            <span><i style="background:#1c1a17;"></i> Open</span>
+            <span><i style="background:#000000;"></i> Blocked</span>
+            <span><i style="background:#2f5c2a;"></i> Promotion</span>
+            <span><i style="background:#4a463d;"></i> Booked</span>
           </div>
-          <div class="cal-confirm" id="sbPromoCalConfirm">
-            <p id="sbPromoCalConfirmLabel"></p>
+          <div class="cal-confirm" id="sbCalConfirm">
+            <p id="sbCalConfirmLabel"></p>
+            <input type="text" id="sbCalConfirmReason" placeholder="Reason for blocking (optional)">
+            <div class="cal-confirm-actions">
+              <button type="button" class="cal-confirm-block-btn" id="sbCalConfirmBlockBtn">Block These Dates</button>
+            </div>
+            <p style="font-size:10.5px; opacity:0.55; text-align:center; margin:12px 0;">— or run a promotion for these dates instead —</p>
             <input type="text" id="sbPromoConfirmName" placeholder="Promotion name, e.g. Diwali Sale">
             <div class="promo-confirm-fields">
               <select id="sbPromoConfirmType">
@@ -397,37 +409,13 @@
             <input type="number" id="sbPromoConfirmMinNights" placeholder="Minimum nights (optional)" min="1">
             <div class="cal-confirm-actions">
               <button type="button" class="promo-confirm-add-btn" id="sbPromoConfirmAddBtn">Add Promotion</button>
-              <button type="button" class="promo-confirm-cancel-btn" id="sbPromoConfirmCancelBtn">Cancel</button>
+              <button type="button" class="promo-confirm-cancel-btn" id="sbCalConfirmCancelBtn">Cancel</button>
             </div>
           </div>
         </div>
-        <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click an existing promotion's dates to remove it.</p>
-        <div id="sbPromotionsList"></div>
-
-        <div class="sidebar-section-title">Block Dates</div>
-        <div class="cal-wrap">
-          <div class="cal-header">
-            <button type="button" class="cal-nav-btn" id="sbCalPrevBtn">&larr;</button>
-            <div class="cal-month-label" id="sbCalMonthLabel"></div>
-            <button type="button" class="cal-nav-btn" id="sbCalNextBtn">&rarr;</button>
-          </div>
-          <div class="cal-grid" id="sbCalGrid"></div>
-          <div class="cal-legend">
-            <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
-            <span><i style="background:#f3d9c4;"></i> Blocked</span>
-            <span><i style="background:#e9e2d6;"></i> Booked</span>
-          </div>
-          <div class="cal-confirm" id="sbCalConfirm">
-            <p id="sbCalConfirmLabel"></p>
-            <input type="text" id="sbCalConfirmReason" placeholder="Reason (optional)">
-            <div class="cal-confirm-actions">
-              <button type="button" class="cal-confirm-block-btn" id="sbCalConfirmBlockBtn">Block</button>
-              <button type="button" class="cal-confirm-cancel-btn" id="sbCalConfirmCancelBtn">Cancel</button>
-            </div>
-          </div>
-        </div>
-        <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked date to remove it.</p>
+        <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked or promoted date to remove it.</p>
         <div id="sbBlockedList"></div>
+        <div id="sbPromotionsList"></div>
 
         <div class="sidebar-section-title">Paid Amenities</div>
         <div id="sbAmenitiesList"></div>
@@ -491,20 +479,27 @@
             </div>
           </div>
 
-          <div class="sidebar-section-title">Promotions</div>
+          <div class="sidebar-section-title" style="margin-top:0;">Availability &amp; Pricing</div>
           <div class="cal-wrap">
             <div class="cal-header">
-              <button type="button" class="cal-nav-btn" id="expPromoCalPrevBtn">&larr;</button>
-              <div class="cal-month-label" id="expPromoCalMonthLabel"></div>
-              <button type="button" class="cal-nav-btn" id="expPromoCalNextBtn">&rarr;</button>
+              <button type="button" class="cal-nav-btn" id="expCalPrevBtn">&larr;</button>
+              <div class="cal-month-label" id="expCalMonthLabel"></div>
+              <button type="button" class="cal-nav-btn" id="expCalNextBtn">&rarr;</button>
             </div>
-            <div class="cal-grid" id="expPromoCalGrid"></div>
+            <div class="cal-grid" id="expCalGrid"></div>
             <div class="cal-legend">
-              <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
-              <span><i style="background:#d9e8d4;"></i> Promotion</span>
+              <span><i style="background:#1c1a17;"></i> Open</span>
+              <span><i style="background:#000000;"></i> Blocked</span>
+              <span><i style="background:#2f5c2a;"></i> Promotion</span>
+              <span><i style="background:#4a463d;"></i> Booked</span>
             </div>
-            <div class="cal-confirm" id="expPromoCalConfirm">
-              <p id="expPromoCalConfirmLabel"></p>
+            <div class="cal-confirm" id="expCalConfirm">
+              <p id="expCalConfirmLabel"></p>
+              <input type="text" id="expCalConfirmReason" placeholder="Reason for blocking (optional)">
+              <div class="cal-confirm-actions">
+                <button type="button" class="cal-confirm-block-btn" id="expCalConfirmBlockBtn">Block These Dates</button>
+              </div>
+              <p style="font-size:10.5px; opacity:0.55; text-align:center; margin:12px 0;">— or run a promotion for these dates instead —</p>
               <input type="text" id="expPromoConfirmName" placeholder="Promotion name, e.g. Off-Season Special">
               <div class="promo-confirm-fields">
                 <select id="expPromoConfirmType">
@@ -515,37 +510,13 @@
               </div>
               <div class="cal-confirm-actions">
                 <button type="button" class="promo-confirm-add-btn" id="expPromoConfirmAddBtn">Add Promotion</button>
-                <button type="button" class="promo-confirm-cancel-btn" id="expPromoConfirmCancelBtn">Cancel</button>
+                <button type="button" class="promo-confirm-cancel-btn" id="expCalConfirmCancelBtn">Cancel</button>
               </div>
             </div>
           </div>
-          <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click an existing promotion's dates to remove it.</p>
-          <div id="expPromotionsList"></div>
-
-          <div class="sidebar-section-title">Block Dates</div>
-          <div class="cal-wrap">
-            <div class="cal-header">
-              <button type="button" class="cal-nav-btn" id="expCalPrevBtn">&larr;</button>
-              <div class="cal-month-label" id="expCalMonthLabel"></div>
-              <button type="button" class="cal-nav-btn" id="expCalNextBtn">&rarr;</button>
-            </div>
-            <div class="cal-grid" id="expCalGrid"></div>
-            <div class="cal-legend">
-              <span><i style="background:white; border:1px solid #ddd0bc;"></i> Open</span>
-              <span><i style="background:#f3d9c4;"></i> Blocked</span>
-              <span><i style="background:#e9e2d6;"></i> Booked</span>
-            </div>
-            <div class="cal-confirm" id="expCalConfirm">
-              <p id="expCalConfirmLabel"></p>
-              <input type="text" id="expCalConfirmReason" placeholder="Reason (optional)">
-              <div class="cal-confirm-actions">
-                <button type="button" class="cal-confirm-block-btn" id="expCalConfirmBlockBtn">Block</button>
-                <button type="button" class="cal-confirm-cancel-btn" id="expCalConfirmCancelBtn">Cancel</button>
-              </div>
-            </div>
-          </div>
-          <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked date to remove it.</p>
+          <p style="font-size:10.5px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked or promoted date to remove it.</p>
           <div id="expBlockedList"></div>
+          <div id="expPromotionsList"></div>
 
           <button type="button" class="sidebar-save-btn" id="expCalendarSaveBtn">Save Changes</button>
           <p class="sidebar-save-msg" id="expCalendarSaveMsg"></p>
@@ -2386,6 +2357,31 @@
 
   let sbDiscountType = null, sbDiscountValue = null, sbDiscountMinNights = null, sbDiscountDescription = null, sbSecurityDeposit = null;
 
+  // Compact price label for a calendar cell — ₹4.1K rather than
+  // ₹4,100, since the cell is small and this is meant to be read at a
+  // glance across a whole month, not down to the rupee.
+  function formatCompactPrice(n){
+    n = Number(n) || 0;
+    if(n >= 100000) return '₹' + (n / 100000).toFixed(1).replace(/\.0$/, '') + 'L';
+    if(n >= 1000) return '₹' + (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+    return '₹' + n;
+  }
+
+  // Actual price for a given date — checks for an active promotion on
+  // that date first (using whatever rate is currently in the input, live,
+  // so this always matches what's about to be saved), falling back to
+  // the plain rate otherwise. Shared by both the Block Dates and
+  // Promotions calendars so a host sees the same real number everywhere,
+  // not just on the calendar that happens to manage promotions.
+  function sbComputePriceForDate(dateStr){
+    const rate = Number(document.getElementById('sbNightlyRateInput').value) || 0;
+    const promoRow = sbPromoRowFor(dateStr);
+    if(!promoRow) return rate;
+    return promoRow.discountType === 'flat'
+      ? Math.max(0, rate - promoRow.discountValue)
+      : Math.max(0, rate - Math.round(rate * (promoRow.discountValue / 100)));
+  }
+
   function sbToDateStr(d){
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -2529,9 +2525,8 @@
       sbRenderPromotionsList();
       sbRenderAmenitiesList();
       sbRenderCalendar();
-      sbRenderPromoCalendar();
 
-      // Real bookings, for shading both calendars — public endpoint, no
+      // Real bookings, for shading the calendar — public endpoint, no
       // auth needed, same one the guest-facing calendar reads from.
       try{
         const bookedRes = await fetch(API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
@@ -2541,7 +2536,6 @@
         sbBookedRanges = [];
       }
       sbRenderCalendar();
-      sbRenderPromoCalendar();
     } catch(err){
       document.getElementById('sidebarContent').innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not load this listing\'s details. Please refresh and try again.</p>';
     }
@@ -2554,123 +2548,6 @@
 
   function sbBlockedRowFor(dateStr){
     return sbBlockedDateRows.find(b => b.startDate && b.endDate && sbInRange(dateStr, b.startDate, b.endDate));
-  }
-  function sbRenderCalendar(){
-    const grid = document.getElementById('sbCalGrid');
-    document.getElementById('sbCalMonthLabel').textContent = sbCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-    const year = sbCalMonth.getFullYear(), month = sbCalMonth.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const startWeekday = new Date(year, month, 1).getDay();
-    let html = ['S','M','T','W','T','F','S'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
-    for(let i = 0; i < startWeekday; i++) html += `<div class="cal-day cal-day--empty"></div>`;
-    const today = sbTodayStr();
-    for(let day = 1; day <= daysInMonth; day++){
-      const dateStr = sbToDateStr(new Date(year, month, day));
-      const isPast = dateStr < today;
-      const booked = sbDateIsBooked(dateStr);
-      const blockedRow = sbBlockedRowFor(dateStr);
-      let selecting = false;
-      if(sbCalSelStart && sbCalSelEnd){
-        const selMin = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
-        const selMax = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
-        selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
-      }
-      let cls = 'cal-day';
-      if(isPast) cls += ' cal-day--past cal-day--disabled';
-      else if(booked) cls += ' cal-day--booked';
-      else if(selecting) cls += ' cal-day--selected';
-      else if(blockedRow) cls += ' cal-day--blocked';
-      // A booked cell shows who's staying, right on the calendar — first
-      // name (or the part of the email before @ if no name is on file)
-      // so it fits in a small cell; clicking it opens the full details.
-      let bookedLabelHtml = '';
-      let cellTitle = blockedRow && blockedRow.reason ? blockedRow.reason : '';
-      if(booked && sbListingId != null){
-        const booking = findBookingForListingDate(sbListingId, dateStr);
-        if(booking){
-          const shortName = (booking.guest_name || booking.guest_email.split('@')[0]).split(' ')[0];
-          bookedLabelHtml = `<span class="cal-day-guest">${shortName}</span>`;
-          cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
-        }
-      }
-      html += `<div class="${cls}" data-date="${dateStr}" title="${cellTitle}">${day}${bookedLabelHtml}</div>`;
-    }
-    grid.innerHTML = html;
-    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
-      cell.addEventListener('mousedown', () => sbOnCalMouseDown(cell.dataset.date));
-      cell.addEventListener('mouseenter', () => sbOnCalMouseEnter(cell.dataset.date));
-      cell.addEventListener('mouseup', () => sbOnCalMouseUp(cell.dataset.date));
-      cell.addEventListener('click', () => sbOnCalClick(cell.dataset.date));
-    });
-    grid.querySelectorAll('.cal-day--booked').forEach(cell => {
-      cell.style.cursor = 'pointer';
-      cell.addEventListener('click', () => {
-        const booking = findBookingForListingDate(sbListingId, cell.dataset.date);
-        if(booking) showBookingDetailsPopup(booking);
-      });
-    });
-  }
-  function sbOnCalMouseDown(dateStr){
-    if(sbBlockedRowFor(dateStr)) return;
-    sbCalDragging = true; sbCalSelStart = dateStr; sbCalSelEnd = dateStr;
-    sbRenderCalendar();
-  }
-  function sbOnCalMouseEnter(dateStr){
-    if(!sbCalDragging || !sbCalSelStart) return;
-    sbCalSelEnd = dateStr; sbRenderCalendar();
-  }
-  function sbOnCalMouseUp(dateStr){
-    if(!sbCalDragging) return;
-    sbCalDragging = false; sbCalSelEnd = dateStr;
-    if(sbCalSelStart) sbShowCalConfirm();
-  }
-  function sbOnCalClick(dateStr){
-    const existing = sbBlockedRowFor(dateStr);
-    if(existing){
-      if(window.confirm(`Remove this block (${existing.startDate} to ${existing.endDate}${existing.reason ? ', ' + existing.reason : ''})?`)){
-        sbBlockedDateRows = sbBlockedDateRows.filter(b => b !== existing);
-        sbRenderBlockedList(); sbRenderCalendar(); sbRenderPromoCalendar();
-      }
-    }
-  }
-  function sbShowCalConfirm(){
-    const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
-    const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
-    document.getElementById('sbCalConfirmLabel').textContent = start === endInclusive ? `Block ${start}?` : `Block ${start} to ${endInclusive}?`;
-    document.getElementById('sbCalConfirmReason').value = '';
-    document.getElementById('sbCalConfirm').style.display = 'block';
-  }
-  function sbHideCalConfirm(){
-    sbCalSelStart = null; sbCalSelEnd = null; sbCalDragging = false;
-    document.getElementById('sbCalConfirm').style.display = 'none';
-    sbRenderCalendar();
-  }
-  document.getElementById('sbCalConfirmBlockBtn').addEventListener('click', () => {
-    const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
-    const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
-    sbBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('sbCalConfirmReason').value.trim() });
-    sbRenderBlockedList(); sbHideCalConfirm(); sbRenderPromoCalendar();
-  });
-  document.getElementById('sbCalConfirmCancelBtn').addEventListener('click', sbHideCalConfirm);
-  document.getElementById('sbCalPrevBtn').addEventListener('click', () => { sbCalMonth.setMonth(sbCalMonth.getMonth() - 1); sbRenderCalendar(); });
-  document.getElementById('sbCalNextBtn').addEventListener('click', () => { sbCalMonth.setMonth(sbCalMonth.getMonth() + 1); sbRenderCalendar(); });
-  document.addEventListener('mouseup', () => { if(sbCalDragging){ sbCalDragging = false; if(sbCalSelStart && sbCalSelEnd) sbShowCalConfirm(); } });
-
-  function sbRenderBlockedList(){
-    const list = document.getElementById('sbBlockedList');
-    if(!sbBlockedDateRows.length){ list.innerHTML = ''; return; }
-    list.innerHTML = sbBlockedDateRows.map((b, idx) => `
-      <div class="sidebar-list-row">
-        ${b.startDate} to ${b.endDate}${b.reason ? ' — ' + b.reason : ''}
-        <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
-      </div>
-    `).join('');
-    list.querySelectorAll('[data-idx]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        sbBlockedDateRows.splice(Number(btn.dataset.idx), 1);
-        sbRenderBlockedList(); sbRenderCalendar(); sbRenderPromoCalendar();
-      });
-    });
   }
 
   // ============================================================
@@ -2722,9 +2599,17 @@
   document.getElementById('expPromoConfirmType').addEventListener('change', expUpdatePromoPreview);
 
   let expCalBlockedDateRows = [];
+
+  function expComputePriceForDate(dateStr){
+    const rate = Number(document.getElementById('expPriceInput').value) || 0;
+    const promoRow = expPromoRowFor(dateStr);
+    if(!promoRow) return rate;
+    return promoRow.discountType === 'flat'
+      ? Math.max(0, rate - promoRow.discountValue)
+      : Math.max(0, rate - Math.round(rate * (promoRow.discountValue / 100)));
+  }
+
   let expPromotionRows = [];
-  let expPromoCalMonth = new Date(); expPromoCalMonth.setDate(1); expPromoCalMonth.setHours(0,0,0,0);
-  let expPromoSelStart = null, expPromoSelEnd = null, expPromoDragging = false;
   let expCalMonth = new Date(); expCalMonth.setDate(1); expCalMonth.setHours(0,0,0,0);
   let expCalSelStart = null, expCalSelEnd = null, expCalDragging = false;
 
@@ -2774,10 +2659,9 @@
         startDate: p.start_date ? p.start_date.slice(0, 10) : '', endDate: p.end_date ? p.end_date.slice(0, 10) : '',
         isActive: p.is_active
       }));
-      expCalRenderBlockedList();
-      expCalRenderCalendar();
+      expRenderBlockedList();
       expRenderPromotionsList();
-      expRenderPromoCalendar();
+      expRenderCalendar();
     } catch(err){
       document.getElementById('expCalendarContent').innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not load this experience\'s calendar. Please refresh and try again.</p>';
     }
@@ -2786,7 +2670,7 @@
   function expCalBlockedRowFor(dateStr){
     return expCalBlockedDateRows.find(b => b.startDate && b.endDate && sbInRange(dateStr, b.startDate, b.endDate));
   }
-  function expCalRenderCalendar(){
+  function expRenderCalendar(){
     const grid = document.getElementById('expCalGrid');
     document.getElementById('expCalMonthLabel').textContent = expCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
     const year = expCalMonth.getFullYear(), month = expCalMonth.getMonth();
@@ -2798,8 +2682,10 @@
     for(let day = 1; day <= daysInMonth; day++){
       const dateStr = sbToDateStr(new Date(year, month, day));
       const isPast = dateStr < today;
-      const blockedRow = expCalBlockedRowFor(dateStr);
       const booking = expCalListingId != null ? findBookingForListingDate(expCalListingId, dateStr) : null;
+      const promoRow = expPromoRowFor(dateStr);
+      const blockedRow = expCalBlockedRowFor(dateStr);
+      const alsoBlocked = promoRow && blockedRow;
       let selecting = false;
       if(expCalSelStart && expCalSelEnd){
         const selMin = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
@@ -2810,15 +2696,21 @@
       if(isPast) cls += ' cal-day--past cal-day--disabled';
       else if(booking) cls += ' cal-day--booked';
       else if(selecting) cls += ' cal-day--selected';
+      else if(promoRow) cls += ' cal-day--promo' + (alsoBlocked ? ' cal-day--promo-blocked' : '');
       else if(blockedRow) cls += ' cal-day--blocked';
-      let bookedLabelHtml = '';
-      let cellTitle = blockedRow && blockedRow.reason ? blockedRow.reason : '';
+      const title = promoRow
+        ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
+        : (blockedRow ? `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}` : '');
+      let priceOrGuestHtml = '';
+      let cellTitle = title;
       if(booking){
         const shortName = (booking.guest_name || booking.guest_email.split('@')[0]).split(' ')[0];
-        bookedLabelHtml = `<span class="cal-day-guest">${shortName}</span>`;
+        priceOrGuestHtml = `<span class="cal-day-guest">${shortName}</span>`;
         cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
+      } else if(!isPast){
+        priceOrGuestHtml = `<span class="cal-day-price">${formatCompactPrice(expComputePriceForDate(dateStr))}</span>`;
       }
-      html += `<div class="${cls}" data-date="${dateStr}" title="${cellTitle}">${day}${bookedLabelHtml}</div>`;
+      html += `<div class="${cls}" data-date="${dateStr}" title="${cellTitle}"><span class="cal-day-date">${day}</span>${priceOrGuestHtml}</div>`;
     }
     grid.innerHTML = html;
     grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
@@ -2835,52 +2727,99 @@
     });
   }
   function expCalOnMouseDown(dateStr){
-    if(expCalBlockedRowFor(dateStr)) return;
+    if(expCalBlockedRowFor(dateStr) || expPromoRowFor(dateStr)) return;
     expCalDragging = true; expCalSelStart = dateStr; expCalSelEnd = dateStr;
-    expCalRenderCalendar();
+    expRenderCalendar();
   }
   function expCalOnMouseEnter(dateStr){
     if(!expCalDragging || !expCalSelStart) return;
-    expCalSelEnd = dateStr; expCalRenderCalendar();
+    expCalSelEnd = dateStr; expRenderCalendar();
   }
   function expCalOnMouseUp(dateStr){
     if(!expCalDragging) return;
     expCalDragging = false; expCalSelEnd = dateStr;
-    if(expCalSelStart) expCalShowConfirm();
+    if(expCalSelStart) expShowCalConfirm();
   }
   function expCalOnClick(dateStr){
-    const existing = expCalBlockedRowFor(dateStr);
-    if(existing){
-      if(window.confirm(`Remove this block (${existing.startDate} to ${existing.endDate}${existing.reason ? ', ' + existing.reason : ''})?`)){
-        expCalBlockedDateRows = expCalBlockedDateRows.filter(b => b !== existing);
-        expCalRenderBlockedList(); expCalRenderCalendar(); expRenderPromoCalendar();
+    const existingPromo = expPromoRowFor(dateStr);
+    if(existingPromo){
+      const rate = Number(document.getElementById('expPriceInput').value) || 0;
+      const discountedRate = existingPromo.discountType === 'flat'
+        ? Math.max(0, rate - existingPromo.discountValue)
+        : Math.max(0, rate - Math.round(rate * (existingPromo.discountValue / 100)));
+      const discountedPayout = discountedRate - Math.round(discountedRate * (expCalCommissionRate / 100));
+
+      document.getElementById('expSummaryHeading').textContent = 'Your Payout — Selected Date';
+      document.getElementById('expSummaryDateLabel').textContent = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      document.getElementById('expSummaryPromoPreview').style.display = 'none';
+      document.getElementById('expExistingPromoName').textContent = existingPromo.name;
+      document.getElementById('expExistingPromoDiscount').textContent = existingPromo.discountType === 'flat' ? `₹${existingPromo.discountValue} off` : `${existingPromo.discountValue}% off`;
+      document.getElementById('expExistingPromoPayout').textContent = '₹' + discountedPayout.toLocaleString('en-IN');
+      document.getElementById('expExistingPromoDetails').style.display = 'block';
+
+      document.getElementById('expRemovePromoSingleDayBtn').onclick = () => {
+        expRemovePromoForSingleDay(existingPromo, dateStr);
+        expResetSummaryToBase();
+      };
+      document.getElementById('expRemovePromoWholeBtn').onclick = () => {
+        if(window.confirm(`Remove the entire "${existingPromo.name}" promotion (${existingPromo.startDate} to ${existingPromo.endDate})?`)){
+          expPromotionRows = expPromotionRows.filter(p => p !== existingPromo);
+          expRenderPromotionsList(); expRenderCalendar();
+          expResetSummaryToBase();
+        }
+      };
+      return;
+    }
+    const existingBlock = expCalBlockedRowFor(dateStr);
+    if(existingBlock){
+      if(window.confirm(`Remove this block (${existingBlock.startDate} to ${existingBlock.endDate}${existingBlock.reason ? ', ' + existingBlock.reason : ''})?`)){
+        expCalBlockedDateRows = expCalBlockedDateRows.filter(b => b !== existingBlock);
+        expRenderBlockedList(); expRenderCalendar();
       }
     }
   }
-  function expCalShowConfirm(){
+  function expShowCalConfirm(){
     const start = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
     const endInclusive = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
-    document.getElementById('expCalConfirmLabel').textContent = start === endInclusive ? `Block ${start}?` : `Block ${start} to ${endInclusive}?`;
+    document.getElementById('expCalConfirmLabel').textContent = start === endInclusive ? start : `${start} to ${endInclusive}`;
     document.getElementById('expCalConfirmReason').value = '';
+    document.getElementById('expPromoConfirmName').value = '';
+    document.getElementById('expPromoConfirmType').value = 'percentage';
+    document.getElementById('expPromoConfirmValue').value = '';
     document.getElementById('expCalConfirm').style.display = 'block';
+    document.getElementById('expSummaryPromoPreview').style.display = 'none';
+    expResetSummaryToBase();
   }
-  function expCalHideConfirm(){
+  function expHideCalConfirm(){
     expCalSelStart = null; expCalSelEnd = null; expCalDragging = false;
     document.getElementById('expCalConfirm').style.display = 'none';
-    expCalRenderCalendar();
+    document.getElementById('expSummaryPromoPreview').style.display = 'none';
+    expRenderCalendar();
   }
   document.getElementById('expCalConfirmBlockBtn').addEventListener('click', () => {
     const start = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
     const endInclusive = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
     expCalBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('expCalConfirmReason').value.trim() });
-    expCalRenderBlockedList(); expCalHideConfirm(); expRenderPromoCalendar();
+    expRenderBlockedList(); expHideCalConfirm();
   });
-  document.getElementById('expCalConfirmCancelBtn').addEventListener('click', expCalHideConfirm);
-  document.getElementById('expCalPrevBtn').addEventListener('click', () => { expCalMonth.setMonth(expCalMonth.getMonth() - 1); expCalRenderCalendar(); });
-  document.getElementById('expCalNextBtn').addEventListener('click', () => { expCalMonth.setMonth(expCalMonth.getMonth() + 1); expCalRenderCalendar(); });
-  document.addEventListener('mouseup', () => { if(expCalDragging){ expCalDragging = false; if(expCalSelStart && expCalSelEnd) expCalShowConfirm(); } });
+  document.getElementById('expPromoConfirmAddBtn').addEventListener('click', () => {
+    const start = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
+    const endInclusive = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
+    const name = document.getElementById('expPromoConfirmName').value.trim();
+    const discountType = document.getElementById('expPromoConfirmType').value;
+    const discountValue = Number(document.getElementById('expPromoConfirmValue').value);
+    if(!name){ alert('Please give this promotion a name.'); return; }
+    if(!discountValue || discountValue <= 0){ alert('Please enter a discount amount greater than 0.'); return; }
+    if(discountType === 'percentage' && discountValue > 100){ alert('A percentage discount can\'t be more than 100.'); return; }
+    expPromotionRows.push({ id: null, name, discountType, discountValue, minNights: null, startDate: start, endDate: sbNextDay(endInclusive), isActive: true });
+    expRenderPromotionsList(); expHideCalConfirm();
+  });
+  document.getElementById('expCalConfirmCancelBtn').addEventListener('click', expHideCalConfirm);
+  document.getElementById('expCalPrevBtn').addEventListener('click', () => { expCalMonth.setMonth(expCalMonth.getMonth() - 1); expRenderCalendar(); });
+  document.getElementById('expCalNextBtn').addEventListener('click', () => { expCalMonth.setMonth(expCalMonth.getMonth() + 1); expRenderCalendar(); });
+  document.addEventListener('mouseup', () => { if(expCalDragging){ expCalDragging = false; if(expCalSelStart && expCalSelEnd) expShowCalConfirm(); } });
 
-  function expCalRenderBlockedList(){
+  function expRenderBlockedList(){
     const list = document.getElementById('expBlockedList');
     if(!expCalBlockedDateRows.length){ list.innerHTML = ''; return; }
     list.innerHTML = expCalBlockedDateRows.map((b, idx) => `
@@ -2892,105 +2831,13 @@
     list.querySelectorAll('[data-idx]').forEach(btn => {
       btn.addEventListener('click', () => {
         expCalBlockedDateRows.splice(Number(btn.dataset.idx), 1);
-        expCalRenderBlockedList(); expCalRenderCalendar(); expRenderPromoCalendar();
+        expRenderBlockedList(); expRenderCalendar();
       });
     });
   }
 
-  // Experience promotions calendar — same interaction model as the stay
-  // sidebar's own promotions calendar above, minus "minimum nights"
-  // (an experience is a single-day booking, not a multi-night stay, so
-  // that field doesn't apply here). Shares the same save endpoint and
-  // sbInRange/sbNextDay/sbToDateStr/sbTodayStr helpers.
   function expPromoRowFor(dateStr){
     return expPromotionRows.find(p => p.startDate && p.endDate && sbInRange(dateStr, p.startDate, p.endDate));
-  }
-  function expRenderPromoCalendar(){
-    const grid = document.getElementById('expPromoCalGrid');
-    if(!grid) return;
-    document.getElementById('expPromoCalMonthLabel').textContent = expPromoCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-    const year = expPromoCalMonth.getFullYear(), month = expPromoCalMonth.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const startWeekday = new Date(year, month, 1).getDay();
-    let html = ['S','M','T','W','T','F','S'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
-    for(let i = 0; i < startWeekday; i++) html += `<div class="cal-day cal-day--empty"></div>`;
-    const today = sbTodayStr();
-    for(let day = 1; day <= daysInMonth; day++){
-      const dateStr = sbToDateStr(new Date(year, month, day));
-      const isPast = dateStr < today;
-      const booking = expCalListingId != null ? findBookingForListingDate(expCalListingId, dateStr) : null;
-      const promoRow = expPromoRowFor(dateStr);
-      const blockedRow = expCalBlockedRowFor(dateStr);
-      const alsoBlocked = promoRow && blockedRow;
-      let selecting = false;
-      if(expPromoSelStart && expPromoSelEnd){
-        const selMin = expPromoSelStart <= expPromoSelEnd ? expPromoSelStart : expPromoSelEnd;
-        const selMax = expPromoSelStart <= expPromoSelEnd ? expPromoSelEnd : expPromoSelStart;
-        selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
-      }
-      let cls = 'cal-day';
-      if(isPast) cls += ' cal-day--past cal-day--disabled';
-      else if(booking) cls += ' cal-day--booked';
-      else if(selecting) cls += ' cal-day--selected';
-      else if(promoRow) cls += ' cal-day--promo' + (alsoBlocked ? ' cal-day--promo-blocked' : '');
-      else if(blockedRow) cls += ' cal-day--blocked';
-      const discountLabel = promoRow ? (promoRow.discountType === 'flat' ? `₹${promoRow.discountValue}` : `${promoRow.discountValue}%`) : '';
-      const title = promoRow
-        ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
-        : (blockedRow ? `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}` : '');
-      const promoLabelHtml = promoRow ? `<span class="cal-day-promo-value">${discountLabel}</span>` : '';
-      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}${promoLabelHtml}</div>`;
-    }
-    grid.innerHTML = html;
-    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
-      cell.addEventListener('mousedown', () => expOnPromoMouseDown(cell.dataset.date));
-      cell.addEventListener('mouseenter', () => expOnPromoMouseEnter(cell.dataset.date));
-      cell.addEventListener('mouseup', () => expOnPromoMouseUp(cell.dataset.date));
-      cell.addEventListener('click', () => expOnPromoClick(cell.dataset.date));
-    });
-  }
-  function expOnPromoMouseDown(dateStr){
-    if(expPromoRowFor(dateStr)) return;
-    expPromoDragging = true; expPromoSelStart = dateStr; expPromoSelEnd = dateStr;
-    expRenderPromoCalendar();
-  }
-  function expOnPromoMouseEnter(dateStr){
-    if(!expPromoDragging || !expPromoSelStart) return;
-    expPromoSelEnd = dateStr; expRenderPromoCalendar();
-  }
-  function expOnPromoMouseUp(dateStr){
-    if(!expPromoDragging) return;
-    expPromoDragging = false; expPromoSelEnd = dateStr;
-    if(expPromoSelStart) expShowPromoConfirm();
-  }
-  function expOnPromoClick(dateStr){
-    const existing = expPromoRowFor(dateStr);
-    if(!existing) return;
-    const rate = Number(document.getElementById('expPriceInput').value) || 0;
-    const discountedRate = existing.discountType === 'flat'
-      ? Math.max(0, rate - existing.discountValue)
-      : Math.max(0, rate - Math.round(rate * (existing.discountValue / 100)));
-    const discountedPayout = discountedRate - Math.round(discountedRate * (expCalCommissionRate / 100));
-
-    document.getElementById('expSummaryHeading').textContent = 'Your Payout — Selected Date';
-    document.getElementById('expSummaryDateLabel').textContent = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-    document.getElementById('expSummaryPromoPreview').style.display = 'none';
-    document.getElementById('expExistingPromoName').textContent = existing.name;
-    document.getElementById('expExistingPromoDiscount').textContent = existing.discountType === 'flat' ? `₹${existing.discountValue} off` : `${existing.discountValue}% off`;
-    document.getElementById('expExistingPromoPayout').textContent = '₹' + discountedPayout.toLocaleString('en-IN');
-    document.getElementById('expExistingPromoDetails').style.display = 'block';
-
-    document.getElementById('expRemovePromoSingleDayBtn').onclick = () => {
-      expRemovePromoForSingleDay(existing, dateStr);
-      expResetSummaryToBase();
-    };
-    document.getElementById('expRemovePromoWholeBtn').onclick = () => {
-      if(window.confirm(`Remove the entire "${existing.name}" promotion (${existing.startDate} to ${existing.endDate})?`)){
-        expPromotionRows = expPromotionRows.filter(p => p !== existing);
-        expRenderPromotionsList(); expRenderPromoCalendar();
-        expResetSummaryToBase();
-      }
-    };
   }
 
   function expRemovePromoForSingleDay(promo, dateStr){
@@ -3007,7 +2854,7 @@
       promo.endDate = dateStr;
       expPromotionRows.push(after);
     }
-    expRenderPromotionsList(); expRenderPromoCalendar();
+    expRenderPromotionsList(); expRenderCalendar();
   }
 
   function expResetSummaryToBase(){
@@ -3015,40 +2862,6 @@
     document.getElementById('expSummaryDateLabel').textContent = 'Not tied to a specific date — this is the standard price.';
     document.getElementById('expExistingPromoDetails').style.display = 'none';
   }
-
-  function expShowPromoConfirm(){
-    const start = expPromoSelStart <= expPromoSelEnd ? expPromoSelStart : expPromoSelEnd;
-    const endInclusive = expPromoSelStart <= expPromoSelEnd ? expPromoSelEnd : expPromoSelStart;
-    document.getElementById('expPromoCalConfirmLabel').textContent = start === endInclusive ? `New promotion for ${start}` : `New promotion for ${start} to ${endInclusive}`;
-    document.getElementById('expPromoConfirmName').value = '';
-    document.getElementById('expPromoConfirmType').value = 'percentage';
-    document.getElementById('expPromoConfirmValue').value = '';
-    document.getElementById('expPromoCalConfirm').style.display = 'block';
-    document.getElementById('expSummaryPromoPreview').style.display = 'none';
-    expResetSummaryToBase();
-  }
-  function expHidePromoConfirm(){
-    expPromoSelStart = null; expPromoSelEnd = null; expPromoDragging = false;
-    document.getElementById('expPromoCalConfirm').style.display = 'none';
-    document.getElementById('expSummaryPromoPreview').style.display = 'none';
-    expRenderPromoCalendar();
-  }
-  document.getElementById('expPromoConfirmAddBtn').addEventListener('click', () => {
-    const start = expPromoSelStart <= expPromoSelEnd ? expPromoSelStart : expPromoSelEnd;
-    const endInclusive = expPromoSelStart <= expPromoSelEnd ? expPromoSelEnd : expPromoSelStart;
-    const name = document.getElementById('expPromoConfirmName').value.trim();
-    const discountType = document.getElementById('expPromoConfirmType').value;
-    const discountValue = Number(document.getElementById('expPromoConfirmValue').value);
-    if(!name){ alert('Please give this promotion a name.'); return; }
-    if(!discountValue || discountValue <= 0){ alert('Please enter a discount amount greater than 0.'); return; }
-    if(discountType === 'percentage' && discountValue > 100){ alert('A percentage discount can\'t be more than 100.'); return; }
-    expPromotionRows.push({ id: null, name, discountType, discountValue, minNights: null, startDate: start, endDate: sbNextDay(endInclusive), isActive: true });
-    expRenderPromotionsList(); expHidePromoConfirm();
-  });
-  document.getElementById('expPromoConfirmCancelBtn').addEventListener('click', expHidePromoConfirm);
-  document.getElementById('expPromoCalPrevBtn').addEventListener('click', () => { expPromoCalMonth.setMonth(expPromoCalMonth.getMonth() - 1); expRenderPromoCalendar(); });
-  document.getElementById('expPromoCalNextBtn').addEventListener('click', () => { expPromoCalMonth.setMonth(expPromoCalMonth.getMonth() + 1); expRenderPromoCalendar(); });
-  document.addEventListener('mouseup', () => { if(expPromoDragging){ expPromoDragging = false; if(expPromoSelStart && expPromoSelEnd) expShowPromoConfirm(); } });
 
   function expRenderPromotionsList(){
     const list = document.getElementById('expPromotionsList');
@@ -3066,7 +2879,7 @@
     list.querySelectorAll('[data-idx]').forEach(btn => {
       btn.addEventListener('click', () => {
         expPromotionRows.splice(Number(btn.dataset.idx), 1);
-        expRenderPromotionsList(); expRenderPromoCalendar();
+        expRenderPromotionsList(); expRenderCalendar();
       });
     });
   }
@@ -3123,18 +2936,22 @@
     btn.disabled = false; btn.textContent = 'Save Changes';
   });
 
-  // ---- Promotions calendar ----
+  // ---- Merged availability calendar: blocking, promotions, bookings,
+  // and real per-date pricing all on one grid (see sbCalGrid in the
+  // HTML) — a host used to have to check two separate calendars to see
+  // whether a date was free, blocked, or discounted; now it's all one
+  // view, and dragging a date range offers both "Block" and "Add
+  // Promotion" as two outcomes of the same selection instead of two
+  // separate flows. ----
   let sbPromotionRows = [];
-  let sbPromoCalMonth = new Date(); sbPromoCalMonth.setDate(1); sbPromoCalMonth.setHours(0,0,0,0);
-  let sbPromoSelStart = null, sbPromoSelEnd = null, sbPromoDragging = false;
 
   function sbPromoRowFor(dateStr){
     return sbPromotionRows.find(p => p.startDate && p.endDate && sbInRange(dateStr, p.startDate, p.endDate));
   }
-  function sbRenderPromoCalendar(){
-    const grid = document.getElementById('sbPromoCalGrid');
-    document.getElementById('sbPromoCalMonthLabel').textContent = sbPromoCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-    const year = sbPromoCalMonth.getFullYear(), month = sbPromoCalMonth.getMonth();
+  function sbRenderCalendar(){
+    const grid = document.getElementById('sbCalGrid');
+    document.getElementById('sbCalMonthLabel').textContent = sbCalMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    const year = sbCalMonth.getFullYear(), month = sbCalMonth.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const startWeekday = new Date(year, month, 1).getDay();
     let html = ['S','M','T','W','T','F','S'].map(w => `<div class="cal-weekday">${w}</div>`).join('');
@@ -3150,15 +2967,12 @@
       // at that discount — struck through rather than given a third,
       // separate color, so it reads at a glance as "this promotion
       // exists here, but the date itself is blocked" instead of forcing
-      // the host to decode another color in the legend. A blocked date
-      // with NO promotion also needs to show as blocked here — previously
-      // it fell through to looking identically "Open", which hid the
-      // fact that it wasn't actually available at all.
+      // the host to decode another color in the legend.
       const alsoBlocked = promoRow && blockedRow;
       let selecting = false;
-      if(sbPromoSelStart && sbPromoSelEnd){
-        const selMin = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelStart : sbPromoSelEnd;
-        const selMax = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelEnd : sbPromoSelStart;
+      if(sbCalSelStart && sbCalSelEnd){
+        const selMin = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
+        const selMax = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
         selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
       }
       let cls = 'cal-day';
@@ -3167,63 +2981,100 @@
       else if(selecting) cls += ' cal-day--selected';
       else if(promoRow) cls += ' cal-day--promo' + (alsoBlocked ? ' cal-day--promo-blocked' : '');
       else if(blockedRow) cls += ' cal-day--blocked';
-      const discountLabel = promoRow ? (promoRow.discountType === 'flat' ? `₹${promoRow.discountValue}` : `${promoRow.discountValue}%`) : '';
       const title = promoRow
         ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
         : (blockedRow ? `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}` : '');
-      const promoLabelHtml = promoRow ? `<span class="cal-day-promo-value">${discountLabel}</span>` : '';
-      html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}${promoLabelHtml}</div>`;
+      // A booked cell shows who's staying, right on the calendar. Every
+      // other cell shows the actual price for that date instead
+      // (promo-discounted if one applies, shown directly as a real
+      // rupee amount rather than a bare percentage — the number a host
+      // actually gets paid matters more here than how the discount was
+      // expressed) so a host reads real pricing at a glance across the
+      // whole month.
+      let priceOrGuestHtml = '';
+      let cellTitle = title;
+      if(booked && sbListingId != null){
+        const booking = findBookingForListingDate(sbListingId, dateStr);
+        if(booking){
+          const shortName = (booking.guest_name || booking.guest_email.split('@')[0]).split(' ')[0];
+          priceOrGuestHtml = `<span class="cal-day-guest">${shortName}</span>`;
+          cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
+        }
+      } else if(!isPast){
+        priceOrGuestHtml = `<span class="cal-day-price">${formatCompactPrice(sbComputePriceForDate(dateStr))}</span>`;
+      }
+      html += `<div class="${cls}" data-date="${dateStr}" title="${cellTitle}"><span class="cal-day-date">${day}</span>${priceOrGuestHtml}</div>`;
     }
     grid.innerHTML = html;
     grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
-      cell.addEventListener('mousedown', () => sbOnPromoMouseDown(cell.dataset.date));
-      cell.addEventListener('mouseenter', () => sbOnPromoMouseEnter(cell.dataset.date));
-      cell.addEventListener('mouseup', () => sbOnPromoMouseUp(cell.dataset.date));
-      cell.addEventListener('click', () => sbOnPromoClick(cell.dataset.date));
+      cell.addEventListener('mousedown', () => sbOnCalMouseDown(cell.dataset.date));
+      cell.addEventListener('mouseenter', () => sbOnCalMouseEnter(cell.dataset.date));
+      cell.addEventListener('mouseup', () => sbOnCalMouseUp(cell.dataset.date));
+      cell.addEventListener('click', () => sbOnCalClick(cell.dataset.date));
+    });
+    grid.querySelectorAll('.cal-day--booked').forEach(cell => {
+      cell.style.cursor = 'pointer';
+      cell.addEventListener('click', () => {
+        const booking = findBookingForListingDate(sbListingId, cell.dataset.date);
+        if(booking) showBookingDetailsPopup(booking);
+      });
     });
   }
-  function sbOnPromoMouseDown(dateStr){
-    if(sbPromoRowFor(dateStr)) return;
-    sbPromoDragging = true; sbPromoSelStart = dateStr; sbPromoSelEnd = dateStr;
-    sbRenderPromoCalendar();
+  function sbOnCalMouseDown(dateStr){
+    if(sbBlockedRowFor(dateStr) || sbPromoRowFor(dateStr)) return;
+    sbCalDragging = true; sbCalSelStart = dateStr; sbCalSelEnd = dateStr;
+    sbRenderCalendar();
   }
-  function sbOnPromoMouseEnter(dateStr){
-    if(!sbPromoDragging || !sbPromoSelStart) return;
-    sbPromoSelEnd = dateStr; sbRenderPromoCalendar();
+  function sbOnCalMouseEnter(dateStr){
+    if(!sbCalDragging || !sbCalSelStart) return;
+    sbCalSelEnd = dateStr; sbRenderCalendar();
   }
-  function sbOnPromoMouseUp(dateStr){
-    if(!sbPromoDragging) return;
-    sbPromoDragging = false; sbPromoSelEnd = dateStr;
-    if(sbPromoSelStart) sbShowPromoConfirm();
+  function sbOnCalMouseUp(dateStr){
+    if(!sbCalDragging) return;
+    sbCalDragging = false; sbCalSelEnd = dateStr;
+    if(sbCalSelStart) sbShowCalConfirm();
   }
-  function sbOnPromoClick(dateStr){
-    const existing = sbPromoRowFor(dateStr);
-    if(!existing) return;
-    const rate = Number(document.getElementById('sbNightlyRateInput').value) || 0;
-    const discountedRate = existing.discountType === 'flat'
-      ? Math.max(0, rate - existing.discountValue)
-      : Math.max(0, rate - Math.round(rate * (existing.discountValue / 100)));
-    const discountedPayout = discountedRate - Math.round(discountedRate * (sbCommissionRate / 100));
+  // Clicking an existing entry removes it — a date can (unusually) carry
+  // both a promotion and a block at once, so the promotion is checked
+  // first (it's the thing a host is more likely mid-adjusting), and the
+  // block on a second click if one remains.
+  function sbOnCalClick(dateStr){
+    const existingPromo = sbPromoRowFor(dateStr);
+    if(existingPromo){
+      const rate = Number(document.getElementById('sbNightlyRateInput').value) || 0;
+      const discountedRate = existingPromo.discountType === 'flat'
+        ? Math.max(0, rate - existingPromo.discountValue)
+        : Math.max(0, rate - Math.round(rate * (existingPromo.discountValue / 100)));
+      const discountedPayout = discountedRate - Math.round(discountedRate * (sbCommissionRate / 100));
 
-    document.getElementById('sbSummaryHeading').textContent = 'Your Payout — Selected Date';
-    document.getElementById('sbSummaryDateLabel').textContent = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-    document.getElementById('sbSummaryPromoPreview').style.display = 'none';
-    document.getElementById('sbExistingPromoName').textContent = existing.name;
-    document.getElementById('sbExistingPromoDiscount').textContent = existing.discountType === 'flat' ? `₹${existing.discountValue} off` : `${existing.discountValue}% off`;
-    document.getElementById('sbExistingPromoPayout').textContent = '₹' + discountedPayout.toLocaleString('en-IN');
-    document.getElementById('sbExistingPromoDetails').style.display = 'block';
+      document.getElementById('sbSummaryHeading').textContent = 'Your Payout — Selected Date';
+      document.getElementById('sbSummaryDateLabel').textContent = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      document.getElementById('sbSummaryPromoPreview').style.display = 'none';
+      document.getElementById('sbExistingPromoName').textContent = existingPromo.name;
+      document.getElementById('sbExistingPromoDiscount').textContent = existingPromo.discountType === 'flat' ? `₹${existingPromo.discountValue} off` : `${existingPromo.discountValue}% off`;
+      document.getElementById('sbExistingPromoPayout').textContent = '₹' + discountedPayout.toLocaleString('en-IN');
+      document.getElementById('sbExistingPromoDetails').style.display = 'block';
 
-    document.getElementById('sbRemovePromoSingleDayBtn').onclick = () => {
-      sbRemovePromoForSingleDay(existing, dateStr);
-      sbResetSummaryToBase();
-    };
-    document.getElementById('sbRemovePromoWholeBtn').onclick = () => {
-      if(window.confirm(`Remove the entire "${existing.name}" promotion (${existing.startDate} to ${existing.endDate})?`)){
-        sbPromotionRows = sbPromotionRows.filter(p => p !== existing);
-        sbRenderPromotionsList(); sbRenderPromoCalendar();
+      document.getElementById('sbRemovePromoSingleDayBtn').onclick = () => {
+        sbRemovePromoForSingleDay(existingPromo, dateStr);
         sbResetSummaryToBase();
+      };
+      document.getElementById('sbRemovePromoWholeBtn').onclick = () => {
+        if(window.confirm(`Remove the entire "${existingPromo.name}" promotion (${existingPromo.startDate} to ${existingPromo.endDate})?`)){
+          sbPromotionRows = sbPromotionRows.filter(p => p !== existingPromo);
+          sbRenderPromotionsList(); sbRenderCalendar();
+          sbResetSummaryToBase();
+        }
+      };
+      return;
+    }
+    const existingBlock = sbBlockedRowFor(dateStr);
+    if(existingBlock){
+      if(window.confirm(`Remove this block (${existingBlock.startDate} to ${existingBlock.endDate}${existingBlock.reason ? ', ' + existingBlock.reason : ''})?`)){
+        sbBlockedDateRows = sbBlockedDateRows.filter(b => b !== existingBlock);
+        sbRenderBlockedList(); sbRenderCalendar();
       }
-    };
+    }
   }
 
   // Splits a promotion's date range to exclude just one day, rather than
@@ -3234,20 +3085,17 @@
     const isFirstDay = dateStr === promo.startDate;
     const isLastDay = sbNextDay(dateStr) === promo.endDate;
     if(isFirstDay && isLastDay){
-      // A single-day promotion — removing its only day removes it entirely.
       sbPromotionRows = sbPromotionRows.filter(p => p !== promo);
     } else if(isFirstDay){
       promo.startDate = sbNextDay(dateStr);
     } else if(isLastDay){
       promo.endDate = dateStr;
     } else {
-      // Splits into two: everything before dateStr, and everything after
-      // — both carrying the same name/discount as the original.
       const after = { ...promo, id: null, startDate: sbNextDay(dateStr) };
       promo.endDate = dateStr;
       sbPromotionRows.push(after);
     }
-    sbRenderPromotionsList(); sbRenderPromoCalendar();
+    sbRenderPromotionsList(); sbRenderCalendar();
   }
 
   function sbResetSummaryToBase(){
@@ -3256,27 +3104,38 @@
     document.getElementById('sbExistingPromoDetails').style.display = 'none';
   }
 
-  function sbShowPromoConfirm(){
-    const start = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelStart : sbPromoSelEnd;
-    const endInclusive = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelEnd : sbPromoSelStart;
-    document.getElementById('sbPromoCalConfirmLabel').textContent = start === endInclusive ? `New promotion for ${start}` : `New promotion for ${start} to ${endInclusive}`;
+  // One confirm popup, two possible outcomes for the same selected range
+  // — Block or Add Promotion. Both action buttons read the same
+  // sbCalSelStart/sbCalSelEnd selection; only one is ever clicked per
+  // popup appearance.
+  function sbShowCalConfirm(){
+    const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
+    const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
+    document.getElementById('sbCalConfirmLabel').textContent = start === endInclusive ? start : `${start} to ${endInclusive}`;
+    document.getElementById('sbCalConfirmReason').value = '';
     document.getElementById('sbPromoConfirmName').value = '';
     document.getElementById('sbPromoConfirmType').value = 'percentage';
     document.getElementById('sbPromoConfirmValue').value = '';
     document.getElementById('sbPromoConfirmMinNights').value = '';
-    document.getElementById('sbPromoCalConfirm').style.display = 'block';
+    document.getElementById('sbCalConfirm').style.display = 'block';
     document.getElementById('sbSummaryPromoPreview').style.display = 'none';
     sbResetSummaryToBase();
   }
-  function sbHidePromoConfirm(){
-    sbPromoSelStart = null; sbPromoSelEnd = null; sbPromoDragging = false;
-    document.getElementById('sbPromoCalConfirm').style.display = 'none';
+  function sbHideCalConfirm(){
+    sbCalSelStart = null; sbCalSelEnd = null; sbCalDragging = false;
+    document.getElementById('sbCalConfirm').style.display = 'none';
     document.getElementById('sbSummaryPromoPreview').style.display = 'none';
-    sbRenderPromoCalendar();
+    sbRenderCalendar();
   }
+  document.getElementById('sbCalConfirmBlockBtn').addEventListener('click', () => {
+    const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
+    const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
+    sbBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('sbCalConfirmReason').value.trim() });
+    sbRenderBlockedList(); sbHideCalConfirm();
+  });
   document.getElementById('sbPromoConfirmAddBtn').addEventListener('click', () => {
-    const start = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelStart : sbPromoSelEnd;
-    const endInclusive = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelEnd : sbPromoSelStart;
+    const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
+    const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
     const name = document.getElementById('sbPromoConfirmName').value.trim();
     const discountType = document.getElementById('sbPromoConfirmType').value;
     const discountValue = Number(document.getElementById('sbPromoConfirmValue').value);
@@ -3285,12 +3144,29 @@
     if(!discountValue || discountValue <= 0){ alert('Please enter a discount amount greater than 0.'); return; }
     if(discountType === 'percentage' && discountValue > 100){ alert('A percentage discount can\'t be more than 100.'); return; }
     sbPromotionRows.push({ id: null, name, discountType, discountValue, minNights: minNights ? Number(minNights) : null, startDate: start, endDate: sbNextDay(endInclusive), isActive: true });
-    sbRenderPromotionsList(); sbHidePromoConfirm();
+    sbRenderPromotionsList(); sbHideCalConfirm();
   });
-  document.getElementById('sbPromoConfirmCancelBtn').addEventListener('click', sbHidePromoConfirm);
-  document.getElementById('sbPromoCalPrevBtn').addEventListener('click', () => { sbPromoCalMonth.setMonth(sbPromoCalMonth.getMonth() - 1); sbRenderPromoCalendar(); });
-  document.getElementById('sbPromoCalNextBtn').addEventListener('click', () => { sbPromoCalMonth.setMonth(sbPromoCalMonth.getMonth() + 1); sbRenderPromoCalendar(); });
-  document.addEventListener('mouseup', () => { if(sbPromoDragging){ sbPromoDragging = false; if(sbPromoSelStart && sbPromoSelEnd) sbShowPromoConfirm(); } });
+  document.getElementById('sbCalConfirmCancelBtn').addEventListener('click', sbHideCalConfirm);
+  document.getElementById('sbCalPrevBtn').addEventListener('click', () => { sbCalMonth.setMonth(sbCalMonth.getMonth() - 1); sbRenderCalendar(); });
+  document.getElementById('sbCalNextBtn').addEventListener('click', () => { sbCalMonth.setMonth(sbCalMonth.getMonth() + 1); sbRenderCalendar(); });
+  document.addEventListener('mouseup', () => { if(sbCalDragging){ sbCalDragging = false; if(sbCalSelStart && sbCalSelEnd) sbShowCalConfirm(); } });
+
+  function sbRenderBlockedList(){
+    const list = document.getElementById('sbBlockedList');
+    if(!sbBlockedDateRows.length){ list.innerHTML = ''; return; }
+    list.innerHTML = sbBlockedDateRows.map((b, idx) => `
+      <div class="sidebar-list-row">
+        ${b.startDate} to ${b.endDate}${b.reason ? ' — ' + b.reason : ''}
+        <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        sbBlockedDateRows.splice(Number(btn.dataset.idx), 1);
+        sbRenderBlockedList(); sbRenderCalendar();
+      });
+    });
+  }
 
   function sbRenderPromotionsList(){
     const list = document.getElementById('sbPromotionsList');
@@ -3307,7 +3183,7 @@
     list.querySelectorAll('[data-idx]').forEach(btn => {
       btn.addEventListener('click', () => {
         sbPromotionRows.splice(Number(btn.dataset.idx), 1);
-        sbRenderPromotionsList(); sbRenderPromoCalendar();
+        sbRenderPromotionsList(); sbRenderCalendar();
       });
     });
   }
