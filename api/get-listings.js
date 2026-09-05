@@ -260,11 +260,8 @@ module.exports = async (req, res) => {
           h.property_name AS hosting_property_name, h.city AS hosting_city, h.area AS hosting_area,
           h.nightly_rate AS hosting_nightly_rate, h.cover_photo_url AS hosting_cover_photo_url,
           h.exterior_photo_urls AS hosting_exterior_photo_urls, h.interior_photo_urls AS hosting_interior_photo_urls,
-          h.status AS hosting_status
-        FROM listings e
-        LEFT JOIN listings h ON h.id = e.hosting_listing_id
-        WHERE e.status = 'approved' AND e.listing_type = 'experience'
-          AND (
+          h.status AS hosting_status,
+          (
             NOT ${expDatesFilter} OR (
               NOT EXISTS (
                 SELECT 1 FROM orders o
@@ -280,7 +277,10 @@ module.exports = async (req, res) => {
                   AND b.end_date > ${expDatesFilter ? expArrivalRaw : null}::date
               )
             )
-          )
+          ) AS is_available
+        FROM listings e
+        LEFT JOIN listings h ON h.id = e.hosting_listing_id
+        WHERE e.status = 'approved' AND e.listing_type = 'experience'
         ORDER BY e.created_at DESC
       `;
 
@@ -298,6 +298,35 @@ module.exports = async (req, res) => {
             return km <= expDistanceFilter.radiusKm;
           })
         : experiences;
+
+      // Same active-promotions teaser data the stays query attaches below
+      // — experiences can have their own date-scoped promotions too (see
+      // host-dashboard.html's calendar), and this was previously never
+      // sent to the frontend at all, so a promoted experience's guest-
+      // facing price summary had no way to reflect it.
+      if (filteredExperiences.length) {
+        const expIds = filteredExperiences.map(e => e.id);
+        const expPromoRows = await sql`
+          SELECT id, listing_id, name, discount_type, discount_value, min_nights, start_date, end_date
+          FROM listing_promotions
+          WHERE listing_id = ANY(${expIds}) AND is_active = TRUE AND end_date > CURRENT_DATE
+          ORDER BY start_date ASC
+        `;
+        const expPromotionsByListing = {};
+        for (const p of expPromoRows) {
+          if (!expPromotionsByListing[p.listing_id]) expPromotionsByListing[p.listing_id] = [];
+          expPromotionsByListing[p.listing_id].push({
+            id: p.id,
+            name: p.name,
+            discountType: p.discount_type,
+            discountValue: p.discount_value,
+            minNights: p.min_nights,
+            startDate: toDateStr(p.start_date),
+            endDate: toDateStr(p.end_date),
+          });
+        }
+        filteredExperiences.forEach(e => { e.active_promotions = expPromotionsByListing[e.id] || []; });
+      }
 
       return res.status(200).json({ experiences: filteredExperiences });
     }
@@ -364,11 +393,12 @@ module.exports = async (req, res) => {
     // filter to begin with, so it's unaffected either way.
     const effectiveCityFilter = distanceFilter ? null : cityFilter;
 
-    // City and date-availability are filtered in SQL — availability
-    // specifically needs to check against the orders table, which only
-    // makes sense server-side. guests and distance are filtered afterward
-    // in JS (see parseMaxGuests / haversineDistanceKm) since both need
-    // logic that's awkward or unsafe to express directly in SQL.
+    // City is filtered in SQL as before. Date-availability used to also
+    // be a WHERE exclusion — now it's a SELECT column (is_available)
+    // instead, so an unavailable-for-these-dates listing still comes
+    // back (the frontend shows it in its own "Unavailable" section,
+    // rather than just vanishing with no explanation of why a listing
+    // a guest saw a minute ago is suddenly gone).
     const listings = await sql`
       SELECT
         id, property_name, city, area, property_type, bedrooms, max_guests,
@@ -377,11 +407,8 @@ module.exports = async (req, res) => {
         exterior_photo_urls, interior_photo_urls, cover_photo_url,
         latitude, longitude, formatted_address,
         pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
-        created_at
-      FROM listings
-      WHERE status = 'approved' AND listing_type = 'stay'
-        AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter} OR area ILIKE ${effectiveCityFilter})
-        AND (
+        created_at,
+        (
           ${arrivalFilter}::date IS NULL OR (
             NOT EXISTS (
               SELECT 1 FROM orders o
@@ -397,7 +424,10 @@ module.exports = async (req, res) => {
                 AND b.end_date > ${arrivalFilter}::date
             )
           )
-        )
+        ) AS is_available
+      FROM listings
+      WHERE status = 'approved' AND listing_type = 'stay'
+        AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter} OR area ILIKE ${effectiveCityFilter})
       ORDER BY created_at DESC
     `;
 
