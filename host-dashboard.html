@@ -170,6 +170,11 @@
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 0;
   }
   .cal-day-promo-value{font-size:7.5px; line-height:1; font-weight:600;}
+  /* A promoted date that's also host-blocked — struck through rather
+     than a third color, since it's really "this promotion is scheduled
+     here, but the date itself won't actually be bookable" — one visual
+     signal, not two overlapping ones to decode. */
+  .cal-day--promo-blocked{opacity:0.6; text-decoration:line-through;}
   .cal-day--selected{background:#1c1a17; color:#f4ebe3;}
   .cal-legend{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:9.5px; opacity:0.75;}
   .cal-legend span{display:inline-flex; align-items:center; gap:4px;}
@@ -2913,7 +2918,9 @@
     for(let day = 1; day <= daysInMonth; day++){
       const dateStr = sbToDateStr(new Date(year, month, day));
       const isPast = dateStr < today;
+      const booking = expCalListingId != null ? findBookingForListingDate(expCalListingId, dateStr) : null;
       const promoRow = expPromoRowFor(dateStr);
+      const alsoBlocked = promoRow && expCalBlockedRowFor(dateStr);
       let selecting = false;
       if(expPromoSelStart && expPromoSelEnd){
         const selMin = expPromoSelStart <= expPromoSelEnd ? expPromoSelStart : expPromoSelEnd;
@@ -2922,15 +2929,18 @@
       }
       let cls = 'cal-day';
       if(isPast) cls += ' cal-day--past cal-day--disabled';
+      else if(booking) cls += ' cal-day--booked';
       else if(selecting) cls += ' cal-day--selected';
-      else if(promoRow) cls += ' cal-day--promo';
+      else if(promoRow) cls += ' cal-day--promo' + (alsoBlocked ? ' cal-day--promo-blocked' : '');
       const discountLabel = promoRow ? (promoRow.discountType === 'flat' ? `₹${promoRow.discountValue}` : `${promoRow.discountValue}%`) : '';
-      const title = promoRow ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}` : '';
+      const title = promoRow
+        ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
+        : '';
       const promoLabelHtml = promoRow ? `<span class="cal-day-promo-value">${discountLabel}</span>` : '';
       html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}${promoLabelHtml}</div>`;
     }
     grid.innerHTML = html;
-    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past)').forEach(cell => {
+    grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
       cell.addEventListener('mousedown', () => expOnPromoMouseDown(cell.dataset.date));
       cell.addEventListener('mouseenter', () => expOnPromoMouseEnter(cell.dataset.date));
       cell.addEventListener('mouseup', () => expOnPromoMouseUp(cell.dataset.date));
@@ -3133,6 +3143,12 @@
       const isPast = dateStr < today;
       const booked = sbDateIsBooked(dateStr);
       const promoRow = sbPromoRowFor(dateStr);
+      // A promoted date that's ALSO host-blocked isn't actually bookable
+      // at that discount — struck through rather than given a third,
+      // separate color, so it reads at a glance as "this promotion
+      // exists here, but the date itself is blocked" instead of forcing
+      // the host to decode another color in the legend.
+      const alsoBlocked = promoRow && sbBlockedRowFor(dateStr);
       let selecting = false;
       if(sbPromoSelStart && sbPromoSelEnd){
         const selMin = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelStart : sbPromoSelEnd;
@@ -3143,9 +3159,11 @@
       if(isPast) cls += ' cal-day--past cal-day--disabled';
       else if(booked) cls += ' cal-day--booked';
       else if(selecting) cls += ' cal-day--selected';
-      else if(promoRow) cls += ' cal-day--promo';
+      else if(promoRow) cls += ' cal-day--promo' + (alsoBlocked ? ' cal-day--promo-blocked' : '');
       const discountLabel = promoRow ? (promoRow.discountType === 'flat' ? `₹${promoRow.discountValue}` : `${promoRow.discountValue}%`) : '';
-      const title = promoRow ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}` : '';
+      const title = promoRow
+        ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
+        : '';
       const promoLabelHtml = promoRow ? `<span class="cal-day-promo-value">${discountLabel}</span>` : '';
       html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}${promoLabelHtml}</div>`;
     }
