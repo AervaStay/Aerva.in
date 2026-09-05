@@ -151,7 +151,7 @@
   .cal-grid{display:grid; grid-template-columns:repeat(7, 1fr); gap:2px;}
   .cal-weekday{font-size:8.5px; text-transform:uppercase; letter-spacing:0.05em; color:#8a7f6c; text-align:center; padding:3px 0;}
   .cal-day{
-    aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; font-size:11px;
+    aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; font-size:14px;
     background:white; border:1px solid transparent; cursor:pointer; border-radius:2px; color:#1c1a17;
   }
   .cal-day:hover:not(.cal-day--disabled){border-color:#8a6c39;}
@@ -163,8 +163,8 @@
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 0;
   }
   .cal-day--booked:hover{border-color:#8a6c39;}
-  .cal-day-guest{font-size:7.5px; line-height:1; text-transform:uppercase; letter-spacing:0.02em; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 2px;}
-  .cal-day--blocked{background:#f3d9c4; color:#8a4a1c;}
+  .cal-day-guest{font-size:8.5px; line-height:1; text-transform:uppercase; letter-spacing:0.02em; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 2px;}
+  .cal-day--blocked{background:#f3d9c4; color:#8a4a1c; text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#8a4a1c;}
   .cal-day--promo{
     background:#d9e8d4; color:#2f5c2a;
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px 0;
@@ -174,7 +174,7 @@
      than a third color, since it's really "this promotion is scheduled
      here, but the date itself won't actually be bookable" — one visual
      signal, not two overlapping ones to decode. */
-  .cal-day--promo-blocked{opacity:0.6; text-decoration:line-through;}
+  .cal-day--promo-blocked{opacity:0.7; text-decoration:line-through; text-decoration-thickness:2px; text-decoration-color:#2f5c2a;}
   .cal-day--selected{background:#1c1a17; color:#f4ebe3;}
   .cal-legend{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:9.5px; opacity:0.75;}
   .cal-legend span{display:inline-flex; align-items:center; gap:4px;}
@@ -2920,7 +2920,8 @@
       const isPast = dateStr < today;
       const booking = expCalListingId != null ? findBookingForListingDate(expCalListingId, dateStr) : null;
       const promoRow = expPromoRowFor(dateStr);
-      const alsoBlocked = promoRow && expCalBlockedRowFor(dateStr);
+      const blockedRow = expCalBlockedRowFor(dateStr);
+      const alsoBlocked = promoRow && blockedRow;
       let selecting = false;
       if(expPromoSelStart && expPromoSelEnd){
         const selMin = expPromoSelStart <= expPromoSelEnd ? expPromoSelStart : expPromoSelEnd;
@@ -2932,10 +2933,11 @@
       else if(booking) cls += ' cal-day--booked';
       else if(selecting) cls += ' cal-day--selected';
       else if(promoRow) cls += ' cal-day--promo' + (alsoBlocked ? ' cal-day--promo-blocked' : '');
+      else if(blockedRow) cls += ' cal-day--blocked';
       const discountLabel = promoRow ? (promoRow.discountType === 'flat' ? `₹${promoRow.discountValue}` : `${promoRow.discountValue}%`) : '';
       const title = promoRow
         ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
-        : '';
+        : (blockedRow ? `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}` : '');
       const promoLabelHtml = promoRow ? `<span class="cal-day-promo-value">${discountLabel}</span>` : '';
       html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}${promoLabelHtml}</div>`;
     }
@@ -3143,12 +3145,16 @@
       const isPast = dateStr < today;
       const booked = sbDateIsBooked(dateStr);
       const promoRow = sbPromoRowFor(dateStr);
+      const blockedRow = sbBlockedRowFor(dateStr);
       // A promoted date that's ALSO host-blocked isn't actually bookable
       // at that discount — struck through rather than given a third,
       // separate color, so it reads at a glance as "this promotion
       // exists here, but the date itself is blocked" instead of forcing
-      // the host to decode another color in the legend.
-      const alsoBlocked = promoRow && sbBlockedRowFor(dateStr);
+      // the host to decode another color in the legend. A blocked date
+      // with NO promotion also needs to show as blocked here — previously
+      // it fell through to looking identically "Open", which hid the
+      // fact that it wasn't actually available at all.
+      const alsoBlocked = promoRow && blockedRow;
       let selecting = false;
       if(sbPromoSelStart && sbPromoSelEnd){
         const selMin = sbPromoSelStart <= sbPromoSelEnd ? sbPromoSelStart : sbPromoSelEnd;
@@ -3160,10 +3166,11 @@
       else if(booked) cls += ' cal-day--booked';
       else if(selecting) cls += ' cal-day--selected';
       else if(promoRow) cls += ' cal-day--promo' + (alsoBlocked ? ' cal-day--promo-blocked' : '');
+      else if(blockedRow) cls += ' cal-day--blocked';
       const discountLabel = promoRow ? (promoRow.discountType === 'flat' ? `₹${promoRow.discountValue}` : `${promoRow.discountValue}%`) : '';
       const title = promoRow
         ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
-        : '';
+        : (blockedRow ? `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}` : '');
       const promoLabelHtml = promoRow ? `<span class="cal-day-promo-value">${discountLabel}</span>` : '';
       html += `<div class="${cls}" data-date="${dateStr}" title="${title}">${day}${promoLabelHtml}</div>`;
     }
