@@ -1310,6 +1310,9 @@
   </div>
 
   <div class="wrap">
+    <div class="browse-row-head">
+      <h3>Available Listings</h3>
+    </div>
     <div class="suite-grid reveal" id="suitesContainer">
       <div class="suites-loading">Loading homes…</div>
     </div>
@@ -5127,6 +5130,11 @@
       if(entry.type === 'stay' && listingsById[entry.id]) cards.push({ type: 'stay', data: listingsById[entry.id] });
       else if(entry.type === 'experience' && experiencesById[entry.id]) cards.push({ type: 'experience', data: experiencesById[entry.id] });
     });
+    // Capped at the 3 most recent — entries are already newest-first (see
+    // getRecentlyViewedEntries), sliced after filtering out stale ones so
+    // a removed/unapproved listing further back in history doesn't leave
+    // fewer than 3 showing when more valid ones actually exist.
+    cards.length = Math.min(cards.length, 3);
 
     if(cards.length === 0){
       row.style.display = 'none';
