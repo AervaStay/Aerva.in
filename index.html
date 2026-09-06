@@ -5947,6 +5947,9 @@
         <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
         <div class="listing-three-col">
           <div class="listing-col-booking">
+            <div class="price">${priceLine}</div>
+            ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
+            ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
             <div class="listing-modal-section-title" style="margin-top:16px;">Check Availability &amp; Price</div>
             <div id="availabilityCalendar" data-listing-id="${listing.id}">
               <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
@@ -6029,13 +6032,6 @@
               <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
               <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
               <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
-            </div>
-            <div class="listing-modal-price-row">
-              <div>
-                <div class="price">${priceLine}</div>
-                ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
-                ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
-              </div>
             </div>
           </div>
           <div class="listing-col-photos">
