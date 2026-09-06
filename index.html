@@ -5227,9 +5227,19 @@
     // just excluded outright, so it can show in its own row below
     // instead of silently vanishing with no explanation.
     const datesWereSearched = !!(searchArrivalDate && searchDepartureDate);
-    const availableSuites = datesWereSearched ? suiteList.filter(l => l.is_available !== false) : suiteList;
+    // Excludes anything already shown in the Recently Viewed row above —
+    // without this, viewing a property made it show up twice on the same
+    // page load, once in Recently Viewed and again in the regular grid
+    // right below it. Only applied to the main available grid; the
+    // Unavailable row further down deliberately still checks against the
+    // full recently-viewed list for its own "show what the guest actually
+    // looked at first" logic, so it isn't filtered here.
+    const recentlyViewedIds = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
+    const availableSuites = (datesWereSearched ? suiteList.filter(l => l.is_available !== false) : suiteList)
+      .filter(l => !recentlyViewedIds.has('stay:' + l.id));
     const unavailableSuites = datesWereSearched ? suiteList.filter(l => l.is_available === false) : [];
-    const availableExperiences = datesWereSearched ? experienceList.filter(e => e.is_available !== false) : experienceList;
+    const availableExperiences = (datesWereSearched ? experienceList.filter(e => e.is_available !== false) : experienceList)
+      .filter(e => !recentlyViewedIds.has('experience:' + e.id));
     const unavailableExperiences = datesWereSearched ? experienceList.filter(e => e.is_available === false) : [];
 
     const finalSuites = showSuites ? availableSuites : [];
