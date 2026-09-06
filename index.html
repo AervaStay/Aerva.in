@@ -4896,7 +4896,7 @@
       : (exp.formatted_address || exp.city || '');
 
     const card = document.createElement('div');
-    card.className = 'suite-card reveal';
+    card.className = 'suite-card';
     card.style.transitionDelay = ((index || 0) % 8) * 60 + 'ms';
     card.dataset.experienceId = exp.id;
     card.style.cursor = 'pointer';
@@ -5032,7 +5032,7 @@
       petPolicyHtml = `<div class="amenity-tags"><span class="amenity-tag">${petTypes}${petFeeNote}</span></div>`;
     }
 
-    card.className = 'suite-card reveal';
+    card.className = 'suite-card';
     card.style.transitionDelay = ((index || 0) % 8) * 60 + 'ms';
     card.dataset.listingId = listing.id;
     card.style.cursor = 'pointer';
@@ -5258,17 +5258,22 @@
     } else {
       // Suites first, then experiences — a stable, predictable order
       // rather than an interleaved shuffle, so results don't visually
-      // reorder themselves every time a filter changes.
+      // reorder themselves every time a filter changes. Cards are no
+      // longer .reveal-animated (see buildSuiteCard/buildExperienceCard)
+      // — they used to start at opacity:0 and only become visible once
+      // an IntersectionObserver detected them scrolling into view; any
+      // card that observer missed for any reason was left permanently
+      // invisible while still fully clickable underneath. Always-visible
+      // cards trade a minor fade-in animation for eliminating that
+      // entire failure mode outright.
       let index = 0;
       finalSuites.forEach(listing => {
         const card = buildSuiteCard(listing, index++);
         container.appendChild(card);
-        io.observe(card);
       });
       finalExperiences.forEach(exp => {
         const card = buildExperienceCard(exp, index++);
         container.appendChild(card);
-        io.observe(card);
       });
     }
 
