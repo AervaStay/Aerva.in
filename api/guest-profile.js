@@ -172,13 +172,29 @@ module.exports = async (req, res) => {
         const conversations = await sql`
           SELECT c.id, c.listing_id, c.guest_email, l.property_name,
                  (SELECT display_text FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-                 (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at
+                 (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
+                 (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'guest' AND m.read_at IS NULL) AS unread_count
           FROM conversations c
           JOIN listings l ON l.id = c.listing_id
           WHERE c.host_id = ${guestId}
           ORDER BY last_message_at DESC NULLS LAST
         `;
         return res.status(200).json({ conversations });
+      }
+
+      // Lightweight — just a single number, meant to be called from the
+      // main site's header on every page load for any logged-in host, so
+      // it deliberately avoids the fuller hostConversations query (which
+      // pulls every conversation's last message) purely to check whether
+      // the little badge on the Messages icon should show at all.
+      if (mode === 'unreadMessageCount') {
+        const rows = await sql`
+          SELECT COUNT(*) AS count
+          FROM messages m
+          JOIN conversations c ON c.id = m.conversation_id
+          WHERE c.host_id = ${guestId} AND m.sender_type = 'guest' AND m.read_at IS NULL
+        `;
+        return res.status(200).json({ count: Number(rows[0]?.count || 0) });
       }
 
       // Host inbox reads messages by conversationId directly, rather than
@@ -196,6 +212,13 @@ module.exports = async (req, res) => {
         const messages = await sql`
           SELECT id, sender_type, display_text, was_redacted, created_at
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
+        `;
+        // Opening a conversation is what actually marks it read — only
+        // the guest's own messages ever need this; a host reading their
+        // own sent messages isn't a meaningful "unread" state.
+        await sql`
+          UPDATE messages SET read_at = NOW()
+          WHERE conversation_id = ${conversationId} AND sender_type = 'guest' AND read_at IS NULL
         `;
         return res.status(200).json({ messages });
       }
