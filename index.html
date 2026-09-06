@@ -243,7 +243,7 @@
      fill the whole row, turning a single result into a giant banner
      instead of a properly-sized card. auto-fill keeps those tracks as
      empty implicit columns instead, so a lone card stays card-sized. */
-  .suite-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(110px,1fr)); gap:12px;}
+  .suite-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:36px;}
   .browse-row-head{margin:48px 0 22px;}
   .browse-row-head h3{
     font-family:'Bodoni Moda', serif; font-weight:400; font-size:24px; color:var(--ink);
@@ -256,9 +256,9 @@
   .suite-card--unavailable{opacity:0.55; filter:grayscale(35%); cursor:default;}
   .suite-card--unavailable:hover{transform:none !important; box-shadow:0 2px 10px rgba(28,26,23,0.08) !important; border-color:#ffffff !important;}
   .suite-card--unavailable .suite-unavailable-badge{
-    position:absolute; top:6px; left:6px; z-index:2;
-    background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:7px; letter-spacing:0.04em;
-    text-transform:uppercase; padding:2px 5px; border-radius:2px;
+    position:absolute; top:12px; left:12px; z-index:2;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:10px; letter-spacing:0.06em;
+    text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
   /* Distinguishes a card the guest has actually looked at before from a
      "regular" search result that's just matching their current filters —
@@ -268,9 +268,9 @@
      since this is a positive "you were here" signal, not an alert. */
   .suite-card--recently-viewed{ position:relative; }
   .suite-card--recently-viewed .suite-recently-viewed-badge{
-    position:absolute; top:6px; left:6px; z-index:2;
-    background:var(--gold-deep); color:#fff; font-size:7px; letter-spacing:0.04em;
-    text-transform:uppercase; padding:2px 5px; border-radius:2px;
+    position:absolute; top:12px; left:12px; z-index:2;
+    background:var(--gold-deep); color:#fff; font-size:10px; letter-spacing:0.06em;
+    text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
   .suite-card{
     background:var(--cream); display:flex; flex-direction:column; border:2px solid #ffffff;
@@ -287,11 +287,11 @@
   .suite-photo img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .5s ease;}
   .suite-card:hover .suite-photo img{transform:scale(1.06);}
   .suite-badges{
-    position:absolute; top:6px; left:6px; z-index:6; display:flex; flex-direction:column; gap:3px; align-items:flex-start;
+    position:absolute; top:12px; left:12px; z-index:6; display:flex; flex-direction:column; gap:6px; align-items:flex-start;
   }
   .suite-badge{
     background:var(--ink); color:var(--cream);
-    font-size:7px; letter-spacing:0.06em; text-transform:uppercase; padding:2px 5px; border-radius:2px;
+    font-size:10px; letter-spacing:0.1em; text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
   .suite-badge-discount{ background:#a3402f; color:#fff; }
   .suite-badge-stay{ background:#4d9a56; color:#fff; }
@@ -304,27 +304,15 @@
     width:100%; height:100%; object-fit:cover; flex:0 0 100%; scroll-snap-align:start; display:block;
   }
   .suite-photo-dots{
-    position:absolute; bottom:5px; left:0; right:0; display:flex; justify-content:center; gap:3px; pointer-events:none;
+    position:absolute; bottom:10px; left:0; right:0; display:flex; justify-content:center; gap:5px; pointer-events:none;
   }
   .suite-photo-dots span{
-    width:3.5px; height:3.5px; border-radius:50%; background:rgba(255,255,255,0.55);
+    width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.55);
   }
-  .suite-body{padding:10px 10px 12px; display:flex; flex-direction:column; flex-grow:1; gap:3px;}
-  .suite-card h3{
-    font-size:12px; font-weight:500; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  }
+  .suite-body{padding:26px 26px 24px; display:flex; flex-direction:column; flex-grow:1;}
+  .suite-card h3{font-size:19px; font-weight:500; line-height:1.3;}
   .suite-card .loc{font-size:11.5px; letter-spacing:0.12em; color:var(--gold-deep); margin-top:10px; text-transform:uppercase;}
   .suite-card .desc{font-size:13.5px; line-height:1.75; opacity:0.75; margin-top:14px; flex-grow:1;}
-  /* Compact card's one description line — the discount when there is
-     one, so it's the thing a guest actually sees at a glance rather than
-     location text they'd get anyway from the search filters. Left empty
-     (collapses to nothing) when a listing has no active offer, rather
-     than falling back to a generic location line — with a card this
-     narrow, one honest line beats a crowded one. */
-  .suite-card .discount-line{
-    font-size:10px; line-height:1.3; color:#a3402f; font-weight:500;
-    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  }
 
   /* ---------- LISTING DETAIL MODAL ---------- */
   .listing-modal-overlay{
@@ -470,7 +458,7 @@
 
   .amenity-tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:12px;}
   .amenity-tag{
-    font-size:8.5px; letter-spacing:0.02em; padding:2px 6px; border:1px solid var(--line-dark);
+    font-size:10.5px; letter-spacing:0.03em; padding:4px 10px; border:1px solid var(--line-dark);
     color:var(--ink); opacity:0.75; white-space:nowrap;
   }
   .amenity-tag-more{color:var(--gold-deep); opacity:1; border-color:var(--gold-deep);}
@@ -479,8 +467,8 @@
   .suite-card:hover .link svg{transform:translateX(4px);}
   .suite-photo-placeholder{width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:linear-gradient(160deg, var(--cream-deep), var(--cream) 70%);}
   .suite-photo-placeholder span{font-family:'Bodoni Moda', serif; font-size:42px; color:var(--gold-deep); opacity:0.55;}
-  .suite-card .price{font-size:11px; margin-top:4px; color:var(--ink); opacity:0.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-  .suite-card .price strong{font-weight:600;}
+  .suite-card .price{font-size:13px; margin-top:10px; color:var(--ink); opacity:0.85;}
+  .suite-card .price strong{font-weight:500;}
   .suite-card .offer{font-size:11.5px; letter-spacing:0.03em; color:var(--gold-deep); margin-top:6px; font-style:italic; font-family:'Bodoni Moda', serif;}
   .suites-empty{text-align:center; padding:40px 20px; opacity:0.6; font-size:14px; grid-column:1/-1;}
   .suites-loading{text-align:center; padding:40px 20px; opacity:0.5; font-size:14px; grid-column:1/-1;}
@@ -585,12 +573,12 @@
   /* ---------- FAVORITE HEART ---------- */
   .suite-photo{position:relative;}
   .fav-heart{
-    position:absolute; top:6px; right:6px; z-index:6; width:20px; height:20px;
+    position:absolute; top:12px; right:12px; z-index:6; width:34px; height:34px;
     border:none; background:rgba(20,17,14,0.35); border-radius:50%; cursor:pointer;
     display:flex; align-items:center; justify-content:center; transition:transform .15s ease;
   }
   .fav-heart:hover{transform:scale(1.08);}
-  .fav-heart svg{width:11px; height:11px; stroke:#fff; fill:none; stroke-width:1.8; transition:fill .15s ease, stroke .15s ease;}
+  .fav-heart svg{width:17px; height:17px; stroke:#fff; fill:none; stroke-width:1.8; transition:fill .15s ease, stroke .15s ease;}
   .fav-heart.is-fav svg{fill:var(--gold); stroke:var(--gold);}
 
   /* ---------- RECENTLY VIEWED STRIP ---------- */
@@ -873,10 +861,10 @@
     .search-bar .btn{width:100%;}
     .calendar-dropdown{width:calc(100vw - 48px);}
     .calendar-months{flex-direction:column; gap:20px;}
-    /* Same compact, thumbnail-style card as desktop, just fewer columns
-       to fit a phone's width — still meaningfully denser than the old
-       single-column list this used to be. */
-    .suite-grid{grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:8px;}
+    /* Two columns at tablet width (900px breakpoint above) becomes two
+       cramped, narrow cards on an actual phone — a genuine single-column
+       list reads far better here. */
+    .suite-grid{grid-template-columns:1fr;}
   }
 
   .photo-preview-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:10px; margin-top:12px;}
@@ -1038,6 +1026,7 @@
     .nav-links{display:none;}
     .nav-toggle{display:flex; flex-direction:column;}
     .phil-grid, .reserve-grid, .loc-grid{grid-template-columns:1fr; gap:44px;}
+    .suite-grid{grid-template-columns:1fr 1fr;}
     .exp-row{grid-template-columns:1fr; gap:8px;}
     .exp-time{padding-top:0;}
     .foot-grid{grid-template-columns:1fr 1fr; row-gap:36px;}
@@ -4915,11 +4904,12 @@
     const priceLine = exp.price
       ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' <span style="font-size:12px; opacity:0.65;">/ person</span>' : ' <span style="font-size:12px; opacity:0.65;">/ group</span>'}`
       : 'Price on enquiry';
-    // Same "description shows the discount, not location" treatment as
-    // buildSuiteCard — see there for the reasoning. Experiences can have
-    // their own date-scoped promotions too (see get-listings.js's
-    // active_promotions and host-dashboard.html's calendar).
-    const expDiscountText = formatPromotionOffer(exp) || '';
+    const hostedAtLine = exp.hosting_property_name
+      ? `Hosted at ${exp.hosting_property_name}${exp.hosting_area ? ', ' + exp.hosting_area + ', ' + exp.hosting_city : exp.hosting_city ? ', ' + exp.hosting_city : ''}`
+      // Without-stay experiences have no hosting property to borrow a
+      // location from — they carry their own address instead (see
+      // submit-listing.js), so that's what shows here for those.
+      : (exp.formatted_address || exp.city || '');
 
     const card = document.createElement('div');
     card.className = 'suite-card';
@@ -4930,12 +4920,13 @@
       <div class="suite-photo">
         ${photoHtml}
         <div class="suite-badges">
-          ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Stay</span>` : `<span class="suite-badge">Experience</span>`}
+          ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
+          ${exp.experience_category ? `<span class="suite-badge">${exp.experience_category}</span>` : ''}
         </div>
       </div>
       <div class="suite-body">
-        <h3 title="${exp.property_name}">${exp.property_name}</h3>
-        ${expDiscountText ? `<div class="discount-line" title="${expDiscountText}">${expDiscountText}</div>` : ''}
+        <h3>${exp.property_name}</h3>
+        ${hostedAtLine ? `<div class="loc">${hostedAtLine}</div>` : ''}
         ${exp.experience_duration_hours ? `<div class="amenity-tags"><span class="amenity-tag">${exp.experience_duration_hours}h</span></div>` : ''}
         <div class="price">${priceLine}</div>
       </div>
@@ -4989,17 +4980,17 @@
     const promoBadgeText = formatPromotionBadge(listing);
     if(promoBadgeText) discountBadge = promoBadgeText;
 
-    // Show a couple of amenities directly on the card — enough for a
-    // guest to gauge what's included at a glance without crowding a card
-    // this narrow (was 4 back when cards had far more room).
+    // Show a handful of amenities directly on the card — enough for a guest
+    // to gauge what's included at a glance, without listing all of them
+    // (which could be two dozen) and crowding the card.
     const amenitiesList = Array.isArray(listing.amenities) ? listing.amenities : [];
-    const AMENITIES_PREVIEW_COUNT = 2;
+    const AMENITIES_PREVIEW_COUNT = 4;
     let amenitiesHtml = '';
     if(amenitiesList.length > 0){
       const shown = amenitiesList.slice(0, AMENITIES_PREVIEW_COUNT);
       const remaining = amenitiesList.length - shown.length;
       const tags = shown.map(a => `<span class="amenity-tag">${a}</span>`).join('');
-      const moreTag = remaining > 0 ? `<span class="amenity-tag amenity-tag-more">+${remaining}</span>` : '';
+      const moreTag = remaining > 0 ? `<span class="amenity-tag amenity-tag-more">+${remaining} more</span>` : '';
       amenitiesHtml = `<div class="amenity-tags">${tags}${moreTag}</div>`;
     }
 
@@ -5062,11 +5053,6 @@
     card.dataset.listingId = listing.id;
     card.style.cursor = 'pointer';
     const isFav = getFavoriteIds().includes(String(listing.id));
-    // Compact card: title, one description line showing the discount
-    // (if any), amenities, then price — location/distance/map-link/pet
-    // policy/offer-sentence all dropped to fit ten-across, and because
-    // location is already implied by whatever the guest just searched.
-    const cardDiscountText = promoOfferLine || offerLine || '';
     card.innerHTML = `
       <div class="suite-photo">
         ${photoHtml}
@@ -5079,10 +5065,15 @@
         </button>
       </div>
       <div class="suite-body">
-        <h3 title="${listing.property_name}">${listing.property_name}</h3>
-        ${cardDiscountText ? `<div class="discount-line" title="${cardDiscountText}">${cardDiscountText}</div>` : ''}
+        <h3>${listing.property_name}</h3>
+        <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        ${distanceHtml}
+        ${mapLinkHtml}
         ${amenitiesHtml}
+        ${petPolicyHtml}
         <div class="price">${priceLine}</div>
+        ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
+        ${promoOfferLine ? `<div class="offer" style="color:#2f5c2a;">${promoOfferLine}</div>` : ''}
       </div>
     `;
     const favBtn = card.querySelector('.fav-heart');
@@ -7690,9 +7681,27 @@
     renderCalendar();
   }
 
+  // Reparents a dropdown to a direct child of <body> and positions it
+  // with fixed coordinates computed from its trigger's own wrapper —
+  // bypasses this page's dropdown/underlying-card stacking-context bug
+  // entirely (raising z-index alone didn't fix it: something in the
+  // ancestor chain was creating its own isolated stacking context, which
+  // meant no z-index value on the dropdown itself could ever win). Only
+  // reparented on open; closing just hides it in place via the .open
+  // class exactly as before, so nothing about the show/hide logic
+  // elsewhere needs to change.
+  function openDropdownAsPortal(dropdownEl, wrapperEl){
+    document.body.appendChild(dropdownEl);
+    const rect = wrapperEl.getBoundingClientRect();
+    dropdownEl.style.position = 'fixed';
+    dropdownEl.style.top = (rect.bottom + 10) + 'px';
+    dropdownEl.style.left = rect.left + 'px';
+  }
+
   function openCalendar(){
     closeGuestsDropdown();
     closeMoreFiltersDropdown();
+    openDropdownAsPortal(calendarDropdown, dateRangeBtn.closest('.date-range-wrapper'));
     calendarDropdown.classList.add('open');
     const anchor = searchArrivalDate ? new Date(searchArrivalDate) : calMinDate;
     calViewYear = anchor.getFullYear();
@@ -7786,6 +7795,7 @@
   function openGuestsDropdown(){
     closeCalendar();
     closeMoreFiltersDropdown();
+    openDropdownAsPortal(guestsDropdown, guestsTriggerBtn.closest('.search-field'));
     guestsDropdown.classList.add('open');
   }
   function closeGuestsDropdown(){
@@ -7833,6 +7843,7 @@
   function openMoreFiltersDropdown(){
     closeCalendar();
     closeGuestsDropdown();
+    openDropdownAsPortal(moreFiltersDropdown, moreFiltersBtn.closest('.more-filters-wrapper'));
     moreFiltersDropdown.classList.add('open');
   }
   function closeMoreFiltersDropdown(){
