@@ -170,7 +170,7 @@ module.exports = async (req, res) => {
 
       if (mode === 'hostConversations') {
         const conversations = await sql`
-          SELECT c.id, c.listing_id, c.guest_email, l.property_name,
+          SELECT c.id, c.listing_id, c.order_id, c.guest_email, l.property_name,
                  (SELECT display_text FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
                  (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
                  (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'guest' AND m.read_at IS NULL) AS unread_count
