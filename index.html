@@ -5161,10 +5161,15 @@
     });
   }
 
+  // Populated by renderRecentlyViewedRow() each time it runs — see there
+  // for why this must be the capped/displayed set, not the full
+  // up-to-20-entry history.
+  let recentlyViewedShownIds = new Set();
+
   function renderRecentlyViewedRow(){
     const row = document.getElementById('recentlyViewedRow');
     const container = document.getElementById('recentlyViewedContainer');
-    if(!row || !container) return;
+    if(!row || !container){ recentlyViewedShownIds = new Set(); return; }
     const entries = getRecentlyViewedEntries();
 
     const cards = [];
@@ -5180,6 +5185,15 @@
     // a removed/unapproved listing further back in history doesn't leave
     // fewer than 3 showing when more valid ones actually exist.
     cards.length = Math.min(cards.length, 3);
+
+    // Exposed so applyFiltersAndRender() excludes from the main grid
+    // ONLY the listings actually shown here — up to 20 are remembered in
+    // localStorage (see RECENTLY_VIEWED_MAX) for history purposes, but
+    // this row only ever displays 3 of them. Excluding all 20 from the
+    // main grid used to make anything past the 3 most recent vanish from
+    // the homepage entirely: not shown here (only 3 fit) and not shown
+    // in Available Listings (excluded). This keeps the two in sync.
+    recentlyViewedShownIds = new Set(cards.map(c => (c.type === 'stay' ? 'stay:' : 'experience:') + c.data.id));
 
     if(cards.length === 0){
       row.style.display = 'none';
@@ -5374,19 +5388,21 @@
     // just excluded outright, so it can show in its own row below
     // instead of silently vanishing with no explanation.
     const datesWereSearched = !!(searchArrivalDate && searchDepartureDate);
-    // Excludes anything already shown in the Recently Viewed row above —
-    // without this, viewing a property made it show up twice on the same
-    // page load, once in Recently Viewed and again in the regular grid
-    // right below it. Only applied to the main available grid; the
-    // Unavailable row further down deliberately still checks against the
-    // full recently-viewed list for its own "show what the guest actually
-    // looked at first" logic, so it isn't filtered here.
-    const recentlyViewedIds = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
+    // Excludes only what's actually SHOWN in the Recently Viewed row
+    // above — not the full up-to-20-entry history (see
+    // recentlyViewedShownIds, set by renderRecentlyViewedRow() right
+    // before this runs). Excluding the full history here used to make
+    // anything past the 3 most-recently-viewed vanish from the homepage
+    // entirely: not shown in Recently Viewed (only 3 fit there) and not
+    // shown here either. The Unavailable row further down deliberately
+    // still checks against the full recently-viewed list for its own
+    // "show what the guest actually looked at first" ordering, so that
+    // one isn't changed.
     const availableSuites = (datesWereSearched ? suiteList.filter(l => l.is_available !== false) : suiteList)
-      .filter(l => !recentlyViewedIds.has('stay:' + l.id));
+      .filter(l => !recentlyViewedShownIds.has('stay:' + l.id));
     const unavailableSuites = datesWereSearched ? suiteList.filter(l => l.is_available === false) : [];
     const availableExperiences = (datesWereSearched ? experienceList.filter(e => e.is_available !== false) : experienceList)
-      .filter(e => !recentlyViewedIds.has('experience:' + e.id));
+      .filter(e => !recentlyViewedShownIds.has('experience:' + e.id));
     const unavailableExperiences = datesWereSearched ? experienceList.filter(e => e.is_available === false) : [];
 
     const finalSuites = showSuites ? availableSuites : [];
