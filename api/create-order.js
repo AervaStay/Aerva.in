@@ -387,12 +387,18 @@ module.exports = async (req, res) => {
       // What kind of pet, not just how many — a host who only allows
       // Dogs shouldn't discover a turtle showed up because "pets" was
       // just a headcount with no species attached. Every listed type
-      // has to be one the listing actually allows.
+      // has to be one the listing actually allows. The list must also
+      // have exactly one type PER billable pet (not "at least one") —
+      // one dropdown per pet slot on the frontend guarantees this, this
+      // is just the server-side backstop against a tampered request.
       const requestedPetTypes = Array.isArray(s.petTypes) ? s.petTypes.filter(t => typeof t === 'string') : [];
       if (requestedPets > 0) {
         const allowedTypes = Array.isArray(listing.allowed_pet_types) ? listing.allowed_pet_types : [];
         if (!requestedPetTypes.length) {
           return res.status(400).json({ error: `Stay ${i + 1}: please specify what kind of pet(s) you're bringing.` });
+        }
+        if (requestedPetTypes.length !== requestedPets) {
+          return res.status(400).json({ error: `Stay ${i + 1}: please specify a type for each of your ${requestedPets} pet(s).` });
         }
         const disallowed = requestedPetTypes.filter(t => !allowedTypes.includes(t));
         if (disallowed.length) {
@@ -400,6 +406,50 @@ module.exports = async (req, res) => {
         }
       }
       const petFeeAmount = requestedPets > 0 ? Math.round(Number(listing.pet_fee || 0) * requestedPets) : 0;
+
+      // Service / emotional-support animals — deliberately NOT subject to
+      // max_pets_allowed and NEVER charged the pet fee: these aren't
+      // "extra pets," they're an accommodation for the guest's own
+      // physical or emotional needs. Only offered at all on listings
+      // that are already pet-friendly (a "no pets" property's policy
+      // isn't overridden here — that's a separate, deliberate choice,
+      // not an oversight). Type is checked against the platform's known
+      // animal list for data quality, but NOT against this listing's own
+      // allowed_pet_types — a host who only allows Dogs as pets doesn't
+      // get to decline a guest's assistance cat.
+      const PET_TYPE_WHITELIST = ['Dog', 'Cat', 'Bird', 'Rabbit', 'Fish', 'Hamster', 'Turtle', 'Other'];
+      const MAX_SERVICE_ANIMALS = 5; // sanity ceiling, not a policy cap — these are never "capped" against the listing
+      const rawServiceAnimals = Array.isArray(s.serviceAnimals) ? s.serviceAnimals : [];
+      let serviceAnimalTypes = [];
+      if (rawServiceAnimals.length) {
+        if (!listing.pet_friendly) {
+          return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} doesn't allow pets, so a service or support animal can't be added for this home.` });
+        }
+        if (rawServiceAnimals.length > MAX_SERVICE_ANIMALS) {
+          return res.status(400).json({ error: `Stay ${i + 1}: please contact the host directly for more than ${MAX_SERVICE_ANIMALS} service animals.` });
+        }
+        serviceAnimalTypes = rawServiceAnimals
+          .map(a => (a && typeof a === 'object' ? a.type : a))
+          .filter(t => typeof t === 'string' && PET_TYPE_WHITELIST.includes(t));
+        if (serviceAnimalTypes.length !== rawServiceAnimals.length) {
+          return res.status(400).json({ error: `Stay ${i + 1}: please specify a valid type for each service or support animal.` });
+        }
+      }
+
+      // Young litter pets (<1yr) — also never capped or charged, but only
+      // offered alongside at least one already-billed adult pet, since
+      // they're understood to be traveling WITH that pet, not on their
+      // own. Proof, if the host has any doubt, is a conversation between
+      // host and guest — not something this platform verifies.
+      const MAX_YOUNG_LITTER = 10; // sanity ceiling
+      const requestedYoungLitter = Number(s.youngLitterCount) || 0;
+      if (requestedYoungLitter > 0 && requestedPets < 1) {
+        return res.status(400).json({ error: `Stay ${i + 1}: young litter pets must travel with at least one adult pet already added above.` });
+      }
+      if (requestedYoungLitter > MAX_YOUNG_LITTER) {
+        return res.status(400).json({ error: `Stay ${i + 1}: please contact the host directly for more than ${MAX_YOUNG_LITTER} young litter pets.` });
+      }
+      const youngLitterCount = Math.max(0, Math.round(requestedYoungLitter));
 
       const roomPortion = beforeDiscount - discountAmount; // room + extra guests, after discount, never includes amenities
       const staySubtotal = roomPortion + amenityTotal + petFeeAmount;
@@ -439,6 +489,8 @@ module.exports = async (req, res) => {
         extraGuestCharge: extraTotal, // broken out for the guest-facing summary
         petFeeAmount, // broken out for the guest-facing summary
         petTypes: requestedPetTypes, // trusted server-side validated list, not re-trusted from the browser at verify time
+        serviceAnimalTypes, // never billed, never counted — see validation above
+        youngLitterCount, // never billed, never counted — see validation above
         roomPortion,
         baseCommission,
         amenityCommission,

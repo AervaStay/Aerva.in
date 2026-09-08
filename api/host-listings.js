@@ -678,7 +678,7 @@ module.exports = async (req, res) => {
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
-             o.status, o.created_at, o.pet_types,
+             o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
              o.guest_email, g.name AS guest_name
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
