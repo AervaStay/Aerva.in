@@ -170,10 +170,10 @@
   }
   .nav-links{display:flex; gap:38px; align-items:center;}
   .nav-links a{
-    font-size:14px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink); opacity:0.72;
+    font-size:14px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink); opacity:1;
     transition:opacity .25s ease;
   }
-  .nav-links a:hover{opacity:1;}
+  .nav-links a:hover{opacity:0.75;}
   .nav-links a:focus-visible, .btn:focus-visible, .field input:focus-visible, .field select:focus-visible{
     outline:2px solid var(--gold); outline-offset:4px;
   }
@@ -485,11 +485,11 @@
   .category-item{
     display:flex; flex-direction:row; align-items:center; gap:6px;
     font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
-    color:var(--ink); opacity:0.62; padding-bottom:2px; border-bottom:2px solid transparent;
+    color:var(--ink); opacity:1; padding-bottom:2px; border-bottom:2px solid transparent;
     transition:opacity .25s ease, border-color .25s ease; white-space:nowrap;
   }
   .category-item svg{width:16px; height:16px; stroke:var(--gold-deep); fill:none; stroke-width:1.4;}
-  .category-item:hover{opacity:0.9;}
+  .category-item:hover{opacity:0.75;}
   .category-item.active{opacity:1; border-color:var(--gold);}
 
   /* "Host with Aerva" — replaces the old single "List Property" link.
@@ -715,7 +715,7 @@
   .search-bar .btn{flex:0 0 auto; padding:12px 28px; margin-bottom:1px;}
   .filter-clear{
     flex:0 0 auto; background:none; border:none; font-size:15px; letter-spacing:0.05em;
-    color:var(--gold-deep); text-decoration:underline; cursor:pointer; padding:8px 0; margin-bottom:1px;
+    color:var(--ink); text-decoration:underline; cursor:pointer; padding:8px 0; margin-bottom:1px;
   }
   .near-me-btn{
     display:inline-flex; align-items:center; gap:6px; text-decoration:none;
