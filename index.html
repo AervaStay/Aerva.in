@@ -256,8 +256,12 @@
      mistaken for a normal, available result. */
   .suite-card--unavailable{opacity:0.55; filter:grayscale(35%); cursor:default;}
   .suite-card--unavailable:hover{transform:none !important; box-shadow:0 2px 10px rgba(28,26,23,0.08) !important; border-color:#ffffff !important;}
-  .suite-card--unavailable .suite-unavailable-badge{
-    position:absolute; top:12px; left:12px; z-index:2;
+  /* Both badges below render as normal flex children INSIDE .suite-badges
+     (see buildSuiteCard/buildExperienceCard + the row-builders that add
+     them), never as their own absolutely-positioned overlay — that's
+     what used to make them land on the exact same top-left corner as the
+     New/discount badges and visually collide with each other. */
+  .suite-unavailable-badge{
     background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:10px; letter-spacing:0.06em;
     text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
@@ -267,9 +271,7 @@
      there's no visual cue for why something is showing up in that row
      specifically. Gold, not the dark/warning tone Unavailable uses,
      since this is a positive "you were here" signal, not an alert. */
-  .suite-card--recently-viewed{ position:relative; }
-  .suite-card--recently-viewed .suite-recently-viewed-badge{
-    position:absolute; top:12px; left:12px; z-index:2;
+  .suite-recently-viewed-badge{
     background:var(--gold-deep); color:#fff; font-size:10px; letter-spacing:0.06em;
     text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
@@ -5164,10 +5166,11 @@
     cards.forEach((item, i) => {
       const card = item.type === 'stay' ? buildSuiteCard(item.data, i) : buildExperienceCard(item.data, i);
       card.classList.add('suite-card--recently-viewed');
-      const badge = document.createElement('div');
-      badge.className = 'suite-recently-viewed-badge';
+      const badge = document.createElement('span');
+      badge.className = 'suite-badge suite-recently-viewed-badge';
       badge.textContent = 'Recently Viewed';
-      card.insertBefore(badge, card.firstChild);
+      const badgeStack = card.querySelector('.suite-badges');
+      if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
       container.appendChild(card);
     });
   }
@@ -5359,21 +5362,21 @@
       orderedSuites.forEach(listing => {
         const card = buildSuiteCard(listing, uIndex++);
         card.classList.add('suite-card--unavailable');
-        card.style.position = 'relative';
-        const badge = document.createElement('div');
-        badge.className = 'suite-unavailable-badge';
+        const badge = document.createElement('span');
+        badge.className = 'suite-badge suite-unavailable-badge';
         badge.textContent = 'Not Available';
-        card.insertBefore(badge, card.firstChild);
+        const badgeStack = card.querySelector('.suite-badges');
+        if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
         unavailableContainer.appendChild(card);
       });
       orderedExperiences.forEach(exp => {
         const card = buildExperienceCard(exp, uIndex++);
         card.classList.add('suite-card--unavailable');
-        card.style.position = 'relative';
-        const badge = document.createElement('div');
-        badge.className = 'suite-unavailable-badge';
+        const badge = document.createElement('span');
+        badge.className = 'suite-badge suite-unavailable-badge';
         badge.textContent = 'Not Available';
-        card.insertBefore(badge, card.firstChild);
+        const badgeStack = card.querySelector('.suite-badges');
+        if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
         unavailableContainer.appendChild(card);
       });
     }
@@ -5955,7 +5958,8 @@
           <span>✓ ${petTypes} welcome</span>
           <span>✓ ${maxPetsLine}</span>
           <span>✓ ${feeLine}</span>
-        </div>`;
+        </div>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:8px; line-height:1.5;">Service and emotional-support animals aren't counted toward the pet limit or fee above. Young pets (under 1 year) traveling with an adult pet aren't counted either.</p>`;
     } else if(listing.pet_friendly === false){
       petPolicyHtml = `
         <div class="listing-modal-section-title">Pet Policy</div>
@@ -6034,15 +6038,51 @@
               </div>
             </div>
             <div id="lgPetTypesPicker" style="display:none; padding:10px 0 4px;">
-              <p style="font-size:11.5px; opacity:0.7; margin-bottom:8px;">What kind of pet(s) are you bringing? <span style="color:#a3402f;">*</span></p>
-              <div style="display:flex; flex-wrap:wrap; gap:8px;">
-                ${(Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length ? listing.allowed_pet_types : ['Dog', 'Cat']).map(t => `
-                  <label style="display:flex; align-items:center; gap:5px; font-size:13px; border:1px solid var(--line-dark); padding:6px 10px; cursor:pointer;">
-                    <input type="checkbox" class="lg-pet-type-checkbox" value="${t}"> ${petTypeLabel(t)}
-                  </label>
-                `).join('')}
+              <p style="font-size:11.5px; opacity:0.7; margin-bottom:8px;">What kind of pet is each one? <span style="color:#a3402f;">*</span></p>
+              <div id="lgPetTypeSlots" style="display:flex; flex-direction:column; gap:6px;"></div>
+              <p id="lgPetTypesError" style="font-size:11.5px; color:#a3402f; margin-top:6px; display:none;">Please choose a type for each pet.</p>
+            </div>
+            <div class="guest-row-divider"></div>
+            <div class="guest-row" style="align-items:flex-start;">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Service or support animal?</div>
+                <div class="guest-row-sub guest-row-sub-muted" style="line-height:1.5;">Not counted toward your pet count or fee — for a guest's own physical or emotional disability only. No documents needed; the host may only ask whether it's required because of a disability, at check-in.</div>
               </div>
-              <p id="lgPetTypesError" style="font-size:11.5px; color:#a3402f; margin-top:6px; display:none;">Please select what pet(s) you're bringing.</p>
+              <label style="display:flex; align-items:center; padding-top:2px; cursor:pointer;">
+                <input type="checkbox" id="lgServiceAnimalToggle">
+              </label>
+            </div>
+            <div id="lgServiceAnimalPicker" style="display:none; padding:6px 0 4px;">
+              <div class="guest-row" style="border:none; padding:6px 0;">
+                <div class="guest-row-text"><div class="guest-row-sub">How many?</div></div>
+                <div class="guest-stepper">
+                  <button type="button" class="guest-step-btn" data-lg-type="serviceAnimals" data-lg-action="dec" aria-label="Decrease service animals">−</button>
+                  <span class="guest-count" id="lgCountServiceAnimals">1</span>
+                  <button type="button" class="guest-step-btn" data-lg-type="serviceAnimals" data-lg-action="inc" aria-label="Increase service animals">+</button>
+                </div>
+              </div>
+              <div id="lgServiceAnimalSlots" style="display:flex; flex-direction:column; gap:6px;"></div>
+              <p id="lgServiceAnimalError" style="font-size:11.5px; color:#a3402f; margin-top:6px; display:none;">Please choose a type for each service or support animal.</p>
+            </div>
+            <div class="guest-row-divider"></div>
+            <div class="guest-row" style="align-items:flex-start;">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Traveling with a young litter?</div>
+                <div class="guest-row-sub guest-row-sub-muted" style="line-height:1.5;">Young pets (under 1 year) traveling with an adult pet you've already added above aren't counted or charged. The host may ask for proof if there's any doubt — it's a mutual understanding between you and your host.</div>
+              </div>
+              <label style="display:flex; align-items:center; padding-top:2px; cursor:pointer;">
+                <input type="checkbox" id="lgYoungLitterToggle" disabled>
+              </label>
+            </div>
+            <div id="lgYoungLitterPicker" style="display:none; padding:6px 0 4px;">
+              <div class="guest-row" style="border:none; padding:6px 0;">
+                <div class="guest-row-text"><div class="guest-row-sub">How many young pets?</div></div>
+                <div class="guest-stepper">
+                  <button type="button" class="guest-step-btn" data-lg-type="youngLitter" data-lg-action="dec" aria-label="Decrease young litter pets">−</button>
+                  <span class="guest-count" id="lgCountYoungLitter">1</span>
+                  <button type="button" class="guest-step-btn" data-lg-type="youngLitter" data-lg-action="inc" aria-label="Increase young litter pets">+</button>
+                </div>
+              </div>
             </div>` : ''}
             <div id="listingAmenitiesPicker"></div>
             <div id="listingExperiencesPicker"></div>
@@ -6388,7 +6428,7 @@
     renderMonth();
 
     // ---- Guest stepper wiring ----
-    const lgCounts = { adults: 1, children: 0, infants: 0, pets: 0 };
+    const lgCounts = { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
     // Same carry-over as dates above — URL params for the standalone
     // page's direct-link case, falling back to the live search bar's own
     // guestCounts variable for the modal-from-search-results case.
@@ -6401,33 +6441,149 @@
     else if(liveGuestCounts && liveGuestCounts.infants) lgCounts.infants = liveGuestCounts.infants;
     if(carriedParams.get('pets')) lgCounts.pets = parseInt(carriedParams.get('pets'), 10) || 0;
     else if(liveGuestCounts && liveGuestCounts.pets) lgCounts.pets = liveGuestCounts.pets;
+    // Respect the host's own cap immediately in the UI, not just as a
+    // server-side rejection after the fact — previously this stepper let
+    // a guest click all the way to 5 pets even on a listing capped at 1.
+    const maxBillablePets = listing.max_pets_allowed ? Math.min(5, Number(listing.max_pets_allowed)) : 5;
+    if(lgCounts.pets > maxBillablePets) lgCounts.pets = maxBillablePets;
     ['adults', 'children', 'infants', 'pets'].forEach(type => {
       const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
       if(countEl) countEl.textContent = lgCounts[type];
     });
-    if(lgCounts.pets > 0){
-      const initialPicker = container.parentElement.querySelector('#lgPetTypesPicker');
-      if(initialPicker) initialPicker.style.display = 'block';
+
+    // One dropdown PER billable pet — never a free-floating multi-select
+    // of "kinds," since that let a guest check three types while the
+    // stepper said "1 pet," with nothing tying the two together. Changing
+    // a pet's type is just changing its own dropdown; the total is always
+    // capped by the stepper count.
+    renderAvailabilityCalendar._lgPetTypeSelections = renderAvailabilityCalendar._lgPetTypeSelections || {};
+    const petTypeOptions = (Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length)
+      ? listing.allowed_pet_types : ['Dog', 'Cat'];
+    function renderPetTypeSlots(count){
+      const slotsEl = container.parentElement.querySelector('#lgPetTypeSlots');
+      if(!slotsEl) return;
+      const prev = renderAvailabilityCalendar._lgPetTypeSelections[listingId] || [];
+      const next = Array.from({ length: count }, (_, i) => prev[i] && petTypeOptions.includes(prev[i]) ? prev[i] : petTypeOptions[0]);
+      renderAvailabilityCalendar._lgPetTypeSelections[listingId] = next;
+      slotsEl.innerHTML = next.map((val, i) => `
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:12.5px; opacity:0.65; width:44px;">Pet ${i + 1}</span>
+          <select class="lg-pet-type-select" data-pet-index="${i}" style="flex:1; padding:6px 8px; border:1px solid var(--line-dark); background:#fff; font-family:inherit; font-size:13px;">
+            ${petTypeOptions.map(t => `<option value="${t}" ${t === val ? 'selected' : ''}>${petTypeLabel(t)}</option>`).join('')}
+          </select>
+        </div>
+      `).join('');
+      slotsEl.querySelectorAll('.lg-pet-type-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+          const idx = Number(sel.dataset.petIndex);
+          renderAvailabilityCalendar._lgPetTypeSelections[listingId][idx] = sel.value;
+        });
+      });
     }
-    const LG_MAX = { adults: 16, children: 12, infants: 5, pets: 5 };
+    const petTypesPickerEl = container.parentElement.querySelector('#lgPetTypesPicker');
+    if(lgCounts.pets > 0){
+      if(petTypesPickerEl) petTypesPickerEl.style.display = 'block';
+      renderPetTypeSlots(lgCounts.pets);
+    }
+
+    // Service/support animals — its own small type-per-slot picker, same
+    // pattern as billable pets, but this NEVER touches lgCounts.pets and
+    // is only offered at all on listings that are pet-friendly (this
+    // whole section lives inside that same conditional in the markup).
+    renderAvailabilityCalendar._lgServiceAnimalSelections = renderAvailabilityCalendar._lgServiceAnimalSelections || {};
+    const serviceAnimalToggle = container.parentElement.querySelector('#lgServiceAnimalToggle');
+    const serviceAnimalPicker = container.parentElement.querySelector('#lgServiceAnimalPicker');
+    function renderServiceAnimalSlots(count){
+      const slotsEl = container.parentElement.querySelector('#lgServiceAnimalSlots');
+      if(!slotsEl) return;
+      const prev = renderAvailabilityCalendar._lgServiceAnimalSelections[listingId] || [];
+      const next = Array.from({ length: count }, (_, i) => prev[i] && petTypeOptions.includes(prev[i]) ? prev[i] : petTypeOptions[0]);
+      renderAvailabilityCalendar._lgServiceAnimalSelections[listingId] = next;
+      slotsEl.innerHTML = next.map((val, i) => `
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:12.5px; opacity:0.65; width:44px;">#${i + 1}</span>
+          <select class="lg-service-animal-select" data-animal-index="${i}" style="flex:1; padding:6px 8px; border:1px solid var(--line-dark); background:#fff; font-family:inherit; font-size:13px;">
+            ${petTypeOptions.map(t => `<option value="${t}" ${t === val ? 'selected' : ''}>${petTypeLabel(t)}</option>`).join('')}
+          </select>
+        </div>
+      `).join('');
+      slotsEl.querySelectorAll('.lg-service-animal-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+          const idx = Number(sel.dataset.animalIndex);
+          renderAvailabilityCalendar._lgServiceAnimalSelections[listingId][idx] = sel.value;
+        });
+      });
+    }
+    if(serviceAnimalToggle){
+      serviceAnimalToggle.addEventListener('change', () => {
+        if(serviceAnimalToggle.checked){
+          lgCounts.serviceAnimals = lgCounts.serviceAnimals || 1;
+          document.getElementById('lgCountServiceAnimals').textContent = lgCounts.serviceAnimals;
+          if(serviceAnimalPicker) serviceAnimalPicker.style.display = 'block';
+          renderServiceAnimalSlots(lgCounts.serviceAnimals);
+        } else {
+          lgCounts.serviceAnimals = 0;
+          if(serviceAnimalPicker) serviceAnimalPicker.style.display = 'none';
+          const errEl = container.parentElement.querySelector('#lgServiceAnimalError');
+          if(errEl) errEl.style.display = 'none';
+        }
+      });
+    }
+
+    // Young litter pets — a plain count, no type picker (they travel
+    // WITH an already-typed adult pet above), only enabled once there's
+    // at least one billable pet to travel with.
+    const youngLitterToggle = container.parentElement.querySelector('#lgYoungLitterToggle');
+    const youngLitterPicker = container.parentElement.querySelector('#lgYoungLitterPicker');
+    function syncYoungLitterAvailability(){
+      if(!youngLitterToggle) return;
+      const canOffer = lgCounts.pets > 0;
+      youngLitterToggle.disabled = !canOffer;
+      if(!canOffer && youngLitterToggle.checked){
+        youngLitterToggle.checked = false;
+        lgCounts.youngLitter = 0;
+        if(youngLitterPicker) youngLitterPicker.style.display = 'none';
+      }
+    }
+    syncYoungLitterAvailability();
+    if(youngLitterToggle){
+      youngLitterToggle.addEventListener('change', () => {
+        if(youngLitterToggle.checked){
+          lgCounts.youngLitter = lgCounts.youngLitter || 1;
+          document.getElementById('lgCountYoungLitter').textContent = lgCounts.youngLitter;
+          if(youngLitterPicker) youngLitterPicker.style.display = 'block';
+        } else {
+          lgCounts.youngLitter = 0;
+          if(youngLitterPicker) youngLitterPicker.style.display = 'none';
+        }
+      });
+    }
+
+    const LG_MAX = { adults: 16, children: 12, infants: 5, pets: maxBillablePets, serviceAnimals: 5, youngLitter: 10 };
     container.parentElement.querySelectorAll('.guest-step-btn[data-lg-type]').forEach(btn => {
       btn.addEventListener('click', () => {
         const type = btn.dataset.lgType;
         const delta = btn.dataset.lgAction === 'inc' ? 1 : -1;
         const next = lgCounts[type] + delta;
-        const min = type === 'adults' ? 1 : 0;
+        // serviceAnimals/youngLitter have their own floor of 1 while
+        // their toggle is on — going to 0 via the stepper doesn't make
+        // sense, unchecking the toggle is how you remove them entirely.
+        const min = type === 'adults' ? 1 : (type === 'serviceAnimals' || type === 'youngLitter') ? 1 : 0;
         if(next < min || next > LG_MAX[type]) return;
         lgCounts[type] = next;
         const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
         if(countEl) countEl.textContent = next;
         if(type === 'pets'){
-          const picker = container.parentElement.querySelector('#lgPetTypesPicker');
-          if(picker) picker.style.display = next > 0 ? 'block' : 'none';
+          if(petTypesPickerEl) petTypesPickerEl.style.display = next > 0 ? 'block' : 'none';
           if(next === 0){
             const errorEl = container.parentElement.querySelector('#lgPetTypesError');
             if(errorEl) errorEl.style.display = 'none';
+          } else {
+            renderPetTypeSlots(next);
           }
+          syncYoungLitterAvailability();
         }
+        if(type === 'serviceAnimals') renderServiceAnimalSlots(next);
         updateListingPriceSummary(listing, lgArrival, lgDeparture);
       });
     });
@@ -6537,7 +6693,7 @@
     const summaryEl = document.getElementById('listingPriceSummary');
     const actionEl = document.getElementById('listingBookingAction');
     if(!summaryEl) return;
-    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0 };
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
 
     // Book Now needs to read the current dates too — stashed here since
     // this function already runs on every date/guest change, same as
@@ -6597,6 +6753,10 @@
     if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmtGuest(extraTotal)}</span></div>`);
     if(discountAmount > 0) rows.push(`<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discountAmount)}</span></div>`);
     if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee (${counts.pets} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
+    // Free by policy — shown so the guest sees they're accounted for
+    // without implying either one adds to the bill.
+    if(counts.serviceAnimals > 0) rows.push(`<div class="sum-row"><span>${counts.serviceAnimals} service/support animal${counts.serviceAnimals === 1 ? '' : 's'}</span><span>No charge</span></div>`);
+    if(counts.youngLitter > 0) rows.push(`<div class="sum-row"><span>${counts.youngLitter} young litter pet${counts.youngLitter === 1 ? '' : 's'}</span><span>No charge</span></div>`);
     if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmtGuest(amenityTotal)}</span></div>`);
     // Experience add-on is priced and charged as its own separate line
     // in the same order (see create-order.js's experiences[] handling) —
@@ -6682,7 +6842,7 @@
       return;
     }
 
-    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0 };
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
     const guests = counts.adults + counts.children;
     // The guest-count stepper already never lets adults drop below 1
     // (see the min:1 rule near LG_MAX), but this checks it explicitly
@@ -6699,23 +6859,39 @@
       amenityId: Number(amenityId), dates: [...datesSet]
     }));
 
-    // Bringing a pet requires saying what kind — the host picked which
-    // types they're okay with (see the "Pet types allowed" checkboxes on
-    // their listing), and this is what stops "a pet" from meaning
-    // whatever the guest assumed, turtle or otherwise, without the host
-    // ever getting a say.
+    // Bringing a pet requires saying what kind — one dropdown per pet
+    // slot (see renderPetTypeSlots), so this is always exactly one type
+    // per billable pet, never a looser "at least one kind checked."
     let petTypes = [];
     if(counts.pets > 0){
       const modalRoot = document.getElementById('listingModalBody');
-      petTypes = Array.from((modalRoot || document).querySelectorAll('.lg-pet-type-checkbox:checked')).map(cb => cb.value);
-      if(!petTypes.length){
+      petTypes = (renderAvailabilityCalendar._lgPetTypeSelections || {})[listing.id] || [];
+      if(petTypes.length !== counts.pets){
         const petTypesError = (modalRoot || document).querySelector('#lgPetTypesError');
         if(petTypesError) petTypesError.style.display = 'block';
-        errorEl.textContent = 'Please select what pet(s) you\'re bringing before booking.';
+        errorEl.textContent = 'Please choose a type for each pet before booking.';
         errorEl.style.display = 'block';
         return;
       }
     }
+
+    // Service/support animals — never counted or charged, only offered
+    // on pet-friendly listings (see the booking-modal markup). Types come
+    // from the same per-slot picker pattern as billable pets above.
+    let serviceAnimals = [];
+    if(counts.serviceAnimals > 0){
+      const modalRoot = document.getElementById('listingModalBody');
+      const types = (renderAvailabilityCalendar._lgServiceAnimalSelections || {})[listing.id] || [];
+      if(types.length !== counts.serviceAnimals){
+        const errEl = (modalRoot || document).querySelector('#lgServiceAnimalError');
+        if(errEl) errEl.style.display = 'block';
+        errorEl.textContent = 'Please choose a type for each service or support animal before booking.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      serviceAnimals = types.map(type => ({ type }));
+    }
+    const youngLitterCount = counts.youngLitter > 0 ? counts.youngLitter : 0;
 
     // If the guest checked a with-stay experience add-on, it needs a
     // date before it can be booked — same requirement create-order.js
@@ -6739,7 +6915,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, petTypes, selectedAmenities: selectedAmenitiesPayload }],
+          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, petTypes, serviceAnimals, youngLitterCount, selectedAmenities: selectedAmenitiesPayload }],
           experiences: selectedExperiencesPayload,
           email,
           // Only takes effect if this currency is admin-enabled for direct
