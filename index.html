@@ -274,16 +274,6 @@
     background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:10px; letter-spacing:0.06em;
     text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
-  /* Distinguishes a card the guest has actually looked at before from a
-     "regular" search result that's just matching their current filters —
-     without this, Recently Viewed and the main grid look identical, and
-     there's no visual cue for why something is showing up in that row
-     specifically. Gold, not the dark/warning tone Unavailable uses,
-     since this is a positive "you were here" signal, not an alert. */
-  .suite-recently-viewed-badge{
-    background:var(--gold-deep); color:#fff; font-size:10px; letter-spacing:0.06em;
-    text-transform:uppercase; padding:5px 10px; border-radius:3px;
-  }
   .suite-card{
     background:var(--cream); display:flex; flex-direction:column; border:2px solid #ffffff;
     border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(28,26,23,0.08);
@@ -5202,13 +5192,10 @@
     row.style.display = 'block';
     container.innerHTML = '';
     cards.forEach((item, i) => {
+      // No per-card "Recently Viewed" badge here — the row heading right
+      // above already says that, and repeating it on every single card
+      // was redundant clutter, not useful information.
       const card = item.type === 'stay' ? buildSuiteCard(item.data, i) : buildExperienceCard(item.data, i);
-      card.classList.add('suite-card--recently-viewed');
-      const badge = document.createElement('span');
-      badge.className = 'suite-badge suite-recently-viewed-badge';
-      badge.textContent = 'Recently Viewed';
-      const badgeStack = card.querySelector('.suite-badges');
-      if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
       container.appendChild(card);
     });
   }
