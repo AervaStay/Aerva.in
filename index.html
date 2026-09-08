@@ -254,8 +254,17 @@
      should still be able to see what exists and consider other dates,
      but it should read at a glance as "not bookable right now," never
      mistaken for a normal, available result. */
-  .suite-card--unavailable{opacity:0.55; filter:grayscale(35%); cursor:default;}
-  .suite-card--unavailable:hover{transform:none !important; box-shadow:0 2px 10px rgba(28,26,23,0.08) !important; border-color:#ffffff !important;}
+  .suite-card--unavailable{opacity:0.7; filter:grayscale(25%); cursor:pointer;}
+  /* Still dimmed to read as "not available for THESE dates" at a glance,
+     but no longer inert — clicking opens the same detail view with its
+     own fresh calendar, letting the guest check other dates. cursor:
+     default and the hover-suppression this used to have made an
+     actionable card look and behave like a dead end. */
+  .suite-card--unavailable .suite-check-availability{
+    position:absolute; bottom:12px; left:12px; right:12px; z-index:2;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:11px; letter-spacing:0.04em;
+    text-align:center; padding:7px 10px; border-radius:4px; pointer-events:none;
+  }
   /* Both badges below render as normal flex children INSIDE .suite-badges
      (see buildSuiteCard/buildExperienceCard + the row-builders that add
      them), never as their own absolutely-positioned overlay — that's
@@ -1308,12 +1317,19 @@
     </div>
   </div>
 
-  <div class="wrap" id="unavailableRow" style="display:none;">
+  <div class="wrap" id="specificMatchRow" style="display:none;">
     <div class="browse-row-head">
-      <h3>Not Available for Your Dates</h3>
-      <p style="font-size:13px; opacity:0.6; margin-top:4px;">These match your search, but are already booked or blocked for the dates you picked.</p>
+      <h3 id="specificMatchHeading">This Property</h3>
+      <p id="specificMatchSub" style="font-size:13px; opacity:0.6; margin-top:4px;"></p>
     </div>
-    <div class="suite-grid" id="unavailableContainer"></div>
+    <div class="suite-grid" id="specificMatchContainer"></div>
+  </div>
+
+  <div class="wrap" id="specificMatchNearbyRow" style="display:none;">
+    <div class="browse-row-head">
+      <h3>Nearby Properties</h3>
+    </div>
+    <div class="suite-grid" id="specificMatchNearbyContainer"></div>
   </div>
 
   <div class="wrap" id="recentlyViewedRow" style="display:none;">
@@ -1323,20 +1339,28 @@
     <div class="suite-grid" id="recentlyViewedContainer"></div>
   </div>
 
-  <div class="wrap" id="nearbyRow" style="display:none;">
-    <div class="browse-row-head">
-      <h3>Near You</h3>
-    </div>
-    <div class="suite-grid" id="nearbyContainer"></div>
-  </div>
-
-  <div class="wrap">
+  <div class="wrap" id="availableSectionWrap">
     <div class="browse-row-head">
       <h3>Available Listings</h3>
     </div>
     <div class="suite-grid reveal" id="suitesContainer">
       <div class="suites-loading">Loading homes…</div>
     </div>
+  </div>
+
+  <div class="wrap" id="unavailableRow" style="display:none;">
+    <div class="browse-row-head">
+      <h3>Not Available for Your Dates</h3>
+      <p style="font-size:13px; opacity:0.6; margin-top:4px;">These match your search, but are already booked or blocked for the dates you picked — pick different dates any time with Check Availability.</p>
+    </div>
+    <div class="suite-grid" id="unavailableContainer"></div>
+  </div>
+
+  <div class="wrap" id="nearbyRow" style="display:none;">
+    <div class="browse-row-head">
+      <h3>Near You</h3>
+    </div>
+    <div class="suite-grid" id="nearbyContainer"></div>
   </div>
 </section>
 
@@ -5213,8 +5237,80 @@
     });
   }
 
+  // The "specific address matched one property" layout (see performSearch's
+  // 300m-match logic) — one card for the matched property itself, clearly
+  // labeled available/unavailable if dates were searched, then a second
+  // row of other properties within 200km of that SEARCHED address. This is
+  // a different center point than renderNearbyRow's "Near You" (which is
+  // always about the guest's own device location) — here it's centered on
+  // wherever they searched, which may not be where they currently are.
+  function renderSpecificMatchRow(matchedListing, geocoded){
+    const row = document.getElementById('specificMatchRow');
+    const nearbyRow = document.getElementById('specificMatchNearbyRow');
+    const container = document.getElementById('specificMatchContainer');
+    const nearbyContainer = document.getElementById('specificMatchNearbyContainer');
+    const subEl = document.getElementById('specificMatchSub');
+    if(!row || !container) return;
+
+    const datesWereSearched = !!(searchArrivalDate && searchDepartureDate);
+    const card = buildSuiteCard(matchedListing, 0);
+    if(datesWereSearched && matchedListing.is_available === false){
+      addUnavailableCardDressing(card);
+      subEl.textContent = "This property matches your search, but isn't available for the dates you picked — Check Availability to see other dates.";
+    } else if(datesWereSearched){
+      subEl.textContent = 'This property matches your search and is available for your dates.';
+    } else {
+      subEl.textContent = 'This property matches your search.';
+    }
+    container.innerHTML = '';
+    container.appendChild(card);
+    row.style.display = 'block';
+
+    if(nearbyRow && nearbyContainer && geocoded){
+      const candidates = approvedListings
+        .filter(l => l.id !== matchedListing.id && l.latitude && l.longitude)
+        .map(l => ({ l, km: haversineDistanceKm(geocoded.lat, geocoded.lng, Number(l.latitude), Number(l.longitude)) }))
+        .filter(x => x.km <= 200)
+        .sort((a, b) => a.km - b.km)
+        .slice(0, 8);
+      if(candidates.length){
+        nearbyContainer.innerHTML = '';
+        candidates.forEach((x, i) => nearbyContainer.appendChild(buildSuiteCard(x.l, i)));
+        nearbyRow.style.display = 'block';
+      } else {
+        nearbyRow.style.display = 'none';
+      }
+    } else if(nearbyRow){
+      nearbyRow.style.display = 'none';
+    }
+  }
+
   function applyFiltersAndRender(){
     const container = document.getElementById('suitesContainer');
+
+    // A place search that resolved to one specific property's own
+    // address (see performSearch) replaces the whole results area with
+    // that property + what's nearby it, instead of the normal
+    // Recently-Viewed/Available/Unavailable breakdown — a guest who
+    // typed one exact address wants that address, not a filtered list.
+    const specificMatchRowEl = document.getElementById('specificMatchRow');
+    const specificMatchNearbyRowEl = document.getElementById('specificMatchNearbyRow');
+    const availableSectionWrapEl = document.getElementById('availableSectionWrap');
+    const recentlyViewedRowEl = document.getElementById('recentlyViewedRow');
+    const nearbyRowEl = document.getElementById('nearbyRow');
+    const unavailableRowEl = document.getElementById('unavailableRow');
+
+    if(specificListingMatch && (currentCategoryFilter === 'all' || currentCategoryFilter === 'suites')){
+      renderSpecificMatchRow(specificListingMatch, specificListingMatchGeo);
+      if(recentlyViewedRowEl) recentlyViewedRowEl.style.display = 'none';
+      if(nearbyRowEl) nearbyRowEl.style.display = 'none';
+      if(unavailableRowEl) unavailableRowEl.style.display = 'none';
+      if(availableSectionWrapEl) availableSectionWrapEl.style.display = 'none';
+      return;
+    }
+    if(specificMatchRowEl) specificMatchRowEl.style.display = 'none';
+    if(specificMatchNearbyRowEl) specificMatchNearbyRowEl.style.display = 'none';
+    if(availableSectionWrapEl) availableSectionWrapEl.style.display = '';
 
     // Called first, unconditionally — the main grid below has an early
     // return for its own empty states, but these two rows are
@@ -5298,14 +5394,13 @@
     const finalUnavailableSuites = showSuites ? unavailableSuites : [];
     const finalUnavailableExperiences = showExperiences ? unavailableExperiences : [];
 
-    // Computed early since both the empty-state message below and the
-    // unavailable row itself (further down) need it — only worth
-    // mentioning/showing at all if the guest actually looked at one of
-    // these unavailable results before.
+    // Computed early since both the empty-state message above and the
+    // unavailable row's own internal ordering (further down) need it —
+    // previously-viewed unavailable results lead that row, everything
+    // else unavailable follows.
     const viewedKeys = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
     const viewedUnavailableSuites = finalUnavailableSuites.filter(l => viewedKeys.has('stay:' + l.id));
     const viewedUnavailableExperiences = finalUnavailableExperiences.filter(e => viewedKeys.has('experience:' + e.id));
-    const hasViewedUnavailable = viewedUnavailableSuites.length > 0 || viewedUnavailableExperiences.length > 0;
 
     container.innerHTML = '';
     if(finalSuites.length === 0 && finalExperiences.length === 0){
@@ -5313,7 +5408,7 @@
       if(currentCategoryFilter === 'suites' && wantsPetFriendly) message = 'No pet-friendly homes match your other filters — try widening your price range or removing pets.';
       else if(currentCategoryFilter === 'suites') message = 'No homes match these filters — try widening your price range.';
       else if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
-      else if(datesWereSearched && hasViewedUnavailable) message = 'Nothing available for those dates — see what\'s unavailable below, or try different dates.';
+      else if(datesWereSearched && (finalUnavailableSuites.length > 0 || finalUnavailableExperiences.length > 0)) message = 'Nothing available for those dates — see what\'s unavailable below, or try different dates.';
       else message = 'Nothing matches these filters yet — try widening your price range.';
       container.innerHTML = `<div class="suites-empty">${message}</div>`;
     } else {
@@ -5339,16 +5434,16 @@
     }
 
     // ---- Unavailable-for-these-dates row ----
-    // Only worth showing at all if at least one of these unavailable
-    // results is something the guest actually looked at — otherwise it's
-    // just clutter about listings they never expressed interest in. The
-    // ones they did view are sorted first within the row. (viewedKeys /
-    // hasViewedUnavailable computed earlier, above, since the empty-
-    // state message needs the same check.)
+    // Shown any time there ARE unavailable results for a real (dated)
+    // search — no longer gated behind "did the guest view one of these
+    // before," so a place/date search always surfaces what's booked out,
+    // not just the guest's own prior picks. Previously-viewed ones still
+    // lead the row when present, purely as an ordering nicety.
     const unavailableRow = document.getElementById('unavailableRow');
     const unavailableContainer = document.getElementById('unavailableContainer');
+    const hasAnyUnavailable = finalUnavailableSuites.length > 0 || finalUnavailableExperiences.length > 0;
 
-    if(!datesWereSearched || !hasViewedUnavailable){
+    if(!datesWereSearched || !hasAnyUnavailable){
       unavailableRow.style.display = 'none';
     } else {
       unavailableRow.style.display = 'block';
@@ -5361,24 +5456,37 @@
       const orderedExperiences = [...viewedUnavailableExperiences, ...finalUnavailableExperiences.filter(e => !viewedKeys.has('experience:' + e.id))];
       orderedSuites.forEach(listing => {
         const card = buildSuiteCard(listing, uIndex++);
-        card.classList.add('suite-card--unavailable');
-        const badge = document.createElement('span');
-        badge.className = 'suite-badge suite-unavailable-badge';
-        badge.textContent = 'Not Available';
-        const badgeStack = card.querySelector('.suite-badges');
-        if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
+        addUnavailableCardDressing(card);
         unavailableContainer.appendChild(card);
       });
       orderedExperiences.forEach(exp => {
         const card = buildExperienceCard(exp, uIndex++);
-        card.classList.add('suite-card--unavailable');
-        const badge = document.createElement('span');
-        badge.className = 'suite-badge suite-unavailable-badge';
-        badge.textContent = 'Not Available';
-        const badgeStack = card.querySelector('.suite-badges');
-        if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
+        addUnavailableCardDressing(card);
         unavailableContainer.appendChild(card);
       });
+    }
+  }
+
+  // Shared by every place an "unavailable for these dates" card gets
+  // built (the main Unavailable row, and the specific-property-match
+  // card when that one property itself isn't available) — the badge AND
+  // the always-visible "Check Availability" label are the same either
+  // way, and the card stays fully clickable: it opens the same detail
+  // view with its own calendar, so the guest can pick different dates
+  // rather than hitting a dead end.
+  function addUnavailableCardDressing(card){
+    card.classList.add('suite-card--unavailable');
+    const badge = document.createElement('span');
+    badge.className = 'suite-badge suite-unavailable-badge';
+    badge.textContent = 'Not Available';
+    const badgeStack = card.querySelector('.suite-badges');
+    if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
+    const photoEl = card.querySelector('.suite-photo');
+    if(photoEl){
+      const checkBtn = document.createElement('span');
+      checkBtn.className = 'suite-check-availability';
+      checkBtn.textContent = 'Check Availability →';
+      photoEl.appendChild(checkBtn);
     }
   }
 
@@ -5722,6 +5830,30 @@
           ? `Showing ${totalResults} result${totalResults === 1 ? '' : 's'} matching your search.`
           : 'Nothing matches your search — try different dates, guests, or place.';
         statusEl.style.display = 'block';
+      }
+
+      // Did the typed/selected place resolve to one specific property's
+      // own address, rather than just a general city/area? A guest
+      // typing "The Willow Cottage, Jibhi" (or picking that exact
+      // address from the autocomplete) will geocode to essentially the
+      // same point the host saved for that listing — a general area
+      // search never lands this close to one exact building. 300m is
+      // tight enough that it's never just "a nearby neighborhood."
+      specificListingMatch = null;
+      specificListingMatchGeo = null;
+      if(searchSuites && geocoded){
+        const TIGHT_MATCH_KM = 0.3;
+        let closest = null, closestKm = Infinity;
+        approvedListings.forEach(l => {
+          if(l.latitude && l.longitude){
+            const km = haversineDistanceKm(geocoded.lat, geocoded.lng, Number(l.latitude), Number(l.longitude));
+            if(km < closestKm){ closestKm = km; closest = l; }
+          }
+        });
+        if(closest && closestKm <= TIGHT_MATCH_KM){
+          specificListingMatch = closest;
+          specificListingMatchGeo = geocoded;
+        }
       }
 
       applyFiltersAndRender();
@@ -7647,6 +7779,15 @@
   document.getElementById('suitesContainer').addEventListener('click', handleCardGridClick);
   document.getElementById('recentlyViewedContainer').addEventListener('click', handleCardGridClick);
   document.getElementById('nearbyContainer').addEventListener('click', handleCardGridClick);
+  // Previously missing entirely — unavailable cards rendered but were
+  // never wired to open anything, making "Check Availability" a label
+  // with nothing behind it. openListingDetail() below builds the same
+  // detail view (with its own fresh calendar) regardless of whether the
+  // card arrived here dimmed as "unavailable" for the originally
+  // searched dates.
+  document.getElementById('unavailableContainer').addEventListener('click', handleCardGridClick);
+  document.getElementById('specificMatchContainer').addEventListener('click', handleCardGridClick);
+  document.getElementById('specificMatchNearbyContainer').addEventListener('click', handleCardGridClick);
 
   document.getElementById('searchBtn').addEventListener('click', performSearch);
 
@@ -7704,6 +7845,14 @@
     calSelectingStart = true;
     updateDateRangeBtn();
     document.getElementById('searchCity').value = '';
+    // Previously left stale — a prior place search's exact coordinates
+    // stayed in these hidden fields even after the visible text was
+    // cleared, so performSearch() (which reads these first) could still
+    // silently run a location-filtered search after "Clear Filters."
+    document.getElementById('searchPlaceLat').value = '';
+    document.getElementById('searchPlaceLng').value = '';
+    specificListingMatch = null;
+    specificListingMatchGeo = null;
     guestCounts.adults = 0;
     guestCounts.children = 0;
     guestCounts.infants = 0;
@@ -7719,6 +7868,13 @@
   // ---- Custom calendar date-range picker (replaces native date inputs) ----
   let searchArrivalDate = '';
   let searchDepartureDate = '';
+  // Set by performSearch() when the typed/selected place resolves to one
+  // specific Aerva property's own saved address (not just "somewhere in
+  // this city") — see the matching logic there. Read by
+  // applyFiltersAndRender() to swap the whole results area for the
+  // "matched property + nearby" layout instead of the normal rows.
+  let specificListingMatch = null;
+  let specificListingMatchGeo = null;
   let calSelectingStart = true;
   let calViewYear, calViewMonth;
 
