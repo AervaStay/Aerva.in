@@ -571,8 +571,31 @@
         </div>
         <p id="templateSaveMsg" style="font-size:12px; margin-top:8px; display:none;"></p>
       </div>
-      <div class="listing-sidebar">
-        <div class="sidebar-placeholder">Click a conversation on the left to open it.</div>
+      <div class="listing-sidebar" id="messagesSidebar">
+        <div class="sidebar-placeholder" id="messagesSidebarPlaceholder">Click a conversation on the left to open it.</div>
+        <div id="messagesSidebarContent" style="display:none; flex-direction:column; height:600px;">
+          <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding-bottom:14px; border-bottom:1px solid #ddd0bc; flex:0 0 auto;">
+            <div>
+              <div class="sidebar-heading" id="messagesSidebarPropertyName" style="margin-bottom:2px;"></div>
+              <div class="sidebar-sub" id="messagesSidebarGuestEmail" style="margin-bottom:0;"></div>
+            </div>
+            <!-- Finds the matching booking by the conversation's order_id
+                 (see loadHostInbox/openHostChat) and reuses the same
+                 popup the Earnings list's own "Details" opens — one
+                 booking-details view for the whole dashboard, not a
+                 second copy of it just for the chat context. -->
+            <button type="button" class="filter-clear" id="messagesSidebarDetailsBtn" style="white-space:nowrap; flex:0 0 auto;">Details</button>
+          </div>
+          <div id="hostChatMessagesContainer" style="flex:1 1 auto; overflow-y:auto; padding:18px 2px; display:flex; flex-direction:column; gap:10px;"></div>
+          <div id="hostChatTemplatesRow" style="padding:0 2px 10px; display:flex; gap:8px; overflow-x:auto; flex:0 0 auto;"></div>
+          <div style="padding-top:14px; border-top:1px solid #ddd0bc; flex:0 0 auto;">
+            <p id="hostChatWarning" style="display:none; font-size:11.5px; color:#a3402f; margin-bottom:8px;">Phone numbers, emails, and social media handles can't be shared here — Aerva keeps all communication on-platform.</p>
+            <div style="display:flex; gap:8px; align-items:flex-end;">
+              <textarea id="hostChatInput" rows="1" placeholder="Type a message…" style="flex:1; resize:none; background:white; border:1px solid #ddd0bc; padding:10px 12px; font-family:inherit; font-size:14px; max-height:100px;"></textarea>
+              <button type="button" id="hostChatSendBtn" aria-label="Send" style="flex:0 0 auto; width:44px; height:44px; border-radius:50%; background:#8a6c39; border:none; color:white; cursor:pointer;">→</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -580,26 +603,6 @@
   <h2 class="section-heading">Your Earnings</h2>
   <div id="bookingsContainer">
     <p class="loading">Loading your bookings…</p>
-  </div>
-</div>
-
-<!-- Chat window — same widget shape as index.html's guest-facing one,
-     adapted for the host role. -->
-<div class="listing-sidebar" id="hostChatModalOverlay" style="display:none; position:fixed; inset:0; background:rgba(20,17,14,0.5); z-index:200; align-items:center; justify-content:center;">
-  <div style="background:#f4ebe3; width:min(480px, 92vw); height:min(640px, 88vh); display:flex; flex-direction:column; border:1px solid #ddd0bc; position:relative;">
-    <button type="button" id="hostChatModalClose" aria-label="Close" style="position:absolute; top:10px; right:14px; background:none; border:none; font-size:22px; cursor:pointer; line-height:1;">×</button>
-    <div style="padding:20px 24px 14px; border-bottom:1px solid #ddd0bc; flex:0 0 auto;">
-      <div class="sidebar-section-title" style="margin:0;" id="hostChatModalTitle">Chat</div>
-    </div>
-    <div id="hostChatMessagesContainer" style="flex:1 1 auto; overflow-y:auto; padding:18px 24px; display:flex; flex-direction:column; gap:10px;"></div>
-    <div id="hostChatTemplatesRow" style="padding:0 24px; display:flex; gap:8px; overflow-x:auto; flex:0 0 auto;"></div>
-    <div style="padding:14px 24px 20px; border-top:1px solid #ddd0bc; flex:0 0 auto;">
-      <p id="hostChatWarning" style="display:none; font-size:11.5px; color:#a3402f; margin-bottom:8px;">Phone numbers, emails, and social media handles can't be shared here — Aerva keeps all communication on-platform.</p>
-      <div style="display:flex; gap:8px; align-items:flex-end;">
-        <textarea id="hostChatInput" rows="1" placeholder="Type a message…" style="flex:1; resize:none; background:white; border:1px solid #ddd0bc; padding:10px 12px; font-family:inherit; font-size:14px; max-height:100px;"></textarea>
-        <button type="button" id="hostChatSendBtn" aria-label="Send" style="flex:0 0 auto; width:44px; height:44px; border-radius:50%; background:#8a6c39; border:none; color:white; cursor:pointer;">→</button>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -992,7 +995,7 @@
         container.innerHTML = '<p class="empty">No conversations yet — these open automatically once a guest with a confirmed booking messages you.</p>';
       } else {
         container.innerHTML = conversations.map(c => `
-          <div class="listing-card" data-conversation-id="${c.id}" data-listing-name="${c.property_name}" data-guest-email="${c.guest_email}" style="cursor:pointer;">
+          <div class="listing-card" data-conversation-id="${c.id}" data-listing-name="${c.property_name}" data-guest-email="${c.guest_email}" data-order-id="${c.order_id || ''}" style="cursor:pointer;">
             <div class="listing-info">
               <h3>${c.property_name}</h3>
               <div class="listing-meta">${c.guest_email}</div>
@@ -1001,7 +1004,10 @@
           </div>
         `).join('');
         container.querySelectorAll('[data-conversation-id]').forEach(card => {
-          card.addEventListener('click', () => openHostChat(Number(card.dataset.conversationId), card.dataset.listingName, card.dataset.guestEmail));
+          card.addEventListener('click', () => openHostChat(
+            Number(card.dataset.conversationId), card.dataset.listingName, card.dataset.guestEmail,
+            card.dataset.orderId ? Number(card.dataset.orderId) : null
+          ));
         });
       }
     } catch(err){
@@ -1012,20 +1018,31 @@
   }
 
   let hostChatCurrentConversationId = null;
+  // Set alongside the conversation id whenever a chat is opened — the
+  // Details button reads this to find the matching row in
+  // allHostBookings. Not every conversation is guaranteed to have one
+  // (see the order_id comment in loadHostInbox), so the button itself
+  // hides rather than erroring out if it's missing.
+  let hostChatCurrentOrderId = null;
 
-  async function openHostChat(conversationId, listingName, guestEmail){
+  function openHostChat(conversationId, listingName, guestEmail, orderId){
     hostChatCurrentConversationId = conversationId;
-    document.getElementById('hostChatModalTitle').textContent = `${listingName} — ${guestEmail}`;
-    document.getElementById('hostChatMessagesContainer').innerHTML = '<p class="loading">Loading…</p>';
-    document.getElementById('hostChatModalOverlay').style.display = 'flex';
+    hostChatCurrentOrderId = orderId || null;
+    document.getElementById('messagesSidebarPlaceholder').style.display = 'none';
+    document.getElementById('messagesSidebarContent').style.display = 'flex';
+    document.getElementById('messagesSidebarPropertyName').textContent = listingName;
+    document.getElementById('messagesSidebarGuestEmail').textContent = guestEmail;
+    document.getElementById('messagesSidebarDetailsBtn').style.display = hostChatCurrentOrderId ? 'inline-block' : 'none';
+    refreshHostChatMessages(conversationId);
+  }
 
-    // There's no direct "get by conversationId" GET mode — conversation
-    // reads are keyed by orderId (see guest-profile.js), and the inbox
-    // list doesn't carry the orderId along. Re-deriving it via the
-    // conversations table directly would need a new endpoint mode; for
-    // now this reads messages the same way the guest side's initial
-    // fetch populates them — the conversation already exists by the time
-    // it shows up in the inbox, so this just needs its message list.
+  // The actual message fetch/render, split out from openHostChat so
+  // sending a new message can refresh the thread without re-deriving the
+  // property name/guest email or resetting the header — it previously
+  // had to parse those back out of the modal's title text (a fragile "X
+  // — Y" string split) just to call the exact same function again.
+  async function refreshHostChatMessages(conversationId){
+    document.getElementById('hostChatMessagesContainer').innerHTML = '<p class="loading">Loading…</p>';
     try{
       const res = await fetch(API_BASE + `/api/guest-profile?mode=hostConversationMessages&conversationId=${conversationId}`, {
         headers: { 'Authorization': 'Bearer ' + sessionToken }
@@ -1038,6 +1055,11 @@
       document.getElementById('hostChatMessagesContainer').innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not open this conversation.</p>';
     }
   }
+
+  document.getElementById('messagesSidebarDetailsBtn').addEventListener('click', () => {
+    const booking = allHostBookings.find(b => b.id === hostChatCurrentOrderId);
+    if(booking) showBookingDetailsPopup(booking);
+  });
 
   function renderHostChatMessages(messages){
     const container = document.getElementById('hostChatMessagesContainer');
@@ -1104,7 +1126,7 @@
       if(res.ok){
         input.value = '';
         document.getElementById('hostChatWarning').style.display = 'none';
-        openHostChat(hostChatCurrentConversationId, document.getElementById('hostChatModalTitle').textContent.split(' — ')[0], document.getElementById('hostChatModalTitle').textContent.split(' — ')[1]);
+        refreshHostChatMessages(hostChatCurrentConversationId);
       }
     } catch(err){ /* retryable — message just doesn't appear */ }
     input.disabled = false;
@@ -1113,9 +1135,6 @@
   document.getElementById('hostChatSendBtn').addEventListener('click', sendHostChatMessage);
   document.getElementById('hostChatInput').addEventListener('keydown', (e) => {
     if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendHostChatMessage(); }
-  });
-  document.getElementById('hostChatModalClose').addEventListener('click', () => {
-    document.getElementById('hostChatModalOverlay').style.display = 'none';
   });
 
   // ---- Template manager ----
