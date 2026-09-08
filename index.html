@@ -1205,7 +1205,7 @@
         <div class="currency-dropdown" id="currencyDropdown"></div>
       </div>
       <a href="guest-login.html" id="guestLoginLink">Log In</a>
-      <a href="host-dashboard.html#messagesSection" id="hostMessagesIcon" class="host-messages-icon" style="display:none;" aria-label="Messages">
+      <a href="host-dashboard.html" id="hostMessagesIcon" class="host-messages-icon" style="display:none;" aria-label="Messages">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         <span id="hostMessagesUnreadBadge" class="host-messages-badge" style="display:none;"></span>
       </a>
@@ -5873,7 +5873,7 @@
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ mode: 'send', conversationId: chatCurrentConversationId, text })
+        body: JSON.stringify({ mode: 'send', conversationId: chatCurrentConversationId, text, role: 'guest' })
       });
       const data = await res.json();
       if(res.ok){
@@ -6231,7 +6231,7 @@
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ mode: 'send', conversationId: inboxCurrentConversationId, text })
+        body: JSON.stringify({ mode: 'send', conversationId: inboxCurrentConversationId, text, role: 'host' })
       });
       if(res.ok){
         input.value = '';
