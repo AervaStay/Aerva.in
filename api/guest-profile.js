@@ -22,6 +22,11 @@
 //   POST { mode: 'send', conversationId, text }
 //   POST { mode: 'saveTemplate', templateId?, listingId?, body }
 //   POST { mode: 'deleteTemplate', templateId }
+//   POST { mode: 'translate', text, targetLang }
+//     Machine-translates one message via Google Cloud Translation API.
+//     Requires GOOGLE_TRANSLATE_API_KEY. Available to either side of a
+//     conversation — just needs a valid session, not conversation
+//     ownership, since it's a stateless text-in/text-out utility.
 //
 // A conversation only ever exists tied to a confirmed (status='paid')
 // order — there is no path anywhere on the site for a guest to message a
@@ -33,6 +38,19 @@ const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 
 const sql = neon(process.env.DATABASE_URL);
+
+// Normalizes a DATE column value to 'YYYY-MM-DD' whether the driver
+// returns it as a JS Date object or an already-formatted string — same
+// helper used in get-listings.js/create-order.js/host-listings.js for
+// the same reason (see host-listings.js's own comment on this: skipping
+// it is what caused the 48-hour cancellation cutoff to silently miscalc
+// via a mangled date-string concatenation). Needed here now that
+// hostConversations returns booking dates for the inbox's status tags.
+function toDateStr(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val.toISOString().split('T')[0];
+  return String(val).slice(0, 10);
+}
 
 // Badge tiers, computed fresh from guest_reviews on every profile load —
 // not stored, so it's always accurate as new reviews come in. Deliberately
@@ -165,20 +183,44 @@ module.exports = async (req, res) => {
           SELECT id, sender_type, display_text, was_redacted, created_at
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `;
-        return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole: isHost ? 'host' : 'guest', messages });
+        // This endpoint is only ever called from the guest-facing chat
+        // widget in index.html (openChatForOrder/sendChatMessage) — so
+        // when an account happens to be BOTH the guest on this booking
+        // AND a host elsewhere (e.g. testing by booking your own
+        // listing), the perspective here should still be "guest," since
+        // that's which surface is actually being used. Checking isGuest
+        // first (not isHost) is what makes that true — the previous
+        // isHost-first priority meant such an account's own messages,
+        // and the host's replies, all rendered identically as "mine,"
+        // making it look like nothing was ever received.
+        return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole: isGuest ? 'guest' : 'host', messages });
       }
 
       if (mode === 'hostConversations') {
         const conversations = await sql`
-          SELECT c.id, c.listing_id, c.order_id, c.guest_email, l.property_name,
+          SELECT c.id, c.listing_id, c.order_id, c.guest_email, c.guest_id,
+                 l.property_name, l.cover_photo_url,
+                 g.name AS guest_name, g.profile_photo_url AS guest_photo_url,
+                 o.arrival, o.departure, o.status AS booking_status,
+                 o.nights, o.guests, o.subtotal, o.gst, o.payout_amount,
                  (SELECT display_text FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
                  (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
                  (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'guest' AND m.read_at IS NULL) AS unread_count
           FROM conversations c
           JOIN listings l ON l.id = c.listing_id
+          LEFT JOIN guests g ON g.id = c.guest_id
+          LEFT JOIN orders o ON o.id = c.order_id
           WHERE c.host_id = ${guestId}
           ORDER BY last_message_at DESC NULLS LAST
         `;
+        // Dates normalized here (see toDateStr's comment) so the
+        // frontend's status-tag logic (Enquiry / Check-in Today / etc.)
+        // does plain string/date-object comparisons against a real date,
+        // never a mangled concatenation.
+        conversations.forEach(c => {
+          c.arrival = toDateStr(c.arrival);
+          c.departure = toDateStr(c.departure);
+        });
         return res.status(200).json({ conversations });
       }
 
@@ -311,7 +353,7 @@ module.exports = async (req, res) => {
     const { mode } = req.body || {};
     try {
       if (mode === 'send') {
-        const { conversationId, text } = req.body || {};
+        const { conversationId, text, role } = req.body || {};
         const rawText = typeof text === 'string' ? text.trim().slice(0, 2000) : '';
         if (!conversationId || !rawText) return res.status(400).json({ error: 'Message can\'t be empty.' });
 
@@ -322,13 +364,77 @@ module.exports = async (req, res) => {
         const isHost = conv.host_id === guestId;
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
 
+        // Which "hat" is this account wearing right now? Identity alone
+        // can't answer that when one account is both the guest on this
+        // booking AND a host elsewhere (e.g. a host testing by booking
+        // their own listing) — isHost-first priority used to mean EVERY
+        // message from such an account got stored as sender_type='host',
+        // regardless of which UI (guest chat widget vs. host inbox) it
+        // was actually sent from, making the guest side look like it
+        // never received anything (every bubble rendered as "mine").
+        // The caller now says which surface it's sending from; that's
+        // validated against real conversation membership, never trusted
+        // blindly. Older clients that don't send `role` fall back to the
+        // previous behavior so nothing breaks pre-deploy.
+        let senderType;
+        if (role === 'guest' || role === 'host') {
+          if (role === 'guest' && !isGuest) return res.status(403).json({ error: 'You are not the guest on this booking.' });
+          if (role === 'host' && !isHost) return res.status(403).json({ error: 'You are not the host on this booking.' });
+          senderType = role;
+        } else {
+          senderType = isHost ? 'host' : 'guest';
+        }
+
         const { displayText, wasRedacted } = redactContactInfo(rawText);
         const inserted = await sql`
           INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
-          VALUES (${conversationId}, ${isHost ? 'host' : 'guest'}, ${rawText}, ${displayText}, ${wasRedacted})
+          VALUES (${conversationId}, ${senderType}, ${rawText}, ${displayText}, ${wasRedacted})
           RETURNING id, sender_type, display_text, was_redacted, created_at
         `;
         return res.status(200).json({ message: inserted[0] });
+      }
+
+      // Real machine translation via Google Cloud Translation API — a
+      // v2 REST call, same lightweight "just fetch() a Google endpoint
+      // with an API key" pattern _social-auth.js already uses for
+      // Google Sign-In, so no extra SDK dependency for this one feature.
+      // Requires GOOGLE_TRANSLATE_API_KEY (a separate API key from
+      // GOOGLE_CLIENT_ID — created in Google Cloud Console with the
+      // Cloud Translation API enabled on that project's billing account).
+      // Available to either party in a conversation, not just hosts —
+      // translation is equally useful to a guest reading a host's reply
+      // in a different language — but still requires a logged-in session
+      // (requireGuest already ran above) so this can't be hit anonymously
+      // and run up translation costs on Aerva's API key for free.
+      if (mode === 'translate') {
+        const { text, targetLang } = req.body || {};
+        const rawText = typeof text === 'string' ? text.trim().slice(0, 2000) : '';
+        const target = typeof targetLang === 'string' && targetLang.trim() ? targetLang.trim().slice(0, 10) : 'en';
+        if (!rawText) return res.status(400).json({ error: 'Nothing to translate.' });
+        if (!process.env.GOOGLE_TRANSLATE_API_KEY) {
+          console.error('GOOGLE_TRANSLATE_API_KEY not set — translation is not available.');
+          return res.status(503).json({ error: 'Translation isn\'t available right now.' });
+        }
+        try {
+          const gRes = await fetch(`https://translation.googleapis.com/language/translate/v2?key=${process.env.GOOGLE_TRANSLATE_API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: rawText, target, format: 'text' })
+          });
+          const gData = await gRes.json().catch(() => null);
+          const translation = gData && gData.data && gData.data.translations && gData.data.translations[0];
+          if (!gRes.ok || !translation) {
+            console.error('Google Translate request failed:', gRes.status, gData);
+            return res.status(502).json({ error: 'Could not translate that message right now.' });
+          }
+          return res.status(200).json({
+            translatedText: translation.translatedText,
+            detectedSourceLanguage: translation.detectedSourceLanguage || null
+          });
+        } catch (err) {
+          console.error('Google Translate request error:', err);
+          return res.status(502).json({ error: 'Could not translate that message right now.' });
+        }
       }
 
       if (mode === 'saveTemplate') {
