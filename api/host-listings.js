@@ -1,751 +1,497 @@
-// /api/host-listings.js
-// Returns every listing belonging to the logged-in guest's linked host
-// account — pending, approved, and rejected, so the dashboard can show
-// real status, not just what's live to guests. Requires a valid
-// guest-session token (the single login used across the whole site — see
-// guest-auth.js / guest-phone-auth.js), sent as:
-//   Authorization: Bearer <sessionToken>
+// /api/guest-profile.js
+// Everything a logged-in guest's profile page needs, in one call, plus the
+// ability to update their own name and profile photo — and, folded in
+// here rather than as a separate file (Vercel Hobby plan's 12-function
+// cap), the host-guest chat feature: conversations, sending messages
+// with contact-info redaction, and host quick-reply templates.
 //
-// A guest who hasn't listed a property yet simply has no linked host
-// account (guests.host_id is null) — that's not an error, it just means
-// an empty list, same as a brand-new account.
+//   GET  (Authorization: Bearer <guestSessionToken>)
+//     Returns { guest, bookings, reviews }. "guest" includes a computed
+//     "badge" field derived from guest_reviews — see computeBadge() below.
 //
-//   GET  — as above, now also returns `verification`: the host's
-//          PAN/Aadhaar/bank verification status, plus their name/phone
-//          for the profile's Personal Details tab. Each booking now
-//          includes its deposit fields (amount, status, release date,
-//          any dispute already raised).
-//   POST { panNumber?, panDocumentUrl? } — submits PAN, once ever. Like
-//          Aadhaar below, this is permanently locked the moment a PAN
-//          document exists on file, regardless of the review outcome —
-//          contact support for any change after that, never a silent
-//          self-service overwrite of identity documents.
-//   POST { aadhaarDocumentUrl? } — submits Aadhaar, once ever — same
-//          "permanently locked once submitted" rule as PAN above. This
-//          used to allow a resubmit after a rejection; it no longer does,
-//          to match PAN's stricter policy.
-//   POST { bankAccountNumber?, bankIfsc?, bankAccountHolderName? } —
-//          unlike PAN/Aadhaar, bank details CAN be changed anytime,
-//          because a host's payout account can legitimately change. But
-//          changing it is exactly the kind of action a compromised
-//          account would take, so a change here re-triggers review of
-//          everything: bank_status resets to pending_review as usual,
-//          and if PAN/Aadhaar were already submitted, THEIR status also
-//          resets to pending_review (same document, freshly re-checked)
-//          rather than staying "verified" through an unrelated-looking
-//          payout change.
-//   POST { hostName?, hostPhone? } — updates the host's own profile
-//          name/phone (Personal Details tab). Not identity-sensitive the
-//          way PAN/Aadhaar/bank are, so no re-verification triggered.
-//   POST { raiseDispute: { orderId, reason } } — flags a concern on one
-//          of this host's bookings' held security deposits, before it
-//          would otherwise auto-refund to the guest 7 days after
-//          checkout. Only works while deposit_status is still 'held' and
-//          the release date hasn't passed. See get-pending-listings.js's
-//          resolveDispute mode for how an admin follows up.
-//   POST { cancelBooking: { orderId, reason } } — cancels a paid booking
-//          and refunds the guest in full, but ONLY if check-in is more
-//          than 48 hours away. Within that window, the host cannot
-//          cancel through this endpoint at all — the guest is protected
-//          regardless of the host's reason.
-//   POST { buyCouponOrder: { bookingId, amount } } — step 1 of issuing a
-//          compensation coupon: creates a Razorpay order for the HOST to
-//          pay Aerva (not a guest payment). bookingId must be one of this
-//          host's own orders — the coupon is tied to that booking's guest.
-//   POST { verifyCouponPayment: { couponId, razorpay_order_id,
-//          razorpay_payment_id, razorpay_signature } } — step 2: confirms
-//          the host's payment actually succeeded (never trusts the
-//          browser's word alone), then activates the coupon, generates
-//          its real code, and emails it to the guest. 3-month validity,
-//          redeemable on any listing platform-wide.
-//   POST { cancelWithCoupon: { orderId } } — cancels a booking to make
-//          room for a bigger one, but ONLY if an active coupon already
-//          exists for that exact booking (see buyCouponOrder above) —
-//          the coupon has to be bought and confirmed FIRST. Same 48-hour
-//          check-in cutoff as cancelBooking.
+//   GET  ?mode=conversation&orderId=X      — fetch/create the chat for one confirmed booking
+//   GET  ?mode=hostConversations           — a host's inbox across all their listings
+//   GET  ?mode=templates                   — a host's own quick-reply templates
+//
+//   PATCH { name?, profilePhotoUrl?, preferredCurrency? } (Authorization: Bearer <token>)
+//     Updates only the fields provided. The photo itself is uploaded
+//     directly to Vercel Blob from the browser first (see blob-upload.js,
+//     same endpoint listing photos already use) — this call just saves
+//     the resulting URL against the guest's account.
+//
+//   POST { mode: 'send', conversationId, text }
+//   POST { mode: 'saveTemplate', templateId?, listingId?, body }
+//   POST { mode: 'deleteTemplate', templateId }
+//   POST { mode: 'translate', text, targetLang }
+//     Machine-translates one message via Google Cloud Translation API.
+//     Requires GOOGLE_TRANSLATE_API_KEY. Available to either side of a
+//     conversation — just needs a valid session, not conversation
+//     ownership, since it's a stateless text-in/text-out utility.
+//
+// A conversation only ever exists tied to a confirmed (status='paid')
+// order — there is no path anywhere on the site for a guest to message a
+// host without an actual booking. See redactContactInfo() below for the
+// message-filtering approach and its real, worth-knowing limitations.
 
 const { neon } = require('@neondatabase/serverless');
-const Razorpay = require('razorpay');
-const { verifyToken, createToken } = require('./_approval-token');
+const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
-const { convertInrToForeignSubunit } = require('./_currency');
-const { verifyRazorpaySignature } = require('./_razorpay-verify');
-const crypto = require('crypto');
 
 const sql = neon(process.env.DATABASE_URL);
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
-const CANCELLATION_CUTOFF_HOURS = 48;
 
 // Normalizes a DATE column value to 'YYYY-MM-DD' whether the driver
 // returns it as a JS Date object or an already-formatted string — same
-// helper used in get-listings.js/create-order.js for the same reason.
-// Missing here until now, which mattered a lot more than in those other
-// files: the host dashboard's own 48-hour cancellation-cutoff check does
-// `booking.arrival + 'T00:00:00Z'` client-side. If the driver ever hands
-// back a full ISO timestamp (e.g. '2026-09-16T00:00:00.000Z') instead of
-// a plain date, that concatenation produces an invalid, double-stamped
-// string ('...000ZT00:00:00Z'), `new Date(...)` on it is Invalid Date,
-// and the hours-until-arrival math silently becomes NaN — which reads as
-// "already past the cutoff" for every single booking, regardless of how
-// far away check-in actually is.
+// helper used in get-listings.js/create-order.js/host-listings.js for
+// the same reason (see host-listings.js's own comment on this: skipping
+// it is what caused the 48-hour cancellation cutoff to silently miscalc
+// via a mangled date-string concatenation). Needed here now that
+// hostConversations returns booking dates for the inbox's status tags.
 function toDateStr(val) {
   if (!val) return null;
   if (val instanceof Date) return val.toISOString().split('T')[0];
   return String(val).slice(0, 10);
 }
 
-// Same Resend pattern used everywhere else in this codebase (see
-// guest-auth.js, submit-listing.js, approve-listing.js) — never throws;
-// a failed notification email shouldn't undo a cancellation that's
-// already happened and already been refunded.
-async function sendCancellationEmail(order){
-  if (!process.env.RESEND_API_KEY) {
-    console.error('RESEND_API_KEY not set — guest will not receive a cancellation notice.');
-    return;
-  }
-  const html = `
-    <div style="font-family:sans-serif; max-width:480px;">
-      <h2 style="font-family:Georgia,serif;">Your booking has been cancelled</h2>
-      <p>Your host has cancelled your stay at <strong>${order.suite_name}</strong> (${toDateStr(order.arrival)} — ${toDateStr(order.departure)}).</p>
-      <p>Your full payment has been refunded to your original payment method — it should appear within 5–7 business days depending on your bank.</p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you have questions about this cancellation, please contact hello@aerva.in.</p>
-    </div>
-  `;
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      from: 'Aerva <hello@aerva.in>',
-      to: order.guest_email,
-      subject: `Your Aerva booking at ${order.suite_name} has been cancelled`,
-      html
-    })
-  });
-  if (!res.ok) {
-    let detail;
-    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
-    console.error('Resend send failed (cancellation notice):', res.status, detail);
-  }
+// Badge tiers, computed fresh from guest_reviews on every profile load —
+// not stored, so it's always accurate as new reviews come in. Deliberately
+// not called "Superhost" (that's Airbnb's term) — this is Aerva's own
+// guest-reputation ladder.
+function computeBadge(reviewCount, avgRating) {
+  if (reviewCount >= 5 && avgRating >= 4.8) return 'Aerva Favorite';
+  if (reviewCount >= 3 && avgRating >= 4.5) return 'Trusted Guest';
+  if (reviewCount >= 1 && avgRating >= 4.0) return 'Valued Guest';
+  return null; // not enough of a track record yet — profile just shows no badge
 }
 
-async function sendCouponEmail(coupon, code, expiresAt){
-  if (!process.env.RESEND_API_KEY) {
-    console.error('RESEND_API_KEY not set — guest will not receive their coupon.');
-    return;
-  }
-  const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
-  const expiresLabel = expiresAt.toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
-  const html = `
-    <div style="font-family:sans-serif; max-width:480px;">
-      <h2 style="font-family:Georgia,serif;">You've received an Aerva coupon</h2>
-      <p>Your host for <strong>${coupon.suite_name}</strong> has issued you a coupon worth <strong>${fmt(coupon.amount)}</strong>.</p>
-      <p style="background:#f4eadc; padding:16px; text-align:center; font-size:20px; letter-spacing:0.05em; font-weight:600;">${code}</p>
-      <p>Apply this code at checkout on any Aerva stay or experience. Valid until <strong>${expiresLabel}</strong> (3 months from today).</p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this coupon? Contact hello@aerva.in.</p>
-    </div>
-  `;
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      from: 'Aerva <hello@aerva.in>',
-      to: coupon.guest_email,
-      subject: 'You\'ve received an Aerva coupon',
-      html
-    })
-  });
-  if (!res.ok) {
-    let detail;
-    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
-    console.error('Resend send failed (coupon notice):', res.status, detail);
-  }
-}
-const SITE_BASE = 'https://aerva.in';
-const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
-
-function requireGuestId(req) {
+function requireGuest(req) {
   const authHeader = req.headers['authorization'] || '';
   const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   const payload = sessionToken ? verifyToken(sessionToken) : null;
   if (!payload || payload.action !== 'guest-session') return null;
-  return payload.listingId; // generically-named token field — see host-auth.js note
+  return payload.listingId; // generically-named token field — see host-auth.js note; here it's the guest's id
+}
+
+// ---- Contact-info redaction (server-side, authoritative) ----
+// Never trust a client-side-only filter for this — this function is what
+// actually gets enforced before anything is stored/shown, regardless of
+// whatever input restrictions the browser itself already tried (see
+// index.html). Worth being upfront: this is pattern-based (regex + a
+// spelled-out-digits check). It catches the overwhelming majority of real
+// attempts — plain digit sequences in any spacing, spelled-out numbers,
+// emails, and Instagram/Facebook/WhatsApp/Telegram mentions and links —
+// but no text filter can catch every possible obfuscation a determined
+// person invents (letter-substituted digits, unicode lookalikes, a
+// number split across two messages, etc.). That's a genuine, known limit
+// of any pattern-based approach, not a bug fixable with more regex.
+const NUMBER_WORDS = {
+  zero: '0', one: '1', two: '2', three: '3', four: '4',
+  five: '5', six: '6', seven: '7', eight: '8', nine: '9', oh: '0'
+};
+
+function redactContactInfo(text) {
+  let result = text;
+  let redacted = false;
+
+  result = result.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, () => { redacted = true; return '[email removed]'; });
+
+  result = result.replace(/(\+?\d[\d\s\-.()]{6,}\d)/g, (match) => {
+    const digitCount = (match.match(/\d/g) || []).length;
+    if (digitCount < 7) return match;
+    redacted = true;
+    return '[number removed]';
+  });
+
+  // Spelled-out digits — "nine eight seven six five four three two one
+  // zero" or similar, 7+ consecutive number-words. Deliberately
+  // conservative (whole-word matches only) to avoid flagging ordinary
+  // sentences that just happen to contain a couple of number-words.
+  const words = result.split(/(\s+)/);
+  let run = [];
+  function flushRun(){
+    if (run.length >= 7) {
+      redacted = true;
+      for (const idx of run) words[idx] = '[number removed]';
+    }
+    run = [];
+  }
+  words.forEach((w, idx) => {
+    const clean = w.toLowerCase().replace(/[.,\-]/g, '');
+    if (NUMBER_WORDS[clean] !== undefined) {
+      run.push(idx);
+    } else if (w.trim() !== '') {
+      flushRun();
+    }
+  });
+  flushRun();
+  result = words.join('');
+  result = result.replace(/(\[number removed\]\s*){2,}/g, '[number removed] ');
+
+  result = result.replace(/\b(instagram|insta|ig|facebook|fb|whatsapp|telegram|snapchat)\b\s*[:@]?\s*[a-zA-Z0-9._]{2,}/gi, () => { redacted = true; return '[contact info removed]'; });
+  result = result.replace(/\b(instagram\.com|facebook\.com|fb\.com|wa\.me|t\.me)\/[a-zA-Z0-9._]+/gi, () => { redacted = true; return '[contact info removed]'; });
+
+  return { displayText: result, wasRedacted: redacted };
 }
 
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, PATCH, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const guestId = requireGuestId(req);
+  const guestId = requireGuest(req);
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
 
-  // ---- Raise a concern on a held security deposit ----
-  // Separate from the verification-submission branch above — this only
-  // ever touches one order's deposit_status, gated on it actually
-  // belonging to this host and still being within the 7-day hold.
-  if (req.method === 'POST' && req.body && req.body.raiseDispute) {
+  // ---- Fetch the full profile bundle, or a chat-related GET mode ----
+  if (req.method === 'GET') {
+    const mode = req.query.mode;
     try {
-      const { orderId, reason } = req.body.raiseDispute;
-      if (!orderId || !reason || !String(reason).trim()) {
-        return res.status(400).json({ error: 'Please explain the concern before submitting.' });
+      if (mode === 'conversation') {
+        const orderId = Number(req.query.orderId);
+        if (!orderId) return res.status(400).json({ error: 'Missing order.' });
+
+        const orderRows = await sql`
+          SELECT o.id, o.listing_id, o.guest_id, o.guest_email, o.status, l.host_id, l.property_name
+          FROM orders o
+          JOIN listings l ON l.id = o.listing_id
+          WHERE o.id = ${orderId}
+        `;
+        const order = orderRows[0];
+        if (!order) return res.status(404).json({ error: 'Booking not found.' });
+        if (order.status !== 'paid') {
+          return res.status(403).json({ error: 'A conversation only opens once a booking is confirmed.' });
+        }
+        const isGuest = order.guest_id === guestId;
+        const isHost = order.host_id === guestId;
+        if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your booking.' });
+
+        let convRows = await sql`SELECT id FROM conversations WHERE order_id = ${orderId}`;
+        let conversationId;
+        if (convRows.length) {
+          conversationId = convRows[0].id;
+        } else {
+          const inserted = await sql`
+            INSERT INTO conversations (order_id, listing_id, guest_id, guest_email, host_id)
+            VALUES (${orderId}, ${order.listing_id}, ${order.guest_id}, ${order.guest_email}, ${order.host_id})
+            RETURNING id
+          `;
+          conversationId = inserted[0].id;
+        }
+
+        const messages = await sql`
+          SELECT id, sender_type, display_text, was_redacted, created_at
+          FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
+        `;
+        return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole: isHost ? 'host' : 'guest', messages });
       }
 
-      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      if (mode === 'hostConversations') {
+        const conversations = await sql`
+          SELECT c.id, c.listing_id, c.order_id, c.guest_email, c.guest_id,
+                 l.property_name, l.cover_photo_url,
+                 g.name AS guest_name, g.profile_photo_url AS guest_photo_url,
+                 o.arrival, o.departure, o.status AS booking_status,
+                 o.nights, o.guests, o.subtotal, o.gst, o.payout_amount,
+                 (SELECT display_text FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+                 (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
+                 (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'guest' AND m.read_at IS NULL) AS unread_count
+          FROM conversations c
+          JOIN listings l ON l.id = c.listing_id
+          LEFT JOIN guests g ON g.id = c.guest_id
+          LEFT JOIN orders o ON o.id = c.order_id
+          WHERE c.host_id = ${guestId}
+          ORDER BY last_message_at DESC NULLS LAST
+        `;
+        // Dates normalized here (see toDateStr's comment) so the
+        // frontend's status-tag logic (Enquiry / Check-in Today / etc.)
+        // does plain string/date-object comparisons against a real date,
+        // never a mangled concatenation.
+        conversations.forEach(c => {
+          c.arrival = toDateStr(c.arrival);
+          c.departure = toDateStr(c.departure);
+        });
+        return res.status(200).json({ conversations });
+      }
+
+      // Lightweight — just a single number, meant to be called from the
+      // main site's header on every page load for any logged-in host, so
+      // it deliberately avoids the fuller hostConversations query (which
+      // pulls every conversation's last message) purely to check whether
+      // the little badge on the Messages icon should show at all.
+      if (mode === 'unreadMessageCount') {
+        const rows = await sql`
+          SELECT COUNT(*) AS count
+          FROM messages m
+          JOIN conversations c ON c.id = m.conversation_id
+          WHERE c.host_id = ${guestId} AND m.sender_type = 'guest' AND m.read_at IS NULL
+        `;
+        return res.status(200).json({ count: Number(rows[0]?.count || 0) });
+      }
+
+      // Host inbox reads messages by conversationId directly, rather than
+      // orderId the way the guest side's initial "open a chat" call does
+      // (mode=conversation) — the inbox list doesn't carry an orderId
+      // along, only the conversation's own id.
+      if (mode === 'hostConversationMessages') {
+        const conversationId = Number(req.query.conversationId);
+        if (!conversationId) return res.status(400).json({ error: 'Missing conversation.' });
+        const convRows = await sql`SELECT id, host_id FROM conversations WHERE id = ${conversationId}`;
+        const conv = convRows[0];
+        if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
+        if (conv.host_id !== guestId) return res.status(403).json({ error: 'Not your conversation.' });
+
+        const messages = await sql`
+          SELECT id, sender_type, display_text, was_redacted, created_at
+          FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
+        `;
+        // Opening a conversation is what actually marks it read — only
+        // the guest's own messages ever need this; a host reading their
+        // own sent messages isn't a meaningful "unread" state.
+        await sql`
+          UPDATE messages SET read_at = NOW()
+          WHERE conversation_id = ${conversationId} AND sender_type = 'guest' AND read_at IS NULL
+        `;
+        return res.status(200).json({ messages });
+      }
+
+      if (mode === 'templates') {
+        const templates = await sql`
+          SELECT id, listing_id, body, sort_order FROM message_templates
+          WHERE host_id = ${guestId} ORDER BY sort_order ASC, created_at ASC
+        `;
+        return res.status(200).json({ templates });
+      }
+
+      // Guest-facing quick-question picker inside the chat window itself
+      // — the same templates a host wrote in their own template manager,
+      // but fetched by conversationId (proving the requester is actually
+      // part of that conversation) rather than by host ownership, since
+      // the guest obviously isn't the host. Only templates for this
+      // exact listing, plus the host's account-wide ones (listing_id IS
+      // NULL), are returned — never another listing's.
+      if (mode === 'conversationTemplates') {
+        const conversationId = Number(req.query.conversationId);
+        if (!conversationId) return res.status(400).json({ error: 'Missing conversation.' });
+        const convRows = await sql`SELECT id, guest_id, host_id, listing_id FROM conversations WHERE id = ${conversationId}`;
+        const conv = convRows[0];
+        if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
+        if (conv.guest_id !== guestId && conv.host_id !== guestId) return res.status(403).json({ error: 'Not your conversation.' });
+
+        const templates = await sql`
+          SELECT id, body FROM message_templates
+          WHERE host_id = ${conv.host_id} AND (listing_id = ${conv.listing_id} OR listing_id IS NULL)
+          ORDER BY sort_order ASC, created_at ASC
+        `;
+        return res.status(200).json({ templates });
+      }
+
+      const guestRows = await sql`
+        SELECT id, email, phone, name, profile_photo_url, preferred_currency, created_at
+        FROM guests WHERE id = ${guestId}
+      `;
       const guest = guestRows[0];
-      if (!guest || !guest.host_id) {
-        return res.status(403).json({ error: 'You do not have permission to do this.' });
-      }
+      if (!guest) return res.status(404).json({ error: 'Account not found.' });
 
-      // Ownership check: the order's listing has to belong to this host —
-      // never trust orderId alone, since it's just a number a guest's
-      // browser could also send.
-      const rows = await sql`
-        SELECT o.id, o.deposit_status, o.deposit_release_at
-        FROM orders o
-        JOIN listings l ON o.listing_id = l.id
-        WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
+      // Payment/booking history — every completed booking tied to this
+      // account. subtotal/discount/gst/total double as the "payment info"
+      // the profile shows; there's no separate payment-methods table since
+      // Razorpay handles card/UPI details on their end, never ours.
+      const bookings = await sql`
+        SELECT id, suite_name, listing_id, arrival, departure, guests, nights,
+               subtotal, discount_amount, gst, total, status, created_at
+        FROM orders
+        WHERE guest_id = ${guestId}
+        ORDER BY created_at DESC
       `;
-      const order = rows[0];
-      if (!order) {
-        return res.status(403).json({ error: 'You do not have permission to do this.' });
-      }
-      if (order.deposit_status !== 'held') {
-        return res.status(400).json({ error: 'This deposit is no longer open to a concern — it has already been refunded, disputed, or resolved.' });
-      }
-      const releaseDate = order.deposit_release_at ? new Date(order.deposit_release_at) : null;
-      if (releaseDate && new Date() > releaseDate) {
-        return res.status(400).json({ error: 'The 7-day window to raise a concern on this deposit has passed.' });
-      }
 
-      await sql`
-        UPDATE orders SET deposit_status = 'disputed', dispute_reason = ${String(reason).trim().slice(0, 1000)}, dispute_raised_at = now()
-        WHERE id = ${orderId}
+      const reviews = await sql`
+        SELECT rating, comment, created_at FROM guest_reviews
+        WHERE guest_id = ${guestId}
+        ORDER BY created_at DESC
       `;
-      await logAudit(sql, {
-        action: 'deposit_dispute_raised', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-        targetType: 'order', targetId: orderId
-      });
 
-      return res.status(200).json({ success: true });
-    } catch (err) {
-      console.error('host-listings (raiseDispute) error:', err);
-      return res.status(500).json({ error: 'Could not submit your concern right now. Please try again.' });
-    }
-  }
-
-  // ---- Shared helpers for both cancellation paths below ----
-
-  // Loads an order and confirms it genuinely belongs to this host,
-  // is still a live paid booking, and (if requested) is past the
-  // 48-hour check-in cutoff. Returns { error, status } on any failure,
-  // or { order, guest } on success — callers check which shape they got.
-  async function loadCancellableOrder(orderId, enforceCutoff){
-    const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-    const guest = guestRows[0];
-    if (!guest || !guest.host_id) {
-      return { error: 'You do not have permission to do this.', status: 403 };
-    }
-    const rows = await sql`
-      SELECT o.id, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_id, o.status,
-             o.total, o.deposit_status, o.charge_currency, o.razorpay_payment_id
-      FROM orders o
-      JOIN listings l ON o.listing_id = l.id
-      WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
-    `;
-    const order = rows[0];
-    if (!order) {
-      return { error: 'You do not have permission to do this.', status: 403 };
-    }
-    if (order.status === 'cancelled') {
-      return { error: 'This booking has already been cancelled.', status: 400 };
-    }
-    if (order.status !== 'paid') {
-      return { error: 'Only a paid, confirmed booking can be cancelled this way.', status: 400 };
-    }
-    if (enforceCutoff) {
-      const arrivalDate = new Date(toDateStr(order.arrival) + 'T00:00:00Z');
-      const hoursUntilArrival = (arrivalDate.getTime() - Date.now()) / (1000 * 60 * 60);
-      if (hoursUntilArrival < CANCELLATION_CUTOFF_HOURS) {
-        return {
-          error: `This stay checks in within ${CANCELLATION_CUTOFF_HOURS} hours — bookings this close to check-in can no longer be cancelled by the host. Please contact hello@aerva.in if this is urgent.`,
-          status: 400
-        };
-      }
-    }
-    return { order, guest };
-  }
-
-  // Actually performs the refund + DB update + email — shared by a plain
-  // host cancellation and a coupon-gated "prioritize a bigger booking"
-  // cancellation. Identical money-handling either way; only the gate
-  // checks before calling this differ.
-  async function executeCancellationRefund(order, orderId, reason, hostId, auditAction){
-    const currency = order.charge_currency || 'INR';
-    let refundAmount;
-    if (currency === 'INR') {
-      refundAmount = Math.round(Number(order.total) * 100);
-    } else {
-      refundAmount = await convertInrToForeignSubunit(sql, Number(order.total), currency);
-      if (!refundAmount) {
-        throw Object.assign(new Error(`No cached exchange rate available to refund this ${currency} booking right now. Please try again shortly.`), { isUserFacing: true, status: 502 });
-      }
-    }
-
-    const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
-      amount: refundAmount,
-      speed: 'normal',
-    });
-
-    await sql`
-      UPDATE orders SET
-        status = 'cancelled',
-        cancellation_reason = ${String(reason).trim().slice(0, 1000)},
-        cancelled_at = now(),
-        deposit_status = ${order.deposit_status === 'held' ? 'refunded' : order.deposit_status},
-        deposit_refund_id = ${refund.id}
-      WHERE id = ${orderId}
-    `;
-
-    await logAudit(sql, {
-      action: auditAction, success: true, actorType: 'host', actorIdentifier: String(hostId),
-      targetType: 'order', targetId: orderId
-    });
-
-    await sendCancellationEmail(order);
-  }
-
-  // ---- Cancel a booking (host-initiated, no coupon required) ----
-  // Only allowed more than 48 hours before check-in — a guest who's
-  // already within that window is protected from a last-minute
-  // cancellation, no matter the host's reason. Refunds the guest's
-  // FULL payment (not just the deposit — this ends the whole stay, not
-  // a deposit dispute), in whatever currency they were actually charged.
-  // For a legitimate cancellation reason (maintenance, unavailability,
-  // etc.) — NOT the "prioritize a bigger booking" scenario, which
-  // requires a coupon first (see cancelWithCoupon below).
-  if (req.method === 'POST' && req.body && req.body.cancelBooking) {
-    try {
-      const { orderId, reason } = req.body.cancelBooking;
-      if (!orderId || !reason || !String(reason).trim()) {
-        return res.status(400).json({ error: 'Please explain why you\'re cancelling this booking.' });
-      }
-      const loaded = await loadCancellableOrder(orderId, true);
-      if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
-
-      await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host');
-      return res.status(200).json({ success: true });
-    } catch (err) {
-      console.error('host-listings (cancelBooking) error:', err);
-      const status = err.isUserFacing ? err.status : 500;
-      return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking right now. Please try again, or contact hello@aerva.in.' });
-    }
-  }
-
-  // ---- Cancel a booking to prioritize a bigger one, using an
-  // already-issued coupon as the required compensation gate ----
-  // The coupon must exist FIRST (see buyCouponOrder/verifyCouponPayment
-  // below) — this is the whole point of the design: the host commits to
-  // and pays for the guest's compensation before the cancellation is
-  // even allowed to happen, not as a penalty applied afterward.
-  if (req.method === 'POST' && req.body && req.body.cancelWithCoupon) {
-    try {
-      const { orderId } = req.body.cancelWithCoupon;
-      if (!orderId) return res.status(400).json({ error: 'Missing booking.' });
-
-      const loaded = await loadCancellableOrder(orderId, true);
-      if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
-
-      const couponRows = await sql`
-        SELECT id FROM coupons
-        WHERE source_order_id = ${orderId} AND status = 'active' AND expires_at > now()
-      `;
-      if (!couponRows[0]) {
-        return res.status(400).json({ error: 'A compensation coupon must be issued to this guest before this booking can be cancelled to prioritize another one. Issue a coupon first.' });
-      }
-
-      await executeCancellationRefund(
-        loaded.order, orderId,
-        'Host prioritized a different booking on this space; guest was issued a compensation coupon before cancellation.',
-        loaded.guest.host_id, 'booking_cancelled_by_host_with_coupon'
-      );
-      return res.status(200).json({ success: true });
-    } catch (err) {
-      console.error('host-listings (cancelWithCoupon) error:', err);
-      const status = err.isUserFacing ? err.status : 500;
-      return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking right now. Please try again, or contact hello@aerva.in.' });
-    }
-  }
-
-  // ---- Buy a compensation coupon for a guest (step 1: create the
-  // Razorpay order for the HOST to pay Aerva) ----
-  // This is a genuinely different kind of transaction from everything
-  // else in this codebase — the host is paying Aerva, not a guest paying
-  // for a stay. Creates a 'pending_payment' coupon row now; it only
-  // becomes real and usable once verifyCouponPayment below confirms the
-  // payment actually succeeded.
-  if (req.method === 'POST' && req.body && req.body.buyCouponOrder) {
-    try {
-      const { bookingId, amount } = req.body.buyCouponOrder;
-      const numAmount = Number(amount);
-      if (!bookingId || !numAmount || numAmount <= 0) {
-        return res.status(400).json({ error: 'Please enter a booking and a valid amount.' });
-      }
-
-      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-      const guest = guestRows[0];
-      if (!guest || !guest.host_id) {
-        return res.status(403).json({ error: 'You do not have permission to do this.' });
-      }
-
-      // Ownership check — the booking this coupon is "against" has to
-      // genuinely belong to this host, same as every other order lookup
-      // in this file.
-      const orderRows = await sql`
-        SELECT o.id, o.guest_id, o.guest_email, o.suite_name
-        FROM orders o
-        JOIN listings l ON o.listing_id = l.id
-        WHERE o.id = ${bookingId} AND l.host_id = ${guest.host_id}
-      `;
-      const sourceOrder = orderRows[0];
-      if (!sourceOrder) {
-        return res.status(403).json({ error: 'That booking ID does not belong to one of your listings.' });
-      }
-      if (!sourceOrder.guest_id) {
-        return res.status(400).json({ error: 'This booking has no linked guest account to issue a coupon to.' });
-      }
-
-      const razorpayOrder = await razorpay.orders.create({
-        amount: Math.round(numAmount * 100), // paise — coupon purchases are always INR, host-side, regardless of what currency the guest was charged in
-        currency: 'INR',
-        receipt: `aerva_coupon_${Date.now()}`,
-        notes: { type: 'host_coupon_purchase', hostId: String(guest.host_id), bookingId: String(bookingId) },
-      });
-
-      const couponRows = await sql`
-        INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, razorpay_order_id)
-        VALUES (${'PENDING-' + razorpayOrder.id}, ${sourceOrder.guest_id}, ${numAmount}, ${guest.host_id}, ${bookingId}, 'pending_payment', ${razorpayOrder.id})
-        RETURNING id
-      `;
+      const reviewCount = reviews.length;
+      const avgRating = reviewCount
+        ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviewCount
+        : 0;
 
       return res.status(200).json({
-        couponId: couponRows[0].id,
-        razorpayOrderId: razorpayOrder.id,
-        amount: razorpayOrder.amount,
-        currency: razorpayOrder.currency,
+        guest: {
+          id: guest.id,
+          email: guest.email,
+          phone: guest.phone,
+          name: guest.name,
+          profilePhotoUrl: guest.profile_photo_url,
+          preferredCurrency: guest.preferred_currency || null,
+          memberSince: guest.created_at,
+          badge: computeBadge(reviewCount, avgRating),
+          reviewCount,
+          avgRating: reviewCount ? Number(avgRating.toFixed(2)) : null
+        },
+        bookings,
+        reviews
       });
     } catch (err) {
-      console.error('host-listings (buyCouponOrder) error:', err);
-      return res.status(500).json({ error: 'Could not start the coupon payment right now. Please try again.' });
+      console.error('guest-profile (GET) error:', err);
+      return res.status(500).json({ error: mode ? 'Could not load right now.' : 'Could not load your profile.' });
     }
   }
 
-  // ---- Confirm the coupon payment actually succeeded (step 2) ----
-  // Same "never trust the browser's word alone" principle as
-  // verify-payment.js — re-verifies the Razorpay signature server-side
-  // before treating the coupon as real. Only on success does the coupon
-  // become 'active', get its real code, and get emailed to the guest.
-  if (req.method === 'POST' && req.body && req.body.verifyCouponPayment) {
+  // ---- Chat actions: send a message, or manage host templates ----
+  if (req.method === 'POST') {
+    const { mode } = req.body || {};
     try {
-      const { couponId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body.verifyCouponPayment;
-      if (!verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
-        return res.status(400).json({ verified: false, error: 'Payment could not be verified.' });
+      if (mode === 'send') {
+        const { conversationId, text } = req.body || {};
+        const rawText = typeof text === 'string' ? text.trim().slice(0, 2000) : '';
+        if (!conversationId || !rawText) return res.status(400).json({ error: 'Message can\'t be empty.' });
+
+        const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${conversationId}`;
+        const conv = convRows[0];
+        if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
+        const isGuest = conv.guest_id === guestId;
+        const isHost = conv.host_id === guestId;
+        if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
+
+        const { displayText, wasRedacted } = redactContactInfo(rawText);
+        const inserted = await sql`
+          INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
+          VALUES (${conversationId}, ${isHost ? 'host' : 'guest'}, ${rawText}, ${displayText}, ${wasRedacted})
+          RETURNING id, sender_type, display_text, was_redacted, created_at
+        `;
+        return res.status(200).json({ message: inserted[0] });
       }
 
-      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-      const guest = guestRows[0];
-      if (!guest || !guest.host_id) {
-        return res.status(403).json({ error: 'You do not have permission to do this.' });
+      // Real machine translation via Google Cloud Translation API — a
+      // v2 REST call, same lightweight "just fetch() a Google endpoint
+      // with an API key" pattern _social-auth.js already uses for
+      // Google Sign-In, so no extra SDK dependency for this one feature.
+      // Requires GOOGLE_TRANSLATE_API_KEY (a separate API key from
+      // GOOGLE_CLIENT_ID — created in Google Cloud Console with the
+      // Cloud Translation API enabled on that project's billing account).
+      // Available to either party in a conversation, not just hosts —
+      // translation is equally useful to a guest reading a host's reply
+      // in a different language — but still requires a logged-in session
+      // (requireGuest already ran above) so this can't be hit anonymously
+      // and run up translation costs on Aerva's API key for free.
+      if (mode === 'translate') {
+        const { text, targetLang } = req.body || {};
+        const rawText = typeof text === 'string' ? text.trim().slice(0, 2000) : '';
+        const target = typeof targetLang === 'string' && targetLang.trim() ? targetLang.trim().slice(0, 10) : 'en';
+        if (!rawText) return res.status(400).json({ error: 'Nothing to translate.' });
+        if (!process.env.GOOGLE_TRANSLATE_API_KEY) {
+          console.error('GOOGLE_TRANSLATE_API_KEY not set — translation is not available.');
+          return res.status(503).json({ error: 'Translation isn\'t available right now.' });
+        }
+        try {
+          const gRes = await fetch(`https://translation.googleapis.com/language/translate/v2?key=${process.env.GOOGLE_TRANSLATE_API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: rawText, target, format: 'text' })
+          });
+          const gData = await gRes.json().catch(() => null);
+          const translation = gData && gData.data && gData.data.translations && gData.data.translations[0];
+          if (!gRes.ok || !translation) {
+            console.error('Google Translate request failed:', gRes.status, gData);
+            return res.status(502).json({ error: 'Could not translate that message right now.' });
+          }
+          return res.status(200).json({
+            translatedText: translation.translatedText,
+            detectedSourceLanguage: translation.detectedSourceLanguage || null
+          });
+        } catch (err) {
+          console.error('Google Translate request error:', err);
+          return res.status(502).json({ error: 'Could not translate that message right now.' });
+        }
       }
 
-      const rows = await sql`
-        SELECT c.id, c.status, c.amount, c.guest_id, c.source_order_id, c.razorpay_order_id, o.guest_email, o.suite_name
-        FROM coupons c
-        JOIN orders o ON c.source_order_id = o.id
-        WHERE c.id = ${couponId} AND c.issuing_host_id = ${guest.host_id}
-      `;
-      const coupon = rows[0];
-      if (!coupon) return res.status(403).json({ error: 'You do not have permission to do this.' });
-      if (coupon.razorpay_order_id !== razorpay_order_id) {
-        return res.status(400).json({ error: 'This payment does not match the coupon being confirmed.' });
-      }
-      if (coupon.status === 'active') {
-        return res.status(200).json({ verified: true, code: coupon.code }); // already processed — safe to no-op rather than error on a retry
+      if (mode === 'saveTemplate') {
+        const { templateId, listingId, body } = req.body || {};
+        const safeBody = typeof body === 'string' ? body.trim().slice(0, 500) : '';
+        if (!safeBody) return res.status(400).json({ error: 'Template text can\'t be empty.' });
+
+        if (listingId) {
+          const ownedRows = await sql`SELECT id FROM listings WHERE id = ${listingId} AND host_id = ${guestId}`;
+          if (!ownedRows.length) return res.status(403).json({ error: 'Not your listing.' });
+        }
+
+        if (templateId) {
+          const updated = await sql`
+            UPDATE message_templates SET body = ${safeBody}, listing_id = ${listingId || null}
+            WHERE id = ${templateId} AND host_id = ${guestId} RETURNING id
+          `;
+          if (!updated.length) return res.status(404).json({ error: 'Template not found.' });
+          return res.status(200).json({ id: updated[0].id });
+        }
+        const inserted = await sql`
+          INSERT INTO message_templates (host_id, listing_id, body) VALUES (${guestId}, ${listingId || null}, ${safeBody}) RETURNING id
+        `;
+        return res.status(200).json({ id: inserted[0].id });
       }
 
-      // A real, guessable-resistant code — not the placeholder written at
-      // buyCouponOrder time.
-      const code = 'AERVA-' + crypto.randomBytes(5).toString('hex').toUpperCase();
-      const expiresAt = new Date();
-      expiresAt.setMonth(expiresAt.getMonth() + 3);
+      if (mode === 'deleteTemplate') {
+        const { templateId } = req.body || {};
+        if (!templateId) return res.status(400).json({ error: 'Missing template.' });
+        await sql`DELETE FROM message_templates WHERE id = ${templateId} AND host_id = ${guestId}`;
+        return res.status(200).json({ ok: true });
+      }
 
-      await sql`
-        UPDATE coupons SET
-          status = 'active', code = ${code}, razorpay_payment_id = ${razorpay_payment_id}, expires_at = ${expiresAt.toISOString()}
-        WHERE id = ${couponId}
+      return res.status(400).json({ error: 'Unknown mode.' });
+    } catch (err) {
+      console.error('guest-profile (POST/chat) error:', err);
+      return res.status(500).json({ error: 'Something went wrong. Please try again.' });
+    }
+  }
+
+  // ---- Update name and/or profile photo ----
+  if (req.method === 'PATCH') {
+    try {
+      const { name, profilePhotoUrl, preferredCurrency } = req.body || {};
+
+      // Only accept real Blob URLs for the photo, same defensive check
+      // used for listing photos in submit-listing.js — never trust an
+      // arbitrary URL string into this column.
+      const safePhotoUrl = typeof profilePhotoUrl === 'string' && profilePhotoUrl.startsWith('https://')
+        ? profilePhotoUrl
+        : undefined;
+      const safeName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : undefined;
+      // Whitelisted currency codes only — this is a display preference,
+      // not something that should ever accept arbitrary input.
+      const SUPPORTED_CURRENCIES = ['INR', 'USD', 'GBP', 'EUR', 'AUD', 'CAD'];
+      const safeCurrency = typeof preferredCurrency === 'string' && SUPPORTED_CURRENCIES.includes(preferredCurrency.toUpperCase())
+        ? preferredCurrency.toUpperCase()
+        : undefined;
+
+      if (safeName === undefined && safePhotoUrl === undefined && safeCurrency === undefined) {
+        return res.status(400).json({ error: 'Nothing to update.' });
+      }
+
+      const updated = await sql`
+        UPDATE guests SET
+          name = COALESCE(${safeName ?? null}, name),
+          profile_photo_url = COALESCE(${safePhotoUrl ?? null}, profile_photo_url),
+          preferred_currency = COALESCE(${safeCurrency ?? null}, preferred_currency)
+        WHERE id = ${guestId}
+        RETURNING id, name, profile_photo_url, preferred_currency
       `;
 
       await logAudit(sql, {
-        action: 'coupon_purchased', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-        targetType: 'coupon', targetId: couponId
+        action: 'guest_profile_updated', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+        targetType: 'guest', targetId: guestId,
+        metadata: { updatedName: safeName !== undefined, updatedPhoto: safePhotoUrl !== undefined, updatedCurrency: safeCurrency !== undefined }
       });
 
-      await sendCouponEmail(coupon, code, expiresAt);
-
-      return res.status(200).json({ verified: true, code });
+      return res.status(200).json({ success: true, guest: updated[0] });
     } catch (err) {
-      console.error('host-listings (verifyCouponPayment) error:', err);
-      return res.status(500).json({ error: 'Could not confirm the coupon payment right now. Please try again.' });
+      console.error('guest-profile (PATCH) error:', err);
+      await logAudit(sql, {
+        action: 'guest_profile_updated', success: false, actorType: 'guest', actorIdentifier: String(guestId),
+        metadata: { reason: 'server_error' }
+      });
+      return res.status(500).json({ error: 'Could not save your changes right now.' });
     }
   }
 
-  // ---- Submit or resubmit verification info ----
-  if (req.method === 'POST') {
-    try {
-      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-      const guest = guestRows[0];
-      if (!guest || !guest.host_id) {
-        return res.status(400).json({ error: 'List a property first to create your host account.' });
-      }
-
-      const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName, panNumber, panDocumentUrl, hostName, hostPhone } = req.body || {};
-      const current = await sql`
-        SELECT aadhaar_status, aadhaar_document_url, aadhaar_rejection_reason,
-               bank_status, pan_status, pan_document_url, pan_rejection_reason
-        FROM hosts WHERE id = ${guest.host_id}
-      `;
-      const host = current[0];
-      let didSomething = false;
-
-      // ---- PAN: submit once, then permanently locked ----
-      if (typeof panDocumentUrl === 'string' && panDocumentUrl.startsWith('https://')) {
-        if (host.pan_document_url) {
-          return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
-        }
-        const cleanPan = typeof panNumber === 'string' ? panNumber.trim().toUpperCase() : '';
-        if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(cleanPan)) {
-          return res.status(400).json({ error: 'Please enter a valid 10-character PAN, e.g. ABCDE1234F.' });
-        }
-        await sql`
-          UPDATE hosts SET pan_number = ${cleanPan}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
-          WHERE id = ${guest.host_id}
-        `;
-        await logAudit(sql, {
-          action: 'host_pan_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-          targetType: 'host', targetId: guest.host_id
-        });
-        didSomething = true;
-      }
-
-      // ---- Aadhaar: submit once, then permanently locked (same policy
-      // as PAN above — no more resubmitting after a rejection either) ----
-      if (typeof aadhaarDocumentUrl === 'string' && aadhaarDocumentUrl.startsWith('https://')) {
-        if (host.aadhaar_document_url) {
-          return res.status(400).json({ error: 'Your Aadhaar has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
-        }
-        // Uploading a file only confirms a file was uploaded — it says
-        // nothing about whose document it actually is. Real verification
-        // happens as a human admin review (see get-pending-listings.js's
-        // ?verifications=1 mode) — pending_review is the correct state
-        // until that review happens.
-        await sql`
-          UPDATE hosts SET aadhaar_document_url = ${aadhaarDocumentUrl}, aadhaar_status = 'pending_review', aadhaar_rejection_reason = NULL
-          WHERE id = ${guest.host_id}
-        `;
-        await logAudit(sql, {
-          action: 'host_aadhaar_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-          targetType: 'host', targetId: guest.host_id
-        });
-        didSomething = true;
-      }
-
-      // ---- Bank: can always be changed, but doing so re-triggers a
-      // full identity re-check, not just the bank details themselves ----
-      const hasBankInfo = bankAccountNumber && bankIfsc && bankAccountHolderName;
-      if (hasBankInfo) {
-        const cleanAccountNumber = String(bankAccountNumber).replace(/\s/g, '');
-        const cleanIfsc = String(bankIfsc).trim().toUpperCase();
-        if (!/^\d{6,20}$/.test(cleanAccountNumber)) {
-          return res.status(400).json({ error: 'Please enter a valid bank account number.' });
-        }
-        if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
-          return res.status(400).json({ error: 'Please enter a valid IFSC code.' });
-        }
-        // Only reset PAN/Aadhaar back to pending_review if they'd
-        // actually been submitted before — nothing to "re-check" for a
-        // PAN/Aadhaar that was never on file in the first place.
-        const aadhaarSubmitted = !!host.aadhaar_document_url;
-        const panSubmitted = !!host.pan_document_url;
-        const reAadhaarStatus = aadhaarSubmitted ? 'pending_review' : host.aadhaar_status;
-        const rePanStatus = panSubmitted ? 'pending_review' : host.pan_status;
-        const reAadhaarReason = aadhaarSubmitted ? null : host.aadhaar_rejection_reason;
-        const rePanReason = panSubmitted ? null : host.pan_rejection_reason;
-        await sql`
-          UPDATE hosts SET
-            bank_account_number = ${cleanAccountNumber}, bank_ifsc = ${cleanIfsc},
-            bank_account_holder_name = ${String(bankAccountHolderName).trim().slice(0, 100)},
-            bank_status = 'pending_review', bank_rejection_reason = NULL,
-            aadhaar_status = ${reAadhaarStatus}, aadhaar_rejection_reason = ${reAadhaarReason},
-            pan_status = ${rePanStatus}, pan_rejection_reason = ${rePanReason}
-          WHERE id = ${guest.host_id}
-        `;
-        await logAudit(sql, {
-          action: 'host_bank_details_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-          targetType: 'host', targetId: guest.host_id,
-          metadata: { retriggeredAadhaar: aadhaarSubmitted, retriggeredPan: panSubmitted }
-        });
-        didSomething = true;
-      }
-
-      // ---- Personal details: name/phone, not identity-sensitive ----
-      if (typeof hostName === 'string' || typeof hostPhone === 'string') {
-        const safeName = typeof hostName === 'string' ? hostName.trim().slice(0, 100) : undefined;
-        const safePhone = typeof hostPhone === 'string' ? hostPhone.trim().slice(0, 20) : undefined;
-        if (safeName || safePhone) {
-          await sql`
-            UPDATE hosts SET
-              name = COALESCE(${safeName ?? null}, name),
-              phone = COALESCE(${safePhone ?? null}, phone)
-            WHERE id = ${guest.host_id}
-          `;
-          await logAudit(sql, {
-            action: 'host_profile_updated', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-            targetType: 'host', targetId: guest.host_id
-          });
-          didSomething = true;
-        }
-      }
-
-      if (!didSomething) {
-        return res.status(400).json({ error: 'Nothing to submit.' });
-      }
-
-      return res.status(200).json({ success: true });
-    } catch (err) {
-      console.error('host-listings (POST verification) error:', err);
-      return res.status(500).json({ error: 'Could not save your verification info right now. Please try again.' });
-    }
-  }
-
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-
-  try {
-    const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-    const guest = guestRows[0];
-    if (!guest) return res.status(401).json({ error: 'Please log in again.' });
-
-    // Never hosted anything yet — an empty dashboard, not an error.
-    if (!guest.host_id) {
-      return res.status(200).json({ listings: [], bookings: [], verification: null });
-    }
-
-    const listings = await sql`
-      SELECT id, property_name, city, area, property_type, bedrooms, max_guests, nightly_rate, status,
-             rejection_reason, admin_status_reason,
-             description, amenities, services, host_name, host_phone,
-             discount_type, discount_value, discount_min_nights, discount_description,
-             latitude, longitude, formatted_address, pincode,
-             exterior_photo_urls, interior_photo_urls, cover_photo_url, created_at,
-             listing_type, hosting_listing_id, experience_category, experience_price_unit,
-             experience_duration_hours, experience_duration_days, experience_type, experience_arranges_travel,
-             experience_travel_details, experience_meeting_point_type,
-             experience_meeting_point_details, experience_start_time, experience_refund_policy,
-             experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
-             experience_instructions, experience_special_instructions,
-             experience_available_from, experience_available_until
-      FROM listings
-      WHERE host_id = ${guest.host_id}
-      ORDER BY created_at DESC
-    `;
-    // Generate a fresh "manage price" link for each listing on the spot —
-    // the host doesn't have to dig up the one-time email from approval time.
-    const listingsWithLinks = listings.map(l => ({
-      ...l,
-      manageLink: `${SITE_BASE}/manage-listing.html?token=${createToken(l.id, 'manage-pricing', TWO_YEARS_MS)}`
-    }));
-
-    // "Aerva Host" status — awarded the moment a host has at least one
-    // approved listing. Computed here rather than stored anywhere, so it's
-    // always accurate the instant a listing's status flips to 'approved'
-    // (see approve-listing.js), with nothing to keep in sync.
-    const hostBadge = listings.some(l => l.status === 'approved') ? 'Aerva Host' : null;
-
-    // Bookings/earnings for this host's listings — deliberately selects
-    // only host-relevant columns. `total` and `guest_service_fee` are
-    // NEVER included here on purpose: total includes the guest's own
-    // service fee, which is Aerva's guest-side revenue and none of the
-    // host's business, exactly as guests never see the host's commission.
-    // subtotal + gst here already reflects what the guest paid for the
-    // stay itself, before that split — payout_amount is what actually
-    // lands with the host after commission.
-    const bookings = await sql`
-      SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.nights, o.guests,
-             o.subtotal, o.discount_amount, o.gst,
-             o.commission_rate, o.commission_amount, o.payout_amount,
-             o.deposit_amount, o.deposit_status, o.deposit_release_at,
-             o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
-             o.cancellation_reason, o.cancelled_at,
-             o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
-             o.guest_email, g.name AS guest_name
-      FROM orders o
-      JOIN listings l ON o.listing_id = l.id
-      LEFT JOIN guests g ON g.id = o.guest_id
-      WHERE l.host_id = ${guest.host_id}
-      ORDER BY o.created_at DESC
-      LIMIT 100
-    `;
-    // See toDateStr's own comment above — this is the fix for the
-    // dashboard's 48-hour cancellation cutoff silently miscalculating.
-    bookings.forEach(b => {
-      b.arrival = toDateStr(b.arrival);
-      b.departure = toDateStr(b.departure);
-    });
-
-    // Verification status for the checklist. Bank account number is
-    // masked to its last 4 digits — even the host's own dashboard never
-    // re-displays the full number once submitted, so there's one fewer
-    // place it exists in full anywhere in the UI.
-    const hostRows = await sql`
-      SELECT name, phone, aadhaar_status, aadhaar_rejection_reason, aadhaar_document_url,
-             bank_status, bank_rejection_reason, bank_account_number, bank_account_holder_name, bank_ifsc,
-             pan_status, pan_rejection_reason, pan_document_url, pan_number
-      FROM hosts WHERE id = ${guest.host_id}
-    `;
-    const h = hostRows[0];
-    const verification = h ? {
-      hostName: h.name,
-      hostPhone: h.phone,
-      aadhaarStatus: h.aadhaar_status,
-      aadhaarRejectionReason: h.aadhaar_rejection_reason,
-      aadhaarSubmitted: !!h.aadhaar_document_url,
-      bankStatus: h.bank_status,
-      bankRejectionReason: h.bank_rejection_reason,
-      bankAccountNumberMasked: h.bank_account_number ? '••••' + h.bank_account_number.slice(-4) : null,
-      bankAccountHolderName: h.bank_account_holder_name,
-      bankIfsc: h.bank_ifsc,
-      panStatus: h.pan_status,
-      panRejectionReason: h.pan_rejection_reason,
-      panSubmitted: !!h.pan_document_url,
-      // PAN is shown, unlike the bank account number — it's not a
-      // payment credential the way an account number is, and a host
-      // benefits from being able to confirm exactly what's on file.
-      panNumberMasked: h.pan_number || null
-    } : null;
-
-    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, verification });
-  } catch (err) {
-    console.error('host-listings error:', err);
-    return res.status(500).json({ error: 'Could not load your listings.' });
-  }
+  return res.status(405).json({ error: 'Method not allowed' });
 };
