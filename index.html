@@ -170,7 +170,7 @@
   }
   .nav-links{display:flex; gap:38px; align-items:center;}
   .nav-links a{
-    font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink); opacity:0.72;
+    font-size:14px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink); opacity:0.72;
     transition:opacity .25s ease;
   }
   .nav-links a:hover{opacity:1;}
@@ -678,17 +678,17 @@
   }
   .sort-field{ flex:0 1 180px; min-width:140px; max-width:190px; }
   .search-field{display:flex; flex-direction:column; gap:6px; flex:1; min-width:130px;}
-  .search-field label{font-size:12.5px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c; font-weight:700;}
+  .search-field label{font-size:14px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c; font-weight:700;}
   .search-field input, .search-field select{
     background:transparent; border:none; border-bottom:1px solid var(--line-dark);
-    padding:8px 2px; font-family:'Jost', sans-serif; font-size:15.5px; color:var(--ink);
+    padding:8px 2px; font-family:'Jost', sans-serif; font-size:16.5px; color:var(--ink);
     width:100%; box-sizing:border-box;
   }
   .search-field input:focus, .search-field select:focus{outline:none; border-color:var(--gold-deep);}
   .place-input-wrap{position:relative; display:flex; align-items:center; flex:1; min-width:0;}
   .place-hint{
     position:absolute; left:2px; top:50%; transform:translateY(-50%); pointer-events:none;
-    font-family:'Jost', sans-serif; font-size:15.5px; color:#a89c86;
+    font-family:'Jost', sans-serif; font-size:16.5px; color:#a89c86;
     opacity:0; transition:opacity 0.4s ease; white-space:nowrap; overflow:hidden;
   }
   /* Only shows while the field is genuinely empty — same rule a real
@@ -714,7 +714,7 @@
   .place-suggest-item span{font-size:11.5px; opacity:0.6; white-space:nowrap;}
   .search-bar .btn{flex:0 0 auto; padding:12px 28px; margin-bottom:1px;}
   .filter-clear{
-    flex:0 0 auto; background:none; border:none; font-size:13.5px; letter-spacing:0.05em;
+    flex:0 0 auto; background:none; border:none; font-size:15px; letter-spacing:0.05em;
     color:var(--gold-deep); text-decoration:underline; cursor:pointer; padding:8px 0; margin-bottom:1px;
   }
   .near-me-btn{
@@ -723,14 +723,14 @@
     transition:border-color .2s ease, background .2s ease;
   }
   .near-me-btn:hover{ border-color:var(--gold); background:rgba(169,136,79,0.08); }
-  .near-me-btn svg{width:15px; height:15px; flex:0 0 auto;}
+  .near-me-btn svg{width:17px; height:17px; flex:0 0 auto;}
   .near-me-btn:disabled{opacity:0.6; cursor:default;}
   .search-status{font-size:14.5px; opacity:0.7; margin-top:14px; margin-bottom:6px;}
 
   .date-range-wrapper{position:relative;}
   .date-range-btn{
     background:transparent; border:none; border-bottom:1px solid var(--line-dark);
-    padding:8px 2px; font-family:'Jost', sans-serif; font-size:15.5px; color:var(--ink);
+    padding:8px 2px; font-family:'Jost', sans-serif; font-size:16.5px; color:var(--ink);
     width:100%; text-align:left; cursor:pointer;
   }
   .date-range-btn:focus{outline:none; border-color:var(--gold-deep);}
@@ -794,7 +794,7 @@
   .guest-step-btn:disabled{opacity:0.3; cursor:default;}
   .guest-count{font-size:16px; min-width:16px; text-align:center;}
   .more-filters-wrapper{position:relative;}
-  .more-filters-btn svg{width:15px; height:15px; flex:0 0 auto;}
+  .more-filters-btn svg{width:17px; height:17px; flex:0 0 auto;}
   .more-filters-dropdown{
     display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:300;
     background-color:#f4ebe3; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
@@ -819,7 +819,7 @@
     font-family:Georgia,serif; font-size:12px;
   }
   .nav-avatar-circle img{width:100%; height:100%; object-fit:cover; display:block;}
-  .nav-account-name{font-size:12.5px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.75;}
+  .nav-account-name{font-size:14px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.75;}
   /* Host-only — shown in the header next to the login/account area, same
      visibility rule as "My Collection" (accountType === 'guest_host').
      Links straight to the host dashboard's Messages tab so a host never
@@ -828,7 +828,7 @@
     position:relative; display:flex; align-items:center; justify-content:center;
     width:22px; height:22px; color:var(--ink);
   }
-  .host-messages-icon svg{width:20px; height:20px;}
+  .host-messages-icon svg{width:22px; height:22px;}
   .host-messages-badge{
     position:absolute; top:-6px; right:-8px; min-width:16px; height:16px; padding:0 4px;
     background:#a3402f; color:#fff; font-size:10px; font-weight:600; line-height:16px;
@@ -846,7 +846,7 @@
   .nav-account-menu .menu-divider{height:1px; background:var(--line-dark); margin:6px 0;}
   .currency-trigger{
     background:none; border:1px solid var(--line-dark); border-radius:999px; padding:6px 12px;
-    font-size:13px; letter-spacing:0.05em; color:var(--ink); cursor:pointer; font-family:'Jost', sans-serif;
+    font-size:14.5px; letter-spacing:0.05em; color:var(--ink); cursor:pointer; font-family:'Jost', sans-serif;
     transition:border-color .2s ease;
   }
   .currency-trigger:hover{border-color:var(--gold-deep);}
