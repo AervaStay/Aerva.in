@@ -307,15 +307,27 @@ module.exports = async (req, res) => {
           SELECT id, sender_type, display_text, was_redacted, created_at
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `;
-        // Opening a conversation marks the OTHER party's messages read —
-        // whichever side I'm not on. Previously hardcoded to always mark
-        // 'guest' messages read, which only made sense back when this
-        // endpoint was host-only.
-        const otherSenderType = isHost ? 'guest' : 'host';
-        await sql`
-          UPDATE messages SET read_at = NOW()
-          WHERE conversation_id = ${conversationId} AND sender_type = ${otherSenderType} AND read_at IS NULL
-        `;
+        // Opening a conversation marks the OTHER party's messages read.
+        // If this account is BOTH the guest and the host here (a
+        // self-booking — booking your own listing to test, for example),
+        // there IS no other real participant, so mark everything read.
+        // The one-sided version of this ("just mark whichever role I'm
+        // NOT" — isHost ? 'guest' : 'host') always resolved to marking
+        // only 'guest' messages in that case, since isHost is checked
+        // first — any 'host'-sent message in a self-booked conversation
+        // could then never be marked read at all, and kept counting
+        // toward the unread badge forever, even though the conversation
+        // list itself showed nothing unread (it has this same one-sided
+        // assumption baked into its own per-row count).
+        if (isGuest && isHost) {
+          await sql`UPDATE messages SET read_at = NOW() WHERE conversation_id = ${conversationId} AND read_at IS NULL`;
+        } else {
+          const otherSenderType = isHost ? 'guest' : 'host';
+          await sql`
+            UPDATE messages SET read_at = NOW()
+            WHERE conversation_id = ${conversationId} AND sender_type = ${otherSenderType} AND read_at IS NULL
+          `;
+        }
         return res.status(200).json({ messages, myRole: isHost ? 'host' : 'guest' });
       }
 
