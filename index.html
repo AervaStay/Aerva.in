@@ -5926,6 +5926,12 @@
   let inboxSearchTerm = '';
   let inboxCurrentConversationId = null;
   let inboxCurrentOrderId = null;
+  // Which hat this account wears in the CURRENTLY OPEN conversation —
+  // 'host' or 'guest'. Set from that conversation's own my_role field
+  // (see myConversations), never assumed globally: the same account can
+  // be the host on one thread and the guest on another, and this inbox
+  // now shows both side by side rather than being a host-only surface.
+  let inboxCurrentRole = null;
   let inboxTranslationOn = false;
   // Caches translated text per message id so toggling translation on/off
   // repeatedly, or re-rendering after sending a new message, doesn't
@@ -6005,7 +6011,7 @@
     const token = guestAuthToken();
     if(!token) return;
     try{
-      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=hostConversations', {
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myConversations', {
         headers: { 'Authorization': 'Bearer ' + token }
       });
       const data = await res.json();
@@ -6023,24 +6029,30 @@
     if(inboxFilter === 'unread') items = items.filter(c => Number(c.unread_count) > 0);
     if(inboxSearchTerm){
       items = items.filter(c =>
-        (c.guest_name || c.guest_email || '').toLowerCase().includes(inboxSearchTerm) ||
+        (c.counterpart_name || '').toLowerCase().includes(inboxSearchTerm) ||
         (c.property_name || '').toLowerCase().includes(inboxSearchTerm)
       );
     }
     if(!items.length){
-      listEl.innerHTML = `<p style="padding:20px 22px; font-size:13px; opacity:0.6;">${inboxConversations.length ? 'No conversations match.' : 'No conversations yet — these open automatically once a guest with a confirmed booking messages you.'}</p>`;
+      listEl.innerHTML = `<p style="padding:20px 22px; font-size:13px; opacity:0.6;">${inboxConversations.length ? 'No conversations match.' : 'No conversations yet — these open automatically once you message a host, or a guest with a confirmed booking messages you.'}</p>`;
       return;
     }
     listEl.innerHTML = items.map(c => {
       const tag = inboxStatusTag(c);
-      const name = c.guest_name || c.guest_email;
-      const thumb = c.cover_photo_url || c.guest_photo_url || '';
+      const name = c.counterpart_name || c.guest_email;
+      const thumb = c.cover_photo_url || c.counterpart_photo_url || '';
+      // "Hosting" / "Guest" — which hat applies to THIS specific thread,
+      // since the same account can be the host on one conversation and
+      // just a guest on another (see my_role, computed server-side).
+      const roleLabel = c.my_role === 'host' ? 'Hosting' : 'Guest';
       return `
         <div class="inbox-conv-card${c.id === inboxCurrentConversationId ? ' active' : ''}" data-conv-id="${c.id}">
           ${thumb ? `<img class="inbox-conv-thumb" src="${thumb}" alt="">` : `<div class="inbox-conv-thumb"></div>`}
           <div class="inbox-conv-info">
             <div class="inbox-conv-topline">
               <span class="inbox-status-tag ${tag.cls}">${tag.label}</span>
+              <span style="opacity:0.5;">·</span>
+              <span style="opacity:0.6;">${roleLabel}</span>
               <span>${inboxDateRangeLabel(c)}</span>
             </div>
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
@@ -6065,13 +6077,14 @@
     if(!conv) return;
     inboxCurrentConversationId = conversationId;
     inboxCurrentOrderId = conv.order_id || null;
+    inboxCurrentRole = conv.my_role || 'host';
     inboxTranslationCache = {}; // fresh conversation, fresh cache
     document.getElementById('inboxPanel').classList.add('chat-open'); // mobile: swap to chat pane
     document.getElementById('inboxChatPlaceholder').style.display = 'none';
     document.getElementById('inboxChatContent').style.display = 'flex';
-    document.getElementById('inboxChatName').textContent = conv.guest_name || conv.guest_email;
+    document.getElementById('inboxChatName').textContent = conv.counterpart_name || conv.guest_email;
     const avatarEl = document.getElementById('inboxChatAvatar');
-    if(conv.guest_photo_url){ avatarEl.src = conv.guest_photo_url; avatarEl.style.display = ''; }
+    if(conv.counterpart_photo_url){ avatarEl.src = conv.counterpart_photo_url; avatarEl.style.display = ''; }
     else { avatarEl.style.display = 'none'; }
     renderInboxConversationList(); // refresh active-card highlight
     await refreshInboxMessages();
@@ -6082,11 +6095,15 @@
     const container = document.getElementById('inboxMessages');
     container.innerHTML = '<p class="loading" style="font-size:13px; opacity:0.6;">Loading…</p>';
     try{
-      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=hostConversationMessages&conversationId=${inboxCurrentConversationId}`, {
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversationMessages&conversationId=${inboxCurrentConversationId}`, {
         headers: { 'Authorization': 'Bearer ' + token }
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Failed to load');
+      // The server confirms which role I actually hold on this
+      // conversation (myRole) — trusted over the client-side copy from
+      // the list, since that's the one place membership is truly checked.
+      if(data.myRole) inboxCurrentRole = data.myRole;
       await renderInboxMessages(data.messages || []);
       loadInboxChatTemplates(inboxCurrentConversationId);
       // Read messages update their own unread_count server-side, but the
@@ -6119,8 +6136,8 @@
       }
     }
     container.innerHTML = messages.map(m => {
-      const isMine = m.sender_type === 'host';
-      const label = isMine ? 'You · Host' : 'Guest';
+      const isMine = m.sender_type === inboxCurrentRole;
+      const label = isMine ? ('You · ' + (inboxCurrentRole === 'host' ? 'Host' : 'Guest')) : (inboxCurrentRole === 'host' ? 'Guest' : 'Host');
       const time = new Date(m.created_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
       const shownText = translated[m.id] || m.display_text;
       const showOriginalLink = translated[m.id] ? `<span class="inbox-message-original-link" data-original="${encodeURIComponent(m.display_text)}">See original</span>` : '';
@@ -6179,15 +6196,19 @@
     const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
     const arrival = conv.arrival ? new Date(conv.arrival + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
     const departure = conv.departure ? new Date(conv.departure + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+    const isHostView = conv.my_role === 'host';
+    // A guest viewing their own booking shouldn't see host-framed numbers
+    // ("Your Payout," commission) — that's the host's business, not
+    // theirs. They see what THEY paid and who to contact instead.
     document.getElementById('inboxBookingDetailsBody').innerHTML = `
-      <h3 style="font-family:'Bodoni Moda', serif; font-size:19px; margin-bottom:4px;">${conv.guest_name || conv.guest_email}</h3>
+      <h3 style="font-family:'Bodoni Moda', serif; font-size:19px; margin-bottom:4px;">${conv.counterpart_name || conv.guest_email}</h3>
       <p style="font-size:12.5px; opacity:0.6; margin-bottom:20px;">${conv.property_name}</p>
       <div style="display:flex; flex-direction:column; gap:12px; font-size:13.5px;">
         <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Dates</span><span>${arrival} → ${departure}${conv.nights ? ` (${conv.nights} night${conv.nights === 1 ? '' : 's'})` : ''}</span></div>
         ${conv.guests ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Guests</span><span>${conv.guests}</span></div>` : ''}
-        ${conv.subtotal != null ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Guest Paid</span><span>${fmt(Number(conv.subtotal) + Number(conv.gst || 0))}</span></div>` : ''}
-        ${conv.payout_amount != null ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Your Payout</span><span style="color:#3a7d44; font-weight:600;">${fmt(conv.payout_amount)}</span></div>` : ''}
-        <div style="display:flex; justify-content:space-between;"><span style="opacity:0.6;">Contact</span><span>${conv.guest_email}</span></div>
+        ${conv.subtotal != null ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">${isHostView ? 'Guest Paid' : 'You Paid'}</span><span>${fmt(Number(conv.subtotal) + Number(conv.gst || 0))}</span></div>` : ''}
+        ${isHostView && conv.payout_amount != null ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Your Payout</span><span style="color:#3a7d44; font-weight:600;">${fmt(conv.payout_amount)}</span></div>` : ''}
+        <div style="display:flex; justify-content:space-between;"><span style="opacity:0.6;">${isHostView ? 'Contact' : 'Host Contact'}</span><span>${isHostView ? conv.guest_email : (conv.counterpart_name || '—')}</span></div>
       </div>
     `;
     document.getElementById('inboxBookingDetailsOverlay').style.display = 'flex';
@@ -6231,7 +6252,7 @@
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ mode: 'send', conversationId: inboxCurrentConversationId, text, role: 'host' })
+        body: JSON.stringify({ mode: 'send', conversationId: inboxCurrentConversationId, text, role: inboxCurrentRole })
       });
       if(res.ok){
         input.value = '';
@@ -9256,25 +9277,29 @@
           if(data.guest.accountType === 'guest_host'){
             myListingsLink.style.display = 'inline';
             if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
-            const hostMessagesIcon = document.getElementById('hostMessagesIcon');
-            if(hostMessagesIcon){
-              hostMessagesIcon.style.display = 'flex';
-              fetch(SUITES_API_BASE + '/api/guest-profile?mode=unreadMessageCount', {
-                headers: { 'Authorization': 'Bearer ' + token }
+          }
+          // Messages is available to every logged-in account now, not
+          // just hosts — a guest-only account can still have an active
+          // conversation on a booking they made, and should be able to
+          // see it the same way a host sees theirs.
+          const hostMessagesIcon = document.getElementById('hostMessagesIcon');
+          if(hostMessagesIcon){
+            hostMessagesIcon.style.display = 'flex';
+            fetch(SUITES_API_BASE + '/api/guest-profile?mode=unreadMessageCount', {
+              headers: { 'Authorization': 'Bearer ' + token }
+            })
+              .then(r => r.ok ? r.json() : null)
+              .then(countData => {
+                const badge = document.getElementById('hostMessagesUnreadBadge');
+                if(!badge || !countData) return;
+                if(countData.count > 0){
+                  badge.textContent = countData.count > 9 ? '9+' : String(countData.count);
+                  badge.style.display = 'block';
+                } else {
+                  badge.style.display = 'none';
+                }
               })
-                .then(r => r.ok ? r.json() : null)
-                .then(countData => {
-                  const badge = document.getElementById('hostMessagesUnreadBadge');
-                  if(!badge || !countData) return;
-                  if(countData.count > 0){
-                    badge.textContent = countData.count > 9 ? '9+' : String(countData.count);
-                    badge.style.display = 'block';
-                  } else {
-                    badge.style.display = 'none';
-                  }
-                })
-                .catch(() => {}); // Non-fatal — the icon just shows with no badge.
-            }
+              .catch(() => {}); // Non-fatal — the icon just shows with no badge.
           }
           // Location prompt, once per browser, only for a confirmed
           // logged-in guest — see promptLocationOnceForGuest for the
