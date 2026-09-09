@@ -264,6 +264,22 @@ module.exports = async (req, res) => {
     }
 
     const guestId = getOptionalGuestId(req);
+    // Resolved once, reused for the "can't book your own property" check
+    // on every stay/experience below — listings.host_id is a hosts.id,
+    // a different id space from guests.id (guestId), so this can't be
+    // compared to guestId directly (same distinction guest-profile.js's
+    // myHostId handles for messaging). Anonymous/logged-out checkout
+    // (guestId null) obviously can't be self-booking anything, so this
+    // stays null in that case and the check below is simply skipped.
+    let myHostId = null;
+    if (guestId) {
+      try {
+        const hostRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+        myHostId = hostRows[0] ? hostRows[0].host_id : null;
+      } catch (err) {
+        console.error('Failed to resolve host_id for account', guestId, err);
+      }
+    }
 
     let grandSubtotal = 0;
     let grandDiscount = 0;
@@ -292,13 +308,20 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT id, property_name, nightly_rate, discount_type, discount_value,
                discount_min_nights, commission_rate, security_deposit,
-               pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types
+               pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types, host_id
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
       const listing = rows[0];
       if (!listing) {
         return res.status(400).json({ error: `Stay ${i + 1}: this home is no longer available to book.` });
+      }
+      // A host can't book their own property — not a pricing/availability
+      // concern, a straightforward conflict-of-interest rule (fake
+      // reviews, self-dealing commission games, etc.). Checked as soon
+      // as the listing's real host_id is known, before any pricing math.
+      if (myHostId != null && listing.host_id === myHostId) {
+        return res.status(400).json({ error: `Stay ${i + 1}: you can't book your own property.` });
       }
       if (!listing.nightly_rate) {
         return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} doesn't have a rate set yet.` });
@@ -518,13 +541,17 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate,
                experience_available_from, experience_available_until, experience_duration_days,
-               discount_type, discount_value, discount_min_nights
+               discount_type, discount_value, discount_min_nights, host_id
         FROM listings
         WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
       `;
       const experience = rows[0];
       if (!experience) {
         return res.status(400).json({ error: `Experience ${i + 1}: this experience is no longer available to book.` });
+      }
+      // Same conflict-of-interest rule as stays — see the comment there.
+      if (myHostId != null && experience.host_id === myHostId) {
+        return res.status(400).json({ error: `Experience ${i + 1}: you can't book your own experience.` });
       }
       if (!experience.nightly_rate) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} doesn't have a price set yet.` });
