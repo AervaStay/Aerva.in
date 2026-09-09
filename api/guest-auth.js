@@ -317,14 +317,18 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Please enter a complete email address, like you@gmail.com.' });
     }
     const cleanEmail = email.trim().toLowerCase();
-    // Prevents email-bombing one specific inbox with repeated
-    // verification links. Only counts actual sends (see below — this
-    // action is only logged when a real send happens), so this can't be
-    // used to probe which emails exist either.
+    // Per-email limit stops one inbox being bombed with links; per-IP
+    // limit (checked against EVERY attempt now, not just real sends —
+    // see the logAudit call below) stops one source from probing many
+    // made-up emails against this endpoint, which the per-email limit
+    // alone couldn't catch since a nonexistent email never repeats.
     const resendsForEmail = await countRecentAttempts(sql, {
       action: 'guest_verification_resent', windowMinutes: 60, byEmail: cleanEmail
     });
-    if (resendsForEmail >= 3) {
+    const resendsForIp = await countRecentAttempts(sql, {
+      action: 'guest_verification_resent', windowMinutes: 60, byIp: clientIp
+    });
+    if (resendsForEmail >= 3 || resendsForIp >= 15) {
       // Same generic success response as everywhere else in this mode —
       // silently not sending another one rather than revealing a limit
       // was hit, so this still can't be used to confirm the account exists.
@@ -337,12 +341,23 @@ module.exports = async (req, res) => {
       // exists or is already verified — same reasoning as login's
       // identical error message, so this can't be used to probe which
       // emails are registered.
+      //
+      // Logged EVERY time now (success reflects whether a real email
+      // actually went out), not just on a real send — that's what makes
+      // the per-IP count above meaningful against an attacker probing
+      // emails that don't exist, which never repeat and so were
+      // invisible to a "count real sends only" version of this check.
       if (guest && !guest.email_verified) {
         const verifyTok = createToken(guest.id, 'guest-email-verify', VERIFY_LINK_LIFETIME_MS);
         await sendVerificationEmail(guest, verifyTok);
         await logAudit(sql, {
           action: 'guest_verification_resent', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
           targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
+        });
+      } else {
+        await logAudit(sql, {
+          action: 'guest_verification_resent', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
+          metadata: { reason: !guest ? 'no_such_account' : 'already_verified', ip: clientIp }
         });
       }
       return res.status(200).json({ success: true });
@@ -363,13 +378,14 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Please enter a complete email address, like you@gmail.com.' });
     }
     const cleanEmail = email.trim().toLowerCase();
-    // Same email-bombing protection as resend-verification above — only
-    // counts actual reset emails sent, so a nonexistent email is
-    // unaffected and reveals nothing either way.
+    // Same two-layer protection as resend-verification above.
     const resetsForEmail = await countRecentAttempts(sql, {
       action: 'guest_password_reset_requested', windowMinutes: 60, byEmail: cleanEmail
     });
-    if (resetsForEmail >= 3) {
+    const resetsForIp = await countRecentAttempts(sql, {
+      action: 'guest_password_reset_requested', windowMinutes: 60, byIp: clientIp
+    });
+    if (resetsForEmail >= 3 || resetsForIp >= 15) {
       return res.status(200).json({ success: true });
     }
     try {
@@ -379,13 +395,20 @@ module.exports = async (req, res) => {
       // response is identical whether or not an account exists, so
       // nobody can use "forgot password" to check which emails have
       // Aerva accounts. Only the guest who actually owns that inbox ever
-      // learns the real answer, by whether an email shows up.
+      // learns the real answer, by whether an email shows up. Logged
+      // either way now, same reasoning as resend-verification, so the
+      // per-IP probing count above actually means something.
       if (guest) {
         const resetTok = createToken(guest.id, 'guest-password-reset', RESET_LINK_LIFETIME_MS);
         await sendPasswordResetEmail(guest, resetTok);
         await logAudit(sql, {
           action: 'guest_password_reset_requested', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
           targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
+        });
+      } else {
+        await logAudit(sql, {
+          action: 'guest_password_reset_requested', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
+          metadata: { reason: 'no_such_account', ip: clientIp }
         });
       }
       return res.status(200).json({ success: true });
