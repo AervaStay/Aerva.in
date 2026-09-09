@@ -2115,7 +2115,7 @@
 
         <div id="inboxTemplatesTab" style="padding:16px 22px; overflow-y:auto; flex:1 1 auto;">
           <p style="font-size:12.5px; opacity:0.6; margin-bottom:14px;">Guests see these as tappable questions inside the chat window — write the ones you get asked most often (check-in time, WiFi, parking, etc.).</p>
-          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code> <code>@guidance</code>. Set check-in time, WiFi, and access code for each property from its "Manage" link in My Collection.</p>
+          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code> <code>@guidance</code> <code>@checkininfo</code>. <code>@checkininfo</code> inserts everything at once — check-in/checkout, WiFi, access code, and any custom fields you've added. Set these for each property from its "Manage" link in My Collection.</p>
           <div id="inboxTemplateListContainer"></div>
           <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line-dark);">
             <input type="text" id="inboxTemplateBodyInput" placeholder="e.g. Check-in is 2 PM, checkout is 11 AM" style="padding:9px 10px; border:1px solid var(--line-dark); font-size:13px; font-family:'Jost', sans-serif;">
@@ -2203,37 +2203,49 @@
      logged in — bookings are no longer allowed without an account (see
      create-order.js's own hard enforcement of this; this modal is just
      the UX side of it, opened inline so a guest doesn't lose their
-     in-progress dates/guest selections by navigating to a separate page). -->
+     in-progress dates/guest selections by navigating to a separate page).
+     Email-first flow: asks for email, checks whether it's already
+     registered, then shows the right form automatically — a guest never
+     has to guess "do I already have an account?" and risk a deliberately
+     vague "incorrect email or password" if they guess wrong. -->
 <div class="listing-modal-overlay" id="bookingLoginOverlay" style="display:none; z-index:600;">
   <div class="listing-modal" style="max-width:400px;">
     <button class="listing-modal-close" id="bookingLoginCloseBtn" aria-label="Close">&times;</button>
     <div style="padding:36px 30px;">
-      <div id="bookingLoginFormView">
+
+      <div id="bookingEmailStepView">
         <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Log In to Book</h3>
-        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">Please log in to complete your booking — this keeps your reservation tied to your own account.</p>
+        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">Please log in or create an account to complete your booking — this keeps your reservation tied to your own account.</p>
         <div class="field">
-          <label for="bookingLoginEmail">Email</label>
-          <input type="email" id="bookingLoginEmail" autocomplete="email">
+          <label for="bookingEmailStepInput">Email</label>
+          <input type="email" id="bookingEmailStepInput" autocomplete="email">
         </div>
-        <div class="field" style="margin-top:14px;">
+        <button type="button" class="btn" id="bookingEmailStepContinueBtn" style="width:100%; margin-top:18px;">Continue</button>
+        <p id="bookingEmailStepError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
+      </div>
+
+      <div id="bookingLoginFormView" style="display:none;">
+        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Welcome Back</h3>
+        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">
+          <span id="bookingLoginEmailDisplay"></span> — <a href="#" id="bookingLoginChangeEmailLink" style="color:var(--gold-deep);">not you?</a>
+        </p>
+        <div class="field">
           <label for="bookingLoginPassword">Password</label>
           <input type="password" id="bookingLoginPassword" autocomplete="current-password">
         </div>
         <button type="button" class="btn" id="bookingLoginSubmitBtn" style="width:100%; margin-top:18px;">Log In</button>
         <p id="bookingLoginError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
-        <p style="font-size:12.5px; margin-top:20px; text-align:center; opacity:0.75;">New to Aerva? <a href="#" id="bookingShowSignupLink" style="color:var(--gold-deep);">Create an account</a></p>
       </div>
 
       <div id="bookingSignupFormView" style="display:none;">
         <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Create Your Account</h3>
-        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">Takes a minute — you'll need to verify your email before logging in to finish this booking.</p>
+        <p style="font-size:13px; opacity:0.65; margin-bottom:6px;">
+          <span id="bookingSignupEmailDisplay"></span> — <a href="#" id="bookingSignupChangeEmailLink" style="color:var(--gold-deep);">not you?</a>
+        </p>
+        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">This email doesn't have an account yet — takes a minute to set one up. You'll need to verify your email before logging in to finish this booking.</p>
         <div class="field">
           <label for="bookingSignupName">Name</label>
           <input type="text" id="bookingSignupName" autocomplete="name">
-        </div>
-        <div class="field" style="margin-top:14px;">
-          <label for="bookingSignupEmail">Email</label>
-          <input type="email" id="bookingSignupEmail" autocomplete="email">
         </div>
         <div class="field" style="margin-top:14px;">
           <label for="bookingSignupPassword">Password</label>
@@ -2242,7 +2254,6 @@
         <button type="button" class="btn" id="bookingSignupSubmitBtn" style="width:100%; margin-top:18px;">Create Account</button>
         <p id="bookingSignupError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
         <p id="bookingSignupSuccessMsg" style="color:#3a7d44; font-size:12.5px; margin-top:12px; display:none;"></p>
-        <p style="font-size:12.5px; margin-top:20px; text-align:center; opacity:0.75;">Already have an account? <a href="#" id="bookingShowLoginLink" style="color:var(--gold-deep);">Log in</a></p>
       </div>
     </div>
   </div>
@@ -5841,43 +5852,103 @@
   // create-order.js's own hard 401 if no session — this modal is the UX
   // side of that, kept inline so a guest doesn't lose their in-progress
   // dates/guest selections by navigating away to a separate login page).
+  // Email-first: ask for email, check whether it's already registered
+  // (mode=check-email), then show login or signup automatically — a
+  // guest never has to guess which one applies to them.
   let bookingLoginSuccessCallback = null;
+  let bookingGateEmail = '';
+
   function requireLoginForBooking(onSuccess){
     if(guestAuthToken()){ onSuccess(); return; }
     bookingLoginSuccessCallback = onSuccess;
+    bookingGateEmail = '';
     document.getElementById('bookingLoginOverlay').style.display = 'flex';
-    document.getElementById('bookingLoginFormView').style.display = 'block';
+    document.getElementById('bookingEmailStepView').style.display = 'block';
+    document.getElementById('bookingLoginFormView').style.display = 'none';
     document.getElementById('bookingSignupFormView').style.display = 'none';
-    document.getElementById('bookingLoginError').style.display = 'none';
-    document.getElementById('bookingLoginEmail').focus();
+    document.getElementById('bookingEmailStepError').style.display = 'none';
+    document.getElementById('bookingEmailStepInput').value = '';
+    document.getElementById('bookingEmailStepInput').focus();
   }
   function closeBookingLoginGate(){
     document.getElementById('bookingLoginOverlay').style.display = 'none';
     bookingLoginSuccessCallback = null;
   }
+  function backToBookingEmailStep(){
+    document.getElementById('bookingLoginFormView').style.display = 'none';
+    document.getElementById('bookingSignupFormView').style.display = 'none';
+    document.getElementById('bookingEmailStepView').style.display = 'block';
+    document.getElementById('bookingEmailStepInput').focus();
+  }
   document.getElementById('bookingLoginCloseBtn').addEventListener('click', closeBookingLoginGate);
   document.getElementById('bookingLoginOverlay').addEventListener('click', (e) => {
     if(e.target.id === 'bookingLoginOverlay') closeBookingLoginGate();
   });
-  document.getElementById('bookingShowSignupLink').addEventListener('click', (e) => {
-    e.preventDefault();
-    document.getElementById('bookingLoginFormView').style.display = 'none';
-    document.getElementById('bookingSignupFormView').style.display = 'block';
+  document.getElementById('bookingLoginChangeEmailLink').addEventListener('click', (e) => { e.preventDefault(); backToBookingEmailStep(); });
+  document.getElementById('bookingSignupChangeEmailLink').addEventListener('click', (e) => { e.preventDefault(); backToBookingEmailStep(); });
+
+  // Also submits on Enter, same as the password/signup fields below.
+  document.getElementById('bookingEmailStepInput').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('bookingEmailStepContinueBtn').click(); }
   });
-  document.getElementById('bookingShowLoginLink').addEventListener('click', (e) => {
-    e.preventDefault();
-    document.getElementById('bookingSignupFormView').style.display = 'none';
-    document.getElementById('bookingLoginFormView').style.display = 'block';
+  document.getElementById('bookingEmailStepContinueBtn').addEventListener('click', async () => {
+    const email = document.getElementById('bookingEmailStepInput').value.trim();
+    const errEl = document.getElementById('bookingEmailStepError');
+    const btn = document.getElementById('bookingEmailStepContinueBtn');
+    errEl.style.display = 'none';
+    if(!email || !email.includes('@')){
+      errEl.textContent = 'Please enter a valid email address.';
+      errEl.style.display = 'block';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'check-email', email })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not check that email right now.';
+        errEl.style.display = 'block';
+      } else {
+        bookingGateEmail = email;
+        document.getElementById('bookingEmailStepView').style.display = 'none';
+        if(data.exists){
+          document.getElementById('bookingLoginEmailDisplay').textContent = email;
+          document.getElementById('bookingLoginError').style.display = 'none';
+          document.getElementById('bookingLoginPassword').value = '';
+          document.getElementById('bookingLoginFormView').style.display = 'block';
+          document.getElementById('bookingLoginPassword').focus();
+        } else {
+          document.getElementById('bookingSignupEmailDisplay').textContent = email;
+          document.getElementById('bookingSignupError').style.display = 'none';
+          document.getElementById('bookingSignupSuccessMsg').style.display = 'none';
+          document.getElementById('bookingSignupName').value = '';
+          document.getElementById('bookingSignupPassword').value = '';
+          document.getElementById('bookingSignupFormView').style.display = 'block';
+          document.getElementById('bookingSignupName').focus();
+        }
+      }
+    } catch(err){
+      errEl.textContent = 'Could not check that email right now. Please try again.';
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Continue';
   });
 
+  document.getElementById('bookingLoginPassword').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('bookingLoginSubmitBtn').click(); }
+  });
   document.getElementById('bookingLoginSubmitBtn').addEventListener('click', async () => {
-    const email = document.getElementById('bookingLoginEmail').value.trim();
     const password = document.getElementById('bookingLoginPassword').value;
     const errEl = document.getElementById('bookingLoginError');
     const btn = document.getElementById('bookingLoginSubmitBtn');
     errEl.style.display = 'none';
-    if(!email || !password){
-      errEl.textContent = 'Please enter your email and password.';
+    if(!password){
+      errEl.textContent = 'Please enter your password.';
       errEl.style.display = 'block';
       return;
     }
@@ -5886,7 +5957,7 @@
     try{
       const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'login', email, password })
+        body: JSON.stringify({ mode: 'login', email: bookingGateEmail, password })
       });
       const data = await res.json();
       if(!res.ok){
@@ -5908,15 +5979,14 @@
 
   document.getElementById('bookingSignupSubmitBtn').addEventListener('click', async () => {
     const name = document.getElementById('bookingSignupName').value.trim();
-    const email = document.getElementById('bookingSignupEmail').value.trim();
     const password = document.getElementById('bookingSignupPassword').value;
     const errEl = document.getElementById('bookingSignupError');
     const successEl = document.getElementById('bookingSignupSuccessMsg');
     const btn = document.getElementById('bookingSignupSubmitBtn');
     errEl.style.display = 'none';
     successEl.style.display = 'none';
-    if(!email || !password){
-      errEl.textContent = 'Please enter an email and password.';
+    if(!password){
+      errEl.textContent = 'Please choose a password.';
       errEl.style.display = 'block';
       return;
     }
@@ -5925,7 +5995,7 @@
     try{
       const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'signup', email, password, name })
+        body: JSON.stringify({ mode: 'signup', email: bookingGateEmail, password, name })
       });
       const data = await res.json();
       if(!res.ok){
@@ -5936,7 +6006,7 @@
         // until the verification link is clicked (see guest-auth.js).
         // The guest has to come back and log in afterward; this can't
         // seamlessly continue straight to payment the way a login can.
-        successEl.textContent = 'Account created — check your email for a verification link. Once verified, log in below to complete your booking.';
+        successEl.textContent = 'Account created — check your email for a verification link. Once verified, click "not you?" above to log in and complete your booking.';
         successEl.style.display = 'block';
         document.getElementById('bookingSignupName').value = '';
         document.getElementById('bookingSignupPassword').value = '';
@@ -6514,6 +6584,23 @@
     }
     return result;
   }
+  // Assembles the fixed check-in fields plus every host-defined custom
+  // field into one readable block — exactly what manage-listing.html's
+  // own live preview builds (kept in sync by hand across these separate
+  // files, same as every other placeholder), and what
+  // auto_send_checkin_instructions sends server-side on booking
+  // confirmation (see _template-scheduling.js).
+  function buildCheckinInstructionsText(conv){
+    const lines = [];
+    if(conv.check_in_time) lines.push(`Check-in: ${conv.check_in_time}`);
+    if(conv.check_out_time) lines.push(`Check-out: ${conv.check_out_time}`);
+    if(conv.wifi_name || conv.wifi_password) lines.push(`WiFi: ${conv.wifi_name || '—'} / ${conv.wifi_password || '—'}`);
+    if(conv.access_code) lines.push(`Access code: ${conv.access_code}`);
+    (Array.isArray(conv.custom_fields) ? conv.custom_fields : []).forEach(f => {
+      if(f.label && f.value) lines.push(`${f.label}: ${f.value}`);
+    });
+    return lines.length ? lines.join('\n') : '(check-in instructions not set yet)';
+  }
   function resolveTemplatePlaceholders(text, conv){
     let result = resolveBasePlaceholders(text, conv);
     // @guidance is handled separately: the Description tab's own free
@@ -6526,6 +6613,12 @@
       const rawGuidance = conv.guest_guidance || '(no additional guidance set yet)';
       const resolvedGuidance = resolveBasePlaceholders(rawGuidance, conv);
       result = result.replace(/@guidance/gi, resolvedGuidance);
+    }
+    // @checkininfo — the assembled fixed-fields-plus-custom-fields block,
+    // handled separately since it needs the custom_fields array, not a
+    // single string lookup like the base placeholders above.
+    if(result.toLowerCase().includes('@checkininfo')){
+      result = result.replace(/@checkininfo/gi, buildCheckinInstructionsText(conv));
     }
     return result;
   }
