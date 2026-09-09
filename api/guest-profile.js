@@ -226,9 +226,17 @@ module.exports = async (req, res) => {
         const conversations = await sql`
           SELECT c.id, c.listing_id, c.order_id, c.guest_email, c.guest_id, c.host_id,
                  l.property_name, l.cover_photo_url,
+                 l.check_in_time, l.check_out_time, l.wifi_name, l.wifi_password, l.access_code,
+                 COALESCE(l.formatted_address, NULLIF(TRIM(CONCAT_WS(', ', l.area, l.city)), '')) AS location_text,
                  CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END AS my_role,
                  CASE WHEN c.host_id = ${myHostId} THEN COALESCE(g.name, c.guest_email) ELSE h.name END AS counterpart_name,
                  CASE WHEN c.host_id = ${myHostId} THEN g.profile_photo_url ELSE NULL END AS counterpart_photo_url,
+                 -- Role-INDEPENDENT — always the actual booking guest's
+                 -- name, regardless of who's viewing. Used for the
+                 -- @guestname template placeholder: "the one who is
+                 -- receiving the message should be the booker name,"
+                 -- not whichever side happens to be looking at this row.
+                 COALESCE(g.name, c.guest_email) AS guest_display_name,
                  o.arrival, o.departure, o.status AS booking_status,
                  o.nights, o.guests, o.subtotal, o.gst, o.payout_amount,
                  (SELECT display_text FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
