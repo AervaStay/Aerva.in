@@ -308,11 +308,11 @@
       <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:14px;">Write a template like "Hi @guestname, check-in is at @checkin, checkout is @checkout. WiFi: @wifiname / @wifipassword. Access code: @accesscode." and these get filled in automatically with the real guest and booking details when you use it in a message.</p>
       <div class="field">
         <label for="checkInTime">Check-In Time</label>
-        <input id="checkInTime" type="text" placeholder="e.g. 2:00 PM">
+        <input id="checkInTime" type="time">
       </div>
       <div class="field">
         <label for="checkOutTime">Check-Out Time</label>
-        <input id="checkOutTime" type="text" placeholder="e.g. 11:00 AM">
+        <input id="checkOutTime" type="time">
       </div>
       <div class="field">
         <label for="wifiName">WiFi Network Name</label>
@@ -795,6 +795,37 @@
     return Math.round(num / currencyRates[pricingCurrency]);
   }
 
+  // Check-in/checkout time — stored and sent to guests as a clean
+  // "10:30 AM" string (readable in a message, unambiguous), but an
+  // <input type="time"> only accepts/returns 24-hour "HH:MM" — these
+  // convert between the two at the load/save boundary so the field
+  // itself stays a real time picker rather than free text a host could
+  // type as "1 P.M.", "13:00", "1pm", etc. inconsistently.
+  function time24To12(t){
+    if(!t || !/^\d{2}:\d{2}$/.test(t)) return '';
+    let [h, m] = t.split(':').map(Number);
+    const period = h >= 12 ? 'PM' : 'AM';
+    h = h % 12; if(h === 0) h = 12;
+    return `${h}:${String(m).padStart(2, '0')} ${period}`;
+  }
+  function time12To24(display){
+    if(!display) return '';
+    // Accepts "10:30 AM", "1:00PM", etc. — tolerant of a missing space
+    // and case, since this only needs to parse what THIS same page just
+    // saved (or a plain 24hr string, for old data saved before this
+    // change existed). Anything else just leaves the field blank rather
+    // than guessing at an ambiguous old free-text value.
+    const ampmMatch = display.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if(ampmMatch){
+      let h = Number(ampmMatch[1]); const m = ampmMatch[2]; const period = ampmMatch[3].toUpperCase();
+      if(period === 'PM' && h !== 12) h += 12;
+      if(period === 'AM' && h === 12) h = 0;
+      return `${String(h).padStart(2, '0')}:${m}`;
+    }
+    if(/^\d{2}:\d{2}$/.test(display.trim())) return display.trim();
+    return '';
+  }
+
   function populatePricingCurrencySelect(){
     const sel = document.getElementById('pricingCurrency');
     sel.innerHTML = Object.keys(SUPPORTED_CURRENCIES).map(code =>
@@ -888,8 +919,8 @@
       });
 
       document.getElementById('securityDeposit').value = l.security_deposit || '';
-      document.getElementById('checkInTime').value = l.check_in_time || '';
-      document.getElementById('checkOutTime').value = l.check_out_time || '';
+      document.getElementById('checkInTime').value = time12To24(l.check_in_time);
+      document.getElementById('checkOutTime').value = time12To24(l.check_out_time);
       document.getElementById('wifiName').value = l.wifi_name || '';
       document.getElementById('wifiPassword').value = l.wifi_password || '';
       document.getElementById('accessCode').value = l.access_code || '';
@@ -972,8 +1003,8 @@
           maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
           allowedPetTypes: petFriendlyYes.checked ? Array.from(document.querySelectorAll('input[name="petType"]:checked')).map(cb => cb.value) : [],
           petFee: petFriendlyYes.checked ? toInr(document.getElementById('petFee').value) : '',
-          checkInTime: document.getElementById('checkInTime').value,
-          checkOutTime: document.getElementById('checkOutTime').value,
+          checkInTime: time24To12(document.getElementById('checkInTime').value),
+          checkOutTime: time24To12(document.getElementById('checkOutTime').value),
           wifiName: document.getElementById('wifiName').value,
           wifiPassword: document.getElementById('wifiPassword').value,
           accessCode: document.getElementById('accessCode').value
