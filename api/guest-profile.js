@@ -143,6 +143,24 @@ module.exports = async (req, res) => {
   const guestId = requireGuest(req);
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
 
+  // This account's OWN host_id (if it has a linked hosts row) — needed
+  // anywhere this file checks "is this account the host of X." Listings,
+  // conversations, and orders all store host_id as a `hosts.id` value —
+  // a completely separate id space from `guests.id` (guestId above).
+  // Two spots below used to compare a hosts.id directly against guestId,
+  // which only ever "worked" by numeric coincidence (they're different
+  // sequences) — in practice a real host was almost never recognized as
+  // the host of their own conversation. Resolved once here so every
+  // mode below shares the same correct lookup rather than repeating
+  // (and risking re-breaking) the same comparison.
+  let myHostId = null;
+  try {
+    const hostRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+    myHostId = hostRows[0] ? hostRows[0].host_id : null;
+  } catch (err) {
+    console.error('Failed to resolve host_id for account', guestId, err);
+  }
+
   // ---- Fetch the full profile bundle, or a chat-related GET mode ----
   if (req.method === 'GET') {
     const mode = req.query.mode;
@@ -163,7 +181,7 @@ module.exports = async (req, res) => {
           return res.status(403).json({ error: 'A conversation only opens once a booking is confirmed.' });
         }
         const isGuest = order.guest_id === guestId;
-        const isHost = order.host_id === guestId;
+        const isHost = myHostId != null && order.host_id === myHostId;
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your booking.' });
 
         let convRows = await sql`SELECT id FROM conversations WHERE order_id = ${orderId}`;
@@ -196,21 +214,34 @@ module.exports = async (req, res) => {
         return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole: isGuest ? 'guest' : 'host', messages });
       }
 
-      if (mode === 'hostConversations') {
+      // Every conversation this account is part of — as host on some,
+      // as guest on others, both shown the same way. Same bug as above
+      // (c.host_id is a hosts.id, guestId is a guests.id) meant this used
+      // to only ever match by numeric coincidence — in practice the
+      // "Messages" inbox showed nothing for almost every real account,
+      // even ones with genuine conversations, regardless of role.
+      // my_role/counterpart_* let the frontend render one unified list
+      // instead of two separate host-only and guest-only surfaces.
+      if (mode === 'myConversations') {
         const conversations = await sql`
-          SELECT c.id, c.listing_id, c.order_id, c.guest_email, c.guest_id,
+          SELECT c.id, c.listing_id, c.order_id, c.guest_email, c.guest_id, c.host_id,
                  l.property_name, l.cover_photo_url,
-                 g.name AS guest_name, g.profile_photo_url AS guest_photo_url,
+                 CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END AS my_role,
+                 CASE WHEN c.host_id = ${myHostId} THEN COALESCE(g.name, c.guest_email) ELSE h.name END AS counterpart_name,
+                 CASE WHEN c.host_id = ${myHostId} THEN g.profile_photo_url ELSE NULL END AS counterpart_photo_url,
                  o.arrival, o.departure, o.status AS booking_status,
                  o.nights, o.guests, o.subtotal, o.gst, o.payout_amount,
                  (SELECT display_text FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
                  (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
-                 (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'guest' AND m.read_at IS NULL) AS unread_count
+                 (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id
+                    AND m.sender_type <> (CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END)
+                    AND m.read_at IS NULL) AS unread_count
           FROM conversations c
           JOIN listings l ON l.id = c.listing_id
           LEFT JOIN guests g ON g.id = c.guest_id
+          LEFT JOIN hosts h ON h.id = c.host_id
           LEFT JOIN orders o ON o.id = c.order_id
-          WHERE c.host_id = ${guestId}
+          WHERE c.guest_id = ${guestId} OR c.host_id = ${myHostId}
           ORDER BY last_message_at DESC NULLS LAST
         `;
         // Dates normalized here (see toDateStr's comment) so the
@@ -225,44 +256,50 @@ module.exports = async (req, res) => {
       }
 
       // Lightweight — just a single number, meant to be called from the
-      // main site's header on every page load for any logged-in host, so
-      // it deliberately avoids the fuller hostConversations query (which
+      // main site's header on every page load for any logged-in account,
+      // so it deliberately avoids the fuller myConversations query (which
       // pulls every conversation's last message) purely to check whether
-      // the little badge on the Messages icon should show at all.
+      // the little badge on the Messages icon should show at all. Counts
+      // unread messages from the OTHER party in either direction — as
+      // host waiting on a guest reply, or as guest waiting on a host reply.
       if (mode === 'unreadMessageCount') {
         const rows = await sql`
           SELECT COUNT(*) AS count
           FROM messages m
           JOIN conversations c ON c.id = m.conversation_id
-          WHERE c.host_id = ${guestId} AND m.sender_type = 'guest' AND m.read_at IS NULL
+          WHERE (c.host_id = ${myHostId} AND m.sender_type = 'guest' AND m.read_at IS NULL)
+             OR (c.guest_id = ${guestId} AND m.sender_type = 'host' AND m.read_at IS NULL)
         `;
         return res.status(200).json({ count: Number(rows[0]?.count || 0) });
       }
 
-      // Host inbox reads messages by conversationId directly, rather than
-      // orderId the way the guest side's initial "open a chat" call does
-      // (mode=conversation) — the inbox list doesn't carry an orderId
-      // along, only the conversation's own id.
-      if (mode === 'hostConversationMessages') {
+      // Reads a conversation's messages — either side can open this now
+      // (not host-only), since a normal messaging system doesn't gate
+      // "seeing your own conversation" by role.
+      if (mode === 'conversationMessages' || mode === 'hostConversationMessages') {
         const conversationId = Number(req.query.conversationId);
         if (!conversationId) return res.status(400).json({ error: 'Missing conversation.' });
-        const convRows = await sql`SELECT id, host_id FROM conversations WHERE id = ${conversationId}`;
+        const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${conversationId}`;
         const conv = convRows[0];
         if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
-        if (conv.host_id !== guestId) return res.status(403).json({ error: 'Not your conversation.' });
+        const isGuest = conv.guest_id === guestId;
+        const isHost = myHostId != null && conv.host_id === myHostId;
+        if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
 
         const messages = await sql`
           SELECT id, sender_type, display_text, was_redacted, created_at
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `;
-        // Opening a conversation is what actually marks it read — only
-        // the guest's own messages ever need this; a host reading their
-        // own sent messages isn't a meaningful "unread" state.
+        // Opening a conversation marks the OTHER party's messages read —
+        // whichever side I'm not on. Previously hardcoded to always mark
+        // 'guest' messages read, which only made sense back when this
+        // endpoint was host-only.
+        const otherSenderType = isHost ? 'guest' : 'host';
         await sql`
           UPDATE messages SET read_at = NOW()
-          WHERE conversation_id = ${conversationId} AND sender_type = 'guest' AND read_at IS NULL
+          WHERE conversation_id = ${conversationId} AND sender_type = ${otherSenderType} AND read_at IS NULL
         `;
-        return res.status(200).json({ messages });
+        return res.status(200).json({ messages, myRole: isHost ? 'host' : 'guest' });
       }
 
       if (mode === 'templates') {
@@ -286,11 +323,21 @@ module.exports = async (req, res) => {
         const convRows = await sql`SELECT id, guest_id, host_id, listing_id FROM conversations WHERE id = ${conversationId}`;
         const conv = convRows[0];
         if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
-        if (conv.guest_id !== guestId && conv.host_id !== guestId) return res.status(403).json({ error: 'Not your conversation.' });
+        if (conv.guest_id !== guestId && (myHostId == null || conv.host_id !== myHostId)) return res.status(403).json({ error: 'Not your conversation.' });
 
-        const templates = await sql`
+        // message_templates.host_id stores the owning account's own
+        // guests.id (see the 'templates'/'saveTemplate' modes below —
+        // they write/read it that way directly) — a DIFFERENT convention
+        // from conversations.host_id/listings.host_id, which store a
+        // hosts.id. Querying message_templates with conv.host_id
+        // directly (as this used to) compares the wrong id space and
+        // silently returns zero rows every time. This resolves the
+        // actual owning account first.
+        const ownerRows = await sql`SELECT id FROM guests WHERE host_id = ${conv.host_id}`;
+        const ownerGuestId = ownerRows[0] ? ownerRows[0].id : null;
+        const templates = ownerGuestId == null ? [] : await sql`
           SELECT id, body FROM message_templates
-          WHERE host_id = ${conv.host_id} AND (listing_id = ${conv.listing_id} OR listing_id IS NULL)
+          WHERE host_id = ${ownerGuestId} AND (listing_id = ${conv.listing_id} OR listing_id IS NULL)
           ORDER BY sort_order ASC, created_at ASC
         `;
         return res.status(200).json({ templates });
@@ -361,7 +408,7 @@ module.exports = async (req, res) => {
         const conv = convRows[0];
         if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
         const isGuest = conv.guest_id === guestId;
-        const isHost = conv.host_id === guestId;
+        const isHost = myHostId != null && conv.host_id === myHostId;
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
 
         // Which "hat" is this account wearing right now? Identity alone
@@ -443,7 +490,12 @@ module.exports = async (req, res) => {
         if (!safeBody) return res.status(400).json({ error: 'Template text can\'t be empty.' });
 
         if (listingId) {
-          const ownedRows = await sql`SELECT id FROM listings WHERE id = ${listingId} AND host_id = ${guestId}`;
+          // listings.host_id is a hosts.id (see myHostId's comment up
+          // top) — comparing it to guestId directly (as this used to)
+          // meant this ownership check would reject a real host's own
+          // listing almost every time, since guests.id and hosts.id are
+          // different sequences that rarely coincide numerically.
+          const ownedRows = myHostId != null ? await sql`SELECT id FROM listings WHERE id = ${listingId} AND host_id = ${myHostId}` : [];
           if (!ownedRows.length) return res.status(403).json({ error: 'Not your listing.' });
         }
 
