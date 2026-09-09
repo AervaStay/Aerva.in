@@ -2140,6 +2140,7 @@
              reply. Available as @guidance in template text too. -->
         <div id="inboxDescriptionTab" style="display:none; padding:16px 22px; overflow-y:auto; flex:1 1 auto; flex-direction:column;">
           <p style="font-size:12.5px; opacity:0.6; margin-bottom:14px;">Longer guidance for guests at a specific property — house rules, parking, quiet hours, local recommendations, anything that doesn't fit a short tappable template. Available as <code>@guidance</code> in your templates too.</p>
+          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">You can also use these keywords right here in your description, and they'll fill in with this property's real details: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code>. E.g. "Check-in is @checkin, checkout is @checkout. WiFi: @wifiname / @wifipassword."</p>
           <div class="field">
             <label>Property</label>
             <select id="inboxGuidanceListingSelect" style="width:100%; padding:9px 10px; border:1px solid var(--line-dark); background:#fff; font-family:'Jost', sans-serif; font-size:13px;">
@@ -2194,6 +2195,55 @@
     <div class="inbox-details-pane" id="inboxDetailsPane">
       <button type="button" class="inbox-icon-btn" id="inboxDetailsCloseBtn" aria-label="Close details" style="position:absolute; top:16px; right:16px;">&times;</button>
       <div id="inboxBookingDetailsBody" style="padding:22px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Login/signup gate shown right before payment for anyone not already
+     logged in — bookings are no longer allowed without an account (see
+     create-order.js's own hard enforcement of this; this modal is just
+     the UX side of it, opened inline so a guest doesn't lose their
+     in-progress dates/guest selections by navigating to a separate page). -->
+<div class="listing-modal-overlay" id="bookingLoginOverlay" style="display:none; z-index:600;">
+  <div class="listing-modal" style="max-width:400px;">
+    <button class="listing-modal-close" id="bookingLoginCloseBtn" aria-label="Close">&times;</button>
+    <div style="padding:36px 30px;">
+      <div id="bookingLoginFormView">
+        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Log In to Book</h3>
+        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">Please log in to complete your booking — this keeps your reservation tied to your own account.</p>
+        <div class="field">
+          <label for="bookingLoginEmail">Email</label>
+          <input type="email" id="bookingLoginEmail" autocomplete="email">
+        </div>
+        <div class="field" style="margin-top:14px;">
+          <label for="bookingLoginPassword">Password</label>
+          <input type="password" id="bookingLoginPassword" autocomplete="current-password">
+        </div>
+        <button type="button" class="btn" id="bookingLoginSubmitBtn" style="width:100%; margin-top:18px;">Log In</button>
+        <p id="bookingLoginError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
+        <p style="font-size:12.5px; margin-top:20px; text-align:center; opacity:0.75;">New to Aerva? <a href="#" id="bookingShowSignupLink" style="color:var(--gold-deep);">Create an account</a></p>
+      </div>
+
+      <div id="bookingSignupFormView" style="display:none;">
+        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Create Your Account</h3>
+        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">Takes a minute — you'll need to verify your email before logging in to finish this booking.</p>
+        <div class="field">
+          <label for="bookingSignupName">Name</label>
+          <input type="text" id="bookingSignupName" autocomplete="name">
+        </div>
+        <div class="field" style="margin-top:14px;">
+          <label for="bookingSignupEmail">Email</label>
+          <input type="email" id="bookingSignupEmail" autocomplete="email">
+        </div>
+        <div class="field" style="margin-top:14px;">
+          <label for="bookingSignupPassword">Password</label>
+          <input type="password" id="bookingSignupPassword" autocomplete="new-password">
+        </div>
+        <button type="button" class="btn" id="bookingSignupSubmitBtn" style="width:100%; margin-top:18px;">Create Account</button>
+        <p id="bookingSignupError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
+        <p id="bookingSignupSuccessMsg" style="color:#3a7d44; font-size:12.5px; margin-top:12px; display:none;"></p>
+        <p style="font-size:12.5px; margin-top:20px; text-align:center; opacity:0.75;">Already have an account? <a href="#" id="bookingShowLoginLink" style="color:var(--gold-deep);">Log in</a></p>
+      </div>
     </div>
   </div>
 </div>
@@ -2917,6 +2967,11 @@
       return;
     }
 
+    if(!guestAuthToken()){
+      requireLoginForBooking(() => document.getElementById('reserveForm').requestSubmit());
+      return;
+    }
+
     const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow).map(s => ({
       listingId: s.listingId, suite: s.suiteName, arrival: s.arrival, departure: s.departure, guests: s.guests,
       selectedAmenities: Object.entries(s.selectedAmenities).map(([amenityId, datesSet]) => ({
@@ -2931,7 +2986,7 @@
     try{
       const orderRes = await fetch(API_BASE + '/api/create-order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
         body: JSON.stringify({
           stays: stays,
           email: document.getElementById('email').value
@@ -5781,6 +5836,119 @@
   // ---- My Bookings + Chat ----
   function guestAuthToken(){ return localStorage.getItem('aerva_guest_session'); }
 
+  // ---- Login gate before payment ----
+  // Bookings are no longer allowed without an account at all (see
+  // create-order.js's own hard 401 if no session — this modal is the UX
+  // side of that, kept inline so a guest doesn't lose their in-progress
+  // dates/guest selections by navigating away to a separate login page).
+  let bookingLoginSuccessCallback = null;
+  function requireLoginForBooking(onSuccess){
+    if(guestAuthToken()){ onSuccess(); return; }
+    bookingLoginSuccessCallback = onSuccess;
+    document.getElementById('bookingLoginOverlay').style.display = 'flex';
+    document.getElementById('bookingLoginFormView').style.display = 'block';
+    document.getElementById('bookingSignupFormView').style.display = 'none';
+    document.getElementById('bookingLoginError').style.display = 'none';
+    document.getElementById('bookingLoginEmail').focus();
+  }
+  function closeBookingLoginGate(){
+    document.getElementById('bookingLoginOverlay').style.display = 'none';
+    bookingLoginSuccessCallback = null;
+  }
+  document.getElementById('bookingLoginCloseBtn').addEventListener('click', closeBookingLoginGate);
+  document.getElementById('bookingLoginOverlay').addEventListener('click', (e) => {
+    if(e.target.id === 'bookingLoginOverlay') closeBookingLoginGate();
+  });
+  document.getElementById('bookingShowSignupLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('bookingLoginFormView').style.display = 'none';
+    document.getElementById('bookingSignupFormView').style.display = 'block';
+  });
+  document.getElementById('bookingShowLoginLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('bookingSignupFormView').style.display = 'none';
+    document.getElementById('bookingLoginFormView').style.display = 'block';
+  });
+
+  document.getElementById('bookingLoginSubmitBtn').addEventListener('click', async () => {
+    const email = document.getElementById('bookingLoginEmail').value.trim();
+    const password = document.getElementById('bookingLoginPassword').value;
+    const errEl = document.getElementById('bookingLoginError');
+    const btn = document.getElementById('bookingLoginSubmitBtn');
+    errEl.style.display = 'none';
+    if(!email || !password){
+      errEl.textContent = 'Please enter your email and password.';
+      errEl.style.display = 'block';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Logging in…';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'login', email, password })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not log in.';
+        errEl.style.display = 'block';
+      } else {
+        localStorage.setItem('aerva_guest_session', data.sessionToken);
+        const cb = bookingLoginSuccessCallback;
+        closeBookingLoginGate();
+        if(cb) cb();
+      }
+    } catch(err){
+      errEl.textContent = 'Could not log in right now. Please try again.';
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Log In';
+  });
+
+  document.getElementById('bookingSignupSubmitBtn').addEventListener('click', async () => {
+    const name = document.getElementById('bookingSignupName').value.trim();
+    const email = document.getElementById('bookingSignupEmail').value.trim();
+    const password = document.getElementById('bookingSignupPassword').value;
+    const errEl = document.getElementById('bookingSignupError');
+    const successEl = document.getElementById('bookingSignupSuccessMsg');
+    const btn = document.getElementById('bookingSignupSubmitBtn');
+    errEl.style.display = 'none';
+    successEl.style.display = 'none';
+    if(!email || !password){
+      errEl.textContent = 'Please enter an email and password.';
+      errEl.style.display = 'block';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Creating account…';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'signup', email, password, name })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not create your account.';
+        errEl.style.display = 'block';
+      } else {
+        // No session is issued on signup — the account isn't usable
+        // until the verification link is clicked (see guest-auth.js).
+        // The guest has to come back and log in afterward; this can't
+        // seamlessly continue straight to payment the way a login can.
+        successEl.textContent = 'Account created — check your email for a verification link. Once verified, log in below to complete your booking.';
+        successEl.style.display = 'block';
+        document.getElementById('bookingSignupName').value = '';
+        document.getElementById('bookingSignupPassword').value = '';
+      }
+    } catch(err){
+      errEl.textContent = 'Could not create your account right now. Please try again.';
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Create Account';
+  });
+
   async function loadMyBookings(){
     const container = document.getElementById('myBookingsContainer');
     const token = guestAuthToken();
@@ -6332,10 +6500,9 @@
     '@wifiname': c => c.wifi_name || '(WiFi name not set yet)',
     '@wifipassword': c => c.wifi_password || '(WiFi password not set yet)',
     '@accesscode': c => c.access_code || '(access code not set yet)',
-    '@location': c => c.location_text || '(location not set yet)',
-    '@guidance': c => c.guest_guidance || '(no additional guidance set yet)'
+    '@location': c => c.location_text || '(location not set yet)'
   };
-  function resolveTemplatePlaceholders(text, conv){
+  function resolveBasePlaceholders(text, conv){
     let result = text;
     for(const [key, getValue] of Object.entries(TEMPLATE_PLACEHOLDERS)){
       if(result.toLowerCase().includes(key)){
@@ -6344,6 +6511,21 @@
         // occurrence.
         result = result.replace(new RegExp(key, 'gi'), getValue(conv));
       }
+    }
+    return result;
+  }
+  function resolveTemplatePlaceholders(text, conv){
+    let result = resolveBasePlaceholders(text, conv);
+    // @guidance is handled separately: the Description tab's own free
+    // text is allowed to contain the SAME keywords (@checkin, @wifiname,
+    // etc.) — a host writing "Welcome! @checkin / @checkout. WiFi:
+    // @wifiname" as their property description gets those filled in too,
+    // one level deep, before the whole thing is dropped into whatever
+    // template used @guidance.
+    if(result.toLowerCase().includes('@guidance')){
+      const rawGuidance = conv.guest_guidance || '(no additional guidance set yet)';
+      const resolvedGuidance = resolveBasePlaceholders(rawGuidance, conv);
+      result = result.replace(/@guidance/gi, resolvedGuidance);
     }
     return result;
   }
@@ -7850,6 +8032,11 @@
     errorEl.style.display = 'none';
     confirmEl.style.display = 'none';
 
+    if(!guestAuthToken()){
+      requireLoginForBooking(() => handleListingBookNow(listing));
+      return;
+    }
+
     const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
     if(!dates.arrival || !dates.departure){
       errorEl.textContent = 'Please select your arrival and departure dates first.';
@@ -7947,7 +8134,7 @@
     try {
       const orderRes = await fetch(API_BASE + '/api/create-order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
         body: JSON.stringify({
           stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, petTypes, serviceAnimals, youngLitterCount, selectedAmenities: selectedAmenitiesPayload }],
           experiences: selectedExperiencesPayload,
@@ -8425,6 +8612,11 @@
     errorEl.style.display = 'none';
     confirmEl.style.display = 'none';
 
+    if(!guestAuthToken()){
+      requireLoginForBooking(() => handleExperienceBookNow(exp));
+      return;
+    }
+
     const date = document.getElementById('expBookDate').value;
     if(!date){
       errorEl.textContent = 'Please choose a date for this experience.';
@@ -8452,7 +8644,7 @@
     try{
       const orderRes = await fetch(API_BASE + '/api/create-order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
         body: JSON.stringify({
           experiences: [{ listingId: exp.id, date, guests }],
           email,
