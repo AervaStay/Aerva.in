@@ -2102,6 +2102,7 @@
         </div>
         <div style="padding:16px 22px; overflow-y:auto; flex:1 1 auto;">
           <p style="font-size:12.5px; opacity:0.6; margin-bottom:14px;">Guests see these as tappable questions inside the chat window — write the ones you get asked most often (check-in time, WiFi, parking, etc.).</p>
+          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code>. Set check-in time, WiFi, and access code for each property from its "Manage" link in My Collection.</p>
           <div id="inboxTemplateListContainer"></div>
           <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px;">
             <input type="text" id="inboxTemplateBodyInput" placeholder="e.g. Check-in is 2 PM, checkout is 11 AM" style="padding:9px 10px; border:1px solid var(--line-dark); font-size:13px; font-family:'Jost', sans-serif;">
@@ -6276,6 +6277,36 @@
     document.getElementById('inboxPanel').classList.remove('details-open');
   });
 
+  // ---- Template keyword substitution ----
+  // A host writes "Hi @guestname, check-in is @checkin..." once, and it
+  // fills in real values for whichever specific conversation it's used
+  // in — the guest's actual name (the booker, always — see the comment
+  // on guest_display_name in guest-profile.js), and that listing's own
+  // check-in/checkout time, WiFi, access code, and address. Resolved at
+  // the moment a template is inserted, using the currently open
+  // conversation's own data, never a generic/global value.
+  const TEMPLATE_PLACEHOLDERS = {
+    '@guestname': c => c.guest_display_name || c.guest_email || 'Guest',
+    '@checkin': c => c.check_in_time || '(check-in time not set yet)',
+    '@checkout': c => c.check_out_time || '(check-out time not set yet)',
+    '@wifiname': c => c.wifi_name || '(WiFi name not set yet)',
+    '@wifipassword': c => c.wifi_password || '(WiFi password not set yet)',
+    '@accesscode': c => c.access_code || '(access code not set yet)',
+    '@location': c => c.location_text || '(location not set yet)'
+  };
+  function resolveTemplatePlaceholders(text, conv){
+    let result = text;
+    for(const [key, getValue] of Object.entries(TEMPLATE_PLACEHOLDERS)){
+      if(result.toLowerCase().includes(key)){
+        // Case-insensitive match (a host typing @GuestName shouldn't
+        // silently fail to substitute), literal replacement of every
+        // occurrence.
+        result = result.replace(new RegExp(key, 'gi'), getValue(conv));
+      }
+    }
+    return result;
+  }
+
   async function loadInboxChatTemplates(conversationId){
     const token = guestAuthToken();
     const row = document.getElementById('inboxChatTemplatesRow');
@@ -6289,7 +6320,9 @@
       row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${t.body}</button>`).join('');
       row.querySelectorAll('[data-template]').forEach(btn => {
         btn.addEventListener('click', () => {
-          document.getElementById('inboxChatInput').value = btn.dataset.template;
+          const conv = inboxConversations.find(c => c.id === inboxCurrentConversationId);
+          const resolved = conv ? resolveTemplatePlaceholders(btn.dataset.template, conv) : btn.dataset.template;
+          document.getElementById('inboxChatInput').value = resolved;
           document.getElementById('inboxChatInput').focus();
         });
       });
@@ -6297,6 +6330,7 @@
       row.innerHTML = '';
     }
   }
+
 
   async function sendInboxMessage(){
     const input = document.getElementById('inboxChatInput');
