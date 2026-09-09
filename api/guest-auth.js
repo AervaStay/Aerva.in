@@ -52,6 +52,7 @@ const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { verifyGoogleIdToken } = require('./_social-auth');
+const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -269,6 +270,46 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { mode, email, password, name, phone } = req.body || {};
+  const clientIp = getClientIp(req);
+
+  // ---- Does this email already have an account? ----
+  // Used by the "log in to book" gate in index.html: rather than making
+  // a guest guess whether they already have an account (and getting a
+  // deliberately-vague "incorrect email or password" if they pick
+  // wrong), the checkout flow asks for email first, checks here, then
+  // shows either the password field or the signup fields accordingly.
+  // Doesn't meaningfully expose anything signup itself doesn't already
+  // reveal (its own 409 "email already exists" response already tells
+  // an attacker the same fact) — just surfaces it earlier and kinder,
+  // for the person actually trying to book something.
+  //
+  // Rate limited by IP only (there's no "account" to lock out here,
+  // just a lookup) — caps how fast one source can harvest which emails
+  // are registered. Logged to audit_log itself (success: true always,
+  // it's not a pass/fail action) purely so this count has something to
+  // count against; nothing else reads these rows.
+  if (mode === 'check-email') {
+    if (!email || typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
+      return res.status(400).json({ error: 'Please enter a complete email address.' });
+    }
+    const recentChecks = await countRecentAttempts(sql, {
+      action: 'guest_check_email', windowMinutes: 15, byIp: clientIp
+    });
+    if (recentChecks >= 20) {
+      return res.status(429).json({ error: 'Too many attempts. Please try again in a few minutes.' });
+    }
+    try {
+      const rows = await sql`SELECT id FROM guests WHERE email = ${email.trim().toLowerCase()}`;
+      await logAudit(sql, {
+        action: 'guest_check_email', success: true, actorType: 'guest',
+        actorIdentifier: email.trim().toLowerCase(), metadata: { ip: clientIp }
+      });
+      return res.status(200).json({ exists: rows.length > 0 });
+    } catch (err) {
+      console.error('guest-auth (check-email) error:', err);
+      return res.status(500).json({ error: 'Could not check that email right now. Please try again.' });
+    }
+  }
 
   // ---- Resend a verification link ----
   if (mode === 'resend-verification') {
@@ -276,6 +317,19 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Please enter a complete email address, like you@gmail.com.' });
     }
     const cleanEmail = email.trim().toLowerCase();
+    // Prevents email-bombing one specific inbox with repeated
+    // verification links. Only counts actual sends (see below — this
+    // action is only logged when a real send happens), so this can't be
+    // used to probe which emails exist either.
+    const resendsForEmail = await countRecentAttempts(sql, {
+      action: 'guest_verification_resent', windowMinutes: 60, byEmail: cleanEmail
+    });
+    if (resendsForEmail >= 3) {
+      // Same generic success response as everywhere else in this mode —
+      // silently not sending another one rather than revealing a limit
+      // was hit, so this still can't be used to confirm the account exists.
+      return res.status(200).json({ success: true });
+    }
     try {
       const rows = await sql`SELECT id, email, email_verified FROM guests WHERE email = ${cleanEmail}`;
       const guest = rows[0];
@@ -288,7 +342,7 @@ module.exports = async (req, res) => {
         await sendVerificationEmail(guest, verifyTok);
         await logAudit(sql, {
           action: 'guest_verification_resent', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
-          targetType: 'guest', targetId: guest.id
+          targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
         });
       }
       return res.status(200).json({ success: true });
@@ -296,7 +350,7 @@ module.exports = async (req, res) => {
       console.error('guest-auth (resend-verification) error:', err);
       await logAudit(sql, {
         action: 'guest_verification_resent', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
-        metadata: { reason: 'server_error' }
+        metadata: { reason: 'server_error', ip: clientIp }
       });
       // Still return success — see note above — but log the real failure.
       return res.status(200).json({ success: true });
@@ -309,6 +363,15 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Please enter a complete email address, like you@gmail.com.' });
     }
     const cleanEmail = email.trim().toLowerCase();
+    // Same email-bombing protection as resend-verification above — only
+    // counts actual reset emails sent, so a nonexistent email is
+    // unaffected and reveals nothing either way.
+    const resetsForEmail = await countRecentAttempts(sql, {
+      action: 'guest_password_reset_requested', windowMinutes: 60, byEmail: cleanEmail
+    });
+    if (resetsForEmail >= 3) {
+      return res.status(200).json({ success: true });
+    }
     try {
       const rows = await sql`SELECT id, email FROM guests WHERE email = ${cleanEmail}`;
       const guest = rows[0];
@@ -322,7 +385,7 @@ module.exports = async (req, res) => {
         await sendPasswordResetEmail(guest, resetTok);
         await logAudit(sql, {
           action: 'guest_password_reset_requested', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
-          targetType: 'guest', targetId: guest.id
+          targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
         });
       }
       return res.status(200).json({ success: true });
@@ -410,12 +473,23 @@ module.exports = async (req, res) => {
 
   // ---- Sign up ----
   if (mode === 'signup') {
+    // By IP only — there's no existing account to rate-limit against yet
+    // (that's the whole point of signup), so this caps how many NEW
+    // accounts one source can spam-create rather than protecting an
+    // existing one.
+    const signupsByIp = await countRecentAttempts(sql, {
+      action: 'guest_signup', windowMinutes: 60, byIp: clientIp, onlyFailures: false
+    });
+    if (signupsByIp >= 8) {
+      return res.status(429).json({ error: 'Too many accounts created from this connection recently. Please try again later.' });
+    }
+
     try {
       const existing = await sql`SELECT id FROM guests WHERE email = ${cleanEmail}`;
       if (existing[0]) {
         await logAudit(sql, {
           action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
-          metadata: { reason: 'email_already_registered' }
+          metadata: { reason: 'email_already_registered', ip: clientIp }
         });
         return res.status(409).json({ error: 'An account with this email already exists. Try logging in instead.' });
       }
@@ -435,7 +509,7 @@ module.exports = async (req, res) => {
         console.error('guest-auth (signup) verification email failed:', emailErr);
         await logAudit(sql, {
           action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
-          metadata: { reason: 'verification_email_failed' }
+          metadata: { reason: 'verification_email_failed', ip: clientIp }
         });
         const message = emailErr.isUserFacing
           ? emailErr.message
@@ -445,7 +519,7 @@ module.exports = async (req, res) => {
 
       await logAudit(sql, {
         action: 'guest_signup', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
-        targetType: 'guest', targetId: guest.id
+        targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
       });
 
       // No session token here on purpose — the account isn't usable until
@@ -463,6 +537,24 @@ module.exports = async (req, res) => {
 
   // ---- Log in ----
   if (mode === 'login') {
+    // Checked before touching the database for the real attempt — a
+    // failed-attempts count by email catches one attacker guessing a
+    // single account's password; a broader count by IP (regardless of
+    // which email, success or fail) catches one attacker spraying
+    // credentials across many different accounts from the same source.
+    const failedByEmail = await countRecentAttempts(sql, {
+      action: 'guest_login', windowMinutes: 15, byEmail: cleanEmail, onlyFailures: true
+    });
+    if (failedByEmail >= 5) {
+      return res.status(429).json({ error: 'Too many failed login attempts on this account. Please try again in 15 minutes, or reset your password.' });
+    }
+    const attemptsByIp = await countRecentAttempts(sql, {
+      action: 'guest_login', windowMinutes: 15, byIp: clientIp
+    });
+    if (attemptsByIp >= 20) {
+      return res.status(429).json({ error: 'Too many attempts from this connection. Please try again in a few minutes.' });
+    }
+
     try {
       const rows = await sql`SELECT id, email, password_hash, name, phone, email_verified, account_type FROM guests WHERE email = ${cleanEmail}`;
       const guest = rows[0];
@@ -475,7 +567,7 @@ module.exports = async (req, res) => {
       if (!guest || !passwordMatches) {
         await logAudit(sql, {
           action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
-          metadata: { reason: !guest ? 'no_such_account' : 'wrong_password' }
+          metadata: { reason: !guest ? 'no_such_account' : 'wrong_password', ip: clientIp }
         });
         // Deliberately the same message either way — never reveal
         // whether the email itself is registered.
@@ -485,7 +577,7 @@ module.exports = async (req, res) => {
       if (!guest.email_verified) {
         await logAudit(sql, {
           action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
-          metadata: { reason: 'email_not_verified' }
+          metadata: { reason: 'email_not_verified', ip: clientIp }
         });
         return res.status(403).json({
           error: 'Please verify your email before logging in — check your inbox for the link we sent.',
@@ -496,7 +588,7 @@ module.exports = async (req, res) => {
       const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
       await logAudit(sql, {
         action: 'guest_login', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
-        targetType: 'guest', targetId: guest.id
+        targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
       });
 
       return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
@@ -510,5 +602,5 @@ module.exports = async (req, res) => {
     }
   }
 
-  return res.status(400).json({ error: 'Invalid request. mode must be "signup", "login", or "resend-verification".' });
+  return res.status(400).json({ error: 'Invalid request. mode must be "check-email", "signup", "login", or "resend-verification".' });
 };
