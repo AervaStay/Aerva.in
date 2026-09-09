@@ -79,7 +79,8 @@ module.exports = async (req, res) => {
                latitude, longitude, formatted_address,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                experience_price_unit, commission_rate,
-               check_in_time, check_out_time, wifi_name, wifi_password, access_code
+               check_in_time, check_out_time, wifi_name, wifi_password, access_code,
+               auto_send_checkin_instructions
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -100,7 +101,12 @@ module.exports = async (req, res) => {
         FROM listing_promotions WHERE listing_id = ${listingId} ORDER BY start_date ASC
       `;
 
-      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions });
+      const customFields = await sql`
+        SELECT id, field_label, field_value FROM listing_custom_fields
+        WHERE listing_id = ${listingId} ORDER BY sort_order ASC, created_at ASC
+      `;
+
+      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions, customFields });
     } catch (err) {
       console.error('update-listing-pricing (GET) error:', err);
       return res.status(500).json({ error: 'Could not load your listing right now. Please try again.' });
@@ -114,7 +120,8 @@ module.exports = async (req, res) => {
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, promotions,
               latitude, longitude, formattedAddress, city, area,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
-              checkInTime, checkOutTime, wifiName, wifiPassword, accessCode } = req.body || {};
+              checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
+              customFields, autoSendCheckinInstructions } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -233,7 +240,8 @@ module.exports = async (req, res) => {
           check_out_time = COALESCE(${safeCheckOutTime ?? null}, check_out_time),
           wifi_name = COALESCE(${safeWifiName ?? null}, wifi_name),
           wifi_password = COALESCE(${safeWifiPassword ?? null}, wifi_password),
-          access_code = COALESCE(${safeAccessCode ?? null}, access_code)
+          access_code = COALESCE(${safeAccessCode ?? null}, access_code),
+          auto_send_checkin_instructions = ${autoSendCheckinInstructions === true}
         WHERE id = ${listingId}
         RETURNING id, property_name, host_email
       `;
@@ -241,6 +249,46 @@ module.exports = async (req, res) => {
 
       if (rateChanged) {
         await sql`INSERT INTO price_history (listing_id, nightly_rate) VALUES (${listingId}, ${rate})`;
+      }
+
+      // ---- Sync dynamic custom check-in fields: same "submitted array
+      // is the full set" pattern as paid amenities below — matched rows
+      // update, unmatched-id rows are new, anything no longer present
+      // gets deleted. Order preserved via each row's position in the array.
+      if (Array.isArray(customFields)) {
+        try {
+          const existingFieldRows = await sql`SELECT id FROM listing_custom_fields WHERE listing_id = ${listingId}`;
+          const existingFieldIds = new Set(existingFieldRows.map(r => r.id));
+          const submittedFieldIds = new Set();
+
+          for (let i = 0; i < customFields.length; i++) {
+            const f = customFields[i];
+            const label = typeof f.label === 'string' ? f.label.trim().slice(0, 80) : '';
+            if (!label) continue; // a field with no label isn't meaningful — skip rather than fail the whole save
+            const value = typeof f.value === 'string' ? f.value.trim().slice(0, 300) : '';
+
+            if (f.id && existingFieldIds.has(Number(f.id))) {
+              await sql`
+                UPDATE listing_custom_fields SET field_label = ${label}, field_value = ${value}, sort_order = ${i}
+                WHERE id = ${Number(f.id)} AND listing_id = ${listingId}
+              `;
+              submittedFieldIds.add(Number(f.id));
+            } else {
+              await sql`
+                INSERT INTO listing_custom_fields (listing_id, field_label, field_value, sort_order)
+                VALUES (${listingId}, ${label}, ${value}, ${i})
+              `;
+            }
+          }
+          const fieldIdsToDelete = [...existingFieldIds].filter(id => !submittedFieldIds.has(id));
+          if (fieldIdsToDelete.length) {
+            await sql`DELETE FROM listing_custom_fields WHERE id = ANY(${fieldIdsToDelete}) AND listing_id = ${listingId}`;
+          }
+        } catch (fieldErr) {
+          console.error('Custom check-in fields sync failed:', fieldErr);
+          // Doesn't fail the whole save — the rest of the listing's
+          // changes (price, photos, etc.) already succeeded above.
+        }
       }
 
       // ---- Sync paid amenities: the submitted array becomes the full

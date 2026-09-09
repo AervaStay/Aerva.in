@@ -228,6 +228,15 @@ module.exports = async (req, res) => {
                  l.property_name, l.cover_photo_url,
                  l.check_in_time, l.check_out_time, l.wifi_name, l.wifi_password, l.access_code, l.guest_guidance,
                  COALESCE(l.formatted_address, NULLIF(TRIM(CONCAT_WS(', ', l.area, l.city)), '')) AS location_text,
+                 -- Aggregated into one JSON array per conversation so the
+                 -- @checkininfo placeholder (see resolveTemplatePlaceholders
+                 -- in index.html / resolveTemplateText in
+                 -- _template-scheduling.js) can assemble the fixed fields
+                 -- above PLUS every host-defined custom field into one
+                 -- readable block — same assembly manage-listing.html's
+                 -- own live preview builds, kept in sync by hand.
+                 (SELECT COALESCE(json_agg(json_build_object('label', field_label, 'value', field_value) ORDER BY sort_order), '[]'::json)
+                    FROM listing_custom_fields WHERE listing_id = l.id) AS custom_fields,
                  CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END AS my_role,
                  CASE WHEN c.host_id = ${myHostId} THEN COALESCE(g.name, c.guest_email) ELSE h.name END AS counterpart_name,
                  CASE WHEN c.host_id = ${myHostId} THEN g.profile_photo_url ELSE NULL END AS counterpart_photo_url,

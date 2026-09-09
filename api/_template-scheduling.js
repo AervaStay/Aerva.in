@@ -37,6 +37,23 @@ function resolveBasePlaceholders(text, data) {
   return result;
 }
 
+// Assembles the fixed check-in fields plus every host-defined custom
+// field into one readable block — exactly what manage-listing.html's own
+// live preview builds, and what index.html's client-side resolver builds
+// for a host manually inserting @checkininfo. Kept in sync by hand
+// across these three separate files, same as every other placeholder.
+function buildCheckinInstructionsText(data) {
+  const lines = [];
+  if (data.checkInTime) lines.push(`Check-in: ${data.checkInTime}`);
+  if (data.checkOutTime) lines.push(`Check-out: ${data.checkOutTime}`);
+  if (data.wifiName || data.wifiPassword) lines.push(`WiFi: ${data.wifiName || '—'} / ${data.wifiPassword || '—'}`);
+  if (data.accessCode) lines.push(`Access code: ${data.accessCode}`);
+  (Array.isArray(data.customFields) ? data.customFields : []).forEach(f => {
+    if (f.field_label && f.field_value) lines.push(`${f.field_label}: ${f.field_value}`);
+  });
+  return lines.length ? lines.join('\n') : '(check-in instructions not set yet)';
+}
+
 function resolveTemplateText(text, data) {
   let result = resolveBasePlaceholders(text, data);
   // @guidance is handled separately — the Description tab's own free
@@ -49,6 +66,10 @@ function resolveTemplateText(text, data) {
     const rawGuidance = data.guestGuidance || '(no additional guidance set yet)';
     const resolvedGuidance = resolveBasePlaceholders(rawGuidance, data);
     result = result.replace(/@guidance/gi, resolvedGuidance);
+  }
+  // @checkininfo — the assembled fixed-fields-plus-custom-fields block.
+  if (result.toLowerCase().includes('@checkininfo')) {
+    result = result.replace(/@checkininfo/gi, buildCheckinInstructionsText(data));
   }
   return result;
 }
@@ -64,7 +85,8 @@ async function sendBookingConfirmedTemplates(sql, order) {
 
     const listingRows = await sql`
       SELECT id, host_id, formatted_address, area, city,
-             check_in_time, check_out_time, wifi_name, wifi_password, access_code, guest_guidance
+             check_in_time, check_out_time, wifi_name, wifi_password, access_code, guest_guidance,
+             auto_send_checkin_instructions
       FROM listings WHERE id = ${order.listing_id}
     `;
     const listing = listingRows[0];
@@ -82,13 +104,19 @@ async function sendBookingConfirmedTemplates(sql, order) {
       SELECT id, body, auto_send_listing_ids FROM message_templates
       WHERE host_id = ${owner.id} AND send_on_booking_confirmed = true
     `;
-    if (!templates.length) return;
-
-    const applicable = templates.filter(t => {
+    const applicableTemplates = templates.filter(t => {
       const ids = Array.isArray(t.auto_send_listing_ids) ? t.auto_send_listing_ids : [];
       return ids.length === 0 || ids.includes(listing.id);
     });
-    if (!applicable.length) return;
+
+    // Nothing to send at all — skip the conversation lookup/creation
+    // entirely rather than creating an empty thread for no reason.
+    if (!applicableTemplates.length && !listing.auto_send_checkin_instructions) return;
+
+    const customFieldRows = await sql`
+      SELECT field_label, field_value FROM listing_custom_fields
+      WHERE listing_id = ${listing.id} ORDER BY sort_order ASC
+    `;
 
     let guestName = order.guest_email;
     if (order.guest_id) {
@@ -103,7 +131,8 @@ async function sendBookingConfirmedTemplates(sql, order) {
       guestName, guestEmail: order.guest_email,
       checkInTime: listing.check_in_time, checkOutTime: listing.check_out_time,
       wifiName: listing.wifi_name, wifiPassword: listing.wifi_password,
-      accessCode: listing.access_code, locationText, guestGuidance: listing.guest_guidance
+      accessCode: listing.access_code, locationText, guestGuidance: listing.guest_guidance,
+      customFields: customFieldRows
     };
 
     // Same find-or-create pattern as guest-profile.js's mode=conversation
@@ -123,11 +152,23 @@ async function sendBookingConfirmedTemplates(sql, order) {
       conversationId = inserted[0].id;
     }
 
-    for (const t of applicable) {
+    for (const t of applicableTemplates) {
       const resolvedText = resolveTemplateText(t.body, placeholderData);
       await sql`
         INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
         VALUES (${conversationId}, 'host', ${resolvedText}, ${resolvedText}, false)
+      `;
+    }
+
+    // A dedicated, self-contained auto-send — separate from the general
+    // template mechanism above, since this one doesn't need the host to
+    // have authored anything at all. Just the assembled check-in
+    // instructions, generated fresh from whatever's currently filled in.
+    if (listing.auto_send_checkin_instructions) {
+      const instructionsText = buildCheckinInstructionsText(placeholderData);
+      await sql`
+        INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
+        VALUES (${conversationId}, 'host', ${instructionsText}, ${instructionsText}, false)
       `;
     }
   } catch (err) {
@@ -135,4 +176,4 @@ async function sendBookingConfirmedTemplates(sql, order) {
   }
 }
 
-module.exports = { resolveTemplateText, sendBookingConfirmedTemplates };
+module.exports = { resolveTemplateText, buildCheckinInstructionsText, sendBookingConfirmedTemplates };
