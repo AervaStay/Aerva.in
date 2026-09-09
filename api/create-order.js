@@ -264,6 +264,16 @@ module.exports = async (req, res) => {
     }
 
     const guestId = getOptionalGuestId(req);
+    // Booking without an account is no longer allowed at all — every
+    // order must be tied to a real, logged-in guest_id, not created
+    // anonymously and only loosely associated by email. The frontend
+    // gates this too (prompting login before payment even starts), but
+    // that's just UX — this is the actual enforcement, since a request
+    // could otherwise skip the frontend entirely and hit this endpoint
+    // directly with no session at all.
+    if (!guestId) {
+      return res.status(401).json({ error: 'Please log in or create an account to complete your booking.' });
+    }
     // Resolved once, reused for the "can't book your own property" check
     // on every stay/experience below — listings.host_id is a hosts.id,
     // a different id space from guests.id (guestId), so this can't be
