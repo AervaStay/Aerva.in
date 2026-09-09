@@ -2117,8 +2117,18 @@
           <p style="font-size:12.5px; opacity:0.6; margin-bottom:14px;">Guests see these as tappable questions inside the chat window — write the ones you get asked most often (check-in time, WiFi, parking, etc.).</p>
           <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code> <code>@guidance</code>. Set check-in time, WiFi, and access code for each property from its "Manage" link in My Collection.</p>
           <div id="inboxTemplateListContainer"></div>
-          <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px;">
+          <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line-dark);">
             <input type="text" id="inboxTemplateBodyInput" placeholder="e.g. Check-in is 2 PM, checkout is 11 AM" style="padding:9px 10px; border:1px solid var(--line-dark); font-size:13px; font-family:'Jost', sans-serif;">
+            <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; cursor:pointer;">
+              <input type="checkbox" id="inboxTemplateScheduleToggle">
+              Send this automatically once a guest confirms a booking
+            </label>
+            <div id="inboxTemplateScheduleOptions" style="display:none; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark); flex-direction:column; gap:8px;">
+              <p style="font-size:11.5px; opacity:0.6; margin:0;">For which properties? Leave all unchecked to apply to every property you host.</p>
+              <div id="inboxTemplateScheduleListings" style="display:flex; flex-direction:column; gap:6px;">
+                <p style="font-size:12px; opacity:0.5; margin:0;">Loading your properties…</p>
+              </div>
+            </div>
             <button type="button" class="filter-clear" id="inboxAddTemplateBtn" style="align-self:flex-start;">Add Template</button>
           </div>
           <p id="inboxTemplateSaveMsg" style="font-size:12px; margin-top:8px; display:none;"></p>
@@ -6405,6 +6415,9 @@
     document.querySelector('[data-guest-info-tab="inboxTemplatesTab"]').classList.add('active');
     document.getElementById('inboxTemplatesTab').style.display = 'block';
     document.getElementById('inboxDescriptionTab').style.display = 'none';
+    document.getElementById('inboxTemplateScheduleToggle').checked = false;
+    document.getElementById('inboxTemplateScheduleOptions').style.display = 'none';
+    inboxTemplateScheduleListingsLoaded = false; // refetch fresh each time the panel reopens, not stale from an earlier session
     loadInboxTemplateManager();
   });
   document.getElementById('inboxTemplatesCloseBtn').addEventListener('click', () => {
@@ -6497,12 +6510,21 @@
         container.innerHTML = '<p style="font-size:12.5px; opacity:0.6;">No templates yet — add one below.</p>';
         return;
       }
-      container.innerHTML = templates.map(t => `
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid var(--line-dark);">
-          <span style="font-size:13px;">${t.body}</span>
+      container.innerHTML = templates.map(t => {
+        const ids = Array.isArray(t.auto_send_listing_ids) ? t.auto_send_listing_ids : [];
+        const scheduleNote = t.send_on_booking_confirmed
+          ? `<div style="font-size:11px; color:var(--gold-deep); margin-top:3px;">Auto-sends on booking confirmed${ids.length ? ` · ${ids.length} propert${ids.length === 1 ? 'y' : 'ies'}` : ' · all properties'}</div>`
+          : '';
+        return `
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid var(--line-dark);">
+          <div>
+            <span style="font-size:13px;">${t.body}</span>
+            ${scheduleNote}
+          </div>
           <button type="button" class="inbox-icon-btn" data-delete-template="${t.id}" aria-label="Delete" style="width:26px; height:26px; flex:0 0 auto;">&times;</button>
         </div>
-      `).join('');
+      `;
+      }).join('');
       container.querySelectorAll('[data-delete-template]').forEach(btn => {
         btn.addEventListener('click', async () => {
           try{
@@ -6519,17 +6541,52 @@
       container.innerHTML = '<p style="font-size:12.5px; color:#a3402f;">Could not load templates.</p>';
     }
   }
+
+  // ---- Auto-send scheduling: property checklist, shown when the
+  // "send automatically" checkbox is ticked ----
+  let inboxTemplateScheduleListingsLoaded = false;
+  document.getElementById('inboxTemplateScheduleToggle').addEventListener('change', function(){
+    const optionsEl = document.getElementById('inboxTemplateScheduleOptions');
+    optionsEl.style.display = this.checked ? 'flex' : 'none';
+    if(this.checked && !inboxTemplateScheduleListingsLoaded) loadInboxTemplateScheduleListings();
+  });
+  async function loadInboxTemplateScheduleListings(){
+    const token = guestAuthToken();
+    const container = document.getElementById('inboxTemplateScheduleListings');
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myListingsGuidance', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      const listings = data.listings || [];
+      inboxTemplateScheduleListingsLoaded = true;
+      if(!listings.length){
+        container.innerHTML = '<p style="font-size:12px; opacity:0.5; margin:0;">You don\'t have any properties yet.</p>';
+        return;
+      }
+      container.innerHTML = listings.map(l => `
+        <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; cursor:pointer;">
+          <input type="checkbox" class="inbox-template-schedule-listing" value="${l.id}"> ${l.property_name}
+        </label>
+      `).join('');
+    } catch(err){
+      container.innerHTML = '<p style="font-size:12px; color:#a3402f; margin:0;">Could not load your properties.</p>';
+    }
+  }
+
   document.getElementById('inboxAddTemplateBtn').addEventListener('click', async () => {
     const token = guestAuthToken();
     const input = document.getElementById('inboxTemplateBodyInput');
     const body = input.value.trim();
     const msgEl = document.getElementById('inboxTemplateSaveMsg');
+    const scheduleOn = document.getElementById('inboxTemplateScheduleToggle').checked;
+    const selectedListingIds = Array.from(document.querySelectorAll('.inbox-template-schedule-listing:checked')).map(cb => Number(cb.value));
     if(!body) return;
     try{
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ mode: 'saveTemplate', body })
+        body: JSON.stringify({ mode: 'saveTemplate', body, sendOnBookingConfirmed: scheduleOn, autoSendListingIds: selectedListingIds })
       });
       const data = await res.json();
       msgEl.style.display = 'block';
@@ -6537,6 +6594,9 @@
         msgEl.textContent = 'Template added.';
         msgEl.style.color = '#3a7d44';
         input.value = '';
+        document.getElementById('inboxTemplateScheduleToggle').checked = false;
+        document.getElementById('inboxTemplateScheduleOptions').style.display = 'none';
+        document.querySelectorAll('.inbox-template-schedule-listing').forEach(cb => { cb.checked = false; });
         loadInboxTemplateManager();
       } else {
         msgEl.textContent = data.error || 'Could not save template.';
