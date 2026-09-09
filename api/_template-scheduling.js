@@ -24,16 +24,31 @@ const TEMPLATE_PLACEHOLDER_MAP = {
   '@wifiname': d => d.wifiName || '(WiFi name not set yet)',
   '@wifipassword': d => d.wifiPassword || '(WiFi password not set yet)',
   '@accesscode': d => d.accessCode || '(access code not set yet)',
-  '@location': d => d.locationText || '(location not set yet)',
-  '@guidance': d => d.guestGuidance || '(no additional guidance set yet)'
+  '@location': d => d.locationText || '(location not set yet)'
 };
 
-function resolveTemplateText(text, data) {
+function resolveBasePlaceholders(text, data) {
   let result = text;
   for (const [key, getValue] of Object.entries(TEMPLATE_PLACEHOLDER_MAP)) {
     if (result.toLowerCase().includes(key)) {
       result = result.replace(new RegExp(key, 'gi'), getValue(data));
     }
+  }
+  return result;
+}
+
+function resolveTemplateText(text, data) {
+  let result = resolveBasePlaceholders(text, data);
+  // @guidance is handled separately — the Description tab's own free
+  // text may itself contain @checkin/@wifiname/etc. (a host writing
+  // their property description using the same keywords), resolved one
+  // level deep before being dropped into whatever template used
+  // @guidance. Kept in sync with index.html's identical client-side
+  // logic (resolveTemplatePlaceholders/resolveBasePlaceholders there).
+  if (result.toLowerCase().includes('@guidance')) {
+    const rawGuidance = data.guestGuidance || '(no additional guidance set yet)';
+    const resolvedGuidance = resolveBasePlaceholders(rawGuidance, data);
+    result = result.replace(/@guidance/gi, resolvedGuidance);
   }
   return result;
 }
