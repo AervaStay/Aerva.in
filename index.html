@@ -5942,6 +5942,32 @@
   // translated once this session.
   let inboxTranslationCache = {};
 
+  // Shared by page load AND by every action that actually changes the
+  // read state (opening a conversation, sending, closing the overlay) —
+  // previously this only ever ran once at page load, so reading a
+  // message did nothing to the badge until a full page refresh. Now it's
+  // called right after the read state changes, so the count reflects
+  // reality without needing a reload.
+  function refreshMessagesBadge(){
+    const badge = document.getElementById('hostMessagesUnreadBadge');
+    const token = guestAuthToken();
+    if(!badge || !token) return;
+    fetch(SUITES_API_BASE + '/api/guest-profile?mode=unreadMessageCount', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(countData => {
+        if(!countData) return;
+        if(countData.count > 0){
+          badge.textContent = countData.count > 9 ? '9+' : String(countData.count);
+          badge.style.display = 'block';
+        } else {
+          badge.style.display = 'none';
+        }
+      })
+      .catch(() => {}); // Non-fatal — badge just keeps its last known value.
+  }
+
   function openInboxOverlay(){
     document.getElementById('inboxOverlay').classList.add('open');
     document.body.style.overflow = 'hidden';
@@ -5950,6 +5976,7 @@
   function closeInboxOverlay(){
     document.getElementById('inboxOverlay').classList.remove('open');
     document.body.style.overflow = '';
+    refreshMessagesBadge(); // catches any reads that happened while it was open
   }
   document.getElementById('hostMessagesIcon').addEventListener('click', (e) => {
     e.preventDefault();
@@ -6125,6 +6152,7 @@
       const conv = inboxConversations.find(c => c.id === inboxCurrentConversationId);
       if(conv) conv.unread_count = 0;
       renderInboxConversationList();
+      refreshMessagesBadge(); // the header icon's count should drop the moment these are marked read, not just when the overlay closes
     } catch(err){
       container.innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not open this conversation.</p>';
     }
@@ -9297,21 +9325,7 @@
           const hostMessagesIcon = document.getElementById('hostMessagesIcon');
           if(hostMessagesIcon){
             hostMessagesIcon.style.display = 'flex';
-            fetch(SUITES_API_BASE + '/api/guest-profile?mode=unreadMessageCount', {
-              headers: { 'Authorization': 'Bearer ' + token }
-            })
-              .then(r => r.ok ? r.json() : null)
-              .then(countData => {
-                const badge = document.getElementById('hostMessagesUnreadBadge');
-                if(!badge || !countData) return;
-                if(countData.count > 0){
-                  badge.textContent = countData.count > 9 ? '9+' : String(countData.count);
-                  badge.style.display = 'block';
-                } else {
-                  badge.style.display = 'none';
-                }
-              })
-              .catch(() => {}); // Non-fatal — the icon just shows with no badge.
+            refreshMessagesBadge();
           }
           // Location prompt, once per browser, only for a confirmed
           // logged-in guest — see promptLocationOnceForGuest for the
