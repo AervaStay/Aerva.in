@@ -78,7 +78,8 @@ module.exports = async (req, res) => {
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
-               experience_price_unit, commission_rate
+               experience_price_unit, commission_rate,
+               check_in_time, check_out_time, wifi_name, wifi_password, access_code
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -112,7 +113,8 @@ module.exports = async (req, res) => {
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, promotions,
               latitude, longitude, formattedAddress, city, area,
-              petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit } = req.body || {};
+              petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
+              checkInTime, checkOutTime, wifiName, wifiPassword, accessCode } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -193,6 +195,20 @@ module.exports = async (req, res) => {
       // than needing the same "not sent at all" handling pet policy needs.
       const finalSecurityDeposit = securityDeposit && Number(securityDeposit) > 0 ? Number(securityDeposit) : null;
 
+      // Guest-info fields — used to fill in @checkin/@checkout/@wifiname/
+      // @wifipassword/@accesscode when a host inserts a quick-reply
+      // template (see guest-profile.js's myConversations / index.html's
+      // template-placeholder resolver). Same "undefined = not sent this
+      // time, leave alone" pattern as location above — an unrelated
+      // price-only save shouldn't blank these out. An explicit empty
+      // string, though, does clear the field (a host removing a value
+      // they'd set before).
+      const safeCheckInTime = typeof checkInTime === 'string' ? checkInTime.trim().slice(0, 50) : undefined;
+      const safeCheckOutTime = typeof checkOutTime === 'string' ? checkOutTime.trim().slice(0, 50) : undefined;
+      const safeWifiName = typeof wifiName === 'string' ? wifiName.trim().slice(0, 100) : undefined;
+      const safeWifiPassword = typeof wifiPassword === 'string' ? wifiPassword.trim().slice(0, 100) : undefined;
+      const safeAccessCode = typeof accessCode === 'string' ? accessCode.trim().slice(0, 100) : undefined;
+
       const updated = await sql`
         UPDATE listings SET
           nightly_rate = ${rate},
@@ -212,7 +228,12 @@ module.exports = async (req, res) => {
           pet_friendly = ${finalPetFriendly}, max_pets_allowed = ${finalMaxPets},
           allowed_pet_types = ${JSON.stringify(finalPetTypes)}, pet_fee = ${finalPetFee},
           security_deposit = ${finalSecurityDeposit},
-          experience_price_unit = COALESCE(${(experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : null}, experience_price_unit)
+          experience_price_unit = COALESCE(${(experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : null}, experience_price_unit),
+          check_in_time = COALESCE(${safeCheckInTime ?? null}, check_in_time),
+          check_out_time = COALESCE(${safeCheckOutTime ?? null}, check_out_time),
+          wifi_name = COALESCE(${safeWifiName ?? null}, wifi_name),
+          wifi_password = COALESCE(${safeWifiPassword ?? null}, wifi_password),
+          access_code = COALESCE(${safeAccessCode ?? null}, access_code)
         WHERE id = ${listingId}
         RETURNING id, property_name, host_email
       `;
