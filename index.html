@@ -910,6 +910,23 @@
   .inbox-conv-time{font-size:11px; opacity:0.5; flex:0 0 auto; white-space:nowrap;}
   .inbox-conv-unread-dot{width:9px; height:9px; border-radius:50%; background:var(--gold-deep); flex:0 0 auto; align-self:center;}
   .inbox-chat-pane{flex:1 1 auto; display:flex; flex-direction:column; min-width:0;}
+  /* Hidden by default — shown by adding .details-open on .inbox-panel
+     (see the Details button's click handler). Docked as a real flex
+     sibling, not an overlay: opening it shrinks the chat pane to make
+     room rather than covering the conversation you're already reading,
+     so both stay visible and usable side by side. */
+  .inbox-details-pane{
+    display:none; flex:0 0 300px; border-left:1px solid var(--line-dark);
+    background:#fff; position:relative; overflow-y:auto;
+  }
+  .inbox-panel.details-open .inbox-details-pane{display:block;}
+  @media (max-width:960px){
+    /* Not enough room for three columns at once on a narrower desktop/
+       tablet width — the details pane takes over the chat pane's spot
+       instead of squeezing in beside it. */
+    .inbox-panel.details-open .inbox-chat-pane{display:none;}
+    .inbox-details-pane{flex:1 1 auto;}
+  }
   .inbox-chat-placeholder{margin:auto; font-size:13.5px; opacity:0.55; text-align:center; padding:0 40px;}
   .inbox-chat-header{
     padding:20px 24px; border-bottom:1px solid var(--line-dark); flex:0 0 auto;
@@ -2127,16 +2144,16 @@
         </div>
       </div>
     </div>
-  </div>
-</div>
 
-<!-- Booking details popup for the inbox's "Details" button — a lighter
-     version of host-dashboard.html's own popup, using only the fields
-     hostConversations already returns (no second round-trip needed). -->
-<div class="listing-modal-overlay" id="inboxBookingDetailsOverlay" style="display:none;">
-  <div class="listing-modal" style="max-width:420px;">
-    <button class="listing-modal-close" id="inboxBookingDetailsCloseBtn" aria-label="Close">&times;</button>
-    <div id="inboxBookingDetailsBody" style="padding-top:20px;"></div>
+    <!-- Booking details — an inline panel docked to the right of the
+         chat, not a full-screen modal, so clicking "Details" doesn't
+         cover or close the conversation you're already reading. The
+         chat pane itself shrinks to make room (see .inbox-panel.details-open
+         in the CSS) rather than this panel floating on top of it. -->
+    <div class="inbox-details-pane" id="inboxDetailsPane">
+      <button type="button" class="inbox-icon-btn" id="inboxDetailsCloseBtn" aria-label="Close details" style="position:absolute; top:16px; right:16px;">&times;</button>
+      <div id="inboxBookingDetailsBody" style="padding:22px;"></div>
+    </div>
   </div>
 </div>
 
@@ -5975,6 +5992,7 @@
   }
   function closeInboxOverlay(){
     document.getElementById('inboxOverlay').classList.remove('open');
+    document.getElementById('inboxPanel').classList.remove('details-open', 'chat-open');
     document.body.style.overflow = '';
     refreshMessagesBadge(); // catches any reads that happened while it was open
   }
@@ -6117,6 +6135,7 @@
     inboxCurrentRole = conv.my_role || 'host';
     inboxTranslationCache = {}; // fresh conversation, fresh cache
     document.getElementById('inboxPanel').classList.add('chat-open'); // mobile: swap to chat pane
+    document.getElementById('inboxPanel').classList.remove('details-open'); // stale details for the PREVIOUS conversation shouldn't linger
     document.getElementById('inboxChatPlaceholder').style.display = 'none';
     document.getElementById('inboxChatContent').style.display = 'flex';
     document.getElementById('inboxChatName').textContent = conv.property_name || 'Aerva';
@@ -6251,13 +6270,10 @@
         <div style="display:flex; justify-content:space-between;"><span style="opacity:0.6;">${isHostView ? 'Contact' : 'Host Contact'}</span><span>${isHostView ? conv.guest_email : (conv.counterpart_name || '—')}</span></div>
       </div>
     `;
-    document.getElementById('inboxBookingDetailsOverlay').style.display = 'flex';
+    document.getElementById('inboxPanel').classList.add('details-open');
   }
-  document.getElementById('inboxBookingDetailsCloseBtn').addEventListener('click', () => {
-    document.getElementById('inboxBookingDetailsOverlay').style.display = 'none';
-  });
-  document.getElementById('inboxBookingDetailsOverlay').addEventListener('click', (e) => {
-    if(e.target.id === 'inboxBookingDetailsOverlay') document.getElementById('inboxBookingDetailsOverlay').style.display = 'none';
+  document.getElementById('inboxDetailsCloseBtn').addEventListener('click', () => {
+    document.getElementById('inboxPanel').classList.remove('details-open');
   });
 
   async function loadInboxChatTemplates(conversationId){
