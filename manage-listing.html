@@ -282,6 +282,29 @@
         </div>
       </div>
 
+
+      <div class="eyebrow" style="margin-top:24px;">Guest Check-In Info <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(used to auto-fill your quick-reply message templates)</span></div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:14px;">Write a template like "Hi @guestname, check-in is at @checkin, checkout is @checkout. WiFi: @wifiname / @wifipassword. Access code: @accesscode." and these get filled in automatically with the real guest and booking details when you use it in a message.</p>
+      <div class="field">
+        <label for="checkInTime">Check-In Time</label>
+        <input id="checkInTime" type="text" placeholder="e.g. 2:00 PM">
+      </div>
+      <div class="field">
+        <label for="checkOutTime">Check-Out Time</label>
+        <input id="checkOutTime" type="text" placeholder="e.g. 11:00 AM">
+      </div>
+      <div class="field">
+        <label for="wifiName">WiFi Network Name</label>
+        <input id="wifiName" type="text" placeholder="e.g. Boho_Vibes_5G">
+      </div>
+      <div class="field">
+        <label for="wifiPassword">WiFi Password</label>
+        <input id="wifiPassword" type="text" placeholder="e.g. welcomehome123">
+      </div>
+      <div class="field">
+        <label for="accessCode">Access / Door Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(lockbox, gate, building entry, etc.)</span></label>
+        <input id="accessCode" type="text" placeholder="e.g. 4521#">
+      </div>
       <div class="eyebrow" style="margin-top:24px;">Paid Amenities <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(guests pay extra to add these at checkout)</span></div>
       <div id="paidAmenitiesList"></div>
       <button type="button" class="add-paid-amenity-btn" id="addPaidAmenityBtn">+ Add a Paid Amenity</button>
@@ -847,6 +870,11 @@
       });
 
       document.getElementById('securityDeposit').value = l.security_deposit || '';
+      document.getElementById('checkInTime').value = l.check_in_time || '';
+      document.getElementById('checkOutTime').value = l.check_out_time || '';
+      document.getElementById('wifiName').value = l.wifi_name || '';
+      document.getElementById('wifiPassword').value = l.wifi_password || '';
+      document.getElementById('accessCode').value = l.access_code || '';
 
       if(l.pet_friendly === true){
         petFriendlyYes.checked = true;
@@ -925,7 +953,12 @@
           petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
           maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
           allowedPetTypes: petFriendlyYes.checked ? Array.from(document.querySelectorAll('input[name="petType"]:checked')).map(cb => cb.value) : [],
-          petFee: petFriendlyYes.checked ? toInr(document.getElementById('petFee').value) : ''
+          petFee: petFriendlyYes.checked ? toInr(document.getElementById('petFee').value) : '',
+          checkInTime: document.getElementById('checkInTime').value,
+          checkOutTime: document.getElementById('checkOutTime').value,
+          wifiName: document.getElementById('wifiName').value,
+          wifiPassword: document.getElementById('wifiPassword').value,
+          accessCode: document.getElementById('accessCode').value
         })
       });
       const data = await res.json();
