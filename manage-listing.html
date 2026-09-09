@@ -326,6 +326,20 @@
         <label for="accessCode">Access / Door Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(lockbox, gate, building entry, etc.)</span></label>
         <input id="accessCode" type="text" placeholder="e.g. 4521#">
       </div>
+
+      <div class="eyebrow" style="margin-top:28px;">Additional Details <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(add as many as this property needs)</span></div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:14px;">For anything the fixed fields above don't cover — parking, elevator codes, trash pickup days, building rules, whatever's specific to this property or the kind of stay it is.</p>
+      <div id="customFieldsList"></div>
+      <button type="button" class="add-paid-amenity-btn" id="addCustomFieldBtn">+ Add a Field</button>
+
+      <div class="eyebrow" style="margin-top:28px;">Check-In Instructions Preview</div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:10px;">This is assembled automatically from everything above, and updates as you type. It's what <code>@checkininfo</code> inserts into a message, and what gets sent if you turn on automatic sending below.</p>
+      <div id="checkinInstructionsPreview" style="background:#f4ebe3; border:1px solid #ddd0bc; padding:14px; font-size:13px; line-height:1.7; white-space:pre-wrap; margin-bottom:16px;"></div>
+
+      <label style="display:flex; align-items:flex-start; gap:10px; font-size:13px; font-weight:normal; letter-spacing:0; text-transform:none; color:#1c1a17; cursor:pointer; margin-bottom:24px;">
+        <input type="checkbox" id="autoSendCheckinInstructions" style="width:auto; margin-top:3px;">
+        <span>Automatically send the preview above to a guest the moment they confirm a booking for this property — no template needed, it just uses whatever's currently filled in here.</span>
+      </label>
     </div>
 
       <button type="submit" class="btn" id="submitBtn">Save Changes</button>
@@ -760,6 +774,74 @@
     renderPaidAmenities();
   });
 
+  // ---- Dynamic custom check-in fields — a host adds as many
+  // label/value pairs as their property actually needs (parking,
+  // elevator codes, trash day, anything the fixed fields don't cover).
+  // Same "array is the source of truth, DOM is just a view onto it"
+  // pattern as paid amenities above.
+  let customFieldRows = [];
+  const customFieldsList = document.getElementById('customFieldsList');
+
+  function renderCustomFields(){
+    customFieldsList.innerHTML = '';
+    customFieldRows.forEach((row, idx) => {
+      const el = document.createElement('div');
+      el.className = 'paid-amenity-row';
+      el.innerHTML = `
+        <div class="row-line" style="grid-template-columns:1fr 1fr;">
+          <input type="text" placeholder="Field name, e.g. Parking" data-field="label" value="${row.label || ''}">
+          <input type="text" placeholder="Value, e.g. Spot 12 in the driveway" data-field="value" value="${row.value || ''}">
+        </div>
+        <button type="button" class="remove-amenity-btn" data-action="remove">Remove this field</button>
+      `;
+      el.querySelectorAll('[data-field]').forEach(input => {
+        input.addEventListener('input', () => {
+          row[input.dataset.field] = input.value;
+          updateCheckinInstructionsPreview();
+        });
+      });
+      el.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        customFieldRows.splice(idx, 1);
+        renderCustomFields();
+        updateCheckinInstructionsPreview();
+      });
+      customFieldsList.appendChild(el);
+    });
+  }
+  document.getElementById('addCustomFieldBtn').addEventListener('click', () => {
+    customFieldRows.push({ id: null, label: '', value: '' });
+    renderCustomFields();
+  });
+
+  // ---- Live check-in instructions preview — assembled from the fixed
+  // fields plus every custom field, exactly the same way @checkininfo
+  // resolves in a message (see index.html/_template-scheduling.js's
+  // matching buildCheckinInstructionsText — kept in sync by hand, same
+  // as the other placeholder logic across these separate files). Blank
+  // fixed fields are simply skipped rather than showing a placeholder
+  // note here, since this preview is for the HOST deciding what to fill
+  // in, not a guest-facing fallback.
+  function updateCheckinInstructionsPreview(){
+    const lines = [];
+    const checkIn = document.getElementById('checkInTime').value;
+    const checkOut = document.getElementById('checkOutTime').value;
+    if(checkIn) lines.push(`Check-in: ${time24To12(checkIn)}`);
+    if(checkOut) lines.push(`Check-out: ${time24To12(checkOut)}`);
+    const wifiName = document.getElementById('wifiName').value.trim();
+    const wifiPassword = document.getElementById('wifiPassword').value.trim();
+    if(wifiName || wifiPassword) lines.push(`WiFi: ${wifiName || '—'} / ${wifiPassword || '—'}`);
+    const accessCode = document.getElementById('accessCode').value.trim();
+    if(accessCode) lines.push(`Access code: ${accessCode}`);
+    customFieldRows.forEach(row => {
+      if(row.label && row.value) lines.push(`${row.label}: ${row.value}`);
+    });
+    const previewEl = document.getElementById('checkinInstructionsPreview');
+    previewEl.textContent = lines.length ? lines.join('\n') : 'Nothing filled in yet — add details above to see them here.';
+  }
+  ['checkInTime', 'checkOutTime', 'wifiName', 'wifiPassword', 'accessCode'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateCheckinInstructionsPreview);
+  });
+
   // ---- Pricing currency: lets a host view/edit their listing's INR
   // prices in their own currency. Purely a display/input convenience —
   // everything is still stored and charged in INR; see the note on
@@ -924,6 +1006,11 @@
       document.getElementById('wifiName').value = l.wifi_name || '';
       document.getElementById('wifiPassword').value = l.wifi_password || '';
       document.getElementById('accessCode').value = l.access_code || '';
+      document.getElementById('autoSendCheckinInstructions').checked = l.auto_send_checkin_instructions === true;
+
+      customFieldRows = (data.customFields || []).map(f => ({ id: f.id, label: f.field_label, value: f.field_value || '' }));
+      renderCustomFields();
+      updateCheckinInstructionsPreview();
 
       if(l.pet_friendly === true){
         petFriendlyYes.checked = true;
@@ -1007,7 +1094,9 @@
           checkOutTime: time24To12(document.getElementById('checkOutTime').value),
           wifiName: document.getElementById('wifiName').value,
           wifiPassword: document.getElementById('wifiPassword').value,
-          accessCode: document.getElementById('accessCode').value
+          accessCode: document.getElementById('accessCode').value,
+          customFields: customFieldRows,
+          autoSendCheckinInstructions: document.getElementById('autoSendCheckinInstructions').checked
         })
       });
       const data = await res.json();
