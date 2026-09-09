@@ -226,7 +226,7 @@ module.exports = async (req, res) => {
         const conversations = await sql`
           SELECT c.id, c.listing_id, c.order_id, c.guest_email, c.guest_id, c.host_id,
                  l.property_name, l.cover_photo_url,
-                 l.check_in_time, l.check_out_time, l.wifi_name, l.wifi_password, l.access_code,
+                 l.check_in_time, l.check_out_time, l.wifi_name, l.wifi_password, l.access_code, l.guest_guidance,
                  COALESCE(l.formatted_address, NULLIF(TRIM(CONCAT_WS(', ', l.area, l.city)), '')) AS location_text,
                  CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END AS my_role,
                  CASE WHEN c.host_id = ${myHostId} THEN COALESCE(g.name, c.guest_email) ELSE h.name END AS counterpart_name,
@@ -316,6 +316,22 @@ module.exports = async (req, res) => {
           WHERE host_id = ${guestId} ORDER BY sort_order ASC, created_at ASC
         `;
         return res.status(200).json({ templates });
+      }
+
+      // For the "Description" tab in the template manager — free-text
+      // per-property guidance (house rules, parking, local tips, etc.),
+      // distinct from both the structured check-in fields and the
+      // clickable quick-reply templates. Small dataset (a host's own
+      // listing count), so fetched all at once rather than one at a time
+      // per dropdown selection.
+      if (mode === 'myListingsGuidance') {
+        if (myHostId == null) return res.status(200).json({ listings: [] });
+        const listings = await sql`
+          SELECT id, property_name, guest_guidance FROM listings
+          WHERE host_id = ${myHostId} AND listing_type = 'stay'
+          ORDER BY property_name ASC
+        `;
+        return res.status(200).json({ listings });
       }
 
       // Guest-facing quick-question picker inside the chat window itself
@@ -490,6 +506,22 @@ module.exports = async (req, res) => {
           console.error('Google Translate request error:', err);
           return res.status(502).json({ error: 'Could not translate that message right now.' });
         }
+      }
+
+      // Saving the "Description" tab's free-text guidance for one
+      // specific property. listings.host_id is a hosts.id (see myHostId's
+      // comment up top) — checked directly here, same as saveTemplate's
+      // own listing-ownership check below, rather than trusting whatever
+      // listingId the browser sends.
+      if (mode === 'saveListingGuidance') {
+        const { listingId, guidance } = req.body || {};
+        const safeGuidance = typeof guidance === 'string' ? guidance.trim().slice(0, 5000) : '';
+        if (!listingId) return res.status(400).json({ error: 'Missing property.' });
+        if (myHostId == null) return res.status(403).json({ error: 'Not your listing.' });
+        const ownedRows = await sql`SELECT id FROM listings WHERE id = ${listingId} AND host_id = ${myHostId}`;
+        if (!ownedRows.length) return res.status(403).json({ error: 'Not your listing.' });
+        await sql`UPDATE listings SET guest_guidance = ${safeGuidance || null} WHERE id = ${listingId}`;
+        return res.status(200).json({ success: true });
       }
 
       if (mode === 'saveTemplate') {
