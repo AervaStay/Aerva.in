@@ -882,6 +882,12 @@
     transition:background .2s ease, border-color .2s ease;
   }
   .inbox-filter-pill.active{background:var(--ink); border-color:var(--ink); color:#fff;}
+  .guest-info-tab-btn{
+    padding:9px 16px; border-radius:999px; border:1px solid var(--line-dark); background:none;
+    font-size:13px; font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer;
+    transition:background .2s ease, border-color .2s ease;
+  }
+  .guest-info-tab-btn.active{background:var(--ink); border-color:var(--ink); color:#fff;}
   .inbox-conversation-list{flex:1 1 auto; overflow-y:auto; border-top:1px solid var(--line-dark);}
   .inbox-conv-card{
     display:flex; gap:12px; padding:16px 22px; cursor:pointer; border-bottom:1px solid var(--line-dark);
@@ -2096,19 +2102,43 @@
            rather than living permanently in the list pane, since it's an
            occasional setup task, not something opened every visit. -->
       <div id="inboxTemplatesPanel" style="display:none; position:absolute; inset:0; background:#fff; z-index:6; flex-direction:column;">
-        <div style="padding:22px; border-bottom:1px solid var(--line-dark); display:flex; align-items:center; justify-content:space-between; flex:0 0 auto;">
-          <h2 style="font-family:'Bodoni Moda', serif; font-weight:400; font-size:20px;">Quick-Reply Templates</h2>
-          <button type="button" class="inbox-icon-btn" id="inboxTemplatesCloseBtn" aria-label="Close">&times;</button>
+        <div style="padding:22px 22px 0; border-bottom:1px solid var(--line-dark); flex:0 0 auto;">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <h2 style="font-family:'Bodoni Moda', serif; font-weight:400; font-size:20px;">Guest Info & Templates</h2>
+            <button type="button" class="inbox-icon-btn" id="inboxTemplatesCloseBtn" aria-label="Close">&times;</button>
+          </div>
+          <div style="display:flex; gap:6px; margin:16px 0 0;">
+            <button type="button" class="guest-info-tab-btn active" data-guest-info-tab="inboxTemplatesTab">Templates</button>
+            <button type="button" class="guest-info-tab-btn" data-guest-info-tab="inboxDescriptionTab">Description</button>
+          </div>
         </div>
-        <div style="padding:16px 22px; overflow-y:auto; flex:1 1 auto;">
+
+        <div id="inboxTemplatesTab" style="padding:16px 22px; overflow-y:auto; flex:1 1 auto;">
           <p style="font-size:12.5px; opacity:0.6; margin-bottom:14px;">Guests see these as tappable questions inside the chat window — write the ones you get asked most often (check-in time, WiFi, parking, etc.).</p>
-          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code>. Set check-in time, WiFi, and access code for each property from its "Manage" link in My Collection.</p>
+          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code> <code>@guidance</code>. Set check-in time, WiFi, and access code for each property from its "Manage" link in My Collection.</p>
           <div id="inboxTemplateListContainer"></div>
           <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px;">
             <input type="text" id="inboxTemplateBodyInput" placeholder="e.g. Check-in is 2 PM, checkout is 11 AM" style="padding:9px 10px; border:1px solid var(--line-dark); font-size:13px; font-family:'Jost', sans-serif;">
             <button type="button" class="filter-clear" id="inboxAddTemplateBtn" style="align-self:flex-start;">Add Template</button>
           </div>
           <p id="inboxTemplateSaveMsg" style="font-size:12px; margin-top:8px; display:none;"></p>
+        </div>
+
+        <!-- Free-text guidance per property — distinct from the tappable
+             templates above: house rules, parking, quiet hours, local
+             tips, anything too long or specific for a one-line canned
+             reply. Available as @guidance in template text too. -->
+        <div id="inboxDescriptionTab" style="display:none; padding:16px 22px; overflow-y:auto; flex:1 1 auto; flex-direction:column;">
+          <p style="font-size:12.5px; opacity:0.6; margin-bottom:14px;">Longer guidance for guests at a specific property — house rules, parking, quiet hours, local recommendations, anything that doesn't fit a short tappable template. Available as <code>@guidance</code> in your templates too.</p>
+          <div class="field">
+            <label>Property</label>
+            <select id="inboxGuidanceListingSelect" style="width:100%; padding:9px 10px; border:1px solid var(--line-dark); background:#fff; font-family:'Jost', sans-serif; font-size:13px;">
+              <option value="">Loading your properties…</option>
+            </select>
+          </div>
+          <textarea id="inboxGuidanceTextarea" rows="10" placeholder="e.g. Quiet hours are 10 PM–7 AM. Parking is in the driveway, not the street. For restaurant recommendations, ask us anytime!" style="width:100%; margin-top:10px; padding:10px 12px; border:1px solid var(--line-dark); font-family:'Jost', sans-serif; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+          <button type="button" class="filter-clear" id="inboxSaveGuidanceBtn" style="align-self:flex-start; margin-top:10px;">Save Description</button>
+          <p id="inboxGuidanceSaveMsg" style="font-size:12px; margin-top:8px; display:none;"></p>
         </div>
       </div>
     </div>
@@ -6292,7 +6322,8 @@
     '@wifiname': c => c.wifi_name || '(WiFi name not set yet)',
     '@wifipassword': c => c.wifi_password || '(WiFi password not set yet)',
     '@accesscode': c => c.access_code || '(access code not set yet)',
-    '@location': c => c.location_text || '(location not set yet)'
+    '@location': c => c.location_text || '(location not set yet)',
+    '@guidance': c => c.guest_guidance || '(no additional guidance set yet)'
   };
   function resolveTemplatePlaceholders(text, conv){
     let result = text;
@@ -6367,10 +6398,89 @@
   // ---- Quick-reply template manager (behind the gear icon) ----
   document.getElementById('inboxSettingsBtn').addEventListener('click', () => {
     document.getElementById('inboxTemplatesPanel').style.display = 'flex';
+    // Always reopens on the Templates tab, regardless of which tab was
+    // active last time — a predictable default rather than remembering
+    // per-session state for a rarely-opened settings panel.
+    document.querySelectorAll('.guest-info-tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector('[data-guest-info-tab="inboxTemplatesTab"]').classList.add('active');
+    document.getElementById('inboxTemplatesTab').style.display = 'block';
+    document.getElementById('inboxDescriptionTab').style.display = 'none';
     loadInboxTemplateManager();
   });
   document.getElementById('inboxTemplatesCloseBtn').addEventListener('click', () => {
     document.getElementById('inboxTemplatesPanel').style.display = 'none';
+  });
+
+  // ---- Templates / Description tab switch within that same panel ----
+  document.querySelectorAll('.guest-info-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.guest-info-tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('inboxTemplatesTab').style.display = 'none';
+      document.getElementById('inboxDescriptionTab').style.display = 'none';
+      btn.classList.add('active');
+      const target = document.getElementById(btn.dataset.guestInfoTab);
+      target.style.display = 'flex';
+      target.style.flexDirection = 'column';
+      if(btn.dataset.guestInfoTab === 'inboxDescriptionTab') loadInboxGuidanceTab();
+    });
+  });
+
+  let inboxGuidanceListings = [];
+  async function loadInboxGuidanceTab(){
+    const token = guestAuthToken();
+    const select = document.getElementById('inboxGuidanceListingSelect');
+    select.innerHTML = '<option value="">Loading your properties…</option>';
+    document.getElementById('inboxGuidanceTextarea').value = '';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myListingsGuidance', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      inboxGuidanceListings = data.listings || [];
+      if(!inboxGuidanceListings.length){
+        select.innerHTML = '<option value="">You don\'t have any properties yet</option>';
+        return;
+      }
+      select.innerHTML = inboxGuidanceListings.map(l => `<option value="${l.id}">${l.property_name}</option>`).join('');
+      document.getElementById('inboxGuidanceTextarea').value = inboxGuidanceListings[0].guest_guidance || '';
+    } catch(err){
+      select.innerHTML = '<option value="">Could not load your properties</option>';
+    }
+  }
+  document.getElementById('inboxGuidanceListingSelect').addEventListener('change', function(){
+    const listing = inboxGuidanceListings.find(l => String(l.id) === this.value);
+    document.getElementById('inboxGuidanceTextarea').value = listing ? (listing.guest_guidance || '') : '';
+    document.getElementById('inboxGuidanceSaveMsg').style.display = 'none';
+  });
+  document.getElementById('inboxSaveGuidanceBtn').addEventListener('click', async () => {
+    const token = guestAuthToken();
+    const select = document.getElementById('inboxGuidanceListingSelect');
+    const listingId = select.value;
+    const guidance = document.getElementById('inboxGuidanceTextarea').value;
+    const msgEl = document.getElementById('inboxGuidanceSaveMsg');
+    if(!listingId) return;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ mode: 'saveListingGuidance', listingId: Number(listingId), guidance })
+      });
+      const data = await res.json();
+      msgEl.style.display = 'block';
+      if(res.ok){
+        msgEl.textContent = 'Description saved.';
+        msgEl.style.color = '#3a7d44';
+        const listing = inboxGuidanceListings.find(l => String(l.id) === listingId);
+        if(listing) listing.guest_guidance = guidance;
+      } else {
+        msgEl.textContent = data.error || 'Could not save right now.';
+        msgEl.style.color = '#a3402f';
+      }
+    } catch(err){
+      msgEl.style.display = 'block';
+      msgEl.textContent = 'Could not save right now.';
+      msgEl.style.color = '#a3402f';
+    }
   });
 
   async function loadInboxTemplateManager(){
