@@ -28,6 +28,7 @@
 //                pay the host vs. refund the guest.
 
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
+const { sendBookingConfirmedTemplates } = require('./_template-scheduling');
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const PDFDocument = require('pdfkit');
@@ -296,6 +297,16 @@ module.exports = async (req, res) => {
           await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${inserted[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
         }
         const newOrderId = inserted[0].id;
+
+        // "Send automatically once a guest confirms a booking" — the one
+        // scheduling trigger currently supported (see
+        // _template-scheduling.js's own comment on why the timed/delayed
+        // ones are deferred). Fired right here, at the exact moment the
+        // order is confirmed as paid — never blocks or fails the booking
+        // itself if something goes wrong sending a template message.
+        await sendBookingConfirmedTemplates(sql, {
+          id: newOrderId, listing_id: stay.listingId || null, guest_id: guestId, guest_email: email
+        });
 
         // Persist which paid amenities (and specific nights) were part of
         // this stay — already validated and priced server-side back in

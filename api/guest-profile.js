@@ -312,7 +312,8 @@ module.exports = async (req, res) => {
 
       if (mode === 'templates') {
         const templates = await sql`
-          SELECT id, listing_id, body, sort_order FROM message_templates
+          SELECT id, listing_id, body, sort_order, send_on_booking_confirmed, auto_send_listing_ids
+          FROM message_templates
           WHERE host_id = ${guestId} ORDER BY sort_order ASC, created_at ASC
         `;
         return res.status(200).json({ templates });
@@ -525,7 +526,7 @@ module.exports = async (req, res) => {
       }
 
       if (mode === 'saveTemplate') {
-        const { templateId, listingId, body } = req.body || {};
+        const { templateId, listingId, body, sendOnBookingConfirmed, autoSendListingIds } = req.body || {};
         const safeBody = typeof body === 'string' ? body.trim().slice(0, 500) : '';
         if (!safeBody) return res.status(400).json({ error: 'Template text can\'t be empty.' });
 
@@ -539,16 +540,34 @@ module.exports = async (req, res) => {
           if (!ownedRows.length) return res.status(403).json({ error: 'Not your listing.' });
         }
 
+        // Same ownership check, applied to every property this auto-send
+        // is being scoped to — never trust a raw array of listing ids
+        // from the browser without confirming they're actually this
+        // host's own properties.
+        const safeSendOnBooking = sendOnBookingConfirmed === true;
+        let safeAutoSendListingIds = [];
+        if (safeSendOnBooking && Array.isArray(autoSendListingIds) && autoSendListingIds.length) {
+          const ids = autoSendListingIds.map(Number).filter(Number.isInteger);
+          const ownedRows = myHostId != null && ids.length
+            ? await sql`SELECT id FROM listings WHERE host_id = ${myHostId} AND id = ANY(${ids})`
+            : [];
+          safeAutoSendListingIds = ownedRows.map(r => r.id);
+        }
+
         if (templateId) {
           const updated = await sql`
-            UPDATE message_templates SET body = ${safeBody}, listing_id = ${listingId || null}
+            UPDATE message_templates SET body = ${safeBody}, listing_id = ${listingId || null},
+              send_on_booking_confirmed = ${safeSendOnBooking},
+              auto_send_listing_ids = ${JSON.stringify(safeAutoSendListingIds)}
             WHERE id = ${templateId} AND host_id = ${guestId} RETURNING id
           `;
           if (!updated.length) return res.status(404).json({ error: 'Template not found.' });
           return res.status(200).json({ id: updated[0].id });
         }
         const inserted = await sql`
-          INSERT INTO message_templates (host_id, listing_id, body) VALUES (${guestId}, ${listingId || null}, ${safeBody}) RETURNING id
+          INSERT INTO message_templates (host_id, listing_id, body, send_on_booking_confirmed, auto_send_listing_ids)
+          VALUES (${guestId}, ${listingId || null}, ${safeBody}, ${safeSendOnBooking}, ${JSON.stringify(safeAutoSendListingIds)})
+          RETURNING id
         `;
         return res.status(200).json({ id: inserted[0].id });
       }
