@@ -897,12 +897,14 @@
   .inbox-status-tag{
     text-transform:uppercase; letter-spacing:0.04em; font-weight:600; font-size:10.5px; padding:2px 8px; border-radius:999px;
   }
-  .inbox-status-tag.tag-enquiry{background:#eee3d3; color:#8a6c39;}
+  .inbox-status-tag.tag-upcoming{background:#eee3d3; color:#8a6c39;}
   .inbox-status-tag.tag-today{background:#3a7d44; color:#fff;}
   .inbox-status-tag.tag-hosting{background:#2f6690; color:#fff;}
   .inbox-status-tag.tag-completed{background:#e7e2da; color:#6b6459;}
   .inbox-status-tag.tag-cancelled{background:#f3d9d4; color:#a3402f;}
-  .inbox-conv-name{font-size:15px; font-weight:600; color:var(--ink); margin-bottom:2px;
+  .inbox-conv-name{font-size:15px; font-weight:700; color:var(--ink); margin-bottom:1px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .inbox-conv-counterpart{font-size:12.5px; opacity:0.6; margin-bottom:2px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .inbox-conv-preview{font-size:13px; opacity:0.65; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .inbox-conv-time{font-size:11px; opacity:0.5; flex:0 0 auto; white-space:nowrap;}
@@ -2101,6 +2103,7 @@
             <img class="inbox-chat-avatar" id="inboxChatAvatar" src="" alt="" onerror="this.style.display='none'">
             <div style="min-width:0;">
               <div class="inbox-chat-name" id="inboxChatName"></div>
+              <div id="inboxChatCounterpart" style="font-size:12.5px; opacity:0.6; margin-top:-2px; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
               <button type="button" class="inbox-translate-toggle" id="inboxTranslateToggle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8h9M9 5v3M13 8c-1 4-3 7-6 9M7 12c1.5 2 4 3.5 6 4M15 21l4-9 4 9M16.5 18h5"/></svg>
                 <span id="inboxTranslateLabel">Translation off</span>
@@ -5975,20 +5978,21 @@
   });
 
   // ---- Status tag: derived from the linked booking's own dates/status,
-  // never a separate field to keep in sync. "Enquiry" here means
-  // "before check-in" specifically — every Aerva conversation already
-  // requires a confirmed, paid booking to exist at all (there's no
-  // pre-booking inquiry flow), so it's a stand-in for "upcoming stay,"
-  // not a literal pre-booking enquiry the way the term is sometimes used
-  // elsewhere. ----
+  // never a separate field to keep in sync. Every Aerva conversation
+  // already requires a confirmed, paid booking to exist at all (there's
+  // no pre-booking enquiry flow) — so a pre-check-in thread is a
+  // confirmed "Upcoming Stay," never an actual unconfirmed enquiry. The
+  // previous "Enquiry" label was factually wrong and read as if the
+  // booking wasn't confirmed yet, when it always is by the time a
+  // conversation can exist at all. ----
   function inboxStatusTag(conv){
-    if(!conv.arrival || !conv.departure) return { label: 'Message', cls: 'tag-enquiry' };
+    if(!conv.arrival || !conv.departure) return { label: 'Message', cls: 'tag-upcoming' };
     if(conv.booking_status === 'cancelled') return { label: 'Cancelled', cls: 'tag-cancelled' };
     const today = new Date().toISOString().split('T')[0];
     if(today > conv.departure) return { label: 'Completed', cls: 'tag-completed' };
     if(today === conv.arrival) return { label: 'Check-in Today', cls: 'tag-today' };
     if(today > conv.arrival) return { label: 'Hosting Now', cls: 'tag-hosting' };
-    return { label: 'Enquiry', cls: 'tag-enquiry' };
+    return { label: 'Upcoming Stay', cls: 'tag-upcoming' };
   }
   function inboxDateRangeLabel(conv){
     if(!conv.arrival || !conv.departure) return '';
@@ -6056,9 +6060,15 @@
               <span>${inboxDateRangeLabel(c)}</span>
             </div>
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-              <div class="inbox-conv-name">${name}</div>
+              <!-- The property is the "subject" of this thread — which
+                   booking it's about — and gets top billing over the
+                   counterpart's name, since with repeat guests/hosts or
+                   multiple properties, the name alone doesn't say which
+                   booking a message is actually referring to. -->
+              <div class="inbox-conv-name">${c.property_name || 'Aerva'}</div>
               <span class="inbox-conv-time">${inboxRelativeTime(c.last_message_at)}</span>
             </div>
+            <div class="inbox-conv-counterpart">${roleLabel === 'Hosting' ? 'Guest' : 'Host'}: ${name}</div>
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
               <div class="inbox-conv-preview">${c.last_message || 'No messages yet'}</div>
               ${Number(c.unread_count) > 0 ? '<span class="inbox-conv-unread-dot"></span>' : ''}
@@ -6082,7 +6092,9 @@
     document.getElementById('inboxPanel').classList.add('chat-open'); // mobile: swap to chat pane
     document.getElementById('inboxChatPlaceholder').style.display = 'none';
     document.getElementById('inboxChatContent').style.display = 'flex';
-    document.getElementById('inboxChatName').textContent = conv.counterpart_name || conv.guest_email;
+    document.getElementById('inboxChatName').textContent = conv.property_name || 'Aerva';
+    const roleLabel = conv.my_role === 'host' ? 'Guest' : 'Host';
+    document.getElementById('inboxChatCounterpart').textContent = `${roleLabel}: ${conv.counterpart_name || conv.guest_email}`;
     const avatarEl = document.getElementById('inboxChatAvatar');
     if(conv.counterpart_photo_url){ avatarEl.src = conv.counterpart_photo_url; avatarEl.style.display = ''; }
     else { avatarEl.style.display = 'none'; }
