@@ -964,6 +964,14 @@
     flex:1; resize:none; background:#fff; border:1px solid var(--line-dark); padding:10px 12px;
     font-family:'Jost', sans-serif; font-size:14px; color:var(--ink); max-height:100px; box-sizing:border-box;
   }
+  .inbox-keyword-suggest-item{
+    padding:9px 14px; cursor:pointer; font-size:13px; display:flex; justify-content:space-between; gap:12px;
+    border-bottom:1px solid var(--line-dark);
+  }
+  .inbox-keyword-suggest-item:last-child{border-bottom:none;}
+  .inbox-keyword-suggest-item:hover, .inbox-keyword-suggest-item.active{background:var(--cream);}
+  .inbox-keyword-suggest-item code{font-weight:600; color:var(--gold-deep);}
+  .inbox-keyword-suggest-item span{opacity:0.55; font-size:12px;}
   .nav-account-menu{
     position:absolute; top:calc(100% + 12px); right:0; background:var(--cream); border:1px solid var(--line-dark);
     min-width:200px; padding:8px 0; box-shadow:0 12px 30px rgba(20,17,14,0.16); z-index:60; display:none;
@@ -2175,10 +2183,15 @@
         </div>
         <div class="inbox-messages" id="inboxMessages"></div>
         <div class="inbox-templates-row" id="inboxChatTemplatesRow"></div>
-        <div class="inbox-input-row">
+        <div class="inbox-input-row" style="position:relative;">
+          <!-- Typing @ followed by letters shows matching keywords here
+               — same set the Templates/Description tabs already
+               document, just reachable while actually composing a
+               message, not only when authoring a saved template. -->
+          <div id="inboxKeywordSuggest" style="display:none; position:absolute; bottom:100%; left:24px; right:24px; background:#fff; border:1px solid var(--line-dark); box-shadow:0 -4px 16px rgba(28,26,23,0.12); max-height:180px; overflow-y:auto; z-index:10;"></div>
           <p id="inboxChatWarning" style="display:none; font-size:11.5px; color:#a3402f; margin-bottom:8px;">Phone numbers, emails, and social media handles can't be shared here — Aerva keeps all communication on-platform.</p>
           <div style="display:flex; gap:8px; align-items:flex-end;">
-            <textarea id="inboxChatInput" rows="1" placeholder="Type a message…"></textarea>
+            <textarea id="inboxChatInput" rows="1" placeholder="Type a message… try @checkin"></textarea>
             <button type="button" class="pill-search-submit" id="inboxChatSendBtn" aria-label="Send" style="flex:0 0 auto; width:44px; height:44px;">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
             </button>
@@ -6654,11 +6667,96 @@
   }
 
 
+  // ---- @keyword autosuggest, live in the actual message box — not just
+  // when authoring a saved template. Typing "@" plus letters shows
+  // matching keywords; picking one inserts it as text. Resolution to
+  // real values happens at send time (see sendInboxMessage below), so a
+  // host can type/send an ad hoc message using these keywords without
+  // ever saving anything as a formal template first.
+  const KEYWORD_SUGGESTIONS = [
+    { key: '@guestname', desc: "Guest's name" },
+    { key: '@checkin', desc: 'Check-in time' },
+    { key: '@checkout', desc: 'Check-out time' },
+    { key: '@wifiname', desc: 'WiFi network name' },
+    { key: '@wifipassword', desc: 'WiFi password' },
+    { key: '@accesscode', desc: 'Access / door code' },
+    { key: '@location', desc: 'Property address' },
+    { key: '@guidance', desc: 'Your saved property description' },
+    { key: '@checkininfo', desc: 'Everything above, all at once' }
+  ];
+  let inboxSuggestActiveIndex = -1;
+  let inboxSuggestMatches = [];
+
+  function findActiveMention(input){
+    // Only triggers on the "@word" immediately before the cursor, not
+    // any "@" earlier in the message — same convention as @-mentions in
+    // most chat apps.
+    const cursor = input.selectionStart;
+    const beforeCursor = input.value.slice(0, cursor);
+    const match = beforeCursor.match(/@([a-zA-Z]*)$/);
+    if(!match) return null;
+    return { partial: match[0], startIndex: cursor - match[0].length, cursor };
+  }
+  function renderInboxKeywordSuggest(input){
+    const mention = findActiveMention(input);
+    const dropdown = document.getElementById('inboxKeywordSuggest');
+    if(!mention){
+      dropdown.style.display = 'none';
+      inboxSuggestMatches = [];
+      return;
+    }
+    const term = mention.partial.slice(1).toLowerCase();
+    inboxSuggestMatches = KEYWORD_SUGGESTIONS.filter(s => s.key.slice(1).toLowerCase().startsWith(term));
+    if(!inboxSuggestMatches.length){
+      dropdown.style.display = 'none';
+      return;
+    }
+    inboxSuggestActiveIndex = 0;
+    dropdown.innerHTML = inboxSuggestMatches.map((s, i) => `
+      <div class="inbox-keyword-suggest-item${i === 0 ? ' active' : ''}" data-suggest-index="${i}">
+        <code>${s.key}</code><span>${s.desc}</span>
+      </div>
+    `).join('');
+    dropdown.style.display = 'block';
+    dropdown.querySelectorAll('[data-suggest-index]').forEach(el => {
+      el.addEventListener('mousedown', (e) => {
+        // mousedown, not click — fires before the textarea loses focus,
+        // so applyInboxSuggestion can still read/restore the cursor
+        // position cleanly.
+        e.preventDefault();
+        applyInboxKeywordSuggestion(input, mention, inboxSuggestMatches[Number(el.dataset.suggestIndex)]);
+      });
+    });
+  }
+  function applyInboxKeywordSuggestion(input, mention, suggestion){
+    const before = input.value.slice(0, mention.startIndex);
+    const after = input.value.slice(mention.cursor);
+    const insertion = suggestion.key + ' ';
+    input.value = before + insertion + after;
+    const newCursor = before.length + insertion.length;
+    input.focus();
+    input.setSelectionRange(newCursor, newCursor);
+    document.getElementById('inboxKeywordSuggest').style.display = 'none';
+    inboxSuggestMatches = [];
+  }
+
   async function sendInboxMessage(){
     const input = document.getElementById('inboxChatInput');
-    const text = input.value.trim();
-    if(!text || !inboxCurrentConversationId) return;
+    const rawText = input.value.trim();
+    if(!rawText || !inboxCurrentConversationId) return;
     const token = guestAuthToken();
+    // Ad hoc keyword resolution — a host typing "@checkin" directly into
+    // the message box (whether picked from the suggestion dropdown or
+    // just typed by hand) gets it resolved to the real value right here,
+    // the same way a saved template does, without needing to save
+    // anything as a template first. Guest-sent messages are left as-is:
+    // a guest has no check-in/WiFi/etc. data of their own to resolve
+    // against, so applying this on their side wouldn't mean anything.
+    let text = rawText;
+    if(inboxCurrentRole === 'host'){
+      const conv = inboxConversations.find(c => c.id === inboxCurrentConversationId);
+      if(conv) text = resolveTemplatePlaceholders(rawText, conv);
+    }
     input.disabled = true;
     try{
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
@@ -6678,12 +6776,39 @@
   }
   document.getElementById('inboxChatSendBtn').addEventListener('click', sendInboxMessage);
   document.getElementById('inboxChatInput').addEventListener('keydown', (e) => {
+    const dropdown = document.getElementById('inboxKeywordSuggest');
+    const suggestOpen = dropdown.style.display === 'block' && inboxSuggestMatches.length;
+    if(suggestOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')){
+      e.preventDefault();
+      const delta = e.key === 'ArrowDown' ? 1 : -1;
+      inboxSuggestActiveIndex = (inboxSuggestActiveIndex + delta + inboxSuggestMatches.length) % inboxSuggestMatches.length;
+      dropdown.querySelectorAll('.inbox-keyword-suggest-item').forEach((el, i) => el.classList.toggle('active', i === inboxSuggestActiveIndex));
+      return;
+    }
+    if(suggestOpen && (e.key === 'Enter' || e.key === 'Tab')){
+      e.preventDefault();
+      const input = document.getElementById('inboxChatInput');
+      const mention = findActiveMention(input);
+      if(mention) applyInboxKeywordSuggestion(input, mention, inboxSuggestMatches[inboxSuggestActiveIndex]);
+      return;
+    }
+    if(suggestOpen && e.key === 'Escape'){
+      dropdown.style.display = 'none';
+      inboxSuggestMatches = [];
+      return;
+    }
     if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendInboxMessage(); }
   });
   document.getElementById('inboxChatInput').addEventListener('input', function(){
     document.getElementById('inboxChatWarning').style.display = looksLikeContactInfo(this.value) ? 'block' : 'none';
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+    renderInboxKeywordSuggest(this);
+  });
+  document.getElementById('inboxChatInput').addEventListener('blur', () => {
+    // Small delay so a mousedown on a suggestion (which fires before
+    // blur) still gets to run its handler before the dropdown disappears.
+    setTimeout(() => { document.getElementById('inboxKeywordSuggest').style.display = 'none'; }, 150);
   });
 
   // ---- Quick-reply template manager (behind the gear icon) ----
