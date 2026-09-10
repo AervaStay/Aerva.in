@@ -234,12 +234,12 @@ module.exports = async (req, res) => {
       const expCityRaw = typeof req.query.city === 'string' ? req.query.city.trim() : '';
 
       // A guest searching specific dates shouldn't see an experience
-      // that's actually blocked (or already booked) across the whole
-      // span they'd need — same overlap rule the stays query above uses,
-      // and same multi-day-aware span (a guest searching a single day
-      // still only needs that one day free, so a multi-day experience's
-      // own duration doesn't factor in here — it's checked properly at
-      // actual booking time in create-order.js instead).
+      // that's actually blocked (or already booked) across the searched
+      // span, checked here as a plain overlap the same way stays are
+      // below. Whether the experience's own DURATION actually fits
+      // inside that span is a separate concern, handled further down
+      // (see fitsSearchedRange) — this block is purely about booking
+      // conflicts, not duration.
       const expArrivalRaw = typeof req.query.arrival === 'string' ? req.query.arrival.trim() : '';
       const expDepartureRaw = typeof req.query.departure === 'string' ? req.query.departure.trim() : '';
       // Must be a real boolean, not just a truthy value — this gets sent
@@ -292,17 +292,42 @@ module.exports = async (req, res) => {
       // Same "no coordinates falls back to city text, otherwise strict
       // distance" rule the suites filter below uses (see the comment
       // there for the reasoning) — kept consistent between the two.
-      const filteredExperiences = expDistanceFilter
-        ? experiences.filter(e => {
-            if (e.latitude == null || e.longitude == null) {
-              if (!expCityRaw) return false;
-              const needle = expCityRaw.toLowerCase();
-              return (e.city && e.city.toLowerCase().includes(needle));
-            }
-            const km = haversineDistanceKm(expDistanceFilter.lat, expDistanceFilter.lng, Number(e.latitude), Number(e.longitude));
-            return km <= expDistanceFilter.radiusKm;
-          })
-        : experiences;
+      //
+      // Also filters out anything that structurally CAN'T fit the
+      // searched date range — e.g. a 15-hour experience genuinely fits a
+      // 2-day search window, but not a same-day one. This is separate
+      // from is_available above (which only checks for actual booking
+      // conflicts): an experience that's simply too long for a short
+      // search isn't "unavailable" the way a booked one is — it just
+      // isn't a match for THIS particular search, the same way an
+      // out-of-radius listing isn't a match. It might work fine for a
+      // longer search. Same hours formula create-order.js/index.html use
+      // for the equivalent per-experience check on the booking page
+      // itself, kept in sync by hand (no shared module between these
+      // separate serverless files).
+      const searchDays = expDatesFilter
+        ? Math.round((new Date(expDepartureRaw) - new Date(expArrivalRaw)) / (1000 * 60 * 60 * 24))
+        : null;
+      function fitsSearchedRange(e){
+        if (!expDatesFilter) return true; // no dates searched — duration doesn't rule anything out
+        const requiredHours = (e.experience_duration_days && e.experience_duration_days > 1)
+          ? e.experience_duration_days * (Number(e.experience_duration_hours) || 24)
+          : (Number(e.experience_duration_hours) || 24);
+        return requiredHours <= searchDays * 24;
+      }
+      const filteredExperiences = experiences.filter(e => {
+        if (!fitsSearchedRange(e)) return false;
+        if (expDistanceFilter) {
+          if (e.latitude == null || e.longitude == null) {
+            if (!expCityRaw) return false;
+            const needle = expCityRaw.toLowerCase();
+            return (e.city && e.city.toLowerCase().includes(needle));
+          }
+          const km = haversineDistanceKm(expDistanceFilter.lat, expDistanceFilter.lng, Number(e.latitude), Number(e.longitude));
+          return km <= expDistanceFilter.radiusKm;
+        }
+        return true;
+      });
 
       // Same active-promotions teaser data the stays query attaches below
       // — experiences can have their own date-scoped promotions too (see
