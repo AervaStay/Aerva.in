@@ -8707,6 +8707,7 @@
                 <button type="button" class="guest-step-btn" id="expGuestsInc" aria-label="Increase guests">+</button>
               </div>
             </div>
+            <p id="expFitWarning" style="display:none; font-size:12.5px; color:#a3402f; margin-top:8px;"></p>
             <div id="expPriceSummary" style="display:none;"></div>
             <div id="expBookingAction" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
               <div class="field">
@@ -8862,6 +8863,7 @@
 
   function updateExperiencePriceSummary(exp){
     const summaryEl = document.getElementById('expPriceSummary');
+    const fitWarningEl = document.getElementById('expFitWarning');
     if(!summaryEl) return;
     const guests = Number(document.getElementById('expGuestsCount').textContent) || 1;
     const price = exp.price ? Number(exp.price) : 0;
@@ -8869,19 +8871,36 @@
     const endDate = document.getElementById('expBookEndDate') ? document.getElementById('expBookEndDate').value : '';
     if(!price || !startDate || !endDate){
       summaryEl.style.display = 'none';
+      if(fitWarningEl) fitWarningEl.style.display = 'none';
       return;
     }
-    // Guest-picked range now, same as a stay's own nights count — see
-    // create-order.js's matching comment on why exp.price is treated as
-    // a PER-DAY rate here (an interim pricing decision, not a finished
-    // model). Inclusive of both the start and end day.
+    // The range is the guest's AVAILABILITY window, not "how many days
+    // of this experience they're buying" — price stays the fixed
+    // package rate regardless of how many days are selected. What the
+    // range determines is whether this experience's own fixed duration
+    // can even fit inside it (see the hours check below), same
+    // reasoning and formula as create-order.js's authoritative version.
     const days = Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1;
-    const subtotalBeforeDiscount = (exp.experience_price_unit === 'per_person' ? price * guests : price) * days;
+    const requiredHours = (exp.experience_duration_days && exp.experience_duration_days > 1)
+      ? exp.experience_duration_days * (Number(exp.experience_duration_hours) || 24)
+      : (Number(exp.experience_duration_hours) || 24);
+    const availableHours = days * 24;
+    if(requiredHours > availableHours){
+      summaryEl.style.display = 'none';
+      if(fitWarningEl){
+        fitWarningEl.textContent = `This experience needs about ${requiredHours} hours — your selected dates only give it ${availableHours}. Please select a longer range.`;
+        fitWarningEl.style.display = 'block';
+      }
+      return;
+    }
+    if(fitWarningEl) fitWarningEl.style.display = 'none';
+
+    const subtotalBeforeDiscount = exp.experience_price_unit === 'per_person' ? price * guests : price;
     // Same discount logic stays use — mirrors calculateDiscount exactly.
-    // days now stands in for "nights" using the guest's real selected
-    // range, not a host-fixed default — matching what create-order.js
-    // actually charges at checkout.
-    const discount = calculateDiscount(exp, days, startDate, subtotalBeforeDiscount);
+    // durationDays stands in for "nights" purely for the promotion's own
+    // minNights gate; not related to the days/hours fit-check above.
+    const durationDays = exp.experience_duration_days && exp.experience_duration_days > 1 ? exp.experience_duration_days : 1;
+    const discount = calculateDiscount(exp, durationDays, startDate, subtotalBeforeDiscount);
     const subtotal = subtotalBeforeDiscount - discount.amount;
     const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
     const total = subtotal + guestServiceFee;
@@ -8892,8 +8911,8 @@
       ? `<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discount.amount)}</span></div>`
       : '';
     const rateLine = exp.experience_price_unit === 'per_person'
-      ? `${fmtGuest(price)} × ${guests} guest${guests === 1 ? '' : 's'} × ${days} day${days === 1 ? '' : 's'}`
-      : `${fmtGuest(price)} × ${days} day${days === 1 ? '' : 's'}`;
+      ? `${fmtGuest(price)} × ${guests} guest${guests === 1 ? '' : 's'}`
+      : 'Package price';
     summaryEl.innerHTML = `
       <div class="listing-modal-section-title">Price Summary</div>
       <div class="sum-row"><span>${rateLine}</span><span>${fmtGuest(subtotalBeforeDiscount)}</span></div>
@@ -8921,6 +8940,20 @@
     const endDate = document.getElementById('expBookEndDate').value;
     if(!date || !endDate){
       errorEl.textContent = 'Please choose both a start and end date for this experience.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    // Same fit-check updateExperiencePriceSummary already ran (and
+    // create-order.js will re-check authoritatively) — repeated here so
+    // clicking "Book Experience" gives a clear reason rather than just
+    // failing at the server with no context, if this is ever reached
+    // with a too-short range still selected.
+    const days = Math.round((new Date(endDate) - new Date(date)) / (1000 * 60 * 60 * 24)) + 1;
+    const requiredHours = (exp.experience_duration_days && exp.experience_duration_days > 1)
+      ? exp.experience_duration_days * (Number(exp.experience_duration_hours) || 24)
+      : (Number(exp.experience_duration_hours) || 24);
+    if(requiredHours > days * 24){
+      errorEl.textContent = `This experience needs about ${requiredHours} hours — your selected dates only give it ${days * 24}. Please select a longer range.`;
       errorEl.style.display = 'block';
       return;
     }
