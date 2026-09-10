@@ -297,6 +297,14 @@
   }
   .suite-badge-discount{ background:#a3402f; color:#fff; }
   .suite-badge-stay{ background:#4d9a56; color:#fff; }
+  /* Distinguishes a stay from an experience only where it's actually
+     ambiguous — the mixed "All" grid. Suites-only/Experience-only tabs
+     already make this obvious from context, so these are gated to only
+     render when currentCategoryFilter === 'all'. Deliberately a
+     different class from .suite-badge-stay above (which means "this
+     experience happens to include a stay," a different fact). */
+  .suite-badge-type-stay{ background:#2f6690; color:#fff; }
+  .suite-badge-type-experience{ background:#8a6c39; color:#fff; }
   .suite-photo-slider{
     position:absolute; inset:0; display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
     -webkit-overflow-scrolling:touch; scrollbar-width:none;
@@ -1435,6 +1443,9 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
           Near Me
         </button>
+        <button type="button" class="filter-clear" id="reserveGroupLink" title="Booking for a large group? Combine multiple homes into one checkout.">
+          Booking for a group?
+        </button>
       </div>
       <button type="button" class="pill-search-submit" id="searchBtn" aria-label="Search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -1544,6 +1555,10 @@
 <!-- ================= RESERVE ================= -->
 <section class="pad" id="reserve" style="display:none;">
   <div class="wrap reserve-grid">
+    <a href="#" id="reserveBackLink" class="link" style="display:inline-flex; align-items:center; gap:6px; margin-bottom:18px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      Back to browsing
+    </a>
     <div class="section-head reveal" style="margin-bottom:0;">
       <div class="eyebrow">Reserve</div>
       <h2>Check your stay.</h2>
@@ -2126,7 +2141,11 @@
           <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code> <code>@guidance</code> <code>@checkininfo</code>. <code>@checkininfo</code> inserts everything at once — check-in/checkout, WiFi, access code, and any custom fields you've added. Set these for each property from its "Manage" link in My Collection.</p>
           <div id="inboxTemplateListContainer"></div>
           <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line-dark);">
-            <input type="text" id="inboxTemplateBodyInput" placeholder="e.g. Check-in is 2 PM, checkout is 11 AM" style="padding:9px 10px; border:1px solid var(--line-dark); font-size:13px; font-family:'Jost', sans-serif;">
+            <input type="text" id="inboxTemplateTitleInput" placeholder="Title, e.g. Check-In Info" style="padding:9px 10px; border:1px solid var(--line-dark); font-size:13px; font-family:'Jost', sans-serif;">
+            <div style="position:relative;">
+              <div id="inboxTemplateKeywordSuggest" style="display:none; position:absolute; bottom:100%; left:0; right:0; background:#fff; border:1px solid var(--line-dark); box-shadow:0 -4px 16px rgba(28,26,23,0.12); max-height:180px; overflow-y:auto; z-index:10;"></div>
+              <textarea id="inboxTemplateBodyInput" rows="5" placeholder="e.g. Hi @guestname! Check-in is @checkin, checkout is @checkout. @checkininfo" style="width:100%; padding:10px 12px; border:1px solid var(--line-dark); font-size:13px; font-family:'Jost', sans-serif; resize:vertical; box-sizing:border-box;"></textarea>
+            </div>
             <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; cursor:pointer;">
               <input type="checkbox" id="inboxTemplateScheduleToggle">
               Send this automatically once a guest confirms a booking
@@ -5298,6 +5317,7 @@
       <div class="suite-photo">
         ${photoHtml}
         <div class="suite-badges">
+          ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-experience">Experience</span>' : ''}
           ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
           ${exp.experience_category ? `<span class="suite-badge">${exp.experience_category}</span>` : ''}
         </div>
@@ -5435,6 +5455,7 @@
       <div class="suite-photo">
         ${photoHtml}
         <div class="suite-badges">
+          ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-stay">Stay</span>' : ''}
           ${isNew ? '<span class="suite-badge">New</span>' : ''}
           ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
         </div>
@@ -6652,7 +6673,15 @@
       const data = await res.json();
       const templates = data.templates || [];
       if(!templates.length){ row.innerHTML = ''; return; }
-      row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${t.body}</button>`).join('');
+      // The button LABEL is the short title when there is one — the full
+      // body text (often a full sentence with keywords) makes a cramped,
+      // unreadable button label otherwise. The full body is still what
+      // actually gets inserted/resolved on click, via data-template — the
+      // title is purely cosmetic here.
+      row.innerHTML = templates.map(t => {
+        const label = t.title || (t.body.length > 40 ? t.body.slice(0, 40) + '…' : t.body);
+        return `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${label}</button>`;
+      }).join('');
       row.querySelectorAll('[data-template]').forEach(btn => {
         btn.addEventListener('click', () => {
           const conv = inboxConversations.find(c => c.id === inboxCurrentConversationId);
@@ -6667,12 +6696,12 @@
   }
 
 
-  // ---- @keyword autosuggest, live in the actual message box — not just
-  // when authoring a saved template. Typing "@" plus letters shows
-  // matching keywords; picking one inserts it as text. Resolution to
-  // real values happens at send time (see sendInboxMessage below), so a
-  // host can type/send an ad hoc message using these keywords without
-  // ever saving anything as a formal template first.
+  // ---- @keyword autosuggest — reusable across any input/textarea, not
+  // just the live message box. Typing "@" plus letters shows matching
+  // keywords; picking one inserts it as text. Used on both the chat
+  // input (for ad hoc messages, resolved at send time — see
+  // sendInboxMessage below) and the template body textarea (so a host
+  // gets the same help while authoring a saved template).
   const KEYWORD_SUGGESTIONS = [
     { key: '@guestname', desc: "Guest's name" },
     { key: '@checkin', desc: 'Check-in time' },
@@ -6684,60 +6713,91 @@
     { key: '@guidance', desc: 'Your saved property description' },
     { key: '@checkininfo', desc: 'Everything above, all at once' }
   ];
-  let inboxSuggestActiveIndex = -1;
-  let inboxSuggestMatches = [];
 
-  function findActiveMention(input){
-    // Only triggers on the "@word" immediately before the cursor, not
-    // any "@" earlier in the message — same convention as @-mentions in
-    // most chat apps.
-    const cursor = input.selectionStart;
-    const beforeCursor = input.value.slice(0, cursor);
-    const match = beforeCursor.match(/@([a-zA-Z]*)$/);
-    if(!match) return null;
-    return { partial: match[0], startIndex: cursor - match[0].length, cursor };
-  }
-  function renderInboxKeywordSuggest(input){
-    const mention = findActiveMention(input);
-    const dropdown = document.getElementById('inboxKeywordSuggest');
-    if(!mention){
-      dropdown.style.display = 'none';
-      inboxSuggestMatches = [];
-      return;
+  // opts.onKeydown(e, suggestWasOpen) — called for every keydown this
+  // factory doesn't itself need to handle, so the caller can still add
+  // its own behavior (e.g. Enter-to-send) without fighting over the
+  // same event. opts.onChange() — called after a suggestion is inserted,
+  // for anything the caller wants to re-run (resizing, previews, etc.).
+  function setupKeywordAutosuggest(inputEl, dropdownEl, opts = {}){
+    let matches = [];
+    let activeIndex = -1;
+
+    function findActiveMention(){
+      // Only triggers on the "@word" immediately before the cursor, not
+      // any "@" earlier in the text — same convention as @-mentions in
+      // most chat apps.
+      const cursor = inputEl.selectionStart;
+      const beforeCursor = inputEl.value.slice(0, cursor);
+      const match = beforeCursor.match(/@([a-zA-Z]*)$/);
+      if(!match) return null;
+      return { partial: match[0], startIndex: cursor - match[0].length, cursor };
     }
-    const term = mention.partial.slice(1).toLowerCase();
-    inboxSuggestMatches = KEYWORD_SUGGESTIONS.filter(s => s.key.slice(1).toLowerCase().startsWith(term));
-    if(!inboxSuggestMatches.length){
-      dropdown.style.display = 'none';
-      return;
+    function close(){
+      dropdownEl.style.display = 'none';
+      matches = [];
     }
-    inboxSuggestActiveIndex = 0;
-    dropdown.innerHTML = inboxSuggestMatches.map((s, i) => `
-      <div class="inbox-keyword-suggest-item${i === 0 ? ' active' : ''}" data-suggest-index="${i}">
-        <code>${s.key}</code><span>${s.desc}</span>
-      </div>
-    `).join('');
-    dropdown.style.display = 'block';
-    dropdown.querySelectorAll('[data-suggest-index]').forEach(el => {
-      el.addEventListener('mousedown', (e) => {
-        // mousedown, not click — fires before the textarea loses focus,
-        // so applyInboxSuggestion can still read/restore the cursor
-        // position cleanly.
-        e.preventDefault();
-        applyInboxKeywordSuggestion(input, mention, inboxSuggestMatches[Number(el.dataset.suggestIndex)]);
+    function render(){
+      const mention = findActiveMention();
+      if(!mention){ close(); return; }
+      const term = mention.partial.slice(1).toLowerCase();
+      matches = KEYWORD_SUGGESTIONS.filter(s => s.key.slice(1).toLowerCase().startsWith(term));
+      if(!matches.length){ close(); return; }
+      activeIndex = 0;
+      dropdownEl.innerHTML = matches.map((s, i) => `
+        <div class="inbox-keyword-suggest-item${i === 0 ? ' active' : ''}" data-suggest-index="${i}">
+          <code>${s.key}</code><span>${s.desc}</span>
+        </div>
+      `).join('');
+      dropdownEl.style.display = 'block';
+      dropdownEl.querySelectorAll('[data-suggest-index]').forEach(el => {
+        el.addEventListener('mousedown', (e) => {
+          // mousedown, not click — fires before the input loses focus,
+          // so apply() can still read/restore the cursor position cleanly.
+          e.preventDefault();
+          apply(mention, matches[Number(el.dataset.suggestIndex)]);
+        });
       });
+    }
+    function apply(mention, suggestion){
+      const before = inputEl.value.slice(0, mention.startIndex);
+      const after = inputEl.value.slice(mention.cursor);
+      const insertion = suggestion.key + ' ';
+      inputEl.value = before + insertion + after;
+      const newCursor = before.length + insertion.length;
+      inputEl.focus();
+      inputEl.setSelectionRange(newCursor, newCursor);
+      close();
+      if(opts.onChange) opts.onChange();
+    }
+
+    inputEl.addEventListener('input', render);
+    inputEl.addEventListener('blur', () => {
+      // Small delay so a mousedown on a suggestion (which fires before
+      // blur) still gets to run its handler before the dropdown disappears.
+      setTimeout(close, 150);
     });
-  }
-  function applyInboxKeywordSuggestion(input, mention, suggestion){
-    const before = input.value.slice(0, mention.startIndex);
-    const after = input.value.slice(mention.cursor);
-    const insertion = suggestion.key + ' ';
-    input.value = before + insertion + after;
-    const newCursor = before.length + insertion.length;
-    input.focus();
-    input.setSelectionRange(newCursor, newCursor);
-    document.getElementById('inboxKeywordSuggest').style.display = 'none';
-    inboxSuggestMatches = [];
+    inputEl.addEventListener('keydown', (e) => {
+      const isOpen = dropdownEl.style.display === 'block' && matches.length;
+      if(isOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')){
+        e.preventDefault();
+        const delta = e.key === 'ArrowDown' ? 1 : -1;
+        activeIndex = (activeIndex + delta + matches.length) % matches.length;
+        dropdownEl.querySelectorAll('.inbox-keyword-suggest-item').forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+        return;
+      }
+      if(isOpen && (e.key === 'Enter' || e.key === 'Tab')){
+        e.preventDefault();
+        const mention = findActiveMention();
+        if(mention) apply(mention, matches[activeIndex]);
+        return;
+      }
+      if(isOpen && e.key === 'Escape'){
+        close();
+        return;
+      }
+      if(opts.onKeydown) opts.onKeydown(e, isOpen);
+    });
   }
 
   async function sendInboxMessage(){
@@ -6775,41 +6835,22 @@
     input.focus();
   }
   document.getElementById('inboxChatSendBtn').addEventListener('click', sendInboxMessage);
-  document.getElementById('inboxChatInput').addEventListener('keydown', (e) => {
-    const dropdown = document.getElementById('inboxKeywordSuggest');
-    const suggestOpen = dropdown.style.display === 'block' && inboxSuggestMatches.length;
-    if(suggestOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')){
-      e.preventDefault();
-      const delta = e.key === 'ArrowDown' ? 1 : -1;
-      inboxSuggestActiveIndex = (inboxSuggestActiveIndex + delta + inboxSuggestMatches.length) % inboxSuggestMatches.length;
-      dropdown.querySelectorAll('.inbox-keyword-suggest-item').forEach((el, i) => el.classList.toggle('active', i === inboxSuggestActiveIndex));
-      return;
-    }
-    if(suggestOpen && (e.key === 'Enter' || e.key === 'Tab')){
-      e.preventDefault();
-      const input = document.getElementById('inboxChatInput');
-      const mention = findActiveMention(input);
-      if(mention) applyInboxKeywordSuggestion(input, mention, inboxSuggestMatches[inboxSuggestActiveIndex]);
-      return;
-    }
-    if(suggestOpen && e.key === 'Escape'){
-      dropdown.style.display = 'none';
-      inboxSuggestMatches = [];
-      return;
-    }
-    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendInboxMessage(); }
-  });
   document.getElementById('inboxChatInput').addEventListener('input', function(){
     document.getElementById('inboxChatWarning').style.display = looksLikeContactInfo(this.value) ? 'block' : 'none';
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 100) + 'px';
-    renderInboxKeywordSuggest(this);
   });
-  document.getElementById('inboxChatInput').addEventListener('blur', () => {
-    // Small delay so a mousedown on a suggestion (which fires before
-    // blur) still gets to run its handler before the dropdown disappears.
-    setTimeout(() => { document.getElementById('inboxKeywordSuggest').style.display = 'none'; }, 150);
+  setupKeywordAutosuggest(document.getElementById('inboxChatInput'), document.getElementById('inboxKeywordSuggest'), {
+    onKeydown: (e, suggestOpen) => {
+      if(!suggestOpen && e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendInboxMessage(); }
+    }
   });
+  // Same autosuggest, attached to the template body textarea — a host
+  // gets the same @keyword help while writing a template as while
+  // sending an ad hoc message. No special Enter handling needed here;
+  // a textarea's normal newline-on-Enter behavior is exactly right for
+  // composing a multi-line template.
+  setupKeywordAutosuggest(document.getElementById('inboxTemplateBodyInput'), document.getElementById('inboxTemplateKeywordSuggest'));
 
   // ---- Quick-reply template manager (behind the gear icon) ----
   document.getElementById('inboxSettingsBtn').addEventListener('click', () => {
@@ -6823,6 +6864,8 @@
     document.getElementById('inboxDescriptionTab').style.display = 'none';
     document.getElementById('inboxTemplateScheduleToggle').checked = false;
     document.getElementById('inboxTemplateScheduleOptions').style.display = 'none';
+    document.getElementById('inboxTemplateTitleInput').value = '';
+    document.getElementById('inboxTemplateBodyInput').value = '';
     inboxTemplateScheduleListingsLoaded = false; // refetch fresh each time the panel reopens, not stale from an earlier session
     loadInboxTemplateManager();
   });
@@ -6923,8 +6966,9 @@
           : '';
         return `
         <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid var(--line-dark);">
-          <div>
-            <span style="font-size:13px;">${t.body}</span>
+          <div style="min-width:0;">
+            ${t.title ? `<div style="font-size:13.5px; font-weight:600;">${t.title}</div>` : ''}
+            <span style="font-size:12.5px; opacity:${t.title ? '0.65' : '1'}; white-space:pre-wrap;">${t.body}</span>
             ${scheduleNote}
           </div>
           <button type="button" class="inbox-icon-btn" data-delete-template="${t.id}" aria-label="Delete" style="width:26px; height:26px; flex:0 0 auto;">&times;</button>
@@ -6982,7 +7026,9 @@
 
   document.getElementById('inboxAddTemplateBtn').addEventListener('click', async () => {
     const token = guestAuthToken();
+    const titleInput = document.getElementById('inboxTemplateTitleInput');
     const input = document.getElementById('inboxTemplateBodyInput');
+    const title = titleInput.value.trim();
     const body = input.value.trim();
     const msgEl = document.getElementById('inboxTemplateSaveMsg');
     const scheduleOn = document.getElementById('inboxTemplateScheduleToggle').checked;
@@ -6992,13 +7038,14 @@
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ mode: 'saveTemplate', body, sendOnBookingConfirmed: scheduleOn, autoSendListingIds: selectedListingIds })
+        body: JSON.stringify({ mode: 'saveTemplate', title, body, sendOnBookingConfirmed: scheduleOn, autoSendListingIds: selectedListingIds })
       });
       const data = await res.json();
       msgEl.style.display = 'block';
       if(res.ok){
         msgEl.textContent = 'Template added.';
         msgEl.style.color = '#3a7d44';
+        titleInput.value = '';
         input.value = '';
         document.getElementById('inboxTemplateScheduleToggle').checked = false;
         document.getElementById('inboxTemplateScheduleOptions').style.display = 'none';
@@ -7541,6 +7588,7 @@
                 <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
               </div>
               <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
+              <a href="#" id="listingAddToGroupLink" class="link" style="display:block; text-align:center; font-size:12.5px; margin-top:10px;">Booking for a large group? Add another property →</a>
               <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
               <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
             </div>
@@ -7584,6 +7632,11 @@
     // never worked before now.
     renderAvailabilityCalendar(listing);
     document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
+    document.getElementById('listingAddToGroupLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      closeListingDetail();
+      prefillReserveWithListing(listing.id);
+    });
   }
 
   // "This property also offers…" — with-stay experiences hosted at this
@@ -9028,6 +9081,10 @@
     document.title = listing.property_name + ' — Aerva';
     renderAvailabilityCalendar(listing);
     document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
+    document.getElementById('listingAddToGroupLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      prefillReserveWithListing(listing.id); // showReserveSection() inside this already hides listingFullView — no separate close step needed here
+    });
   }
 
   document.getElementById('listingModalClose').addEventListener('click', closeListingDetail);
@@ -9035,7 +9092,35 @@
     if(e.target.id === 'listingModalOverlay') closeListingDetail();
   });
 
+  // The Reserve section (multi-stay booking — combine several properties
+  // or the same one twice into one checkout) previously had no way to
+  // reach it at all: nothing linked to it, and even this function only
+  // ever scrolled to it without first making it visible (it's
+  // display:none by default). Fixed by having both this and the new
+  // entry points below actually toggle section visibility.
+  function showReserveSection(){
+    document.getElementById('suites').style.display = 'none';
+    document.getElementById('listingFullView').style.display = 'none';
+    document.getElementById('experienceFullView').style.display = 'none';
+    document.getElementById('reserve').style.display = 'block';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  function hideReserveSection(){
+    document.getElementById('reserve').style.display = 'none';
+    document.getElementById('suites').style.display = 'block';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  document.getElementById('reserveBackLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    hideReserveSection();
+  });
+  document.getElementById('reserveGroupLink').addEventListener('click', () => {
+    showReserveSection();
+    if(stayRowsEl.children.length === 0) addStayRow();
+  });
+
   function prefillReserveWithListing(listingId){
+    showReserveSection();
     if(stayRowsEl.children.length === 0){
       addStayRow();
     }
@@ -9064,8 +9149,6 @@
 
     refreshSuiteAvailability();
     updatePricing();
-
-    document.getElementById('reserve').scrollIntoView({ behavior: 'smooth' });
   }
 
   function handleCardGridClick(e){
