@@ -80,7 +80,7 @@ module.exports = async (req, res) => {
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                experience_price_unit, commission_rate,
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
-               auto_send_checkin_instructions
+               auto_send_checkin_instructions, checkin_photos
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -121,7 +121,7 @@ module.exports = async (req, res) => {
               latitude, longitude, formattedAddress, city, area,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
-              customFields, autoSendCheckinInstructions } = req.body || {};
+              customFields, autoSendCheckinInstructions, checkinPhotos } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -216,6 +216,20 @@ module.exports = async (req, res) => {
       const safeWifiPassword = typeof wifiPassword === 'string' ? wifiPassword.trim().slice(0, 100) : undefined;
       const safeAccessCode = typeof accessCode === 'string' ? accessCode.trim().slice(0, 100) : undefined;
 
+      // Capped at 3 regardless of what's submitted — enforced here, not
+      // just in the UI, since the UI cap is trivially bypassable by
+      // anyone calling this endpoint directly. Always a full overwrite
+      // (like paid amenities/custom fields above), not a COALESCE — the
+      // manage-listing.html form always submits its complete current
+      // state for this field, so an empty array here genuinely means
+      // "no check-in photos," not "wasn't touched this time."
+      const safeCheckinPhotos = Array.isArray(checkinPhotos)
+        ? checkinPhotos
+            .filter(p => p && typeof p.url === 'string' && p.url.trim())
+            .slice(0, 3)
+            .map(p => ({ caption: typeof p.caption === 'string' ? p.caption.trim().slice(0, 80) : '', url: p.url.trim() }))
+        : [];
+
       const updated = await sql`
         UPDATE listings SET
           nightly_rate = ${rate},
@@ -241,7 +255,8 @@ module.exports = async (req, res) => {
           wifi_name = COALESCE(${safeWifiName ?? null}, wifi_name),
           wifi_password = COALESCE(${safeWifiPassword ?? null}, wifi_password),
           access_code = COALESCE(${safeAccessCode ?? null}, access_code),
-          auto_send_checkin_instructions = ${autoSendCheckinInstructions === true}
+          auto_send_checkin_instructions = ${autoSendCheckinInstructions === true},
+          checkin_photos = ${JSON.stringify(safeCheckinPhotos)}
         WHERE id = ${listingId}
         RETURNING id, property_name, host_email
       `;

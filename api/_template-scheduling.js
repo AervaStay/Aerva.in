@@ -51,6 +51,12 @@ function buildCheckinInstructionsText(data) {
   (Array.isArray(data.customFields) ? data.customFields : []).forEach(f => {
     if (f.field_label && f.field_value) lines.push(`${f.field_label}: ${f.field_value}`);
   });
+  // Messages are text-only — a photo becomes "Caption: link" so a guest
+  // can tap through to see it, same convention manage-listing.html's own
+  // live preview and index.html's client-side builder use.
+  (Array.isArray(data.checkinPhotos) ? data.checkinPhotos : []).forEach(p => {
+    if (p.url) lines.push(`${p.caption || 'Photo'}: ${p.url}`);
+  });
   return lines.length ? lines.join('\n') : '(check-in instructions not set yet)';
 }
 
@@ -86,7 +92,7 @@ async function sendBookingConfirmedTemplates(sql, order) {
     const listingRows = await sql`
       SELECT id, host_id, formatted_address, area, city,
              check_in_time, check_out_time, wifi_name, wifi_password, access_code, guest_guidance,
-             auto_send_checkin_instructions
+             auto_send_checkin_instructions, checkin_photos
       FROM listings WHERE id = ${order.listing_id}
     `;
     const listing = listingRows[0];
@@ -132,7 +138,8 @@ async function sendBookingConfirmedTemplates(sql, order) {
       checkInTime: listing.check_in_time, checkOutTime: listing.check_out_time,
       wifiName: listing.wifi_name, wifiPassword: listing.wifi_password,
       accessCode: listing.access_code, locationText, guestGuidance: listing.guest_guidance,
-      customFields: customFieldRows
+      customFields: customFieldRows,
+      checkinPhotos: Array.isArray(listing.checkin_photos) ? listing.checkin_photos : []
     };
 
     // Same find-or-create pattern as guest-profile.js's mode=conversation

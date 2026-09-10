@@ -227,6 +227,7 @@ module.exports = async (req, res) => {
           SELECT c.id, c.listing_id, c.order_id, c.guest_email, c.guest_id, c.host_id,
                  l.property_name, l.cover_photo_url,
                  l.check_in_time, l.check_out_time, l.wifi_name, l.wifi_password, l.access_code, l.guest_guidance,
+                 l.checkin_photos,
                  COALESCE(l.formatted_address, NULLIF(TRIM(CONCAT_WS(', ', l.area, l.city)), '')) AS location_text,
                  -- Aggregated into one JSON array per conversation so the
                  -- @checkininfo placeholder (see resolveTemplatePlaceholders
