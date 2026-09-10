@@ -86,6 +86,18 @@
     padding:8px 10px; font-size:13px;
   }
   .common-checkin-row.checked input[type="text"]{display:block;}
+  .checkin-photo-slot{width:160px; display:flex; flex-direction:column; gap:6px;}
+  .checkin-photo-slot-box{
+    width:160px; height:120px; border:1px dashed #ddd0bc; background:#f4ebe3;
+    display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:pointer;
+  }
+  .checkin-photo-slot-box img{width:100%; height:100%; object-fit:cover;}
+  .checkin-photo-slot-box span{font-size:11px; opacity:0.5; text-align:center; padding:0 10px;}
+  .checkin-photo-slot input[type="text"]{font-size:12px; padding:7px 9px;}
+  .checkin-photo-remove-btn{
+    font-size:11px; background:none; border:none; color:#a3402f; cursor:pointer;
+    text-decoration:underline; padding:0; text-align:left;
+  }
   .check-item input{width:auto;}
   .paid-amenity-row{
     background:white; border:1px solid #ddd0bc; padding:14px; margin-bottom:10px; display:flex; flex-direction:column; gap:8px;
@@ -336,13 +348,17 @@
       </div>
 
       <div class="eyebrow" style="margin-top:28px;">Common Check-In Details <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(tick any that apply, then fill in the value)</span></div>
-      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:14px;">The things guests most often ask about, whatever kind of stay or experience this is. Ticking one adds it to your check-in instructions below — untick to remove it.</p>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:14px;">The things guests most often ask about, whatever kind of stay this is. Ticking one adds it to your check-in instructions below — untick to remove it.</p>
       <div id="commonCheckinFieldsGrid" style="display:flex; flex-direction:column; gap:2px; margin-bottom:24px;"></div>
 
       <div class="eyebrow" style="margin-top:28px;">Additional Details <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(add anything not covered above)</span></div>
-      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:14px;">For anything the fixed fields and common details above don't cover — whatever's specific to this exact property or experience.</p>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:14px;">For anything the fixed fields and common details above don't cover — whatever's specific to this exact property.</p>
       <div id="customFieldsList"></div>
       <button type="button" class="add-paid-amenity-btn" id="addCustomFieldBtn">+ Add a Field</button>
+
+      <div class="eyebrow" style="margin-top:28px;">Check-In Photos <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(up to 3 — a parking spot, a lockbox, the entrance, etc.)</span></div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:14px;">A caption plus a photo says more than either alone. These get linked in <code>@checkininfo</code> and the automatic send below, since messages here are text-only — a guest taps the link to see the photo.</p>
+      <div id="checkinPhotoSlots" style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:24px;"></div>
 
       <div class="eyebrow" style="margin-top:28px;">Check-In Instructions Preview</div>
       <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:10px;">This is assembled automatically from everything above, and updates as you type. It's what <code>@checkininfo</code> inserts into a message, and what gets sent if you turn on automatic sending below.</p>
@@ -797,10 +813,14 @@
   let customFieldRows = [];
   const customFieldsList = document.getElementById('customFieldsList');
 
-  // Genuinely common across almost any stay or hosted experience — not
-  // exhaustive, just the things guests most often ask about, so a host
-  // isn't starting from a blank page for the basics. Anything specific
-  // enough not to be here belongs in "Additional Details" below instead.
+  // Genuinely common across almost any stay — not exhaustive, just the
+  // things guests most often ask about, so a host isn't starting from a
+  // blank page for the basics. Anything specific enough not to be here
+  // belongs in "Additional Details" below instead. This tab only exists
+  // on the property/stay management page, so nothing experience-specific
+  // (meeting points, what to bring, etc.) belongs in this list — those
+  // would need their own equivalent built into the experience management
+  // form, which doesn't have this feature yet.
   const COMMON_CHECKIN_FIELDS = [
     'Parking Instructions',
     'Building / Gate Access Code',
@@ -819,9 +839,7 @@
     'Nearest Hospital / Pharmacy',
     'Nearest Grocery Store',
     'Public Transport / Taxi Info',
-    'Building Security / Front Desk Contact',
-    'Meeting Point Details (for Experiences)',
-    'What to Bring (for Experiences)'
+    'Building Security / Front Desk Contact'
   ];
 
   function renderCommonCheckinFields(){
@@ -929,12 +947,98 @@
     customFieldRows.forEach(row => {
       if(row.label && row.value) lines.push(`${row.label}: ${row.value}`);
     });
+    // Messages are text-only, so a photo becomes "Caption: link" — a
+    // guest taps it to see the actual picture. Only a slot that has a
+    // real photo (uploaded or newly picked) shows up; a caption typed
+    // with no photo yet isn't included, since there'd be nothing to link to.
+    checkinPhotoSlots.forEach(slot => {
+      const hasPhoto = slot.file || slot.url;
+      if(hasPhoto) lines.push(`${slot.caption || 'Photo'}: ${slot.file ? '[will upload on save]' : slot.url}`);
+    });
     const previewEl = document.getElementById('checkinInstructionsPreview');
     previewEl.textContent = lines.length ? lines.join('\n') : 'Nothing filled in yet — add details above to see them here.';
   }
   ['checkInTime', 'checkOutTime', 'wifiName', 'wifiPassword', 'accessCode'].forEach(id => {
     document.getElementById(id).addEventListener('input', updateCheckinInstructionsPreview);
   });
+
+  // ---- Check-in photos — up to 3 caption+photo pairs. Each slot tracks
+  // either an already-uploaded url (from the server) or a newly-picked
+  // File pending upload (uploaded only on save, same lazy-upload pattern
+  // as the exterior/interior photo manager above — no point sending a
+  // file to Blob storage for a photo the host might still change their
+  // mind about before actually saving).
+  let checkinPhotoSlots = [
+    { caption: '', url: null, file: null },
+    { caption: '', url: null, file: null },
+    { caption: '', url: null, file: null }
+  ];
+
+  function renderCheckinPhotoSlots(){
+    const container = document.getElementById('checkinPhotoSlots');
+    container.innerHTML = checkinPhotoSlots.map((slot, i) => {
+      const previewSrc = slot.file ? URL.createObjectURL(slot.file) : slot.url;
+      return `
+        <div class="checkin-photo-slot">
+          <div class="checkin-photo-slot-box" data-slot-pick="${i}">
+            ${previewSrc ? `<img src="${previewSrc}" alt="">` : '<span>+ Add Photo</span>'}
+          </div>
+          <input type="text" placeholder="Caption, e.g. Parking Spot" value="${slot.caption || ''}" data-slot-caption="${i}">
+          ${previewSrc ? `<button type="button" class="checkin-photo-remove-btn" data-slot-remove="${i}">Remove photo</button>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('[data-slot-pick]').forEach(box => {
+      box.addEventListener('click', () => {
+        const idx = Number(box.dataset.slotPick);
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.addEventListener('change', () => {
+          if(input.files[0]){
+            checkinPhotoSlots[idx].file = input.files[0];
+            checkinPhotoSlots[idx].url = null;
+            renderCheckinPhotoSlots();
+            updateCheckinInstructionsPreview();
+          }
+        });
+        input.click();
+      });
+    });
+    container.querySelectorAll('[data-slot-caption]').forEach(input => {
+      input.addEventListener('input', () => {
+        checkinPhotoSlots[Number(input.dataset.slotCaption)].caption = input.value;
+        updateCheckinInstructionsPreview();
+      });
+    });
+    container.querySelectorAll('[data-slot-remove]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.slotRemove);
+        checkinPhotoSlots[idx] = { caption: checkinPhotoSlots[idx].caption, url: null, file: null };
+        renderCheckinPhotoSlots();
+        updateCheckinInstructionsPreview();
+      });
+    });
+  }
+
+  // Uploads any newly-picked files (existing ones untouched) and returns
+  // the final array to save. Empty slots (no photo at all, caption or
+  // not) are simply omitted — a caption with nothing to caption isn't
+  // meaningful to save.
+  async function finalizeCheckinPhotos(){
+    const result = [];
+    for(const slot of checkinPhotoSlots){
+      if(slot.file){
+        const { upload } = await import('https://esm.sh/@vercel/blob/client');
+        const uploaded = await upload(slot.file.name, slot.file, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        result.push({ caption: slot.caption || '', url: uploaded.url });
+      } else if(slot.url){
+        result.push({ caption: slot.caption || '', url: slot.url });
+      }
+    }
+    return result;
+  }
 
   // ---- Pricing currency: lets a host view/edit their listing's INR
   // prices in their own currency. Purely a display/input convenience —
@@ -1105,6 +1209,13 @@
       customFieldRows = (data.customFields || []).map(f => ({ id: f.id, label: f.field_label, value: f.field_value || '' }));
       renderCommonCheckinFields();
       renderCustomFields();
+
+      const savedPhotos = Array.isArray(l.checkin_photos) ? l.checkin_photos : [];
+      checkinPhotoSlots = [0, 1, 2].map(i => savedPhotos[i]
+        ? { caption: savedPhotos[i].caption || '', url: savedPhotos[i].url, file: null }
+        : { caption: '', url: null, file: null });
+      renderCheckinPhotoSlots();
+
       updateCheckinInstructionsPreview();
 
       if(l.pet_friendly === true){
@@ -1152,9 +1263,10 @@
     submitBtn.textContent = 'Saving…';
 
     try{
-      const [exteriorPhotoUrls, interiorPhotoUrls] = await Promise.all([
+      const [exteriorPhotoUrls, interiorPhotoUrls, checkinPhotos] = await Promise.all([
         exteriorManager.finalizeUrls(),
-        interiorManager.finalizeUrls()
+        interiorManager.finalizeUrls(),
+        finalizeCheckinPhotos()
       ]);
 
       const res = await fetch(API_BASE + '/api/update-listing-pricing', {
@@ -1191,7 +1303,8 @@
           wifiPassword: document.getElementById('wifiPassword').value,
           accessCode: document.getElementById('accessCode').value,
           customFields: customFieldRows,
-          autoSendCheckinInstructions: document.getElementById('autoSendCheckinInstructions').checked
+          autoSendCheckinInstructions: document.getElementById('autoSendCheckinInstructions').checked,
+          checkinPhotos
         })
       });
       const data = await res.json();
