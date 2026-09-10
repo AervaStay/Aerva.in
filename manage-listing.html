@@ -361,13 +361,20 @@
       <div id="checkinPhotoSlots" style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:24px;"></div>
 
       <div class="eyebrow" style="margin-top:28px;">Check-In Instructions Preview</div>
-      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:10px;">This is assembled automatically from everything above, and updates as you type. It's what <code>@checkininfo</code> inserts into a message, and what gets sent if you turn on automatic sending below.</p>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:10px;">This is assembled automatically from everything above, and updates as you type. It's what <code>@checkininfo</code> inserts into a message, and what gets sent by the scheduling option below.</p>
       <div id="checkinInstructionsPreview" style="background:#f4ebe3; border:1px solid #ddd0bc; padding:14px; font-size:13px; line-height:1.7; white-space:pre-wrap; margin-bottom:16px;"></div>
 
-      <label style="display:flex; align-items:flex-start; gap:10px; font-size:13px; font-weight:normal; letter-spacing:0; text-transform:none; color:#1c1a17; cursor:pointer; margin-bottom:24px;">
-        <input type="checkbox" id="autoSendCheckinInstructions" style="width:auto; margin-top:3px;">
-        <span>Automatically send the preview above to a guest the moment they confirm a booking for this property — no template needed, it just uses whatever's currently filled in here.</span>
-      </label>
+      <div class="eyebrow" style="margin-top:0;">Scheduling</div>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:10px;">Send the preview above automatically — no template needed, it just uses whatever's currently filled in when it fires. Timed options need something checking every few minutes to fire accurately, which isn't available on the current plan yet, so only immediate sending works right now.</p>
+      <div class="field" style="margin-bottom:24px;">
+        <label for="checkinScheduleTrigger">When should this send?</label>
+        <select id="checkinScheduleTrigger">
+          <option value="">Don't send automatically</option>
+          <option value="on_booking_confirmed">The moment a guest confirms their booking</option>
+          <option value="before_checkin" disabled>1 day before check-in, at a set time — coming soon</option>
+          <option value="on_checkin_day" disabled>On the day of check-in, at a set time — coming soon</option>
+        </select>
+      </div>
     </div>
 
       <button type="submit" class="btn" id="submitBtn">Save Changes</button>
@@ -1204,7 +1211,7 @@
       document.getElementById('wifiName').value = l.wifi_name || '';
       document.getElementById('wifiPassword').value = l.wifi_password || '';
       document.getElementById('accessCode').value = l.access_code || '';
-      document.getElementById('autoSendCheckinInstructions').checked = l.auto_send_checkin_instructions === true;
+      document.getElementById('checkinScheduleTrigger').value = l.auto_send_checkin_instructions === true ? 'on_booking_confirmed' : '';
 
       customFieldRows = (data.customFields || []).map(f => ({ id: f.id, label: f.field_label, value: f.field_value || '' }));
       renderCommonCheckinFields();
@@ -1303,7 +1310,7 @@
           wifiPassword: document.getElementById('wifiPassword').value,
           accessCode: document.getElementById('accessCode').value,
           customFields: customFieldRows,
-          autoSendCheckinInstructions: document.getElementById('autoSendCheckinInstructions').checked,
+          autoSendCheckinInstructions: document.getElementById('checkinScheduleTrigger').value === 'on_booking_confirmed',
           checkinPhotos
         })
       });
