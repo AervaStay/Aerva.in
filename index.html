@@ -8,6 +8,7 @@
 <!-- Security hardening -->
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
   script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com https://fonts.googleapis.com https://esm.sh https://maps.googleapis.com https://unpkg.com;
@@ -8541,14 +8542,23 @@
     const availableFromIso = exp.experience_available_from ? String(exp.experience_available_from).slice(0, 10) : null;
     const availableUntilIso = exp.experience_available_until ? String(exp.experience_available_until).slice(0, 10) : null;
     const bookDateMin = (availableFromIso && availableFromIso > tomorrowIso) ? availableFromIso : tomorrowIso;
-    const bookDateMax = availableUntilIso || null;
-    const availabilityNoteHtml = (availableFromIso || availableUntilIso) ? `
+    // A host-set "Available Until" date that's already in the past, or
+    // earlier than the earliest bookable date, would otherwise disable
+    // EVERY day on the calendar with no warning to anyone — every date
+    // would count as "overrunning" a window that's already closed. That
+    // silently makes the whole experience unbookable: no listener even
+    // gets attached to a disabled cell, so clicking does nothing and
+    // throws no error either, which is exactly what made this hard to
+    // spot. Treated as "no upper bound" instead when it's not actually
+    // usable, rather than trusting it blindly.
+    const bookDateMax = (availableUntilIso && availableUntilIso >= bookDateMin) ? availableUntilIso : null;
+    const availabilityNoteHtml = (availableFromIso || bookDateMax) ? `
       <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">
-        ${availableFromIso && availableUntilIso
-          ? `Available ${new Date(availableFromIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(availableUntilIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`
+        ${availableFromIso && bookDateMax
+          ? `Available ${new Date(availableFromIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(bookDateMax + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`
           : availableFromIso
           ? `Available from ${new Date(availableFromIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`
-          : `Available through ${new Date(availableUntilIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`}
+          : `Available through ${new Date(bookDateMax + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`}
       </p>
     ` : '';
 
