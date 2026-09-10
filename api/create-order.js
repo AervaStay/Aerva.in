@@ -567,20 +567,40 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} doesn't have a price set yet.` });
       }
 
-      // Multi-day experiences (a 3-day trek, etc.) — the guest picks a
-      // single start date; the end date (exclusive, same convention as
-      // a stay's own arrival/departure) is computed from the host's set
-      // duration, never trusted from the request itself.
-      const durationDays = experience.experience_duration_days && experience.experience_duration_days >= 1
-        ? experience.experience_duration_days
-        : 1;
-      const endDateExclusive = addDaysToDateStr(ex.date, durationDays);
+      // Guest-selected range (start + end, inclusive on both ends) — a
+      // real product decision to let guests pick their own range instead
+      // of a host-fixed duration, replacing what used to be computed
+      // automatically from experience_duration_days. That column is
+      // still read above and still used as a sensible default duration
+      // when a request doesn't send an endDate (an older/unfinished
+      // client, or a single-day experience), but it's no longer the
+      // authoritative length once a real range is provided.
+      //
+      // PRICING NOTE: experience.nightly_rate is treated here as a
+      // PER-DAY rate (price × days), same convention a stay's own
+      // nightly_rate already uses — this is a deliberate interim choice,
+      // not a finished pricing model. There's currently no dedicated
+      // "per day" vs "flat regardless of length" distinction in the
+      // schema (experience_price_unit is only 'per_person' vs 'flat'),
+      // so a genuinely flat-regardless-of-days experience will currently
+      // scale with the guest's chosen range too. Revisit this once the
+      // real per-day pricing model is decided — this keeps the range
+      // FEATURE itself correct and shippable without blocking on that
+      // separate decision.
+      const fallbackDurationDays = experience.experience_duration_days && experience.experience_duration_days >= 1
+        ? experience.experience_duration_days : 1;
+      const rawEndDate = typeof ex.endDate === 'string' && ex.endDate ? ex.endDate : null;
+      const startDate = ex.date;
+      const endDateInclusive = rawEndDate && rawEndDate >= startDate ? rawEndDate : addDaysToDateStr(startDate, fallbackDurationDays - 1);
+      const endDateExclusive = addDaysToDateStr(endDateInclusive, 1);
+      const days = Math.round((new Date(endDateExclusive) - new Date(startDate)) / (1000 * 60 * 60 * 24));
+      const durationDays = days; // kept as `durationDays` below since calculateDiscount's minNights gate reads this name
 
       // Optional host-set season/date-range this experience actually
       // runs in — the guest's date picker already constrains this via
       // min/max, but that's client-side only, so it's re-checked here
-      // for real before any money moves. Checked against the END of a
-      // multi-day booking too, not just its start.
+      // for real before any money moves. Checked against the END of the
+      // guest's selected range too, not just its start.
       //
       // A misconfigured "available_until" (earlier than available_from,
       // or the whole window already in the past) would otherwise reject
@@ -599,21 +619,21 @@ module.exports = async (req, res) => {
         && experience.experience_available_until >= effectiveMinDate
         ? experience.experience_available_until
         : null;
-      if (experience.experience_available_from && ex.date < experience.experience_available_from) {
+      if (experience.experience_available_from && startDate < experience.experience_available_from) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available until ${experience.experience_available_from}.` });
       }
-      if (usableAvailableUntil && addDaysToDateStr(ex.date, durationDays - 1) > usableAvailableUntil) {
+      if (usableAvailableUntil && endDateInclusive > usableAvailableUntil) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available after ${usableAvailableUntil}.` });
       }
 
-      // Host-blocked dates, checked across the FULL span of a multi-day
-      // booking — same overlap rule stays already use (see the stay
-      // loop above), not just an exact match on the start date.
+      // Host-blocked dates, checked across the FULL guest-selected range
+      // — same overlap rule stays already use (see the stay loop above),
+      // not just an exact match on the start date.
       const experienceBlockedRows = await sql`
         SELECT 1 FROM listing_blocked_dates
         WHERE listing_id = ${ex.listingId}
           AND start_date < ${endDateExclusive}::date
-          AND end_date > ${ex.date}::date
+          AND end_date > ${startDate}::date
         LIMIT 1
       `;
       if (experienceBlockedRows[0]) {
@@ -626,23 +646,22 @@ module.exports = async (req, res) => {
       }
 
       const price = Number(experience.nightly_rate);
-      const subtotalBeforeDiscount = experience.experience_price_unit === 'per_person' ? price * guests : price;
+      const subtotalBeforeDiscount = experience.experience_price_unit === 'per_person' ? price * guests * days : price * days;
 
       // Same discount logic stays use — the listing's own standing
       // discount and/or any date-scoped promotions (see
       // update-listing-pricing.js) — previously never applied to
       // experiences at all, so a host's promotion calendar was purely
-      // cosmetic for anything booked here. "Nights" doesn't really apply
-      // to an experience, but calculateDiscount only uses it for a
-      // minNights gate, so durationDays stands in for it — a promotion
-      // requiring "2+ nights" on a 1-day experience simply never
-      // qualifies, which is the correct behavior either way.
+      // cosmetic for anything booked here. durationDays is now the
+      // guest's real selected day count (see above), so a "2+ nights"
+      // promotion now genuinely reflects how long they're actually
+      // booking, not a host-fixed default.
       const experiencePromoRows = await sql`
         SELECT is_active, discount_type, discount_value, min_nights, start_date, end_date
         FROM listing_promotions
         WHERE listing_id = ${ex.listingId} AND is_active = TRUE AND end_date > CURRENT_DATE
       `;
-      const subtotal = subtotalBeforeDiscount - calculateDiscount(experience, durationDays, ex.date, subtotalBeforeDiscount, experiencePromoRows);
+      const subtotal = subtotalBeforeDiscount - calculateDiscount(experience, durationDays, startDate, subtotalBeforeDiscount, experiencePromoRows);
       const commissionRate = BASE_COMMISSION_RATE;
       const commissionAmount = Math.round(subtotal * (commissionRate / 100));
       const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
@@ -653,7 +672,7 @@ module.exports = async (req, res) => {
       experienceDetails.push({
         listingId: experience.id,
         suite: experience.property_name,
-        date: ex.date,
+        date: startDate,
         endDate: endDateExclusive,
         durationDays,
         guests,
