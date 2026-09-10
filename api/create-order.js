@@ -581,11 +581,29 @@ module.exports = async (req, res) => {
       // min/max, but that's client-side only, so it's re-checked here
       // for real before any money moves. Checked against the END of a
       // multi-day booking too, not just its start.
+      //
+      // A misconfigured "available_until" (earlier than available_from,
+      // or the whole window already in the past) would otherwise reject
+      // EVERY booking attempt for this experience with a confusing
+      // "isn't available after [stale date]" error — even after
+      // index.html's own calendar was fixed to stop disabling every day
+      // for the same reason. Same "not actually usable, so ignore it"
+      // fallback applied here, checked against whichever is later of
+      // available_from or today — matching the calendar's own bookDateMin
+      // exactly, so what a guest is allowed to pick and what the server
+      // actually accepts never disagree.
+      const todayIso = toDateStr(new Date());
+      const effectiveMinDate = experience.experience_available_from && experience.experience_available_from > todayIso
+        ? experience.experience_available_from : todayIso;
+      const usableAvailableUntil = experience.experience_available_until
+        && experience.experience_available_until >= effectiveMinDate
+        ? experience.experience_available_until
+        : null;
       if (experience.experience_available_from && ex.date < experience.experience_available_from) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available until ${experience.experience_available_from}.` });
       }
-      if (experience.experience_available_until && addDaysToDateStr(ex.date, durationDays - 1) > experience.experience_available_until) {
-        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available after ${experience.experience_available_until}.` });
+      if (usableAvailableUntil && addDaysToDateStr(ex.date, durationDays - 1) > usableAvailableUntil) {
+        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available after ${usableAvailableUntil}.` });
       }
 
       // Host-blocked dates, checked across the FULL span of a multi-day
