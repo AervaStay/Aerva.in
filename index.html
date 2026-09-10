@@ -469,7 +469,7 @@
   .amenity-tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:12px;}
   .amenity-tag{
     font-size:10.5px; letter-spacing:0.03em; padding:4px 10px; border:1px solid var(--line-dark);
-    color:var(--ink); opacity:0.75; white-space:nowrap;
+    color:var(--ink); opacity:0.75; white-space:normal; max-width:100%; word-break:break-word;
   }
   .amenity-tag-more{color:var(--gold-deep); opacity:1; border-color:var(--gold-deep);}
   .suite-card .link{margin-top:20px; font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink); border-top:1px solid var(--line-dark); padding-top:16px; display:flex; justify-content:space-between; align-items:center;}
@@ -1025,8 +1025,19 @@
     .calendar-months{flex-direction:column; gap:20px;}
     /* Two columns at tablet width (900px breakpoint above) becomes two
        cramped, narrow cards on an actual phone — a genuine single-column
-       list reads far better here. */
+       list reads far better here. This used to be overridden right back
+       to two columns by the 900px block above it: both media queries
+       are true at once on a phone (390px is ≤640px AND ≤900px), and
+       since that other rule came later in the file, it always won,
+       silently undoing this. Fixed by bounding the tablet rule below to
+       stop overlapping this one at all, rather than relying on source
+       order between two rules that both apply. */
     .suite-grid{grid-template-columns:1fr;}
+  }
+  @media (min-width:641px) and (max-width:900px){
+    /* Tablet width only now — see the note above on why this needed a
+       lower bound. */
+    .suite-grid{grid-template-columns:1fr 1fr;}
   }
 
   .photo-preview-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:10px; margin-top:12px;}
@@ -1188,7 +1199,6 @@
     .nav-links{display:none;}
     .nav-toggle{display:flex; flex-direction:column;}
     .phil-grid, .reserve-grid, .loc-grid{grid-template-columns:1fr; gap:44px;}
-    .suite-grid{grid-template-columns:1fr 1fr;}
     .exp-row{grid-template-columns:1fr; gap:8px;}
     .exp-time{padding-top:0;}
     .foot-grid{grid-template-columns:1fr 1fr; row-gap:36px;}
