@@ -8688,11 +8688,12 @@
           <div class="listing-col-booking">
             <div class="listing-modal-section-title" style="margin-top:16px;">Book This Experience</div>
             <div class="field">
-              <label>${(exp.experience_duration_days && exp.experience_duration_days > 1) ? 'Start Date' : 'Date'}</label>
+              <label>Dates</label>
               <div id="expBookCalendar" data-min="${bookDateMin}" data-max="${bookDateMax || ''}">
                 <p style="font-size:13px; opacity:0.6;">Loading calendar…</p>
               </div>
               <input type="hidden" id="expBookDate">
+              <input type="hidden" id="expBookEndDate">
               ${availabilityNoteHtml}
             </div>
             <div class="guest-row" style="padding-top:16px;">
@@ -8752,42 +8753,47 @@
   }
 
   // A real visual calendar for booking an experience — same month-grid
-  // pattern as renderAvailabilityCalendar (stays), but simpler: single
-  // date selection, no booked-nights concept (experiences don't track
-  // per-date capacity yet), just past dates and the host's optional
-  // Available From/Until window greyed out. This replaces what used to
-  // be a bare native <input type="date"> — that had a real min/max
-  // constraint underneath, but nothing about it looked any different
-  // from a plain date field, so a guest had no way to actually SEE that
-  // a range existed at all, especially on mobile where native date
-  // pickers vary a lot and often show no visual hint of min/max.
+  // pattern as renderAvailabilityCalendar (stays), and now genuinely the
+  // SAME interaction too: two clicks pick a start and end date, exactly
+  // like a stay's arrival/departure. This used to auto-compute the end
+  // date from the host's fixed experience_duration_days, letting the
+  // guest only ever pick a single start date — that's a real product
+  // decision to change (guests choosing their own range instead of a
+  // host-fixed length), not a bug fix. create-order.js now prices this
+  // as price × days, an interim assumption pending a real "per day"
+  // pricing model — see the comment there.
   function renderExpBookingCalendar(exp){
     const container = document.getElementById('expBookCalendar');
     if(!container) return;
     const minIso = container.dataset.min;
     const maxIso = container.dataset.max || null;
-    // Multi-day experience (a 3-day trek, etc.) — the guest still just
-    // picks ONE start date; the end date is computed client-side purely
-    // to show what range that selection covers. The server (create-
-    // order.js) recomputes and validates this itself from the same
-    // duration — this is display only, never trusted as the real check.
-    const durationDays = exp.experience_duration_days && exp.experience_duration_days >= 1 ? exp.experience_duration_days : 1;
 
-    let selectedDate = '';
+    let expArrival = '';
+    let expDeparture = '';
+    let expSelectingStart = true;
     let viewYear, viewMonth;
     const minDateObj = new Date(minIso + 'T00:00:00');
     viewYear = minDateObj.getFullYear();
     viewMonth = minDateObj.getMonth();
 
-    function addDaysIso(iso, days){
-      const d = new Date(iso + 'T00:00:00');
-      d.setDate(d.getDate() + days);
-      return toLocalDateStr(d);
-    }
-
-    function selectDate(iso){
-      selectedDate = iso;
-      document.getElementById('expBookDate').value = iso;
+    function handleExpDayClick(iso){
+      if(expSelectingStart || !expArrival){
+        expArrival = iso;
+        expDeparture = '';
+        expSelectingStart = false;
+      } else if(iso <= expArrival){
+        // Picked an earlier (or same) date as the second click — start a
+        // fresh selection from here instead, same convention the stay
+        // calendar uses.
+        expArrival = iso;
+        expDeparture = '';
+        expSelectingStart = false;
+      } else {
+        expDeparture = iso;
+        expSelectingStart = true;
+      }
+      document.getElementById('expBookDate').value = expArrival;
+      document.getElementById('expBookEndDate').value = expDeparture;
       updateExperiencePriceSummary(exp);
       renderMonth();
     }
@@ -8800,33 +8806,23 @@
       const maxDateObj = maxIso ? new Date(maxIso + 'T00:00:00') : null;
       const isMaxMonth = maxDateObj && viewYear === maxDateObj.getFullYear() && viewMonth === maxDateObj.getMonth();
 
-      // The span a currently-selected start date would cover — used to
-      // shade every day in between, not just the start, so a multi-day
-      // booking visually reads as one block on the calendar.
-      const selectedEndInclusive = selectedDate ? addDaysIso(selectedDate, durationDays - 1) : null;
-
       let cellsHtml = '';
       for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
       for(let day = 1; day <= daysInMonth; day++){
         const iso = toLocalDateStr(new Date(viewYear, viewMonth, day));
-        // A start date this late would push the experience's END past
-        // the host's available-until window — disabled the same way a
-        // too-early date already is, rather than letting the guest pick
-        // something the server will just reject anyway.
-        const wouldOverrun = maxIso && addDaysIso(iso, durationDays - 1) > maxIso;
-        const isDisabled = iso < minIso || wouldOverrun;
+        const isDisabled = iso < minIso || (maxIso && iso > maxIso);
         let classes = 'calendar-day';
         if(isDisabled) classes += ' disabled';
-        if(iso === selectedDate) classes += ' selected-start';
-        else if(selectedDate && iso > selectedDate && iso <= selectedEndInclusive) classes += ' selected-start';
+        if(iso === expArrival || iso === expDeparture) classes += ' selected-start';
+        else if(expArrival && expDeparture && iso > expArrival && iso < expDeparture) classes += ' in-range';
         cellsHtml += `<div class="${classes}" data-exp-date="${iso}">${day}</div>`;
       }
 
-      const rangeNoteHtml = selectedDate
-        ? (durationDays > 1
-            ? `<p style="font-size:12px; margin-top:10px;"><strong>${new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(selectedEndInclusive + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</strong> (${durationDays} days)</p>`
-            : '')
-        : `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick a${durationDays > 1 ? ' start' : ''} date to see the price and continue booking.</p>`;
+      const rangeNoteHtml = expArrival && expDeparture
+        ? `<p style="font-size:12px; margin-top:10px;"><strong>${new Date(expArrival + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(expDeparture + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</strong></p>`
+        : expArrival
+        ? `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Now pick your end date.</p>`
+        : `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick your dates to see the price and continue booking.</p>`;
 
       container.innerHTML = `
         <div class="calendar-month-panel" style="max-width:320px; padding:0;">
@@ -8856,7 +8852,7 @@
       container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
         cell.addEventListener('click', (e) => {
           e.stopPropagation();
-          selectDate(cell.dataset.expDate);
+          handleExpDayClick(cell.dataset.expDate);
         });
       });
     }
@@ -8869,19 +8865,23 @@
     if(!summaryEl) return;
     const guests = Number(document.getElementById('expGuestsCount').textContent) || 1;
     const price = exp.price ? Number(exp.price) : 0;
-    if(!price){
+    const startDate = document.getElementById('expBookDate') ? document.getElementById('expBookDate').value : '';
+    const endDate = document.getElementById('expBookEndDate') ? document.getElementById('expBookEndDate').value : '';
+    if(!price || !startDate || !endDate){
       summaryEl.style.display = 'none';
       return;
     }
-    const subtotalBeforeDiscount = exp.experience_price_unit === 'per_person' ? price * guests : price;
+    // Guest-picked range now, same as a stay's own nights count — see
+    // create-order.js's matching comment on why exp.price is treated as
+    // a PER-DAY rate here (an interim pricing decision, not a finished
+    // model). Inclusive of both the start and end day.
+    const days = Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1;
+    const subtotalBeforeDiscount = (exp.experience_price_unit === 'per_person' ? price * guests : price) * days;
     // Same discount logic stays use — mirrors calculateDiscount exactly.
-    // durationDays stands in for "nights" here purely for the promotion's
-    // own minNights gate; a 1-day experience simply never qualifies for
-    // a "2+ nights" promotion, matching what create-order.js actually
-    // charges at checkout.
-    const durationDays = exp.experience_duration_days && exp.experience_duration_days > 1 ? exp.experience_duration_days : 1;
-    const selectedDate = document.getElementById('expBookDate') ? document.getElementById('expBookDate').value : '';
-    const discount = calculateDiscount(exp, durationDays, selectedDate, subtotalBeforeDiscount);
+    // days now stands in for "nights" using the guest's real selected
+    // range, not a host-fixed default — matching what create-order.js
+    // actually charges at checkout.
+    const discount = calculateDiscount(exp, days, startDate, subtotalBeforeDiscount);
     const subtotal = subtotalBeforeDiscount - discount.amount;
     const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
     const total = subtotal + guestServiceFee;
@@ -8891,9 +8891,12 @@
     const discountRowHtml = discount.amount > 0
       ? `<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discount.amount)}</span></div>`
       : '';
+    const rateLine = exp.experience_price_unit === 'per_person'
+      ? `${fmtGuest(price)} × ${guests} guest${guests === 1 ? '' : 's'} × ${days} day${days === 1 ? '' : 's'}`
+      : `${fmtGuest(price)} × ${days} day${days === 1 ? '' : 's'}`;
     summaryEl.innerHTML = `
       <div class="listing-modal-section-title">Price Summary</div>
-      <div class="sum-row"><span>${exp.experience_price_unit === 'per_person' ? fmtGuest(price) + ' × ' + guests + ' guest' + (guests === 1 ? '' : 's') : 'Flat price'}</span><span>${fmtGuest(subtotalBeforeDiscount)}</span></div>
+      <div class="sum-row"><span>${rateLine}</span><span>${fmtGuest(subtotalBeforeDiscount)}</span></div>
       ${discountRowHtml}
       <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
       <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
@@ -8915,8 +8918,9 @@
     }
 
     const date = document.getElementById('expBookDate').value;
-    if(!date){
-      errorEl.textContent = 'Please choose a date for this experience.';
+    const endDate = document.getElementById('expBookEndDate').value;
+    if(!date || !endDate){
+      errorEl.textContent = 'Please choose both a start and end date for this experience.';
       errorEl.style.display = 'block';
       return;
     }
@@ -8943,7 +8947,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
         body: JSON.stringify({
-          experiences: [{ listingId: exp.id, date, guests }],
+          experiences: [{ listingId: exp.id, date, endDate, guests }],
           email,
           preferredCurrency: currentCurrency,
           couponCode: document.getElementById('expCouponCode').value.trim() || undefined
