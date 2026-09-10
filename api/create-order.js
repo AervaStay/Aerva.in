@@ -567,26 +567,19 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} doesn't have a price set yet.` });
       }
 
-      // Guest-selected range (start + end, inclusive on both ends) — a
-      // real product decision to let guests pick their own range instead
-      // of a host-fixed duration, replacing what used to be computed
-      // automatically from experience_duration_days. That column is
-      // still read above and still used as a sensible default duration
-      // when a request doesn't send an endDate (an older/unfinished
-      // client, or a single-day experience), but it's no longer the
-      // authoritative length once a real range is provided.
-      //
-      // PRICING NOTE: experience.nightly_rate is treated here as a
-      // PER-DAY rate (price × days), same convention a stay's own
-      // nightly_rate already uses — this is a deliberate interim choice,
-      // not a finished pricing model. There's currently no dedicated
-      // "per day" vs "flat regardless of length" distinction in the
-      // schema (experience_price_unit is only 'per_person' vs 'flat'),
-      // so a genuinely flat-regardless-of-days experience will currently
-      // scale with the guest's chosen range too. Revisit this once the
-      // real per-day pricing model is decided — this keeps the range
-      // FEATURE itself correct and shippable without blocking on that
-      // separate decision.
+      // Guest-selected range (start + end, inclusive on both ends) — the
+      // range represents the guest's AVAILABILITY window (e.g. "I'm free
+      // these 2 days"), not a variable-length purchase — price stays the
+      // fixed package rate above regardless of how many days are
+      // selected. What the range actually determines is whether this
+      // experience's own fixed duration can even fit inside it: a
+      // 15-hour package comfortably fits a 2-day (48-hour) window, so
+      // that combination is valid and should be allowed; a 2-day (48hr)
+      // package obviously can't fit inside a same-day (24hr) window.
+      // experience_duration_days still exists as a fallback for the
+      // separate stay add-on flow (which never sends an endDate), but
+      // once a real range is provided, it's checked as a MINIMUM
+      // requirement rather than treated as the authoritative length.
       const fallbackDurationDays = experience.experience_duration_days && experience.experience_duration_days >= 1
         ? experience.experience_duration_days : 1;
       const rawEndDate = typeof ex.endDate === 'string' && ex.endDate ? ex.endDate : null;
@@ -595,6 +588,22 @@ module.exports = async (req, res) => {
       const endDateExclusive = addDaysToDateStr(endDateInclusive, 1);
       const days = Math.round((new Date(endDateExclusive) - new Date(startDate)) / (1000 * 60 * 60 * 24));
       const durationDays = days; // kept as `durationDays` below since calculateDiscount's minNights gate reads this name
+
+      // Does the guest's selected window actually give this experience
+      // enough time to happen at all? Same convention the card display
+      // already uses (see buildExperienceCard's durationDaysLine/
+      // durationHoursLine): experience_duration_hours is PER DAY when
+      // experience_duration_days is more than 1 (e.g. "3 days, 5
+      // hours/day"), or the one TOTAL duration when it's a single-day
+      // package (e.g. "15 hours", possibly running past midnight into a
+      // second calendar date without being a multi-day experience).
+      const requiredHours = (experience.experience_duration_days && experience.experience_duration_days > 1)
+        ? experience.experience_duration_days * (Number(experience.experience_duration_hours) || 24)
+        : (Number(experience.experience_duration_hours) || 24);
+      const availableHours = days * 24;
+      if (requiredHours > availableHours) {
+        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} needs about ${requiredHours} hours — the dates you selected only give it ${availableHours}. Please select a longer range.` });
+      }
 
       // Optional host-set season/date-range this experience actually
       // runs in — the guest's date picker already constrains this via
@@ -646,7 +655,12 @@ module.exports = async (req, res) => {
       }
 
       const price = Number(experience.nightly_rate);
-      const subtotalBeforeDiscount = experience.experience_price_unit === 'per_person' ? price * guests * days : price * days;
+      // Price is the fixed package rate for this experience — never
+      // scaled by how many days are in the guest's selected range. The
+      // range represents the guest's AVAILABILITY window, not "how many
+      // days of this experience they're buying" — see the days/duration
+      // check below for what the range is actually used for.
+      const subtotalBeforeDiscount = experience.experience_price_unit === 'per_person' ? price * guests : price;
 
       // Same discount logic stays use — the listing's own standing
       // discount and/or any date-scoped promotions (see
