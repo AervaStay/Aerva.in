@@ -6599,6 +6599,12 @@
     (Array.isArray(conv.custom_fields) ? conv.custom_fields : []).forEach(f => {
       if(f.label && f.value) lines.push(`${f.label}: ${f.value}`);
     });
+    // Messages are text-only — a photo becomes "Caption: link" so a
+    // guest can tap through to see it, same convention
+    // manage-listing.html's own live preview uses.
+    (Array.isArray(conv.checkin_photos) ? conv.checkin_photos : []).forEach(p => {
+      if(p.url) lines.push(`${p.caption || 'Photo'}: ${p.url}`);
+    });
     return lines.length ? lines.join('\n') : '(check-in instructions not set yet)';
   }
   function resolveTemplatePlaceholders(text, conv){
