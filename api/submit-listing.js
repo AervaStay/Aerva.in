@@ -487,7 +487,21 @@ module.exports = async (req, res) => {
       }
     }
 
-    const rate = nightlyRate ? Number(nightlyRate) : null;
+    // A Resort's listing-level rate isn't something the host types
+    // anymore — it's computed as the lowest room price submitted, since
+    // that's the genuine "from ₹X/night" a guest would actually see,
+    // rather than a separate, redundant number that could drift out of
+    // sync with the real room prices. Every other property type still
+    // uses whatever the host entered directly.
+    let rate;
+    if (propertyType === 'Resort') {
+      const bedroomPrices = Array.isArray(roomPhotos)
+        ? roomPhotos.filter(r => r && r.isBedroom && Number(r.price) > 0).map(r => Number(r.price))
+        : [];
+      rate = bedroomPrices.length ? Math.min(...bedroomPrices) : null;
+    } else {
+      rate = nightlyRate ? Number(nightlyRate) : null;
+    }
     // Only accept strings that look like real Blob URLs — defensive against
     // a tampered request trying to inject arbitrary content here. Capped
     // at 20 per category, matching MAX_LISTING_PHOTOS in aerva.html — this

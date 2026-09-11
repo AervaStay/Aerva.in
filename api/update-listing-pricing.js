@@ -351,15 +351,20 @@ module.exports = async (req, res) => {
         }
       }
 
-      // ---- Sync resort rooms — only meaningful when property_type is
-      // 'Resort', but not restricted to it here (harmless no-op for
-      // anything else, since the array would just be empty). Same
-      // "submitted array is the full set" pattern as custom fields
-      // above. Each room carries its own price and occupancy limit —
-      // that's what makes a resort's rooms independently bookable and
-      // independently priced, rather than one blended rate for the
-      // whole property.
-      if (Array.isArray(rooms)) {
+      // ---- Sync resort rooms — was previously "harmless no-op for
+      // anything else, since the array would just be empty," but that
+      // assumption broke the moment recomputing nightly_rate (below)
+      // was added: manage-listing.html always sends rooms:[] for every
+      // non-Resort save too (roomRows is simply never populated for
+      // those), and an unconditional recompute would have overwritten
+      // every regular listing's real price with NULL on its very next
+      // save. Explicitly gated on property_type now, not just array
+      // presence. Same "submitted array is the full set" pattern as
+      // custom fields above. Each room carries its own price and
+      // occupancy limit — that's what makes a resort's rooms
+      // independently bookable and independently priced, rather than
+      // one blended rate for the whole property.
+      if (Array.isArray(rooms) && before[0].property_type === 'Resort') {
         try {
           const existingRoomRows = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${listingId}`;
           const existingRoomIds = new Set(existingRoomRows.map(r => r.id));
@@ -423,6 +428,19 @@ module.exports = async (req, res) => {
           if (roomIdsNoLongerSubmitted.length) {
             await sql`UPDATE listing_rooms SET is_active = false WHERE id = ANY(${roomIdsNoLongerSubmitted}) AND listing_id = ${listingId}`;
           }
+          // The listing's own nightly_rate — what actually drives the
+          // "From ₹X/night" card display, price filtering, and sorting
+          // everywhere on the site — is the lowest ACTIVE room price,
+          // recomputed fresh here. A host editing one room's price later
+          // (the very reason this Rooms tab exists) would otherwise
+          // leave the card showing a stale number from whatever it was
+          // at initial approval, or from a room that's since gone
+          // inactive.
+          const cheapestActiveRoom = await sql`
+            SELECT MIN(nightly_rate) AS min_rate FROM listing_rooms
+            WHERE listing_id = ${listingId} AND is_active = TRUE AND nightly_rate IS NOT NULL
+          `;
+          await sql`UPDATE listings SET nightly_rate = ${cheapestActiveRoom[0].min_rate} WHERE id = ${listingId}`;
         } catch (roomErr) {
           console.error('Resort rooms sync failed:', roomErr);
           // Doesn't fail the whole save — same as custom fields above.
