@@ -4138,15 +4138,41 @@
   async function uploadPhotoCategory(files){
     if(files.length === 0) return { urls: [], hashes: [] };
     const { upload } = await import('https://esm.sh/@vercel/blob/client');
-    const results = await Promise.all(
-      files.map(async file => {
+
+    // Limited concurrency, with one automatic retry per file, rather
+    // than uploading everything at once via a single Promise.all. A host
+    // filling in every Rooms & Spaces slot (several bedrooms plus
+    // Kitchen/Washroom/Living Room) can easily have 6-10+ photos
+    // uploading in the same instant now, all requesting a token from
+    // /api/blob-upload simultaneously — uploading that many at once
+    // seemed to intermittently trip a transient Vercel Blob error ("The
+    // object can not be found here") under that load. This spreads the
+    // requests out and gives a genuinely transient failure a second
+    // chance before it actually fails the whole submission.
+    const CONCURRENCY = 3;
+    async function uploadOne(file){
+      async function attempt(){
         const [uploaded, hash] = await Promise.all([
           upload(file.name, file, { access: 'public', handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload' }),
           computeFileHash(file)
         ]);
         return { url: uploaded.url, hash };
-      })
-    );
+      }
+      try{
+        return await attempt();
+      } catch(err){
+        console.warn('Photo upload failed once, retrying:', file.name, err);
+        await new Promise(r => setTimeout(r, 800));
+        return await attempt(); // a second failure is real — let it propagate
+      }
+    }
+
+    const results = [];
+    for(let i = 0; i < files.length; i += CONCURRENCY){
+      const batch = files.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(batch.map(uploadOne));
+      results.push(...batchResults);
+    }
     return { urls: results.map(r => r.url), hashes: results.map(r => r.hash) };
   }
 
