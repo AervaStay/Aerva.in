@@ -1681,7 +1681,7 @@
       </div>
       <div class="form-row">
         <div class="field">
-          <label for="listGuests">Max Guests <span style="color:#a3402f;">*</span></label>
+          <label for="listGuests"><span id="listGuestsLabel">Max Guests</span> <span id="listGuestsRequiredMark" style="color:#a3402f;">*</span></label>
           <select id="listGuests" name="Max Guests" required>
             <option value="" disabled selected>Select the maximum number of guests</option>
             <option>1</option>
@@ -1697,6 +1697,7 @@
             <option>11</option>
             <option>12+</option>
           </select>
+          <p id="listGuestsHint" style="font-size:11.5px; opacity:0.6; margin-top:4px; display:none;"></p>
         </div>
       </div>
       <div class="field">
@@ -1706,6 +1707,7 @@
       <div class="field">
         <label for="listPrice"><span id="listPriceLabel">Expected Nightly Rate (₹)</span> <span class="required-mark">*</span></label>
         <input id="listPrice" name="Expected Nightly Rate" type="number" min="0" placeholder="e.g. 4500" required>
+        <p id="listPriceHint" style="font-size:11.5px; opacity:0.6; margin-top:4px; display:none;"></p>
       </div>
       <div class="field">
         <label for="listSecurityDeposit"><span id="listSecurityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, refundable, held 7 days after checkout</span></label>
@@ -4092,14 +4094,38 @@
     const label = document.getElementById('listBedroomsLabel');
     const hint = document.getElementById('listBedroomsHint');
     const input = document.getElementById('listBedrooms');
+    const priceHint = document.getElementById('listPriceHint');
+    const guestsSelect = document.getElementById('listGuests');
+    const guestsRequiredMark = document.getElementById('listGuestsRequiredMark');
+    const guestsHint = document.getElementById('listGuestsHint');
     if(this.value === 'Resort'){
       label.textContent = 'Number of Rooms';
       input.placeholder = 'e.g. 10';
       hint.textContent = "You'll need at least this many interior photos below — one per room. Each room's own price, capacity, and photo are set separately after approval.";
+      // A Resort's real pricing lives per-room, set individually after
+      // approval (see manage-listing.html's Rooms tab) — this field
+      // isn't what a guest is ever actually charged, so it's reframed
+      // here as a rough starting figure for the admin review team,
+      // rather than looking like the property's one true rate the way
+      // it does for every other property type.
+      priceHint.textContent = "For a Resort, this is just a rough starting figure for our review team — each room's actual price is set individually after approval, not this number.";
+      priceHint.style.display = 'block';
+      // Max Guests is per-room only for a Resort (see submit-listing.js,
+      // which already doesn't require this field there) — not required
+      // client-side either now, so a Resort host isn't forced to pick an
+      // arbitrary number that has no real meaning for their listing.
+      guestsSelect.required = false;
+      guestsRequiredMark.style.display = 'none';
+      guestsHint.textContent = 'Not used for a Resort — each room sets its own capacity separately after approval.';
+      guestsHint.style.display = 'block';
     } else {
       label.textContent = 'Bedrooms';
       input.placeholder = 'e.g. 4 — enter 0 for a studio';
       hint.textContent = "You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.";
+      priceHint.style.display = 'none';
+      guestsSelect.required = true;
+      guestsRequiredMark.style.display = '';
+      guestsHint.style.display = 'none';
     }
   });
 
