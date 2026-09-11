@@ -154,7 +154,15 @@
     <form id="pricingForm">
       <div class="mgmt-tabs">
         <button type="button" class="mgmt-tab-btn active" data-mgmt-tab="mgmtTabDetails">Property Details</button>
+        <button type="button" class="mgmt-tab-btn" id="mgmtTabRoomsBtn" data-mgmt-tab="mgmtTabRooms" style="display:none;">Rooms</button>
         <button type="button" class="mgmt-tab-btn" data-mgmt-tab="mgmtTabCheckin">Guest Check-In Info</button>
+      </div>
+
+      <div class="mgmt-tab-panel" id="mgmtTabRooms">
+        <div class="eyebrow" style="margin-top:0;">Rooms</div>
+        <p style="font-size:12px; opacity:0.6; margin-top:-4px; margin-bottom:18px;">Each room is booked, priced, and made available independently — a guest can book Room A while Room B stays free for someone else. The nightly rate on the Property Details tab isn't used for a Resort; each room sets its own instead.</p>
+        <div id="roomsList"></div>
+        <button type="button" class="add-paid-amenity-btn" id="addRoomBtn">+ Add a Room</button>
       </div>
 
       <div class="mgmt-tab-panel active" id="mgmtTabDetails">
@@ -932,6 +940,52 @@
     renderCustomFields();
   });
 
+  // ---- Resort rooms — each independently priced, occupancy-limited,
+  // and (via orders.room_id / listing_blocked_dates.room_id) independently
+  // available. Only shown/relevant when property_type is 'Resort'.
+  let roomRows = [];
+  const roomsList = document.getElementById('roomsList');
+
+  function renderRooms(){
+    roomsList.innerHTML = '';
+    roomRows.forEach((room, idx) => {
+      const el = document.createElement('div');
+      el.className = 'paid-amenity-row';
+      el.innerHTML = `
+        <div class="row-line" style="grid-template-columns:2fr 1fr 1fr;">
+          <input type="text" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${room.roomName || ''}">
+          <input type="number" min="1" placeholder="Max guests" data-room-field="maxOccupancy" value="${room.maxOccupancy || ''}">
+          <input type="number" min="1" placeholder="₹ / night" data-room-field="nightlyRate" value="${room.nightlyRate || ''}">
+        </div>
+        <textarea rows="2" placeholder="Description (optional)" data-room-field="description" style="width:100%; margin-top:8px; padding:8px 10px; font-size:13px; font-family:'Jost', sans-serif;">${room.description || ''}</textarea>
+        <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; margin-top:8px; cursor:pointer;">
+          <input type="checkbox" data-room-field="isActive" ${room.isActive !== false ? 'checked' : ''}> Active — bookable by guests
+        </label>
+        <button type="button" class="remove-amenity-btn" data-action="remove">Remove this room</button>
+      `;
+      el.querySelectorAll('[data-room-field]').forEach(input => {
+        const field = input.dataset.roomField;
+        const eventName = input.type === 'checkbox' ? 'change' : 'input';
+        input.addEventListener(eventName, () => {
+          room[field] = input.type === 'checkbox' ? input.checked : input.value;
+        });
+      });
+      el.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        // A room with real booking history isn't hard-deleted server-side
+        // even if removed here (see update-listing-pricing.js) — it's
+        // just marked inactive, so removing it from this list and saving
+        // is always safe.
+        roomRows.splice(idx, 1);
+        renderRooms();
+      });
+      roomsList.appendChild(el);
+    });
+  }
+  document.getElementById('addRoomBtn').addEventListener('click', () => {
+    roomRows.push({ id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true });
+    renderRooms();
+  });
+
   // ---- Live check-in instructions preview — assembled from the fixed
   // fields plus every custom field, exactly the same way @checkininfo
   // resolves in a message (see index.html/_template-scheduling.js's
@@ -1225,6 +1279,18 @@
 
       updateCheckinInstructionsPreview();
 
+      // Rooms tab only makes sense for a Resort — hidden entirely for
+      // every other property type rather than showing an empty,
+      // confusing section.
+      if(l.property_type === 'Resort'){
+        document.getElementById('mgmtTabRoomsBtn').style.display = 'inline-block';
+        roomRows = (data.rooms || []).filter(r => r.is_active !== false).map(r => ({
+          id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
+          nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false
+        }));
+        renderRooms();
+      }
+
       if(l.pet_friendly === true){
         petFriendlyYes.checked = true;
         document.getElementById('maxPetsAllowed').value = l.max_pets_allowed || '';
@@ -1311,7 +1377,8 @@
           accessCode: document.getElementById('accessCode').value,
           customFields: customFieldRows,
           autoSendCheckinInstructions: document.getElementById('checkinScheduleTrigger').value === 'on_booking_confirmed',
-          checkinPhotos
+          checkinPhotos,
+          rooms: roomRows
         })
       });
       const data = await res.json();
