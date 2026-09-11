@@ -668,6 +668,34 @@ module.exports = async (req, res) => {
       listing = inserted[0];
     }
 
+    // For non-Resort stays, mirror each declared room (bedroom) as its
+    // own listing_rooms record holding just a name and one interior
+    // photo — NOT independently priced or bookable (the whole property
+    // still books as ONE unit, at this listing's own nightly_rate and
+    // max_guests). This is what makes "villa with 4 rooms" and "resort
+    // with 10 rooms" a single consistent concept at the data level, per
+    // room, even though only a Resort's rooms are ever independently
+    // bookable — a Resort's real rooms are defined separately, post-
+    // approval, in manage-listing.html, so this is skipped entirely for
+    // that type. Experiences have no rooms concept at all either.
+    if (!isExperience && propertyType !== 'Resort' && !isDraft) {
+      const declaredRoomCount = Math.max(1, Number(bedrooms) || 0);
+      const photosForRooms = safeInteriorUrls.slice(0, declaredRoomCount);
+      // Replaced wholesale on every (re)submission — simplest way to
+      // keep these in sync with whatever the current interior photo set
+      // actually is, rather than diffing against a previous version.
+      // Safe to delete freely here (unlike a Resort's real rooms, which
+      // are never hard-deleted): nothing ever references one of these
+      // via orders.room_id, since a non-Resort booking never sets it.
+      await sql`DELETE FROM listing_rooms WHERE listing_id = ${listing.id}`;
+      for (let i = 0; i < photosForRooms.length; i++) {
+        await sql`
+          INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, sort_order, is_active)
+          VALUES (${listing.id}, ${'Room ' + (i + 1)}, ${photosForRooms[i]}, ${i}, TRUE)
+        `;
+      }
+    }
+
     // Drafts don't need admin review yet, and don't count as a "real" price
     // the way a submitted listing's starting price does.
     if (!isDraft) {
