@@ -422,12 +422,20 @@ module.exports = async (req, res) => {
     const guestsRaw = typeof req.query.guests === 'string' ? req.query.guests.trim() : '';
     const arrivalRaw = typeof req.query.arrival === 'string' ? req.query.arrival.trim() : '';
     const departureRaw = typeof req.query.departure === 'string' ? req.query.departure.trim() : '';
+    const roomsNeededRaw = typeof req.query.roomsNeeded === 'string' ? req.query.roomsNeeded.trim() : '';
     const latRaw = typeof req.query.lat === 'string' ? Number(req.query.lat) : null;
     const lngRaw = typeof req.query.lng === 'string' ? Number(req.query.lng) : null;
     const radiusRaw = typeof req.query.radiusKm === 'string' ? Number(req.query.radiusKm) : null;
 
     const cityFilter = cityRaw ? `%${cityRaw}%` : null;
     const guestsFilter = guestsRaw && !isNaN(Number(guestsRaw)) ? Number(guestsRaw) : null;
+    // Optional, and a genuinely different question from guestsFilter
+    // above: guestsFilter asks "can this property fit N people at all"
+    // (summed across rooms for a Resort); this asks "can I book N
+    // SEPARATE rooms within one property" — Airbnb-style whole-unit
+    // listings can never answer yes to this, no matter how many people
+    // they sleep, since there's nothing separate to book there.
+    const roomsNeededFilter = roomsNeededRaw && !isNaN(Number(roomsNeededRaw)) ? Number(roomsNeededRaw) : null;
     // Only a genuine, complete lat/lng/radius triple activates distance
     // filtering — a lone or malformed value is ignored rather than
     // crashing or silently filtering everything out.
@@ -536,18 +544,24 @@ module.exports = async (req, res) => {
       `;
       const capacityByListing = {};
       for (const r of roomRows) {
-        if (!capacityByListing[r.listing_id]) capacityByListing[r.listing_id] = { total: 0, available: 0 };
+        if (!capacityByListing[r.listing_id]) capacityByListing[r.listing_id] = { total: 0, available: 0, count: 0, availableCount: 0 };
         capacityByListing[r.listing_id].total += r.max_occupancy;
-        if (r.is_free) capacityByListing[r.listing_id].available += r.max_occupancy;
+        capacityByListing[r.listing_id].count += 1;
+        if (r.is_free) {
+          capacityByListing[r.listing_id].available += r.max_occupancy;
+          capacityByListing[r.listing_id].availableCount += 1;
+        }
       }
       // Attached directly onto each listing object so the frontend can
       // show real room-derived capacity/availability without a second
       // round trip, and so the guest-count re-filter just below can use it.
       resortListings.forEach(l => {
-        const cap = capacityByListing[l.id] || { total: 0, available: 0 };
+        const cap = capacityByListing[l.id] || { total: 0, available: 0, count: 0, availableCount: 0 };
         l.is_available = datesFilter ? cap.available > 0 : cap.total > 0;
         l.resort_total_capacity = cap.total;
         l.resort_available_capacity = cap.available;
+        l.resort_room_count = cap.count;
+        l.resort_available_room_count = cap.availableCount;
       });
     }
     const afterResortCapacityFilter = guestsFilter
@@ -558,6 +572,19 @@ module.exports = async (req, res) => {
         })
       : afterGuestsFilter;
 
+    // "Number of rooms" is a genuinely different ask from guest count —
+    // wanting to book N SEPARATE rooms within one property. Only a
+    // Resort can ever say yes to this, so using this filter at all
+    // excludes every other property type outright, regardless of how
+    // many people they sleep.
+    const afterRoomsNeededFilter = roomsNeededFilter
+      ? afterResortCapacityFilter.filter(l => {
+          if (l.property_type !== 'Resort') return false;
+          const roomCount = datesFilter ? l.resort_available_room_count : l.resort_room_count;
+          return (roomCount || 0) >= roomsNeededFilter;
+        })
+      : afterResortCapacityFilter;
+
     // A listing with no coordinates at all can't have a real distance
     // measured — rather than excluding it outright (punishing a data gap
     // that isn't the guest's problem), it falls back to a plain city/area
@@ -566,7 +593,7 @@ module.exports = async (req, res) => {
     // regardless of what its city/area text says — that's the actually
     // reliable signal once it exists.
     const filtered = distanceFilter
-      ? afterResortCapacityFilter.filter(l => {
+      ? afterRoomsNeededFilter.filter(l => {
           if (l.latitude == null || l.longitude == null) {
             if (!cityRaw) return false;
             const needle = cityRaw.toLowerCase();
@@ -575,7 +602,7 @@ module.exports = async (req, res) => {
           const km = haversineDistanceKm(distanceFilter.lat, distanceFilter.lng, Number(l.latitude), Number(l.longitude));
           return km <= distanceFilter.radiusKm;
         })
-      : afterResortCapacityFilter;
+      : afterRoomsNeededFilter;
 
     // One extra query for all paid amenities across every listing being
     // returned, rather than one query per listing — cheaper, and this
