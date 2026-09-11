@@ -231,9 +231,46 @@ async function applyDecision(listingId, action, reason = null) {
   const result = await sql`
     UPDATE listings SET status = ${newStatus}, rejection_reason = ${action === 'reject' ? reason : null}
     WHERE id = ${listingId}
-    RETURNING id, property_name, status, host_email, host_id, rejection_reason, property_type
+    RETURNING id, property_name, status, host_email, host_id, rejection_reason, property_type, pending_room_photos
   `;
   const listing = result[0] || null;
+
+  // Pre-populate a Resort's rooms from whatever named room photos were
+  // staged at submission (see submit-listing.js) — a host who already
+  // named and photographed every room ("Bedroom 1," "Kitchen,"
+  // "Balcony," etc.) shouldn't have to redo that from a blank Rooms tab
+  // just because approval is what actually happens next. Only runs once
+  // per listing: gated on listing_rooms being genuinely empty, so a
+  // SECOND approval of the same listing (shouldn't normally happen, but
+  // defensively) never overwrites rooms a host has since configured with
+  // real pricing. Price and capacity are deliberately left for the host
+  // to fill in themselves — those weren't collected at submission and
+  // this shouldn't guess at them.
+  if (listing && action === 'approve' && listing.property_type === 'Resort' && Array.isArray(listing.pending_room_photos) && listing.pending_room_photos.length) {
+    try {
+      const existingRoomCount = await sql`SELECT COUNT(*)::int AS count FROM listing_rooms WHERE listing_id = ${listing.id}`;
+      if (existingRoomCount[0].count === 0) {
+        for (let i = 0; i < listing.pending_room_photos.length; i++) {
+          const room = listing.pending_room_photos[i];
+          if (!room || typeof room.roomName !== 'string' || typeof room.url !== 'string') continue;
+          await sql`
+            INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, sort_order, is_active)
+            VALUES (${listing.id}, ${room.roomName.trim().slice(0, 100)}, ${room.url}, ${i}, FALSE)
+          `;
+        }
+      }
+      // Consumed — cleared regardless of whether it actually inserted
+      // anything, so a later resubmission-and-reapproval cycle (rejected
+      // → fixed → approved again) doesn't try to replay stale photos
+      // from a much earlier submission.
+      await sql`UPDATE listings SET pending_room_photos = NULL WHERE id = ${listing.id}`;
+    } catch (roomErr) {
+      console.error('Resort room pre-population failed:', roomErr);
+      // Never blocks the approval itself — worst case, the host just
+      // sees an empty Rooms tab and adds rooms manually, same as before
+      // this existed.
+    }
+  }
 
   if (listing && action === 'approve') {
     try {
