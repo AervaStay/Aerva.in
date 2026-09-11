@@ -110,7 +110,7 @@ module.exports = async (req, res) => {
       // single-unit listing has no rooms at all, this just comes back
       // empty for those.
       const rooms = await sql`
-        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, is_active
+        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls, is_active
         FROM listing_rooms WHERE listing_id = ${listingId} ORDER BY sort_order ASC, created_at ASC
       `;
 
@@ -376,26 +376,39 @@ module.exports = async (req, res) => {
             if (!roomName || !maxOccupancy || maxOccupancy < 1 || !roomRate || roomRate <= 0) continue;
             const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
             const coverPhotoUrl = typeof r.coverPhotoUrl === 'string' && r.coverPhotoUrl.trim() ? r.coverPhotoUrl.trim() : null;
-            // A room without a photo is saved (so the host doesn't lose
-            // their other entered data), but forced inactive regardless
-            // of what was requested — not bookable by guests until a
-            // photo is actually added. Defense-in-depth alongside the
-            // declared-room-count check above, which normally catches
-            // this first when a real count is set.
-            const isActive = r.isActive !== false && !!coverPhotoUrl;
+            // Washroom and balcony belong to THIS room, not the resort
+            // as a whole — stored in its own photo_urls, labeled so
+            // they can be told apart from the main cover_photo_url.
+            // Balcony is genuinely optional; washroom isn't, and factors
+            // into whether this room can be active at all, same as the
+            // main photo does.
+            const washroomUrl = typeof r.washroomUrl === 'string' && r.washroomUrl.trim() ? r.washroomUrl.trim() : null;
+            const balconyUrl = typeof r.balconyUrl === 'string' && r.balconyUrl.trim() ? r.balconyUrl.trim() : null;
+            const photoUrls = [];
+            if (washroomUrl) photoUrls.push({ label: 'Washroom', url: washroomUrl });
+            if (balconyUrl) photoUrls.push({ label: 'Balcony', url: balconyUrl });
+            // A room without a main photo OR without a washroom photo is
+            // saved (so the host doesn't lose their other entered data),
+            // but forced inactive regardless of what was requested — not
+            // bookable by guests until both are actually added.
+            // Defense-in-depth alongside the declared-room-count check
+            // above, which normally catches this first when a real count
+            // is set.
+            const isActive = r.isActive !== false && !!coverPhotoUrl && !!washroomUrl;
 
             if (r.id && existingRoomIds.has(Number(r.id))) {
               await sql`
                 UPDATE listing_rooms SET room_name = ${roomName}, max_occupancy = ${maxOccupancy},
                   nightly_rate = ${roomRate}, description = ${description}, is_active = ${isActive}, sort_order = ${i},
-                  cover_photo_url = COALESCE(${coverPhotoUrl}, cover_photo_url)
+                  cover_photo_url = COALESCE(${coverPhotoUrl}, cover_photo_url),
+                  photo_urls = ${JSON.stringify(photoUrls)}
                 WHERE id = ${Number(r.id)} AND listing_id = ${listingId}
               `;
               submittedRoomIds.add(Number(r.id));
             } else {
               await sql`
-                INSERT INTO listing_rooms (listing_id, room_name, max_occupancy, nightly_rate, description, is_active, sort_order, cover_photo_url)
-                VALUES (${listingId}, ${roomName}, ${maxOccupancy}, ${roomRate}, ${description}, ${isActive}, ${i}, ${coverPhotoUrl})
+                INSERT INTO listing_rooms (listing_id, room_name, max_occupancy, nightly_rate, description, is_active, sort_order, cover_photo_url, photo_urls)
+                VALUES (${listingId}, ${roomName}, ${maxOccupancy}, ${roomRate}, ${description}, ${isActive}, ${i}, ${coverPhotoUrl}, ${JSON.stringify(photoUrls)})
               `;
             }
           }
