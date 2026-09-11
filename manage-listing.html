@@ -951,18 +951,39 @@
     roomRows.forEach((room, idx) => {
       const el = document.createElement('div');
       el.className = 'paid-amenity-row';
+      const previewSrc = room.photoFile ? URL.createObjectURL(room.photoFile) : room.coverPhotoUrl;
       el.innerHTML = `
-        <div class="row-line" style="grid-template-columns:2fr 1fr 1fr;">
-          <input type="text" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${room.roomName || ''}">
-          <input type="number" min="1" placeholder="Max guests" data-room-field="maxOccupancy" value="${room.maxOccupancy || ''}">
-          <input type="number" min="1" placeholder="₹ / night" data-room-field="nightlyRate" value="${room.nightlyRate || ''}">
+        <div style="display:flex; gap:14px; align-items:flex-start;">
+          <div class="checkin-photo-slot-box" data-room-photo-pick style="width:110px; height:90px; flex:0 0 auto;">
+            ${previewSrc ? `<img src="${previewSrc}" alt="">` : '<span>+ Add Photo</span>'}
+          </div>
+          <div style="flex:1; min-width:0;">
+            <div class="row-line" style="grid-template-columns:2fr 1fr 1fr;">
+              <input type="text" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${room.roomName || ''}">
+              <input type="number" min="1" placeholder="Max guests" data-room-field="maxOccupancy" value="${room.maxOccupancy || ''}">
+              <input type="number" min="1" placeholder="₹ / night" data-room-field="nightlyRate" value="${room.nightlyRate || ''}">
+            </div>
+            <textarea rows="2" placeholder="Description (optional)" data-room-field="description" style="width:100%; margin-top:8px; padding:8px 10px; font-size:13px; font-family:'Jost', sans-serif;">${room.description || ''}</textarea>
+          </div>
         </div>
-        <textarea rows="2" placeholder="Description (optional)" data-room-field="description" style="width:100%; margin-top:8px; padding:8px 10px; font-size:13px; font-family:'Jost', sans-serif;">${room.description || ''}</textarea>
         <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; margin-top:8px; cursor:pointer;">
           <input type="checkbox" data-room-field="isActive" ${room.isActive !== false ? 'checked' : ''}> Active — bookable by guests
         </label>
         <button type="button" class="remove-amenity-btn" data-action="remove">Remove this room</button>
       `;
+      el.querySelector('[data-room-photo-pick]').addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.addEventListener('change', () => {
+          if(input.files[0]){
+            room.photoFile = input.files[0];
+            room.coverPhotoUrl = null;
+            renderRooms();
+          }
+        });
+        input.click();
+      });
       el.querySelectorAll('[data-room-field]').forEach(input => {
         const field = input.dataset.roomField;
         const eventName = input.type === 'checkbox' ? 'change' : 'input';
@@ -982,9 +1003,23 @@
     });
   }
   document.getElementById('addRoomBtn').addEventListener('click', () => {
-    roomRows.push({ id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true });
+    roomRows.push({ id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true, photoFile: null, coverPhotoUrl: null });
     renderRooms();
   });
+
+  // Uploads any newly-picked room photos (existing ones untouched) and
+  // returns the field to send for each room. Same lazy-upload pattern as
+  // check-in photos above — nothing hits Blob storage until Save.
+  async function finalizeRoomPhotos(){
+    for(const room of roomRows){
+      if(room.photoFile){
+        const { upload } = await import('https://esm.sh/@vercel/blob/client');
+        const uploaded = await upload(room.photoFile.name, room.photoFile, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        room.coverPhotoUrl = uploaded.url;
+        room.photoFile = null;
+      }
+    }
+  }
 
   // ---- Live check-in instructions preview — assembled from the fixed
   // fields plus every custom field, exactly the same way @checkininfo
@@ -1286,7 +1321,8 @@
         document.getElementById('mgmtTabRoomsBtn').style.display = 'inline-block';
         roomRows = (data.rooms || []).filter(r => r.is_active !== false).map(r => ({
           id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
-          nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false
+          nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
+          coverPhotoUrl: r.cover_photo_url || null, photoFile: null
         }));
         renderRooms();
       }
@@ -1332,6 +1368,19 @@
     const errorMsg = document.getElementById('errorMsg');
     confirmMsg.style.display = 'none';
     errorMsg.style.display = 'none';
+
+    // Every active room needs its own photo — a guest choosing between
+    // several rooms with no way to see what they actually look like
+    // defeats the point of having separate rooms at all. Checked here,
+    // not just left as a nice-to-have, since this is exactly the kind of
+    // thing that's easy to skip when adding rooms quickly.
+    const roomsMissingPhotos = roomRows.filter(r => r.isActive !== false && !r.coverPhotoUrl && !r.photoFile);
+    if(roomsMissingPhotos.length){
+      errorMsg.textContent = `Please add a photo for every active room — missing for: ${roomsMissingPhotos.map(r => r.roomName || 'Untitled room').join(', ')}.`;
+      errorMsg.style.display = 'block';
+      return;
+    }
+
     submitBtn.disabled = true;
     submitBtn.textContent = 'Saving…';
 
@@ -1339,7 +1388,8 @@
       const [exteriorPhotoUrls, interiorPhotoUrls, checkinPhotos] = await Promise.all([
         exteriorManager.finalizeUrls(),
         interiorManager.finalizeUrls(),
-        finalizeCheckinPhotos()
+        finalizeCheckinPhotos(),
+        finalizeRoomPhotos()
       ]);
 
       const res = await fetch(API_BASE + '/api/update-listing-pricing', {
