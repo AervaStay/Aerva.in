@@ -430,28 +430,55 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: 'At least 1 exterior photo is required' });
         }
         // Named, per-space validation — replacing the old flat "at least
-        // N interior photos total" count. Kitchen, Washroom, and Living
-        // Room are always required regardless of declared room count;
-        // bedroom photos must match that count exactly. Applies to every
-        // stay type (including Resort — this describes the overall
-        // property's common spaces before its individual rooms are
-        // separately defined post-approval in manage-listing.html), not
-        // just non-Resort ones. This is the authoritative check —
-        // index.html enforces the same rule client-side, but that's
-        // convenience, not the real guarantee.
+        // N interior photos total" count. A villa/home has one shared
+        // Kitchen/Washroom/Living Room worth documenting once; a Resort
+        // has NO shared common spaces to document here at all — its one
+        // common space is the exterior, already covered above. A Resort
+        // room's washroom (mandatory) and balcony (optional) belong to
+        // that room specifically, checked further below alongside its
+        // price/occupancy, not as a resort-wide fixed category. Bedroom/
+        // Room photos must match the declared count exactly either way.
+        // This is the authoritative check — index.html enforces the same
+        // rule client-side, but that's convenience, not the real
+        // guarantee.
         const declaredRooms = Math.max(1, Number(bedrooms) || 0);
         const safeRoomPhotosForValidation = Array.isArray(roomPhotos)
           ? roomPhotos.filter(r => r && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
           : [];
-        const MANDATORY_FIXED_SPACES = ['Kitchen', 'Washroom', 'Living Room'];
+        const MANDATORY_FIXED_SPACES = propertyType === 'Resort' ? [] : ['Kitchen', 'Washroom', 'Living Room'];
         const providedSpaceNames = safeRoomPhotosForValidation.map(r => r.roomName);
         const missingFixedSpaces = MANDATORY_FIXED_SPACES.filter(name => !providedSpaceNames.includes(name));
         const bedroomPhotoCount = safeRoomPhotosForValidation.filter(r => r.isBedroom).length;
         if (missingFixedSpaces.length || bedroomPhotoCount < declaredRooms) {
           const missingParts = [...missingFixedSpaces];
-          if (bedroomPhotoCount < declaredRooms) missingParts.push(`${declaredRooms - bedroomPhotoCount} more bedroom photo(s)`);
+          if (bedroomPhotoCount < declaredRooms) missingParts.push(`${declaredRooms - bedroomPhotoCount} more ${propertyType === 'Resort' ? 'room' : 'bedroom'} photo(s)`);
           console.warn(`submit-listing rejected: missing room photos — ${missingParts.join(', ')}`);
           return res.status(400).json({ error: `Please add a photo for: ${missingParts.join(', ')}.` });
+        }
+        // For a Resort, each room is also a real, independently priced
+        // room from the start, with its own washroom (mandatory) —
+        // checked here authoritatively (index.html enforces the same
+        // rule client-side, but that's convenience, not the guarantee).
+        // Balcony is genuinely optional, so it's never required here.
+        if (propertyType === 'Resort') {
+          const incompleteRooms = safeRoomPhotosForValidation.filter(r =>
+            r.isBedroom && (!(Number(r.maxOccupancy) > 0) || !(Number(r.price) > 0))
+          );
+          if (incompleteRooms.length) {
+            console.warn(`submit-listing rejected: ${incompleteRooms.length} room(s) missing price/occupancy`);
+            return res.status(400).json({
+              error: `Please set a max guests and price for: ${incompleteRooms.map(r => r.roomName).join(', ')}.`
+            });
+          }
+          const missingWashrooms = safeRoomPhotosForValidation.filter(r =>
+            r.isBedroom && !(typeof r.washroomUrl === 'string' && r.washroomUrl.startsWith('https://'))
+          );
+          if (missingWashrooms.length) {
+            console.warn(`submit-listing rejected: ${missingWashrooms.length} room(s) missing washroom photo`);
+            return res.status(400).json({
+              error: `Please add a washroom photo for: ${missingWashrooms.map(r => r.roomName).join(', ')}.`
+            });
+          }
         }
         if (petFriendly !== true && petFriendly !== false) {
           console.warn('submit-listing rejected: pet policy not specified');
@@ -715,15 +742,31 @@ module.exports = async (req, res) => {
       // The named room photos aren't written into listing_rooms directly
       // (see the comment above — that risks a Resort's real, already-
       // priced rooms on any future resubmission), but they shouldn't
-      // just be thrown away either — a host who already named and
-      // photographed every room at submission shouldn't have to redo
-      // that work from scratch after approval. Staged here instead;
+      // just be thrown away either — a host who already named,
+      // photographed, priced, AND documented every room's washroom (and
+      // balcony, if provided) at submission shouldn't have to redo that
+      // work from scratch after approval. Staged here instead;
       // approve-listing.js consumes this exactly once, the first time
-      // this listing is approved, to pre-populate listing_rooms (the
-      // host still fills in each room's actual price and confirms its
-      // capacity, but doesn't re-name or re-upload anything).
+      // this listing is approved, to pre-populate listing_rooms as
+      // fully complete, active rooms — main photo as cover_photo_url,
+      // washroom/balcony tucked into that room's own photo_urls.
+      //
+      // Only room (bedroom) entries are staged here — there are no
+      // fixed common-area categories for a Resort at all (see the
+      // validation above); Kitchen/Washroom/Living Room/Garden only
+      // exist for non-Resort types, and never become listing_rooms
+      // records regardless (they're still part of interior_photo_urls
+      // above, just not this).
       const safeRoomPhotos = Array.isArray(roomPhotos)
-        ? roomPhotos.filter(r => r && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
+        ? roomPhotos.filter(r => r && r.isBedroom && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
+          .map(r => ({
+            roomName: r.roomName.trim().slice(0, 100),
+            url: r.url,
+            maxOccupancy: Number(r.maxOccupancy) > 0 ? Number(r.maxOccupancy) : null,
+            price: Number(r.price) > 0 ? Number(r.price) : null,
+            washroomUrl: typeof r.washroomUrl === 'string' && r.washroomUrl.startsWith('https://') ? r.washroomUrl : null,
+            balconyUrl: typeof r.balconyUrl === 'string' && r.balconyUrl.startsWith('https://') ? r.balconyUrl : null
+          }))
         : [];
       await sql`UPDATE listings SET pending_room_photos = ${JSON.stringify(safeRoomPhotos)} WHERE id = ${listing.id}`;
     }
