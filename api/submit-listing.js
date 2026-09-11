@@ -429,9 +429,21 @@ module.exports = async (req, res) => {
           console.warn('submit-listing rejected: no exterior photos');
           return res.status(400).json({ error: 'At least 1 exterior photo is required' });
         }
-        if (!Array.isArray(interiorPhotoUrls) || interiorPhotoUrls.length === 0) {
-          console.warn('submit-listing rejected: no interior photos');
-          return res.status(400).json({ error: 'At least 1 interior photo is required' });
+        // Scales with the declared room count (bedrooms — doubles as
+        // "Number of Rooms" for a Resort, same field, see the frontend's
+        // dynamic label) rather than a flat minimum of 1. Floored at 1
+        // regardless, so a studio (bedrooms=0) still needs one interior
+        // photo. This is the authoritative check — index.html enforces
+        // the same rule client-side, but that's convenience, not the
+        // real guarantee.
+        const declaredRooms = Math.max(1, Number(bedrooms) || 0);
+        if (!Array.isArray(interiorPhotoUrls) || interiorPhotoUrls.length < declaredRooms) {
+          console.warn(`submit-listing rejected: ${Array.isArray(interiorPhotoUrls) ? interiorPhotoUrls.length : 0} interior photos, needs ${declaredRooms}`);
+          return res.status(400).json({
+            error: declaredRooms > 1
+              ? `You've declared ${declaredRooms} rooms — please attach at least ${declaredRooms} interior photos, one per room.`
+              : 'At least 1 interior photo is required'
+          });
         }
         if (petFriendly !== true && petFriendly !== false) {
           console.warn('submit-listing rejected: pet policy not specified');
