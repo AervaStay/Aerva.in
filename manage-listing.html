@@ -161,6 +161,11 @@
       <div class="mgmt-tab-panel" id="mgmtTabRooms">
         <div class="eyebrow" style="margin-top:0;">Rooms</div>
         <p style="font-size:12px; opacity:0.6; margin-top:-4px; margin-bottom:18px;">Each room is booked, priced, and made available independently — a guest can book Room A while Room B stays free for someone else. The nightly rate on the Property Details tab isn't used for a Resort; each room sets its own instead.</p>
+        <div class="field" style="max-width:220px;">
+          <label for="declaredRoomCount">Declared Room Count</label>
+          <input type="number" id="declaredRoomCount" min="1">
+        </div>
+        <p id="roomCountProgress" style="font-size:12.5px; margin-top:6px; margin-bottom:18px;"></p>
         <div id="roomsList"></div>
         <button type="button" class="add-paid-amenity-btn" id="addRoomBtn">+ Add a Room</button>
       </div>
@@ -989,6 +994,7 @@
         const eventName = input.type === 'checkbox' ? 'change' : 'input';
         input.addEventListener(eventName, () => {
           room[field] = input.type === 'checkbox' ? input.checked : input.value;
+          updateRoomCountProgress();
         });
       });
       el.querySelector('[data-action="remove"]').addEventListener('click', () => {
@@ -1001,11 +1007,41 @@
       });
       roomsList.appendChild(el);
     });
+    updateRoomCountProgress();
   }
   document.getElementById('addRoomBtn').addEventListener('click', () => {
     roomRows.push({ id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true, photoFile: null, coverPhotoUrl: null });
     renderRooms();
   });
+
+  // A room only counts as "complete" once it has a name, occupancy,
+  // price, AND a photo — the exact same criteria update-listing-
+  // pricing.js's own server-side check uses, kept in sync by hand (no
+  // shared module between these separate files). This is what the
+  // declared room count is actually being measured against.
+  function countCompleteActiveRooms(){
+    return roomRows.filter(r => {
+      const hasPhoto = !!(r.photoFile || r.coverPhotoUrl);
+      return r.roomName && Number(r.maxOccupancy) >= 1 && Number(r.nightlyRate) > 0 && hasPhoto && r.isActive !== false;
+    }).length;
+  }
+  function updateRoomCountProgress(){
+    const progressEl = document.getElementById('roomCountProgress');
+    const declared = Number(document.getElementById('declaredRoomCount').value) || 0;
+    const complete = countCompleteActiveRooms();
+    if(!declared){
+      progressEl.textContent = '';
+      return;
+    }
+    if(complete === declared){
+      progressEl.textContent = `✓ ${complete} of ${declared} declared rooms complete.`;
+      progressEl.style.color = '#3a7d44';
+    } else {
+      progressEl.textContent = `${complete} of ${declared} declared rooms complete — this must match exactly before saving.`;
+      progressEl.style.color = '#a3402f';
+    }
+  }
+  document.getElementById('declaredRoomCount').addEventListener('input', updateRoomCountProgress);
 
   // Uploads any newly-picked room photos (existing ones untouched) and
   // returns the field to send for each room. Same lazy-upload pattern as
@@ -1319,6 +1355,7 @@
       // confusing section.
       if(l.property_type === 'Resort'){
         document.getElementById('mgmtTabRoomsBtn').style.display = 'inline-block';
+        document.getElementById('declaredRoomCount').value = l.bedrooms || '';
         roomRows = (data.rooms || []).filter(r => r.is_active !== false).map(r => ({
           id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
           nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
@@ -1381,6 +1418,25 @@
       return;
     }
 
+    // The declared room count and the actual number of complete, active
+    // rooms must match exactly — same rule update-listing-pricing.js
+    // enforces authoritatively; this is just the earlier, faster version
+    // of the same check. Only applies when a declared count is actually
+    // set (an empty field is a genuine "not declared yet" state, not
+    // "declared zero").
+    const declaredRoomCountVal = document.getElementById('declaredRoomCount').value;
+    if(declaredRoomCountVal){
+      const declared = Number(declaredRoomCountVal);
+      const complete = countCompleteActiveRooms();
+      if(complete !== declared){
+        errorMsg.textContent = complete < declared
+          ? `You declared ${declared} rooms — you currently have ${complete} complete and active. Please finish ${declared - complete} more before saving.`
+          : `You declared ${declared} rooms — you currently have ${complete} complete and active, which is more. Please remove ${complete - declared}, or increase the declared count above.`;
+        errorMsg.style.display = 'block';
+        return;
+      }
+    }
+
     submitBtn.disabled = true;
     submitBtn.textContent = 'Saving…';
 
@@ -1428,7 +1484,8 @@
           customFields: customFieldRows,
           autoSendCheckinInstructions: document.getElementById('checkinScheduleTrigger').value === 'on_booking_confirmed',
           checkinPhotos,
-          rooms: roomRows
+          rooms: roomRows,
+          bedrooms: document.getElementById('declaredRoomCount').value || undefined
         })
       });
       const data = await res.json();
