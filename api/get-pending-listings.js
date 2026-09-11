@@ -675,10 +675,11 @@ module.exports = async (req, res) => {
              l.host_name, l.host_email, l.host_phone,
              l.discount_type, l.discount_value, l.discount_min_nights, l.discount_description,
              l.exterior_photo_urls, l.interior_photo_urls,
-             l.latitude, l.longitude, l.formatted_address,
+             l.latitude, l.longitude, l.formatted_address, l.pincode,
              l.commission_rate, l.created_at,
              l.listing_type, l.hosting_listing_id, l.experience_category,
              l.experience_price_unit, l.experience_duration_hours,
+             l.pending_room_photos,
              h.property_name AS hosting_property_name
       FROM listings l
       LEFT JOIN listings h ON h.id = l.hosting_listing_id
