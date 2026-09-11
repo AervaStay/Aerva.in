@@ -339,18 +339,20 @@ module.exports = async (req, res) => {
             if (!roomName || !maxOccupancy || maxOccupancy < 1 || !roomRate || roomRate <= 0) continue;
             const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
             const isActive = r.isActive !== false;
+            const coverPhotoUrl = typeof r.coverPhotoUrl === 'string' && r.coverPhotoUrl.trim() ? r.coverPhotoUrl.trim() : null;
 
             if (r.id && existingRoomIds.has(Number(r.id))) {
               await sql`
                 UPDATE listing_rooms SET room_name = ${roomName}, max_occupancy = ${maxOccupancy},
-                  nightly_rate = ${roomRate}, description = ${description}, is_active = ${isActive}, sort_order = ${i}
+                  nightly_rate = ${roomRate}, description = ${description}, is_active = ${isActive}, sort_order = ${i},
+                  cover_photo_url = COALESCE(${coverPhotoUrl}, cover_photo_url)
                 WHERE id = ${Number(r.id)} AND listing_id = ${listingId}
               `;
               submittedRoomIds.add(Number(r.id));
             } else {
               await sql`
-                INSERT INTO listing_rooms (listing_id, room_name, max_occupancy, nightly_rate, description, is_active, sort_order)
-                VALUES (${listingId}, ${roomName}, ${maxOccupancy}, ${roomRate}, ${description}, ${isActive}, ${i})
+                INSERT INTO listing_rooms (listing_id, room_name, max_occupancy, nightly_rate, description, is_active, sort_order, cover_photo_url)
+                VALUES (${listingId}, ${roomName}, ${maxOccupancy}, ${roomRate}, ${description}, ${isActive}, ${i}, ${coverPhotoUrl})
               `;
             }
           }
