@@ -1488,9 +1488,6 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
           Near Me
         </button>
-        <button type="button" class="filter-clear" id="reserveGroupLink" title="Booking for a large group? Combine multiple homes into one checkout.">
-          Booking for a group?
-        </button>
       </div>
       <button type="button" class="pill-search-submit" id="searchBtn" aria-label="Search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -1597,56 +1594,6 @@
   </div>
 </section>
 
-<!-- ================= RESERVE ================= -->
-<section class="pad" id="reserve" style="display:none;">
-  <div class="wrap reserve-grid">
-    <a href="#" id="reserveBackLink" class="link" style="display:inline-flex; align-items:center; gap:6px; margin-bottom:18px;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-      Back to browsing
-    </a>
-    <div class="section-head reveal" style="margin-bottom:0;">
-      <div class="eyebrow">Reserve</div>
-      <h2>Check your stay.</h2>
-      <p>Booking more than one home, or the same home twice? Add each stay below and see one combined total — no surprises at checkout.</p>
-    </div>
-    <form class="reserve-form reveal" id="reserveForm" autocomplete="off">
-      <div id="stayRows"></div>
-
-      <button type="button" class="btn" id="addStayBtn" style="align-self:flex-start; font-size:11.5px; padding:10px 20px;">+ Add Another Stay</button>
-
-      <div class="field">
-        <label for="email">Email</label>
-        <input id="email" type="email" placeholder="you@example.com" required>
-      </div>
-
-      <div id="priceSummary" style="display:none; border-top:1px solid var(--line-dark); margin-top:6px; padding-top:16px;">
-        <div class="eyebrow" style="margin-bottom:12px;">Estimated Total</div>
-        <div id="summaryLines"></div>
-        <div id="sumGstRow" class="sum-row" style="display:none;"><span>GST (12%)</span><span id="sumGst"></span></div>
-        <div id="sumServiceFeeRow" class="sum-row" style="display:none;"><span>Aerva Service Fee (8%)</span><span id="sumServiceFee"></span></div>
-        <div class="sum-row sum-total"><span>Total</span><span id="sumTotal"></span></div>
-        <p style="font-size:11.5px; opacity:0.55; margin-top:10px;">Nightly rate covers up to 2 guests per stay. Each additional guest is ₹1,500/night, from the 3rd guest onward. Estimate only — final rate confirmed on availability check.</p>
-      </div>
-
-      <p style="font-size:11.5px; opacity:0.6; border-top:1px solid var(--line-dark); margin-top:6px; padding-top:14px;">
-        Each stay in one request must be a different home — once you pick a property for one stay, it's no longer selectable for another. Availability against <em>other</em> guests' bookings is confirmed by our team after you submit — dates aren't guaranteed until we reply.
-      </p>
-
-      <div id="paymentSection" style="display:none; border-top:1px solid var(--line-dark); margin-top:6px; padding-top:16px;">
-        <div class="eyebrow" style="margin-bottom:12px;">Payment</div>
-        <p style="font-size:13px; opacity:0.72; margin-bottom:4px;">Card, UPI, netbanking, and wallets — all handled securely by Razorpay's checkout.</p>
-        <div class="pay-badges">
-          <span>UPI</span><span>Visa</span><span>Mastercard</span><span>RuPay</span><span>Netbanking</span>
-        </div>
-        <p style="font-size:11.5px; opacity:0.55; margin-top:12px;">You'll enter payment details in Razorpay's secure window — nothing is collected or stored on this page.</p>
-      </div>
-
-      <button type="submit" class="btn solid" id="reserveSubmitBtn">Reserve & Pay</button>
-      <p class="confirm" style="display:none;">Thank you — our stay team will reply within a day with availability and rates.</p>
-    </form>
-  </div>
-</section>
-
 <!-- ================= ADD LISTING ================= -->
 <section class="pad" id="add-listing" style="background:var(--cream-deep); display:none;">
   <div class="wrap">
@@ -1712,6 +1659,7 @@
             <option>Suite within a larger property</option>
             <option>Cabin / Cottage</option>
             <option>Heritage / Traditional Home</option>
+            <option>Resort</option>
             <option>Other</option>
           </select>
         </div>
@@ -1729,8 +1677,9 @@
       </div>
       <div class="form-row">
         <div class="field">
-          <label for="listGuests">Max Guests</label>
-          <select id="listGuests" name="Max Guests">
+          <label for="listGuests">Max Guests <span style="color:#a3402f;">*</span></label>
+          <select id="listGuests" name="Max Guests" required>
+            <option value="" disabled selected>Select the maximum number of guests</option>
             <option>1</option>
             <option>2</option>
             <option>3</option>
@@ -3035,6 +2984,13 @@
   }
 
   function initReserveForm(){
+    // The old multi-property "Reserve" flow was removed (Resort listings
+    // with independently bookable rooms replace that need) — this whole
+    // function is now a safe no-op rather than being deleted outright,
+    // since several of its neighboring functions (calculateDiscount,
+    // getNightsInRange, fmtGuest, etc.) are genuinely still used
+    // elsewhere in this file and weren't safe to remove alongside it.
+    if(!stayRowsEl) return;
     if(approvedListings.length === 0){
       stayRowsEl.innerHTML = '<div class="suites-empty" style="text-align:left; padding:0;">No stays are available to book online right now. Check back shortly.</div>';
       addStayBtn.style.display = 'none';
@@ -3044,13 +3000,13 @@
     addStayRow();
   }
 
-  addStayBtn.addEventListener('click', addStayRow);
+  if(addStayBtn) addStayBtn.addEventListener('click', addStayRow);
 
   // ---- Razorpay checkout (secure: order created server-side) ----
   const RAZORPAY_KEY_ID = 'rzp_test_TRBdgq9nPS2wfy'; // public Key ID only — safe to expose
   const API_BASE = 'https://aerva-in.vercel.app'; // your deployed api/ functions
 
-  document.getElementById('reserveForm').addEventListener('submit', async function(e){
+  document.getElementById('reserveForm') && document.getElementById('reserveForm').addEventListener('submit', async function(e){
     e.preventDefault();
 
     if(!currentBookingTotal){
@@ -5877,22 +5833,6 @@
   // initGoogleMaps() instead — see below. populateCityOptions() (which
   // only ever suggested existing listing cities) is retired.
 
-  // Refreshes the "Home" dropdown in every existing Reserve stay row after a
-  // search changes which listings are available — without wiping out dates
-  // or guest counts the person already entered.
-  function refreshAllStayRowSuiteOptions(){
-    const rows = Array.from(stayRowsEl.querySelectorAll('.stay-row'));
-    rows.forEach(row => {
-      const select = row.querySelector('.stayRow-suite');
-      if(!select) return;
-      const previousValue = select.value;
-      select.innerHTML = buildSuiteOptionsHtml();
-      if(listingsById[previousValue]) select.value = previousValue;
-    });
-    refreshSuiteAvailability();
-    updatePricing();
-  }
-
   // Reused across searches so we don't create a new Geocoder instance
   // every time — cheap either way, but tidier.
   let placesGeocoder = null;
@@ -7247,7 +7187,6 @@
       }
 
       applyFiltersAndRender();
-      refreshAllStayRowSuiteOptions();
     } catch(err){
       container.innerHTML = '<div class="suites-empty">Could not search right now. Please try again.</div>';
     }
@@ -7492,6 +7431,63 @@
       ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="link" style="font-size:13px;">View on map</a>`
       : '';
 
+    // A Resort's booking column is structurally different enough (room
+    // selection instead of a single price/pet-policy/amenities flow)
+    // that it's a genuinely separate path here, rather than threading
+    // "is this a resort" checks through every line of the regular
+    // column below. Photos/map/description are identical either way,
+    // so those are reused as-is.
+    if(listing.property_type === 'Resort'){
+      const rooms = Array.isArray(listing.rooms) ? listing.rooms : [];
+      return `
+        <div class="listing-modal-content">
+          <h2>${listing.property_name}</h2>
+          <div class="loc">${formatCityArea(listing)} · Resort</div>
+          <div class="listing-three-col">
+            <div class="listing-col-booking">
+              <div class="listing-modal-section-title" style="margin-top:0;">Check Availability</div>
+              <div id="resortBookCalendar" data-listing-id="${listing.id}">
+                <p style="font-size:13px; opacity:0.6;">Loading calendar…</p>
+              </div>
+              <p id="resortDatesPrompt" style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick your dates first, then choose which room${rooms.length === 1 ? '' : 's'} you need below.</p>
+              <div class="listing-modal-section-title" style="margin-top:20px;">Rooms</div>
+              <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:6px;">Each room is booked and priced on its own — pick as many as your group needs. A room greyed out below isn't free for the dates you picked.</p>
+              <div id="resortRoomsList">
+                ${rooms.length ? '<p style="font-size:12.5px; opacity:0.5;">Pick dates above to see room availability.</p>' : '<p style="font-size:13px; opacity:0.6;">This resort has no rooms set up yet.</p>'}
+              </div>
+              <div id="resortPriceSummary" style="display:none;"></div>
+              <div id="resortBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+                <div class="field">
+                  <label for="resortBookEmail">Email <span style="color:#a3402f;">*</span></label>
+                  <input id="resortBookEmail" type="email" placeholder="you@email.com" required>
+                </div>
+                <div class="field" style="margin-top:12px;">
+                  <label for="resortBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                  <input id="resortBookPhone" type="tel" placeholder="10-digit mobile number" required>
+                </div>
+                <button type="button" class="btn solid" id="resortBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
+                <p id="resortBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
+                <p id="resortBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
+              </div>
+            </div>
+            <div class="listing-col-photos">
+              <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
+              ${photosHtml}
+              <p class="desc" style="margin-top:16px;">${listing.description}</p>
+            </div>
+            <div class="listing-col-map">
+              <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
+              ${(listing.latitude && listing.longitude) ? `
+                <div class="listing-map-embed" id="listingMapEmbed"></div>
+                <div style="margin-top:8px;">${mapLinkHtml}</div>
+              ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
+            </div>
+          </div>
+          ${amenitiesHtml}
+        </div>
+      `;
+    }
+
     const priceLine = listing.nightly_rate
       ? `From <strong>${fmt(Number(listing.nightly_rate))}</strong>/night`
       : 'Rate on enquiry';
@@ -7623,7 +7619,6 @@
                 <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
               </div>
               <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
-              <a href="#" id="listingAddToGroupLink" class="link" style="display:block; text-align:center; font-size:12.5px; margin-top:10px;">Booking for a large group? Add another property →</a>
               <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
               <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
             </div>
@@ -7659,6 +7654,11 @@
     if(mapEl && listing.latitude && listing.longitude){
       initListingMapEmbed(mapEl, listing.latitude, listing.longitude, listing.property_name);
     }
+    if(listing.property_type === 'Resort'){
+      renderResortBookingCalendar(listing);
+      document.getElementById('resortBookNowBtn').addEventListener('click', () => handleResortBookNow(listing));
+      return;
+    }
     loadListingExperiences(listing);
     // This modal previously never actually rendered — buildListingDetailHtml
     // only sets up the "Loading availability…" placeholder markup, the
@@ -7667,11 +7667,6 @@
     // never worked before now.
     renderAvailabilityCalendar(listing);
     document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
-    document.getElementById('listingAddToGroupLink').addEventListener('click', (e) => {
-      e.preventDefault();
-      closeListingDetail();
-      prefillReserveWithListing(listing.id);
-    });
   }
 
   // "This property also offers…" — with-stay experiences hosted at this
@@ -8546,6 +8541,279 @@
     rzp.open();
   }
 
+  // ---- Resort booking: pick dates once, then choose which room(s) —
+  // each room independently priced and independently available (see
+  // create-order.js's dedicated resort-room branch). Deliberately
+  // simpler than the regular stay flow above: no pets, no paid
+  // amenities, no extra-guest pricing — a hotel-style room doesn't carry
+  // any of those single-unit concerns. Guest count per room defaults to
+  // that room's own max occupancy (no separate guest-count picker here,
+  // matching the "keep it property-wise" simplification — a guest
+  // choosing a room that sleeps 4 is understood to be booking it for up
+  // to 4, not asked to additionally specify a smaller number).
+  let resortSelectedRooms = {};
+
+  async function renderResortBookingCalendar(listing){
+    const container = document.getElementById('resortBookCalendar');
+    if(!container) return;
+    let resortArrival = '';
+    let resortDeparture = '';
+    let selectingStart = true;
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const minIso = toLocalDateStr(tomorrow);
+    const minDateObj = new Date(minIso + 'T00:00:00');
+    let viewYear = minDateObj.getFullYear();
+    let viewMonth = minDateObj.getMonth();
+
+    function handleDayClick(iso){
+      if(selectingStart || !resortArrival){
+        resortArrival = iso; resortDeparture = ''; selectingStart = false;
+      } else if(iso <= resortArrival){
+        resortArrival = iso; resortDeparture = ''; selectingStart = false;
+      } else {
+        resortDeparture = iso; selectingStart = true;
+      }
+      renderMonth();
+      if(resortArrival && resortDeparture){
+        renderResortRooms(listing, resortArrival, resortDeparture);
+      }
+    }
+
+    function renderMonth(){
+      const firstDay = new Date(viewYear, viewMonth, 1);
+      const startWeekday = firstDay.getDay();
+      const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+      const isMinMonth = viewYear === minDateObj.getFullYear() && viewMonth === minDateObj.getMonth();
+
+      let cellsHtml = '';
+      for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
+      for(let day = 1; day <= daysInMonth; day++){
+        const iso = toLocalDateStr(new Date(viewYear, viewMonth, day));
+        const isDisabled = iso < minIso;
+        let classes = 'calendar-day';
+        if(isDisabled) classes += ' disabled';
+        if(iso === resortArrival || iso === resortDeparture) classes += ' selected-start';
+        else if(resortArrival && resortDeparture && iso > resortArrival && iso < resortDeparture) classes += ' in-range';
+        cellsHtml += `<div class="${classes}" data-resort-date="${iso}">${day}</div>`;
+      }
+      const rangeNoteHtml = resortArrival && resortDeparture
+        ? `<p style="font-size:12px; margin-top:10px;"><strong>${new Date(resortArrival + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(resortDeparture + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</strong></p>`
+        : resortArrival
+        ? `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Now pick your checkout date.</p>`
+        : `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick check-in, then checkout.</p>`;
+
+      container.innerHTML = `
+        <div class="calendar-month-panel" style="max-width:320px; padding:0;">
+          <div class="calendar-month-header">
+            <button type="button" class="cal-nav" id="resortCalPrev" aria-label="Previous month" ${isMinMonth ? 'disabled' : ''}>‹</button>
+            <div class="calendar-month-label">${MONTH_NAMES[viewMonth]} ${viewYear}</div>
+            <button type="button" class="cal-nav" id="resortCalNext" aria-label="Next month">›</button>
+          </div>
+          <div class="calendar-weekdays"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
+          <div class="calendar-grid">${cellsHtml}</div>
+          ${rangeNoteHtml}
+        </div>
+      `;
+      document.getElementById('resortCalPrev').addEventListener('click', () => {
+        viewMonth -= 1; if(viewMonth < 0){ viewMonth = 11; viewYear -= 1; } renderMonth();
+      });
+      document.getElementById('resortCalNext').addEventListener('click', () => {
+        viewMonth += 1; if(viewMonth > 11){ viewMonth = 0; viewYear += 1; } renderMonth();
+      });
+      container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+        cell.addEventListener('click', (e) => { e.stopPropagation(); handleDayClick(cell.dataset.resortDate); });
+      });
+    }
+    renderMonth();
+  }
+
+  async function renderResortRooms(listing, arrival, departure){
+    const container = document.getElementById('resortRoomsList');
+    const promptEl = document.getElementById('resortDatesPrompt');
+    if(promptEl) promptEl.style.display = 'none';
+    const rooms = Array.isArray(listing.rooms) ? listing.rooms : [];
+    resortSelectedRooms = {};
+    updateResortPriceSummary();
+    if(!rooms.length) return;
+
+    container.innerHTML = '<p style="font-size:12.5px; opacity:0.5;">Checking room availability…</p>';
+    const nightsNeeded = getNightsInRangeClient(arrival, departure);
+
+    const roomsWithAvailability = await Promise.all(rooms.map(async room => {
+      try{
+        const res = await fetch(SUITES_API_BASE + `/api/get-listings?availabilityFor=${listing.id}&roomId=${room.id}`);
+        if(!res.ok) return { ...room, available: true }; // fail open — a check failing shouldn't itself block booking
+        const data = await res.json();
+        const ranges = [...(Array.isArray(data.bookedRanges) ? data.bookedRanges : []), ...(Array.isArray(data.blockedRanges) ? data.blockedRanges : [])];
+        const occupied = new Set();
+        ranges.forEach(r => { if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => occupied.add(n)); });
+        return { ...room, available: !nightsNeeded.some(n => occupied.has(n)) };
+      } catch(err){
+        return { ...room, available: true };
+      }
+    }));
+
+    const nights = nightsNeeded.length;
+    container.innerHTML = roomsWithAvailability.map(room => `
+      <label style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--line-dark); cursor:${room.available ? 'pointer' : 'default'}; opacity:${room.available ? '1' : '0.45'};">
+        ${room.coverPhotoUrl
+          ? `<img src="${room.coverPhotoUrl}" alt="" style="width:64px; height:52px; object-fit:cover; border-radius:4px; flex:0 0 auto;">`
+          : `<span style="width:64px; height:52px; flex:0 0 auto; background:var(--cream-deep); border-radius:4px;"></span>`}
+        <input type="checkbox" data-room-id="${room.id}" ${room.available ? '' : 'disabled'} style="width:auto;">
+        <span style="flex:1; min-width:0;">
+          <strong style="display:block; font-size:14px;">${room.roomName}</strong>
+          <span style="font-size:12px; opacity:0.65;">Sleeps up to ${room.maxOccupancy} · ${fmt(Number(room.price))}/night${room.available ? '' : ' · Not available these dates'}</span>
+        </span>
+      </label>
+    `).join('');
+
+    container.querySelectorAll('[data-room-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const room = roomsWithAvailability.find(r => String(r.id) === cb.dataset.roomId);
+        if(cb.checked) resortSelectedRooms[room.id] = { ...room, arrival, departure, nights };
+        else delete resortSelectedRooms[room.id];
+        updateResortPriceSummary();
+      });
+    });
+  }
+
+  function updateResortPriceSummary(){
+    const summaryEl = document.getElementById('resortPriceSummary');
+    const actionEl = document.getElementById('resortBookingAction');
+    if(!summaryEl || !actionEl) return;
+    const selected = Object.values(resortSelectedRooms);
+    if(!selected.length){
+      summaryEl.style.display = 'none';
+      actionEl.style.display = 'none';
+      return;
+    }
+    const rows = selected.map(r => {
+      const cost = Number(r.price) * r.nights;
+      return `<div class="sum-row"><span>${r.roomName} × ${r.nights} night${r.nights === 1 ? '' : 's'}</span><span>${fmtGuest(cost)}</span></div>`;
+    }).join('');
+    const subtotal = selected.reduce((sum, r) => sum + Number(r.price) * r.nights, 0);
+    const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
+    const total = subtotal + guestServiceFee;
+    summaryEl.innerHTML = `
+      <div class="listing-modal-section-title">Price Summary</div>
+      ${rows}
+      <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
+      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
+    `;
+    summaryEl.style.display = 'block';
+    actionEl.style.display = 'block';
+  }
+
+  async function handleResortBookNow(listing){
+    const errorEl = document.getElementById('resortBookError');
+    const confirmEl = document.getElementById('resortBookConfirm');
+    const btn = document.getElementById('resortBookNowBtn');
+    errorEl.style.display = 'none';
+    confirmEl.style.display = 'none';
+
+    if(!guestAuthToken()){
+      requireLoginForBooking(() => handleResortBookNow(listing));
+      return;
+    }
+    const selected = Object.values(resortSelectedRooms);
+    if(!selected.length){
+      errorEl.textContent = 'Please select at least one room.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const email = document.getElementById('resortBookEmail').value.trim();
+    if(!email || !email.includes('@')){
+      errorEl.textContent = 'Please enter a valid email address.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const phone = document.getElementById('resortBookPhone').value.trim().replace(/\D/g, '');
+    if(!phone || phone.length < 10){
+      errorEl.textContent = 'Please enter a valid mobile number.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Preparing payment…';
+
+    // One stays[] entry per selected room — each becomes its own order
+    // row server-side (see create-order.js's resort branch), which is
+    // also what makes independent per-room payouts fall out naturally
+    // from the existing order structure, same as any other multi-item
+    // booking.
+    const stays = selected.map(r => ({
+      listingId: listing.id, roomId: r.id, arrival: r.arrival, departure: r.departure, guests: r.maxOccupancy
+    }));
+
+    let order;
+    try{
+      const orderRes = await fetch(API_BASE + '/api/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({ stays, email, preferredCurrency: currentCurrency })
+      });
+      if(!orderRes.ok){
+        const errData = await orderRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Could not start payment. Please try again.');
+      }
+      order = await orderRes.json();
+    } catch(err){
+      btn.disabled = false;
+      btn.textContent = 'Book Now';
+      errorEl.textContent = err.message || 'Could not start payment. Please try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Book Now';
+
+    if(typeof Razorpay === 'undefined'){
+      errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const options = {
+      key: RAZORPAY_KEY_ID,
+      order_id: order.orderId,
+      amount: order.amount,
+      currency: order.currency,
+      name: 'Aerva',
+      description: listing.property_name,
+      prefill: { email, contact: phone },
+      theme: { color: '#a9884f' },
+      config: { display: { sequence: ['upi', 'card', 'netbanking', 'wallet'], preferences: { show_default_blocks: true } } },
+      handler: async function(response){
+        try{
+          const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(response)
+          });
+          const verifyData = await verifyRes.json();
+          if(verifyData.verified){
+            confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm and follow up by email shortly.';
+            confirmEl.style.display = 'block';
+          } else {
+            errorEl.textContent = 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
+            errorEl.style.display = 'block';
+          }
+        } catch(err){
+          errorEl.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.';
+          errorEl.style.display = 'block';
+        }
+      },
+      modal: { ondismiss: function(){} }
+    };
+    const rzp2 = new Razorpay(options);
+    rzp2.on('payment.failed', function(response){
+      errorEl.textContent = 'Payment failed: ' + response.error.description;
+      errorEl.style.display = 'block';
+    });
+    rzp2.open();
+  }
+
   // Experience detail page — mirrors buildListingDetailHtml's structure,
   // but with much simpler booking math (no nights, no discount, price is
   // either per-person or flat) and a "hosted at" cross-sell into the
@@ -9257,77 +9525,19 @@
     document.getElementById('listingFullViewBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingFullView').style.display = 'block';
     document.title = listing.property_name + ' — Aerva';
+    if(listing.property_type === 'Resort'){
+      renderResortBookingCalendar(listing);
+      document.getElementById('resortBookNowBtn').addEventListener('click', () => handleResortBookNow(listing));
+      return;
+    }
     renderAvailabilityCalendar(listing);
     document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
-    document.getElementById('listingAddToGroupLink').addEventListener('click', (e) => {
-      e.preventDefault();
-      prefillReserveWithListing(listing.id); // showReserveSection() inside this already hides listingFullView — no separate close step needed here
-    });
   }
 
   document.getElementById('listingModalClose').addEventListener('click', closeListingDetail);
   document.getElementById('listingModalOverlay').addEventListener('click', (e) => {
     if(e.target.id === 'listingModalOverlay') closeListingDetail();
   });
-
-  // The Reserve section (multi-stay booking — combine several properties
-  // or the same one twice into one checkout) previously had no way to
-  // reach it at all: nothing linked to it, and even this function only
-  // ever scrolled to it without first making it visible (it's
-  // display:none by default). Fixed by having both this and the new
-  // entry points below actually toggle section visibility.
-  function showReserveSection(){
-    document.getElementById('suites').style.display = 'none';
-    document.getElementById('listingFullView').style.display = 'none';
-    document.getElementById('experienceFullView').style.display = 'none';
-    document.getElementById('reserve').style.display = 'block';
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-  function hideReserveSection(){
-    document.getElementById('reserve').style.display = 'none';
-    document.getElementById('suites').style.display = 'block';
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-  document.getElementById('reserveBackLink').addEventListener('click', (e) => {
-    e.preventDefault();
-    hideReserveSection();
-  });
-  document.getElementById('reserveGroupLink').addEventListener('click', () => {
-    showReserveSection();
-    if(stayRowsEl.children.length === 0) addStayRow();
-  });
-
-  function prefillReserveWithListing(listingId){
-    showReserveSection();
-    if(stayRowsEl.children.length === 0){
-      addStayRow();
-    }
-    const firstRow = stayRowsEl.querySelector('.stay-row');
-    if(!firstRow) return;
-
-    const suiteSelect = firstRow.querySelector('.stayRow-suite');
-    if(listingsById[listingId]) suiteSelect.value = listingId;
-
-    const searchArrivalVal = searchArrivalDate;
-    const searchDepartureVal = searchDepartureDate;
-    const searchGuestsVal = document.getElementById('searchGuests').value;
-
-    const arrivalEl = firstRow.querySelector('.stayRow-arrival');
-    const departureEl = firstRow.querySelector('.stayRow-departure');
-    const guestsEl = firstRow.querySelector('.stayRow-guests');
-
-    if(searchArrivalVal){
-      arrivalEl.value = searchArrivalVal;
-      const next = new Date(searchArrivalVal);
-      next.setDate(next.getDate() + 1);
-      departureEl.min = next.toISOString().split('T')[0];
-    }
-    if(searchDepartureVal) departureEl.value = searchDepartureVal;
-    if(searchGuestsVal) guestsEl.value = searchGuestsVal >= 6 ? '6' : searchGuestsVal;
-
-    refreshSuiteAvailability();
-    updatePricing();
-  }
 
   function handleCardGridClick(e){
     // "View on map" opens Google Maps in a new tab — let it behave
