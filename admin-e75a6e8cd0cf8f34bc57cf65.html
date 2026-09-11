@@ -468,6 +468,51 @@
     `;
   }
 
+  // A pending Resort's real per-room breakdown (name, capacity, price,
+  // and its own main/washroom/balcony photos) lives in
+  // pending_room_photos until approval creates the real listing_rooms
+  // records — without this, an admin reviewing a Resort would only see
+  // a flat, unlabeled photo gallery and no way to check whether the
+  // declared room count, pricing, or required washroom photos are
+  // actually there before approving.
+  function roomBreakdownHtml(pendingRoomPhotos, declaredCount){
+    if (!Array.isArray(pendingRoomPhotos) || pendingRoomPhotos.length === 0) {
+      return `<p class="address-line" style="color:#a3402f;">⚠ No rooms have been provided yet for this Resort (declared: ${declaredCount || 0}) — nothing here for a guest to book if approved as-is.</p>`;
+    }
+    const rows = pendingRoomPhotos.map(r => {
+      const photos = [
+        r.url ? { label: 'Room', url: r.url } : null,
+        r.washroomUrl ? { label: 'Washroom', url: r.washroomUrl } : null,
+        r.balconyUrl ? { label: 'Balcony', url: r.balconyUrl } : null
+      ].filter(Boolean);
+      const missing = [];
+      if (!r.url) missing.push('room photo');
+      if (!r.washroomUrl) missing.push('washroom photo');
+      if (!(Number(r.maxOccupancy) > 0)) missing.push('max guests');
+      if (!(Number(r.price) > 0)) missing.push('price');
+      return `
+        <div style="border:1px solid #ddd0bc; padding:10px 12px; margin-top:8px; border-radius:4px;">
+          <strong>${r.roomName || 'Untitled room'}</strong>
+          <span style="opacity:0.7;"> — sleeps up to ${r.maxOccupancy || '—'} · ₹${r.price || '—'}/night</span>
+          ${missing.length ? `<div style="color:#a3402f; font-size:12.5px; margin-top:4px;">⚠ Missing: ${missing.join(', ')}</div>` : ''}
+          <div class="photo-row" style="margin-top:6px;">
+            ${photos.map(p => `<a href="${p.url}" target="_blank" rel="noopener"><img src="${p.url}" alt="${p.label} photo" title="${p.label}"></a>`).join('')}
+          </div>
+        </div>
+      `;
+    }).join('');
+    const countMismatch = declaredCount && pendingRoomPhotos.length !== declaredCount
+      ? `<div style="color:#a3402f; font-size:12.5px; margin-top:6px;">⚠ Declared ${declaredCount} rooms, but ${pendingRoomPhotos.length} were provided.</div>`
+      : '';
+    return `
+      <div class="photo-group">
+        <div class="photo-group-label">Rooms (${pendingRoomPhotos.length} of ${declaredCount || '?'} declared)</div>
+        ${countMismatch}
+        ${rows}
+      </div>
+    `;
+  }
+
   function tagListHtml(label, items){
     if (!Array.isArray(items) || items.length === 0) return '';
     return `
@@ -491,11 +536,12 @@
         : '';
       const metaLine = isExperience
         ? `${typeTag}${l.experience_category || 'Uncategorized'} · ₹${l.nightly_rate || '—'}${l.experience_price_unit === 'per_person' ? ' per person' : ' flat'}${l.experience_duration_hours ? ' · ' + l.experience_duration_hours + 'h' : ''} · Hosted at: ${l.hosting_property_name || 'not set'} · ${l.host_name} (${l.host_email}, ${l.host_phone})`
-        : `${l.area ? l.area + ', ' : ''}${l.city} · ${l.property_type || ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})`;
+        : `${l.area ? l.area + ', ' : ''}${l.city} · <strong>${l.property_type || 'Property type not set'}</strong>${l.property_type === 'Resort' ? ` · ${l.bedrooms || 0} rooms declared` : ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})`;
       const addressHtml = (!isExperience && l.formatted_address) ? `
-        <p class="address-line">📍 ${l.formatted_address}${(l.latitude && l.longitude) ? ` — <a href="https://www.google.com/maps?q=${l.latitude},${l.longitude}" target="_blank" rel="noopener">Open in Google Maps</a>` : ''}</p>
+        <p class="address-line">📍 ${l.formatted_address}${l.pincode ? ` — PIN ${l.pincode}` : ' — <span style="color:#a3402f;">no pincode on file</span>'}${(l.latitude && l.longitude) ? ` — <a href="https://www.google.com/maps?q=${l.latitude},${l.longitude}" target="_blank" rel="noopener">Open in Google Maps</a>` : ''}</p>
         ${(l.latitude && l.longitude) ? `<div class="listing-map-preview" id="listingMap-${l.id}" data-lat="${l.latitude}" data-lng="${l.longitude}"></div>` : ''}
       ` : (!isExperience ? '<p class="address-line" style="color:#a3402f;">⚠ No location was set for this listing — worth checking with the host before approving.</p>' : '');
+      const roomsHtml = (!isExperience && l.property_type === 'Resort') ? roomBreakdownHtml(l.pending_room_photos, l.bedrooms) : '';
       return `
       <div class="listing" id="listing-${l.id}">
         <h3>${l.property_name}</h3>
@@ -505,7 +551,7 @@
         ${tagListHtml('Amenities', l.amenities)}
         ${tagListHtml('Services', l.services)}
         ${photoThumbnailsHtml('Exterior', l.exterior_photo_urls)}
-        ${photoThumbnailsHtml('Interior', l.interior_photo_urls)}
+        ${l.property_type === 'Resort' ? roomsHtml : photoThumbnailsHtml('Interior', l.interior_photo_urls)}
         <div class="actions">
           <button class="approve-btn" onclick="decide(${l.id}, 'approve')">Approve</button>
           <button class="reject-btn" onclick="showRejectPanel(${l.id})">Reject</button>
