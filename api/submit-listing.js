@@ -396,6 +396,22 @@ module.exports = async (req, res) => {
           console.warn('submit-listing rejected: missing required text fields');
           return res.status(400).json({ error: 'Missing required fields' });
         }
+        // A Resort's real capacity lives in its rooms (see listing_rooms
+        // and manage-listing.html's Rooms tab) — max_guests on the
+        // listing itself isn't meaningful there, and rooms aren't even
+        // created until after this initial submission is approved, so
+        // requiring it here would make it impossible to submit a Resort
+        // at all. Every other property type needs a real, positive
+        // number — this used to be silently optional (stored as NULL if
+        // left blank), which meant a listing could go live with no
+        // stated capacity at all, undermining exactly the kind of
+        // guest-count search filtering get-listings.js relies on.
+        if (propertyType !== 'Resort') {
+          const maxGuestsNum = Number(maxGuests);
+          if (!maxGuests || isNaN(maxGuestsNum) || maxGuestsNum < 1) {
+            return res.status(400).json({ error: 'Please select the maximum number of guests this property can accommodate.' });
+          }
+        }
         if (!area || !String(area).trim()) {
           return res.status(400).json({ error: 'Please enter the area.' });
         }
