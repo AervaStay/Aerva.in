@@ -3804,15 +3804,18 @@
   window.initGoogleMaps = function(){};
 
   (function wireSearchBarAutocomplete(){
-      // Search bar's "Place" field — real-world address suggestions as
-      // the guest types, not just cities that already have listings.
+      // Search bar's "Where" field — real-world LOCATION suggestions
+      // only, as the guest types. This used to also mix in Aerva's own
+      // listings that matched by name (labeled "Your Listings" — a
+      // mismatched, host-dashboard-sounding label that made no sense in
+      // a guest-facing search bar), ahead of the actual place results.
+      // Removed entirely: a guest typing a place name wants places, not
+      // property names competing for the same suggestion slots.
       //
       // Uses a CUSTOM dropdown rather than Google's native Autocomplete
-      // widget — the native one renders its own suggestion list that
-      // can't have extra items (like matching listings) injected into
-      // it. Instead this calls the free/Google prediction sources
-      // directly and combines the results with a simple client-side
-      // match against current listings, rendering both together.
+      // widget, so the free Nominatim-first / Google-fallback source
+      // switching below stays possible — the native widget only ever
+      // talks to Google directly.
       const searchPlaceInput = document.getElementById('searchCity');
       const placeSuggestionsEl = document.getElementById('placeSuggestions');
       if(!searchPlaceInput || !placeSuggestionsEl) return;
@@ -3848,29 +3851,19 @@
       // lat/lng included — no second lookup needed to select one).
       // googlePredictions: only populated when the free path failed
       // entirely (see the caller below) — needs the old getDetails step.
-      function renderSuggestions(matchingListings, freePlaces, googlePredictions){
-        if(matchingListings.length === 0 && freePlaces.length === 0 && googlePredictions.length === 0){
+      function renderSuggestions(freePlaces, googlePredictions){
+        if(freePlaces.length === 0 && googlePredictions.length === 0){
           closeSuggestions();
           return;
         }
         let html = '';
-        if(matchingListings.length){
-          html += '<div class="place-suggest-heading">Your Listings</div>';
-          html += matchingListings.map(l => `
-            <button type="button" class="place-suggest-item" data-type="listing" data-id="${l.id}">
-              <strong>${l.property_name}</strong><span>${formatCityArea(l)}</span>
-            </button>
-          `).join('');
-        }
         if(freePlaces.length){
-          html += '<div class="place-suggest-heading">Places</div>';
           html += freePlaces.map((p, i) => `
             <button type="button" class="place-suggest-item" data-type="free-place" data-index="${i}">
               ${p.formatted_address}
             </button>
           `).join('');
         } else if(googlePredictions.length){
-          html += '<div class="place-suggest-heading">Places</div>';
           html += googlePredictions.map(p => `
             <button type="button" class="place-suggest-item" data-type="google-place" data-place-id="${p.place_id}">
               ${p.description}
@@ -3880,24 +3873,6 @@
         placeSuggestionsEl.innerHTML = html;
         placeSuggestionsEl.style.display = 'block';
 
-        placeSuggestionsEl.querySelectorAll('[data-type="listing"]').forEach(btn => {
-          btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const listing = listingsById[btn.dataset.id];
-            if(listing && listing.latitude && listing.longitude){
-              selectCoordinates(listing.latitude, listing.longitude, listing.property_name);
-            } else if(listing){
-              // No coordinates on this listing yet — fall back to
-              // filling in its city as plain text search instead of
-              // leaving the suggestion inert.
-              searchPlaceInput.value = formatCityArea(listing) || listing.property_name;
-              document.getElementById('searchPlaceLat').value = '';
-              document.getElementById('searchPlaceLng').value = '';
-              closeSuggestions();
-              openCalendar();
-            }
-          });
-        });
         placeSuggestionsEl.querySelectorAll('[data-type="free-place"]').forEach(btn => {
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -3937,10 +3912,6 @@
         // previous Google-only version needed to be.
         debounceTimer = setTimeout(async () => {
           const thisQueryId = ++latestQueryId;
-          const queryLower = query.toLowerCase();
-          const matchingListings = approvedListings
-            .filter(l => (l.property_name || '').toLowerCase().includes(queryLower) || (l.city || '').toLowerCase().includes(queryLower) || (l.area || '').toLowerCase().includes(queryLower))
-            .slice(0, 5);
 
           const freeResults = await freeSearchSuggestions(query);
           if(thisQueryId !== latestQueryId) return; // a newer keystroke superseded this
@@ -3948,20 +3919,20 @@
           if(freeResults !== null){
             // Nominatim answered (even if with zero results) — done, no
             // need to also spend a Google request on the same query.
-            renderSuggestions(matchingListings, freeResults.slice(0, 5), []);
+            renderSuggestions(freeResults.slice(0, 5), []);
             return;
           }
 
           // Nominatim itself failed (network error, etc.) — only now
           // does this fall back to Google.
           if(!autocompleteService){
-            renderSuggestions(matchingListings, [], []);
+            renderSuggestions([], []);
             return;
           }
           autocompleteService.getPlacePredictions({ input: query, types: ['geocode'], componentRestrictions: { country: 'in' } }, (predictions, status) => {
             if(thisQueryId !== latestQueryId) return;
             const validPredictions = (status === 'OK' && predictions) ? predictions.slice(0, 5) : [];
-            renderSuggestions(matchingListings, [], validPredictions);
+            renderSuggestions([], validPredictions);
           });
         }, 350);
       });
@@ -7841,11 +7812,21 @@
     const listingId = listing.id;
 
     let bookedRanges = [];
+    let blockedRanges = [];
     try {
       const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
       if(res.ok){
         const data = await res.json();
         bookedRanges = Array.isArray(data.bookedRanges) ? data.bookedRanges : [];
+        // The backend has always returned this alongside bookedRanges —
+        // it just never got read here, so a host's own blocked dates
+        // (maintenance, personal use, etc.) never actually greyed out
+        // anything on the guest-facing calendar, even though
+        // create-order.js was already correctly rejecting a booking
+        // attempt against them. A guest could pick a blocked date, fill
+        // out the whole form, and only find out it was never actually
+        // available at the final submit — this fixes that at the source.
+        blockedRanges = Array.isArray(data.blockedRanges) ? data.blockedRanges : [];
       }
     } catch(err){
       console.error('Could not load availability:', err);
@@ -7853,6 +7834,9 @@
 
     const bookedNights = new Set();
     bookedRanges.forEach(r => {
+      if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => bookedNights.add(n));
+    });
+    blockedRanges.forEach(r => {
       if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => bookedNights.add(n));
     });
 
@@ -8809,11 +8793,35 @@
   // host-fixed length), not a bug fix. create-order.js now prices this
   // as price × days, an interim assumption pending a real "per day"
   // pricing model — see the comment there.
-  function renderExpBookingCalendar(exp){
+  async function renderExpBookingCalendar(exp){
     const container = document.getElementById('expBookCalendar');
     if(!container) return;
     const minIso = container.dataset.min;
     const maxIso = container.dataset.max || null;
+
+    // A with_stay experience is tied to a real property (hosting_listing_id)
+    // — booking the experience is supposed to also reserve that stay, so
+    // its own booked/blocked nights need to grey out here too, not just
+    // the experience listing's own (which mostly has none, since
+    // experiences don't track per-date capacity the way stays do). This
+    // used to not exist at all: an experience could show as bookable on
+    // dates where the actual property was already fully booked by
+    // someone else, since nothing here ever checked the linked stay.
+    const occupiedNights = new Set();
+    if(exp.hosting_listing_id){
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(exp.hosting_listing_id));
+        if(res.ok){
+          const data = await res.json();
+          const ranges = [...(Array.isArray(data.bookedRanges) ? data.bookedRanges : []), ...(Array.isArray(data.blockedRanges) ? data.blockedRanges : [])];
+          ranges.forEach(r => {
+            if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => occupiedNights.add(n));
+          });
+        }
+      } catch(err){
+        console.error('Could not load linked stay availability:', err);
+      }
+    }
 
     let expArrival = '';
     let expDeparture = '';
@@ -8822,6 +8830,11 @@
     const minDateObj = new Date(minIso + 'T00:00:00');
     viewYear = minDateObj.getFullYear();
     viewMonth = minDateObj.getMonth();
+
+    function rangeOverlapsOccupiedNights(startIso, endIso){
+      if(!occupiedNights.size) return false;
+      return getNightsInRangeClient(startIso, endIso).some(n => occupiedNights.has(n));
+    }
 
     function handleExpDayClick(iso){
       if(expSelectingStart || !expArrival){
@@ -8832,6 +8845,19 @@
         // Picked an earlier (or same) date as the second click — start a
         // fresh selection from here instead, same convention the stay
         // calendar uses.
+        expArrival = iso;
+        expDeparture = '';
+        expSelectingStart = false;
+      } else if(rangeOverlapsOccupiedNights(expArrival, iso)){
+        // The stay portion isn't free across the whole span the guest
+        // just tried to select — caught here, before any date even
+        // makes it into the booking form, rather than only failing at
+        // the final "Book Experience" click or (worse) at payment.
+        const warningEl = document.getElementById('expFitWarning');
+        if(warningEl){
+          warningEl.textContent = "The stay included with this experience isn't available for the full range you selected. Please choose different dates.";
+          warningEl.style.display = 'block';
+        }
         expArrival = iso;
         expDeparture = '';
         expSelectingStart = false;
@@ -8857,7 +8883,7 @@
       for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
       for(let day = 1; day <= daysInMonth; day++){
         const iso = toLocalDateStr(new Date(viewYear, viewMonth, day));
-        const isDisabled = iso < minIso || (maxIso && iso > maxIso);
+        const isDisabled = iso < minIso || (maxIso && iso > maxIso) || occupiedNights.has(iso);
         let classes = 'calendar-day';
         if(isDisabled) classes += ' disabled';
         if(iso === expArrival || iso === expDeparture) classes += ' selected-start';
@@ -8947,7 +8973,23 @@
     // minNights gate; not related to the days/hours fit-check above.
     const durationDays = exp.experience_duration_days && exp.experience_duration_days > 1 ? exp.experience_duration_days : 1;
     const discount = calculateDiscount(exp, durationDays, startDate, subtotalBeforeDiscount);
-    const subtotal = subtotalBeforeDiscount - discount.amount;
+    const expSubtotal = subtotalBeforeDiscount - discount.amount;
+
+    // A with_stay experience also reserves and charges for the linked
+    // property (see create-order.js) — shown here as an ESTIMATE using
+    // that property's plain nightly rate (no promotions applied
+    // client-side, unlike the experience's own price above), so the
+    // guest sees a total that's actually close to what they'll be
+    // charged, rather than only the experience's own price with the
+    // stay silently added at checkout with no warning beforehand.
+    let hostingSubtotal = 0;
+    let hostingRowHtml = '';
+    if(exp.experience_type === 'with_stay' && exp.hosting_listing_id && exp.hosting_nightly_rate){
+      hostingSubtotal = Number(exp.hosting_nightly_rate) * days;
+      hostingRowHtml = `<div class="sum-row"><span>Stay at ${exp.hosting_property_name || 'the property'} × ${days} night${days === 1 ? '' : 's'}</span><span>${fmtGuest(hostingSubtotal)}</span></div>`;
+    }
+
+    const subtotal = expSubtotal + hostingSubtotal;
     const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
     const total = subtotal + guestServiceFee;
     const inrNote = currentCurrency !== 'INR'
@@ -8963,6 +9005,7 @@
       <div class="listing-modal-section-title">Price Summary</div>
       <div class="sum-row"><span>${rateLine}</span><span>${fmtGuest(subtotalBeforeDiscount)}</span></div>
       ${discountRowHtml}
+      ${hostingRowHtml}
       <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
       <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
       ${inrNote}
