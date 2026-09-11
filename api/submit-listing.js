@@ -711,6 +711,21 @@ module.exports = async (req, res) => {
           VALUES (${listing.id}, ${safeRoomPhotos[i].roomName.trim().slice(0, 100)}, ${safeRoomPhotos[i].url}, ${i}, TRUE)
         `;
       }
+    } else if (!isExperience && propertyType === 'Resort' && !isDraft) {
+      // The named room photos aren't written into listing_rooms directly
+      // (see the comment above — that risks a Resort's real, already-
+      // priced rooms on any future resubmission), but they shouldn't
+      // just be thrown away either — a host who already named and
+      // photographed every room at submission shouldn't have to redo
+      // that work from scratch after approval. Staged here instead;
+      // approve-listing.js consumes this exactly once, the first time
+      // this listing is approved, to pre-populate listing_rooms (the
+      // host still fills in each room's actual price and confirms its
+      // capacity, but doesn't re-name or re-upload anything).
+      const safeRoomPhotos = Array.isArray(roomPhotos)
+        ? roomPhotos.filter(r => r && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
+        : [];
+      await sql`UPDATE listings SET pending_room_photos = ${JSON.stringify(safeRoomPhotos)} WHERE id = ${listing.id}`;
     }
 
     // Drafts don't need admin review yet, and don't count as a "real" price
