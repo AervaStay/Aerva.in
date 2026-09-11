@@ -1711,11 +1711,11 @@
         <label for="listPricingCurrency">Pricing Currency <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— enter your prices below in this currency; Aerva converts and stores them in INR automatically</span></label>
         <select id="listPricingCurrency"></select>
       </div>
-      <div class="field">
+      <div class="field" id="listPriceRow">
         <label for="listPrice"><span id="listPriceLabel">Expected Nightly Rate (₹)</span> <span class="required-mark">*</span></label>
         <input id="listPrice" name="Expected Nightly Rate" type="number" min="0" placeholder="e.g. 4500" required>
-        <p id="listPriceHint" style="font-size:11.5px; opacity:0.6; margin-top:4px; display:none;"></p>
       </div>
+      <p id="listPriceResortNote" style="font-size:11.5px; opacity:0.6; margin-top:-8px; margin-bottom:16px; display:none;">Not needed for a Resort — the price shown to guests is worked out automatically from your rooms' own prices below (the lowest one, as a "from" price), so there's nothing redundant to fill in here.</p>
       <div class="field">
         <label for="listSecurityDeposit"><span id="listSecurityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, refundable, held 7 days after checkout</span></label>
         <input id="listSecurityDeposit" name="Security Deposit" type="number" min="0" placeholder="e.g. 2000">
@@ -4280,7 +4280,9 @@
     const label = document.getElementById('listBedroomsLabel');
     const hint = document.getElementById('listBedroomsHint');
     const input = document.getElementById('listBedrooms');
-    const priceHint = document.getElementById('listPriceHint');
+    const priceRow = document.getElementById('listPriceRow');
+    const priceInput = document.getElementById('listPrice');
+    const priceResortNote = document.getElementById('listPriceResortNote');
     const guestsRow = document.getElementById('listGuestsRow');
     const guestsSelect = document.getElementById('listGuests');
     const guestsResortNote = document.getElementById('listGuestsResortNote');
@@ -4288,14 +4290,17 @@
       label.textContent = 'Number of Rooms';
       input.placeholder = 'e.g. 10';
       hint.textContent = "You'll need at least this many interior photos below — one per room. Each room's own price, capacity, and photo are set separately after approval.";
-      // A Resort's real pricing lives per-room, set individually after
-      // approval (see manage-listing.html's Rooms tab) — this field
-      // isn't what a guest is ever actually charged, so it's reframed
-      // here as a rough starting figure for the admin review team,
-      // rather than looking like the property's one true rate the way
-      // it does for every other property type.
-      priceHint.textContent = "For a Resort, this is just a rough starting figure for our review team — each room's actual price is set individually after approval, not this number.";
-      priceHint.style.display = 'block';
+      // A Resort's real pricing lives per-room, set individually below —
+      // asking for ALSO a listing-level "expected rate" here was
+      // redundant now that real per-room prices are collected in the
+      // same form. The price guests actually see is computed
+      // automatically from the lowest room price submitted (see
+      // submit-listing.js) — removed from view entirely, same treatment
+      // as Max Guests, rather than kept as a vague "rough figure" a host
+      // has to fill in and reconcile against their real room prices.
+      priceRow.style.display = 'none';
+      priceInput.required = false;
+      priceResortNote.style.display = 'block';
       // Max Guests is per-room only for a Resort (see submit-listing.js,
       // which already doesn't require this field there) — removed from
       // view entirely rather than just made optional. A field a host
@@ -4309,7 +4314,9 @@
       label.textContent = 'Bedrooms';
       input.placeholder = 'e.g. 4 — enter 0 for a studio';
       hint.textContent = "You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.";
-      priceHint.style.display = 'none';
+      priceRow.style.display = '';
+      priceInput.required = true;
+      priceResortNote.style.display = 'none';
       guestsRow.style.display = '';
       guestsSelect.required = true;
       guestsResortNote.style.display = 'none';
