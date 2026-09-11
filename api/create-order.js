@@ -551,6 +551,7 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate,
                experience_available_from, experience_available_until, experience_duration_days,
+               experience_duration_hours, experience_type, hosting_listing_id,
                discount_type, discount_value, discount_min_nights, host_id
         FROM listings
         WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
@@ -652,6 +653,89 @@ module.exports = async (req, res) => {
       const guests = Number(ex.guests) || 1;
       if (guests < 1) {
         return res.status(400).json({ error: `Experience ${i + 1}: invalid guest count` });
+      }
+
+      // A with_stay experience is tied to a real property
+      // (hosting_listing_id) — booking the experience is supposed to
+      // also reserve that stay, consolidated into this same payment.
+      // This used to not exist at all: create-order.js never referenced
+      // hosting_listing_id anywhere, so booking a with_stay experience
+      // via its own page only ever charged for the experience portion —
+      // no stay order got created, the property's calendar never
+      // blocked those dates, and its host was never paid. Fixed by
+      // composing a real stay entry here and pushing it into the SAME
+      // stayDetails array the stays[] loop above already fills, so
+      // verify-payment.js creates a genuine, separate order row for it
+      // (with its own host_id and payout_amount) using logic that
+      // already exists — no new order-creation path needed.
+      if (experience.experience_type === 'with_stay' && experience.hosting_listing_id) {
+        const hostingRows = await sql`
+          SELECT id, property_name, nightly_rate, discount_type, discount_value, discount_min_nights
+          FROM listings WHERE id = ${experience.hosting_listing_id} AND status = 'approved'
+        `;
+        const hostingListing = hostingRows[0];
+        if (!hostingListing) {
+          return res.status(400).json({ error: `Experience ${i + 1}: the stay included with "${experience.property_name}" is no longer available.` });
+        }
+        if (!hostingListing.nightly_rate) {
+          return res.status(400).json({ error: `Experience ${i + 1}: the stay included with "${experience.property_name}" doesn't have a price set yet.` });
+        }
+
+        // Same overlap checks as any stay booking — see the stays[] loop
+        // above for the identical pattern. This is the actual guarantee
+        // behind "if the stay isn't available, the guest is notified" —
+        // checked here, authoritatively, before any charge happens, not
+        // just as a best-effort hint on the calendar.
+        const hostingBlockedRows = await sql`
+          SELECT 1 FROM listing_blocked_dates
+          WHERE listing_id = ${hostingListing.id}
+            AND start_date < ${endDateExclusive}::date
+            AND end_date > ${startDate}::date
+          LIMIT 1
+        `;
+        const hostingBookedRows = await sql`
+          SELECT 1 FROM orders
+          WHERE listing_id = ${hostingListing.id} AND status = 'paid'
+            AND arrival < ${endDateExclusive}::date
+            AND departure > ${startDate}::date
+          LIMIT 1
+        `;
+        if (hostingBlockedRows[0] || hostingBookedRows[0]) {
+          return res.status(400).json({ error: `Experience ${i + 1}: the stay included with "${experience.property_name}" isn't available for those dates. Please choose different dates.` });
+        }
+
+        const hostingPromoRows = await sql`
+          SELECT is_active, discount_type, discount_value, min_nights, start_date, end_date
+          FROM listing_promotions
+          WHERE listing_id = ${hostingListing.id} AND is_active = TRUE AND end_date > CURRENT_DATE
+        `;
+        const hostingSubtotalBeforeDiscount = Number(hostingListing.nightly_rate) * days;
+        const hostingDiscountAmount = calculateDiscount(hostingListing, days, startDate, hostingSubtotalBeforeDiscount, hostingPromoRows);
+        const hostingSubtotal = hostingSubtotalBeforeDiscount - hostingDiscountAmount;
+        const hostingGuestServiceFee = Math.round(hostingSubtotal * (GUEST_SERVICE_FEE_RATE / 100));
+
+        grandSubtotal += hostingSubtotal;
+        grandGuestServiceFee += hostingGuestServiceFee;
+
+        // Deliberately minimal compared to a normal stays[] entry — no
+        // pets, paid amenities, or extra-guest pricing here, since a
+        // guest configures none of that through the experience booking
+        // flow. commissionRate (rather than baseCommission/
+        // amenityCommission) is enough for verify-payment.js to compute
+        // this correctly; the fields left out all have safe fallbacks
+        // there (empty array / zero).
+        stayDetails.push({
+          listingId: hostingListing.id,
+          suite: hostingListing.property_name,
+          arrival: startDate,
+          departure: endDateExclusive,
+          guests,
+          nights: days,
+          subtotal: hostingSubtotal,
+          discountAmount: hostingDiscountAmount,
+          commissionRate: BASE_COMMISSION_RATE,
+          guestServiceFee: hostingGuestServiceFee,
+        });
       }
 
       const price = Number(experience.nightly_rate);
