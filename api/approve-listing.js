@@ -260,15 +260,29 @@ async function applyDecision(listingId, action, reason = null) {
           if (!room || typeof room.roomName !== 'string' || typeof room.url !== 'string') continue;
           const maxOccupancy = Number(room.maxOccupancy) > 0 ? Number(room.maxOccupancy) : null;
           const price = Number(room.price) > 0 ? Number(room.price) : null;
-          // Only created active if it's genuinely complete — a room that
-          // somehow arrives here without a real price/occupancy (an
-          // older submission from before this was required, for
-          // instance) still gets created so nothing is silently lost,
-          // just inactive until the host finishes it in the Rooms tab,
-          // same fallback behavior as before this change.
+          // Washroom/balcony belong to THIS room, not the resort as a
+          // whole — tucked into its own photo_urls (labeled, so
+          // manage-listing.html or a future guest-facing gallery can
+          // tell them apart from the main photo) rather than becoming
+          // separate listing_rooms records of their own, which would
+          // wrongly make them look like independently bookable rooms.
+          const subPhotos = [];
+          if (typeof room.washroomUrl === 'string' && room.washroomUrl.startsWith('https://')) {
+            subPhotos.push({ label: 'Washroom', url: room.washroomUrl });
+          }
+          if (typeof room.balconyUrl === 'string' && room.balconyUrl.startsWith('https://')) {
+            subPhotos.push({ label: 'Balcony', url: room.balconyUrl });
+          }
+          // Only created active if it's genuinely complete (real price,
+          // occupancy, AND washroom) — a room that somehow arrives here
+          // incomplete (an older submission from before this was
+          // required, for instance) still gets created so nothing is
+          // silently lost, just inactive until the host finishes it in
+          // the Rooms tab, same fallback behavior as before this change.
+          const hasWashroom = subPhotos.some(p => p.label === 'Washroom');
           await sql`
-            INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, max_occupancy, nightly_rate, sort_order, is_active)
-            VALUES (${listing.id}, ${room.roomName.trim().slice(0, 100)}, ${room.url}, ${maxOccupancy}, ${price}, ${i}, ${maxOccupancy != null && price != null})
+            INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, photo_urls, max_occupancy, nightly_rate, sort_order, is_active)
+            VALUES (${listing.id}, ${room.roomName.trim().slice(0, 100)}, ${room.url}, ${JSON.stringify(subPhotos)}, ${maxOccupancy}, ${price}, ${i}, ${maxOccupancy != null && price != null && hasWashroom})
           `;
         }
       }
