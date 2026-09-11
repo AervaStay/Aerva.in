@@ -807,6 +807,13 @@
   }
   .room-space-photo-box img{width:100%; height:100%; object-fit:cover; display:block;}
   .room-space-photo-box span{font-size:11px; opacity:0.5; text-align:center; padding:0 6px;}
+  .room-space-photo-box.pool-target{border-color:var(--gold-deep); border-style:solid; box-shadow:0 0 0 2px rgba(169,136,79,0.25);}
+  .room-photo-pool-thumb{
+    width:64px; height:64px; flex:0 0 auto; border:2px solid transparent; border-radius:4px; overflow:hidden;
+    cursor:pointer; position:relative;
+  }
+  .room-photo-pool-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+  .room-photo-pool-thumb.selected{border-color:var(--gold-deep); box-shadow:0 0 0 2px rgba(169,136,79,0.3);}
   .guest-step-btn{
     width:30px; height:30px; border-radius:50%; border:1px solid var(--line-dark);
     background:none; color:var(--ink); font-size:16px; line-height:1; cursor:pointer;
@@ -1679,9 +1686,9 @@
           <p id="listBedroomsHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.</p>
         </div>
       </div>
-      <div class="form-row">
+      <div class="form-row" id="listGuestsRow">
         <div class="field">
-          <label for="listGuests"><span id="listGuestsLabel">Max Guests</span> <span id="listGuestsRequiredMark" style="color:#a3402f;">*</span></label>
+          <label for="listGuests">Max Guests <span style="color:#a3402f;">*</span></label>
           <select id="listGuests" name="Max Guests" required>
             <option value="" disabled selected>Select the maximum number of guests</option>
             <option>1</option>
@@ -1697,9 +1704,9 @@
             <option>11</option>
             <option>12+</option>
           </select>
-          <p id="listGuestsHint" style="font-size:11.5px; opacity:0.6; margin-top:4px; display:none;"></p>
         </div>
       </div>
+      <p id="listGuestsResortNote" style="font-size:11.5px; opacity:0.6; margin-top:-8px; margin-bottom:16px; display:none;">Guest capacity for a Resort is set per room instead — each room gets its own "sleeps up to N" limit after approval, and a guest searching for a group sees your resort if enough rooms together can fit them.</p>
       <div class="field">
         <label for="listPricingCurrency">Pricing Currency <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— enter your prices below in this currency; Aerva converts and stores them in INR automatically</span></label>
         <select id="listPricingCurrency"></select>
@@ -1803,6 +1810,13 @@
 
       <div class="eyebrow" style="margin-top:24px; margin-bottom:-4px;">Rooms &amp; Spaces</div>
       <p style="font-size:11.5px; opacity:0.6; margin:6px 0 10px;">Name each space and add a photo. Bedrooms (however many you set above), Kitchen, Washroom, and Living Room are required — Garden and Balcony only if you have them.</p>
+      <div style="background:var(--cream-deep); border:1px solid var(--line-dark); padding:12px 14px; margin-bottom:14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+          <p style="font-size:12px; opacity:0.7; margin:0;">Selecting several photos at once? Pick them all here first, then just tap each one onto its spot below — faster than opening a file picker separately for every single box.</p>
+          <button type="button" class="filter-clear" id="roomPhotoPoolBtn" style="flex:0 0 auto;">+ Select Multiple Photos</button>
+        </div>
+        <div id="roomPhotoPoolTray" style="display:none; gap:8px; margin-top:12px; overflow-x:auto; padding-bottom:4px;"></div>
+      </div>
       <div id="roomSpacesList"></div>
       <input type="hidden" id="listPhotosInterior">
 
@@ -4072,11 +4086,87 @@
     renderRoomSpaces();
   }
 
+  // ---- Photo pool: pick several photos in ONE file dialog, then tap
+  // each onto its target box, instead of opening a file dialog
+  // separately for every single Room/Washroom/Balcony/Kitchen/etc. slot.
+  // Falls back to the original one-at-a-time behavior below whenever
+  // nothing's selected from the pool, so this is purely additive — the
+  // old click-to-upload flow still works exactly as before if a host
+  // prefers it or the pool is empty.
+  let roomPhotoPool = [];
+  let roomPhotoPoolNextId = 1;
+  let roomPhotoPoolSelectedId = null;
+
+  function renderRoomPhotoPool(){
+    const tray = document.getElementById('roomPhotoPoolTray');
+    if(!roomPhotoPool.length){
+      tray.style.display = 'none';
+      tray.innerHTML = '';
+    } else {
+      tray.style.display = 'flex';
+      tray.innerHTML = roomPhotoPool.map(p => `
+        <div class="room-photo-pool-thumb${p.id === roomPhotoPoolSelectedId ? ' selected' : ''}" data-pool-id="${p.id}">
+          <img src="${URL.createObjectURL(p.file)}" alt="">
+        </div>
+      `).join('');
+      tray.querySelectorAll('[data-pool-id]').forEach(thumb => {
+        thumb.addEventListener('click', () => {
+          const id = Number(thumb.dataset.poolId);
+          roomPhotoPoolSelectedId = roomPhotoPoolSelectedId === id ? null : id;
+          renderRoomPhotoPool();
+          updatePoolTargetHighlights();
+        });
+      });
+    }
+    updatePoolTargetHighlights();
+  }
+  // Every currently-empty slot on the page gets a highlighted border
+  // while a pool photo is selected, as a visual "tap here" hint — this
+  // runs across ALL rendered slots regardless of which room they belong
+  // to, since renderRoomSpaces() may have rebuilt the DOM since the pool
+  // was last touched.
+  function updatePoolTargetHighlights(){
+    document.querySelectorAll('.room-space-photo-box').forEach(box => {
+      const isEmpty = !box.querySelector('img');
+      box.classList.toggle('pool-target', isEmpty && roomPhotoPoolSelectedId !== null);
+    });
+  }
+  document.getElementById('roomPhotoPoolBtn').addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = true;
+    input.addEventListener('change', () => {
+      Array.from(input.files).forEach(file => {
+        roomPhotoPool.push({ id: roomPhotoPoolNextId++, file });
+      });
+      renderRoomPhotoPool();
+    });
+    input.click();
+  });
+
   // Reusable small photo-pick box, since Resort rooms now need three of
   // these (main, washroom, balcony) instead of one — a generic click-to-
   // upload handler avoids writing the same wiring three times over.
   function wireRoomPhotoPick(el, getFile, setFile, onPicked){
     el.addEventListener('click', () => {
+      // A pool photo is selected and this box is empty — assign it
+      // directly, no file dialog needed. Clicking a box that ALREADY has
+      // a photo always falls through to the normal replace-via-dialog
+      // behavior below, even with a pool photo selected, since "replace
+      // this specific photo" is a more deliberate action than "fill an
+      // empty slot."
+      if(roomPhotoPoolSelectedId !== null && !el.querySelector('img')){
+        const poolIndex = roomPhotoPool.findIndex(p => p.id === roomPhotoPoolSelectedId);
+        if(poolIndex !== -1){
+          setFile(roomPhotoPool[poolIndex].file);
+          roomPhotoPool.splice(poolIndex, 1);
+          roomPhotoPoolSelectedId = null;
+          onPicked();
+          renderRoomPhotoPool();
+          return;
+        }
+      }
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/*';
@@ -4180,6 +4270,7 @@
       const balconyPick = rowEl.querySelector('[data-room-balcony-pick]');
       if(balconyPick) wireRoomPhotoPick(balconyPick, () => room.balconyFile, f => { room.balconyFile = f; room.balconyUrl = null; }, renderRoomSpaces);
     });
+    updatePoolTargetHighlights(); // re-applied after every rebuild, since these are all new DOM elements
   }
   renderRoomSpaces();
   document.getElementById('listBedrooms').addEventListener('input', syncBedroomRowCount);
@@ -4190,9 +4281,9 @@
     const hint = document.getElementById('listBedroomsHint');
     const input = document.getElementById('listBedrooms');
     const priceHint = document.getElementById('listPriceHint');
+    const guestsRow = document.getElementById('listGuestsRow');
     const guestsSelect = document.getElementById('listGuests');
-    const guestsRequiredMark = document.getElementById('listGuestsRequiredMark');
-    const guestsHint = document.getElementById('listGuestsHint');
+    const guestsResortNote = document.getElementById('listGuestsResortNote');
     if(this.value === 'Resort'){
       label.textContent = 'Number of Rooms';
       input.placeholder = 'e.g. 10';
@@ -4206,21 +4297,22 @@
       priceHint.textContent = "For a Resort, this is just a rough starting figure for our review team — each room's actual price is set individually after approval, not this number.";
       priceHint.style.display = 'block';
       // Max Guests is per-room only for a Resort (see submit-listing.js,
-      // which already doesn't require this field there) — not required
-      // client-side either now, so a Resort host isn't forced to pick an
-      // arbitrary number that has no real meaning for their listing.
+      // which already doesn't require this field there) — removed from
+      // view entirely rather than just made optional. A field a host
+      // can see but is told "not used" is still a field they have to
+      // stop and read about; not showing it at all is the more honest,
+      // less cluttered version of the same fix.
+      guestsRow.style.display = 'none';
       guestsSelect.required = false;
-      guestsRequiredMark.style.display = 'none';
-      guestsHint.textContent = "Not used for a Resort. Capacity is set per room, not for the resort overall — each room gets its own \"sleeps up to N\" limit after approval, and a guest searching for a group sees your resort if enough rooms together can fit them.";
-      guestsHint.style.display = 'block';
+      guestsResortNote.style.display = 'block';
     } else {
       label.textContent = 'Bedrooms';
       input.placeholder = 'e.g. 4 — enter 0 for a studio';
       hint.textContent = "You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.";
       priceHint.style.display = 'none';
+      guestsRow.style.display = '';
       guestsSelect.required = true;
-      guestsRequiredMark.style.display = '';
-      guestsHint.style.display = 'none';
+      guestsResortNote.style.display = 'none';
     }
     // Fixed categories genuinely differ by property type (see
     // currentFixedRoomSpaces above) — rebuilt here so switching between
@@ -4684,8 +4776,23 @@
         confirmEl.style.display = 'block';
         updateListPinMap(draft.latitude, draft.longitude);
       }
-      if(draft.property_type) document.getElementById('listType').value = draft.property_type;
-      if(draft.bedrooms) document.getElementById('listBedrooms').value = draft.bedrooms;
+      if(draft.property_type){
+        document.getElementById('listType').value = draft.property_type;
+        // Setting .value directly doesn't fire 'change' on its own — the
+        // whole Resort-vs-everything-else UI adaptation (hiding Max
+        // Guests, relabeling Bedrooms, swapping fixed room categories)
+        // lives entirely in that handler, so a Resort draft would
+        // otherwise reload looking like a regular property.
+        document.getElementById('listType').dispatchEvent(new Event('change'));
+      }
+      if(draft.bedrooms){
+        document.getElementById('listBedrooms').value = draft.bedrooms;
+        // Same issue as property_type above — setting .value directly
+        // doesn't fire 'input', which is what actually builds the
+        // correct number of bedroom/room rows. Without this, a draft
+        // saved with 4 bedrooms would reload showing just the default 1.
+        syncBedroomRowCount();
+      }
       if(draft.max_guests) document.getElementById('listGuests').value = draft.max_guests;
       document.getElementById('listPrice').value = draft.nightly_rate || '';
       document.getElementById('listDescription').value = draft.description || '';
@@ -5213,8 +5320,14 @@
       confirmEl.style.display = 'block';
       updateListPinMap(source.latitude, source.longitude);
     }
-    if(source.property_type) document.getElementById('listType').value = source.property_type;
-    if(source.bedrooms) document.getElementById('listBedrooms').value = source.bedrooms;
+    if(source.property_type){
+      document.getElementById('listType').value = source.property_type;
+      document.getElementById('listType').dispatchEvent(new Event('change'));
+    }
+    if(source.bedrooms){
+      document.getElementById('listBedrooms').value = source.bedrooms;
+      syncBedroomRowCount();
+    }
     if(source.max_guests) document.getElementById('listGuests').value = source.max_guests;
     document.getElementById('listPrice').value = source.nightly_rate || '';
     document.getElementById('listDescription').value = source.description || '';
