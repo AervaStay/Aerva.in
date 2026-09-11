@@ -1356,7 +1356,16 @@
       if(l.property_type === 'Resort'){
         document.getElementById('mgmtTabRoomsBtn').style.display = 'inline-block';
         document.getElementById('declaredRoomCount').value = l.bedrooms || '';
-        roomRows = (data.rooms || []).filter(r => r.is_active !== false).map(r => ({
+        // Every room loaded here, active or not — a room pre-populated
+        // from submission-time photos (see approve-listing.js) is
+        // deliberately created inactive, since it has a name and photo
+        // but no price or confirmed capacity yet. Filtering those out
+        // would make them invisible to the host entirely, defeating the
+        // whole point of carrying them over instead of a blank Rooms tab.
+        // The "Active — bookable by guests" checkbox on each row is what
+        // actually reflects real is_active state, and the host controls
+        // it directly from here.
+        roomRows = (data.rooms || []).map(r => ({
           id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
           nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
           coverPhotoUrl: r.cover_photo_url || null, photoFile: null
