@@ -74,7 +74,7 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     try {
       const rows = await sql`
-        SELECT id, property_name, property_type, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
+        SELECT id, property_name, property_type, bedrooms, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
@@ -129,7 +129,7 @@ module.exports = async (req, res) => {
               latitude, longitude, formattedAddress, city, area,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
-              customFields, autoSendCheckinInstructions, checkinPhotos, rooms } = req.body || {};
+              customFields, autoSendCheckinInstructions, checkinPhotos, rooms, bedrooms } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -149,7 +149,8 @@ module.exports = async (req, res) => {
 
       const before = await sql`
         SELECT nightly_rate, exterior_photo_urls, interior_photo_urls,
-               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit
+               pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
+               property_type, bedrooms
         FROM listings WHERE id = ${listingId}
       `;
       if (!before[0]) return res.status(404).json({ error: 'This listing could not be found.' });
@@ -238,10 +239,46 @@ module.exports = async (req, res) => {
             .map(p => ({ caption: typeof p.caption === 'string' ? p.caption.trim().slice(0, 80) : '', url: p.url.trim() }))
         : [];
 
+      // Declared room count — same "Bedrooms" field submitted at listing
+      // creation, relabeled "Number of Rooms" for a Resort (see
+      // index.html's listType change handler). Same "not sent this time,
+      // leave alone" convention as the guest-info fields above.
+      const finalBedrooms = (bedrooms !== undefined && bedrooms !== null && bedrooms !== '')
+        ? Number(bedrooms) : before[0].bedrooms;
+
+      // For a Resort specifically, the number of ACTIVE rooms being saved
+      // must equal the declared room count exactly — "declare 10, only
+      // ever create 6" would leave the platform (and guests) trusting a
+      // number nothing backs up. Checked here, before any room writes
+      // happen, so a mismatch fails the whole save cleanly rather than
+      // partially applying it. Same "meaningful room" criteria as the
+      // actual sync below (name, occupancy, rate, AND a photo — a room
+      // with no photo isn't really ready to show guests either, same
+      // requirement index.html's own form enforces client-side).
+      if (before[0].property_type === 'Resort' && Array.isArray(rooms)) {
+        const activeRoomCount = rooms.filter(r => {
+          const roomName = typeof r.roomName === 'string' ? r.roomName.trim() : '';
+          const maxOccupancy = Number(r.maxOccupancy);
+          const roomRate = Number(r.nightlyRate);
+          const hasPhoto = typeof r.coverPhotoUrl === 'string' && r.coverPhotoUrl.trim();
+          const isMeaningful = roomName && maxOccupancy >= 1 && roomRate > 0 && hasPhoto;
+          return isMeaningful && r.isActive !== false;
+        }).length;
+        const declaredCount = Number(finalBedrooms) || 0;
+        if (declaredCount > 0 && activeRoomCount !== declaredCount) {
+          return res.status(400).json({
+            error: activeRoomCount < declaredCount
+              ? `You declared ${declaredCount} rooms — you currently have ${activeRoomCount} active with a name, occupancy, price, and photo all set. Please complete ${declaredCount - activeRoomCount} more, or update the declared room count above to match.`
+              : `You declared ${declaredCount} rooms — you currently have ${activeRoomCount} active, which is more. Please remove ${activeRoomCount - declaredCount}, or update the declared room count above to match.`
+          });
+        }
+      }
+
       const updated = await sql`
         UPDATE listings SET
           nightly_rate = ${rate},
           city = ${safeCity}, area = ${safeArea},
+          bedrooms = ${finalBedrooms},
           discount_type = ${discountType || null},
           discount_value = ${discountValue ? Number(discountValue) : null},
           discount_min_nights = ${discountMinNights ? Number(discountMinNights) : null},
@@ -338,8 +375,14 @@ module.exports = async (req, res) => {
             // failing the whole listing save over one incomplete row.
             if (!roomName || !maxOccupancy || maxOccupancy < 1 || !roomRate || roomRate <= 0) continue;
             const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
-            const isActive = r.isActive !== false;
             const coverPhotoUrl = typeof r.coverPhotoUrl === 'string' && r.coverPhotoUrl.trim() ? r.coverPhotoUrl.trim() : null;
+            // A room without a photo is saved (so the host doesn't lose
+            // their other entered data), but forced inactive regardless
+            // of what was requested — not bookable by guests until a
+            // photo is actually added. Defense-in-depth alongside the
+            // declared-room-count check above, which normally catches
+            // this first when a real count is set.
+            const isActive = r.isActive !== false && !!coverPhotoUrl;
 
             if (r.id && existingRoomIds.has(Number(r.id))) {
               await sql`
