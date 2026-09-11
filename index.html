@@ -859,13 +859,36 @@
   .inbox-close-btn{
     position:absolute; top:14px; right:16px; z-index:5; background:none; border:none;
     font-size:24px; line-height:1; cursor:pointer; color:var(--ink); opacity:0.6;
+    width:40px; height:40px; display:flex; align-items:center; justify-content:center;
   }
   .inbox-close-btn:hover{opacity:1;}
+  .inbox-chat-back-btn{
+    display:none; flex:0 0 auto; width:36px; height:36px; border-radius:50%; border:1px solid var(--line-dark);
+    background:none; align-items:center; justify-content:center; cursor:pointer; color:var(--ink);
+    margin-right:4px;
+  }
   .inbox-list-pane{
     flex:0 0 380px; border-right:1px solid var(--line-dark); display:flex; flex-direction:column;
     background:#fff; min-width:0; position:relative;
   }
-  @media (max-width:760px){ .inbox-list-pane{flex-basis:100%;} .inbox-chat-pane{display:none;} .inbox-panel.chat-open .inbox-list-pane{display:none;} .inbox-panel.chat-open .inbox-chat-pane{display:flex;} }
+  @media (max-width:760px){
+    /* Full-screen on a phone instead of a rounded, inset dialog with
+       margin on every side — that layout eats into an already tight
+       viewport and reads as "a small awkward box" rather than a proper
+       full-screen inbox the way a phone's own apps look. */
+    .inbox-overlay{padding:0;}
+    .inbox-panel{width:100vw; height:100dvh; border-radius:0; max-width:none; max-height:none;}
+    .inbox-list-pane{flex-basis:100%;}
+    .inbox-chat-pane{display:none;}
+    .inbox-panel.chat-open .inbox-list-pane{display:none;}
+    .inbox-panel.chat-open .inbox-chat-pane{display:flex;}
+    /* Previously there was no way back to the conversation list on a
+       phone once you opened one — closing the whole overlay and
+       reopening it was the only escape. This restores an actual "back"
+       affordance, the same way any phone messaging app has one. */
+    .inbox-chat-back-btn{display:flex;}
+    .inbox-close-btn{top:10px; right:10px;}
+  }
   .inbox-list-header{
     padding:22px 22px 14px; flex:0 0 auto; display:flex; align-items:center; justify-content:space-between;
   }
@@ -1296,6 +1319,10 @@
       <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
     </span>
     <a href="index.html?view=my-bookings">My Bookings</a>
+    <a href="#" id="hostMessagesIconMobile" style="display:none; align-items:center; gap:8px;">
+      Messages
+      <span id="hostMessagesUnreadBadgeMobile" class="host-messages-badge" style="display:none; position:static; margin-left:2px;"></span>
+    </a>
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Collection</a>
     <a href="host-dashboard.html?openProfile=1">Account Settings</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
@@ -1537,7 +1564,7 @@
 <section class="pad" id="listingFullView" style="display:none;">
   <div class="wrap">
     <div class="sticky-back-bar">
-    <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
+    <a href="index.html" id="listingFullViewBackLink" class="link" style="margin-bottom:22px; display:inline-flex;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
       Back to all homes
     </a>
@@ -1554,7 +1581,7 @@
 <section class="pad" id="experienceFullView" style="display:none;">
   <div class="wrap">
     <div class="sticky-back-bar">
-    <a href="index.html?view=experiences" class="link" style="margin-bottom:22px; display:inline-flex;">
+    <a href="index.html?view=experiences" id="experienceFullViewBackLink" class="link" style="margin-bottom:22px; display:inline-flex;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
       Back to Aerva Experience
     </a>
@@ -2197,6 +2224,9 @@
       <div id="inboxChatContent" style="display:none; flex-direction:column; height:100%;">
         <div class="inbox-chat-header">
           <div class="inbox-chat-header-left">
+            <button type="button" class="inbox-chat-back-btn" id="inboxChatBackBtn" aria-label="Back to conversations">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
             <img class="inbox-chat-avatar" id="inboxChatAvatar" src="" alt="" onerror="this.style.display='none'">
             <div style="min-width:0;">
               <div class="inbox-chat-name" id="inboxChatName"></div>
@@ -6291,6 +6321,7 @@
   // reality without needing a reload.
   function refreshMessagesBadge(){
     const badge = document.getElementById('hostMessagesUnreadBadge');
+    const badgeMobile = document.getElementById('hostMessagesUnreadBadgeMobile');
     const token = guestAuthToken();
     if(!badge || !token) return;
     fetch(SUITES_API_BASE + '/api/guest-profile?mode=unreadMessageCount', {
@@ -6299,12 +6330,16 @@
       .then(r => r.ok ? r.json() : null)
       .then(countData => {
         if(!countData) return;
-        if(countData.count > 0){
-          badge.textContent = countData.count > 9 ? '9+' : String(countData.count);
-          badge.style.display = 'block';
-        } else {
-          badge.style.display = 'none';
-        }
+        const label = countData.count > 9 ? '9+' : String(countData.count);
+        [badge, badgeMobile].forEach(el => {
+          if(!el) return;
+          if(countData.count > 0){
+            el.textContent = label;
+            el.style.display = 'inline-block';
+          } else {
+            el.style.display = 'none';
+          }
+        });
       })
       .catch(() => {}); // Non-fatal — badge just keeps its last known value.
   }
@@ -6323,6 +6358,10 @@
   document.getElementById('hostMessagesIcon').addEventListener('click', (e) => {
     e.preventDefault();
     openInboxOverlay();
+  });
+  document.getElementById('hostMessagesIconMobile').addEventListener('click', (e) => {
+    e.preventDefault();
+    openInboxOverlay(); // the mobile-nav-panel's generic "close on any link click" listener already handles closing the menu itself
   });
   document.getElementById('inboxCloseBtn').addEventListener('click', closeInboxOverlay);
   document.getElementById('inboxOverlay').addEventListener('click', (e) => {
@@ -6471,6 +6510,13 @@
     renderInboxConversationList(); // refresh active-card highlight
     await refreshInboxMessages();
   }
+  document.getElementById('inboxChatBackBtn').addEventListener('click', () => {
+    // Mobile only (see the .inbox-chat-back-btn media query) — returns
+    // to the conversation list without closing the whole overlay, which
+    // used to be the only way back once a conversation was opened.
+    document.getElementById('inboxPanel').classList.remove('chat-open');
+    document.getElementById('inboxPanel').classList.remove('details-open');
+  });
 
   async function refreshInboxMessages(){
     const token = guestAuthToken();
@@ -9128,6 +9174,31 @@
     document.getElementById('expBookNowBtn').addEventListener('click', () => handleExperienceBookNow(exp));
     updateExperiencePriceSummary(exp);
   }
+  // Smooth in-page return instead of a full reload — the plain
+  // href="index.html"/"index.html?view=experiences" fallback still
+  // works (e.g. JS disabled, or arriving here via a direct shared link
+  // with no prior browse state to return to), but for the common case
+  // of a guest browsing, opening a listing, then going back, a full
+  // page reload was a jarring way to do something this simple, and lost
+  // whatever search/filter state they had going.
+  document.getElementById('listingFullViewBackLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('listingFullView').style.display = 'none';
+    document.getElementById('suites').style.display = 'block';
+    document.body.classList.add('showing-hero');
+    document.title = 'Aerva — Stay Elegant';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  document.getElementById('experienceFullViewBackLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('experienceFullView').style.display = 'none';
+    document.getElementById('suites').style.display = 'block';
+    const expSection = document.getElementById('experiences');
+    if(expSection) expSection.style.display = 'none';
+    document.body.classList.add('showing-hero');
+    document.title = 'Aerva — Stay Elegant';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
 
   function showFullListingPage(listing){
     trackRecentlyViewed('stay', listing.id);
@@ -10103,6 +10174,12 @@
             hostMessagesIcon.style.display = 'flex';
             refreshMessagesBadge();
           }
+          // Same icon, mirrored into the mobile slide-out panel — this
+          // used to only exist in the desktop nav (.nav-links), which is
+          // display:none below 900px, so a phone guest had no way to
+          // reach Messages at all.
+          const hostMessagesIconMobile = document.getElementById('hostMessagesIconMobile');
+          if(hostMessagesIconMobile) hostMessagesIconMobile.style.display = 'flex';
           // Location prompt, once per browser, only for a confirmed
           // logged-in guest — see promptLocationOnceForGuest for the
           // full reasoning. Fires and forgets; doesn't block anything
