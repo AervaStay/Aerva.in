@@ -119,7 +119,7 @@ function rejectionReasonPage(listing, token) {
   </body></html>`;
 }
 
-async function sendHostApprovalEmail(listing) {
+async function sendHostApprovalEmail(listing, { needsRoomSetup = false } = {}) {
   if (!process.env.RESEND_API_KEY) {
     console.warn('RESEND_API_KEY not set — skipping host approval email.');
     return;
@@ -147,19 +147,22 @@ async function sendHostApprovalEmail(listing) {
       </div>
   ` : '';
 
-  // A Resort isn't actually bookable the moment it's approved the way
-  // every other property type is — its rooms (each with their own
-  // price, capacity, and photo) are set up separately, afterward, in
-  // "Manage Price & Offers." Without this called out explicitly, a host
-  // reads "your listing is live" and reasonably assumes they're done —
-  // a guest visiting the page in the meantime would see "This resort
-  // has no rooms set up yet" instead of anything bookable at all.
-  const resortRoomsReminder = listing.property_type === 'Resort' ? `
+  // needsRoomSetup is only ever true now if something's genuinely
+  // incomplete (an older listing that predates submission requiring a
+  // real price/occupancy per bedroom, or a Resort declared with zero
+  // rooms) — a normal Resort submission already provided everything
+  // needed for its rooms to go live immediately on approval, so this
+  // warning shouldn't show for the common case anymore.
+  const resortRoomsReminder = needsRoomSetup ? `
       <div style="background:#fdf1ea; border:1px solid #e3b892; padding:16px 20px; margin:20px 0; border-radius:4px;">
         <p style="margin:0; font-size:13px; letter-spacing:0.06em; text-transform:uppercase; color:#a3402f;">One more step for your Resort</p>
         <p style="margin:6px 0 0; font-size:14px;">Guests can't book yet — you still need to add your rooms (each with its own price, capacity, and photo) using the link below. Until you do, your listing page will show "no rooms set up yet."</p>
       </div>
-  ` : '';
+  ` : (listing.property_type === 'Resort' ? `
+      <div style="background:#faf3e6; border:1px solid #ddc9a3; padding:16px 20px; margin:20px 0; border-radius:4px;">
+        <p style="margin:0; font-size:14px;">Your rooms are already set up and bookable, using the details you provided at submission. Head to the link below anytime you want to update a room's price or add more.</p>
+      </div>
+  ` : '');
 
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
@@ -167,8 +170,8 @@ async function sendHostApprovalEmail(listing) {
       <p><strong>${listing.property_name}</strong> is now approved and visible to guests.</p>
       ${badgeAnnouncement}
       ${resortRoomsReminder}
-      <p>${listing.property_type === 'Resort' ? 'Use this link to add your rooms, change pricing, or set up an offer' : "Whenever you'd like to change your nightly rate or set up an offer, use this link"} — it's yours to keep and reuse anytime:</p>
-      <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">${listing.property_type === 'Resort' ? 'Add Your Rooms' : 'Manage Price & Offers'}</a></p>
+      <p>${listing.property_type === 'Resort' ? 'Use this link to update room pricing, add more rooms, or set up an offer' : "Whenever you'd like to change your nightly rate or set up an offer, use this link"} — it's yours to keep and reuse anytime:</p>
+      <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">${needsRoomSetup ? 'Add Your Rooms' : (listing.property_type === 'Resort' ? 'Manage Your Rooms' : 'Manage Price & Offers')}</a></p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, contact hello@aerva.in for a new one.</p>
     </div>
   `;
@@ -235,17 +238,19 @@ async function applyDecision(listingId, action, reason = null) {
   `;
   const listing = result[0] || null;
 
-  // Pre-populate a Resort's rooms from whatever named room photos were
-  // staged at submission (see submit-listing.js) — a host who already
-  // named and photographed every room ("Bedroom 1," "Kitchen,"
-  // "Balcony," etc.) shouldn't have to redo that from a blank Rooms tab
-  // just because approval is what actually happens next. Only runs once
-  // per listing: gated on listing_rooms being genuinely empty, so a
-  // SECOND approval of the same listing (shouldn't normally happen, but
-  // defensively) never overwrites rooms a host has since configured with
-  // real pricing. Price and capacity are deliberately left for the host
-  // to fill in themselves — those weren't collected at submission and
-  // this shouldn't guess at them.
+  // Pre-populate a Resort's rooms from whatever named, priced bedroom
+  // photos were staged at submission (see submit-listing.js) — a host
+  // who already named, photographed, AND priced every bedroom shouldn't
+  // have to redo that from a blank Rooms tab just because approval is
+  // what actually happens next. Only runs once per listing: gated on
+  // listing_rooms being genuinely empty, so a SECOND approval of the
+  // same listing (shouldn't normally happen, but defensively) never
+  // overwrites rooms a host has since reconfigured. Each room is now
+  // created fully active — submit-listing.js already required a real
+  // price and occupancy for every bedroom before allowing submission at
+  // all, so unlike the earlier version of this, there's nothing left
+  // for the host to fill in before it's genuinely bookable. They can
+  // still update the price anytime from the Rooms tab afterward.
   if (listing && action === 'approve' && listing.property_type === 'Resort' && Array.isArray(listing.pending_room_photos) && listing.pending_room_photos.length) {
     try {
       const existingRoomCount = await sql`SELECT COUNT(*)::int AS count FROM listing_rooms WHERE listing_id = ${listing.id}`;
@@ -253,9 +258,17 @@ async function applyDecision(listingId, action, reason = null) {
         for (let i = 0; i < listing.pending_room_photos.length; i++) {
           const room = listing.pending_room_photos[i];
           if (!room || typeof room.roomName !== 'string' || typeof room.url !== 'string') continue;
+          const maxOccupancy = Number(room.maxOccupancy) > 0 ? Number(room.maxOccupancy) : null;
+          const price = Number(room.price) > 0 ? Number(room.price) : null;
+          // Only created active if it's genuinely complete — a room that
+          // somehow arrives here without a real price/occupancy (an
+          // older submission from before this was required, for
+          // instance) still gets created so nothing is silently lost,
+          // just inactive until the host finishes it in the Rooms tab,
+          // same fallback behavior as before this change.
           await sql`
-            INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, sort_order, is_active)
-            VALUES (${listing.id}, ${room.roomName.trim().slice(0, 100)}, ${room.url}, ${i}, FALSE)
+            INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, max_occupancy, nightly_rate, sort_order, is_active)
+            VALUES (${listing.id}, ${room.roomName.trim().slice(0, 100)}, ${room.url}, ${maxOccupancy}, ${price}, ${i}, ${maxOccupancy != null && price != null})
           `;
         }
       }
@@ -274,7 +287,20 @@ async function applyDecision(listingId, action, reason = null) {
 
   if (listing && action === 'approve') {
     try {
-      await sendHostApprovalEmail(listing);
+      // Whether the email needs the "you still need to add your rooms"
+      // warning depends on whether pre-population above actually left
+      // this Resort with a real, bookable room — which it normally will
+      // now that submit-listing.js requires full price/occupancy for
+      // every bedroom before allowing submission at all. Checked fresh
+      // here rather than assumed, so an older listing that predates that
+      // requirement (or a Resort with zero declared rooms) still gets
+      // the accurate warning instead of a false "you're all set."
+      let hasActiveRoom = true;
+      if (listing.property_type === 'Resort') {
+        const activeRoomRows = await sql`SELECT COUNT(*)::int AS count FROM listing_rooms WHERE listing_id = ${listing.id} AND is_active = TRUE`;
+        hasActiveRoom = activeRoomRows[0].count > 0;
+      }
+      await sendHostApprovalEmail(listing, { needsRoomSetup: listing.property_type === 'Resort' && !hasActiveRoom });
     } catch (emailErr) {
       console.error('Host approval email failed:', emailErr);
     }
