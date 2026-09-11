@@ -1481,6 +1481,10 @@
               <label for="maxPrice">Max Price (₹/night)</label>
               <input type="number" id="maxPrice" min="0" placeholder="No max">
             </div>
+            <div class="search-field">
+              <label for="roomsNeeded">Number of Rooms <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(optional)</span></label>
+              <input type="number" id="roomsNeeded" min="1" placeholder="Only for multi-room resorts">
+            </div>
           </div>
         </div>
         <button type="button" class="filter-clear" id="clearFiltersBtn">Clear filters</button>
@@ -1664,15 +1668,9 @@
           </select>
         </div>
         <div class="field">
-          <label for="listBedrooms">Bedrooms</label>
-          <select id="listBedrooms" name="Bedrooms">
-            <option>Studio</option>
-            <option>1</option>
-            <option>2</option>
-            <option>3</option>
-            <option>4</option>
-            <option>5+</option>
-          </select>
+          <label for="listBedrooms" id="listBedroomsLabel">Bedrooms</label>
+          <input type="number" id="listBedrooms" name="Bedrooms" min="0" placeholder="e.g. 4 — enter 0 for a studio">
+          <p id="listBedroomsHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.</p>
         </div>
       </div>
       <div class="form-row">
@@ -4010,6 +4008,26 @@
   const exteriorPhotoManager = createPhotoManager('listPhotosExterior', 'photoPreviewContainerExterior');
   const interiorPhotoManager = createPhotoManager('listPhotosInterior', 'photoPreviewContainerInterior');
 
+  // A Resort's "rooms" and a villa's "bedrooms" are the same underlying
+  // field here (bedrooms) — this just relabels it per property type so
+  // the language matches what's actually being asked, without needing a
+  // second column. The interior-photo-count requirement below reads
+  // this same value regardless of which label is showing.
+  document.getElementById('listType').addEventListener('change', function(){
+    const label = document.getElementById('listBedroomsLabel');
+    const hint = document.getElementById('listBedroomsHint');
+    const input = document.getElementById('listBedrooms');
+    if(this.value === 'Resort'){
+      label.textContent = 'Number of Rooms';
+      input.placeholder = 'e.g. 10';
+      hint.textContent = "You'll need at least this many interior photos below — one per room. Each room's own price, capacity, and photo are set separately after approval.";
+    } else {
+      label.textContent = 'Bedrooms';
+      input.placeholder = 'e.g. 4 — enter 0 for a studio';
+      hint.textContent = "You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.";
+    }
+  });
+
   function collectCheckedValues(name){
     return Array.from(listingForm.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value);
   }
@@ -4113,8 +4131,20 @@
         errorEl.style.display = 'block';
         return;
       }
-      if(interiorPhotoManager.getFiles().length === 0 && !(listingSubmissionState.interiorUrls && listingSubmissionState.interiorUrls.length)){
-        errorEl.textContent = 'Please attach at least 1 interior photo.';
+      // Interior count scales with the declared room count (bedrooms for
+      // a regular property, or "Number of Rooms" for a Resort — same
+      // underlying field, just relabeled — see the listType change
+      // handler above) rather than a flat minimum of 1. A host claiming
+      // 4 rooms should show 4 rooms' worth of interior photos, not one
+      // generic living-room shot standing in for the whole property.
+      // Floored at 1 regardless (a studio, bedrooms=0, still needs at
+      // least one interior photo).
+      const declaredRooms = Math.max(1, Number(document.getElementById('listBedrooms').value) || 0);
+      const interiorCount = interiorPhotoManager.getFiles().length || (listingSubmissionState.interiorUrls ? listingSubmissionState.interiorUrls.length : 0);
+      if(interiorCount < declaredRooms){
+        errorEl.textContent = declaredRooms > 1
+          ? `You've declared ${declaredRooms} rooms — please attach at least ${declaredRooms} interior photos, one per room, so guests know what they're actually booking.`
+          : 'Please attach at least 1 interior photo.';
         errorEl.style.display = 'block';
         return;
       }
@@ -7091,6 +7121,13 @@
     }
     if(guests) params.set('guests', guests);
     if(arrival && departure){ params.set('arrival', arrival); params.set('departure', departure); }
+    // Optional, and only ever matters for a Resort — a guest asking for
+    // "3 rooms" wants to book 3 separate rooms within ONE property, not
+    // 3 different properties (that's a different concept entirely — see
+    // get-listings.js for how this excludes every non-Resort listing
+    // once it's actually used).
+    const roomsNeeded = document.getElementById('roomsNeeded').value;
+    if(roomsNeeded) params.set('roomsNeeded', roomsNeeded);
 
     try{
       // Scoped to whichever tab is actually active — searching while on
@@ -9628,6 +9665,15 @@
   document.getElementById('sortPrice').addEventListener('change', applyFiltersAndRender);
   document.getElementById('minPrice').addEventListener('input', applyFiltersAndRender);
   document.getElementById('maxPrice').addEventListener('input', applyFiltersAndRender);
+  // Debounced, and re-runs a full performSearch() rather than the
+  // client-side applyFiltersAndRender() min/max price use — this filter
+  // needs the server to check real per-room availability against the
+  // searched dates, which isn't data the browser already has on hand.
+  let roomsNeededDebounce = null;
+  document.getElementById('roomsNeeded').addEventListener('input', () => {
+    clearTimeout(roomsNeededDebounce);
+    roomsNeededDebounce = setTimeout(performSearch, 500);
+  });
   document.getElementById('clearFiltersBtn').addEventListener('click', () => {
     searchArrivalDate = '';
     searchDepartureDate = '';
@@ -9650,6 +9696,7 @@
     document.getElementById('sortPrice').value = '';
     document.getElementById('minPrice').value = '';
     document.getElementById('maxPrice').value = '';
+    document.getElementById('roomsNeeded').value = '';
     document.getElementById('searchStatus').style.display = 'none';
     performSearch();
   });
