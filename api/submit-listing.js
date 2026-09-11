@@ -184,7 +184,7 @@ module.exports = async (req, res) => {
       propertyName, city, area, propertyType, bedrooms, maxGuests, nightlyRate,
       description, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
-      exteriorPhotoUrls, interiorPhotoUrls, photoHashes, coverPhotoUrl,
+      exteriorPhotoUrls, interiorPhotoUrls, roomPhotos, photoHashes, coverPhotoUrl,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
       securityDeposit,
       hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceDurationDays, experienceType,
@@ -429,21 +429,29 @@ module.exports = async (req, res) => {
           console.warn('submit-listing rejected: no exterior photos');
           return res.status(400).json({ error: 'At least 1 exterior photo is required' });
         }
-        // Scales with the declared room count (bedrooms — doubles as
-        // "Number of Rooms" for a Resort, same field, see the frontend's
-        // dynamic label) rather than a flat minimum of 1. Floored at 1
-        // regardless, so a studio (bedrooms=0) still needs one interior
-        // photo. This is the authoritative check — index.html enforces
-        // the same rule client-side, but that's convenience, not the
-        // real guarantee.
+        // Named, per-space validation — replacing the old flat "at least
+        // N interior photos total" count. Kitchen, Washroom, and Living
+        // Room are always required regardless of declared room count;
+        // bedroom photos must match that count exactly. Applies to every
+        // stay type (including Resort — this describes the overall
+        // property's common spaces before its individual rooms are
+        // separately defined post-approval in manage-listing.html), not
+        // just non-Resort ones. This is the authoritative check —
+        // index.html enforces the same rule client-side, but that's
+        // convenience, not the real guarantee.
         const declaredRooms = Math.max(1, Number(bedrooms) || 0);
-        if (!Array.isArray(interiorPhotoUrls) || interiorPhotoUrls.length < declaredRooms) {
-          console.warn(`submit-listing rejected: ${Array.isArray(interiorPhotoUrls) ? interiorPhotoUrls.length : 0} interior photos, needs ${declaredRooms}`);
-          return res.status(400).json({
-            error: declaredRooms > 1
-              ? `You've declared ${declaredRooms} rooms — please attach at least ${declaredRooms} interior photos, one per room.`
-              : 'At least 1 interior photo is required'
-          });
+        const safeRoomPhotosForValidation = Array.isArray(roomPhotos)
+          ? roomPhotos.filter(r => r && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
+          : [];
+        const MANDATORY_FIXED_SPACES = ['Kitchen', 'Washroom', 'Living Room'];
+        const providedSpaceNames = safeRoomPhotosForValidation.map(r => r.roomName);
+        const missingFixedSpaces = MANDATORY_FIXED_SPACES.filter(name => !providedSpaceNames.includes(name));
+        const bedroomPhotoCount = safeRoomPhotosForValidation.filter(r => r.isBedroom).length;
+        if (missingFixedSpaces.length || bedroomPhotoCount < declaredRooms) {
+          const missingParts = [...missingFixedSpaces];
+          if (bedroomPhotoCount < declaredRooms) missingParts.push(`${declaredRooms - bedroomPhotoCount} more bedroom photo(s)`);
+          console.warn(`submit-listing rejected: missing room photos — ${missingParts.join(', ')}`);
+          return res.status(400).json({ error: `Please add a photo for: ${missingParts.join(', ')}.` });
         }
         if (petFriendly !== true && petFriendly !== false) {
           console.warn('submit-listing rejected: pet policy not specified');
@@ -668,30 +676,39 @@ module.exports = async (req, res) => {
       listing = inserted[0];
     }
 
-    // For non-Resort stays, mirror each declared room (bedroom) as its
-    // own listing_rooms record holding just a name and one interior
-    // photo — NOT independently priced or bookable (the whole property
-    // still books as ONE unit, at this listing's own nightly_rate and
-    // max_guests). This is what makes "villa with 4 rooms" and "resort
-    // with 10 rooms" a single consistent concept at the data level, per
-    // room, even though only a Resort's rooms are ever independently
-    // bookable — a Resort's real rooms are defined separately, post-
-    // approval, in manage-listing.html, so this is skipped entirely for
-    // that type. Experiences have no rooms concept at all either.
+    // For non-Resort stays, mirror each named room photo as its own
+    // listing_rooms record — NOT independently priced or bookable (the
+    // whole property still books as ONE unit, at this listing's own
+    // nightly_rate and max_guests). This is what makes "villa with 4
+    // rooms" describe its rooms consistently at the data level.
+    //
+    // Deliberately EXCLUDED for Resort, and not just at initial
+    // submission — a Resort's real rooms are independently priced/
+    // bookable, defined separately post-approval in manage-listing.html,
+    // and if this submission endpoint is ever reached again for an
+    // already-approved Resort (an edit, not just a draft/rejected
+    // resubmission), blindly deleting and recreating listing_rooms here
+    // would destroy a host's real room setup — pricing, occupancy,
+    // booking history and all. The Kitchen/Washroom/Living Room/bedroom-
+    // count photo requirement above still applies to a Resort submission
+    // (describing the overall property's common spaces), but those
+    // photos are simply left in interior_photo_urls for a Resort,
+    // never written into listing_rooms here.
     if (!isExperience && propertyType !== 'Resort' && !isDraft) {
-      const declaredRoomCount = Math.max(1, Number(bedrooms) || 0);
-      const photosForRooms = safeInteriorUrls.slice(0, declaredRoomCount);
+      const safeRoomPhotos = Array.isArray(roomPhotos)
+        ? roomPhotos.filter(r => r && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
+        : [];
       // Replaced wholesale on every (re)submission — simplest way to
-      // keep these in sync with whatever the current interior photo set
+      // keep these in sync with whatever the current room photo set
       // actually is, rather than diffing against a previous version.
-      // Safe to delete freely here (unlike a Resort's real rooms, which
-      // are never hard-deleted): nothing ever references one of these
-      // via orders.room_id, since a non-Resort booking never sets it.
+      // Safe to delete freely here for a non-Resort: nothing ever
+      // references one of these via orders.room_id, since only a real
+      // Resort room booking sets it.
       await sql`DELETE FROM listing_rooms WHERE listing_id = ${listing.id}`;
-      for (let i = 0; i < photosForRooms.length; i++) {
+      for (let i = 0; i < safeRoomPhotos.length; i++) {
         await sql`
           INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, sort_order, is_active)
-          VALUES (${listing.id}, ${'Room ' + (i + 1)}, ${photosForRooms[i]}, ${i}, TRUE)
+          VALUES (${listing.id}, ${safeRoomPhotos[i].roomName.trim().slice(0, 100)}, ${safeRoomPhotos[i].url}, ${i}, TRUE)
         `;
       }
     }
