@@ -687,6 +687,13 @@
   }
   .sort-field{ flex:0 1 180px; min-width:140px; max-width:190px; }
   .search-field{display:flex; flex-direction:column; gap:6px; flex:1; min-width:130px;}
+  .search-field-where{
+    /* "Where" holds full place names ("Bandra West, Mumbai,
+       Maharashtra") while "When"/"Who" only ever show a short date
+       range or a number — giving all three equal flex made the one
+       field that actually needs room the most cramped of the three. */
+    flex:2.2; min-width:200px;
+  }
   .search-field label{font-size:14px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c; font-weight:700;}
   .search-field input, .search-field select{
     background:transparent; border:none; border-bottom:1px solid var(--line-dark);
@@ -1346,7 +1353,7 @@
       <h2 class="hero-headline reveal" id="browseHeading">Homes and moments, <em>together</em>.</h2>
       <p class="hero-subhead reveal" id="browseSubhead">Every stay and every experience on Aerva, reviewed and approved individually — browse both at once, or filter to just one.</p>
       <div class="search-bar pill-search reveal" id="searchBar">
-      <div class="search-field">
+      <div class="search-field search-field-where">
         <label for="searchCity">Where</label>
         <div class="place-input-wrap">
           <input type="text" id="searchCity" placeholder="" autocomplete="off">
