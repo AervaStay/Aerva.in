@@ -281,6 +281,31 @@ module.exports = async (req, res) => {
                   AND b.start_date < ${expDatesFilter ? expDepartureRaw : null}::date
                   AND b.end_date > ${expDatesFilter ? expArrivalRaw : null}::date
               )
+              -- For a with_stay experience, the searched dates also need
+              -- the LINKED PROPERTY itself free, not just the experience
+              -- listing row — booking one without checking the other is
+              -- exactly how a guest could end up paying for a "stay"
+              -- that was already occupied by someone else. Skipped
+              -- entirely when there's no hosting_listing_id (a
+              -- without_stay experience, or a with_stay one not yet
+              -- linked to a real property).
+              AND (
+                e.hosting_listing_id IS NULL OR (
+                  NOT EXISTS (
+                    SELECT 1 FROM orders ho
+                    WHERE ho.listing_id = e.hosting_listing_id
+                      AND ho.status = 'paid'
+                      AND ho.arrival < ${expDatesFilter ? expDepartureRaw : null}::date
+                      AND ho.departure > ${expDatesFilter ? expArrivalRaw : null}::date
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM listing_blocked_dates hb
+                    WHERE hb.listing_id = e.hosting_listing_id
+                      AND hb.start_date < ${expDatesFilter ? expDepartureRaw : null}::date
+                      AND hb.end_date > ${expDatesFilter ? expArrivalRaw : null}::date
+                  )
+                )
+              )
             )
           ) AS is_available
         FROM listings e
