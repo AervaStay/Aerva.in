@@ -956,11 +956,16 @@
     roomRows.forEach((room, idx) => {
       const el = document.createElement('div');
       el.className = 'paid-amenity-row';
-      const previewSrc = room.photoFile ? URL.createObjectURL(room.photoFile) : room.coverPhotoUrl;
+      const mainSrc = room.photoFile ? URL.createObjectURL(room.photoFile) : room.coverPhotoUrl;
+      const washroomSrc = room.washroomFile ? URL.createObjectURL(room.washroomFile) : room.washroomUrl;
+      const balconySrc = room.balconyFile ? URL.createObjectURL(room.balconyFile) : room.balconyUrl;
       el.innerHTML = `
         <div style="display:flex; gap:14px; align-items:flex-start;">
-          <div class="checkin-photo-slot-box" data-room-photo-pick style="width:110px; height:90px; flex:0 0 auto;">
-            ${previewSrc ? `<img src="${previewSrc}" alt="">` : '<span>+ Add Photo</span>'}
+          <div style="text-align:center; flex:0 0 auto;">
+            <div class="checkin-photo-slot-box" data-room-photo-pick style="width:110px; height:90px;">
+              ${mainSrc ? `<img src="${mainSrc}" alt="">` : '<span>+ Room Photo</span>'}
+            </div>
+            <div style="font-size:10.5px; opacity:0.55; margin-top:3px;">Room *</div>
           </div>
           <div style="flex:1; min-width:0;">
             <div class="row-line" style="grid-template-columns:2fr 1fr 1fr;">
@@ -969,6 +974,20 @@
               <input type="number" min="1" placeholder="₹ / night" data-room-field="nightlyRate" value="${room.nightlyRate || ''}">
             </div>
             <textarea rows="2" placeholder="Description (optional)" data-room-field="description" style="width:100%; margin-top:8px; padding:8px 10px; font-size:13px; font-family:'Jost', sans-serif;">${room.description || ''}</textarea>
+            <div style="display:flex; gap:16px; margin-top:10px;">
+              <div style="text-align:center;">
+                <div class="checkin-photo-slot-box" data-room-washroom-pick style="width:76px; height:58px;">
+                  ${washroomSrc ? `<img src="${washroomSrc}" alt="">` : '<span>+ Photo</span>'}
+                </div>
+                <div style="font-size:10.5px; opacity:0.55; margin-top:3px;">Washroom *</div>
+              </div>
+              <div style="text-align:center;">
+                <div class="checkin-photo-slot-box" data-room-balcony-pick style="width:76px; height:58px;">
+                  ${balconySrc ? `<img src="${balconySrc}" alt="">` : '<span>+ Photo</span>'}
+                </div>
+                <div style="font-size:10.5px; opacity:0.55; margin-top:3px;">Balcony (optional)</div>
+              </div>
+            </div>
           </div>
         </div>
         <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; margin-top:8px; cursor:pointer;">
@@ -976,19 +995,24 @@
         </label>
         <button type="button" class="remove-amenity-btn" data-action="remove">Remove this room</button>
       `;
-      el.querySelector('[data-room-photo-pick]').addEventListener('click', () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/*';
-        input.addEventListener('change', () => {
-          if(input.files[0]){
-            room.photoFile = input.files[0];
-            room.coverPhotoUrl = null;
-            renderRooms();
-          }
+      function wirePick(selector, getFile, setFile, clearUrl){
+        el.querySelector(selector).addEventListener('click', () => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'image/*';
+          input.addEventListener('change', () => {
+            if(input.files[0]){
+              setFile(input.files[0]);
+              clearUrl();
+              renderRooms();
+            }
+          });
+          input.click();
         });
-        input.click();
-      });
+      }
+      wirePick('[data-room-photo-pick]', () => room.photoFile, f => { room.photoFile = f; }, () => { room.coverPhotoUrl = null; });
+      wirePick('[data-room-washroom-pick]', () => room.washroomFile, f => { room.washroomFile = f; }, () => { room.washroomUrl = null; });
+      wirePick('[data-room-balcony-pick]', () => room.balconyFile, f => { room.balconyFile = f; }, () => { room.balconyUrl = null; });
       el.querySelectorAll('[data-room-field]').forEach(input => {
         const field = input.dataset.roomField;
         const eventName = input.type === 'checkbox' ? 'change' : 'input';
@@ -1010,19 +1034,24 @@
     updateRoomCountProgress();
   }
   document.getElementById('addRoomBtn').addEventListener('click', () => {
-    roomRows.push({ id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true, photoFile: null, coverPhotoUrl: null });
+    roomRows.push({
+      id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true,
+      photoFile: null, coverPhotoUrl: null, washroomFile: null, washroomUrl: null, balconyFile: null, balconyUrl: null
+    });
     renderRooms();
   });
 
   // A room only counts as "complete" once it has a name, occupancy,
-  // price, AND a photo — the exact same criteria update-listing-
-  // pricing.js's own server-side check uses, kept in sync by hand (no
-  // shared module between these separate files). This is what the
+  // price, a main photo, AND a washroom photo — the exact same criteria
+  // update-listing-pricing.js's own server-side check uses, kept in sync
+  // by hand (no shared module between these separate files). Balcony is
+  // genuinely optional, so it's never part of this. This is what the
   // declared room count is actually being measured against.
   function countCompleteActiveRooms(){
     return roomRows.filter(r => {
       const hasPhoto = !!(r.photoFile || r.coverPhotoUrl);
-      return r.roomName && Number(r.maxOccupancy) >= 1 && Number(r.nightlyRate) > 0 && hasPhoto && r.isActive !== false;
+      const hasWashroom = !!(r.washroomFile || r.washroomUrl);
+      return r.roomName && Number(r.maxOccupancy) >= 1 && Number(r.nightlyRate) > 0 && hasPhoto && hasWashroom && r.isActive !== false;
     }).length;
   }
   function updateRoomCountProgress(){
@@ -1045,14 +1074,26 @@
 
   // Uploads any newly-picked room photos (existing ones untouched) and
   // returns the field to send for each room. Same lazy-upload pattern as
-  // check-in photos above — nothing hits Blob storage until Save.
+  // check-in photos above — nothing hits Blob storage until Save. Now
+  // handles three possible photos per room (main, washroom, balcony)
+  // instead of just one.
   async function finalizeRoomPhotos(){
+    const { upload } = await import('https://esm.sh/@vercel/blob/client');
     for(const room of roomRows){
       if(room.photoFile){
-        const { upload } = await import('https://esm.sh/@vercel/blob/client');
         const uploaded = await upload(room.photoFile.name, room.photoFile, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
         room.coverPhotoUrl = uploaded.url;
         room.photoFile = null;
+      }
+      if(room.washroomFile){
+        const uploaded = await upload(room.washroomFile.name, room.washroomFile, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        room.washroomUrl = uploaded.url;
+        room.washroomFile = null;
+      }
+      if(room.balconyFile){
+        const uploaded = await upload(room.balconyFile.name, room.balconyFile, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        room.balconyUrl = uploaded.url;
+        room.balconyFile = null;
       }
     }
   }
@@ -1365,11 +1406,21 @@
         // The "Active — bookable by guests" checkbox on each row is what
         // actually reflects real is_active state, and the host controls
         // it directly from here.
-        roomRows = (data.rooms || []).map(r => ({
-          id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
-          nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
-          coverPhotoUrl: r.cover_photo_url || null, photoFile: null
-        }));
+        roomRows = (data.rooms || []).map(r => {
+          // Washroom/balcony live inside this room's own photo_urls
+          // array (see approve-listing.js), labeled rather than in fixed
+          // positions — extracted back out here the same way.
+          const subPhotos = Array.isArray(r.photo_urls) ? r.photo_urls : [];
+          const washroom = subPhotos.find(p => p && p.label === 'Washroom');
+          const balcony = subPhotos.find(p => p && p.label === 'Balcony');
+          return {
+            id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
+            nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
+            coverPhotoUrl: r.cover_photo_url || null, photoFile: null,
+            washroomUrl: washroom ? washroom.url : null, washroomFile: null,
+            balconyUrl: balcony ? balcony.url : null, balconyFile: null
+          };
+        });
         renderRooms();
       }
 
@@ -1423,6 +1474,12 @@
     const roomsMissingPhotos = roomRows.filter(r => r.isActive !== false && !r.coverPhotoUrl && !r.photoFile);
     if(roomsMissingPhotos.length){
       errorMsg.textContent = `Please add a photo for every active room — missing for: ${roomsMissingPhotos.map(r => r.roomName || 'Untitled room').join(', ')}.`;
+      errorMsg.style.display = 'block';
+      return;
+    }
+    const roomsMissingWashroom = roomRows.filter(r => r.isActive !== false && !r.washroomUrl && !r.washroomFile);
+    if(roomsMissingWashroom.length){
+      errorMsg.textContent = `Please add a washroom photo for every active room — missing for: ${roomsMissingWashroom.map(r => r.roomName || 'Untitled room').join(', ')}.`;
       errorMsg.style.display = 'block';
       return;
     }
