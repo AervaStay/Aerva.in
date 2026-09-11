@@ -74,7 +74,7 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     try {
       const rows = await sql`
-        SELECT id, property_name, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
+        SELECT id, property_name, property_type, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
@@ -106,7 +106,15 @@ module.exports = async (req, res) => {
         WHERE listing_id = ${listingId} ORDER BY sort_order ASC, created_at ASC
       `;
 
-      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions, customFields });
+      // Only meaningful for property_type = 'Resort' — a regular
+      // single-unit listing has no rooms at all, this just comes back
+      // empty for those.
+      const rooms = await sql`
+        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, is_active
+        FROM listing_rooms WHERE listing_id = ${listingId} ORDER BY sort_order ASC, created_at ASC
+      `;
+
+      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions, customFields, rooms });
     } catch (err) {
       console.error('update-listing-pricing (GET) error:', err);
       return res.status(500).json({ error: 'Could not load your listing right now. Please try again.' });
@@ -121,7 +129,7 @@ module.exports = async (req, res) => {
               latitude, longitude, formattedAddress, city, area,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
-              customFields, autoSendCheckinInstructions, checkinPhotos } = req.body || {};
+              customFields, autoSendCheckinInstructions, checkinPhotos, rooms } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -303,6 +311,63 @@ module.exports = async (req, res) => {
           console.error('Custom check-in fields sync failed:', fieldErr);
           // Doesn't fail the whole save — the rest of the listing's
           // changes (price, photos, etc.) already succeeded above.
+        }
+      }
+
+      // ---- Sync resort rooms — only meaningful when property_type is
+      // 'Resort', but not restricted to it here (harmless no-op for
+      // anything else, since the array would just be empty). Same
+      // "submitted array is the full set" pattern as custom fields
+      // above. Each room carries its own price and occupancy limit —
+      // that's what makes a resort's rooms independently bookable and
+      // independently priced, rather than one blended rate for the
+      // whole property.
+      if (Array.isArray(rooms)) {
+        try {
+          const existingRoomRows = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${listingId}`;
+          const existingRoomIds = new Set(existingRoomRows.map(r => r.id));
+          const submittedRoomIds = new Set();
+
+          for (let i = 0; i < rooms.length; i++) {
+            const r = rooms[i];
+            const roomName = typeof r.roomName === 'string' ? r.roomName.trim().slice(0, 100) : '';
+            const maxOccupancy = Number(r.maxOccupancy);
+            const roomRate = Number(r.nightlyRate);
+            // A room missing a name, a real occupancy limit, or a real
+            // price isn't meaningful to save — skipped rather than
+            // failing the whole listing save over one incomplete row.
+            if (!roomName || !maxOccupancy || maxOccupancy < 1 || !roomRate || roomRate <= 0) continue;
+            const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
+            const isActive = r.isActive !== false;
+
+            if (r.id && existingRoomIds.has(Number(r.id))) {
+              await sql`
+                UPDATE listing_rooms SET room_name = ${roomName}, max_occupancy = ${maxOccupancy},
+                  nightly_rate = ${roomRate}, description = ${description}, is_active = ${isActive}, sort_order = ${i}
+                WHERE id = ${Number(r.id)} AND listing_id = ${listingId}
+              `;
+              submittedRoomIds.add(Number(r.id));
+            } else {
+              await sql`
+                INSERT INTO listing_rooms (listing_id, room_name, max_occupancy, nightly_rate, description, is_active, sort_order)
+                VALUES (${listingId}, ${roomName}, ${maxOccupancy}, ${roomRate}, ${description}, ${isActive}, ${i})
+              `;
+            }
+          }
+          // Deliberately NOT deleted, even if removed from the submitted
+          // array — a room with past or future paid bookings against it
+          // (orders.room_id) shouldn't disappear and orphan that
+          // history, same reasoning listings themselves are never hard-
+          // deleted elsewhere in this codebase. Marking is_active=false
+          // (by simply omitting it from the form) is the intended way
+          // to retire a room instead.
+          const roomIdsNoLongerSubmitted = [...existingRoomIds].filter(id => !submittedRoomIds.has(id));
+          if (roomIdsNoLongerSubmitted.length) {
+            await sql`UPDATE listing_rooms SET is_active = false WHERE id = ANY(${roomIdsNoLongerSubmitted}) AND listing_id = ${listingId}`;
+          }
+        } catch (roomErr) {
+          console.error('Resort rooms sync failed:', roomErr);
+          // Doesn't fail the whole save — same as custom fields above.
         }
       }
 

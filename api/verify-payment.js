@@ -274,7 +274,7 @@ module.exports = async (req, res) => {
 
         const inserted = await sql`
           INSERT INTO orders (
-            suite_name, listing_id, guest_id, guest_email, arrival, departure, guests, nights,
+            suite_name, listing_id, room_id, guest_id, guest_email, arrival, departure, guests, nights,
             subtotal, discount_amount, gst, guest_service_fee, total,
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
@@ -282,7 +282,7 @@ module.exports = async (req, res) => {
             razorpay_order_id, razorpay_payment_id, status, order_type, pet_types,
             service_animal_types, young_litter_count
           ) VALUES (
-            ${stay.suite}, ${stay.listingId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
+            ${stay.suite}, ${stay.listingId || null}, ${stay.roomId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             ${depositAmount}, ${depositStatus}, ${depositReleaseAt},

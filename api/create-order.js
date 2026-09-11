@@ -298,6 +298,7 @@ module.exports = async (req, res) => {
     const stayDetails = [];
     const experienceDetails = [];
     const seenListingIds = new Set();
+    const seenRoomIds = new Set();
 
     for (let i = 0; i < safeStays.length; i++) {
       const s = safeStays[i];
@@ -305,11 +306,108 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Stay ${i + 1}: missing home selection, dates, or guest count` });
       }
 
-      // Each property can only appear once per booking request.
-      if (seenListingIds.has(s.listingId)) {
-        return res.status(400).json({ error: `Stay ${i + 1} repeats a home already used in this request.` });
+      // Each property can only appear once per booking request. A resort
+      // is the one exception — multiple rooms within the SAME resort are
+      // meant to be booked together in one request, so this is checked
+      // per ROOM there instead (see the branch just below), not per
+      // listing.
+      if (!s.roomId) {
+        if (seenListingIds.has(s.listingId)) {
+          return res.status(400).json({ error: `Stay ${i + 1} repeats a home already used in this request.` });
+        }
+        seenListingIds.add(s.listingId);
       }
-      seenListingIds.add(s.listingId);
+
+      // ---- Resort room booking — a deliberately separate, much simpler
+      // path from the single-unit stay logic below it. A resort room has
+      // its own fixed price and occupancy limit, and is independently
+      // available from every other room in the same resort — none of
+      // the single-unit concerns below (pets, extra-guest pricing, paid
+      // amenities, security deposits) apply to booking one hotel-style
+      // room, so this doesn't try to thread roomId through that much
+      // more complex logic. Each selected room becomes its own stayDetails
+      // entry (and therefore its own order row — see verify-payment.js),
+      // the same way multiple different properties in one request already
+      // each get their own row.
+      if (s.roomId) {
+        if (seenRoomIds.has(s.roomId)) {
+          return res.status(400).json({ error: `Stay ${i + 1} repeats a room already selected in this request.` });
+        }
+        seenRoomIds.add(s.roomId);
+
+        const resortRows = await sql`
+          SELECT id, property_name, property_type, host_id
+          FROM listings WHERE id = ${s.listingId} AND status = 'approved' AND property_type = 'Resort'
+        `;
+        const resort = resortRows[0];
+        if (!resort) {
+          return res.status(400).json({ error: `Stay ${i + 1}: this resort is no longer available to book.` });
+        }
+        if (myHostId != null && resort.host_id === myHostId) {
+          return res.status(400).json({ error: `Stay ${i + 1}: you can't book your own property.` });
+        }
+
+        const roomRows = await sql`
+          SELECT id, room_name, max_occupancy, nightly_rate
+          FROM listing_rooms WHERE id = ${s.roomId} AND listing_id = ${s.listingId} AND is_active = TRUE
+        `;
+        const room = roomRows[0];
+        if (!room) {
+          return res.status(400).json({ error: `Stay ${i + 1}: this room is no longer available to book.` });
+        }
+        if (!room.nightly_rate) {
+          return res.status(400).json({ error: `Stay ${i + 1}: ${room.room_name} doesn't have a price set yet.` });
+        }
+
+        const roomNights = calculateNights(s.arrival, s.departure);
+        const roomGuests = Number(s.guests);
+        if (!roomNights || roomNights <= 0 || !roomGuests || roomGuests < 1) {
+          return res.status(400).json({ error: `Stay ${i + 1}: invalid dates or guest count` });
+        }
+        if (roomGuests > room.max_occupancy) {
+          return res.status(400).json({ error: `Stay ${i + 1}: ${room.room_name} sleeps up to ${room.max_occupancy} — please select another room or reduce your guest count for this room.` });
+        }
+
+        // Independent availability — checked against THIS room's own
+        // orders/blocks only, never the resort listing as a whole. This
+        // is what makes "Room A booked, Room B still free" actually true
+        // rather than just a UI label.
+        const roomBlockedRows = await sql`
+          SELECT 1 FROM listing_blocked_dates
+          WHERE room_id = ${room.id} AND start_date < ${s.departure}::date AND end_date > ${s.arrival}::date
+          LIMIT 1
+        `;
+        const roomBookedRows = await sql`
+          SELECT 1 FROM orders
+          WHERE room_id = ${room.id} AND status = 'paid'
+            AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date
+          LIMIT 1
+        `;
+        if (roomBlockedRows[0] || roomBookedRows[0]) {
+          return res.status(400).json({ error: `Stay ${i + 1}: ${room.room_name} isn't available for those dates. Please choose different dates or another room.` });
+        }
+
+        const roomSubtotal = Number(room.nightly_rate) * roomNights;
+        const roomCommissionAmount = Math.round(roomSubtotal * (BASE_COMMISSION_RATE / 100));
+        const roomGuestServiceFee = Math.round(roomSubtotal * (GUEST_SERVICE_FEE_RATE / 100));
+
+        grandSubtotal += roomSubtotal;
+        grandGuestServiceFee += roomGuestServiceFee;
+
+        stayDetails.push({
+          listingId: resort.id,
+          roomId: room.id,
+          suite: `${resort.property_name} — ${room.room_name}`,
+          arrival: s.arrival,
+          departure: s.departure,
+          guests: roomGuests,
+          nights: roomNights,
+          subtotal: roomSubtotal,
+          commissionRate: BASE_COMMISSION_RATE,
+          guestServiceFee: roomGuestServiceFee,
+        });
+        continue;
+      }
 
       // The listing is looked up fresh from the database — this is the
       // "validate against what the owner actually shared" step. A listing

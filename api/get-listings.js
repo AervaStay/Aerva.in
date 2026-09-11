@@ -106,11 +106,16 @@ module.exports = async (req, res) => {
       if (!listingId) {
         return res.status(400).json({ error: 'Missing or invalid availabilityFor' });
       }
-      const orderRows = await sql`
-        SELECT arrival, departure FROM orders
-        WHERE listing_id = ${listingId} AND status = 'paid'
-        ORDER BY arrival ASC
-      `;
+      // A resort room is independently available from every other room
+      // in the same resort (and from the resort listing itself, which
+      // is never directly booked) — when roomId is present, everything
+      // below filters by room_id instead of listing_id.
+      const roomIdRaw = typeof req.query.roomId === 'string' ? req.query.roomId.trim() : '';
+      const roomId = roomIdRaw ? Number(roomIdRaw) : null;
+
+      const orderRows = roomId
+        ? await sql`SELECT arrival, departure FROM orders WHERE room_id = ${roomId} AND status = 'paid' ORDER BY arrival ASC`
+        : await sql`SELECT arrival, departure FROM orders WHERE listing_id = ${listingId} AND status = 'paid' ORDER BY arrival ASC`;
       const bookedRanges = orderRows.map(r => ({
         arrival: toDateStr(r.arrival),
         departure: toDateStr(r.departure),
@@ -119,11 +124,9 @@ module.exports = async (req, res) => {
       // Host-blocked dates (maintenance, personal use, etc.) — shown on
       // the same calendar as booked dates so a guest can't even try to
       // select them, though create-order.js is what actually enforces it.
-      const blockedRows = await sql`
-        SELECT start_date, end_date, reason FROM listing_blocked_dates
-        WHERE listing_id = ${listingId}
-        ORDER BY start_date ASC
-      `;
+      const blockedRows = roomId
+        ? await sql`SELECT start_date, end_date, reason FROM listing_blocked_dates WHERE room_id = ${roomId} ORDER BY start_date ASC`
+        : await sql`SELECT start_date, end_date, reason FROM listing_blocked_dates WHERE listing_id = ${listingId} AND room_id IS NULL ORDER BY start_date ASC`;
       const blockedRanges = blockedRows.map(r => ({
         arrival: toDateStr(r.start_date),
         departure: toDateStr(r.end_date),
@@ -492,9 +495,68 @@ module.exports = async (req, res) => {
           // A listing with no max_guests set at all isn't excluded by a
           // guest-count search — better to show it and let the guest
           // judge for themselves than to hide it over missing data.
+          // Resorts always fall into this "no max_guests" case (their
+          // capacity lives per-room, not on the listing itself) — real
+          // resort capacity is computed and enforced separately below,
+          // this first pass just avoids wrongly excluding one here.
           return capacity === null || capacity >= guestsFilter;
         })
       : listings;
+
+    // A resort's real availability/capacity lives in its ROOMS, not the
+    // listing row itself — is_available above only checked for orders/
+    // blocks against the LISTING's own id, which would incorrectly mark
+    // an entire resort unavailable the moment ANY one of its rooms gets
+    // booked (bookings against a resort reference room_id, but still
+    // carry the resort's own listing_id too). Recomputed properly here:
+    // a resort is available if at least one room is free (for the
+    // searched dates, if any) with enough capacity for the searched
+    // guest count.
+    const resortListings = afterGuestsFilter.filter(l => l.property_type === 'Resort');
+    if (resortListings.length) {
+      const resortIds = resortListings.map(l => l.id);
+      const roomRows = await sql`
+        SELECT listing_rooms.id, listing_rooms.listing_id, listing_rooms.max_occupancy,
+          (
+            ${arrivalFilter}::date IS NULL OR (
+              NOT EXISTS (
+                SELECT 1 FROM orders o
+                WHERE o.room_id = listing_rooms.id AND o.status = 'paid'
+                  AND o.arrival < ${departureFilter}::date AND o.departure > ${arrivalFilter}::date
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM listing_blocked_dates b
+                WHERE b.room_id = listing_rooms.id
+                  AND b.start_date < ${departureFilter}::date AND b.end_date > ${arrivalFilter}::date
+              )
+            )
+          ) AS is_free
+        FROM listing_rooms
+        WHERE listing_id = ANY(${resortIds}) AND is_active = TRUE
+      `;
+      const capacityByListing = {};
+      for (const r of roomRows) {
+        if (!capacityByListing[r.listing_id]) capacityByListing[r.listing_id] = { total: 0, available: 0 };
+        capacityByListing[r.listing_id].total += r.max_occupancy;
+        if (r.is_free) capacityByListing[r.listing_id].available += r.max_occupancy;
+      }
+      // Attached directly onto each listing object so the frontend can
+      // show real room-derived capacity/availability without a second
+      // round trip, and so the guest-count re-filter just below can use it.
+      resortListings.forEach(l => {
+        const cap = capacityByListing[l.id] || { total: 0, available: 0 };
+        l.is_available = datesFilter ? cap.available > 0 : cap.total > 0;
+        l.resort_total_capacity = cap.total;
+        l.resort_available_capacity = cap.available;
+      });
+    }
+    const afterResortCapacityFilter = guestsFilter
+      ? afterGuestsFilter.filter(l => {
+          if (l.property_type !== 'Resort') return true; // already correctly handled above
+          const capacity = datesFilter ? l.resort_available_capacity : l.resort_total_capacity;
+          return (capacity || 0) >= guestsFilter;
+        })
+      : afterGuestsFilter;
 
     // A listing with no coordinates at all can't have a real distance
     // measured — rather than excluding it outright (punishing a data gap
@@ -504,7 +566,7 @@ module.exports = async (req, res) => {
     // regardless of what its city/area text says — that's the actually
     // reliable signal once it exists.
     const filtered = distanceFilter
-      ? afterGuestsFilter.filter(l => {
+      ? afterResortCapacityFilter.filter(l => {
           if (l.latitude == null || l.longitude == null) {
             if (!cityRaw) return false;
             const needle = cityRaw.toLowerCase();
@@ -513,7 +575,7 @@ module.exports = async (req, res) => {
           const km = haversineDistanceKm(distanceFilter.lat, distanceFilter.lng, Number(l.latitude), Number(l.longitude));
           return km <= distanceFilter.radiusKm;
         })
-      : afterGuestsFilter;
+      : afterResortCapacityFilter;
 
     // One extra query for all paid amenities across every listing being
     // returned, rather than one query per listing — cheaper, and this
@@ -540,6 +602,34 @@ module.exports = async (req, res) => {
         });
       }
       filtered.forEach(l => { l.paid_amenities = amenitiesByListing[l.id] || []; });
+
+      // Full room details for any Resort in this result set — the
+      // capacity-only numbers computed above (resort_total_capacity /
+      // resort_available_capacity) are just for filtering; the booking
+      // page itself needs each room's name, price, and description to
+      // actually let a guest pick which ones to book.
+      const resortIdsInResults = filtered.filter(l => l.property_type === 'Resort').map(l => l.id);
+      if (resortIdsInResults.length) {
+        const detailedRoomRows = await sql`
+          SELECT id, listing_id, room_name, max_occupancy, nightly_rate, description, cover_photo_url
+          FROM listing_rooms
+          WHERE listing_id = ANY(${resortIdsInResults}) AND is_active = TRUE
+          ORDER BY sort_order ASC, created_at ASC
+        `;
+        const roomsByListing = {};
+        for (const r of detailedRoomRows) {
+          if (!roomsByListing[r.listing_id]) roomsByListing[r.listing_id] = [];
+          roomsByListing[r.listing_id].push({
+            id: r.id,
+            roomName: r.room_name,
+            maxOccupancy: r.max_occupancy,
+            price: r.nightly_rate,
+            description: r.description,
+            coverPhotoUrl: r.cover_photo_url,
+          });
+        }
+        filtered.forEach(l => { if (l.property_type === 'Resort') l.rooms = roomsByListing[l.id] || []; });
+      }
 
       // Active/upcoming promotions — same one-query-for-everyone pattern
       // as paid amenities just above. "Active" here means is_active AND
