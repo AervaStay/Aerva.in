@@ -147,13 +147,28 @@ async function sendHostApprovalEmail(listing) {
       </div>
   ` : '';
 
+  // A Resort isn't actually bookable the moment it's approved the way
+  // every other property type is — its rooms (each with their own
+  // price, capacity, and photo) are set up separately, afterward, in
+  // "Manage Price & Offers." Without this called out explicitly, a host
+  // reads "your listing is live" and reasonably assumes they're done —
+  // a guest visiting the page in the meantime would see "This resort
+  // has no rooms set up yet" instead of anything bookable at all.
+  const resortRoomsReminder = listing.property_type === 'Resort' ? `
+      <div style="background:#fdf1ea; border:1px solid #e3b892; padding:16px 20px; margin:20px 0; border-radius:4px;">
+        <p style="margin:0; font-size:13px; letter-spacing:0.06em; text-transform:uppercase; color:#a3402f;">One more step for your Resort</p>
+        <p style="margin:6px 0 0; font-size:14px;">Guests can't book yet — you still need to add your rooms (each with its own price, capacity, and photo) using the link below. Until you do, your listing page will show "no rooms set up yet."</p>
+      </div>
+  ` : '';
+
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">Your listing is live on Aerva</h2>
       <p><strong>${listing.property_name}</strong> is now approved and visible to guests.</p>
       ${badgeAnnouncement}
-      <p>Whenever you'd like to change your nightly rate or set up an offer, use this link — it's yours to keep and reuse anytime:</p>
-      <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Manage Price & Offers</a></p>
+      ${resortRoomsReminder}
+      <p>${listing.property_type === 'Resort' ? 'Use this link to add your rooms, change pricing, or set up an offer' : "Whenever you'd like to change your nightly rate or set up an offer, use this link"} — it's yours to keep and reuse anytime:</p>
+      <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">${listing.property_type === 'Resort' ? 'Add Your Rooms' : 'Manage Price & Offers'}</a></p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, contact hello@aerva.in for a new one.</p>
     </div>
   `;
@@ -216,7 +231,7 @@ async function applyDecision(listingId, action, reason = null) {
   const result = await sql`
     UPDATE listings SET status = ${newStatus}, rejection_reason = ${action === 'reject' ? reason : null}
     WHERE id = ${listingId}
-    RETURNING id, property_name, status, host_email, host_id, rejection_reason
+    RETURNING id, property_name, status, host_email, host_id, rejection_reason, property_type
   `;
   const listing = result[0] || null;
 
