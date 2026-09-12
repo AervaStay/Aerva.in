@@ -486,18 +486,76 @@ module.exports = async (req, res) => {
 
           } else {
             // Real, active rooms already exist — this resort is live and
-            // bookable. Any further change (a new room, a renamed one, a
-            // different price or photo) is staged rather than applied,
-            // so nothing a guest currently sees changes until an admin
-            // has reviewed it — the same protection the listing itself
-            // got at initial approval, now extended to changes made
-            // after the fact instead of only the first submission.
-            await sql`UPDATE listings SET pending_room_changes = ${JSON.stringify(rooms)}, rooms_pending_review = TRUE WHERE id = ${listingId}`;
-            roomsWarning = "Your room changes have been submitted for admin review and will go live once approved — your current live rooms are unaffected until then.";
-            await logAudit(sql, {
-              action: 'room_changes_submitted', success: true, actorType: 'host', actorIdentifier: listing.host_email,
-              targetType: 'listing', targetId: listingId, metadata: { roomCount: rooms.length }
-            });
+            // bookable. Checked here first whether the submitted rooms
+            // are ACTUALLY different from what's currently live — a host
+            // opening the Rooms tab and clicking Save without changing
+            // anything used to stage a "pending review" anyway, showing
+            // up in the admin queue with two identical room sets and
+            // nothing to actually review. Only a genuine difference (a
+            // new room, a renamed one, a different price/photo/active
+            // state, or a room removed entirely) gets staged now.
+            const currentRoomsForCompare = await sql`
+              SELECT id, room_name, max_occupancy, nightly_rate, description, is_active, cover_photo_url, photo_urls
+              FROM listing_rooms WHERE listing_id = ${listingId}
+            `;
+            const currentById = new Map(currentRoomsForCompare.map(r => [r.id, r]));
+            function submittedRoomPhotoUrls(r){
+              return Array.isArray(r.photos)
+                ? r.photos.filter(p => p && typeof p.url === 'string' && p.url.trim()).map(p => p.url.trim())
+                : [];
+            }
+            function currentRoomPhotoUrls(r){
+              const rest = Array.isArray(r.photo_urls) ? r.photo_urls.map(p => p && p.url).filter(Boolean) : [];
+              return r.cover_photo_url ? [r.cover_photo_url, ...rest] : rest;
+            }
+
+            const submittedIds = new Set();
+            let hasRealChange = false;
+            for (const r of rooms) {
+              const roomName = typeof r.roomName === 'string' ? r.roomName.trim().slice(0, 100) : '';
+              const maxOccupancy = Number(r.maxOccupancy) || null;
+              const roomRate = Number(r.nightlyRate) || null;
+              const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
+              const isActive = r.isActive !== false;
+              const photos = submittedRoomPhotoUrls(r);
+
+              if (r.id && currentById.has(Number(r.id))) {
+                submittedIds.add(Number(r.id));
+                const cur = currentById.get(Number(r.id));
+                const curPhotos = currentRoomPhotoUrls(cur);
+                const samePhotos = photos.length === curPhotos.length && photos.every((url, i) => url === curPhotos[i]);
+                // Every field explicitly converted to the same type on
+                // both sides before comparing — the DB driver returning
+                // a number as a string (or vice versa) elsewhere in this
+                // codebase has caused real false-positive bugs before.
+                if (
+                  roomName !== (cur.room_name || '') ||
+                  maxOccupancy !== (cur.max_occupancy == null ? null : Number(cur.max_occupancy)) ||
+                  roomRate !== (cur.nightly_rate == null ? null : Number(cur.nightly_rate)) ||
+                  description !== (cur.description || '') ||
+                  isActive !== cur.is_active ||
+                  !samePhotos
+                ) {
+                  hasRealChange = true;
+                }
+              } else {
+                hasRealChange = true; // no matching id — a genuinely new room
+              }
+            }
+            // Any existing room no longer present in the submitted set at
+            // all would get deactivated — also a real, reviewable change.
+            for (const cur of currentRoomsForCompare) {
+              if (!submittedIds.has(cur.id)) hasRealChange = true;
+            }
+
+            if (hasRealChange) {
+              await sql`UPDATE listings SET pending_room_changes = ${JSON.stringify(rooms)}, rooms_pending_review = TRUE WHERE id = ${listingId}`;
+              roomsWarning = "Your room changes have been submitted for admin review and will go live once approved — your current live rooms are unaffected until then.";
+              await logAudit(sql, {
+                action: 'room_changes_submitted', success: true, actorType: 'host', actorIdentifier: listing.host_email,
+                targetType: 'listing', targetId: listingId, metadata: { roomCount: rooms.length }
+              });
+            }
           }
         } catch (roomErr) {
           console.error('Resort rooms sync failed:', roomErr);
