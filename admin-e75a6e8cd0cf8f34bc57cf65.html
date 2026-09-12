@@ -194,6 +194,8 @@
 
   <div id="listingsView">
     <div id="listingsContainer"><p class="empty">Loading…</p></div>
+    <h2 id="roomChangesHeading" style="display:none; margin-top:40px;">Room Changes Awaiting Review</h2>
+    <div id="roomChangesContainer"></div>
   </div>
 
   <div id="liveView" style="display:none;">
@@ -451,8 +453,86 @@
       }
       const data = await res.json();
       renderListings(data.listings);
+      renderRoomChangeRequests(data.roomChangeRequests);
     } catch(err){
       container.innerHTML = '<p class="error">Could not load listings. Check API_BASE and try again.</p>';
+    }
+  }
+
+  // A Resort's room CHANGES (not the initial listing itself, which is
+  // handled by renderListings/decide above) get their own review queue
+  // once the resort is already live — see update-listing-pricing.js,
+  // which stages these instead of applying them directly the moment
+  // real, active rooms already exist. current_rooms (what guests see
+  // right now) is shown alongside pending_room_changes (what's proposed)
+  // so the admin can actually compare the two, not review the proposal
+  // blind.
+  function renderRoomChangeRequests(requests){
+    const heading = document.getElementById('roomChangesHeading');
+    const container = document.getElementById('roomChangesContainer');
+    if (!Array.isArray(requests) || requests.length === 0) {
+      heading.style.display = 'none';
+      container.innerHTML = '';
+      return;
+    }
+    heading.style.display = 'block';
+    container.innerHTML = requests.map(r => {
+      const currentRooms = Array.isArray(r.current_rooms) ? r.current_rooms : [];
+      const proposedRooms = Array.isArray(r.pending_room_changes) ? r.pending_room_changes : [];
+      const roomBlock = (room, isProposed) => {
+        const photos = isProposed
+          ? (Array.isArray(room.photos) ? room.photos.map(p => p && p.url).filter(Boolean) : [])
+          : [room.coverPhotoUrl, ...(Array.isArray(room.photoUrls) ? room.photoUrls.map(p => p && p.url) : [])].filter(Boolean);
+        return `
+          <div style="border:1px solid #ddd0bc; padding:10px 12px; margin-top:8px; border-radius:4px;">
+            <strong>${room.roomName || 'Untitled room'}</strong>
+            <span style="opacity:0.7;"> — sleeps up to ${room.maxOccupancy || '—'} · ₹${room.nightlyRate || room.price || '—'}/night${room.isActive === false ? ' · inactive' : ''}</span>
+            <div class="photo-row" style="margin-top:6px;">
+              ${photos.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Room photo"></a>`).join('')}
+            </div>
+          </div>
+        `;
+      };
+      return `
+        <div class="listing" id="roomChange-${r.id}">
+          <h3>${r.property_name}</h3>
+          <div class="meta">${r.area ? r.area + ', ' : ''}${r.city} · ${r.host_name} (${r.host_email}, ${r.host_phone})</div>
+          <div style="display:flex; gap:24px; margin-top:14px; flex-wrap:wrap;">
+            <div style="flex:1; min-width:280px;">
+              <div class="photo-group-label">Currently Live (${currentRooms.length} room${currentRooms.length === 1 ? '' : 's'})</div>
+              ${currentRooms.length ? currentRooms.map(room => roomBlock(room, false)).join('') : '<p style="opacity:0.6; font-size:13px;">No rooms currently live.</p>'}
+            </div>
+            <div style="flex:1; min-width:280px;">
+              <div class="photo-group-label">Proposed Change (${proposedRooms.length} room${proposedRooms.length === 1 ? '' : 's'})</div>
+              ${proposedRooms.length ? proposedRooms.map(room => roomBlock(room, true)).join('') : '<p style="opacity:0.6; font-size:13px;">No rooms in the proposal.</p>'}
+            </div>
+          </div>
+          <div class="actions" style="margin-top:16px;">
+            <button class="approve-btn" onclick="decideRoomChange(${r.id}, 'approve_room_changes')">Approve Changes</button>
+            <button class="reject-btn" onclick="decideRoomChange(${r.id}, 'reject_room_changes')">Reject Changes</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function decideRoomChange(listingId, action){
+    if(action === 'reject_room_changes' && !confirm('Discard these proposed room changes? The currently live rooms will be unaffected.')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/approve-listing', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ listingId, action })
+      });
+      if(!res.ok){
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Could not update this room change request.');
+        return;
+      }
+      const el = document.getElementById('roomChange-' + listingId);
+      if(el) el.remove();
+    } catch(err){
+      alert('Could not reach the server — please try again.');
     }
   }
 
@@ -475,19 +555,29 @@
   // a flat, unlabeled photo gallery and no way to check whether the
   // declared room count, pricing, or required washroom photos are
   // actually there before approving.
+  // A room's whole gallery is just "urls" now — no forced washroom/
+  // balcony sub-categorization (that was simplified away; see the
+  // session history for why). This function used to check for
+  // r.washroomUrl/r.url, fields that no longer exist in the data at
+  // all — meaning it was ALWAYS reporting "missing room photo, missing
+  // washroom photo" for every room regardless of what was actually
+  // there, since those fields are permanently undefined now. Rewritten
+  // to match the current shape.
   function roomBreakdownHtml(pendingRoomPhotos, declaredCount){
+    // Normalized once, up front — every comparison and every "declared
+    // vs provided" message below uses this same number, so a string-
+    // vs-number mismatch from however the DB driver returned this value
+    // (a real, confirmed cause of a false "declared 3, but 3 were
+    // provided" warning) can't happen at any single comparison site,
+    // rather than needing every consumer to remember to convert it.
+    const declaredNum = Number(declaredCount) || 0;
     if (!Array.isArray(pendingRoomPhotos) || pendingRoomPhotos.length === 0) {
-      return `<p class="address-line" style="color:#a3402f;">⚠ No rooms have been provided yet for this Resort (declared: ${declaredCount || 0}) — nothing here for a guest to book if approved as-is.</p>`;
+      return `<p class="address-line" style="color:#a3402f;">⚠ No rooms have been provided yet for this Resort (declared: ${declaredNum}) — nothing here for a guest to book if approved as-is.</p>`;
     }
     const rows = pendingRoomPhotos.map(r => {
-      const photos = [
-        r.url ? { label: 'Room', url: r.url } : null,
-        r.washroomUrl ? { label: 'Washroom', url: r.washroomUrl } : null,
-        r.balconyUrl ? { label: 'Balcony', url: r.balconyUrl } : null
-      ].filter(Boolean);
+      const urls = Array.isArray(r.urls) ? r.urls.filter(u => typeof u === 'string' && u.trim()) : [];
       const missing = [];
-      if (!r.url) missing.push('room photo');
-      if (!r.washroomUrl) missing.push('washroom photo');
+      if (!urls.length) missing.push('at least one photo');
       if (!(Number(r.maxOccupancy) > 0)) missing.push('max guests');
       if (!(Number(r.price) > 0)) missing.push('price');
       return `
@@ -496,17 +586,17 @@
           <span style="opacity:0.7;"> — sleeps up to ${r.maxOccupancy || '—'} · ₹${r.price || '—'}/night</span>
           ${missing.length ? `<div style="color:#a3402f; font-size:12.5px; margin-top:4px;">⚠ Missing: ${missing.join(', ')}</div>` : ''}
           <div class="photo-row" style="margin-top:6px;">
-            ${photos.map(p => `<a href="${p.url}" target="_blank" rel="noopener"><img src="${p.url}" alt="${p.label} photo" title="${p.label}"></a>`).join('')}
+            ${urls.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Room photo"></a>`).join('')}
           </div>
         </div>
       `;
     }).join('');
-    const countMismatch = declaredCount && pendingRoomPhotos.length !== declaredCount
-      ? `<div style="color:#a3402f; font-size:12.5px; margin-top:6px;">⚠ Declared ${declaredCount} rooms, but ${pendingRoomPhotos.length} were provided.</div>`
+    const countMismatch = declaredNum && pendingRoomPhotos.length !== declaredNum
+      ? `<div style="color:#a3402f; font-size:12.5px; margin-top:6px;">⚠ Declared ${declaredNum} rooms, but ${pendingRoomPhotos.length} were provided.</div>`
       : '';
     return `
       <div class="photo-group">
-        <div class="photo-group-label">Rooms (${pendingRoomPhotos.length} of ${declaredCount || '?'} declared)</div>
+        <div class="photo-group-label">Rooms (${pendingRoomPhotos.length} of ${declaredNum || '?'} declared)</div>
         ${countMismatch}
         ${rows}
       </div>
