@@ -352,10 +352,19 @@ module.exports = async (req, res) => {
             return (e.city && e.city.toLowerCase().includes(needle));
           }
           const km = haversineDistanceKm(expDistanceFilter.lat, expDistanceFilter.lng, Number(e.latitude), Number(e.longitude));
+          e.distance_km = km;
           return km <= expDistanceFilter.radiusKm;
         }
         return true;
       });
+      // Nearest first — same reasoning as the stays search below.
+      if (expDistanceFilter) {
+        filteredExperiences.sort((a, b) => {
+          const da = a.distance_km == null ? Infinity : a.distance_km;
+          const db = b.distance_km == null ? Infinity : b.distance_km;
+          return da - db;
+        });
+      }
 
       // Same active-promotions teaser data the stays query attaches below
       // — experiences can have their own date-scoped promotions too (see
@@ -600,9 +609,29 @@ module.exports = async (req, res) => {
             return (l.city && l.city.toLowerCase().includes(needle)) || (l.area && l.area.toLowerCase().includes(needle));
           }
           const km = haversineDistanceKm(distanceFilter.lat, distanceFilter.lng, Number(l.latitude), Number(l.longitude));
+          // Attached here rather than recomputed later — this is the
+          // one place the actual distance is known, and both the sort
+          // below and the frontend's "X km away" display want the exact
+          // same number, not a second, potentially-inconsistent
+          // calculation.
+          l.distance_km = km;
           return km <= distanceFilter.radiusKm;
         })
       : afterRoomsNeededFilter;
+
+    // Nearest first — a 200km radius is wide enough that "somewhere in
+    // range" isn't very useful on its own; a guest wants the closest
+    // options surfaced first, not an arbitrary or database-insertion
+    // order. Listings without coordinates (matched above by city/area
+    // text instead) have no distance_km to sort by, so they're pushed to
+    // the end rather than sorted arbitrarily among themselves.
+    if (distanceFilter) {
+      filtered.sort((a, b) => {
+        const da = a.distance_km == null ? Infinity : a.distance_km;
+        const db = b.distance_km == null ? Infinity : b.distance_km;
+        return da - db;
+      });
+    }
 
     // One extra query for all paid amenities across every listing being
     // returned, rather than one query per listing — cheaper, and this
