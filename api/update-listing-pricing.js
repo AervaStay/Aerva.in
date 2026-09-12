@@ -124,6 +124,26 @@ module.exports = async (req, res) => {
   // ---- Save changes ----
   if (req.method === 'POST') {
     try {
+      // A host can withdraw their own pending room changes at any time —
+      // this doesn't touch anything live (the proposal was never
+      // applied, only staged), so there's no risk in letting them self-
+      // serve out of this state rather than being stuck waiting on an
+      // admin indefinitely, with no way to submit anything else in the
+      // meantime, if the review queue is slow or isn't working.
+      if (req.body && req.body.cancelPendingRoomChanges === true) {
+        const cancelled = await sql`
+          UPDATE listings SET rooms_pending_review = FALSE, pending_room_changes = NULL
+          WHERE id = ${listingId} AND rooms_pending_review = TRUE
+          RETURNING id, host_email
+        `;
+        if (!cancelled[0]) return res.status(404).json({ error: 'No pending room changes were found to cancel.' });
+        await logAudit(sql, {
+          action: 'room_changes_cancelled', success: true, actorType: 'host', actorIdentifier: cancelled[0].host_email,
+          targetType: 'listing', targetId: listingId, metadata: {}
+        });
+        return res.status(200).json({ success: true });
+      }
+
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, promotions,
               latitude, longitude, formattedAddress, city, area,
@@ -474,6 +494,10 @@ module.exports = async (req, res) => {
             // after the fact instead of only the first submission.
             await sql`UPDATE listings SET pending_room_changes = ${JSON.stringify(rooms)}, rooms_pending_review = TRUE WHERE id = ${listingId}`;
             roomsWarning = "Your room changes have been submitted for admin review and will go live once approved — your current live rooms are unaffected until then.";
+            await logAudit(sql, {
+              action: 'room_changes_submitted', success: true, actorType: 'host', actorIdentifier: listing.host_email,
+              targetType: 'listing', targetId: listingId, metadata: { roomCount: rooms.length }
+            });
           }
         } catch (roomErr) {
           console.error('Resort rooms sync failed:', roomErr);
