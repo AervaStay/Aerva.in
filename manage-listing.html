@@ -1059,15 +1059,23 @@
       `;
       function wirePick(selector, getFile, setFile, clearUrl){
         el.querySelector(selector).addEventListener('click', () => {
+          // Attached to the DOM (hidden) and removed after use — a
+          // dynamically created <input type="file"> left detached from
+          // the page can become unreliable on repeated use in iOS
+          // Safari specifically (works the first time, silently doesn't
+          // fire afterward).
           const input = document.createElement('input');
           input.type = 'file';
           input.accept = 'image/*';
+          input.style.display = 'none';
+          document.body.appendChild(input);
           input.addEventListener('change', () => {
             if(input.files[0]){
               setFile(input.files[0]);
               clearUrl();
               renderRooms();
             }
+            input.remove();
           });
           input.click();
         });
@@ -1227,9 +1235,13 @@
     container.querySelectorAll('[data-slot-pick]').forEach(box => {
       box.addEventListener('click', () => {
         const idx = Number(box.dataset.slotPick);
+        // Same DOM-attach-then-remove fix as the room photo pickers —
+        // reliability across repeated uses, particularly on iOS Safari.
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = 'image/*';
+        input.style.display = 'none';
+        document.body.appendChild(input);
         input.addEventListener('change', () => {
           if(input.files[0]){
             checkinPhotoSlots[idx].file = input.files[0];
@@ -1237,6 +1249,7 @@
             renderCheckinPhotoSlots();
             updateCheckinInstructionsPreview();
           }
+          input.remove();
         });
         input.click();
       });
