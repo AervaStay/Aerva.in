@@ -762,7 +762,7 @@ module.exports = async (req, res) => {
           VALUES (${listing.id}, ${safeRoomPhotos[i].roomName}, ${coverUrl}, ${JSON.stringify(restUrls.map(url => ({ url })))}, ${i}, TRUE)
         `;
       }
-    } else if (!isExperience && propertyType === 'Resort' && !isDraft) {
+    } else if (!isExperience && propertyType === 'Resort') {
       // The named room photos aren't written into listing_rooms directly
       // (see the comment above — that risks a Resort's real, already-
       // priced rooms on any future resubmission), but they shouldn't
@@ -773,6 +773,14 @@ module.exports = async (req, res) => {
       // first time this listing is approved, to pre-populate
       // listing_rooms as fully complete, active rooms — first photo as
       // cover_photo_url, the rest of that room's gallery into photo_urls.
+      //
+      // This now runs for a DRAFT save too, not just a real submission —
+      // it used to be skipped entirely for drafts, which meant a host
+      // who'd already filled in every room's photos, price, and
+      // occupancy and then clicked "Save as Draft" would come back to
+      // find every room completely empty again, since nothing about
+      // Resort rooms was ever persisted for a draft. index.html restores
+      // this same data back into the form when a draft is reopened.
       //
       // Only room (bedroom) entries are staged here — there are no
       // fixed common-area categories for a Resort at all (see the
