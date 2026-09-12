@@ -364,11 +364,17 @@ module.exports = async (req, res) => {
       // occupancy limit — that's what makes a resort's rooms
       // independently bookable and independently priced, rather than
       // one blended rate for the whole property.
+      let roomsWarning = null;
       if (Array.isArray(rooms) && before[0].property_type === 'Resort') {
         try {
           const existingRoomRows = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${listingId}`;
           const existingRoomIds = new Set(existingRoomRows.map(r => r.id));
           const submittedRoomIds = new Set();
+          // Tracked so the host gets told explicitly which rooms didn't
+          // save, rather than a room with real photos/pricing silently
+          // never making it into the database with no error at all —
+          // that used to be the only outcome here.
+          const skippedRoomLabels = [];
 
           for (let i = 0; i < rooms.length; i++) {
             const r = rooms[i];
@@ -377,8 +383,17 @@ module.exports = async (req, res) => {
             const roomRate = Number(r.nightlyRate);
             // A room missing a name, a real occupancy limit, or a real
             // price isn't meaningful to save — skipped rather than
-            // failing the whole listing save over one incomplete row.
-            if (!roomName || !maxOccupancy || maxOccupancy < 1 || !roomRate || roomRate <= 0) continue;
+            // failing the whole listing save over one incomplete row
+            // (a host might genuinely still be mid-way through setting
+            // up a different room and just wants to save progress on
+            // the rest).
+            if (!roomName || !maxOccupancy || maxOccupancy < 1 || !roomRate || roomRate <= 0) {
+              const hasAnyPhotos = Array.isArray(r.photos) && r.photos.some(p => p && typeof p.url === 'string' && p.url.trim());
+              if (hasAnyPhotos || maxOccupancy > 0 || roomRate > 0) {
+                skippedRoomLabels.push(roomName || `Room ${i + 1}`);
+              }
+              continue;
+            }
             const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
             // A room's whole gallery — no forced washroom/balcony
             // labeling, just however many photos the host added. First
@@ -438,6 +453,9 @@ module.exports = async (req, res) => {
             WHERE listing_id = ${listingId} AND is_active = TRUE AND nightly_rate IS NOT NULL
           `;
           await sql`UPDATE listings SET nightly_rate = ${cheapestActiveRoom[0].min_rate} WHERE id = ${listingId}`;
+          if (skippedRoomLabels.length) {
+            roomsWarning = `${skippedRoomLabels.join(', ')} ${skippedRoomLabels.length === 1 ? 'has' : 'have'} photos or pricing but weren't saved — each room needs a name, max guests, and price to be saved.`;
+          }
         } catch (roomErr) {
           console.error('Resort rooms sync failed:', roomErr);
           // Doesn't fail the whole save — same as custom fields above.
@@ -600,7 +618,7 @@ module.exports = async (req, res) => {
         metadata: { newRate: rate, rateChanged, discountType: discountType || null, paidAmenitiesError: !!paidAmenitiesError, blockedDatesError: !!blockedDatesError, promotionsError: !!promotionsError }
       });
 
-      const warning = [paidAmenitiesError, blockedDatesError, promotionsError].filter(Boolean).join(' ') || undefined;
+      const warning = [paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning].filter(Boolean).join(' ') || undefined;
       return res.status(200).json({ success: true, warning });
     } catch (err) {
       console.error('update-listing-pricing (POST) error:', err);
