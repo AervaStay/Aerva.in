@@ -1397,7 +1397,7 @@
       <div class="search-field search-field-where">
         <label for="searchCity">Where</label>
         <div class="place-input-wrap">
-          <input type="text" id="searchCity" placeholder="" autocomplete="off">
+          <input type="text" id="searchCity" placeholder=" " autocomplete="off">
           <span class="place-hint" id="placeHint"><span id="placeHintText"></span></span>
           <div class="place-suggestions" id="placeSuggestions" style="display:none;"></div>
         </div>
@@ -3823,6 +3823,21 @@
       const placeSuggestionsEl = document.getElementById('placeSuggestions');
       if(!searchPlaceInput || !placeSuggestionsEl) return;
 
+      // Directly controls the animated hint's visibility via JS, rather
+      // than relying solely on the :placeholder-shown CSS selector — that
+      // selector doesn't reliably fire for an empty placeholder attribute
+      // across every WebKit/Safari version, which was leaving the "Where"
+      // field looking blank (misaligned against "When"/"Who", which
+      // always show real button text) on some phones even though the
+      // CSS itself was never wrong on desktop. This is the belt to that
+      // fix's suspenders — works regardless of that quirk either way.
+      const placeHintEl = document.getElementById('placeHint');
+      function updatePlaceHintVisibility(){
+        if(placeHintEl) placeHintEl.style.opacity = searchPlaceInput.value === '' ? '1' : '0';
+      }
+      updatePlaceHintVisibility();
+      searchPlaceInput.addEventListener('input', updatePlaceHintVisibility);
+
       // Google's AutocompleteService/PlacesService are only reached now if
       // Nominatim itself fails (see freeSearchSuggestions) — kept ready as
       // the fallback path, not the primary one.
@@ -3841,6 +3856,11 @@
 
       function selectCoordinates(lat, lng, displayText){
         searchPlaceInput.value = displayText;
+        // Setting .value directly doesn't fire 'input' — needed here
+        // explicitly, since updatePlaceHintVisibility sets an inline
+        // style that would otherwise keep showing the hint text
+        // overlapping the place name that was just selected.
+        updatePlaceHintVisibility();
         document.getElementById('searchPlaceLat').value = lat;
         document.getElementById('searchPlaceLng').value = lng;
         closeSuggestions();
@@ -10358,6 +10378,11 @@
     calSelectingStart = true;
     updateDateRangeBtn();
     document.getElementById('searchCity').value = '';
+    // Setting .value directly doesn't fire 'input' on its own, which is
+    // what actually re-shows the "Where" field's hint text once it's
+    // empty again — without this, clearing filters would leave the
+    // field looking permanently filled-in-but-blank.
+    document.getElementById('searchCity').dispatchEvent(new Event('input'));
     // Previously left stale — a prior place search's exact coordinates
     // stayed in these hidden fields even after the visible text was
     // cleared, so performSearch() (which reads these first) could still
