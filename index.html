@@ -807,13 +807,6 @@
   }
   .room-space-photo-box img{width:100%; height:100%; object-fit:cover; display:block;}
   .room-space-photo-box span{font-size:11px; opacity:0.5; text-align:center; padding:0 6px;}
-  .room-space-photo-box.pool-target{border-color:var(--gold-deep); border-style:solid; box-shadow:0 0 0 2px rgba(169,136,79,0.25);}
-  .room-photo-pool-thumb{
-    width:64px; height:64px; flex:0 0 auto; border:2px solid transparent; border-radius:4px; overflow:hidden;
-    cursor:pointer; position:relative;
-  }
-  .room-photo-pool-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
-  .room-photo-pool-thumb.selected{border-color:var(--gold-deep); box-shadow:0 0 0 2px rgba(169,136,79,0.3);}
   .guest-step-btn{
     width:30px; height:30px; border-radius:50%; border:1px solid var(--line-dark);
     background:none; color:var(--ink); font-size:16px; line-height:1; cursor:pointer;
@@ -1812,10 +1805,10 @@
       <p style="font-size:11.5px; opacity:0.6; margin:6px 0 10px;">Name each space and add a photo. Bedrooms (however many you set above), Kitchen, Washroom, and Living Room are required — Garden and Balcony only if you have them.</p>
       <div style="background:var(--cream-deep); border:1px solid var(--line-dark); padding:12px 14px; margin-bottom:14px;">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-          <p style="font-size:12px; opacity:0.7; margin:0;">Selecting several photos at once? Pick them all here first, then just tap each one onto its spot below — faster than opening a file picker separately for every single box.</p>
+          <p style="font-size:12px; opacity:0.7; margin:0;">Selecting several photos at once? Pick them all here in one go, in the same order as the empty spots below (top to bottom) — they'll drop straight into place, no extra clicks needed.</p>
           <button type="button" class="filter-clear" id="roomPhotoPoolBtn" style="flex:0 0 auto;">+ Select Multiple Photos</button>
         </div>
-        <div id="roomPhotoPoolTray" style="display:none; gap:8px; margin-top:12px; overflow-x:auto; padding-bottom:4px;"></div>
+        <p id="roomPhotoPoolStatus" style="display:none; font-size:12px; color:#3a7d44; margin:10px 0 0;"></p>
       </div>
       <div id="roomSpacesList"></div>
       <input type="hidden" id="listPhotosInterior">
@@ -4086,50 +4079,34 @@
     renderRoomSpaces();
   }
 
-  // ---- Photo pool: pick several photos in ONE file dialog, then tap
-  // each onto its target box, instead of opening a file dialog
-  // separately for every single Room/Washroom/Balcony/Kitchen/etc. slot.
-  // Falls back to the original one-at-a-time behavior below whenever
-  // nothing's selected from the pool, so this is purely additive — the
-  // old click-to-upload flow still works exactly as before if a host
-  // prefers it or the pool is empty.
-  let roomPhotoPool = [];
-  let roomPhotoPoolNextId = 1;
-  let roomPhotoPoolSelectedId = null;
-
-  function renderRoomPhotoPool(){
-    const tray = document.getElementById('roomPhotoPoolTray');
-    if(!roomPhotoPool.length){
-      tray.style.display = 'none';
-      tray.innerHTML = '';
-    } else {
-      tray.style.display = 'flex';
-      tray.innerHTML = roomPhotoPool.map(p => `
-        <div class="room-photo-pool-thumb${p.id === roomPhotoPoolSelectedId ? ' selected' : ''}" data-pool-id="${p.id}">
-          <img src="${URL.createObjectURL(p.file)}" alt="">
-        </div>
-      `).join('');
-      tray.querySelectorAll('[data-pool-id]').forEach(thumb => {
-        thumb.addEventListener('click', () => {
-          const id = Number(thumb.dataset.poolId);
-          roomPhotoPoolSelectedId = roomPhotoPoolSelectedId === id ? null : id;
-          renderRoomPhotoPool();
-          updatePoolTargetHighlights();
-        });
-      });
-    }
-    updatePoolTargetHighlights();
-  }
-  // Every currently-empty slot on the page gets a highlighted border
-  // while a pool photo is selected, as a visual "tap here" hint — this
-  // runs across ALL rendered slots regardless of which room they belong
-  // to, since renderRoomSpaces() may have rebuilt the DOM since the pool
-  // was last touched.
-  function updatePoolTargetHighlights(){
-    document.querySelectorAll('.room-space-photo-box').forEach(box => {
-      const isEmpty = !box.querySelector('img');
-      box.classList.toggle('pool-target', isEmpty && roomPhotoPoolSelectedId !== null);
+  // ---- Bulk photo fill: pick several photos in ONE file dialog, and
+  // they drop straight into the empty Room/Washroom/Balcony/Kitchen/etc.
+  // slots in order — top to bottom, main-then-washroom-then-balcony for
+  // each room — with zero further clicks. Simpler than an earlier
+  // version of this that required selecting a thumbnail from a pool and
+  // then clicking a target box for every single photo; this just
+  // matches photos to slots directly, the way a host would naturally
+  // have taken them (walk into a room, photograph it, its washroom, its
+  // balcony, move to the next room). Purely additive — the original
+  // one-at-a-time click-to-upload on each box still works exactly as
+  // before regardless.
+  function getEmptyRoomPhotoSlotsInOrder(){
+    const isResort = document.getElementById('listType').value === 'Resort';
+    const slots = [];
+    roomSpaceRows.forEach(room => {
+      if(!room.file && !room.url){
+        slots.push(f => { room.file = f; room.url = null; });
+      }
+      if(room.isBedroom && isResort){
+        if(!room.washroomFile && !room.washroomUrl){
+          slots.push(f => { room.washroomFile = f; room.washroomUrl = null; });
+        }
+        if(!room.balconyFile && !room.balconyUrl){
+          slots.push(f => { room.balconyFile = f; room.balconyUrl = null; });
+        }
+      }
     });
+    return slots;
   }
   document.getElementById('roomPhotoPoolBtn').addEventListener('click', () => {
     const input = document.createElement('input');
@@ -4137,10 +4114,23 @@
     input.accept = 'image/*';
     input.multiple = true;
     input.addEventListener('change', () => {
-      Array.from(input.files).forEach(file => {
-        roomPhotoPool.push({ id: roomPhotoPoolNextId++, file });
-      });
-      renderRoomPhotoPool();
+      const files = Array.from(input.files);
+      const emptySlots = getEmptyRoomPhotoSlotsInOrder();
+      const assignCount = Math.min(files.length, emptySlots.length);
+      for(let i = 0; i < assignCount; i++) emptySlots[i](files[i]);
+      renderRoomSpaces();
+      const statusEl = document.getElementById('roomPhotoPoolStatus');
+      statusEl.style.display = 'block';
+      if(assignCount === 0){
+        statusEl.style.color = '#a3402f';
+        statusEl.textContent = 'Every spot is already filled — remove a photo first if you want to replace one this way.';
+      } else if(files.length > assignCount){
+        statusEl.style.color = '#a3402f';
+        statusEl.textContent = `Filled ${assignCount} empty spot${assignCount === 1 ? '' : 's'} in order — ${files.length - assignCount} extra photo${files.length - assignCount === 1 ? '' : 's'} didn't fit anywhere (every remaining spot was already filled).`;
+      } else {
+        statusEl.style.color = '#3a7d44';
+        statusEl.textContent = `✓ Filled ${assignCount} empty spot${assignCount === 1 ? '' : 's'}, in the order they appear below.`;
+      }
     });
     input.click();
   });
@@ -4150,23 +4140,6 @@
   // upload handler avoids writing the same wiring three times over.
   function wireRoomPhotoPick(el, getFile, setFile, onPicked){
     el.addEventListener('click', () => {
-      // A pool photo is selected and this box is empty — assign it
-      // directly, no file dialog needed. Clicking a box that ALREADY has
-      // a photo always falls through to the normal replace-via-dialog
-      // behavior below, even with a pool photo selected, since "replace
-      // this specific photo" is a more deliberate action than "fill an
-      // empty slot."
-      if(roomPhotoPoolSelectedId !== null && !el.querySelector('img')){
-        const poolIndex = roomPhotoPool.findIndex(p => p.id === roomPhotoPoolSelectedId);
-        if(poolIndex !== -1){
-          setFile(roomPhotoPool[poolIndex].file);
-          roomPhotoPool.splice(poolIndex, 1);
-          roomPhotoPoolSelectedId = null;
-          onPicked();
-          renderRoomPhotoPool();
-          return;
-        }
-      }
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/*';
@@ -4270,7 +4243,6 @@
       const balconyPick = rowEl.querySelector('[data-room-balcony-pick]');
       if(balconyPick) wireRoomPhotoPick(balconyPick, () => room.balconyFile, f => { room.balconyFile = f; room.balconyUrl = null; }, renderRoomSpaces);
     });
-    updatePoolTargetHighlights(); // re-applied after every rebuild, since these are all new DOM elements
   }
   renderRoomSpaces();
   document.getElementById('listBedrooms').addEventListener('input', syncBedroomRowCount);
@@ -4438,12 +4410,20 @@
       // Checked in the same top-to-bottom order as the form itself, so
       // whichever error shows is the first thing the host actually needs
       // to fix, not just an arbitrary one.
+      const isResortSubmission = document.getElementById('listType').value === 'Resort';
       const requiredChecks = [
         { value: document.getElementById('listLatitude').value, message: 'Please select your property\'s location from the address suggestions.' },
         { value: document.getElementById('listCity').value.trim(), message: 'Please enter the city.' },
         { value: document.getElementById('listArea').value.trim(), message: 'Please enter the area.' },
         { value: document.getElementById('listPincode').value.trim(), message: 'Please enter the PIN/postal code.' },
-        { value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' },
+        // Skipped for a Resort — that field is hidden entirely there
+        // (see the listType change handler), since its price is
+        // computed automatically from room prices instead of typed in
+        // here. This check used to run unconditionally regardless of
+        // property type, which blocked every Resort submission outright
+        // the moment the field was hidden — an empty, hidden field can
+        // never satisfy a check that doesn't know to skip it.
+        ...(isResortSubmission ? [] : [{ value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' }]),
         { value: document.getElementById('listDescription').value.trim(), message: 'Please tell us a bit about the property.' }
       ];
       for(const check of requiredChecks){
