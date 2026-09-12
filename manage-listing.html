@@ -727,6 +727,42 @@
   // already saved on the listing, or { key: tempId, type: 'new', file }
   // for one just added and not yet uploaded — both render identically
   // and share the same reorder/cover/remove controls.
+  // A modern phone camera photo is routinely 5-15MB — uploading that raw,
+  // across exterior/interior photos, room galleries, and check-in
+  // photos, is the real reason this can feel slow, far more than
+  // anything about the form itself. Resized to a sensible max dimension
+  // and re-encoded as JPEG before upload, typically cutting file size by
+  // 10-20x with no visible quality loss for web display. Never blocks
+  // the actual upload if anything goes wrong — falls back to the
+  // original file untouched. Kept in sync by hand with the identical
+  // helper in index.html (no shared module between these separate files).
+  async function compressImage(file, maxDimension = 1920, quality = 0.82){
+    if(!file.type || !file.type.startsWith('image/')) return file;
+    if(file.type === 'image/heic' || file.type === 'image/heif') return file;
+    try{
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+      if(scale >= 1 && file.size < 1.5 * 1024 * 1024){
+        bitmap.close();
+        return file;
+      }
+      const targetWidth = Math.max(1, Math.round(bitmap.width * scale));
+      const targetHeight = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+      bitmap.close();
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if(!blob || blob.size >= file.size) return file;
+      return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+    } catch(err){
+      console.warn('Image compression skipped, uploading original:', file.name, err);
+      return file;
+    }
+  }
+
   function createPhotoManager(previewGridId, fileInputId, addBtnId){
     const previewGrid = document.getElementById(previewGridId);
     const fileInput = document.getElementById(fileInputId);
@@ -799,7 +835,8 @@
             urls.push(item.url);
           } else {
             const { upload } = await import('https://esm.sh/@vercel/blob/client');
-            const result = await upload(item.file.name, item.file, {
+            const compressed = await compressImage(item.file);
+            const result = await upload(compressed.name, compressed, {
               access: 'public',
               handleUploadUrl: API_BASE + '/api/blob-upload'
             });
@@ -1208,7 +1245,8 @@
           photo.file = null;
           continue;
         }
-        const uploaded = await upload(photo.file.name, photo.file, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        const compressed = await compressImage(photo.file);
+        const uploaded = await upload(compressed.name, compressed, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
         cache.set(photo.file, uploaded.url);
         photo.url = uploaded.url;
         photo.file = null;
@@ -1327,7 +1365,8 @@
     for(const slot of checkinPhotoSlots){
       if(slot.file){
         const { upload } = await import('https://esm.sh/@vercel/blob/client');
-        const uploaded = await upload(slot.file.name, slot.file, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        const compressed = await compressImage(slot.file);
+        const uploaded = await upload(compressed.name, compressed, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
         result.push({ caption: slot.caption || '', url: uploaded.url });
       } else if(slot.url){
         result.push({ caption: slot.caption || '', url: slot.url });
@@ -1589,6 +1628,26 @@
     const errorMsg = document.getElementById('errorMsg');
     confirmMsg.style.display = 'none';
     errorMsg.style.display = 'none';
+
+    // Every active room needs a name — checked as its own explicit rule,
+    // not just folded into the declared-count-must-match check below.
+    // That count-based check can pass even when a specific room is
+    // incomplete: 4 fully-named rooms matching a declared count of 4,
+    // plus a 5th room with photos/price/occupancy but no name, still
+    // reads as "4 of 4 complete" — the unnamed room just silently never
+    // gets saved server-side (it fails a name check there and, having no
+    // id yet, is dropped rather than updated), with nothing telling the
+    // host that happened. Named explicitly here so that specific room
+    // gets called out before it can vanish without a trace.
+    const roomsMissingNames = roomRows.filter(r =>
+      r.isActive !== false && !r.roomName.trim() &&
+      (r.photos.some(p => p.file || p.url) || r.maxOccupancy || r.nightlyRate)
+    );
+    if(roomsMissingNames.length){
+      errorMsg.textContent = `Please name every active room — ${roomsMissingNames.length} room(s) have photos or pricing but no name yet.`;
+      errorMsg.style.display = 'block';
+      return;
+    }
 
     // Every active room needs its own photo — a guest choosing between
     // several rooms with no way to see what they actually look like
