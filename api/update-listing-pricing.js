@@ -80,7 +80,7 @@ module.exports = async (req, res) => {
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                experience_price_unit, commission_rate,
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
-               auto_send_checkin_instructions, checkin_photos
+               auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -150,10 +150,22 @@ module.exports = async (req, res) => {
       const before = await sql`
         SELECT nightly_rate, exterior_photo_urls, interior_photo_urls,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
-               property_type, bedrooms
+               property_type, bedrooms, status, rooms_pending_review
         FROM listings WHERE id = ${listingId}
       `;
       if (!before[0]) return res.status(404).json({ error: 'This listing could not be found.' });
+      // A listing that hasn't been approved yet has nothing live to
+      // manage — editing it here would conflict with (or silently
+      // discard) whatever's staged in pending_room_photos awaiting the
+      // admin's initial review. Host has to wait for that first
+      // approval before this page does anything.
+      if (before[0].status !== 'approved') {
+        return res.status(403).json({
+          error: before[0].status === 'rejected'
+            ? 'This listing was not approved and needs to be resubmitted before it can be managed here. Please contact hello@aerva.in if you have questions about the rejection.'
+            : 'Your listing is still awaiting review — you\'ll be able to manage your rooms and pricing here once it\'s approved.'
+        });
+      }
       const rateChanged = Number(before[0].nightly_rate) !== rate;
 
       // Same defensive pattern as submit-listing.js — only real Blob URLs
@@ -242,37 +254,13 @@ module.exports = async (req, res) => {
       // Declared room count — same "Bedrooms" field submitted at listing
       // creation, relabeled "Number of Rooms" for a Resort (see
       // index.html's listType change handler). Same "not sent this time,
-      // leave alone" convention as the guest-info fields above.
+      // leave alone" convention as the guest-info fields above. No
+      // longer validated against the actual room count — manage-
+      // listing.html now sends this as simply however many active rooms
+      // exist when saving, computed automatically rather than a number
+      // the host has to separately declare and keep in sync by hand.
       const finalBedrooms = (bedrooms !== undefined && bedrooms !== null && bedrooms !== '')
         ? Number(bedrooms) : before[0].bedrooms;
-
-      // For a Resort specifically, the number of ACTIVE rooms being saved
-      // must equal the declared room count exactly — "declare 10, only
-      // ever create 6" would leave the platform (and guests) trusting a
-      // number nothing backs up. Checked here, before any room writes
-      // happen, so a mismatch fails the whole save cleanly rather than
-      // partially applying it. Same "meaningful room" criteria as the
-      // actual sync below (name, occupancy, rate, AND a photo — a room
-      // with no photo isn't really ready to show guests either, same
-      // requirement index.html's own form enforces client-side).
-      if (before[0].property_type === 'Resort' && Array.isArray(rooms)) {
-        const activeRoomCount = rooms.filter(r => {
-          const roomName = typeof r.roomName === 'string' ? r.roomName.trim() : '';
-          const maxOccupancy = Number(r.maxOccupancy);
-          const roomRate = Number(r.nightlyRate);
-          const hasPhoto = Array.isArray(r.photos) && r.photos.some(p => p && typeof p.url === 'string' && p.url.trim());
-          const isMeaningful = roomName && maxOccupancy >= 1 && roomRate > 0 && hasPhoto;
-          return isMeaningful && r.isActive !== false;
-        }).length;
-        const declaredCount = Number(finalBedrooms) || 0;
-        if (declaredCount > 0 && activeRoomCount !== declaredCount) {
-          return res.status(400).json({
-            error: activeRoomCount < declaredCount
-              ? `You declared ${declaredCount} rooms — you currently have ${activeRoomCount} active with a name, occupancy, price, and photo all set. Please complete ${declaredCount - activeRoomCount} more, or update the declared room count above to match.`
-              : `You declared ${declaredCount} rooms — you currently have ${activeRoomCount} active, which is more. Please remove ${activeRoomCount - declaredCount}, or update the declared room count above to match.`
-          });
-        }
-      }
 
       const updated = await sql`
         UPDATE listings SET
@@ -365,8 +353,27 @@ module.exports = async (req, res) => {
       // independently bookable and independently priced, rather than
       // one blended rate for the whole property.
       let roomsWarning = null;
-      if (Array.isArray(rooms) && before[0].property_type === 'Resort') {
+      if (Array.isArray(rooms) && before[0].property_type === 'Resort' && before[0].rooms_pending_review) {
+        // A prior round of changes is already sitting with the admin —
+        // submitting a second set on top of that would mean reviewing a
+        // moving target (or worse, silently overwriting the first set
+        // before it's even been looked at). Held back with a clear
+        // message instead; nothing else in this save is blocked, only
+        // the room changes.
+        roomsWarning = "Your last room changes are still awaiting admin review — please wait for those to be approved before submitting more.";
+      } else if (Array.isArray(rooms) && before[0].property_type === 'Resort') {
         try {
+          const existingActiveRoomCount = await sql`SELECT COUNT(*)::int AS count FROM listing_rooms WHERE listing_id = ${listingId} AND is_active = TRUE`;
+          // First-time setup (completing what approval's pre-population
+          // may have missed, or a resort that had none staged at
+          // submission) applies directly — there's nothing live yet for
+          // a change to override. Once real, active rooms exist, any
+          // further change is staged for admin review instead — see the
+          // else branch below. Rooms already awaiting review can't be
+          // edited again until that review finishes, so the admin isn't
+          // reviewing a moving target.
+          if (existingActiveRoomCount[0].count === 0) {
+
           const existingRoomRows = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${listingId}`;
           const existingRoomIds = new Set(existingRoomRows.map(r => r.id));
           const submittedRoomIds = new Set();
@@ -455,6 +462,18 @@ module.exports = async (req, res) => {
           await sql`UPDATE listings SET nightly_rate = ${cheapestActiveRoom[0].min_rate} WHERE id = ${listingId}`;
           if (skippedRoomLabels.length) {
             roomsWarning = `${skippedRoomLabels.join(', ')} ${skippedRoomLabels.length === 1 ? 'has' : 'have'} photos or pricing but weren't saved — each room needs a name, max guests, and price to be saved.`;
+          }
+
+          } else {
+            // Real, active rooms already exist — this resort is live and
+            // bookable. Any further change (a new room, a renamed one, a
+            // different price or photo) is staged rather than applied,
+            // so nothing a guest currently sees changes until an admin
+            // has reviewed it — the same protection the listing itself
+            // got at initial approval, now extended to changes made
+            // after the fact instead of only the first submission.
+            await sql`UPDATE listings SET pending_room_changes = ${JSON.stringify(rooms)}, rooms_pending_review = TRUE WHERE id = ${listingId}`;
+            roomsWarning = "Your room changes have been submitted for admin review and will go live once approved — your current live rooms are unaffected until then.";
           }
         } catch (roomErr) {
           console.error('Resort rooms sync failed:', roomErr);
