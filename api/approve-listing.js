@@ -23,6 +23,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken } = require('./_approval-token');
+const { logAudit } = require('./_audit-log');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -234,9 +235,18 @@ async function applyDecision(listingId, action, reason = null) {
   const result = await sql`
     UPDATE listings SET status = ${newStatus}, rejection_reason = ${action === 'reject' ? reason : null}
     WHERE id = ${listingId}
-    RETURNING id, property_name, status, host_email, host_id, rejection_reason, property_type, pending_room_photos
+    RETURNING id, property_name, status, host_email, host_id, rejection_reason, property_type, pending_room_photos, listing_type
   `;
   const listing = result[0] || null;
+
+  if (listing) {
+    await logAudit(sql, {
+      action: action === 'approve' ? 'listing_approved' : 'listing_rejected',
+      success: true, actorType: 'admin', actorIdentifier: null,
+      targetType: listing.listing_type === 'experience' ? 'experience' : 'listing', targetId: listing.id,
+      metadata: { propertyType: listing.property_type, rejectionReason: action === 'reject' ? reason : undefined }
+    });
+  }
 
   // Pre-populate a Resort's rooms from whatever named, priced bedroom
   // photos were staged at submission (see submit-listing.js) — a host
@@ -323,6 +333,75 @@ async function applyDecision(listingId, action, reason = null) {
   }
 
   return listing;
+}
+
+// Applies or discards a SINGLE room's staged change (see
+// update-listing-pricing.js, which stages per-room now, not per-
+// listing) — a room-level decision, separate from approving the
+// listing itself, since this only ever runs on an already-approved,
+// already-live listing's individual room.
+async function applyRoomChangeDecision(roomId, action) {
+  const rows = await sql`
+    SELECT lr.id, lr.listing_id, lr.pending_changes, l.host_email, l.property_name
+    FROM listing_rooms lr JOIN listings l ON l.id = lr.listing_id
+    WHERE lr.id = ${roomId} AND lr.pending_review = TRUE
+  `;
+  const room = rows[0];
+  if (!room) return null;
+
+  // A brand-new room's pending_changes holds only its
+  // newRoomIntendedActive marker (see update-listing-pricing.js) —
+  // nothing to "restore" it to, since it never had a prior live state.
+  // An edit to a previously-live room carries the full proposed field
+  // set instead.
+  const isNewRoomProposal = room.pending_changes && Object.prototype.hasOwnProperty.call(room.pending_changes, 'newRoomIntendedActive');
+
+  if (action === 'approve_room') {
+    if (isNewRoomProposal) {
+      await sql`
+        UPDATE listing_rooms SET is_active = ${!!room.pending_changes.newRoomIntendedActive},
+          pending_changes = NULL, pending_review = FALSE, pending_since = NULL
+        WHERE id = ${room.id}
+      `;
+    } else {
+      const p = room.pending_changes || {};
+      await sql`
+        UPDATE listing_rooms SET
+          room_name = ${p.roomName}, max_occupancy = ${p.maxOccupancy}, nightly_rate = ${p.nightlyRate},
+          description = ${p.description || null}, is_active = ${p.isActive !== false},
+          cover_photo_url = COALESCE(${p.coverPhotoUrl || null}, cover_photo_url),
+          photo_urls = ${JSON.stringify(p.photoUrls || [])},
+          pending_changes = NULL, pending_review = FALSE, pending_since = NULL
+        WHERE id = ${room.id}
+      `;
+    }
+    // Same "lowest active room price drives the card" recompute as
+    // update-listing-pricing.js — a room's price only takes effect on
+    // the listing's own display price once its change is actually live.
+    const cheapestActiveRoom = await sql`
+      SELECT MIN(nightly_rate) AS min_rate FROM listing_rooms
+      WHERE listing_id = ${room.listing_id} AND is_active = TRUE AND nightly_rate IS NOT NULL
+    `;
+    await sql`UPDATE listings SET nightly_rate = ${cheapestActiveRoom[0].min_rate} WHERE id = ${room.listing_id}`;
+  } else if (action === 'reject_room') {
+    if (isNewRoomProposal) {
+      // Never went live — nothing else references it, safe to remove
+      // outright rather than leaving a permanently-inactive orphan row.
+      await sql`DELETE FROM listing_rooms WHERE id = ${room.id}`;
+    } else {
+      // The room reverts to exactly how it was before the edit attempt
+      // — active again, proposal discarded, nothing else affected.
+      await sql`UPDATE listing_rooms SET pending_changes = NULL, pending_review = FALSE, pending_since = NULL, is_active = TRUE WHERE id = ${room.id}`;
+    }
+  }
+
+  await logAudit(sql, {
+    action: action === 'approve_room' ? 'room_change_approved' : 'room_change_rejected',
+    success: true, actorType: 'admin', actorIdentifier: null,
+    targetType: 'listing_room', targetId: room.id,
+    metadata: { listingId: room.listing_id, isNewRoom: isNewRoomProposal }
+  });
+  return room;
 }
 
 module.exports = async (req, res) => {
@@ -415,10 +494,12 @@ module.exports = async (req, res) => {
     }
 
     try {
-      const { listingId, action, reason } = req.body;
-      const listing = await applyDecision(listingId, action, reason || null);
-      if (!listing) return res.status(404).json({ error: 'Listing not found' });
-      return res.status(200).json({ success: true, listing });
+      const { listingId, roomId, action, reason } = req.body;
+      const result = (action === 'approve_room' || action === 'reject_room')
+        ? await applyRoomChangeDecision(roomId, action)
+        : await applyDecision(listingId, action, reason || null);
+      if (!result) return res.status(404).json({ error: 'Listing or room not found' });
+      return res.status(200).json({ success: true, listing: result });
     } catch (err) {
       console.error('approve-listing (POST) error:', err);
       return res.status(500).json({ error: 'Could not update listing' });

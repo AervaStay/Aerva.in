@@ -680,34 +680,38 @@ module.exports = async (req, res) => {
              l.listing_type, l.hosting_listing_id, l.experience_category,
              l.experience_price_unit, l.experience_duration_hours,
              l.pending_room_photos,
-             h.property_name AS hosting_property_name
+             h.property_name AS hosting_property_name,
+             c.property_name AS cloned_from_property_name, c.status AS cloned_from_status,
+             c.rejection_reason AS cloned_from_rejection_reason
       FROM listings l
       LEFT JOIN listings h ON h.id = l.hosting_listing_id
+      LEFT JOIN listings c ON c.id = l.cloned_from_listing_id
       WHERE l.status = 'pending'
       ORDER BY l.created_at ASC
     `;
 
     // Separate from the "brand new submission" queue above — these are
-    // ALREADY-approved, live Resorts where the host has since changed
-    // their rooms (a new one, a different price, a renamed one, etc.).
-    // The current live rooms are included alongside the proposed
-    // changes specifically so the admin can compare the two, rather
-    // than reviewing the new set blind with no sense of what's actually
-    // different.
+    // individual rooms on ALREADY-approved, live Resorts where the host
+    // has since added, edited, or is proposing something new for a
+    // specific room. Per-room now, not per-listing: two different rooms
+    // on the same resort can be independently pending, and this returns
+    // each as its own entry rather than bundling a whole listing's
+    // rooms into one review. For an edit to a previously-live room, the
+    // room's own fields ARE the still-live version and pending_changes
+    // holds the proposal; for a brand-new room, the room's own fields
+    // already hold the intended data (it's just inactive) and
+    // pending_changes only carries the newRoomIntendedActive marker —
+    // admin.html tells these apart the same way update-listing-pricing.js
+    // does.
     const roomChangeRequests = await sql`
-      SELECT l.id, l.property_name, l.city, l.area, l.host_name, l.host_email, l.host_phone,
-             l.pending_room_changes,
-             (
-               SELECT json_agg(json_build_object(
-                 'id', lr.id, 'roomName', lr.room_name, 'maxOccupancy', lr.max_occupancy,
-                 'nightlyRate', lr.nightly_rate, 'coverPhotoUrl', lr.cover_photo_url,
-                 'photoUrls', lr.photo_urls, 'isActive', lr.is_active
-               ) ORDER BY lr.sort_order, lr.created_at)
-               FROM listing_rooms lr WHERE lr.listing_id = l.id
-             ) AS current_rooms
-      FROM listings l
-      WHERE l.rooms_pending_review = TRUE
-      ORDER BY l.created_at ASC
+      SELECT lr.id AS room_id, lr.listing_id, lr.room_name, lr.max_occupancy, lr.nightly_rate,
+             lr.description, lr.cover_photo_url, lr.photo_urls, lr.is_active,
+             lr.pending_changes, lr.pending_since,
+             l.property_name, l.city, l.area, l.host_name, l.host_email, l.host_phone
+      FROM listing_rooms lr
+      JOIN listings l ON l.id = lr.listing_id
+      WHERE lr.pending_review = TRUE
+      ORDER BY lr.pending_since ASC NULLS LAST
     `;
 
     return res.status(200).json({ listings, roomChangeRequests });

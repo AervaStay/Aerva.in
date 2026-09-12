@@ -110,7 +110,7 @@ module.exports = async (req, res) => {
       // single-unit listing has no rooms at all, this just comes back
       // empty for those.
       const rooms = await sql`
-        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls, is_active
+        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls, is_active, pending_review, pending_changes
         FROM listing_rooms WHERE listing_id = ${listingId} ORDER BY sort_order ASC, created_at ASC
       `;
 
@@ -124,22 +124,38 @@ module.exports = async (req, res) => {
   // ---- Save changes ----
   if (req.method === 'POST') {
     try {
-      // A host can withdraw their own pending room changes at any time —
-      // this doesn't touch anything live (the proposal was never
-      // applied, only staged), so there's no risk in letting them self-
-      // serve out of this state rather than being stuck waiting on an
-      // admin indefinitely, with no way to submit anything else in the
-      // meantime, if the review queue is slow or isn't working.
-      if (req.body && req.body.cancelPendingRoomChanges === true) {
-        const cancelled = await sql`
-          UPDATE listings SET rooms_pending_review = FALSE, pending_room_changes = NULL
-          WHERE id = ${listingId} AND rooms_pending_review = TRUE
-          RETURNING id, host_email
+      // A host can withdraw a pending change on ONE specific room at any
+      // time — scoped to that room only now, not the whole listing's
+      // rooms, matching the same per-room granularity the staging logic
+      // itself uses. A brand-new room that was never live gets removed
+      // entirely (nothing to "restore" it to); an edit to a previously-
+      // live room instead reverts it back to active, undoing the
+      // temporary deactivation, since withdrawing the edit means it
+      // should keep operating exactly as it did before the edit attempt.
+      if (req.body && req.body.cancelPendingRoomChangeForRoomId) {
+        const roomRows = await sql`
+          SELECT id, pending_changes, listing_id FROM listing_rooms
+          WHERE id = ${Number(req.body.cancelPendingRoomChangeForRoomId)} AND listing_id = ${listingId} AND pending_review = TRUE
         `;
-        if (!cancelled[0]) return res.status(404).json({ error: 'No pending room changes were found to cancel.' });
+        const room = roomRows[0];
+        if (!room) return res.status(404).json({ error: 'No pending change was found for that room.' });
+        const hostRows = await sql`SELECT host_email FROM listings WHERE id = ${listingId}`;
+        // A brand-new room's pending_changes holds only its
+        // newRoomIntendedActive marker (see the insert above) — nothing
+        // to "restore" it to, since it never had a prior live state, so
+        // withdrawing it means deleting it outright. An edit to a
+        // previously-live room instead reverts to active, since
+        // withdrawing the edit means the room keeps operating exactly as
+        // it did before the edit attempt.
+        const isNewRoomProposal = room.pending_changes && Object.prototype.hasOwnProperty.call(room.pending_changes, 'newRoomIntendedActive');
+        if (isNewRoomProposal) {
+          await sql`DELETE FROM listing_rooms WHERE id = ${room.id}`;
+        } else {
+          await sql`UPDATE listing_rooms SET pending_changes = NULL, pending_review = FALSE, pending_since = NULL, is_active = TRUE WHERE id = ${room.id}`;
+        }
         await logAudit(sql, {
-          action: 'room_changes_cancelled', success: true, actorType: 'host', actorIdentifier: cancelled[0].host_email,
-          targetType: 'listing', targetId: listingId, metadata: {}
+          action: 'room_change_cancelled', success: true, actorType: 'host', actorIdentifier: hostRows[0] ? hostRows[0].host_email : null,
+          targetType: 'listing_room', targetId: room.id, metadata: { listingId }
         });
         return res.status(200).json({ success: true });
       }
@@ -373,15 +389,7 @@ module.exports = async (req, res) => {
       // independently bookable and independently priced, rather than
       // one blended rate for the whole property.
       let roomsWarning = null;
-      if (Array.isArray(rooms) && before[0].property_type === 'Resort' && before[0].rooms_pending_review) {
-        // A prior round of changes is already sitting with the admin —
-        // submitting a second set on top of that would mean reviewing a
-        // moving target (or worse, silently overwriting the first set
-        // before it's even been looked at). Held back with a clear
-        // message instead; nothing else in this save is blocked, only
-        // the room changes.
-        roomsWarning = "Your last room changes are still awaiting admin review — please wait for those to be approved before submitting more.";
-      } else if (Array.isArray(rooms) && before[0].property_type === 'Resort') {
+      if (Array.isArray(rooms) && before[0].property_type === 'Resort') {
         try {
           const existingActiveRoomCount = await sql`SELECT COUNT(*)::int AS count FROM listing_rooms WHERE listing_id = ${listingId} AND is_active = TRUE`;
           // First-time setup (completing what approval's pre-population
@@ -486,16 +494,18 @@ module.exports = async (req, res) => {
 
           } else {
             // Real, active rooms already exist — this resort is live and
-            // bookable. Checked here first whether the submitted rooms
-            // are ACTUALLY different from what's currently live — a host
-            // opening the Rooms tab and clicking Save without changing
-            // anything used to stage a "pending review" anyway, showing
-            // up in the admin queue with two identical room sets and
-            // nothing to actually review. Only a genuine difference (a
-            // new room, a renamed one, a different price/photo/active
-            // state, or a room removed entirely) gets staged now.
+            // bookable. Per-room now, not per-listing: removing a room
+            // needs no review at all (just deactivated immediately,
+            // below); a genuinely new room is staged inactive on its
+            // own, never touching any other room's availability; and
+            // editing an existing room stages just THAT room's proposed
+            // changes and deactivates only it, leaving every other room
+            // — including ones the host hasn't touched at all — fully
+            // bookable throughout. The whole-listing freeze this used to
+            // do meant one room edit could block bookings on rooms
+            // nobody was even changing.
             const currentRoomsForCompare = await sql`
-              SELECT id, room_name, max_occupancy, nightly_rate, description, is_active, cover_photo_url, photo_urls
+              SELECT id, room_name, max_occupancy, nightly_rate, description, is_active, cover_photo_url, photo_urls, pending_review
               FROM listing_rooms WHERE listing_id = ${listingId}
             `;
             const currentById = new Map(currentRoomsForCompare.map(r => [r.id, r]));
@@ -510,52 +520,107 @@ module.exports = async (req, res) => {
             }
 
             const submittedIds = new Set();
-            let hasRealChange = false;
-            for (const r of rooms) {
+            const roomsStagedForReview = [];
+            const roomsSkippedAlreadyPending = [];
+
+            for (let i = 0; i < rooms.length; i++) {
+              const r = rooms[i];
               const roomName = typeof r.roomName === 'string' ? r.roomName.trim().slice(0, 100) : '';
               const maxOccupancy = Number(r.maxOccupancy) || null;
               const roomRate = Number(r.nightlyRate) || null;
               const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
               const isActive = r.isActive !== false;
               const photos = submittedRoomPhotoUrls(r);
+              const coverPhotoUrl = photos[0] || null;
+              const photoUrls = photos.slice(1).map(url => ({ url }));
 
               if (r.id && currentById.has(Number(r.id))) {
                 submittedIds.add(Number(r.id));
                 const cur = currentById.get(Number(r.id));
+                // A room already awaiting review on its own is left
+                // completely alone here — same reasoning the old
+                // listing-wide guard had, just scoped down to this one
+                // room instead of freezing every room over it.
+                if (cur.pending_review) {
+                  roomsSkippedAlreadyPending.push(cur.room_name || roomName || `Room ${i + 1}`);
+                  continue;
+                }
                 const curPhotos = currentRoomPhotoUrls(cur);
-                const samePhotos = photos.length === curPhotos.length && photos.every((url, i) => url === curPhotos[i]);
-                // Every field explicitly converted to the same type on
-                // both sides before comparing — the DB driver returning
-                // a number as a string (or vice versa) elsewhere in this
-                // codebase has caused real false-positive bugs before.
-                if (
+                const samePhotos = photos.length === curPhotos.length && photos.every((url, idx) => url === curPhotos[idx]);
+                const hasChange = (
                   roomName !== (cur.room_name || '') ||
                   maxOccupancy !== (cur.max_occupancy == null ? null : Number(cur.max_occupancy)) ||
                   roomRate !== (cur.nightly_rate == null ? null : Number(cur.nightly_rate)) ||
                   description !== (cur.description || '') ||
                   isActive !== cur.is_active ||
                   !samePhotos
-                ) {
-                  hasRealChange = true;
-                }
+                );
+                if (!hasChange) continue; // genuinely unchanged — left completely untouched
+                // Staged onto this one room only: its OWN current fields
+                // (room_name, price, etc.) stay exactly as they are —
+                // that's what "still live" means for this room's
+                // existing bookings and search visibility — while the
+                // proposal sits in pending_changes. Deactivated per the
+                // requirement that an edited room shouldn't stay
+                // bookable with details that no longer reflect what it
+                // actually looks like right now.
+                await sql`
+                  UPDATE listing_rooms SET
+                    pending_changes = ${JSON.stringify({ roomName, maxOccupancy, nightlyRate: roomRate, description, isActive, coverPhotoUrl, photoUrls })},
+                    pending_review = TRUE, pending_since = now(), is_active = FALSE
+                  WHERE id = ${Number(r.id)} AND listing_id = ${listingId}
+                `;
+                roomsStagedForReview.push(roomName || cur.room_name || `Room ${i + 1}`);
               } else {
-                hasRealChange = true; // no matching id — a genuinely new room
+                // A genuinely new room — nothing existing to compare
+                // against or deactivate. Inserted directly as inactive
+                // and pending; it simply doesn't exist yet as far as
+                // guests or other rooms are concerned, so there's no
+                // "other rooms unaffected" consideration needed here —
+                // there's nothing for it to affect.
+                if (!roomName || !maxOccupancy || maxOccupancy < 1 || !roomRate || roomRate <= 0) continue; // incomplete — not worth staging yet
+                // pending_changes here holds just the host's intended
+                // active/inactive preference — everything else about a
+                // brand-new room already lives directly in its own
+                // fields, but is_active itself is forced false while
+                // pending (see below), so this is the only value that
+                // would otherwise be lost by approval time.
+                await sql`
+                  INSERT INTO listing_rooms (listing_id, room_name, max_occupancy, nightly_rate, description, is_active, sort_order, cover_photo_url, photo_urls, pending_review, pending_since, pending_changes)
+                  VALUES (${listingId}, ${roomName}, ${maxOccupancy}, ${roomRate}, ${description}, FALSE, ${i}, ${coverPhotoUrl}, ${JSON.stringify(photoUrls)}, TRUE, now(), ${JSON.stringify({ newRoomIntendedActive: isActive })})
+                `;
+                roomsStagedForReview.push(roomName);
               }
             }
-            // Any existing room no longer present in the submitted set at
-            // all would get deactivated — also a real, reviewable change.
-            for (const cur of currentRoomsForCompare) {
-              if (!submittedIds.has(cur.id)) hasRealChange = true;
+            // Removing a room needs no review — deactivated immediately.
+            // A host taking a room out of service isn't introducing
+            // anything new that needs vetting, and holding this back
+            // pending admin approval would mean a room the host actively
+            // wants OFF the market stays bookable in the meantime, the
+            // opposite of what they asked for.
+            const roomIdsRemoved = [...currentById.keys()].filter(id => !submittedIds.has(id) && !currentById.get(id).pending_review);
+            if (roomIdsRemoved.length) {
+              await sql`UPDATE listing_rooms SET is_active = FALSE WHERE id = ANY(${roomIdsRemoved}) AND listing_id = ${listingId}`;
             }
 
-            if (hasRealChange) {
-              await sql`UPDATE listings SET pending_room_changes = ${JSON.stringify(rooms)}, rooms_pending_review = TRUE WHERE id = ${listingId}`;
-              roomsWarning = "Your room changes have been submitted for admin review and will go live once approved — your current live rooms are unaffected until then.";
+            const cheapestActiveRoom = await sql`
+              SELECT MIN(nightly_rate) AS min_rate FROM listing_rooms
+              WHERE listing_id = ${listingId} AND is_active = TRUE AND nightly_rate IS NOT NULL
+            `;
+            await sql`UPDATE listings SET nightly_rate = ${cheapestActiveRoom[0].min_rate} WHERE id = ${listingId}`;
+
+            const warningParts = [];
+            if (roomsStagedForReview.length) {
+              warningParts.push(`${roomsStagedForReview.join(', ')} ${roomsStagedForReview.length === 1 ? 'is' : 'are'} awaiting admin review and temporarily unavailable to guests until approved — every other room is unaffected and stays bookable.`);
               await logAudit(sql, {
                 action: 'room_changes_submitted', success: true, actorType: 'host', actorIdentifier: listing.host_email,
-                targetType: 'listing', targetId: listingId, metadata: { roomCount: rooms.length }
+                targetType: 'listing', targetId: listingId, metadata: { rooms: roomsStagedForReview }
               });
             }
+            if (roomsSkippedAlreadyPending.length) {
+              warningParts.push(`${roomsSkippedAlreadyPending.join(', ')} already ${roomsSkippedAlreadyPending.length === 1 ? 'has' : 'have'} a change awaiting review — that submission was left as-is rather than being overwritten.`);
+            }
+            if (warningParts.length) roomsWarning = warningParts.join(' ');
           }
         } catch (roomErr) {
           console.error('Resort rooms sync failed:', roomErr);
