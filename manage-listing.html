@@ -224,11 +224,7 @@
 
       <div class="mgmt-tab-panel" id="mgmtTabRooms">
         <div class="eyebrow" style="margin-top:0;">Rooms</div>
-        <p style="font-size:12px; opacity:0.6; margin-top:-4px; margin-bottom:18px;">Each room is booked, priced, and made available independently — a guest can book Room A while Room B stays free for someone else. The nightly rate on the Property Details tab isn't used for a Resort; each room sets its own instead. Add or remove rooms freely below — whatever's here when you save is what goes live.</p>
-        <div id="pendingRoomChangesBanner" style="display:none; background:#fdf1ea; border:1px solid #e3b892; padding:14px 16px; margin-bottom:18px;">
-          <p style="font-size:13px; margin:0 0 10px;">Your last room changes are still awaiting admin review — your current live rooms are shown below, unaffected until that's approved. You can keep waiting, or cancel that submission below to make new changes right away.</p>
-          <button type="button" id="cancelPendingRoomChangesBtn" style="width:auto; padding:8px 16px; font-size:12px; background:none; border:1px solid #a3402f; color:#a3402f; cursor:pointer; border-radius:4px;">Cancel Pending Changes</button>
-        </div>
+        <p style="font-size:12px; opacity:0.6; margin-top:-4px; margin-bottom:18px;">Each room is booked, priced, and made available independently — a guest can book Room A while Room B stays free for someone else. The nightly rate on the Property Details tab isn't used for a Resort; each room sets its own instead. Add or remove rooms freely below — whatever's here when you save is what goes live. Removing a room takes effect immediately; adding a new one or editing an existing room's details goes to a quick admin review first, affecting only that one room — every other room keeps working normally the whole time.</p>
         <div id="roomsList"></div>
         <button type="button" class="add-paid-amenity-btn" id="addRoomBtn">+ Add a Room</button>
       </div>
@@ -1084,24 +1080,37 @@
       const el = document.createElement('div');
       el.className = 'room-card';
       const otherRooms = roomRows.filter((r, i) => i !== idx);
+      const isPending = !!room.pendingReview;
+      // A room already awaiting review is shown read-only — editing it
+      // again here wouldn't do anything (the server skips a room that's
+      // already pending, see update-listing-pricing.js), so disabling
+      // it here is clearer than letting a host make changes that
+      // silently don't take effect until they notice nothing saved.
+      const pendingBannerHtml = isPending ? `
+        <div style="background:#fdf1ea; border:1px solid #e3b892; padding:10px 12px; margin-bottom:12px; border-radius:4px;">
+          <p style="font-size:12.5px; margin:0 0 8px;">${room.pendingChanges && Object.prototype.hasOwnProperty.call(room.pendingChanges, 'newRoomIntendedActive') ? 'This new room is awaiting admin review and isn\'t bookable yet.' : 'Your edit to this room is awaiting admin review — it\'s temporarily offline until approved. Every other room is unaffected.'}</p>
+          <button type="button" class="cancel-room-pending-btn" style="width:auto; padding:6px 14px; font-size:11.5px; background:none; border:1px solid #a3402f; color:#a3402f; cursor:pointer; border-radius:4px;">Cancel This Change</button>
+        </div>
+      ` : '';
       el.innerHTML = `
         <div class="room-card-top" style="flex-direction:column; align-items:stretch;">
+          ${pendingBannerHtml}
           <div class="room-card-fields" style="margin-bottom:12px;">
-            <input type="text" class="room-name-input" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${room.roomName || ''}">
+            <input type="text" class="room-name-input" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${room.roomName || ''}" ${isPending ? 'disabled' : ''}>
             <div class="room-card-numbers">
               <div class="room-card-number-field">
                 <label>Max Guests</label>
-                <input type="number" min="1" placeholder="—" data-room-field="maxOccupancy" value="${room.maxOccupancy || ''}">
+                <input type="number" min="1" placeholder="—" data-room-field="maxOccupancy" value="${room.maxOccupancy || ''}" ${isPending ? 'disabled' : ''}>
               </div>
               <div class="room-card-number-field">
                 <label>Price / Night (₹)</label>
-                <input type="number" min="1" placeholder="—" data-room-field="nightlyRate" value="${room.nightlyRate || ''}">
+                <input type="number" min="1" placeholder="—" data-room-field="nightlyRate" value="${room.nightlyRate || ''}" ${isPending ? 'disabled' : ''}>
               </div>
             </div>
-            <textarea rows="2" class="room-description-input" placeholder="Description (optional)" data-room-field="description">${room.description || ''}</textarea>
+            <textarea rows="2" class="room-description-input" placeholder="Description (optional)" data-room-field="description" ${isPending ? 'disabled' : ''}>${room.description || ''}</textarea>
           </div>
           ${roomGalleryHtml(room, idx)}
-          ${room.photos.length ? `
+          ${room.photos.length && !isPending ? `
             <button type="button" class="add-paid-amenity-btn" data-clone-open style="margin-top:12px; width:auto; padding:8px 16px; font-size:11px;">Clone these ${room.photos.length} photo${room.photos.length === 1 ? '' : 's'} to other rooms</button>
             <div data-clone-panel style="display:none; background:#f4ebe3; border:1px solid #ddd0bc; padding:12px 14px; margin-top:8px;">
               ${otherRooms.length ? `
@@ -1121,13 +1130,17 @@
         </div>
         <div class="room-card-footer">
           <label class="room-active-toggle">
-            <input type="checkbox" data-room-field="isActive" ${room.isActive !== false ? 'checked' : ''}>
+            <input type="checkbox" data-room-field="isActive" ${room.isActive !== false ? 'checked' : ''} ${isPending ? 'disabled' : ''}>
             <span class="room-active-toggle-box"></span>
             Active — bookable by guests
           </label>
-          <button type="button" class="remove-amenity-btn" data-action="remove">Remove this room</button>
+          ${isPending ? '' : '<button type="button" class="remove-amenity-btn" data-action="remove">Remove this room</button>'}
         </div>
       `;
+      const cancelPendingBtn = el.querySelector('.cancel-room-pending-btn');
+      if(cancelPendingBtn){
+        cancelPendingBtn.addEventListener('click', () => cancelRoomPendingChange(room.id, cancelPendingBtn));
+      }
       const galleryAdd = el.querySelector('[data-gallery-add]');
       if(galleryAdd){
         galleryAdd.addEventListener('click', () => {
@@ -1200,14 +1213,17 @@
           room[field] = input.type === 'checkbox' ? input.checked : input.value;
         });
       });
-      el.querySelector('[data-action="remove"]').addEventListener('click', () => {
-        // A room with real booking history isn't hard-deleted server-side
-        // even if removed here (see update-listing-pricing.js) — it's
-        // just marked inactive, so removing it from this list and saving
-        // is always safe.
-        roomRows.splice(idx, 1);
-        renderRooms();
-      });
+      const removeBtn = el.querySelector('[data-action="remove"]');
+      if(removeBtn){
+        removeBtn.addEventListener('click', () => {
+          // A room with real booking history isn't hard-deleted server-side
+          // even if removed here (see update-listing-pricing.js) — it's
+          // just marked inactive, so removing it from this list and saving
+          // is always safe.
+          roomRows.splice(idx, 1);
+          renderRooms();
+        });
+      }
       roomsList.appendChild(el);
     });
   }
@@ -1218,41 +1234,35 @@
     renderRooms();
   });
 
-  // Lets a host withdraw their own pending room submission directly,
-  // rather than being stuck waiting on an admin who may not act on it
-  // right away — this only discards the staged proposal, never anything
-  // already live, so there's nothing risky about doing this immediately.
-  document.getElementById('cancelPendingRoomChangesBtn').addEventListener('click', async () => {
-    if(!confirm('Cancel your pending room changes? Your current live rooms are unaffected either way — this just withdraws the submission so you can make new changes right away.')) return;
-    const btn = document.getElementById('cancelPendingRoomChangesBtn');
+  // Lets a host withdraw a pending change on ONE specific room directly,
+  // rather than waiting indefinitely on an admin — this only discards
+  // that room's staged proposal (or removes it, if it was a brand-new
+  // room that never went live), never anything else, so there's nothing
+  // risky about doing this immediately.
+  async function cancelRoomPendingChange(roomId, btn){
+    if(!confirm('Cancel this room\'s pending change? Every other room is unaffected either way.')) return;
     btn.disabled = true;
     btn.textContent = 'Cancelling…';
     try{
       const res = await fetch(API_BASE + '/api/update-listing-pricing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, cancelPendingRoomChanges: true })
+        body: JSON.stringify({ token, cancelPendingRoomChangeForRoomId: roomId })
       });
       if(res.ok){
-        document.getElementById('pendingRoomChangesBanner').style.display = 'none';
-        // Re-enables the Save button that got disabled on load because
-        // of this exact pending state — without this, cancelling would
-        // remove the banner but leave Save looking permanently stuck.
-        const saveBtn = document.getElementById('submitBtn');
-        saveBtn.disabled = false;
-        saveBtn.textContent = 'Save Changes';
+        loadListing();
       } else {
         const data = await res.json().catch(() => ({}));
         alert(data.error || 'Could not cancel — please try again.');
         btn.disabled = false;
-        btn.textContent = 'Cancel Pending Changes';
+        btn.textContent = 'Cancel This Change';
       }
     } catch(err){
       alert('Could not reach the server — please try again.');
       btn.disabled = false;
-      btn.textContent = 'Cancel Pending Changes';
+      btn.textContent = 'Cancel This Change';
     }
-  });
+  }
 
   // Uploads any newly-picked photos across every room's gallery (already-
   // uploaded ones untouched) and fills in their url. Same lazy-upload
@@ -1625,24 +1635,6 @@
         document.querySelectorAll('.mgmt-tab-panel').forEach(panel => panel.classList.remove('active'));
         document.getElementById('mgmtTabRoomsBtn').classList.add('active');
         document.getElementById('mgmtTabRooms').classList.add('active');
-        // Shown immediately on load if there's already a pending room
-        // change awaiting review, rather than only surfacing this the
-        // moment a host tries to save again and hits the block — they
-        // deserve to know their previous submission is still sitting
-        // there before they even start editing, not after.
-        if(l.rooms_pending_review){
-          document.getElementById('pendingRoomChangesBanner').style.display = 'block';
-          // Disabled outright rather than letting a host click Save and
-          // only then discover their room changes got silently held
-          // back (everything else on the form still saves fine, but the
-          // rooms sync itself is a no-op while a submission is already
-          // pending) — clearer to prevent the attempt than to explain
-          // after the fact why part of what they just saved didn't
-          // actually apply.
-          const saveBtn = document.getElementById('submitBtn');
-          saveBtn.disabled = true;
-          saveBtn.textContent = 'Save Changes (blocked — room changes pending review)';
-        }
         // Every room loaded here, active or not — a room pre-populated
         // from submission-time photos (see approve-listing.js) is
         // deliberately created inactive, since it has a name and photo
@@ -1665,7 +1657,7 @@
           return {
             id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
             nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
-            photos
+            photos, pendingReview: !!r.pending_review, pendingChanges: r.pending_changes || null
           };
         });
         renderRooms();
