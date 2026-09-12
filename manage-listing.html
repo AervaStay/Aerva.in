@@ -224,12 +224,7 @@
 
       <div class="mgmt-tab-panel" id="mgmtTabRooms">
         <div class="eyebrow" style="margin-top:0;">Rooms</div>
-        <p style="font-size:12px; opacity:0.6; margin-top:-4px; margin-bottom:18px;">Each room is booked, priced, and made available independently — a guest can book Room A while Room B stays free for someone else. The nightly rate on the Property Details tab isn't used for a Resort; each room sets its own instead.</p>
-        <div class="field" style="max-width:220px;">
-          <label for="declaredRoomCount">Declared Room Count</label>
-          <input type="number" id="declaredRoomCount" min="1">
-        </div>
-        <p id="roomCountProgress" style="font-size:12.5px; margin-top:6px; margin-bottom:18px;"></p>
+        <p style="font-size:12px; opacity:0.6; margin-top:-4px; margin-bottom:18px;">Each room is booked, priced, and made available independently — a guest can book Room A while Room B stays free for someone else. The nightly rate on the Property Details tab isn't used for a Resort; each room sets its own instead. Add or remove rooms freely below — whatever's here when you save is what goes live.</p>
         <div id="roomsList"></div>
         <button type="button" class="add-paid-amenity-btn" id="addRoomBtn">+ Add a Room</button>
       </div>
@@ -463,6 +458,11 @@
   <div id="notFoundState" style="display:none;">
     <h1>Link not valid</h1>
     <p class="subtitle">This link may have expired or is incorrect. Contact hello@aerva.in if you need a new one.</p>
+  </div>
+
+  <div id="pendingState" style="display:none;">
+    <h1 id="pendingHeading"></h1>
+    <p class="subtitle" id="pendingMessage"></p>
   </div>
 </div>
 
@@ -1175,7 +1175,6 @@
         const eventName = input.type === 'checkbox' ? 'change' : 'input';
         input.addEventListener(eventName, () => {
           room[field] = input.type === 'checkbox' ? input.checked : input.value;
-          updateRoomCountProgress();
         });
       });
       el.querySelector('[data-action="remove"]').addEventListener('click', () => {
@@ -1188,7 +1187,6 @@
       });
       roomsList.appendChild(el);
     });
-    updateRoomCountProgress();
   }
   document.getElementById('addRoomBtn').addEventListener('click', () => {
     roomRows.push({
@@ -1196,36 +1194,6 @@
     });
     renderRooms();
   });
-
-  // A room only counts as "complete" once it has a name, occupancy,
-  // price, AND at least one photo in its gallery — no specific label
-  // (washroom, balcony, etc.) required within it. Same criteria
-  // update-listing-pricing.js's own server-side check uses, kept in sync
-  // by hand (no shared module between these separate files). This is
-  // what the declared room count is actually being measured against.
-  function countCompleteActiveRooms(){
-    return roomRows.filter(r => {
-      const hasPhoto = r.photos.some(p => p.file || p.url);
-      return r.roomName && Number(r.maxOccupancy) >= 1 && Number(r.nightlyRate) > 0 && hasPhoto && r.isActive !== false;
-    }).length;
-  }
-  function updateRoomCountProgress(){
-    const progressEl = document.getElementById('roomCountProgress');
-    const declared = Number(document.getElementById('declaredRoomCount').value) || 0;
-    const complete = countCompleteActiveRooms();
-    if(!declared){
-      progressEl.textContent = '';
-      return;
-    }
-    if(complete === declared){
-      progressEl.textContent = `✓ ${complete} of ${declared} declared rooms complete.`;
-      progressEl.style.color = '#3a7d44';
-    } else {
-      progressEl.textContent = `${complete} of ${declared} declared rooms complete — this must match exactly before saving.`;
-      progressEl.style.color = '#a3402f';
-    }
-  }
-  document.getElementById('declaredRoomCount').addEventListener('input', updateRoomCountProgress);
 
   // Uploads any newly-picked photos across every room's gallery (already-
   // uploaded ones untouched) and fills in their url. Same lazy-upload
@@ -1490,6 +1458,21 @@
       const data = await res.json();
       const l = data.listing;
 
+      // A listing that hasn't been approved yet has nothing live to
+      // manage — shown as its own distinct state rather than the full
+      // form, matching the block the backend itself enforces (see
+      // update-listing-pricing.js) so this isn't just a UI-only
+      // courtesy that a direct API call could bypass.
+      if(l.status !== 'approved'){
+        loadingState.style.display = 'none';
+        document.getElementById('pendingHeading').textContent = l.status === 'rejected' ? 'Listing not approved' : 'Still under review';
+        document.getElementById('pendingMessage').textContent = l.status === 'rejected'
+          ? 'This listing was not approved and needs to be resubmitted before it can be managed here. Please contact hello@aerva.in if you have questions about the rejection.'
+          : `${l.property_name || 'Your listing'} is still awaiting review — you'll be able to manage your rooms and pricing here once it's approved. We'll email you when that happens.`;
+        document.getElementById('pendingState').style.display = 'block';
+        return;
+      }
+
       document.getElementById('propertyNameHeading').textContent = l.property_name;
       document.getElementById('listingCity').value = l.city || '';
       document.getElementById('listingArea').value = l.area || '';
@@ -1558,7 +1541,6 @@
       // confusing section.
       if(l.property_type === 'Resort'){
         document.getElementById('mgmtTabRoomsBtn').style.display = 'inline-block';
-        document.getElementById('declaredRoomCount').value = l.bedrooms || '';
         // Every room loaded here, active or not — a room pre-populated
         // from submission-time photos (see approve-listing.js) is
         // deliberately created inactive, since it has a name and photo
@@ -1663,25 +1645,6 @@
       return;
     }
 
-    // The declared room count and the actual number of complete, active
-    // rooms must match exactly — same rule update-listing-pricing.js
-    // enforces authoritatively; this is just the earlier, faster version
-    // of the same check. Only applies when a declared count is actually
-    // set (an empty field is a genuine "not declared yet" state, not
-    // "declared zero").
-    const declaredRoomCountVal = document.getElementById('declaredRoomCount').value;
-    if(declaredRoomCountVal){
-      const declared = Number(declaredRoomCountVal);
-      const complete = countCompleteActiveRooms();
-      if(complete !== declared){
-        errorMsg.textContent = complete < declared
-          ? `You declared ${declared} rooms — you currently have ${complete} complete and active. Please finish ${declared - complete} more before saving.`
-          : `You declared ${declared} rooms — you currently have ${complete} complete and active, which is more. Please remove ${complete - declared}, or increase the declared count above.`;
-        errorMsg.style.display = 'block';
-        return;
-      }
-    }
-
     submitBtn.disabled = true;
     submitBtn.textContent = 'Saving…';
 
@@ -1730,7 +1693,11 @@
           autoSendCheckinInstructions: document.getElementById('checkinScheduleTrigger').value === 'on_booking_confirmed',
           checkinPhotos,
           rooms: roomRows,
-          bedrooms: document.getElementById('declaredRoomCount').value || undefined
+          // No more manually "declaring" a count that has to match —
+          // this is simply however many active rooms are actually here
+          // when you save, computed automatically rather than asked for
+          // separately.
+          bedrooms: roomRows.filter(r => r.isActive !== false).length || undefined
         })
       });
       const data = await res.json();
