@@ -498,60 +498,73 @@
       return;
     }
     heading.style.display = 'block';
+    // Each entry here is ONE pending room, not a whole listing's worth —
+    // a resort with two independently-edited rooms shows as two
+    // separate cards, each approvable/rejectable on its own without
+    // touching the other.
     container.innerHTML = requests.map(r => {
-      const currentRooms = Array.isArray(r.current_rooms) ? r.current_rooms : [];
-      const proposedRooms = Array.isArray(r.pending_room_changes) ? r.pending_room_changes : [];
-      const roomBlock = (room, isProposed) => {
-        const photos = isProposed
-          ? (Array.isArray(room.photos) ? room.photos.map(p => p && p.url).filter(Boolean) : [])
-          : [room.coverPhotoUrl, ...(Array.isArray(room.photoUrls) ? room.photoUrls.map(p => p && p.url) : [])].filter(Boolean);
-        return `
-          <div style="border:1px solid #ddd0bc; padding:10px 12px; margin-top:8px; border-radius:4px;">
-            <strong>${room.roomName || 'Untitled room'}</strong>
-            <span style="opacity:0.7;"> — sleeps up to ${room.maxOccupancy || '—'} · ₹${room.nightlyRate || room.price || '—'}/night${room.isActive === false ? ' · inactive' : ''}</span>
-            <div class="photo-row" style="margin-top:6px;">
-              ${photos.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Room photo"></a>`).join('')}
-            </div>
+      const isNewRoomProposal = r.pending_changes && Object.prototype.hasOwnProperty.call(r.pending_changes, 'newRoomIntendedActive');
+      const currentPhotos = [r.cover_photo_url, ...(Array.isArray(r.photo_urls) ? r.photo_urls.map(p => p && p.url) : [])].filter(Boolean);
+      const roomSummary = (name, occ, rate, active, photos) => `
+        <div style="border:1px solid #ddd0bc; padding:10px 12px; margin-top:8px; border-radius:4px;">
+          <strong>${name || 'Untitled room'}</strong>
+          <span style="opacity:0.7;"> — sleeps up to ${occ || '—'} · ₹${rate || '—'}/night${active === false ? ' · inactive' : ''}</span>
+          <div class="photo-row" style="margin-top:6px;">
+            ${photos.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Room photo"></a>`).join('')}
           </div>
-        `;
-      };
+        </div>
+      `;
+      const comparisonHtml = isNewRoomProposal
+        ? `
+          <div style="margin-top:14px;">
+            <div class="photo-group-label">New Room Proposal (not yet live)</div>
+            ${roomSummary(r.room_name, r.max_occupancy, r.nightly_rate, r.pending_changes.newRoomIntendedActive, currentPhotos)}
+          </div>
+        `
+        : (() => {
+            const p = r.pending_changes || {};
+            const proposedPhotos = Array.isArray(p.photos) ? p.photos.map(ph => ph && ph.url).filter(Boolean) : [];
+            return `
+              <div style="display:flex; gap:24px; margin-top:14px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:280px;">
+                  <div class="photo-group-label">Currently Live</div>
+                  ${roomSummary(r.room_name, r.max_occupancy, r.nightly_rate, r.is_active, currentPhotos)}
+                </div>
+                <div style="flex:1; min-width:280px;">
+                  <div class="photo-group-label">Proposed Change</div>
+                  ${roomSummary(p.roomName, p.maxOccupancy, p.nightlyRate, p.isActive, proposedPhotos)}
+                </div>
+              </div>
+            `;
+          })();
       return `
-        <div class="listing" id="roomChange-${r.id}">
-          <h3>${r.property_name}</h3>
+        <div class="listing" id="roomChange-${r.room_id}">
+          <h3>${r.property_name}${isNewRoomProposal ? ' <span style="font-size:11px; opacity:0.6; text-transform:uppercase;">— New Room</span>' : ' <span style="font-size:11px; opacity:0.6; text-transform:uppercase;">— Room Edit</span>'}</h3>
           <div class="meta">${r.area ? r.area + ', ' : ''}${r.city} · ${r.host_name} (${r.host_email}, ${r.host_phone})</div>
-          <div style="display:flex; gap:24px; margin-top:14px; flex-wrap:wrap;">
-            <div style="flex:1; min-width:280px;">
-              <div class="photo-group-label">Currently Live (${currentRooms.length} room${currentRooms.length === 1 ? '' : 's'})</div>
-              ${currentRooms.length ? currentRooms.map(room => roomBlock(room, false)).join('') : '<p style="opacity:0.6; font-size:13px;">No rooms currently live.</p>'}
-            </div>
-            <div style="flex:1; min-width:280px;">
-              <div class="photo-group-label">Proposed Change (${proposedRooms.length} room${proposedRooms.length === 1 ? '' : 's'})</div>
-              ${proposedRooms.length ? proposedRooms.map(room => roomBlock(room, true)).join('') : '<p style="opacity:0.6; font-size:13px;">No rooms in the proposal.</p>'}
-            </div>
-          </div>
+          ${comparisonHtml}
           <div class="actions" style="margin-top:16px;">
-            <button class="approve-btn" onclick="decideRoomChange(${r.id}, 'approve_room_changes')">Approve Changes</button>
-            <button class="reject-btn" onclick="decideRoomChange(${r.id}, 'reject_room_changes')">Reject Changes</button>
+            <button class="approve-btn" onclick="decideRoomChange(${r.room_id}, 'approve_room')">Approve</button>
+            <button class="reject-btn" onclick="decideRoomChange(${r.room_id}, 'reject_room')">Reject</button>
           </div>
         </div>
       `;
     }).join('');
   }
 
-  async function decideRoomChange(listingId, action){
-    if(action === 'reject_room_changes' && !confirm('Discard these proposed room changes? The currently live rooms will be unaffected.')) return;
+  async function decideRoomChange(roomId, action){
+    if(action === 'reject_room' && !confirm('Discard this room\'s proposed change? Every other room is unaffected either way.')) return;
     try{
       const res = await fetch(API_BASE + '/api/approve-listing', {
         method: 'POST',
         headers: authHeaders(true),
-        body: JSON.stringify({ listingId, action })
+        body: JSON.stringify({ roomId, action })
       });
       if(!res.ok){
         const data = await res.json().catch(() => ({}));
         alert(data.error || 'Could not update this room change request.');
         return;
       }
-      const el = document.getElementById('roomChange-' + listingId);
+      const el = document.getElementById('roomChange-' + roomId);
       if(el) el.remove();
     } catch(err){
       alert('Could not reach the server — please try again.');
@@ -654,9 +667,23 @@
         ${(l.latitude && l.longitude) ? `<div class="listing-map-preview" id="listingMap-${l.id}" data-lat="${l.latitude}" data-lng="${l.longitude}"></div>` : ''}
       ` : (!isExperience ? '<p class="address-line" style="color:#a3402f;">⚠ No location was set for this listing — worth checking with the host before approving.</p>' : '');
       const roomsHtml = (!isExperience && l.property_type === 'Resort') ? roomBreakdownHtml(l.pending_room_photos, l.bedrooms) : '';
+      // Loud and impossible to miss on purpose — a host resubmitting a
+      // rejected listing via Clone (see host-dashboard.html) looks
+      // identical to a genuinely new submission otherwise, and an admin
+      // who doesn't realize that could easily approve the same problem
+      // that got it rejected the first time, or waste time re-finding
+      // issues already documented in the original rejection reason.
+      const cloneAlertHtml = l.cloned_from_status === 'rejected' ? `
+        <div style="background:#a3402f; color:#fff; padding:10px 14px; margin:10px 0; border-radius:4px; font-weight:600;">
+          ⚠ This is a resubmission (cloned) of a PREVIOUSLY REJECTED listing — "${l.cloned_from_property_name || 'Untitled'}".
+          ${l.cloned_from_rejection_reason ? `Original rejection reason: "${l.cloned_from_rejection_reason}"` : 'No rejection reason was recorded for the original.'}
+          Check whether that issue was actually addressed before approving.
+        </div>
+      ` : '';
       return `
       <div class="listing" id="listing-${l.id}">
         <h3>${l.property_name}</h3>
+        ${cloneAlertHtml}
         <div class="meta">${metaLine}</div>
         ${addressHtml}
         <div class="desc">${l.description}</div>
