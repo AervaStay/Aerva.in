@@ -814,6 +814,28 @@
     font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:1;
   }
   .room-photo-remove-btn:hover{background:#a3402f;}
+  .bedroom-tab-bar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;}
+  .bedroom-tab{
+    width:34px; height:34px; border-radius:50%; border:1px solid var(--line-dark); background:var(--cream);
+    display:flex; align-items:center; justify-content:center; font-size:14px; cursor:pointer; flex:0 0 auto;
+  }
+  .bedroom-tab.active{background:var(--ink); color:var(--cream); border-color:var(--ink);}
+  .room-bucket{margin-top:14px;}
+  .room-bucket-label{font-size:12.5px; font-weight:600; margin-bottom:6px;}
+  .room-bucket-label .required-mark{color:#a3402f;}
+  .room-bucket-label .optional-mark{opacity:0.55; font-weight:normal; text-transform:none; letter-spacing:0;}
+  .room-bucket-grid{
+    display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start; min-height:64px;
+    border:1px dashed transparent; border-radius:4px; padding:4px; transition:border-color .15s ease, background .15s ease;
+  }
+  .room-bucket-grid.drop-target{border-color:var(--gold-deep); background:rgba(169,136,79,0.08);}
+  .room-photo-move-btn{
+    position:absolute; bottom:-7px; right:-7px; width:20px; height:20px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream); border:none; cursor:pointer;
+    font-size:11px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:1;
+  }
+  .room-photo-move-btn:hover{background:#8a6c39;}
+  .room-photo-move-btn.picked-up{background:var(--gold-deep);}
   .guest-step-btn{
     width:30px; height:30px; border-radius:50%; border:1px solid var(--line-dark);
     background:none; color:var(--ink); font-size:16px; line-height:1; cursor:pointer;
@@ -4075,12 +4097,32 @@
     for(let i = 0; i < declared; i++){
       newBedrooms.push(existingBedrooms[i] || {
         key: 'bedroom_' + i, name: isResort ? `Room ${i + 1}` : `Bedroom ${i + 1}`,
-        mandatory: true, isBedroom: true, photos: [], maxOccupancy: '', price: ''
+        mandatory: true, isBedroom: true,
+        // "photos" is the default bucket every upload lands in. The
+        // other three are optional, purely organizational — a photo
+        // moved into one still belongs to this same room, it's just
+        // labeled for a clearer gallery later. Nothing requires using
+        // them at all; a room with everything left in "photos" is just
+        // as valid as one that's been sorted.
+        photos: [], washroomPhotos: [], livingRoomPhotos: [], balconyPhotos: [],
+        maxOccupancy: '', price: ''
       });
     }
     roomSpaceRows = [...newBedrooms, ...fixedRows];
+    if(activeBedroomTabKey === null && newBedrooms.length) activeBedroomTabKey = newBedrooms[0].key;
     renderRoomSpaces();
   }
+  // Which numbered bedroom tab (1, 2, 3...) is currently open — only one
+  // bedroom's full editor is shown at a time once there's more than one,
+  // rather than a long stacked list of every room's whole gallery.
+  let activeBedroomTabKey = null;
+  // Tracks a photo picked up for a tap-to-move action: {bucketKey,
+  // photoIndex} identifying exactly where it currently lives. Real HTML5
+  // drag-and-drop is layered on top as a bonus for desktop/mouse users,
+  // but tap-to-move is the primary, reliable interaction — native drag-
+  // and-drop has effectively no support on iOS Safari's touch interface,
+  // which is where this site gets tested most.
+  let pickedUpPhoto = null;
 
   // Reusable small photo-pick box for a SINGLE-photo slot (the fixed
   // spaces — Kitchen, Washroom, Living Room, Garden, Balcony — still
@@ -4126,33 +4168,62 @@
     `;
   }
 
-  // A bedroom/room's whole gallery — several photos, uncategorized (no
-  // forced "this one must be the washroom" labeling), plus a "+ Add
-  // Photos" tile that opens a MULTI-select file picker so a host can
-  // load several shots for this one room in a single action.
-  function roomGalleryHtml(room, roomIdx){
-    const thumbs = room.photos.map((photo, photoIdx) => {
+  // A bedroom's photos live across four buckets — "photos" is the
+  // default, general bucket every upload lands in; the other three are
+  // optional, purely organizational sub-groups a host can sort photos
+  // into afterward. All four combine to satisfy "this room needs at
+  // least one photo" — nothing requires actually sorting anything.
+  const OPTIONAL_ROOM_BUCKETS = ['washroomPhotos', 'livingRoomPhotos', 'balconyPhotos'];
+  function allRoomPhotos(room){
+    return [...room.photos, ...room.washroomPhotos, ...room.livingRoomPhotos, ...room.balconyPhotos];
+  }
+
+  // Moves one photo between two buckets — used by both the tap-to-move
+  // flow (primary, works everywhere) and real drag-and-drop (bonus for
+  // desktop/mouse users, wired further below). Native HTML5 drag-and-
+  // drop has effectively no support on iOS Safari's touch interface,
+  // which is where this site gets tested most, so tap-to-move can't be
+  // an afterthought here — it has to fully stand on its own.
+  function movePhoto(roomIdx, srcBucketKey, srcPhotoIndex, targetBucketKey){
+    const room = roomSpaceRows[roomIdx];
+    if(!room || srcBucketKey === targetBucketKey) return;
+    const [photo] = room[srcBucketKey].splice(srcPhotoIndex, 1);
+    if(!photo) return;
+    room[targetBucketKey].push(photo);
+    pickedUpPhoto = null;
+    renderRoomSpaces();
+  }
+
+  function roomBucketHtml(room, roomIdx, bucketKey, label, isOptional){
+    const photos = room[bucketKey];
+    const isDropTarget = pickedUpPhoto !== null && pickedUpPhoto.roomIdx === roomIdx && pickedUpPhoto.bucketKey !== bucketKey;
+    const thumbs = photos.map((photo, photoIdx) => {
       const src = photo.file ? URL.createObjectURL(photo.file) : photo.url;
+      const isPickedUp = pickedUpPhoto && pickedUpPhoto.roomIdx === roomIdx && pickedUpPhoto.bucketKey === bucketKey && pickedUpPhoto.photoIndex === photoIdx;
       return `
-        <div style="position:relative; display:inline-block;">
+        <div style="position:relative; display:inline-block;" draggable="true" data-drag-source="${bucketKey}:${photoIdx}">
           <div class="room-space-photo-box">
             <img src="${src}" alt="">
           </div>
-          <button type="button" class="room-photo-remove-btn" data-gallery-remove="${roomIdx}:${photoIdx}" aria-label="Remove this photo">×</button>
+          <button type="button" class="room-photo-remove-btn" data-gallery-remove="${bucketKey}:${photoIdx}" aria-label="Remove this photo">×</button>
+          ${OPTIONAL_ROOM_BUCKETS.length ? `<button type="button" class="room-photo-move-btn${isPickedUp ? ' picked-up' : ''}" data-gallery-move="${bucketKey}:${photoIdx}" aria-label="Move to another section" title="Move to Washroom, Living Room, or Balcony">⇄</button>` : ''}
         </div>
       `;
     }).join('');
     return `
-      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start;">
-        ${thumbs}
-        <div class="room-space-photo-box" data-gallery-add="${roomIdx}">
-          <span>+ Add Photos</span>
+      <div class="room-bucket">
+        <div class="room-bucket-label">${label} ${isOptional ? '<span class="optional-mark">(optional)</span>' : '<span class="required-mark">*</span>'}</div>
+        <div class="room-bucket-grid${isDropTarget ? ' drop-target' : ''}" data-drop-zone="${bucketKey}">
+          ${thumbs}
+          <div class="room-space-photo-box" data-gallery-add="${bucketKey}">
+            <span>+ Add</span>
+          </div>
         </div>
       </div>
     `;
   }
 
-  function wireGalleryAdd(el, room){
+  function wireGalleryAdd(el, room, bucketKey){
     el.addEventListener('click', () => {
       const input = document.createElement('input');
       input.type = 'file';
@@ -4161,7 +4232,7 @@
       input.style.display = 'none';
       document.body.appendChild(input);
       input.addEventListener('change', () => {
-        Array.from(input.files).forEach(file => room.photos.push({ file, url: null }));
+        Array.from(input.files).forEach(file => room[bucketKey].push({ file, url: null }));
         renderRoomSpaces();
         input.remove();
       });
@@ -4173,44 +4244,66 @@
     const container = document.getElementById('roomSpacesList');
     const isResort = document.getElementById('listType').value === 'Resort';
     const bedroomRows = roomSpaceRows.filter(r => r.isBedroom);
-    container.innerHTML = roomSpaceRows.map((room, idx) => {
-      if(room.isBedroom){
-        const otherBedrooms = bedroomRows.filter(r => r !== room);
-        return `
-          <div class="guest-row" data-room-idx="${idx}" style="align-items:flex-start; flex-direction:column; gap:12px;">
-            <div style="width:100%;">
-              <input type="text" data-room-name-input style="border:none; background:none; padding:0; width:100%; font-size:16.5px; font-weight:600; color:var(--ink); font-family:'Jost', sans-serif;" value="${room.name}" maxlength="40">
-              <div class="guest-row-sub">Required — at least one photo. Tap the name above to rename it to a category, e.g. Suite, Deluxe, Standard.</div>
-              ${isResort ? `
-                <div style="display:flex; gap:10px; margin-top:10px;">
-                  <input type="number" min="1" placeholder="Max guests" data-room-occupancy-input value="${room.maxOccupancy || ''}" style="width:110px; padding:8px 10px; font-size:13px;">
-                  <input type="number" min="1" placeholder="₹ / night" data-room-price-input value="${room.price || ''}" style="width:110px; padding:8px 10px; font-size:13px;">
-                </div>
-                <p style="font-size:11px; opacity:0.55; margin-top:4px;">You can update this price anytime later from the Rooms tab after approval.</p>
-              ` : ''}
-            </div>
-            ${roomGalleryHtml(room, idx)}
-            ${room.photos.length && otherBedrooms.length ? `
-              <button type="button" class="filter-clear" data-clone-open="${idx}" style="font-size:11.5px;">Clone these ${room.photos.length} photo${room.photos.length === 1 ? '' : 's'} to other ${isResort ? 'rooms' : 'bedrooms'}</button>
-              <div data-clone-panel="${idx}" style="display:none; background:var(--cream-deep); border:1px solid var(--line-dark); padding:12px 14px; width:100%; box-sizing:border-box;">
-                <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Copies these exact photos onto whichever rooms you check below, replacing anything already there for that room.</p>
-                ${otherBedrooms.map(other => `
-                  <label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; cursor:pointer;">
-                    <input type="checkbox" data-clone-target="${roomSpaceRows.indexOf(other)}" style="width:auto;"> ${other.name}
-                  </label>
-                `).join('')}
-                <button type="button" class="btn solid" data-clone-apply="${idx}" style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Clone Now</button>
-              </div>
-            ` : ''}
-          </div>
-          ${idx < roomSpaceRows.length - 1 ? '<div class="guest-row-divider"></div>' : ''}
-        `;
-      }
+    const fixedRows = roomSpaceRows.filter(r => !r.isBedroom);
 
-      // Fixed spaces (Kitchen/Washroom/Living Room/Garden/Balcony) keep
-      // the simple single-photo layout — each is one shared space for
-      // the whole property, not something that needs a gallery.
+    if(bedroomRows.length && !bedroomRows.some(r => r.key === activeBedroomTabKey)){
+      activeBedroomTabKey = bedroomRows[0].key;
+    }
+    const activeRoom = bedroomRows.find(r => r.key === activeBedroomTabKey);
+    const activeIdx = activeRoom ? roomSpaceRows.indexOf(activeRoom) : -1;
+    const otherBedrooms = bedroomRows.filter(r => r !== activeRoom);
+
+    // A numbered tab per bedroom (1, 2, 3...) once there's more than
+    // one — only the selected room's full editor (name, price,
+    // occupancy, and all four photo buckets) is shown at a time, rather
+    // than every room's whole gallery stacked in one long scroll.
+    const tabBarHtml = bedroomRows.length > 1 ? `
+      <div class="bedroom-tab-bar">
+        ${bedroomRows.map((room, i) => `<div class="bedroom-tab${room.key === activeBedroomTabKey ? ' active' : ''}" data-tab-key="${room.key}">${i + 1}</div>`).join('')}
+      </div>
+    ` : '';
+
+    let bedroomEditorHtml = '';
+    if(activeRoom){
+      const totalPhotos = allRoomPhotos(activeRoom).length;
+      bedroomEditorHtml = `
+        <div style="width:100%;">
+          ${tabBarHtml}
+          <input type="text" data-room-name-input style="border:none; background:none; padding:0; width:100%; font-size:16.5px; font-weight:600; color:var(--ink); font-family:'Jost', sans-serif;" value="${activeRoom.name}" maxlength="40">
+          <div class="guest-row-sub">Required — at least one photo, anywhere below. Tap the name above to rename it, e.g. Suite, Deluxe, Standard.</div>
+          ${isResort ? `
+            <div style="display:flex; gap:10px; margin-top:10px;">
+              <input type="number" min="1" placeholder="Max guests" data-room-occupancy-input value="${activeRoom.maxOccupancy || ''}" style="width:110px; padding:8px 10px; font-size:13px;">
+              <input type="number" min="1" placeholder="₹ / night" data-room-price-input value="${activeRoom.price || ''}" style="width:110px; padding:8px 10px; font-size:13px;">
+            </div>
+            <p style="font-size:11px; opacity:0.55; margin-top:4px;">You can update this price anytime later from the Rooms tab after approval.</p>
+          ` : ''}
+          ${roomBucketHtml(activeRoom, activeIdx, 'photos', activeRoom.name, false)}
+          ${roomBucketHtml(activeRoom, activeIdx, 'washroomPhotos', 'Washroom', true)}
+          ${roomBucketHtml(activeRoom, activeIdx, 'livingRoomPhotos', 'Living Room', true)}
+          ${roomBucketHtml(activeRoom, activeIdx, 'balconyPhotos', 'Balcony', true)}
+          <p style="font-size:11px; opacity:0.5; margin-top:8px;">Tap the ⇄ on a photo, then tap Washroom/Living Room/Balcony below to move it there — or drag it, if you're on a computer.</p>
+          ${totalPhotos && otherBedrooms.length ? `
+            <button type="button" class="filter-clear" data-clone-open style="font-size:11.5px; margin-top:10px;">Clone this room's ${totalPhotos} photo${totalPhotos === 1 ? '' : 's'} to other ${isResort ? 'rooms' : 'bedrooms'}</button>
+            <div data-clone-panel style="display:none; background:var(--cream-deep); border:1px solid var(--line-dark); padding:12px 14px; width:100%; box-sizing:border-box; margin-top:8px;">
+              <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Copies this room's whole set of photos (including anything already sorted into Washroom/Living Room/Balcony) onto whichever rooms you check below, replacing anything already there for that room.</p>
+              ${otherBedrooms.map(other => `
+                <label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; cursor:pointer;">
+                  <input type="checkbox" data-clone-target="${roomSpaceRows.indexOf(other)}" style="width:auto;"> ${other.name}
+                </label>
+              `).join('')}
+              <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Clone Now</button>
+            </div>
+          ` : ''}
+        </div>
+        <div class="guest-row-divider"></div>
+      `;
+    }
+
+    const fixedHtml = fixedRows.map((room) => {
+      const idx = roomSpaceRows.indexOf(room);
       const previewSrc = room.file ? URL.createObjectURL(room.file) : room.url;
+      const isLast = idx === roomSpaceRows.length - 1;
       return `
         <div class="guest-row" data-room-idx="${idx}" style="align-items:flex-start;">
           <div class="guest-row-text" style="flex:1; min-width:0; margin-right:12px;">
@@ -4219,63 +4312,117 @@
           </div>
           ${roomPhotoBoxHtml(previewSrc, '+ Photo', 'data-room-photo-pick', 'data-room-photo-remove')}
         </div>
-        ${idx < roomSpaceRows.length - 1 ? '<div class="guest-row-divider"></div>' : ''}
+        ${!isLast ? '<div class="guest-row-divider"></div>' : ''}
       `;
     }).join('');
 
-    container.querySelectorAll('[data-room-idx]').forEach(rowEl => {
-      const idx = Number(rowEl.dataset.roomIdx);
-      const room = roomSpaceRows[idx];
-      const nameInput = rowEl.querySelector('[data-room-name-input]');
-      if(nameInput) nameInput.addEventListener('input', () => { room.name = nameInput.value; });
-      const occupancyInput = rowEl.querySelector('[data-room-occupancy-input]');
-      if(occupancyInput) occupancyInput.addEventListener('input', () => { room.maxOccupancy = occupancyInput.value; });
-      const priceInput = rowEl.querySelector('[data-room-price-input]');
-      if(priceInput) priceInput.addEventListener('input', () => { room.price = priceInput.value; });
+    container.innerHTML = bedroomEditorHtml + fixedHtml;
 
-      // Fixed-space single photo slot.
-      const mainPick = rowEl.querySelector('[data-room-photo-pick]');
-      if(mainPick) wireRoomPhotoPick(mainPick, () => room.file, f => { room.file = f; room.url = null; }, renderRoomSpaces);
-      const mainRemove = rowEl.querySelector('[data-room-photo-remove]');
-      if(mainRemove) mainRemove.addEventListener('click', () => { room.file = null; room.url = null; renderRoomSpaces(); });
+    // ---- Tab switching ----
+    container.querySelectorAll('[data-tab-key]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        activeBedroomTabKey = tab.dataset.tabKey;
+        pickedUpPhoto = null;
+        renderRoomSpaces();
+      });
+    });
 
-      // Bedroom/room gallery.
-      const galleryAdd = rowEl.querySelector('[data-gallery-add]');
-      if(galleryAdd) wireGalleryAdd(galleryAdd, room);
-      rowEl.querySelectorAll('[data-gallery-remove]').forEach(btn => {
+    // ---- Active bedroom's fields and buckets ----
+    if(activeRoom){
+      const nameInput = container.querySelector('[data-room-name-input]');
+      if(nameInput) nameInput.addEventListener('input', () => { activeRoom.name = nameInput.value; });
+      const occupancyInput = container.querySelector('[data-room-occupancy-input]');
+      if(occupancyInput) occupancyInput.addEventListener('input', () => { activeRoom.maxOccupancy = occupancyInput.value; });
+      const priceInput = container.querySelector('[data-room-price-input]');
+      if(priceInput) priceInput.addEventListener('input', () => { activeRoom.price = priceInput.value; });
+
+      container.querySelectorAll('[data-gallery-add]').forEach(el => wireGalleryAdd(el, activeRoom, el.dataset.galleryAdd));
+      container.querySelectorAll('[data-gallery-remove]').forEach(btn => {
         btn.addEventListener('click', () => {
-          const [rIdx, pIdx] = btn.dataset.galleryRemove.split(':').map(Number);
-          roomSpaceRows[rIdx].photos.splice(pIdx, 1);
+          const [bucketKey, photoIdx] = btn.dataset.galleryRemove.split(':');
+          activeRoom[bucketKey].splice(Number(photoIdx), 1);
           renderRoomSpaces();
         });
       });
 
-      // Clone panel — toggled open, then applies to whichever other
-      // rooms are checked. Deliberately opt-in (nothing clones until
-      // "Clone Now" is pressed) so a host never loses a room's own
-      // photos by accident.
-      const cloneOpenBtn = rowEl.querySelector('[data-clone-open]');
-      const clonePanel = rowEl.querySelector('[data-clone-panel]');
+      // Tap-to-move: tap a photo's ⇄ to pick it up (tapping the same one
+      // again cancels), then tap any OTHER bucket to drop it there.
+      container.querySelectorAll('[data-gallery-move]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const [bucketKey, photoIdx] = btn.dataset.galleryMove.split(':');
+          const isSame = pickedUpPhoto && pickedUpPhoto.roomIdx === activeIdx && pickedUpPhoto.bucketKey === bucketKey && pickedUpPhoto.photoIndex === Number(photoIdx);
+          pickedUpPhoto = isSame ? null : { roomIdx: activeIdx, bucketKey, photoIndex: Number(photoIdx) };
+          renderRoomSpaces();
+        });
+      });
+      container.querySelectorAll('[data-drop-zone]').forEach(zone => {
+        zone.addEventListener('click', (e) => {
+          if(!pickedUpPhoto || pickedUpPhoto.roomIdx !== activeIdx) return;
+          // Only a click on the zone's own empty space counts as a
+          // "drop here" — a click on a photo's own remove/move button,
+          // or the add-photos tile, is handled by their own listeners
+          // above and shouldn't also trigger a move.
+          if(e.target.closest('[data-gallery-move]') || e.target.closest('[data-gallery-remove]') || e.target.closest('[data-gallery-add]')) return;
+          movePhoto(activeIdx, pickedUpPhoto.bucketKey, pickedUpPhoto.photoIndex, zone.dataset.dropZone);
+        });
+        // Real drag-and-drop, layered on as a bonus for desktop/mouse
+        // users — tap-to-move above is what actually has to work
+        // everywhere, since this has no real support on iOS Safari's
+        // touch interface.
+        zone.addEventListener('dragover', (e) => e.preventDefault());
+        zone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const source = e.dataTransfer.getData('text/plain');
+          if(!source) return;
+          const [srcBucketKey, srcPhotoIndex] = source.split(':');
+          movePhoto(activeIdx, srcBucketKey, Number(srcPhotoIndex), zone.dataset.dropZone);
+        });
+      });
+      container.querySelectorAll('[data-drag-source]').forEach(el => {
+        el.addEventListener('dragstart', (e) => {
+          e.dataTransfer.setData('text/plain', el.dataset.dragSource);
+        });
+      });
+
+      const cloneOpenBtn = container.querySelector('[data-clone-open]');
+      const clonePanel = container.querySelector('[data-clone-panel]');
       if(cloneOpenBtn && clonePanel){
         cloneOpenBtn.addEventListener('click', () => {
           clonePanel.style.display = clonePanel.style.display === 'none' ? 'block' : 'none';
         });
       }
-      const cloneApplyBtn = rowEl.querySelector('[data-clone-apply]');
+      const cloneApplyBtn = container.querySelector('[data-clone-apply]');
       if(cloneApplyBtn){
         cloneApplyBtn.addEventListener('click', () => {
-          const targets = Array.from(rowEl.querySelectorAll('[data-clone-target]:checked')).map(cb => Number(cb.dataset.cloneTarget));
+          const targets = Array.from(container.querySelectorAll('[data-clone-target]:checked')).map(cb => Number(cb.dataset.cloneTarget));
           if(!targets.length) return;
           // Same File/URL references are reused across the clone
           // targets, not re-picked from disk — uploadPhotoCategory below
           // deduplicates by File identity, so an identical photo cloned
           // onto 3 rooms is only actually uploaded once, not three times.
+          const clonePhotos = arr => arr.map(p => ({ file: p.file, url: p.url }));
           targets.forEach(targetIdx => {
-            roomSpaceRows[targetIdx].photos = room.photos.map(p => ({ file: p.file, url: p.url }));
+            const target = roomSpaceRows[targetIdx];
+            target.photos = clonePhotos(activeRoom.photos);
+            target.washroomPhotos = clonePhotos(activeRoom.washroomPhotos);
+            target.livingRoomPhotos = clonePhotos(activeRoom.livingRoomPhotos);
+            target.balconyPhotos = clonePhotos(activeRoom.balconyPhotos);
           });
           renderRoomSpaces();
         });
       }
+    }
+
+    // ---- Fixed spaces (Kitchen/Washroom/Living Room/Garden/Balcony) —
+    // unchanged simple single-photo layout, each one shared space for
+    // the whole property, not something that needs a gallery.
+    container.querySelectorAll('[data-room-idx]').forEach(rowEl => {
+      const idx = Number(rowEl.dataset.roomIdx);
+      const room = roomSpaceRows[idx];
+      const mainPick = rowEl.querySelector('[data-room-photo-pick]');
+      if(mainPick) wireRoomPhotoPick(mainPick, () => room.file, f => { room.file = f; room.url = null; }, renderRoomSpaces);
+      const mainRemove = rowEl.querySelector('[data-room-photo-remove]');
+      if(mainRemove) mainRemove.addEventListener('click', () => { room.file = null; room.url = null; renderRoomSpaces(); });
     });
   }
   renderRoomSpaces();
@@ -4502,7 +4649,7 @@
       // as having its photo requirement met once its gallery has at
       // least one photo — no specific label (washroom, balcony, etc.)
       // required within it.
-      const missingMandatorySpaces = roomSpaceRows.filter(r => r.mandatory && (r.isBedroom ? r.photos.length === 0 : !r.file && !r.url));
+      const missingMandatorySpaces = roomSpaceRows.filter(r => r.mandatory && (r.isBedroom ? allRoomPhotos(r).length === 0 : !r.file && !r.url));
       if(missingMandatorySpaces.length){
         errorEl.textContent = `Please add a photo for: ${missingMandatorySpaces.map(r => r.name || 'an unnamed bedroom').join(', ')}.`;
         errorEl.style.display = 'block';
@@ -4547,7 +4694,7 @@
     const exteriorIdsAtUpload = exteriorPhotoManager.getOrderedIds();
 
     // Every photo still needing upload — a fixed space's single file/url
-    // pair, or one entry from a bedroom's whole photos[] gallery — is
+    // pair, or one entry from any of a bedroom's four photo buckets — is
     // collected as the SAME shape (an object with .file/.url/.hash) so
     // the result can be written back identically regardless of which
     // kind it came from. A retry naturally only re-uploads whichever
@@ -4555,7 +4702,7 @@
     const uploadTasks = [];
     roomSpaceRows.forEach(room => {
       if(room.isBedroom){
-        room.photos.forEach(photo => { if(photo.file && !photo.url) uploadTasks.push(photo); });
+        allRoomPhotos(room).forEach(photo => { if(photo.file && !photo.url) uploadTasks.push(photo); });
       } else if(room.file && !room.url){
         uploadTasks.push(room);
       }
@@ -4582,7 +4729,7 @@
         exteriorPhotoUrls = exteriorPhotoUrls || [];
         exteriorPhotoHashes = exteriorPhotoHashes || [];
         const stillMissingMandatory = roomSpaceRows.some(r =>
-          r.mandatory && (r.isBedroom ? r.photos.every(p => !p.url) : (!r.file && !r.url))
+          r.mandatory && (r.isBedroom ? allRoomPhotos(r).every(p => !p.url) : (!r.file && !r.url))
         );
         if(!isDraft && (exteriorPhotoUrls.length === 0 || stillMissingMandatory)){
           const detail = uploadErr && uploadErr.message ? ` (${uploadErr.message})` : '';
@@ -4600,25 +4747,27 @@
 
     // Flat array kept for backward compatibility (the general property-
     // wide gallery guests browse) — every fixed space's photo plus every
-    // photo in every bedroom's gallery.
+    // photo across every bedroom's four buckets.
     const interiorPhotoUrls = [
       ...roomSpaceRows.filter(r => !r.isBedroom && r.url).map(r => r.url),
-      ...roomSpaceRows.filter(r => r.isBedroom).flatMap(r => r.photos.filter(p => p.url).map(p => p.url))
+      ...roomSpaceRows.filter(r => r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.url).map(p => p.url))
     ];
     // The NEW named mapping submit-listing.js uses to create properly
     // labeled listing_rooms records ("Suite 1," "Deluxe 1," etc.)
     // instead of the generic "Room 1, Room 2..." placeholders it used to
-    // fall back to. A bedroom carries its WHOLE photo gallery as "urls"
-    // — no forced washroom/balcony labeling, just however many photos
-    // the host added — while a fixed space (Kitchen, Garden, etc.) still
+    // fall back to. A bedroom carries its WHOLE combined gallery
+    // (default bucket plus anything sorted into Washroom/Living Room/
+    // Balcony) as one flat "urls" list — the bucket organization is a
+    // host-side editing convenience only, not something the backend
+    // needs to track — while a fixed space (Kitchen, Garden, etc.) still
     // carries just its one "url", since those never become listing_rooms
     // records regardless (see submit-listing.js).
     const roomPhotos = roomSpaceRows
-      .filter(r => r.isBedroom ? r.photos.some(p => p.url) : r.url)
+      .filter(r => r.isBedroom ? allRoomPhotos(r).some(p => p.url) : r.url)
       .map(r => r.isBedroom
         ? {
             roomName: r.name, isBedroom: true,
-            urls: r.photos.filter(p => p.url).map(p => p.url),
+            urls: allRoomPhotos(r).filter(p => p.url).map(p => p.url),
             // Only meaningful for a Resort submission — undefined for
             // everything else, which submit-listing.js treats the same
             // as "not provided" (see its own room-photo sanitization).
@@ -4629,7 +4778,7 @@
       );
     const roomPhotoHashes = [
       ...roomSpaceRows.filter(r => !r.isBedroom && r.hash).map(r => r.hash),
-      ...roomSpaceRows.filter(r => r.isBedroom).flatMap(r => r.photos.filter(p => p.hash).map(p => p.hash))
+      ...roomSpaceRows.filter(r => r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.hash).map(p => p.hash))
     ];
 
     // Cover photo can only come from an explicit exterior star now — the
@@ -4743,6 +4892,8 @@
       listingForm.reset();
       exteriorPhotoManager.clear();
       roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, file: null, url: null }));
+      activeBedroomTabKey = null;
+      pickedUpPhoto = null;
       syncBedroomRowCount();
       listingSubmissionState = { currentListingId: null, exteriorUrls: null };
       document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
