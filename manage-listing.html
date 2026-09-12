@@ -142,7 +142,7 @@
   }
   .room-description-input:focus{outline:none; border-color:#8a6c39;}
   .room-photo-slot{
-    width:118px; flex:0 0 auto; text-align:center; cursor:pointer;
+    width:118px; flex:0 0 auto; text-align:center; cursor:pointer; position:relative;
   }
   .room-photo-slot > img, .room-photo-slot > span{
     display:flex; align-items:center; justify-content:center; width:118px; height:96px;
@@ -150,6 +150,12 @@
   }
   .room-photo-slot > span{font-size:11.5px; color:#8a7f6c; text-align:center; padding:0 10px; line-height:1.4;}
   .room-photo-slot:hover > img, .room-photo-slot:hover > span{border-color:#8a6c39;}
+  .room-photo-remove-btn{
+    position:absolute; top:-7px; right:-7px; width:20px; height:20px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; border:none; cursor:pointer;
+    font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:1;
+  }
+  .room-photo-remove-btn:hover{background:#a3402f;}
   .room-photo-slot-label{
     font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7f6c; margin-top:6px;
   }
@@ -1021,6 +1027,7 @@
         <div class="room-card-top">
           <div class="room-photo-slot" data-room-photo-pick>
             ${mainSrc ? `<img src="${mainSrc}" alt="">` : '<span>+ Room Photo</span>'}
+            ${mainSrc ? '<button type="button" class="room-photo-remove-btn" data-room-photo-remove aria-label="Remove this photo">×</button>' : ''}
             <div class="room-photo-slot-label">Room <em>*</em></div>
           </div>
           <div class="room-card-fields">
@@ -1041,10 +1048,12 @@
         <div class="room-card-subphotos">
           <div class="room-photo-slot room-photo-slot-small" data-room-washroom-pick>
             ${washroomSrc ? `<img src="${washroomSrc}" alt="">` : '<span>+ Photo</span>'}
+            ${washroomSrc ? '<button type="button" class="room-photo-remove-btn" data-room-washroom-remove aria-label="Remove this photo">×</button>' : ''}
             <div class="room-photo-slot-label">Washroom <em>*</em></div>
           </div>
           <div class="room-photo-slot room-photo-slot-small" data-room-balcony-pick>
             ${balconySrc ? `<img src="${balconySrc}" alt="">` : '<span>+ Photo</span>'}
+            ${balconySrc ? '<button type="button" class="room-photo-remove-btn" data-room-balcony-remove aria-label="Remove this photo">×</button>' : ''}
             <div class="room-photo-slot-label">Balcony <span>(optional)</span></div>
           </div>
         </div>
@@ -1083,6 +1092,17 @@
       wirePick('[data-room-photo-pick]', () => room.photoFile, f => { room.photoFile = f; }, () => { room.coverPhotoUrl = null; });
       wirePick('[data-room-washroom-pick]', () => room.washroomFile, f => { room.washroomFile = f; }, () => { room.washroomUrl = null; });
       wirePick('[data-room-balcony-pick]', () => room.balconyFile, f => { room.balconyFile = f; }, () => { room.balconyUrl = null; });
+      // Remove buttons are siblings of the pick box (not children of the
+      // click target itself), so no stopPropagation is needed — clicking
+      // one doesn't also open the file picker. Clears both any pending
+      // unsaved file AND an already-uploaded url, so removing a photo
+      // that came from a prior save doesn't leave a stale url behind.
+      const mainRemoveBtn = el.querySelector('[data-room-photo-remove]');
+      if(mainRemoveBtn) mainRemoveBtn.addEventListener('click', () => { room.photoFile = null; room.coverPhotoUrl = null; renderRooms(); });
+      const washroomRemoveBtn = el.querySelector('[data-room-washroom-remove]');
+      if(washroomRemoveBtn) washroomRemoveBtn.addEventListener('click', () => { room.washroomFile = null; room.washroomUrl = null; renderRooms(); });
+      const balconyRemoveBtn = el.querySelector('[data-room-balcony-remove]');
+      if(balconyRemoveBtn) balconyRemoveBtn.addEventListener('click', () => { room.balconyFile = null; room.balconyUrl = null; renderRooms(); });
       el.querySelectorAll('[data-room-field]').forEach(input => {
         const field = input.dataset.roomField;
         const eventName = input.type === 'checkbox' ? 'change' : 'input';
