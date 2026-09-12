@@ -47,6 +47,7 @@ const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { getEnabledInternationalCurrencies, convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
+const { logAudit } = require('./_audit-log');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -264,32 +265,6 @@ module.exports = async (req, res) => {
     }
 
     const guestId = getOptionalGuestId(req);
-    // Booking without an account is no longer allowed at all — every
-    // order must be tied to a real, logged-in guest_id, not created
-    // anonymously and only loosely associated by email. The frontend
-    // gates this too (prompting login before payment even starts), but
-    // that's just UX — this is the actual enforcement, since a request
-    // could otherwise skip the frontend entirely and hit this endpoint
-    // directly with no session at all.
-    if (!guestId) {
-      return res.status(401).json({ error: 'Please log in or create an account to complete your booking.' });
-    }
-    // Resolved once, reused for the "can't book your own property" check
-    // on every stay/experience below — listings.host_id is a hosts.id,
-    // a different id space from guests.id (guestId), so this can't be
-    // compared to guestId directly (same distinction guest-profile.js's
-    // myHostId handles for messaging). Anonymous/logged-out checkout
-    // (guestId null) obviously can't be self-booking anything, so this
-    // stays null in that case and the check below is simply skipped.
-    let myHostId = null;
-    if (guestId) {
-      try {
-        const hostRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-        myHostId = hostRows[0] ? hostRows[0].host_id : null;
-      } catch (err) {
-        console.error('Failed to resolve host_id for account', guestId, err);
-      }
-    }
 
     let grandSubtotal = 0;
     let grandDiscount = 0;
@@ -298,7 +273,6 @@ module.exports = async (req, res) => {
     const stayDetails = [];
     const experienceDetails = [];
     const seenListingIds = new Set();
-    const seenRoomIds = new Set();
 
     for (let i = 0; i < safeStays.length; i++) {
       const s = safeStays[i];
@@ -306,108 +280,11 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Stay ${i + 1}: missing home selection, dates, or guest count` });
       }
 
-      // Each property can only appear once per booking request. A resort
-      // is the one exception — multiple rooms within the SAME resort are
-      // meant to be booked together in one request, so this is checked
-      // per ROOM there instead (see the branch just below), not per
-      // listing.
-      if (!s.roomId) {
-        if (seenListingIds.has(s.listingId)) {
-          return res.status(400).json({ error: `Stay ${i + 1} repeats a home already used in this request.` });
-        }
-        seenListingIds.add(s.listingId);
+      // Each property can only appear once per booking request.
+      if (seenListingIds.has(s.listingId)) {
+        return res.status(400).json({ error: `Stay ${i + 1} repeats a home already used in this request.` });
       }
-
-      // ---- Resort room booking — a deliberately separate, much simpler
-      // path from the single-unit stay logic below it. A resort room has
-      // its own fixed price and occupancy limit, and is independently
-      // available from every other room in the same resort — none of
-      // the single-unit concerns below (pets, extra-guest pricing, paid
-      // amenities, security deposits) apply to booking one hotel-style
-      // room, so this doesn't try to thread roomId through that much
-      // more complex logic. Each selected room becomes its own stayDetails
-      // entry (and therefore its own order row — see verify-payment.js),
-      // the same way multiple different properties in one request already
-      // each get their own row.
-      if (s.roomId) {
-        if (seenRoomIds.has(s.roomId)) {
-          return res.status(400).json({ error: `Stay ${i + 1} repeats a room already selected in this request.` });
-        }
-        seenRoomIds.add(s.roomId);
-
-        const resortRows = await sql`
-          SELECT id, property_name, property_type, host_id
-          FROM listings WHERE id = ${s.listingId} AND status = 'approved' AND property_type = 'Resort'
-        `;
-        const resort = resortRows[0];
-        if (!resort) {
-          return res.status(400).json({ error: `Stay ${i + 1}: this resort is no longer available to book.` });
-        }
-        if (myHostId != null && resort.host_id === myHostId) {
-          return res.status(400).json({ error: `Stay ${i + 1}: you can't book your own property.` });
-        }
-
-        const roomRows = await sql`
-          SELECT id, room_name, max_occupancy, nightly_rate
-          FROM listing_rooms WHERE id = ${s.roomId} AND listing_id = ${s.listingId} AND is_active = TRUE
-        `;
-        const room = roomRows[0];
-        if (!room) {
-          return res.status(400).json({ error: `Stay ${i + 1}: this room is no longer available to book.` });
-        }
-        if (!room.nightly_rate) {
-          return res.status(400).json({ error: `Stay ${i + 1}: ${room.room_name} doesn't have a price set yet.` });
-        }
-
-        const roomNights = calculateNights(s.arrival, s.departure);
-        const roomGuests = Number(s.guests);
-        if (!roomNights || roomNights <= 0 || !roomGuests || roomGuests < 1) {
-          return res.status(400).json({ error: `Stay ${i + 1}: invalid dates or guest count` });
-        }
-        if (roomGuests > room.max_occupancy) {
-          return res.status(400).json({ error: `Stay ${i + 1}: ${room.room_name} sleeps up to ${room.max_occupancy} — please select another room or reduce your guest count for this room.` });
-        }
-
-        // Independent availability — checked against THIS room's own
-        // orders/blocks only, never the resort listing as a whole. This
-        // is what makes "Room A booked, Room B still free" actually true
-        // rather than just a UI label.
-        const roomBlockedRows = await sql`
-          SELECT 1 FROM listing_blocked_dates
-          WHERE room_id = ${room.id} AND start_date < ${s.departure}::date AND end_date > ${s.arrival}::date
-          LIMIT 1
-        `;
-        const roomBookedRows = await sql`
-          SELECT 1 FROM orders
-          WHERE room_id = ${room.id} AND status = 'paid'
-            AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date
-          LIMIT 1
-        `;
-        if (roomBlockedRows[0] || roomBookedRows[0]) {
-          return res.status(400).json({ error: `Stay ${i + 1}: ${room.room_name} isn't available for those dates. Please choose different dates or another room.` });
-        }
-
-        const roomSubtotal = Number(room.nightly_rate) * roomNights;
-        const roomCommissionAmount = Math.round(roomSubtotal * (BASE_COMMISSION_RATE / 100));
-        const roomGuestServiceFee = Math.round(roomSubtotal * (GUEST_SERVICE_FEE_RATE / 100));
-
-        grandSubtotal += roomSubtotal;
-        grandGuestServiceFee += roomGuestServiceFee;
-
-        stayDetails.push({
-          listingId: resort.id,
-          roomId: room.id,
-          suite: `${resort.property_name} — ${room.room_name}`,
-          arrival: s.arrival,
-          departure: s.departure,
-          guests: roomGuests,
-          nights: roomNights,
-          subtotal: roomSubtotal,
-          commissionRate: BASE_COMMISSION_RATE,
-          guestServiceFee: roomGuestServiceFee,
-        });
-        continue;
-      }
+      seenListingIds.add(s.listingId);
 
       // The listing is looked up fresh from the database — this is the
       // "validate against what the owner actually shared" step. A listing
@@ -416,20 +293,14 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT id, property_name, nightly_rate, discount_type, discount_value,
                discount_min_nights, commission_rate, security_deposit,
-               pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types, host_id
+               pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types,
+               max_guests, property_type
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
       const listing = rows[0];
       if (!listing) {
         return res.status(400).json({ error: `Stay ${i + 1}: this home is no longer available to book.` });
-      }
-      // A host can't book their own property — not a pricing/availability
-      // concern, a straightforward conflict-of-interest rule (fake
-      // reviews, self-dealing commission games, etc.). Checked as soon
-      // as the listing's real host_id is known, before any pricing math.
-      if (myHostId != null && listing.host_id === myHostId) {
-        return res.status(400).json({ error: `Stay ${i + 1}: you can't book your own property.` });
       }
       if (!listing.nightly_rate) {
         return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} doesn't have a rate set yet.` });
@@ -451,6 +322,22 @@ module.exports = async (req, res) => {
       const adults = Number(s.adults);
       if (!adults || adults < 1) {
         return res.status(400).json({ error: `Stay ${i + 1}: at least one adult (18+) guest is required — children or infants can't book a stay on their own.` });
+      }
+
+      // A stay is a single physical unit (a villa, a studio, a room) —
+      // priced flat per night regardless of how many people are in it,
+      // but still genuinely limited by how many people can actually fit.
+      // Only checked for non-Resort properties: a Resort's real capacity
+      // lives per-room (max_occupancy on listing_rooms), not on the
+      // listing itself, so max_guests there isn't a meaningful ceiling
+      // to enforce here.
+      if (listing.property_type !== 'Resort') {
+        const maxGuestsAllowed = Number(listing.max_guests);
+        if (maxGuestsAllowed > 0 && guests > maxGuestsAllowed) {
+          return res.status(400).json({
+            error: `Stay ${i + 1}: ${listing.property_name} sleeps up to ${maxGuestsAllowed} guests, but ${guests} were requested. Please reduce the guest count or book an additional stay for the rest of your group.`
+          });
+        }
       }
 
       // ---- Availability, checked here for real (not just in the search
@@ -518,18 +405,12 @@ module.exports = async (req, res) => {
       // What kind of pet, not just how many — a host who only allows
       // Dogs shouldn't discover a turtle showed up because "pets" was
       // just a headcount with no species attached. Every listed type
-      // has to be one the listing actually allows. The list must also
-      // have exactly one type PER billable pet (not "at least one") —
-      // one dropdown per pet slot on the frontend guarantees this, this
-      // is just the server-side backstop against a tampered request.
+      // has to be one the listing actually allows.
       const requestedPetTypes = Array.isArray(s.petTypes) ? s.petTypes.filter(t => typeof t === 'string') : [];
       if (requestedPets > 0) {
         const allowedTypes = Array.isArray(listing.allowed_pet_types) ? listing.allowed_pet_types : [];
         if (!requestedPetTypes.length) {
           return res.status(400).json({ error: `Stay ${i + 1}: please specify what kind of pet(s) you're bringing.` });
-        }
-        if (requestedPetTypes.length !== requestedPets) {
-          return res.status(400).json({ error: `Stay ${i + 1}: please specify a type for each of your ${requestedPets} pet(s).` });
         }
         const disallowed = requestedPetTypes.filter(t => !allowedTypes.includes(t));
         if (disallowed.length) {
@@ -537,50 +418,6 @@ module.exports = async (req, res) => {
         }
       }
       const petFeeAmount = requestedPets > 0 ? Math.round(Number(listing.pet_fee || 0) * requestedPets) : 0;
-
-      // Service / emotional-support animals — deliberately NOT subject to
-      // max_pets_allowed and NEVER charged the pet fee: these aren't
-      // "extra pets," they're an accommodation for the guest's own
-      // physical or emotional needs. Only offered at all on listings
-      // that are already pet-friendly (a "no pets" property's policy
-      // isn't overridden here — that's a separate, deliberate choice,
-      // not an oversight). Type is checked against the platform's known
-      // animal list for data quality, but NOT against this listing's own
-      // allowed_pet_types — a host who only allows Dogs as pets doesn't
-      // get to decline a guest's assistance cat.
-      const PET_TYPE_WHITELIST = ['Dog', 'Cat', 'Bird', 'Rabbit', 'Fish', 'Hamster', 'Turtle', 'Other'];
-      const MAX_SERVICE_ANIMALS = 5; // sanity ceiling, not a policy cap — these are never "capped" against the listing
-      const rawServiceAnimals = Array.isArray(s.serviceAnimals) ? s.serviceAnimals : [];
-      let serviceAnimalTypes = [];
-      if (rawServiceAnimals.length) {
-        if (!listing.pet_friendly) {
-          return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} doesn't allow pets, so a service or support animal can't be added for this home.` });
-        }
-        if (rawServiceAnimals.length > MAX_SERVICE_ANIMALS) {
-          return res.status(400).json({ error: `Stay ${i + 1}: please contact the host directly for more than ${MAX_SERVICE_ANIMALS} service animals.` });
-        }
-        serviceAnimalTypes = rawServiceAnimals
-          .map(a => (a && typeof a === 'object' ? a.type : a))
-          .filter(t => typeof t === 'string' && PET_TYPE_WHITELIST.includes(t));
-        if (serviceAnimalTypes.length !== rawServiceAnimals.length) {
-          return res.status(400).json({ error: `Stay ${i + 1}: please specify a valid type for each service or support animal.` });
-        }
-      }
-
-      // Young litter pets (<1yr) — also never capped or charged, but only
-      // offered alongside at least one already-billed adult pet, since
-      // they're understood to be traveling WITH that pet, not on their
-      // own. Proof, if the host has any doubt, is a conversation between
-      // host and guest — not something this platform verifies.
-      const MAX_YOUNG_LITTER = 10; // sanity ceiling
-      const requestedYoungLitter = Number(s.youngLitterCount) || 0;
-      if (requestedYoungLitter > 0 && requestedPets < 1) {
-        return res.status(400).json({ error: `Stay ${i + 1}: young litter pets must travel with at least one adult pet already added above.` });
-      }
-      if (requestedYoungLitter > MAX_YOUNG_LITTER) {
-        return res.status(400).json({ error: `Stay ${i + 1}: please contact the host directly for more than ${MAX_YOUNG_LITTER} young litter pets.` });
-      }
-      const youngLitterCount = Math.max(0, Math.round(requestedYoungLitter));
 
       const roomPortion = beforeDiscount - discountAmount; // room + extra guests, after discount, never includes amenities
       const staySubtotal = roomPortion + amenityTotal + petFeeAmount;
@@ -620,8 +457,6 @@ module.exports = async (req, res) => {
         extraGuestCharge: extraTotal, // broken out for the guest-facing summary
         petFeeAmount, // broken out for the guest-facing summary
         petTypes: requestedPetTypes, // trusted server-side validated list, not re-trusted from the browser at verify time
-        serviceAnimalTypes, // never billed, never counted — see validation above
-        youngLitterCount, // never billed, never counted — see validation above
         roomPortion,
         baseCommission,
         amenityCommission,
@@ -649,8 +484,7 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate,
                experience_available_from, experience_available_until, experience_duration_days,
-               experience_duration_hours, experience_type, hosting_listing_id,
-               discount_type, discount_value, discount_min_nights, host_id
+               discount_type, discount_value, discount_min_nights
         FROM listings
         WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
       `;
@@ -658,90 +492,39 @@ module.exports = async (req, res) => {
       if (!experience) {
         return res.status(400).json({ error: `Experience ${i + 1}: this experience is no longer available to book.` });
       }
-      // Same conflict-of-interest rule as stays — see the comment there.
-      if (myHostId != null && experience.host_id === myHostId) {
-        return res.status(400).json({ error: `Experience ${i + 1}: you can't book your own experience.` });
-      }
       if (!experience.nightly_rate) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} doesn't have a price set yet.` });
       }
 
-      // Guest-selected range (start + end, inclusive on both ends) — the
-      // range represents the guest's AVAILABILITY window (e.g. "I'm free
-      // these 2 days"), not a variable-length purchase — price stays the
-      // fixed package rate above regardless of how many days are
-      // selected. What the range actually determines is whether this
-      // experience's own fixed duration can even fit inside it: a
-      // 15-hour package comfortably fits a 2-day (48-hour) window, so
-      // that combination is valid and should be allowed; a 2-day (48hr)
-      // package obviously can't fit inside a same-day (24hr) window.
-      // experience_duration_days still exists as a fallback for the
-      // separate stay add-on flow (which never sends an endDate), but
-      // once a real range is provided, it's checked as a MINIMUM
-      // requirement rather than treated as the authoritative length.
-      const fallbackDurationDays = experience.experience_duration_days && experience.experience_duration_days >= 1
-        ? experience.experience_duration_days : 1;
-      const rawEndDate = typeof ex.endDate === 'string' && ex.endDate ? ex.endDate : null;
-      const startDate = ex.date;
-      const endDateInclusive = rawEndDate && rawEndDate >= startDate ? rawEndDate : addDaysToDateStr(startDate, fallbackDurationDays - 1);
-      const endDateExclusive = addDaysToDateStr(endDateInclusive, 1);
-      const days = Math.round((new Date(endDateExclusive) - new Date(startDate)) / (1000 * 60 * 60 * 24));
-      const durationDays = days; // kept as `durationDays` below since calculateDiscount's minNights gate reads this name
-
-      // Does the guest's selected window actually give this experience
-      // enough time to happen at all? Same convention the card display
-      // already uses (see buildExperienceCard's durationDaysLine/
-      // durationHoursLine): experience_duration_hours is PER DAY when
-      // experience_duration_days is more than 1 (e.g. "3 days, 5
-      // hours/day"), or the one TOTAL duration when it's a single-day
-      // package (e.g. "15 hours", possibly running past midnight into a
-      // second calendar date without being a multi-day experience).
-      const requiredHours = (experience.experience_duration_days && experience.experience_duration_days > 1)
-        ? experience.experience_duration_days * (Number(experience.experience_duration_hours) || 24)
-        : (Number(experience.experience_duration_hours) || 24);
-      const availableHours = days * 24;
-      if (requiredHours > availableHours) {
-        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} needs about ${requiredHours} hours — the dates you selected only give it ${availableHours}. Please select a longer range.` });
-      }
+      // Multi-day experiences (a 3-day trek, etc.) — the guest picks a
+      // single start date; the end date (exclusive, same convention as
+      // a stay's own arrival/departure) is computed from the host's set
+      // duration, never trusted from the request itself.
+      const durationDays = experience.experience_duration_days && experience.experience_duration_days >= 1
+        ? experience.experience_duration_days
+        : 1;
+      const endDateExclusive = addDaysToDateStr(ex.date, durationDays);
 
       // Optional host-set season/date-range this experience actually
       // runs in — the guest's date picker already constrains this via
       // min/max, but that's client-side only, so it's re-checked here
-      // for real before any money moves. Checked against the END of the
-      // guest's selected range too, not just its start.
-      //
-      // A misconfigured "available_until" (earlier than available_from,
-      // or the whole window already in the past) would otherwise reject
-      // EVERY booking attempt for this experience with a confusing
-      // "isn't available after [stale date]" error — even after
-      // index.html's own calendar was fixed to stop disabling every day
-      // for the same reason. Same "not actually usable, so ignore it"
-      // fallback applied here, checked against whichever is later of
-      // available_from or today — matching the calendar's own bookDateMin
-      // exactly, so what a guest is allowed to pick and what the server
-      // actually accepts never disagree.
-      const todayIso = toDateStr(new Date());
-      const effectiveMinDate = experience.experience_available_from && experience.experience_available_from > todayIso
-        ? experience.experience_available_from : todayIso;
-      const usableAvailableUntil = experience.experience_available_until
-        && experience.experience_available_until >= effectiveMinDate
-        ? experience.experience_available_until
-        : null;
-      if (experience.experience_available_from && startDate < experience.experience_available_from) {
+      // for real before any money moves. Checked against the END of a
+      // multi-day booking too, not just its start.
+      if (experience.experience_available_from && ex.date < experience.experience_available_from) {
         return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available until ${experience.experience_available_from}.` });
       }
-      if (usableAvailableUntil && endDateInclusive > usableAvailableUntil) {
-        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available after ${usableAvailableUntil}.` });
+      if (experience.experience_available_until && addDaysToDateStr(ex.date, durationDays - 1) > experience.experience_available_until) {
+        return res.status(400).json({ error: `Experience ${i + 1}: ${experience.property_name} isn't available after ${experience.experience_available_until}.` });
       }
 
-      // Host-blocked dates, checked across the FULL guest-selected range
-      // — same overlap rule stays already use (see the stay loop above),
-      // not just an exact match on the start date.
+      // Host-blocked dates, checked across the FULL span of a multi-day
+      // booking — same overlap rule stays already use (see the stay
+      // loop above), not just an exact match on the start date.
       const experienceBlockedRows = await sql`
         SELECT 1 FROM listing_blocked_dates
         WHERE listing_id = ${ex.listingId}
           AND start_date < ${endDateExclusive}::date
-          AND end_date > ${startDate}::date
+          AND end_date > ${ex.date}::date
         LIMIT 1
       `;
       if (experienceBlockedRows[0]) {
@@ -753,111 +536,24 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Experience ${i + 1}: invalid guest count` });
       }
 
-      // A with_stay experience is tied to a real property
-      // (hosting_listing_id) — booking the experience is supposed to
-      // also reserve that stay, consolidated into this same payment.
-      // This used to not exist at all: create-order.js never referenced
-      // hosting_listing_id anywhere, so booking a with_stay experience
-      // via its own page only ever charged for the experience portion —
-      // no stay order got created, the property's calendar never
-      // blocked those dates, and its host was never paid. Fixed by
-      // composing a real stay entry here and pushing it into the SAME
-      // stayDetails array the stays[] loop above already fills, so
-      // verify-payment.js creates a genuine, separate order row for it
-      // (with its own host_id and payout_amount) using logic that
-      // already exists — no new order-creation path needed.
-      if (experience.experience_type === 'with_stay' && experience.hosting_listing_id) {
-        const hostingRows = await sql`
-          SELECT id, property_name, nightly_rate, discount_type, discount_value, discount_min_nights
-          FROM listings WHERE id = ${experience.hosting_listing_id} AND status = 'approved'
-        `;
-        const hostingListing = hostingRows[0];
-        if (!hostingListing) {
-          return res.status(400).json({ error: `Experience ${i + 1}: the stay included with "${experience.property_name}" is no longer available.` });
-        }
-        if (!hostingListing.nightly_rate) {
-          return res.status(400).json({ error: `Experience ${i + 1}: the stay included with "${experience.property_name}" doesn't have a price set yet.` });
-        }
-
-        // Same overlap checks as any stay booking — see the stays[] loop
-        // above for the identical pattern. This is the actual guarantee
-        // behind "if the stay isn't available, the guest is notified" —
-        // checked here, authoritatively, before any charge happens, not
-        // just as a best-effort hint on the calendar.
-        const hostingBlockedRows = await sql`
-          SELECT 1 FROM listing_blocked_dates
-          WHERE listing_id = ${hostingListing.id}
-            AND start_date < ${endDateExclusive}::date
-            AND end_date > ${startDate}::date
-          LIMIT 1
-        `;
-        const hostingBookedRows = await sql`
-          SELECT 1 FROM orders
-          WHERE listing_id = ${hostingListing.id} AND status = 'paid'
-            AND arrival < ${endDateExclusive}::date
-            AND departure > ${startDate}::date
-          LIMIT 1
-        `;
-        if (hostingBlockedRows[0] || hostingBookedRows[0]) {
-          return res.status(400).json({ error: `Experience ${i + 1}: the stay included with "${experience.property_name}" isn't available for those dates. Please choose different dates.` });
-        }
-
-        const hostingPromoRows = await sql`
-          SELECT is_active, discount_type, discount_value, min_nights, start_date, end_date
-          FROM listing_promotions
-          WHERE listing_id = ${hostingListing.id} AND is_active = TRUE AND end_date > CURRENT_DATE
-        `;
-        const hostingSubtotalBeforeDiscount = Number(hostingListing.nightly_rate) * days;
-        const hostingDiscountAmount = calculateDiscount(hostingListing, days, startDate, hostingSubtotalBeforeDiscount, hostingPromoRows);
-        const hostingSubtotal = hostingSubtotalBeforeDiscount - hostingDiscountAmount;
-        const hostingGuestServiceFee = Math.round(hostingSubtotal * (GUEST_SERVICE_FEE_RATE / 100));
-
-        grandSubtotal += hostingSubtotal;
-        grandGuestServiceFee += hostingGuestServiceFee;
-
-        // Deliberately minimal compared to a normal stays[] entry — no
-        // pets, paid amenities, or extra-guest pricing here, since a
-        // guest configures none of that through the experience booking
-        // flow. commissionRate (rather than baseCommission/
-        // amenityCommission) is enough for verify-payment.js to compute
-        // this correctly; the fields left out all have safe fallbacks
-        // there (empty array / zero).
-        stayDetails.push({
-          listingId: hostingListing.id,
-          suite: hostingListing.property_name,
-          arrival: startDate,
-          departure: endDateExclusive,
-          guests,
-          nights: days,
-          subtotal: hostingSubtotal,
-          discountAmount: hostingDiscountAmount,
-          commissionRate: BASE_COMMISSION_RATE,
-          guestServiceFee: hostingGuestServiceFee,
-        });
-      }
-
       const price = Number(experience.nightly_rate);
-      // Price is the fixed package rate for this experience — never
-      // scaled by how many days are in the guest's selected range. The
-      // range represents the guest's AVAILABILITY window, not "how many
-      // days of this experience they're buying" — see the days/duration
-      // check below for what the range is actually used for.
       const subtotalBeforeDiscount = experience.experience_price_unit === 'per_person' ? price * guests : price;
 
       // Same discount logic stays use — the listing's own standing
       // discount and/or any date-scoped promotions (see
       // update-listing-pricing.js) — previously never applied to
       // experiences at all, so a host's promotion calendar was purely
-      // cosmetic for anything booked here. durationDays is now the
-      // guest's real selected day count (see above), so a "2+ nights"
-      // promotion now genuinely reflects how long they're actually
-      // booking, not a host-fixed default.
+      // cosmetic for anything booked here. "Nights" doesn't really apply
+      // to an experience, but calculateDiscount only uses it for a
+      // minNights gate, so durationDays stands in for it — a promotion
+      // requiring "2+ nights" on a 1-day experience simply never
+      // qualifies, which is the correct behavior either way.
       const experiencePromoRows = await sql`
         SELECT is_active, discount_type, discount_value, min_nights, start_date, end_date
         FROM listing_promotions
         WHERE listing_id = ${ex.listingId} AND is_active = TRUE AND end_date > CURRENT_DATE
       `;
-      const subtotal = subtotalBeforeDiscount - calculateDiscount(experience, durationDays, startDate, subtotalBeforeDiscount, experiencePromoRows);
+      const subtotal = subtotalBeforeDiscount - calculateDiscount(experience, durationDays, ex.date, subtotalBeforeDiscount, experiencePromoRows);
       const commissionRate = BASE_COMMISSION_RATE;
       const commissionAmount = Math.round(subtotal * (commissionRate / 100));
       const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
@@ -868,7 +564,7 @@ module.exports = async (req, res) => {
       experienceDetails.push({
         listingId: experience.id,
         suite: experience.property_name,
-        date: startDate,
+        date: ex.date,
         endDate: endDateExclusive,
         durationDays,
         guests,
@@ -967,6 +663,23 @@ module.exports = async (req, res) => {
         stays: JSON.stringify(stayDetails).slice(0, 4000),
         experiences: JSON.stringify(experienceDetails).slice(0, 2000),
       },
+    });
+
+    // "What they booked" — the actual stay/experience details, dates,
+    // and amount, logged the moment the order (and its Razorpay
+    // counterpart) actually gets created. This is the booking ATTEMPT,
+    // not yet a confirmed booking — verify-payment.js logs that
+    // separately once payment actually clears, since a guest can create
+    // an order here and then abandon payment entirely.
+    await logAudit(sql, {
+      action: 'booking_order_created', success: true, actorType: 'guest', actorIdentifier: email || null,
+      targetType: 'order', targetId: null,
+      metadata: {
+        razorpayOrderId: order.id, guestId: guestId || null,
+        stays: safeStays.map(s => ({ listingId: s.listingId, arrival: s.arrival, departure: s.departure, guests: s.guests })),
+        experiences: safeExperiences.map(e => ({ listingId: e.listingId, date: e.date, guests: e.guests })),
+        totalRupees, chargeCurrency, chargeAmount, couponId: appliedCouponId || null
+      }
     });
 
     return res.status(200).json({
