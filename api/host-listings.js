@@ -79,24 +79,6 @@ const razorpay = new Razorpay({
 });
 const CANCELLATION_CUTOFF_HOURS = 48;
 
-// Normalizes a DATE column value to 'YYYY-MM-DD' whether the driver
-// returns it as a JS Date object or an already-formatted string — same
-// helper used in get-listings.js/create-order.js for the same reason.
-// Missing here until now, which mattered a lot more than in those other
-// files: the host dashboard's own 48-hour cancellation-cutoff check does
-// `booking.arrival + 'T00:00:00Z'` client-side. If the driver ever hands
-// back a full ISO timestamp (e.g. '2026-09-16T00:00:00.000Z') instead of
-// a plain date, that concatenation produces an invalid, double-stamped
-// string ('...000ZT00:00:00Z'), `new Date(...)` on it is Invalid Date,
-// and the hours-until-arrival math silently becomes NaN — which reads as
-// "already past the cutoff" for every single booking, regardless of how
-// far away check-in actually is.
-function toDateStr(val) {
-  if (!val) return null;
-  if (val instanceof Date) return val.toISOString().split('T')[0];
-  return String(val).slice(0, 10);
-}
-
 // Same Resend pattern used everywhere else in this codebase (see
 // guest-auth.js, submit-listing.js, approve-listing.js) — never throws;
 // a failed notification email shouldn't undo a cancellation that's
@@ -109,7 +91,7 @@ async function sendCancellationEmail(order){
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">Your booking has been cancelled</h2>
-      <p>Your host has cancelled your stay at <strong>${order.suite_name}</strong> (${toDateStr(order.arrival)} — ${toDateStr(order.departure)}).</p>
+      <p>Your host has cancelled your stay at <strong>${order.suite_name}</strong> (${order.arrival} — ${order.departure}).</p>
       <p>Your full payment has been refunded to your original payment method — it should appear within 5–7 business days depending on your bank.</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you have questions about this cancellation, please contact hello@aerva.in.</p>
     </div>
@@ -275,7 +257,7 @@ module.exports = async (req, res) => {
       return { error: 'Only a paid, confirmed booking can be cancelled this way.', status: 400 };
     }
     if (enforceCutoff) {
-      const arrivalDate = new Date(toDateStr(order.arrival) + 'T00:00:00Z');
+      const arrivalDate = new Date(order.arrival + 'T00:00:00Z');
       const hoursUntilArrival = (arrivalDate.getTime() - Date.now()) / (1000 * 60 * 60);
       if (hoursUntilArrival < CANCELLATION_CUTOFF_HOURS) {
         return {
@@ -657,6 +639,7 @@ module.exports = async (req, res) => {
              discount_type, discount_value, discount_min_nights, discount_description,
              latitude, longitude, formatted_address, pincode,
              exterior_photo_urls, interior_photo_urls, cover_photo_url, created_at,
+             pending_room_photos,
              listing_type, hosting_listing_id, experience_category, experience_price_unit,
              experience_duration_hours, experience_duration_days, experience_type, experience_arranges_travel,
              experience_travel_details, experience_meeting_point_type,
@@ -696,7 +679,7 @@ module.exports = async (req, res) => {
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
-             o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
+             o.status, o.created_at, o.pet_types,
              o.guest_email, g.name AS guest_name
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
@@ -705,12 +688,6 @@ module.exports = async (req, res) => {
       ORDER BY o.created_at DESC
       LIMIT 100
     `;
-    // See toDateStr's own comment above — this is the fix for the
-    // dashboard's 48-hour cancellation cutoff silently miscalculating.
-    bookings.forEach(b => {
-      b.arrival = toDateStr(b.arrival);
-      b.departure = toDateStr(b.departure);
-    });
 
     // Verification status for the checklist. Bank account number is
     // masked to its last 4 digits — even the host's own dashboard never
