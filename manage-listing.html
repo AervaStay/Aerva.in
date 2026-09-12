@@ -1015,22 +1015,37 @@
   let roomRows = [];
   const roomsList = document.getElementById('roomsList');
 
+  function roomGalleryHtml(room, roomIdx){
+    const thumbs = room.photos.map((photo, photoIdx) => {
+      const src = photo.file ? URL.createObjectURL(photo.file) : photo.url;
+      return `
+        <div style="position:relative; display:inline-block;">
+          <div class="room-photo-slot room-photo-slot-small" style="cursor:default;">
+            <img src="${src}" alt="">
+          </div>
+          <button type="button" class="room-photo-remove-btn" data-gallery-remove="${roomIdx}:${photoIdx}" aria-label="Remove this photo">×</button>
+        </div>
+      `;
+    }).join('');
+    return `
+      <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start;">
+        ${thumbs}
+        <div class="room-photo-slot room-photo-slot-small" data-gallery-add="${roomIdx}">
+          <span>+ Add Photos</span>
+        </div>
+      </div>
+    `;
+  }
+
   function renderRooms(){
     roomsList.innerHTML = '';
     roomRows.forEach((room, idx) => {
       const el = document.createElement('div');
       el.className = 'room-card';
-      const mainSrc = room.photoFile ? URL.createObjectURL(room.photoFile) : room.coverPhotoUrl;
-      const washroomSrc = room.washroomFile ? URL.createObjectURL(room.washroomFile) : room.washroomUrl;
-      const balconySrc = room.balconyFile ? URL.createObjectURL(room.balconyFile) : room.balconyUrl;
+      const otherRooms = roomRows.filter((r, i) => i !== idx);
       el.innerHTML = `
-        <div class="room-card-top">
-          <div class="room-photo-slot" data-room-photo-pick>
-            ${mainSrc ? `<img src="${mainSrc}" alt="">` : '<span>+ Room Photo</span>'}
-            ${mainSrc ? '<button type="button" class="room-photo-remove-btn" data-room-photo-remove aria-label="Remove this photo">×</button>' : ''}
-            <div class="room-photo-slot-label">Room <em>*</em></div>
-          </div>
-          <div class="room-card-fields">
+        <div class="room-card-top" style="flex-direction:column; align-items:stretch;">
+          <div class="room-card-fields" style="margin-bottom:12px;">
             <input type="text" class="room-name-input" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${room.roomName || ''}">
             <div class="room-card-numbers">
               <div class="room-card-number-field">
@@ -1044,18 +1059,19 @@
             </div>
             <textarea rows="2" class="room-description-input" placeholder="Description (optional)" data-room-field="description">${room.description || ''}</textarea>
           </div>
-        </div>
-        <div class="room-card-subphotos">
-          <div class="room-photo-slot room-photo-slot-small" data-room-washroom-pick>
-            ${washroomSrc ? `<img src="${washroomSrc}" alt="">` : '<span>+ Photo</span>'}
-            ${washroomSrc ? '<button type="button" class="room-photo-remove-btn" data-room-washroom-remove aria-label="Remove this photo">×</button>' : ''}
-            <div class="room-photo-slot-label">Washroom <em>*</em></div>
-          </div>
-          <div class="room-photo-slot room-photo-slot-small" data-room-balcony-pick>
-            ${balconySrc ? `<img src="${balconySrc}" alt="">` : '<span>+ Photo</span>'}
-            ${balconySrc ? '<button type="button" class="room-photo-remove-btn" data-room-balcony-remove aria-label="Remove this photo">×</button>' : ''}
-            <div class="room-photo-slot-label">Balcony <span>(optional)</span></div>
-          </div>
+          ${roomGalleryHtml(room, idx)}
+          ${room.photos.length && otherRooms.length ? `
+            <button type="button" class="add-paid-amenity-btn" data-clone-open style="margin-top:12px; width:auto; padding:8px 16px; font-size:11px;">Clone these ${room.photos.length} photo${room.photos.length === 1 ? '' : 's'} to other rooms</button>
+            <div data-clone-panel style="display:none; background:#f4ebe3; border:1px solid #ddd0bc; padding:12px 14px; margin-top:8px;">
+              <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Copies these exact photos onto whichever rooms you check below, replacing anything already there for that room.</p>
+              ${otherRooms.map(other => `
+                <label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; cursor:pointer;">
+                  <input type="checkbox" data-clone-target="${roomRows.indexOf(other)}" style="width:auto;"> ${other.roomName || 'Untitled room'}
+                </label>
+              `).join('')}
+              <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Clone Now</button>
+            </div>
+          ` : ''}
         </div>
         <div class="room-card-footer">
           <label class="room-active-toggle">
@@ -1066,8 +1082,9 @@
           <button type="button" class="remove-amenity-btn" data-action="remove">Remove this room</button>
         </div>
       `;
-      function wirePick(selector, getFile, setFile, clearUrl){
-        el.querySelector(selector).addEventListener('click', () => {
+      const galleryAdd = el.querySelector('[data-gallery-add]');
+      if(galleryAdd){
+        galleryAdd.addEventListener('click', () => {
           // Attached to the DOM (hidden) and removed after use — a
           // dynamically created <input type="file"> left detached from
           // the page can become unreliable on repeated use in iOS
@@ -1076,33 +1093,46 @@
           const input = document.createElement('input');
           input.type = 'file';
           input.accept = 'image/*';
+          input.multiple = true;
           input.style.display = 'none';
           document.body.appendChild(input);
           input.addEventListener('change', () => {
-            if(input.files[0]){
-              setFile(input.files[0]);
-              clearUrl();
-              renderRooms();
-            }
+            Array.from(input.files).forEach(file => room.photos.push({ file, url: null }));
+            renderRooms();
             input.remove();
           });
           input.click();
         });
       }
-      wirePick('[data-room-photo-pick]', () => room.photoFile, f => { room.photoFile = f; }, () => { room.coverPhotoUrl = null; });
-      wirePick('[data-room-washroom-pick]', () => room.washroomFile, f => { room.washroomFile = f; }, () => { room.washroomUrl = null; });
-      wirePick('[data-room-balcony-pick]', () => room.balconyFile, f => { room.balconyFile = f; }, () => { room.balconyUrl = null; });
-      // Remove buttons are siblings of the pick box (not children of the
-      // click target itself), so no stopPropagation is needed — clicking
-      // one doesn't also open the file picker. Clears both any pending
-      // unsaved file AND an already-uploaded url, so removing a photo
-      // that came from a prior save doesn't leave a stale url behind.
-      const mainRemoveBtn = el.querySelector('[data-room-photo-remove]');
-      if(mainRemoveBtn) mainRemoveBtn.addEventListener('click', () => { room.photoFile = null; room.coverPhotoUrl = null; renderRooms(); });
-      const washroomRemoveBtn = el.querySelector('[data-room-washroom-remove]');
-      if(washroomRemoveBtn) washroomRemoveBtn.addEventListener('click', () => { room.washroomFile = null; room.washroomUrl = null; renderRooms(); });
-      const balconyRemoveBtn = el.querySelector('[data-room-balcony-remove]');
-      if(balconyRemoveBtn) balconyRemoveBtn.addEventListener('click', () => { room.balconyFile = null; room.balconyUrl = null; renderRooms(); });
+      el.querySelectorAll('[data-gallery-remove]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const [rIdx, pIdx] = btn.dataset.galleryRemove.split(':').map(Number);
+          roomRows[rIdx].photos.splice(pIdx, 1);
+          renderRooms();
+        });
+      });
+      const cloneOpenBtn = el.querySelector('[data-clone-open]');
+      const clonePanel = el.querySelector('[data-clone-panel]');
+      if(cloneOpenBtn && clonePanel){
+        cloneOpenBtn.addEventListener('click', () => {
+          clonePanel.style.display = clonePanel.style.display === 'none' ? 'block' : 'none';
+        });
+      }
+      const cloneApplyBtn = el.querySelector('[data-clone-apply]');
+      if(cloneApplyBtn){
+        cloneApplyBtn.addEventListener('click', () => {
+          const targets = Array.from(el.querySelectorAll('[data-clone-target]:checked')).map(cb => Number(cb.dataset.cloneTarget));
+          if(!targets.length) return;
+          // Same File/URL references are reused across the clone
+          // targets, not re-picked from disk — finalizeRoomPhotos below
+          // only uploads a File once even if it appears on several
+          // rooms (see its own dedup note).
+          targets.forEach(targetIdx => {
+            roomRows[targetIdx].photos = room.photos.map(p => ({ file: p.file, url: p.url }));
+          });
+          renderRooms();
+        });
+      }
       el.querySelectorAll('[data-room-field]').forEach(input => {
         const field = input.dataset.roomField;
         const eventName = input.type === 'checkbox' ? 'change' : 'input';
@@ -1125,23 +1155,21 @@
   }
   document.getElementById('addRoomBtn').addEventListener('click', () => {
     roomRows.push({
-      id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true,
-      photoFile: null, coverPhotoUrl: null, washroomFile: null, washroomUrl: null, balconyFile: null, balconyUrl: null
+      id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true, photos: []
     });
     renderRooms();
   });
 
   // A room only counts as "complete" once it has a name, occupancy,
-  // price, a main photo, AND a washroom photo — the exact same criteria
+  // price, AND at least one photo in its gallery — no specific label
+  // (washroom, balcony, etc.) required within it. Same criteria
   // update-listing-pricing.js's own server-side check uses, kept in sync
-  // by hand (no shared module between these separate files). Balcony is
-  // genuinely optional, so it's never part of this. This is what the
-  // declared room count is actually being measured against.
+  // by hand (no shared module between these separate files). This is
+  // what the declared room count is actually being measured against.
   function countCompleteActiveRooms(){
     return roomRows.filter(r => {
-      const hasPhoto = !!(r.photoFile || r.coverPhotoUrl);
-      const hasWashroom = !!(r.washroomFile || r.washroomUrl);
-      return r.roomName && Number(r.maxOccupancy) >= 1 && Number(r.nightlyRate) > 0 && hasPhoto && hasWashroom && r.isActive !== false;
+      const hasPhoto = r.photos.some(p => p.file || p.url);
+      return r.roomName && Number(r.maxOccupancy) >= 1 && Number(r.nightlyRate) > 0 && hasPhoto && r.isActive !== false;
     }).length;
   }
   function updateRoomCountProgress(){
@@ -1162,28 +1190,28 @@
   }
   document.getElementById('declaredRoomCount').addEventListener('input', updateRoomCountProgress);
 
-  // Uploads any newly-picked room photos (existing ones untouched) and
-  // returns the field to send for each room. Same lazy-upload pattern as
-  // check-in photos above — nothing hits Blob storage until Save. Now
-  // handles three possible photos per room (main, washroom, balcony)
-  // instead of just one.
+  // Uploads any newly-picked photos across every room's gallery (already-
+  // uploaded ones untouched) and fills in their url. Same lazy-upload
+  // pattern as check-in photos above — nothing hits Blob storage until
+  // Save. Deduplicated by File identity: cloning a room's photos onto
+  // others reuses the same File references rather than re-picking from
+  // disk, so an identical photo cloned onto 3 rooms is uploaded once,
+  // not three times, and every occurrence ends up with the same URL.
   async function finalizeRoomPhotos(){
     const { upload } = await import('https://esm.sh/@vercel/blob/client');
+    const cache = new Map();
     for(const room of roomRows){
-      if(room.photoFile){
-        const uploaded = await upload(room.photoFile.name, room.photoFile, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
-        room.coverPhotoUrl = uploaded.url;
-        room.photoFile = null;
-      }
-      if(room.washroomFile){
-        const uploaded = await upload(room.washroomFile.name, room.washroomFile, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
-        room.washroomUrl = uploaded.url;
-        room.washroomFile = null;
-      }
-      if(room.balconyFile){
-        const uploaded = await upload(room.balconyFile.name, room.balconyFile, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
-        room.balconyUrl = uploaded.url;
-        room.balconyFile = null;
+      for(const photo of room.photos){
+        if(!photo.file || photo.url) continue;
+        if(cache.has(photo.file)){
+          photo.url = cache.get(photo.file);
+          photo.file = null;
+          continue;
+        }
+        const uploaded = await upload(photo.file.name, photo.file, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        cache.set(photo.file, uploaded.url);
+        photo.url = uploaded.url;
+        photo.file = null;
       }
     }
   }
@@ -1502,18 +1530,19 @@
         // actually reflects real is_active state, and the host controls
         // it directly from here.
         roomRows = (data.rooms || []).map(r => {
-          // Washroom/balcony live inside this room's own photo_urls
-          // array (see approve-listing.js), labeled rather than in fixed
-          // positions — extracted back out here the same way.
-          const subPhotos = Array.isArray(r.photo_urls) ? r.photo_urls : [];
-          const washroom = subPhotos.find(p => p && p.label === 'Washroom');
-          const balcony = subPhotos.find(p => p && p.label === 'Balcony');
+          // A room's whole gallery is cover_photo_url (the first photo)
+          // plus whatever else is in photo_urls (see approve-listing.js
+          // and update-listing-pricing.js) — reassembled into one flat
+          // photos[] array here, since there's no meaningful distinction
+          // between them anymore beyond display order.
+          const restPhotos = Array.isArray(r.photo_urls) ? r.photo_urls : [];
+          const photos = [];
+          if (r.cover_photo_url) photos.push({ url: r.cover_photo_url, file: null });
+          restPhotos.forEach(p => { if (p && p.url) photos.push({ url: p.url, file: null }); });
           return {
             id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
             nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
-            coverPhotoUrl: r.cover_photo_url || null, photoFile: null,
-            washroomUrl: washroom ? washroom.url : null, washroomFile: null,
-            balconyUrl: balcony ? balcony.url : null, balconyFile: null
+            photos
           };
         });
         renderRooms();
@@ -1565,16 +1594,12 @@
     // several rooms with no way to see what they actually look like
     // defeats the point of having separate rooms at all. Checked here,
     // not just left as a nice-to-have, since this is exactly the kind of
-    // thing that's easy to skip when adding rooms quickly.
-    const roomsMissingPhotos = roomRows.filter(r => r.isActive !== false && !r.coverPhotoUrl && !r.photoFile);
+    // thing that's easy to skip when adding rooms quickly. No specific
+    // label (washroom, balcony, etc.) required within the gallery — just
+    // at least one photo.
+    const roomsMissingPhotos = roomRows.filter(r => r.isActive !== false && !r.photos.some(p => p.file || p.url));
     if(roomsMissingPhotos.length){
       errorMsg.textContent = `Please add a photo for every active room — missing for: ${roomsMissingPhotos.map(r => r.roomName || 'Untitled room').join(', ')}.`;
-      errorMsg.style.display = 'block';
-      return;
-    }
-    const roomsMissingWashroom = roomRows.filter(r => r.isActive !== false && !r.washroomUrl && !r.washroomFile);
-    if(roomsMissingWashroom.length){
-      errorMsg.textContent = `Please add a washroom photo for every active room — missing for: ${roomsMissingWashroom.map(r => r.roomName || 'Untitled room').join(', ')}.`;
       errorMsg.style.display = 'block';
       return;
     }
