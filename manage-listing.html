@@ -1545,6 +1545,7 @@
       document.getElementById('propertyNameHeading').textContent = l.property_name;
       document.getElementById('listingCity').value = l.city || '';
       document.getElementById('listingArea').value = l.area || '';
+      document.getElementById('listPincode').value = l.pincode || '';
       if(l.latitude && l.longitude){
         document.getElementById('listLatitude').value = l.latitude;
         document.getElementById('listLongitude').value = l.longitude;
@@ -1761,6 +1762,7 @@
           latitude: document.getElementById('listLatitude').value,
           longitude: document.getElementById('listLongitude').value,
           formattedAddress: document.getElementById('listFormattedAddress').value,
+          pincode: document.getElementById('listPincode').value,
           discountType: document.getElementById('discountType').value,
           discountValue: document.getElementById('discountType').value === 'flat'
             ? toInr(document.getElementById('discountValue').value)
