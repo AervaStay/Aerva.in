@@ -804,9 +804,16 @@
   .room-space-photo-box{
     width:76px; height:58px; flex:0 0 auto; border:1px dashed var(--line-dark); background:var(--cream);
     display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:pointer;
+    position:relative;
   }
   .room-space-photo-box img{width:100%; height:100%; object-fit:cover; display:block;}
   .room-space-photo-box span{font-size:11px; opacity:0.5; text-align:center; padding:0 6px;}
+  .room-photo-remove-btn{
+    position:absolute; top:-7px; right:-7px; width:20px; height:20px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream); border:none; cursor:pointer;
+    font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:1;
+  }
+  .room-photo-remove-btn:hover{background:#a3402f;}
   .guest-step-btn{
     width:30px; height:30px; border-radius:50%; border:1px solid var(--line-dark);
     background:none; color:var(--ink); font-size:16px; line-height:1; cursor:pointer;
@@ -4109,10 +4116,18 @@
     return slots;
   }
   document.getElementById('roomPhotoPoolBtn').addEventListener('click', () => {
+    // Attached to the DOM (hidden), not left detached — a dynamically
+    // created <input type="file"> that's never actually part of the
+    // page can behave unreliably on repeated use in iOS Safari
+    // specifically (the first use works, later ones silently don't
+    // fire), which is exactly the "only worked for the first room"
+    // symptom this fixes. Removed again once its job is done.
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
     input.multiple = true;
+    input.style.display = 'none';
+    document.body.appendChild(input);
     input.addEventListener('change', () => {
       const files = Array.from(input.files);
       const emptySlots = getEmptyRoomPhotoSlotsInOrder();
@@ -4131,6 +4146,7 @@
         statusEl.style.color = '#3a7d44';
         statusEl.textContent = `✓ Filled ${assignCount} empty spot${assignCount === 1 ? '' : 's'}, in the order they appear below.`;
       }
+      input.remove();
     });
     input.click();
   });
@@ -4140,17 +4156,40 @@
   // upload handler avoids writing the same wiring three times over.
   function wireRoomPhotoPick(el, getFile, setFile, onPicked){
     el.addEventListener('click', () => {
+      // Same DOM-attach-then-remove fix as the bulk picker above, and
+      // for the same reason — reliability across repeated uses.
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/*';
+      input.style.display = 'none';
+      document.body.appendChild(input);
       input.addEventListener('change', () => {
         if(input.files[0]){
           setFile(input.files[0]);
           onPicked();
         }
+        input.remove();
       });
       input.click();
     });
+  }
+
+  // Small helper so every photo slot (main, washroom, balcony, or a
+  // plain fixed space) gets the same optional remove button without
+  // repeating this markup four times over. The remove button sits
+  // outside the box's own overflow:hidden (as a sibling in a relatively-
+  // positioned wrapper), poking slightly past its corner — otherwise the
+  // box's own overflow:hidden (needed to crop the photo itself) would
+  // clip the button too.
+  function roomPhotoBoxHtml(src, placeholder, pickAttr, removeAttr, extraClass){
+    return `
+      <div style="position:relative; display:inline-block;">
+        <div class="room-space-photo-box ${extraClass || ''}" ${pickAttr}>
+          ${src ? `<img src="${src}" alt="">` : `<span>${placeholder}</span>`}
+        </div>
+        ${src ? `<button type="button" class="room-photo-remove-btn" ${removeAttr} aria-label="Remove this photo">×</button>` : ''}
+      </div>
+    `;
   }
 
   function renderRoomSpaces(){
@@ -4181,23 +4220,17 @@
                 <p style="font-size:11px; opacity:0.55; margin-top:4px;">You can update this price anytime later from the Rooms tab after approval.</p>
               </div>
               <div style="text-align:center;">
-                <div class="room-space-photo-box" data-room-photo-pick>
-                  ${mainSrc ? `<img src="${mainSrc}" alt="">` : '<span>+ Room Photo</span>'}
-                </div>
+                ${roomPhotoBoxHtml(mainSrc, '+ Room Photo', 'data-room-photo-pick', 'data-room-photo-remove')}
                 <div style="font-size:10.5px; opacity:0.55; margin-top:3px;">Room *</div>
               </div>
             </div>
             <div style="display:flex; gap:16px;">
               <div style="text-align:center;">
-                <div class="room-space-photo-box" data-room-washroom-pick>
-                  ${washroomSrc ? `<img src="${washroomSrc}" alt="">` : '<span>+ Photo</span>'}
-                </div>
+                ${roomPhotoBoxHtml(washroomSrc, '+ Photo', 'data-room-washroom-pick', 'data-room-washroom-remove')}
                 <div style="font-size:10.5px; opacity:0.55; margin-top:3px;">Washroom *</div>
               </div>
               <div style="text-align:center;">
-                <div class="room-space-photo-box" data-room-balcony-pick>
-                  ${balconySrc ? `<img src="${balconySrc}" alt="">` : '<span>+ Photo</span>'}
-                </div>
+                ${roomPhotoBoxHtml(balconySrc, '+ Photo', 'data-room-balcony-pick', 'data-room-balcony-remove')}
                 <div style="font-size:10.5px; opacity:0.55; margin-top:3px;">Balcony (optional)</div>
               </div>
             </div>
@@ -4218,9 +4251,7 @@
               : `<div class="guest-row-title">${room.name}</div>`}
             <div class="guest-row-sub">${room.mandatory ? 'Required' : 'Optional'}</div>
           </div>
-          <div class="room-space-photo-box" data-room-photo-pick>
-            ${previewSrc ? `<img src="${previewSrc}" alt="">` : '<span>+ Photo</span>'}
-          </div>
+          ${roomPhotoBoxHtml(previewSrc, '+ Photo', 'data-room-photo-pick', 'data-room-photo-remove')}
         </div>
         ${idx < roomSpaceRows.length - 1 ? '<div class="guest-row-divider"></div>' : ''}
       `;
@@ -4242,6 +4273,18 @@
       if(washroomPick) wireRoomPhotoPick(washroomPick, () => room.washroomFile, f => { room.washroomFile = f; room.washroomUrl = null; }, renderRoomSpaces);
       const balconyPick = rowEl.querySelector('[data-room-balcony-pick]');
       if(balconyPick) wireRoomPhotoPick(balconyPick, () => room.balconyFile, f => { room.balconyFile = f; room.balconyUrl = null; }, renderRoomSpaces);
+
+      // Remove buttons — stopPropagation isn't actually needed here since
+      // the button is a sibling of the pick box, not a child of it, but
+      // each handler clears both the pending file AND any already-
+      // uploaded url, so removing a photo that was uploaded on a prior
+      // attempt (retry scenario) doesn't leave a stale url behind.
+      const mainRemove = rowEl.querySelector('[data-room-photo-remove]');
+      if(mainRemove) mainRemove.addEventListener('click', () => { room.file = null; room.url = null; renderRoomSpaces(); });
+      const washroomRemove = rowEl.querySelector('[data-room-washroom-remove]');
+      if(washroomRemove) washroomRemove.addEventListener('click', () => { room.washroomFile = null; room.washroomUrl = null; renderRoomSpaces(); });
+      const balconyRemove = rowEl.querySelector('[data-room-balcony-remove]');
+      if(balconyRemove) balconyRemove.addEventListener('click', () => { room.balconyFile = null; room.balconyUrl = null; renderRoomSpaces(); });
     });
   }
   renderRoomSpaces();
