@@ -306,6 +306,7 @@
      experience happens to include a stay," a different fact). */
   .suite-badge-type-stay{ background:#2f6690; color:#fff; }
   .suite-badge-type-experience{ background:#8a6c39; color:#fff; }
+  .suite-badge-rooms{ background:rgba(28,26,23,0.78); color:#fff; }
   .suite-photo-slider{
     position:absolute; inset:0; display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
     -webkit-overflow-scrolling:touch; scrollbar-width:none;
@@ -4553,6 +4554,50 @@
     return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  // A modern phone camera photo is routinely 5-15MB — uploading that raw,
+  // for potentially 20-40+ photos on a full Resort listing, is the real
+  // reason this feels slow, far more than anything about the form itself.
+  // Resized to a sensible max dimension and re-encoded as JPEG before
+  // upload, typically cutting file size by 10-20x with no visible
+  // quality loss for web display (nothing on the site ever shows a photo
+  // anywhere near full camera resolution anyway). Never blocks the
+  // actual upload if anything goes wrong — a compression failure (an
+  // unsupported format, a corrupt file, etc.) just falls back to
+  // uploading the original file untouched.
+  async function compressImage(file, maxDimension = 1920, quality = 0.82){
+    if(!file.type || !file.type.startsWith('image/')) return file;
+    // HEIC/HEIF (the default format on many iPhones) generally can't be
+    // decoded via createImageBitmap in most browsers — attempting it
+    // would just fail and fall through to the catch below anyway, but
+    // skipping straight to the original avoids a pointless decode
+    // attempt on every single HEIC photo.
+    if(file.type === 'image/heic' || file.type === 'image/heif') return file;
+    try{
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+      // Already small (a screenshot, an already-compressed photo, etc.)
+      // — re-encoding it wouldn't help and could even make it bigger.
+      if(scale >= 1 && file.size < 1.5 * 1024 * 1024){
+        bitmap.close();
+        return file;
+      }
+      const targetWidth = Math.max(1, Math.round(bitmap.width * scale));
+      const targetHeight = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+      bitmap.close();
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if(!blob || blob.size >= file.size) return file; // didn't actually help — keep the original
+      return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+    } catch(err){
+      console.warn('Image compression skipped, uploading original:', file.name, err);
+      return file;
+    }
+  }
+
   async function uploadPhotoCategory(files){
     if(files.length === 0) return { urls: [], hashes: [] };
     const { upload } = await import('https://esm.sh/@vercel/blob/client');
@@ -4570,9 +4615,10 @@
     const CONCURRENCY = 3;
     async function uploadOne(file){
       async function attempt(){
+        const compressed = await compressImage(file);
         const [uploaded, hash] = await Promise.all([
-          upload(file.name, file, { access: 'public', handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload' }),
-          computeFileHash(file)
+          upload(compressed.name, compressed, { access: 'public', handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload' }),
+          computeFileHash(compressed)
         ]);
         return { url: uploaded.url, hash };
       }
@@ -6161,6 +6207,7 @@
           ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-stay">Stay</span>' : ''}
           ${isNew ? '<span class="suite-badge">New</span>' : ''}
           ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
+          ${listing.property_type === 'Resort' && listing.resort_room_count ? `<span class="suite-badge suite-badge-rooms">${listing.resort_available_room_count || 0} of ${listing.resort_room_count} rooms · sleeps up to ${listing.resort_available_capacity || listing.resort_total_capacity || 0}</span>` : ''}
         </div>
         <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
           <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
