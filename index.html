@@ -4960,6 +4960,7 @@
           interiorPhotoUrls: interiorPhotoUrls,
           roomPhotos: roomPhotos,
           coverPhotoUrl: coverPhotoUrl,
+          clonedFromListingId: clonedFromListingId,
           // Content hashes, not URLs — a re-upload of the exact same photo
           // always gets a brand-new Blob URL, so only comparing actual
           // image bytes can catch a genuine duplicate. See submit-listing.js
@@ -5305,6 +5306,17 @@
       const data = await res.json();
       const existing = (data.listings || []).find(l => String(l.id) === String(editId) && l.listing_type === 'experience');
       if(!existing) return;
+      // A pending experience used to load fully into this form — a host
+      // could change anything and only find out it was rejected once
+      // they tried to save (see submit-listing.js, which now blocks
+      // editing mid-review). Caught here instead, before any of that
+      // effort happens, with a clear reason rather than a silently blank
+      // form.
+      if(existing.status === 'pending'){
+        alert('This experience is still awaiting its first review and can\'t be edited until that\'s complete.');
+        window.location.href = 'host-dashboard.html';
+        return;
+      }
 
       editingExperienceId = existing.id;
       document.getElementById('expName').value = existing.property_name || '';
@@ -5621,6 +5633,7 @@
   // second fetch). Read once, then cleared immediately, so refreshing
   // this page or navigating back to it doesn't silently reapply stale
   // clone data days later.
+  let clonedFromListingId = null;
   (function cloneListingIfLinked(){
     const params = new URLSearchParams(window.location.search);
     if(params.get('clone') !== '1') return;
@@ -5631,6 +5644,12 @@
 
     let source;
     try { source = JSON.parse(raw); } catch(err) { return; }
+    // Captured for the actual submission later — see submit-listing.js,
+    // which checks whether THIS id's listing was rejected, so an admin
+    // reviewing this new submission knows it's effectively a
+    // resubmission of something already turned down, not a genuinely
+    // new property.
+    clonedFromListingId = source.id || null;
 
     // Deliberately NOT set — this must submit as a brand new listing,
     // never overwrite the original being cloned from.
@@ -6207,7 +6226,9 @@
           ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-stay">Stay</span>' : ''}
           ${isNew ? '<span class="suite-badge">New</span>' : ''}
           ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
-          ${listing.property_type === 'Resort' && listing.resort_room_count ? `<span class="suite-badge suite-badge-rooms">${listing.resort_available_room_count || 0} of ${listing.resort_room_count} rooms · sleeps up to ${listing.resort_available_capacity || listing.resort_total_capacity || 0}</span>` : ''}
+          ${listing.property_type === 'Resort' && listing.resort_room_count
+            ? `<span class="suite-badge suite-badge-rooms">${listing.resort_available_room_count || 0} of ${listing.resort_room_count} rooms · sleeps up to ${listing.resort_available_capacity || listing.resort_total_capacity || 0}</span>`
+            : (Number(listing.max_guests) > 0 ? `<span class="suite-badge suite-badge-rooms">Sleeps up to ${Number(listing.max_guests)}</span>` : '')}
         </div>
         <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
           <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
