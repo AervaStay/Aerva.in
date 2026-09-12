@@ -1235,6 +1235,12 @@
       });
       if(res.ok){
         document.getElementById('pendingRoomChangesBanner').style.display = 'none';
+        // Re-enables the Save button that got disabled on load because
+        // of this exact pending state — without this, cancelling would
+        // remove the banner but leave Save looking permanently stuck.
+        const saveBtn = document.getElementById('submitBtn');
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Changes';
       } else {
         const data = await res.json().catch(() => ({}));
         alert(data.error || 'Could not cancel — please try again.');
@@ -1626,6 +1632,16 @@
         // there before they even start editing, not after.
         if(l.rooms_pending_review){
           document.getElementById('pendingRoomChangesBanner').style.display = 'block';
+          // Disabled outright rather than letting a host click Save and
+          // only then discover their room changes got silently held
+          // back (everything else on the form still saves fine, but the
+          // rooms sync itself is a no-op while a submission is already
+          // pending) — clearer to prevent the attempt than to explain
+          // after the fact why part of what they just saved didn't
+          // actually apply.
+          const saveBtn = document.getElementById('submitBtn');
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Save Changes (blocked — room changes pending review)';
         }
         // Every room loaded here, active or not — a room pre-populated
         // from submission-time photos (see approve-listing.js) is
