@@ -260,7 +260,7 @@ module.exports = async (req, res) => {
           const roomName = typeof r.roomName === 'string' ? r.roomName.trim() : '';
           const maxOccupancy = Number(r.maxOccupancy);
           const roomRate = Number(r.nightlyRate);
-          const hasPhoto = typeof r.coverPhotoUrl === 'string' && r.coverPhotoUrl.trim();
+          const hasPhoto = Array.isArray(r.photos) && r.photos.some(p => p && typeof p.url === 'string' && p.url.trim());
           const isMeaningful = roomName && maxOccupancy >= 1 && roomRate > 0 && hasPhoto;
           return isMeaningful && r.isActive !== false;
         }).length;
@@ -380,26 +380,23 @@ module.exports = async (req, res) => {
             // failing the whole listing save over one incomplete row.
             if (!roomName || !maxOccupancy || maxOccupancy < 1 || !roomRate || roomRate <= 0) continue;
             const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
-            const coverPhotoUrl = typeof r.coverPhotoUrl === 'string' && r.coverPhotoUrl.trim() ? r.coverPhotoUrl.trim() : null;
-            // Washroom and balcony belong to THIS room, not the resort
-            // as a whole — stored in its own photo_urls, labeled so
-            // they can be told apart from the main cover_photo_url.
-            // Balcony is genuinely optional; washroom isn't, and factors
-            // into whether this room can be active at all, same as the
-            // main photo does.
-            const washroomUrl = typeof r.washroomUrl === 'string' && r.washroomUrl.trim() ? r.washroomUrl.trim() : null;
-            const balconyUrl = typeof r.balconyUrl === 'string' && r.balconyUrl.trim() ? r.balconyUrl.trim() : null;
-            const photoUrls = [];
-            if (washroomUrl) photoUrls.push({ label: 'Washroom', url: washroomUrl });
-            if (balconyUrl) photoUrls.push({ label: 'Balcony', url: balconyUrl });
-            // A room without a main photo OR without a washroom photo is
-            // saved (so the host doesn't lose their other entered data),
-            // but forced inactive regardless of what was requested — not
-            // bookable by guests until both are actually added.
-            // Defense-in-depth alongside the declared-room-count check
-            // above, which normally catches this first when a real count
-            // is set.
-            const isActive = r.isActive !== false && !!coverPhotoUrl && !!washroomUrl;
+            // A room's whole gallery — no forced washroom/balcony
+            // labeling, just however many photos the host added. First
+            // photo becomes cover_photo_url (what shows on cards/search
+            // results); the rest live in photo_urls for that room's own
+            // detail view.
+            const safeUrls = Array.isArray(r.photos)
+              ? r.photos.filter(p => p && typeof p.url === 'string' && p.url.trim()).map(p => p.url.trim())
+              : [];
+            const coverPhotoUrl = safeUrls[0] || null;
+            const photoUrls = safeUrls.slice(1).map(url => ({ url }));
+            // A room without at least one photo is saved (so the host
+            // doesn't lose their other entered data), but forced
+            // inactive regardless of what was requested — not bookable
+            // by guests until a photo is actually added. Defense-in-
+            // depth alongside the declared-room-count check above, which
+            // normally catches this first when a real count is set.
+            const isActive = r.isActive !== false && !!coverPhotoUrl;
 
             if (r.id && existingRoomIds.has(Number(r.id))) {
               await sql`

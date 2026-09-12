@@ -433,20 +433,24 @@ module.exports = async (req, res) => {
         // N interior photos total" count. A villa/home has one shared
         // Kitchen/Washroom/Living Room worth documenting once; a Resort
         // has NO shared common spaces to document here at all — its one
-        // common space is the exterior, already covered above. A Resort
-        // room's washroom (mandatory) and balcony (optional) belong to
-        // that room specifically, checked further below alongside its
-        // price/occupancy, not as a resort-wide fixed category. Bedroom/
-        // Room photos must match the declared count exactly either way.
-        // This is the authoritative check — index.html enforces the same
-        // rule client-side, but that's convenience, not the real
-        // guarantee.
+        // common space is the exterior, already covered above. Bedroom/
+        // Room photos must match the declared count exactly either way —
+        // a bedroom just needs at least one photo in its gallery, no
+        // specific washroom/balcony label required within it. This is
+        // the authoritative check — index.html enforces the same rule
+        // client-side, but that's convenience, not the real guarantee.
         const declaredRooms = Math.max(1, Number(bedrooms) || 0);
         const safeRoomPhotosForValidation = Array.isArray(roomPhotos)
-          ? roomPhotos.filter(r => r && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
+          ? roomPhotos.filter(r => {
+              if (!r || typeof r.roomName !== 'string' || !r.roomName.trim()) return false;
+              if (r.isBedroom) {
+                return Array.isArray(r.urls) && r.urls.some(u => typeof u === 'string' && u.startsWith('https://'));
+              }
+              return typeof r.url === 'string' && r.url.startsWith('https://');
+            })
           : [];
         const MANDATORY_FIXED_SPACES = propertyType === 'Resort' ? [] : ['Kitchen', 'Washroom', 'Living Room'];
-        const providedSpaceNames = safeRoomPhotosForValidation.map(r => r.roomName);
+        const providedSpaceNames = safeRoomPhotosForValidation.filter(r => !r.isBedroom).map(r => r.roomName);
         const missingFixedSpaces = MANDATORY_FIXED_SPACES.filter(name => !providedSpaceNames.includes(name));
         const bedroomPhotoCount = safeRoomPhotosForValidation.filter(r => r.isBedroom).length;
         if (missingFixedSpaces.length || bedroomPhotoCount < declaredRooms) {
@@ -456,10 +460,9 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: `Please add a photo for: ${missingParts.join(', ')}.` });
         }
         // For a Resort, each room is also a real, independently priced
-        // room from the start, with its own washroom (mandatory) —
-        // checked here authoritatively (index.html enforces the same
-        // rule client-side, but that's convenience, not the guarantee).
-        // Balcony is genuinely optional, so it's never required here.
+        // room from the start — checked here authoritatively (index.html
+        // enforces the same rule client-side, but that's convenience,
+        // not the guarantee).
         if (propertyType === 'Resort') {
           const incompleteRooms = safeRoomPhotosForValidation.filter(r =>
             r.isBedroom && (!(Number(r.maxOccupancy) > 0) || !(Number(r.price) > 0))
@@ -468,15 +471,6 @@ module.exports = async (req, res) => {
             console.warn(`submit-listing rejected: ${incompleteRooms.length} room(s) missing price/occupancy`);
             return res.status(400).json({
               error: `Please set a max guests and price for: ${incompleteRooms.map(r => r.roomName).join(', ')}.`
-            });
-          }
-          const missingWashrooms = safeRoomPhotosForValidation.filter(r =>
-            r.isBedroom && !(typeof r.washroomUrl === 'string' && r.washroomUrl.startsWith('https://'))
-          );
-          if (missingWashrooms.length) {
-            console.warn(`submit-listing rejected: ${missingWashrooms.length} room(s) missing washroom photo`);
-            return res.status(400).json({
-              error: `Please add a washroom photo for: ${missingWashrooms.map(r => r.roomName).join(', ')}.`
             });
           }
         }
@@ -736,8 +730,23 @@ module.exports = async (req, res) => {
     // photos are simply left in interior_photo_urls for a Resort,
     // never written into listing_rooms here.
     if (!isExperience && propertyType !== 'Resort' && !isDraft) {
+      // A bedroom entry carries its whole gallery as "urls" (no forced
+      // washroom/balcony split); a fixed space (Kitchen, Garden, etc.)
+      // still carries just one "url". Normalized to the same shape here
+      // — first photo as cover_photo_url, the rest (if any) into
+      // photo_urls — so both kinds create a valid listing_rooms record
+      // the same way.
       const safeRoomPhotos = Array.isArray(roomPhotos)
-        ? roomPhotos.filter(r => r && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
+        ? roomPhotos
+          .map(r => {
+            if (!r || typeof r.roomName !== 'string' || !r.roomName.trim()) return null;
+            const urls = r.isBedroom
+              ? (Array.isArray(r.urls) ? r.urls.filter(u => typeof u === 'string' && u.startsWith('https://')) : [])
+              : (typeof r.url === 'string' && r.url.startsWith('https://') ? [r.url] : []);
+            if (!urls.length) return null;
+            return { roomName: r.roomName.trim().slice(0, 100), urls };
+          })
+          .filter(Boolean)
         : [];
       // Replaced wholesale on every (re)submission — simplest way to
       // keep these in sync with whatever the current room photo set
@@ -747,9 +756,10 @@ module.exports = async (req, res) => {
       // Resort room booking sets it.
       await sql`DELETE FROM listing_rooms WHERE listing_id = ${listing.id}`;
       for (let i = 0; i < safeRoomPhotos.length; i++) {
+        const [coverUrl, ...restUrls] = safeRoomPhotos[i].urls;
         await sql`
-          INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, sort_order, is_active)
-          VALUES (${listing.id}, ${safeRoomPhotos[i].roomName.trim().slice(0, 100)}, ${safeRoomPhotos[i].url}, ${i}, TRUE)
+          INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, photo_urls, sort_order, is_active)
+          VALUES (${listing.id}, ${safeRoomPhotos[i].roomName}, ${coverUrl}, ${JSON.stringify(restUrls.map(url => ({ url })))}, ${i}, TRUE)
         `;
       }
     } else if (!isExperience && propertyType === 'Resort' && !isDraft) {
@@ -757,13 +767,12 @@ module.exports = async (req, res) => {
       // (see the comment above — that risks a Resort's real, already-
       // priced rooms on any future resubmission), but they shouldn't
       // just be thrown away either — a host who already named,
-      // photographed, priced, AND documented every room's washroom (and
-      // balcony, if provided) at submission shouldn't have to redo that
-      // work from scratch after approval. Staged here instead;
-      // approve-listing.js consumes this exactly once, the first time
-      // this listing is approved, to pre-populate listing_rooms as
-      // fully complete, active rooms — main photo as cover_photo_url,
-      // washroom/balcony tucked into that room's own photo_urls.
+      // photographed, and priced every room at submission shouldn't have
+      // to redo that work from scratch after approval. Staged here
+      // instead; approve-listing.js consumes this exactly once, the
+      // first time this listing is approved, to pre-populate
+      // listing_rooms as fully complete, active rooms — first photo as
+      // cover_photo_url, the rest of that room's gallery into photo_urls.
       //
       // Only room (bedroom) entries are staged here — there are no
       // fixed common-area categories for a Resort at all (see the
@@ -772,14 +781,12 @@ module.exports = async (req, res) => {
       // records regardless (they're still part of interior_photo_urls
       // above, just not this).
       const safeRoomPhotos = Array.isArray(roomPhotos)
-        ? roomPhotos.filter(r => r && r.isBedroom && typeof r.roomName === 'string' && r.roomName.trim() && typeof r.url === 'string' && r.url.startsWith('https://'))
+        ? roomPhotos.filter(r => r && r.isBedroom && typeof r.roomName === 'string' && r.roomName.trim() && Array.isArray(r.urls) && r.urls.some(u => typeof u === 'string' && u.startsWith('https://')))
           .map(r => ({
             roomName: r.roomName.trim().slice(0, 100),
-            url: r.url,
+            urls: r.urls.filter(u => typeof u === 'string' && u.startsWith('https://')),
             maxOccupancy: Number(r.maxOccupancy) > 0 ? Number(r.maxOccupancy) : null,
-            price: Number(r.price) > 0 ? Number(r.price) : null,
-            washroomUrl: typeof r.washroomUrl === 'string' && r.washroomUrl.startsWith('https://') ? r.washroomUrl : null,
-            balconyUrl: typeof r.balconyUrl === 'string' && r.balconyUrl.startsWith('https://') ? r.balconyUrl : null
+            price: Number(r.price) > 0 ? Number(r.price) : null
           }))
         : [];
       await sql`UPDATE listings SET pending_room_photos = ${JSON.stringify(safeRoomPhotos)} WHERE id = ${listing.id}`;

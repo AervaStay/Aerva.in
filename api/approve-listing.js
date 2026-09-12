@@ -257,32 +257,24 @@ async function applyDecision(listingId, action, reason = null) {
       if (existingRoomCount[0].count === 0) {
         for (let i = 0; i < listing.pending_room_photos.length; i++) {
           const room = listing.pending_room_photos[i];
-          if (!room || typeof room.roomName !== 'string' || typeof room.url !== 'string') continue;
+          if (!room || typeof room.roomName !== 'string' || !Array.isArray(room.urls) || !room.urls.length) continue;
           const maxOccupancy = Number(room.maxOccupancy) > 0 ? Number(room.maxOccupancy) : null;
           const price = Number(room.price) > 0 ? Number(room.price) : null;
-          // Washroom/balcony belong to THIS room, not the resort as a
-          // whole — tucked into its own photo_urls (labeled, so
-          // manage-listing.html or a future guest-facing gallery can
-          // tell them apart from the main photo) rather than becoming
-          // separate listing_rooms records of their own, which would
-          // wrongly make them look like independently bookable rooms.
-          const subPhotos = [];
-          if (typeof room.washroomUrl === 'string' && room.washroomUrl.startsWith('https://')) {
-            subPhotos.push({ label: 'Washroom', url: room.washroomUrl });
-          }
-          if (typeof room.balconyUrl === 'string' && room.balconyUrl.startsWith('https://')) {
-            subPhotos.push({ label: 'Balcony', url: room.balconyUrl });
-          }
+          // A room's whole gallery — no forced washroom/balcony
+          // labeling, just however many photos the host added. First
+          // photo becomes the cover shown on cards/search results; the
+          // rest live in photo_urls for that room's own detail view.
+          const [coverUrl, ...restUrls] = room.urls;
           // Only created active if it's genuinely complete (real price,
-          // occupancy, AND washroom) — a room that somehow arrives here
-          // incomplete (an older submission from before this was
-          // required, for instance) still gets created so nothing is
-          // silently lost, just inactive until the host finishes it in
-          // the Rooms tab, same fallback behavior as before this change.
-          const hasWashroom = subPhotos.some(p => p.label === 'Washroom');
+          // occupancy, AND at least one photo) — a room that somehow
+          // arrives here incomplete (an older submission from before
+          // this was required, for instance) still gets created so
+          // nothing is silently lost, just inactive until the host
+          // finishes it in the Rooms tab, same fallback behavior as
+          // before this change.
           await sql`
             INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, photo_urls, max_occupancy, nightly_rate, sort_order, is_active)
-            VALUES (${listing.id}, ${room.roomName.trim().slice(0, 100)}, ${room.url}, ${JSON.stringify(subPhotos)}, ${maxOccupancy}, ${price}, ${i}, ${maxOccupancy != null && price != null && hasWashroom})
+            VALUES (${listing.id}, ${room.roomName.trim().slice(0, 100)}, ${coverUrl}, ${JSON.stringify(restUrls.map(url => ({ url })))}, ${maxOccupancy}, ${price}, ${i}, ${maxOccupancy != null && price != null})
           `;
         }
       }
