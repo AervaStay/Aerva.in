@@ -456,6 +456,13 @@
       }
       const data = await res.json();
       renderListings(data.listings);
+      // Logged explicitly so this is diagnosable from the browser
+      // console without needing to dig through the Network tab — an
+      // undefined value here means get-pending-listings.js hasn't been
+      // deployed with the version that returns this at all; an empty
+      // array means it's deployed and running, but genuinely found no
+      // listing with rooms_pending_review = TRUE.
+      console.log('roomChangeRequests from server:', data.roomChangeRequests);
       renderRoomChangeRequests(data.roomChangeRequests);
     } catch(err){
       container.innerHTML = '<p class="error">Could not load listings. Check API_BASE and try again.</p>';
@@ -473,6 +480,18 @@
   function renderRoomChangeRequests(requests){
     const heading = document.getElementById('roomChangesHeading');
     const container = document.getElementById('roomChangesContainer');
+    // Distinguishes "the backend doesn't know about this feature yet"
+    // (undefined — an older deployed version of get-pending-listings.js)
+    // from "it works, but nothing is actually pending" (a real empty
+    // array) — visibly, not just in the console, since this exact
+    // ambiguity is what's been hardest to pin down without direct access
+    // to the live deployment.
+    if (requests === undefined) {
+      heading.style.display = 'block';
+      heading.textContent = 'Room Changes Awaiting Review';
+      container.innerHTML = '<p class="error">This server response is missing "roomChangeRequests" entirely — get-pending-listings.js on your live Vercel deployment doesn\'t match the version that adds this feature. Redeploy that specific file.</p>';
+      return;
+    }
     if (!Array.isArray(requests) || requests.length === 0) {
       heading.style.display = 'none';
       container.innerHTML = '';
