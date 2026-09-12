@@ -76,7 +76,7 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT id, property_name, property_type, bedrooms, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
-               latitude, longitude, formatted_address,
+               latitude, longitude, formatted_address, pincode,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                experience_price_unit, commission_rate,
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
@@ -162,7 +162,7 @@ module.exports = async (req, res) => {
 
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, promotions,
-              latitude, longitude, formattedAddress, city, area,
+              latitude, longitude, formattedAddress, city, area, pincode,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
               customFields, autoSendCheckinInstructions, checkinPhotos, rooms, bedrooms } = req.body || {};
@@ -315,6 +315,7 @@ module.exports = async (req, res) => {
           latitude = COALESCE(${safeLat ?? null}, latitude),
           longitude = COALESCE(${safeLng ?? null}, longitude),
           formatted_address = COALESCE(${formattedAddress || null}, formatted_address),
+          pincode = COALESCE(${typeof pincode === 'string' && pincode.trim() ? pincode.trim().slice(0, 20) : null}, pincode),
           pet_friendly = ${finalPetFriendly}, max_pets_allowed = ${finalMaxPets},
           allowed_pet_types = ${JSON.stringify(finalPetTypes)}, pet_fee = ${finalPetFee},
           security_deposit = ${finalSecurityDeposit},
