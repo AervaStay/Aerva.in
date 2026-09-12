@@ -818,8 +818,14 @@
   .bedroom-tab{
     width:34px; height:34px; border-radius:50%; border:1px solid var(--line-dark); background:var(--cream);
     display:flex; align-items:center; justify-content:center; font-size:14px; cursor:pointer; flex:0 0 auto;
+    position:relative;
   }
   .bedroom-tab.active{background:var(--ink); color:var(--cream); border-color:var(--ink);}
+  .bedroom-tab-dot{
+    position:absolute; top:-3px; right:-3px; width:10px; height:10px; border-radius:50%;
+    background:#a3402f; border:1.5px solid var(--cream);
+  }
+  .bedroom-tab-dot.complete{background:#3a7d44;}
   .room-bucket{margin-top:14px;}
   .room-bucket-label{font-size:12.5px; font-weight:600; margin-bottom:6px;}
   .room-bucket-label .required-mark{color:#a3402f;}
@@ -4259,7 +4265,10 @@
     // than every room's whole gallery stacked in one long scroll.
     const tabBarHtml = bedroomRows.length > 1 ? `
       <div class="bedroom-tab-bar">
-        ${bedroomRows.map((room, i) => `<div class="bedroom-tab${room.key === activeBedroomTabKey ? ' active' : ''}" data-tab-key="${room.key}">${i + 1}</div>`).join('')}
+        ${bedroomRows.map((room, i) => {
+          const isComplete = allRoomPhotos(room).some(p => p.file || p.url);
+          return `<div class="bedroom-tab${room.key === activeBedroomTabKey ? ' active' : ''}" data-tab-key="${room.key}">${i + 1}<span class="bedroom-tab-dot${isComplete ? ' complete' : ''}" title="${isComplete ? 'Has a photo' : 'Needs a photo'}"></span></div>`;
+        }).join('')}
       </div>
     ` : '';
 
@@ -4552,7 +4561,20 @@
       } catch(err){
         console.warn('Photo upload failed once, retrying:', file.name, err);
         await new Promise(r => setTimeout(r, 800));
-        return await attempt(); // a second failure is real — let it propagate
+        try{
+          return await attempt();
+        } catch(err2){
+          // A genuinely persistent failure on ONE file used to throw
+          // here, which rejected the entire Promise.all for its batch —
+          // discarding every other photo that had already uploaded
+          // successfully in the same call, not just this one. That's
+          // how a single stubborn photo could make an unrelated
+          // bedroom's already-successful photos disappear. Returned as
+          // null instead, so the caller can tell exactly which photo
+          // didn't make it and leave everything else intact.
+          console.error('Photo upload failed permanently:', file.name, err2);
+          return null;
+        }
       }
     }
 
@@ -4573,7 +4595,11 @@
       batch.forEach((file, j) => cache.set(file, batchResults[j]));
     }
     const results = files.map(file => cache.get(file));
-    return { urls: results.map(r => r.url), hashes: results.map(r => r.hash) };
+    // null entries (a persistent per-file failure) come through as null
+    // url/hash rather than throwing — the caller checks for these and
+    // leaves that specific photo's file in place for a retry, instead of
+    // silently treating a failed upload as a successful, empty one.
+    return { urls: results.map(r => r ? r.url : null), hashes: results.map(r => r ? r.hash : null) };
   }
 
   async function saveListing(isDraft){
@@ -4719,10 +4745,18 @@
         exteriorPhotoHashes = exteriorResult.hashes;
         listingSubmissionState.exteriorUrls = exteriorPhotoUrls;
         listingSubmissionState.exteriorHashes = exteriorPhotoHashes;
+        // Only write back a result that actually succeeded — a null
+        // entry (see uploadPhotoCategory) means this specific photo's
+        // upload failed for real after a retry. Leaving its .file in
+        // place (not clearing it) is what makes it show up as a
+        // candidate for upload again on the next submit attempt,
+        // instead of silently vanishing.
         uploadTasks.forEach((target, i) => {
-          target.url = roomResult.urls[i];
-          target.file = null;
-          target.hash = roomResult.hashes[i];
+          if(roomResult.urls[i]){
+            target.url = roomResult.urls[i];
+            target.file = null;
+            target.hash = roomResult.hashes[i];
+          }
         });
       } catch(uploadErr){
         console.warn('Photo upload failed:', uploadErr);
@@ -4740,6 +4774,41 @@
           activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
           return;
         }
+      }
+    }
+
+    // A photo can fail to upload without the whole call throwing now
+    // (see uploadPhotoCategory) — a failed one shows up as a null entry
+    // rather than being silently treated as success. Filtered out here
+    // unconditionally (a draft save shouldn't send nulls to the backend
+    // either), with the actual blocking checks only applying to a real
+    // submission, right before building the payload — a stubborn single
+    // photo gets a clear, specific message naming which room needs
+    // attention rather than falling through to the server's more
+    // generic "N more room photo(s)" rejection. Every OTHER photo that
+    // did succeed is kept — only whatever's still stuck needs
+    // re-attempting.
+    exteriorPhotoUrls = (exteriorPhotoUrls || []).filter(Boolean);
+    exteriorPhotoHashes = (exteriorPhotoHashes || []).filter(Boolean);
+    if(!isDraft){
+      if(exteriorPhotoUrls.length === 0){
+        errorEl.textContent = 'Every exterior photo failed to upload — please try again, or email us directly at hello@aerva.in if this keeps happening.';
+        errorEl.style.display = 'block';
+        activeBtn.disabled = false;
+        otherBtn.disabled = false;
+        activeBtn.textContent = 'Submit Listing for Review';
+        return;
+      }
+      const roomsStillMissingPhotos = roomSpaceRows.filter(r =>
+        r.mandatory && (r.isBedroom ? allRoomPhotos(r).every(p => !p.url) : (!r.file && !r.url))
+      );
+      if(roomsStillMissingPhotos.length){
+        errorEl.textContent = `Please add a photo for: ${roomsStillMissingPhotos.map(r => r.name || 'an unnamed bedroom').join(', ')} — one of the earlier uploads didn't go through, please try again.`;
+        errorEl.style.display = 'block';
+        activeBtn.disabled = false;
+        otherBtn.disabled = false;
+        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+        return;
       }
     }
 
@@ -4976,6 +5045,25 @@
         // correct number of bedroom/room rows. Without this, a draft
         // saved with 4 bedrooms would reload showing just the default 1.
         syncBedroomRowCount();
+      }
+      // Restores each bedroom's photos, price, and occupancy from
+      // whatever was staged the last time this draft was saved (see
+      // submit-listing.js) — matched by position, since that's the same
+      // order they were in when saved. This used to not exist at all: a
+      // Resort draft with every room fully filled in would reload
+      // completely empty, since nothing about per-room data survived a
+      // draft save before now.
+      if(Array.isArray(draft.pending_room_photos) && draft.pending_room_photos.length){
+        const bedroomRows = roomSpaceRows.filter(r => r.isBedroom);
+        draft.pending_room_photos.forEach((saved, i) => {
+          const room = bedroomRows[i];
+          if(!room || !saved) return;
+          if(saved.roomName) room.name = saved.roomName;
+          if(Array.isArray(saved.urls)) room.photos = saved.urls.map(url => ({ url, file: null }));
+          if(saved.maxOccupancy) room.maxOccupancy = saved.maxOccupancy;
+          if(saved.price) room.price = saved.price;
+        });
+        renderRoomSpaces();
       }
       if(draft.max_guests) document.getElementById('listGuests').value = draft.max_guests;
       document.getElementById('listPrice').value = draft.nightly_rate || '';
