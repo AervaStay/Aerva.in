@@ -185,11 +185,14 @@
 <div class="wrap" id="mainView" style="display:none;">
   <h1>Aerva Admin</h1>
   <p id="adminGreeting" style="font-size:13px; opacity:0.7; margin-top:-16px; margin-bottom:20px;"></p>
-  <div class="tabs">
-    <button class="tab-btn active" id="tabListingsBtn" onclick="switchTab('listings')">Pending Listings</button>
-    <button class="tab-btn" id="tabLiveBtn" onclick="switchTab('live')">Live Listings</button>
-    <button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications</button>
-    <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
+  <div class="tabs" style="display:flex; align-items:center; justify-content:space-between;">
+    <div>
+      <button class="tab-btn active" id="tabListingsBtn" onclick="switchTab('listings')">Pending Listings</button>
+      <button class="tab-btn" id="tabLiveBtn" onclick="switchTab('live')">Live Listings</button>
+      <button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications</button>
+      <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
+    </div>
+    <button type="button" onclick="refreshCurrentView()" style="background:none; border:1px solid #ddd0bc; padding:8px 14px; font-size:12px; cursor:pointer; border-radius:4px;" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </div>
 
   <div id="listingsView">
@@ -766,6 +769,19 @@
     if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();
+  }
+
+  // This whole dashboard only fetches data once, per tab, the first time
+  // it's opened — nothing here polls or updates live. A host submitting
+  // a new listing, or a room-change request landing, won't show up on
+  // an already-open admin tab until it's told to reload. This is that
+  // "tell it to reload" button, refreshing whichever tab is currently
+  // showing rather than all four at once.
+  function refreshCurrentView(){
+    if(document.getElementById('tabListingsBtn').classList.contains('active')) loadListings();
+    else if(document.getElementById('tabLiveBtn').classList.contains('active')) loadLiveListings();
+    else if(document.getElementById('tabVerificationsBtn').classList.contains('active')) loadVerifications();
+    else if(document.getElementById('tabDepositsBtn').classList.contains('active')) loadDisputes();
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
