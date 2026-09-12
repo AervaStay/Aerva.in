@@ -8310,6 +8310,7 @@
             <div id="availabilityCalendar" data-listing-id="${listing.id}">
               <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
             </div>
+            <div id="lgCapacityNote" style="display:none; font-size:12.5px; color:#a3402f; padding-top:12px;"></div>
             <div class="guest-row" style="border:none; padding-top:16px;">
               <div class="guest-row-text">
                 <div class="guest-row-title">Adults</div>
@@ -8899,6 +8900,15 @@
     }
 
     const LG_MAX = { adults: 16, children: 12, infants: 5, pets: maxBillablePets, serviceAnimals: 5, youngLitter: 10 };
+    // A stay is one physical unit with a real ceiling on how many people
+    // can fit — capped here in real time as the stepper moves, not just
+    // caught later at checkout (see create-order.js, which still
+    // enforces this authoritatively either way). Infants/pets don't
+    // count toward this the same way adults/children occupying the
+    // space do. Not applied to a Resort: its real capacity lives
+    // per-room, not on the listing itself, so there's no single ceiling
+    // to check against here.
+    const listingMaxGuests = (listing.property_type !== 'Resort') ? Number(listing.max_guests) : null;
     container.parentElement.querySelectorAll('.guest-step-btn[data-lg-type]').forEach(btn => {
       btn.addEventListener('click', () => {
         const type = btn.dataset.lgType;
@@ -8909,7 +8919,23 @@
         // sense, unchecking the toggle is how you remove them entirely.
         const min = type === 'adults' ? 1 : (type === 'serviceAnimals' || type === 'youngLitter') ? 1 : 0;
         if(next < min || next > LG_MAX[type]) return;
+        if(delta > 0 && (type === 'adults' || type === 'children') && listingMaxGuests > 0){
+          const otherType = type === 'adults' ? 'children' : 'adults';
+          if(next + lgCounts[otherType] > listingMaxGuests){
+            const capNoteEl = container.parentElement.querySelector('#lgCapacityNote');
+            if(capNoteEl){
+              capNoteEl.textContent = `${listing.property_name || 'This home'} sleeps up to ${listingMaxGuests} guests. For a larger group, please book an additional stay.`;
+              capNoteEl.style.display = 'block';
+            }
+            return;
+          }
+        }
         lgCounts[type] = next;
+        // Any successful change clears a previously-shown capacity
+        // warning — otherwise decrementing back down to a valid count
+        // would leave the message stuck on screen looking unresolved.
+        const capNoteEl = container.parentElement.querySelector('#lgCapacityNote');
+        if(capNoteEl) capNoteEl.style.display = 'none';
         const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
         if(countEl) countEl.textContent = next;
         if(type === 'pets'){
