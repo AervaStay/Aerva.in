@@ -686,7 +686,31 @@ module.exports = async (req, res) => {
       WHERE l.status = 'pending'
       ORDER BY l.created_at ASC
     `;
-    return res.status(200).json({ listings });
+
+    // Separate from the "brand new submission" queue above — these are
+    // ALREADY-approved, live Resorts where the host has since changed
+    // their rooms (a new one, a different price, a renamed one, etc.).
+    // The current live rooms are included alongside the proposed
+    // changes specifically so the admin can compare the two, rather
+    // than reviewing the new set blind with no sense of what's actually
+    // different.
+    const roomChangeRequests = await sql`
+      SELECT l.id, l.property_name, l.city, l.area, l.host_name, l.host_email, l.host_phone,
+             l.pending_room_changes,
+             (
+               SELECT json_agg(json_build_object(
+                 'id', lr.id, 'roomName', lr.room_name, 'maxOccupancy', lr.max_occupancy,
+                 'nightlyRate', lr.nightly_rate, 'coverPhotoUrl', lr.cover_photo_url,
+                 'photoUrls', lr.photo_urls, 'isActive', lr.is_active
+               ) ORDER BY lr.sort_order, lr.created_at)
+               FROM listing_rooms lr WHERE lr.listing_id = l.id
+             ) AS current_rooms
+      FROM listings l
+      WHERE l.rooms_pending_review = TRUE
+      ORDER BY l.created_at ASC
+    `;
+
+    return res.status(200).json({ listings, roomChangeRequests });
   } catch (err) {
     console.error('get-pending-listings error:', err);
     return res.status(500).json({ error: 'Could not fetch listings' });
