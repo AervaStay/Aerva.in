@@ -1097,16 +1097,21 @@
             <textarea rows="2" class="room-description-input" placeholder="Description (optional)" data-room-field="description">${room.description || ''}</textarea>
           </div>
           ${roomGalleryHtml(room, idx)}
-          ${room.photos.length && otherRooms.length ? `
+          ${room.photos.length ? `
             <button type="button" class="add-paid-amenity-btn" data-clone-open style="margin-top:12px; width:auto; padding:8px 16px; font-size:11px;">Clone these ${room.photos.length} photo${room.photos.length === 1 ? '' : 's'} to other rooms</button>
             <div data-clone-panel style="display:none; background:#f4ebe3; border:1px solid #ddd0bc; padding:12px 14px; margin-top:8px;">
-              <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Copies these exact photos onto whichever rooms you check below, replacing anything already there for that room.</p>
-              ${otherRooms.map(other => `
-                <label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; cursor:pointer;">
-                  <input type="checkbox" data-clone-target="${roomRows.indexOf(other)}" style="width:auto;"> ${other.roomName || 'Untitled room'}
-                </label>
-              `).join('')}
-              <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Clone Now</button>
+              ${otherRooms.length ? `
+                <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Copies these exact photos onto whichever rooms you check below, replacing anything already there for that room.</p>
+                ${otherRooms.map(other => `
+                  <label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; cursor:pointer;">
+                    <input type="checkbox" data-clone-target="${roomRows.indexOf(other)}" style="width:auto;"> ${other.roomName || 'Untitled room'}
+                  </label>
+                `).join('')}
+                <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Clone Now</button>
+                <div style="height:1px; background:#ddd0bc; margin:14px 0;"></div>
+              ` : ''}
+              <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Don't see the room you want? Create it now with these same photos already filled in.</p>
+              <button type="button" class="add-paid-amenity-btn" data-clone-new-room style="width:auto; padding:8px 16px; font-size:11px;">+ Clone into a New Room</button>
             </div>
           ` : ''}
         </div>
@@ -1166,6 +1171,20 @@
           // rooms (see its own dedup note).
           targets.forEach(targetIdx => {
             roomRows[targetIdx].photos = room.photos.map(p => ({ file: p.file, url: p.url }));
+          });
+          renderRooms();
+        });
+      }
+      const cloneNewRoomBtn = el.querySelector('[data-clone-new-room]');
+      if(cloneNewRoomBtn){
+        cloneNewRoomBtn.addEventListener('click', () => {
+          // A brand-new room doesn't exist yet to check off in the list
+          // above — this creates it AND clones the photos into it in one
+          // action, rather than making the host add an empty room first,
+          // then come back to this same panel to find it as an option.
+          roomRows.push({
+            id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true,
+            photos: room.photos.map(p => ({ file: p.file, url: p.url }))
           });
           renderRooms();
         });
