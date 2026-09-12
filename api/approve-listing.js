@@ -257,7 +257,10 @@ async function applyDecision(listingId, action, reason = null) {
       if (existingRoomCount[0].count === 0) {
         for (let i = 0; i < listing.pending_room_photos.length; i++) {
           const room = listing.pending_room_photos[i];
-          if (!room || typeof room.roomName !== 'string' || !Array.isArray(room.urls) || !room.urls.length) continue;
+          // typeof room.roomName === 'string' alone doesn't catch an
+          // EMPTY string — a room whose name was cleared but still had
+          // photos could otherwise slip through with a blank name.
+          if (!room || typeof room.roomName !== 'string' || !room.roomName.trim() || !Array.isArray(room.urls) || !room.urls.length) continue;
           const maxOccupancy = Number(room.maxOccupancy) > 0 ? Number(room.maxOccupancy) : null;
           const price = Number(room.price) > 0 ? Number(room.price) : null;
           // A room's whole gallery — no forced washroom/balcony
