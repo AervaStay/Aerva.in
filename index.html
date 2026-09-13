@@ -11631,11 +11631,16 @@
           // rule in submit-listing.js), so it's shown to any logged-in
           // account.
           if(data.guest.accountType === 'guest_host'){
-            myListingsLink.style.display = 'inline';
+            // .nav-account-menu a's CSS expects display:block (full-width,
+            // stacked, with its own top/bottom padding) — display:inline
+            // was silently breaking that spacing the whole time. Only
+            // became visually obvious once two conditionally-shown links
+            // (My Collection, Status) sat right next to each other.
+            myListingsLink.style.display = 'block';
             if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
             const statusMenuLink = document.getElementById('statusMenuLink');
             const statusMenuLinkMobile = document.getElementById('statusMenuLinkMobile');
-            if(statusMenuLink) statusMenuLink.style.display = 'inline';
+            if(statusMenuLink) statusMenuLink.style.display = 'block';
             if(statusMenuLinkMobile) statusMenuLinkMobile.style.display = 'block';
           }
           // Messages is available to every logged-in account now, not
