@@ -328,44 +328,42 @@ module.exports = async (req, res) => {
       const endStr = dayStrs[dayStrs.length - 1];
       const startStr = dayStrs[0];
 
-      const results = [];
+      // Each ROW here is one bookable unit — a Resort's individual
+      // rooms each get their own row, not aggregated into one line for
+      // the whole resort, so a host can see and act on a specific
+      // room's availability directly from this one view without
+      // opening that listing separately.
+      const rows = [];
       for (const listing of listings) {
         if (listing.property_type === 'Resort') {
-          const rooms = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${listing.id} AND is_active = TRUE`;
-          if (!rooms.length) {
-            results.push({ id: listing.id, propertyName: listing.property_name, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available') });
-            continue;
-          }
-          const roomIds = rooms.map(r => r.id);
-          const bookedRanges = await sql`
-            SELECT room_id, arrival AS start_date, departure AS end_date FROM orders
-            WHERE room_id = ANY(${roomIds}) AND status = 'paid'
-              AND arrival < ${endStr}::date AND departure > ${startStr}::date
-          `;
-          const blockedRanges = await sql`
-            SELECT room_id, start_date, end_date FROM listing_blocked_dates
-            WHERE listing_id = ${listing.id} AND (room_id = ANY(${roomIds}) OR room_id IS NULL)
-              AND start_date < ${endStr}::date AND end_date > ${startStr}::date
-          `;
-          // For each day, how many of this resort's rooms are occupied
-          // (booked OR blocked) versus its total room count — that ratio
-          // is what turns into available/partial/booked below.
-          const dayStatuses = dayStrs.map(dateStr => {
-            const occupiedRoomIds = new Set();
-            [...bookedRanges, ...blockedRanges].forEach(r => {
-              if (dateStr >= r.start_date && dateStr < r.end_date) {
-                if (r.room_id) occupiedRoomIds.add(r.room_id);
-                else roomIds.forEach(id => occupiedRoomIds.add(id)); // a whole-listing block (room_id NULL) occupies every room
-              }
+          const rooms = await sql`SELECT id, room_name FROM listing_rooms WHERE listing_id = ${listing.id} AND is_active = TRUE ORDER BY sort_order ASC, created_at ASC`;
+          for (const room of rooms) {
+            const bookedRanges = await sql`
+              SELECT id, arrival AS start_date, departure AS end_date, guest_email, guests, nights, total FROM orders
+              WHERE room_id = ${room.id} AND status = 'paid'
+                AND arrival < ${endStr}::date AND departure > ${startStr}::date
+            `;
+            const blockedRanges = await sql`
+              SELECT start_date, end_date FROM listing_blocked_dates
+              WHERE listing_id = ${listing.id} AND (room_id = ${room.id} OR room_id IS NULL)
+                AND start_date < ${endStr}::date AND end_date > ${startStr}::date
+            `;
+            const dayStatuses = dayStrs.map(dateStr => {
+              if (bookedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'booked';
+              if (blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'blocked';
+              return 'available';
             });
-            if (occupiedRoomIds.size === 0) return 'available';
-            if (occupiedRoomIds.size >= roomIds.length) return 'booked';
-            return 'partial';
-          });
-          results.push({ id: listing.id, propertyName: listing.property_name, propertyType: listing.property_type, dayStatuses });
+            rows.push({
+              listingId: listing.id, roomId: room.id, label: `${listing.property_name} — ${room.room_name || 'Room'}`,
+              propertyType: listing.property_type, dayStatuses, bookings: bookedRanges
+            });
+          }
+          if (!rooms.length) {
+            rows.push({ listingId: listing.id, roomId: null, label: `${listing.property_name} (no active rooms yet)`, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available'), bookings: [] });
+          }
         } else {
           const bookedRanges = await sql`
-            SELECT arrival AS start_date, departure AS end_date FROM orders
+            SELECT id, arrival AS start_date, departure AS end_date, guest_email, guests, nights, total FROM orders
             WHERE listing_id = ${listing.id} AND status = 'paid'
               AND arrival < ${endStr}::date AND departure > ${startStr}::date
           `;
@@ -375,23 +373,83 @@ module.exports = async (req, res) => {
               AND start_date < ${endStr}::date AND end_date > ${startStr}::date
           `;
           const dayStatuses = dayStrs.map(dateStr => {
-            const isBooked = bookedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date);
-            if (isBooked) return 'booked';
-            const isBlocked = blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date);
-            if (isBlocked) return 'blocked';
+            if (bookedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'booked';
+            if (blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'blocked';
             return 'available';
           });
-          results.push({ id: listing.id, propertyName: listing.property_name, propertyType: listing.property_type, dayStatuses });
+          rows.push({ listingId: listing.id, roomId: null, label: listing.property_name, propertyType: listing.property_type, dayStatuses, bookings: bookedRanges });
         }
       }
 
-      return res.status(200).json({ startDate: startStr, days: DAYS, listings: results });
+      return res.status(200).json({ startDate: startStr, days: DAYS, rows });
     } catch (err) {
       console.error('host-listings (statusCalendar) error:', err);
       return res.status(500).json({ error: 'Could not load the status calendar right now.' });
     }
   }
 
+  // ---- Toggle a single date blocked/unblocked directly from the
+  // Status calendar's clickable cells — clicking an available day
+  // blocks it, clicking a day this host already blocked removes it. A
+  // real guest booking is never touched here: the frontend only ever
+  // makes available/blocked cells clickable in the first place, and
+  // this double-checks that server-side too, since a direct API call
+  // could try to send a booked date anyway.
+  if (req.method === 'POST' && req.body && req.body.toggleBlockedDate) {
+    try {
+      const { listingId, roomId, date } = req.body.toggleBlockedDate;
+      if (!listingId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'Missing or invalid listing/date.' });
+      }
+      const listingRows = await sql`
+        SELECT l.id FROM listings l
+        JOIN guests g ON g.host_id = l.host_id
+        WHERE l.id = ${listingId} AND g.id = ${guestId}
+      `;
+      if (!listingRows[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
+      if (roomId) {
+        const roomRows = await sql`SELECT id FROM listing_rooms WHERE id = ${roomId} AND listing_id = ${listingId}`;
+        if (!roomRows[0]) return res.status(400).json({ error: 'That room could not be found on this listing.' });
+      }
+
+      const bookedRows = await sql`
+        SELECT 1 FROM orders
+        WHERE status = 'paid' AND arrival <= ${date}::date AND departure > ${date}::date
+          AND (
+            (${roomId || null}::int IS NOT NULL AND room_id = ${roomId || null})
+            OR (${roomId || null}::int IS NULL AND listing_id = ${listingId})
+          )
+        LIMIT 1
+      `;
+      if (bookedRows[0]) {
+        return res.status(400).json({ error: 'This date already has a real booking and can\'t be blocked here.' });
+      }
+
+      const safeRoomId = roomId || null;
+      const existing = await sql`
+        SELECT id FROM listing_blocked_dates
+        WHERE listing_id = ${listingId} AND (room_id = ${safeRoomId} OR (room_id IS NULL AND ${safeRoomId}::int IS NULL))
+          AND start_date = ${date}::date AND end_date = (${date}::date + interval '1 day')
+        LIMIT 1
+      `;
+      if (existing[0]) {
+        await sql`DELETE FROM listing_blocked_dates WHERE id = ${existing[0].id}`;
+        return res.status(200).json({ success: true, blocked: false });
+      } else {
+        await sql`
+          INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason)
+          VALUES (${listingId}, ${safeRoomId}, ${date}::date, (${date}::date + interval '1 day'), 'Blocked by host')
+        `;
+        return res.status(200).json({ success: true, blocked: true });
+      }
+    } catch (err) {
+      console.error('host-listings (toggleBlockedDate) error:', err);
+      return res.status(500).json({ error: 'Could not update this date right now.' });
+    }
+  }
+
+  // ---- Raise a concern on a held security deposit ----
   // Separate from the verification-submission branch above — this only
   // ever touches one order's deposit_status, gated on it actually
   // belonging to this host and still being within the 7-day hold.
