@@ -353,7 +353,7 @@ module.exports = async (req, res) => {
       const rows = [];
       for (const listing of listings) {
         const promotions = await sql`
-          SELECT id, name, discount_type, discount_value, start_date, end_date FROM listing_promotions
+          SELECT id, room_id, name, discount_type, discount_value, start_date, end_date FROM listing_promotions
           WHERE listing_id = ${listing.id} AND is_active = TRUE
             AND start_date < ${endStr}::date AND end_date > ${startStr}::date
         `;
@@ -375,7 +375,11 @@ module.exports = async (req, res) => {
               if (blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'blocked';
               return 'available';
             });
-            const dayPricing = dayStrs.map(dateStr => priceForDate(Number(room.nightly_rate) || 0, promotions, dateStr));
+            // A promotion scoped to THIS room, or one with no room_id at
+            // all (a whole-resort promotion, still honored for every
+            // room) — never a promotion scoped to a DIFFERENT room.
+            const roomPromotions = promotions.filter(p => p.room_id === room.id || p.room_id === null);
+            const dayPricing = dayStrs.map(dateStr => priceForDate(Number(room.nightly_rate) || 0, roomPromotions, dateStr));
             rows.push({
               listingId: listing.id, roomId: room.id, label: `${listing.property_name} — ${room.room_name || 'Room'}`,
               propertyType: listing.property_type, dayStatuses, dayPricing, bookings: bookedRanges
@@ -509,14 +513,14 @@ module.exports = async (req, res) => {
 
   // ---- Add a promotion over a selected range — same drag-select flow
   // as above, the other of the two outcomes offered for a selection.
-  // Promotions are listing-wide by design (see listing_promotions'
-  // schema — no room_id column), so selecting one room's row on a
-  // Resort still creates a promotion for the WHOLE resort, same as
-  // dragging on the base rate in the sidebar calendar already does;
-  // there's no such thing as a single-room-only promotion today.
+  // roomId is optional: when provided (a Resort room's row was
+  // selected), the promotion is scoped to that one room only — every
+  // other room at the same resort keeps its own separate pricing,
+  // untouched. Omitted for a non-Resort listing, which has no rooms to
+  // scope to, matching the previous whole-listing-only behavior exactly.
   if (req.method === 'POST' && req.body && req.body.addPromotion) {
     try {
-      const { listingId, name, discountType, discountValue, minNights, startDate, endDate } = req.body.addPromotion;
+      const { listingId, roomId, name, discountType, discountValue, minNights, startDate, endDate } = req.body.addPromotion;
       if (!listingId || !startDate || !endDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
         return res.status(400).json({ error: 'Missing or invalid listing/date range.' });
       }
@@ -533,9 +537,15 @@ module.exports = async (req, res) => {
       `;
       if (!listingRows[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
 
+      const safeRoomId = roomId || null;
+      if (safeRoomId) {
+        const roomRows = await sql`SELECT id FROM listing_rooms WHERE id = ${safeRoomId} AND listing_id = ${listingId}`;
+        if (!roomRows[0]) return res.status(400).json({ error: 'That room could not be found on this listing.' });
+      }
+
       await sql`
-        INSERT INTO listing_promotions (listing_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
-        VALUES (${listingId}, ${name.trim()}, ${discountType}, ${value}, ${minNights ? Number(minNights) : null}, ${startDate}::date, ${endDate}::date, TRUE)
+        INSERT INTO listing_promotions (listing_id, room_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
+        VALUES (${listingId}, ${safeRoomId}, ${name.trim()}, ${discountType}, ${value}, ${minNights ? Number(minNights) : null}, ${startDate}::date, ${endDate}::date, TRUE)
       `;
       return res.status(200).json({ success: true });
     } catch (err) {
