@@ -342,7 +342,12 @@ module.exports = async (req, res) => {
         const discounted = promo.discount_type === 'flat'
           ? Math.max(0, baseRate - Number(promo.discount_value))
           : Math.max(0, baseRate - Math.round(baseRate * (Number(promo.discount_value) / 100)));
-        return { price: discounted, promoName: promo.name, promoId: promo.id };
+        return {
+          price: discounted, promoName: promo.name, promoId: promo.id,
+          promoDiscountType: promo.discount_type, promoDiscountValue: promo.discount_value,
+          promoMinNights: promo.min_nights, promoStartDate: promo.start_date, promoEndDate: promo.end_date,
+          basePrice: baseRate,
+        };
       }
 
       // Each ROW here is one bookable unit — a Resort's individual
@@ -353,7 +358,7 @@ module.exports = async (req, res) => {
       const rows = [];
       for (const listing of listings) {
         const promotions = await sql`
-          SELECT id, room_id, name, discount_type, discount_value, start_date, end_date FROM listing_promotions
+          SELECT id, room_id, name, discount_type, discount_value, min_nights, start_date, end_date FROM listing_promotions
           WHERE listing_id = ${listing.id} AND is_active = TRUE
             AND start_date < ${endStr}::date AND end_date > ${startStr}::date
         `;
