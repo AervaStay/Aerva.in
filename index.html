@@ -3265,6 +3265,7 @@
       otpRow.style.display = 'none';
       otpMsgEl.style.display = 'none';
       otpInput.value = '';
+      hiddenInput.value = '';
 
       const rule = currentRule();
       const digits = localInput.value.trim();
@@ -3287,6 +3288,12 @@
       }
       errorEl.style.display = 'none';
       sendBtn.style.display = 'inline-block';
+      // Verification is optional — a correctly-FORMATTED number is
+      // enough to populate the field the form actually submits.
+      // Verifying it (below) is offered, not required; if the host does
+      // verify, hiddenInput gets overwritten with the same value plus
+      // the confirmed checkmark, so nothing is lost either way.
+      hiddenInput.value = `${rule.dialCode} ${digits}`;
       return true;
     }
 
@@ -4965,8 +4972,8 @@
         errorEl.style.display = 'block';
         return;
       }
-      if(!document.getElementById('listHostPhone').value.trim() || !window.hostPhoneVerified){
-        errorEl.textContent = 'Please verify your phone number (send and enter the code) before submitting.';
+      if(!document.getElementById('listHostPhone').value.trim()){
+        errorEl.textContent = 'Please enter a valid phone number.';
         errorEl.style.display = 'block';
         return;
       }
