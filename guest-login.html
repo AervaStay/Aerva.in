@@ -137,7 +137,14 @@
       </div>
       <div class="field">
         <label for="signupPhone">Phone</label>
-        <input id="signupPhone" type="tel" placeholder="Your phone number" autocomplete="tel">
+        <!-- Country code is picked, not typed. The old single free-text
+             field let someone enter "9876543210" here and "+919876543210"
+             on the phone-login screen — two different strings for one
+             number, which quietly produced two separate accounts. -->
+        <div style="display:flex; gap:8px;">
+          <select id="signupPhoneCountry" style="flex:0 0 auto;"></select>
+          <input id="signupPhone" type="tel" inputmode="numeric" placeholder="Number" autocomplete="tel" style="flex:1;">
+        </div>
       </div>
       <div class="field">
         <label for="signupPassword">Password</label>
@@ -163,7 +170,10 @@
     <form id="phoneRequestForm">
       <div class="field">
         <label for="phoneNumber">Phone Number</label>
-        <input id="phoneNumber" type="tel" placeholder="+919876543210" autocomplete="tel" required>
+        <div style="display:flex; gap:8px;">
+          <select id="phoneNumberCountry" style="flex:0 0 auto;"></select>
+          <input id="phoneNumber" type="tel" inputmode="numeric" placeholder="Number" autocomplete="tel" style="flex:1;" required>
+        </div>
       </div>
       <button type="submit" class="btn" id="phoneRequestBtn">Send Code</button>
       <p class="error" id="phoneRequestError" style="display:none;"></p>
@@ -413,7 +423,20 @@
     const emailValue = document.getElementById('signupEmail').value.trim();
     const passwordValue = document.getElementById('signupPassword').value;
     const nameValue = document.getElementById('signupName').value.trim();
-    const phoneValue = document.getElementById('signupPhone').value.trim();
+    // Phone stays optional at signup, but if one IS entered it's built
+    // into the same E.164 string the phone-login screen sends, so both
+    // paths resolve to one account rather than two.
+    const signupPhoneRaw = document.getElementById('signupPhone').value.trim();
+    let phoneValue = '';
+    if(signupPhoneRaw){
+      const signupBuilt = buildE164(document.getElementById('signupPhoneCountry').value, signupPhoneRaw);
+      if(signupBuilt.error){
+        signupError.textContent = signupBuilt.error;
+        signupError.style.display = 'block';
+        return;
+      }
+      phoneValue = signupBuilt.e164;
+    }
 
     if(!EMAIL_PATTERN.test(emailValue)){
       signupError.textContent = 'Please enter a complete email address, like you@gmail.com.';
@@ -464,7 +487,51 @@
   // Remembers the phone number between the "request code" and "verify
   // code" steps, so the verify step doesn't need the guest to re-type it.
   let pendingPhoneNumber = '';
-  const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
+  // Mirrors COUNTRY_PHONE_RULES in api/_phone-validation.js — a browser
+  // can't require() a server-side file, so this list is kept in sync by
+  // hand, the same convention index.html uses for the host phone field.
+  // The server re-validates everything sent from here regardless.
+  const COUNTRY_PHONE_RULES = [
+    { code: 'IN', dialCode: '+91', name: 'India', length: 10 },
+    { code: 'US', dialCode: '+1', name: 'United States', length: 10 },
+    { code: 'CA', dialCode: '+1', name: 'Canada', length: 10 },
+    { code: 'GB', dialCode: '+44', name: 'United Kingdom', length: 10 },
+    { code: 'AE', dialCode: '+971', name: 'United Arab Emirates', length: 9 },
+    { code: 'AU', dialCode: '+61', name: 'Australia', length: 9 },
+    { code: 'SG', dialCode: '+65', name: 'Singapore', length: 8 },
+    { code: 'NP', dialCode: '+977', name: 'Nepal', length: 10 },
+    { code: 'LK', dialCode: '+94', name: 'Sri Lanka', length: 9 },
+    { code: 'BD', dialCode: '+880', name: 'Bangladesh', length: 10 },
+    { code: 'DE', dialCode: '+49', name: 'Germany', length: 11 },
+    { code: 'FR', dialCode: '+33', name: 'France', length: 9 },
+  ];
+
+  // Fills a country dropdown with the list above, defaulting to India —
+  // where essentially every Aerva guest and property is.
+  function populateCountrySelect(selectEl){
+    if(!selectEl) return;
+    selectEl.innerHTML = COUNTRY_PHONE_RULES
+      .map(c => `<option value="${c.code}">${c.dialCode} ${c.name}</option>`)
+      .join('');
+    selectEl.value = 'IN';
+  }
+  populateCountrySelect(document.getElementById('signupPhoneCountry'));
+  populateCountrySelect(document.getElementById('phoneNumberCountry'));
+
+  // Builds the single stored E.164 string from the two fields. Returns
+  // { e164 } or { error } — the same shape and the same rules as
+  // _phone-validation.js's toE164 on the server.
+  function buildE164(countryCode, localValue){
+    const rule = COUNTRY_PHONE_RULES.find(c => c.code === countryCode);
+    if(!rule) return { error: 'Please select a country.' };
+    const digits = String(localValue || '').trim().replace(/[\s\-().]/g, '').replace(/^0+/, '');
+    if(!digits) return { error: 'Please enter your phone number.' };
+    if(!/^[0-9]+$/.test(digits)) return { error: 'Phone number must be digits only.' };
+    if(digits.length !== rule.length){
+      return { error: `${rule.name} numbers are exactly ${rule.length} digits — that one has ${digits.length}.` };
+    }
+    return { e164: rule.dialCode + digits };
+  }
 
   document.getElementById('phoneRequestForm').addEventListener('submit', async function(e){
     e.preventDefault();
@@ -472,9 +539,12 @@
     const phoneRequestError = document.getElementById('phoneRequestError');
     phoneRequestError.style.display = 'none';
 
-    const phoneValue = document.getElementById('phoneNumber').value.trim();
-    if(!E164_PATTERN.test(phoneValue)){
-      phoneRequestError.textContent = 'Please include your country code, like +919876543210.';
+    const built = buildE164(
+      document.getElementById('phoneNumberCountry').value,
+      document.getElementById('phoneNumber').value
+    );
+    if(built.error){
+      phoneRequestError.textContent = built.error;
       phoneRequestError.style.display = 'block';
       return;
     }
@@ -486,12 +556,12 @@
       const res = await fetch(API_BASE + '/api/guest-phone-auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'request', phone: phoneValue })
+        body: JSON.stringify({ mode: 'request', phone: built.e164 })
       });
       const data = await res.json();
       if(res.ok){
-        pendingPhoneNumber = phoneValue;
-        document.getElementById('phoneVerifySubtitle').textContent = `We texted a code to ${phoneValue}.`;
+        pendingPhoneNumber = built.e164;
+        document.getElementById('phoneVerifySubtitle').textContent = `We texted a code to ${built.e164}.`;
         document.getElementById('phoneCode').value = '';
         showOnly(phoneVerifyState);
       } else {
