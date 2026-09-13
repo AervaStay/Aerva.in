@@ -3985,15 +3985,23 @@
   function createPhotoManager(inputId, previewContainerId){
     const inputEl = document.getElementById(inputId);
     const previewContainer = document.getElementById(previewContainerId);
-    let selectedPhotos = []; // [{ id, file }]
+    // Each entry is either { id, file } for a newly-picked photo still
+    // needing upload, or { id, file: null, url } for one that's already
+    // uploaded and just being carried over (e.g. Clone's "with photos"
+    // option, reusing the original's real Blob URLs directly rather than
+    // forcing a full re-upload of files that already exist).
+    let selectedPhotos = [];
 
     // Keeps the real <input type="file"> in sync with our own array, so
-    // the upload step (which reads inputEl.files) keeps working. Native
-    // "required" validation is intentionally NOT relied on here — see the
-    // note elsewhere about DataTransfer being unreliable on iOS Safari.
+    // the upload step (which reads inputEl.files) keeps working. Only
+    // the file-based entries are ever placed into the real input — an
+    // already-uploaded URL entry was never picked from disk and has no
+    // File object to put there. Native "required" validation is
+    // intentionally NOT relied on here — see the note elsewhere about
+    // DataTransfer being unreliable on iOS Safari.
     function syncInput(){
       const dt = new DataTransfer();
-      selectedPhotos.forEach(p => dt.items.add(p.file));
+      selectedPhotos.forEach(p => { if(p.file) dt.items.add(p.file); });
       inputEl.files = dt.files;
     }
 
@@ -4008,12 +4016,12 @@
     function renderPreviews(){
       previewContainer.innerHTML = '';
       selectedPhotos.forEach((photo, idx) => {
-        const url = URL.createObjectURL(photo.file);
+        const url = photo.url || URL.createObjectURL(photo.file);
         const isCover = photo.id === coverPhotoId;
         const item = document.createElement('div');
         item.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
         item.innerHTML = `
-          <img src="${url}" alt="${photo.file.name}">
+          <img src="${url}" alt="${photo.file ? photo.file.name : 'Photo'}">
           <span class="photo-order-badge">${idx + 1}</span>
           <button type="button" class="photo-remove-btn" data-action="remove" aria-label="Remove this photo">×</button>
           <button type="button" class="photo-cover-btn" data-action="cover" aria-label="Set as cover photo" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
@@ -4045,7 +4053,7 @@
       const newFiles = Array.from(inputEl.files);
       for(const f of newFiles){
         if(selectedPhotos.length >= MAX_LISTING_PHOTOS) break;
-        const alreadyAdded = selectedPhotos.some(p => p.file.name === f.name && p.file.size === f.size);
+        const alreadyAdded = selectedPhotos.some(p => p.file && p.file.name === f.name && p.file.size === f.size);
         if(!alreadyAdded) selectedPhotos.push({ id: 'photo_' + (nextPhotoId++), file: f });
       }
       syncInput();
@@ -4053,8 +4061,24 @@
     });
 
     const manager = {
-      getFiles: () => selectedPhotos.map(p => p.file),
+      getFiles: () => selectedPhotos.filter(p => p.file).map(p => p.file),
       getOrderedIds: () => selectedPhotos.map(p => p.id),
+      // The full ordered list, marking which entries already have a real
+      // URL versus which still need one from an upload — this is what
+      // lets the submission step rebuild the final URL array in the
+      // exact order shown here, even though uploads themselves only
+      // return results for the file-based subset.
+      getOrderedEntries: () => selectedPhotos.map(p => ({ id: p.id, url: p.url || null })),
+      // Adds already-uploaded photos directly by URL — no file, no
+      // upload needed, since these already exist in Blob storage from
+      // wherever they were first uploaded.
+      addExistingUrls: (urls) => {
+        urls.forEach(url => {
+          if(selectedPhotos.length >= MAX_LISTING_PHOTOS) return;
+          selectedPhotos.push({ id: 'photo_' + (nextPhotoId++), file: null, url });
+        });
+        renderPreviews();
+      },
       renderPreviews,
       clear: () => {
         const remainingIds = selectedPhotos.map(p => p.id);
@@ -4728,7 +4752,7 @@
         errorEl.style.display = 'block';
         return;
       }
-      if(exteriorPhotoManager.getFiles().length === 0 && !(listingSubmissionState.exteriorUrls && listingSubmissionState.exteriorUrls.length)){
+      if(exteriorPhotoManager.getOrderedIds().length === 0 && !(listingSubmissionState.exteriorUrls && listingSubmissionState.exteriorUrls.length)){
         errorEl.textContent = 'Please attach at least 1 exterior photo.';
         errorEl.style.display = 'block';
         return;
@@ -4809,6 +4833,31 @@
         ]);
         exteriorPhotoUrls = exteriorResult.urls;
         exteriorPhotoHashes = exteriorResult.hashes;
+        // exteriorResult only has entries for the FILE-based photos
+        // (getFiles() never sees already-uploaded URL entries, e.g. ones
+        // carried over via Clone's "with photos" option) — rebuilt here
+        // into the manager's actual visual order, weaving the two kinds
+        // back together, rather than ending up with newly-uploaded
+        // photos silently appended after already-existing ones
+        // regardless of how the host actually arranged them.
+        if(exteriorPhotoManager.getOrderedEntries().some(e => e.url)){
+          const orderedEntries = exteriorPhotoManager.getOrderedEntries();
+          let uploadedIdx = 0;
+          const mergedUrls = [];
+          const mergedHashes = [];
+          orderedEntries.forEach(entry => {
+            if(entry.url){
+              mergedUrls.push(entry.url);
+              mergedHashes.push(null); // already uploaded elsewhere previously — nothing new to hash here
+            } else {
+              mergedUrls.push(exteriorPhotoUrls[uploadedIdx]);
+              mergedHashes.push(exteriorPhotoHashes[uploadedIdx]);
+              uploadedIdx++;
+            }
+          });
+          exteriorPhotoUrls = mergedUrls;
+          exteriorPhotoHashes = mergedHashes;
+        }
         listingSubmissionState.exteriorUrls = exteriorPhotoUrls;
         listingSubmissionState.exteriorHashes = exteriorPhotoHashes;
         // Only write back a result that actually succeeded — a null
@@ -5649,6 +5698,8 @@
     const raw = localStorage.getItem('aerva_clone_listing');
     localStorage.removeItem('aerva_clone_listing');
     if(!raw) return;
+    const cloneWithPhotos = localStorage.getItem('aerva_clone_with_photos') === '1';
+    localStorage.removeItem('aerva_clone_with_photos');
 
     let source;
     try { source = JSON.parse(raw); } catch(err) { return; }
@@ -5721,18 +5772,28 @@
       petFriendlyNo.checked = true;
     }
 
-    // Show the original's photos as reference thumbnails only — browsers
-    // don't allow a file input to be pre-filled from a URL for security
-    // reasons, same limitation the draft-resume flow already has, so
-    // these still have to be re-uploaded, not just re-attached.
-    const referencePhotos = [...(source.exterior_photo_urls || []), ...(source.interior_photo_urls || [])];
+    // Exterior photos are real, already-uploaded Blob URLs — when the
+    // host chose "with photos" (see host-dashboard.html's cloneListing),
+    // these are added directly into the actual gallery via
+    // addExistingUrls, not just shown as inert reference thumbnails.
+    // They're fully editable from there: reorderable, removable, and a
+    // new cover can be set, exactly like any other exterior photo.
+    // Interior/room photos still require re-uploading regardless of this
+    // choice — those live in a separate, more complex per-room gallery
+    // system that reusing existing URLs for isn't built out for yet.
+    if(cloneWithPhotos && Array.isArray(source.exterior_photo_urls) && source.exterior_photo_urls.length){
+      exteriorPhotoManager.addExistingUrls(source.exterior_photo_urls);
+    }
+    const referencePhotos = cloneWithPhotos ? (source.interior_photo_urls || []) : [...(source.exterior_photo_urls || []), ...(source.interior_photo_urls || [])];
     const referenceHtml = referencePhotos.length
       ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">${referencePhotos.slice(0, 8).map(url => `<img src="${url}" style="width:64px; height:64px; object-fit:cover; border-radius:4px;">`).join('')}</div>`
       : '';
 
     const cloneErrorEl = listingForm.querySelector('.listing-error');
     cloneErrorEl.style.color = 'var(--gold-deep)';
-    cloneErrorEl.innerHTML = `Cloned from "${source.property_name}" — give this configuration its own name below, and re-upload photos (shown here for reference only; browsers don't allow carrying over previously uploaded files).${referenceHtml}`;
+    cloneErrorEl.innerHTML = cloneWithPhotos
+      ? `Cloned from "${source.property_name}" — give this configuration its own name below. Exterior photos were carried over and are already in the gallery below (feel free to change them). Interior/room photos still need re-uploading (shown here for reference).${referenceHtml}`
+      : `Cloned from "${source.property_name}" — give this configuration its own name below, and re-upload photos (shown here for reference only; browsers don't allow carrying over previously uploaded files).${referenceHtml}`;
     cloneErrorEl.style.display = 'block';
 
     document.getElementById('listPropertyName').focus();
@@ -7979,8 +8040,23 @@
       // typing "The Willow Cottage, Jibhi" (or picking that exact
       // address from the autocomplete) will geocode to essentially the
       // same point the host saved for that listing — a general area
-      // search never lands this close to one exact building. 300m is
-      // tight enough that it's never just "a nearby neighborhood."
+      // search never lands this close to one exact building. 300m alone
+      // isn't quite enough of a guarantee, though — a broad city/
+      // district search (e.g. "Mumbai Suburban") can coincidentally
+      // geocode to a point within 300m of some listing purely by chance,
+      // especially in a dense area, which used to hide every other
+      // result behind a false "this one property matches" screen. Now
+      // also requires the searched text to actually share a real word
+      // with that listing's own name or address — a genuine address
+      // search naturally does; a city/area name coincidentally landing
+      // nearby doesn't.
+      function sharesSignificantWord(searchText, listingText){
+        const STOPWORDS = new Set(['the','and','near','city','area','district','sub','suburban','resort','stay','home','villa','apartment','road','street','nagar']);
+        const tokenize = (s) => (s || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3 && !STOPWORDS.has(w));
+        const searchWords = new Set(tokenize(searchText));
+        return tokenize(listingText).some(w => searchWords.has(w));
+      }
+
       specificListingMatch = null;
       specificListingMatchGeo = null;
       if(searchSuites && geocoded){
@@ -7992,7 +8068,7 @@
             if(km < closestKm){ closestKm = km; closest = l; }
           }
         });
-        if(closest && closestKm <= TIGHT_MATCH_KM){
+        if(closest && closestKm <= TIGHT_MATCH_KM && sharesSignificantWord(city, closest.property_name)){
           specificListingMatch = closest;
           specificListingMatchGeo = geocoded;
         }
