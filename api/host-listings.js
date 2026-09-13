@@ -487,15 +487,19 @@ module.exports = async (req, res) => {
       }
 
       const safeRoomId = roomId || null;
-      const bookedRows = await sql`
-        SELECT 1 FROM orders
-        WHERE status = 'paid' AND arrival < ${endDate}::date AND departure > ${startDate}::date
-          AND (
-            (${safeRoomId}::int IS NOT NULL AND room_id = ${safeRoomId})
-            OR (${safeRoomId}::int IS NULL AND listing_id = ${listingId})
-          )
-        LIMIT 1
-      `;
+      const bookedRows = safeRoomId
+        ? await sql`
+            SELECT 1 FROM orders
+            WHERE status = 'paid' AND room_id = ${safeRoomId}
+              AND arrival < ${endDate}::date AND departure > ${startDate}::date
+            LIMIT 1
+          `
+        : await sql`
+            SELECT 1 FROM orders
+            WHERE status = 'paid' AND listing_id = ${listingId}
+              AND arrival < ${endDate}::date AND departure > ${startDate}::date
+            LIMIT 1
+          `;
       if (bookedRows[0]) {
         return res.status(400).json({ error: 'Part of this range already has a real booking — please adjust the dates and try again.' });
       }
