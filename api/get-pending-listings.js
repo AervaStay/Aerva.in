@@ -717,6 +717,12 @@ module.exports = async (req, res) => {
     return res.status(200).json({ listings, roomChangeRequests });
   } catch (err) {
     console.error('get-pending-listings error:', err);
-    return res.status(500).json({ error: 'Could not fetch listings' });
+    // This is an authenticated, admin-only endpoint — safe to return the
+    // actual database error message here, unlike a public-facing one.
+    // A generic "Could not fetch listings" with no detail was the reason
+    // a missing-migration column error looked identical to every other
+    // possible failure on the admin page, with no way to tell them apart
+    // without checking server logs directly.
+    return res.status(500).json({ error: 'Could not fetch listings: ' + (err.message || 'unknown error') });
   }
 };
