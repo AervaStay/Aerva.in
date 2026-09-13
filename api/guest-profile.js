@@ -92,6 +92,30 @@ function redactContactInfo(text) {
   let result = text;
   let redacted = false;
 
+  // URLs are pulled out BEFORE any pattern runs and put back afterwards.
+  // Without this, the phone-number pattern below (7+ digits mixed with
+  // dashes) happily matches the middle of a Vercel Blob filename — a
+  // UUID plus random suffix is full of digit runs — and rewrites it to
+  // "[number removed]". The message still looked fine, but the link was
+  // dead: the guest taps a check-in photo and gets nothing. Silently
+  // corrupting a URL is worse than either allowing or blocking it,
+  // because nobody can tell it happened.
+  //
+  // Note this means an ordinary link is never redacted. Social links are
+  // NOT given that protection — they're checked here, at extraction time,
+  // so https://instagram.com/handle is still caught rather than being
+  // waved through by the very mechanism that protects photo URLs.
+  const SOCIAL_URL_PATTERN = /(instagram\.com|facebook\.com|fb\.com|fb\.me|wa\.me|whatsapp\.com|t\.me|telegram\.me|snapchat\.com)/i;
+  const urls = [];
+  result = result.replace(/https?:\/\/[^\s<>"']+/gi, (match) => {
+    if (SOCIAL_URL_PATTERN.test(match)) {
+      redacted = true;
+      return '[contact info removed]';
+    }
+    urls.push(match);
+    return `\u0000URL${urls.length - 1}\u0000`;
+  });
+
   result = result.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, () => { redacted = true; return '[email removed]'; });
 
   result = result.replace(/(\+?\d[\d\s\-.()]{6,}\d)/g, (match) => {
@@ -128,6 +152,10 @@ function redactContactInfo(text) {
 
   result = result.replace(/\b(instagram|insta|ig|facebook|fb|whatsapp|telegram|snapchat)\b\s*[:@]?\s*[a-zA-Z0-9._]{2,}/gi, () => { redacted = true; return '[contact info removed]'; });
   result = result.replace(/\b(instagram\.com|facebook\.com|fb\.com|wa\.me|t\.me)\/[a-zA-Z0-9._]+/gi, () => { redacted = true; return '[contact info removed]'; });
+
+  // Put the real URLs back now that every pattern has run. Done last so
+  // nothing above can have touched them.
+  result = result.replace(/\u0000URL(\d+)\u0000/g, (_m, i) => urls[Number(i)]);
 
   return { displayText: result, wasRedacted: redacted };
 }
