@@ -70,6 +70,8 @@ const { verifyToken, createToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
+const { validatePhoneNumber } = require('./_phone-validation');
+const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -172,6 +174,130 @@ module.exports = async (req, res) => {
 
   const guestId = requireGuestId(req);
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
+
+  // ---- Send an OTP to verify a host's phone number ----
+  // Country-aware format validation (length + digits-only) happens
+  // here, server-side, before anything is "sent" — never trusts
+  // whatever the frontend already checked, since a direct API call
+  // could skip that entirely. Actual SMS delivery is intentionally NOT
+  // wired to a real provider yet — see the comment on otpForTesting
+  // below for why, and what changes once a provider is chosen.
+  if (req.method === 'POST' && req.body && req.body.sendHostPhoneOtp) {
+    try {
+      const { countryCode, localNumber } = req.body.sendHostPhoneOtp;
+      const validation = validatePhoneNumber(countryCode, localNumber);
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error });
+      }
+
+      const guestRows = await sql`SELECT host_id, email FROM guests WHERE id = ${guestId}`;
+      const guest = guestRows[0];
+      if (!guest || !guest.host_id) {
+        return res.status(403).json({ error: 'You do not have permission to do this.' });
+      }
+
+      // Rate-limited per host (not just per IP) — a host retrying OTP
+      // requests for their own number shouldn't be able to spam
+      // themselves (or, if their session were somehow compromised,
+      // spam an SMS provider's bill) unlimited times.
+      const recentSends = await countRecentAttempts(sql, {
+        action: 'host_phone_otp_sent', windowMinutes: 10, byEmail: String(guest.host_id)
+      });
+      if (recentSends >= 5) {
+        return res.status(429).json({ error: 'Too many OTP requests — please wait a few minutes and try again.' });
+      }
+
+      const otp = String(crypto.randomInt(100000, 1000000)); // 6 digits, never starts with 0 so it always displays as 6 characters
+      const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+      const OTP_LIFETIME_MINUTES = 10;
+
+      await sql`
+        UPDATE hosts SET
+          phone_country_code = ${countryCode}, phone_otp_hash = ${otpHash},
+          phone_otp_expires_at = now() + (${OTP_LIFETIME_MINUTES} || ' minutes')::interval,
+          phone_otp_attempts = 0, phone_verified = FALSE
+        WHERE id = ${guest.host_id}
+      `;
+
+      await logAudit(sql, {
+        action: 'host_phone_otp_sent', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
+        targetType: 'host', targetId: guest.host_id, metadata: { ip: getClientIp(req), countryCode }
+      });
+
+      // No real SMS provider is connected yet ("we'll take services
+      // based on country the host belongs to, later on" — per the
+      // request this was built for) — the OTP mechanism itself (
+      // generation, hashing, expiry, attempt-limiting, verification) is
+      // fully real and working; only the delivery step is a placeholder.
+      // Returned directly in the response for now so the flow is
+      // actually testable end to end without a provider connected —
+      // this MUST be removed the moment a real SMS integration is
+      // wired in, since shipping this to production as-is would defeat
+      // the entire point of an OTP.
+      return res.status(200).json({ success: true, otpForTesting: otp, note: 'No SMS provider connected yet — this code is returned directly for testing. Remove this field once a real provider is wired in.' });
+    } catch (err) {
+      console.error('host-listings (sendHostPhoneOtp) error:', err);
+      return res.status(500).json({ error: 'Could not send a verification code right now. Please try again.' });
+    }
+  }
+
+  // ---- Verify the OTP just sent ----
+  if (req.method === 'POST' && req.body && req.body.verifyHostPhoneOtp) {
+    try {
+      const { otp } = req.body.verifyHostPhoneOtp;
+      if (!otp || typeof otp !== 'string' || !/^[0-9]{6}$/.test(otp.trim())) {
+        return res.status(400).json({ error: 'Please enter the 6-digit code.' });
+      }
+
+      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      const guest = guestRows[0];
+      if (!guest || !guest.host_id) {
+        return res.status(403).json({ error: 'You do not have permission to do this.' });
+      }
+
+      const hostRows = await sql`
+        SELECT phone_otp_hash, phone_otp_expires_at, phone_otp_attempts
+        FROM hosts WHERE id = ${guest.host_id}
+      `;
+      const host = hostRows[0];
+      if (!host || !host.phone_otp_hash) {
+        return res.status(400).json({ error: 'No verification code was requested — please request a new one.' });
+      }
+      if (new Date(host.phone_otp_expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This code has expired — please request a new one.' });
+      }
+      // Five wrong guesses invalidates the code entirely, rather than
+      // leaving it guessable indefinitely within its 10-minute window —
+      // a fresh OTP request is required after this, same recovery path
+      // as an expired code.
+      if (host.phone_otp_attempts >= 5) {
+        return res.status(400).json({ error: 'Too many incorrect attempts — please request a new code.' });
+      }
+
+      const submittedHash = crypto.createHash('sha256').update(otp.trim()).digest('hex');
+      if (submittedHash !== host.phone_otp_hash) {
+        await sql`UPDATE hosts SET phone_otp_attempts = phone_otp_attempts + 1 WHERE id = ${guest.host_id}`;
+        await logAudit(sql, {
+          action: 'host_phone_otp_verified', success: false, actorType: 'host', actorIdentifier: String(guest.host_id),
+          targetType: 'host', targetId: guest.host_id, metadata: { ip: getClientIp(req) }
+        });
+        return res.status(400).json({ error: 'Incorrect code — please try again.' });
+      }
+
+      await sql`
+        UPDATE hosts SET phone_verified = TRUE, phone_otp_hash = NULL, phone_otp_expires_at = NULL, phone_otp_attempts = 0
+        WHERE id = ${guest.host_id}
+      `;
+      await logAudit(sql, {
+        action: 'host_phone_otp_verified', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
+        targetType: 'host', targetId: guest.host_id, metadata: {}
+      });
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('host-listings (verifyHostPhoneOtp) error:', err);
+      return res.status(500).json({ error: 'Could not verify this code right now. Please try again.' });
+    }
+  }
 
   // ---- Raise a concern on a held security deposit ----
   // Separate from the verification-submission branch above — this only
