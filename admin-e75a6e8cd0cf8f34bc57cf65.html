@@ -454,8 +454,19 @@
         document.getElementById('loginError').style.display = 'block';
         return;
       }
-      const data = await res.json();
-      renderListings(data.listings);
+      const data = await res.json().catch(() => ({}));
+      // Checked explicitly rather than assuming a 200 — a server error
+      // (e.g. a query referencing a column that hasn't been migrated
+      // onto the live database yet) still returns valid JSON, just with
+      // an "error" key instead of "listings". Without this check,
+      // renderListings(undefined) would throw and get swallowed by the
+      // catch block below as a generic, unhelpful "check API_BASE"
+      // message — masking the actual, specific reason this failed.
+      if(!res.ok){
+        container.innerHTML = `<p class="error">Could not load listings: ${data.error || `server returned ${res.status}`}. If this mentions a column or table, a database migration likely hasn't been run yet.</p>`;
+        return;
+      }
+      renderListings(data.listings || []);
       // Logged explicitly so this is diagnosable from the browser
       // console without needing to dig through the Network tab — an
       // undefined value here means get-pending-listings.js hasn't been
@@ -465,7 +476,8 @@
       console.log('roomChangeRequests from server:', data.roomChangeRequests);
       renderRoomChangeRequests(data.roomChangeRequests);
     } catch(err){
-      container.innerHTML = '<p class="error">Could not load listings. Check API_BASE and try again.</p>';
+      console.error('loadListings failed:', err);
+      container.innerHTML = `<p class="error">Could not load listings — ${err.message || 'unknown error'}. Check API_BASE and the browser console for details.</p>`;
     }
   }
 
