@@ -568,7 +568,7 @@
     </div>
   </div>
 
-  <h2 class="section-heading">Status</h2>
+  <h2 class="section-heading" id="statusSection">Status</h2>
   <p style="font-size:12.5px; opacity:0.65; margin:-8px 0 14px;">Every approved stay, next 30 days. A Resort's rooms each get their own row here — no need to open the listing separately to see per-room availability. Click any open square to block that date directly, or a square you've already blocked to remove it — a real guest booking can't be changed here.</p>
   <div style="display:flex; gap:14px; align-items:center; margin-bottom:14px; font-size:11.5px; flex-wrap:wrap;">
     <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#eef6ef; border:1px solid #3a7d44; display:inline-block; border-radius:2px;"></span> Available</span>
@@ -3390,7 +3390,19 @@
 
   if(sessionToken){
     loadListings();
-    loadStatusCalendar();
+    // A plain #statusSection anchor jump on initial page load can land
+    // in the wrong spot — the listings and calendar above it are still
+    // loading asynchronously at that point, so the page's height (and
+    // therefore where "Status" actually sits) keeps shifting for a
+    // moment after the browser's own anchor-scroll already happened.
+    // Re-scrolled here, after the calendar's own content has actually
+    // rendered, to land in the right place regardless of load timing.
+    loadStatusCalendar().then(() => {
+      if(window.location.hash === '#statusSection'){
+        const el = document.getElementById('statusSection');
+        if(el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
     loadGuestProfile();
     // Deep links from index.html's account menu — "Account Settings"
     // opens the Profile modal; "List Experience" opens its own separate
