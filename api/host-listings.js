@@ -164,6 +164,51 @@ function requireGuestId(req) {
   return payload.listingId; // generically-named token field — see host-auth.js note
 }
 
+
+// ---- Unblocking part of a stored block range ----
+// listing_blocked_dates stores one row per blocked RANGE, with end_date
+// EXCLUSIVE (a single night on 15 Sep is stored 15 Sep -> 16 Sep; see how
+// host-status.html sends nextDayStr(endInclusive) to bulkBlockRange).
+// Freeing up part of that range therefore isn't a delete — it's a trim,
+// or a split into two rows when the freed dates sit in the middle.
+// Deleting the whole row instead, which is what used to happen, quietly
+// reopened nights the host never asked to reopen.
+//
+// [from, to) is the half-open range being freed, matching the storage
+// convention so the comparisons stay consistent.
+async function unblockRangeFromRow(sql, rowId, from, to) {
+  const rows = await sql`SELECT id, listing_id, room_id, start_date, end_date, reason FROM listing_blocked_dates WHERE id = ${rowId}`;
+  const row = rows[0];
+  if (!row) return;
+
+  const rowStart = new Date(row.start_date).toISOString().slice(0, 10);
+  const rowEnd = new Date(row.end_date).toISOString().slice(0, 10);
+
+  const keepLeft = from > rowStart;   // block survives before the freed part
+  const keepRight = to < rowEnd;      // block survives after it
+
+  if (!keepLeft && !keepRight) {
+    // Freed range covers the whole row.
+    await sql`DELETE FROM listing_blocked_dates WHERE id = ${row.id}`;
+    return;
+  }
+  if (keepLeft && keepRight) {
+    // Freed range is in the MIDDLE — shorten this row to the left piece
+    // and insert a second row for the right piece.
+    await sql`UPDATE listing_blocked_dates SET end_date = ${from}::date WHERE id = ${row.id}`;
+    await sql`
+      INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason)
+      VALUES (${row.listing_id}, ${row.room_id}, ${to}::date, ${rowEnd}::date, ${row.reason})
+    `;
+    return;
+  }
+  if (keepLeft) {
+    await sql`UPDATE listing_blocked_dates SET end_date = ${from}::date WHERE id = ${row.id}`;
+  } else {
+    await sql`UPDATE listing_blocked_dates SET start_date = ${to}::date WHERE id = ${row.id}`;
+  }
+}
+
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -490,11 +535,71 @@ module.exports = async (req, res) => {
       if (!existing[0]) {
         return res.status(400).json({ error: 'No block was found covering this date.' });
       }
-      await sql`DELETE FROM listing_blocked_dates WHERE id = ${existing[0].id}`;
+      // Unblocks exactly ONE day, which usually means SPLITTING the row
+      // rather than deleting it. Blocks are stored as ranges, so deleting
+      // the row outright (as this used to) silently freed every other
+      // night in the same block — a host clicking 15 Sep to reopen one
+      // night would quietly reopen 13-20 Sep too.
+      const nextDay = new Date(date + 'T00:00:00');
+      nextDay.setDate(nextDay.getDate() + 1);
+      const dayAfter = nextDay.toISOString().slice(0, 10);
+      await unblockRangeFromRow(sql, existing[0].id, date, dayAfter);
       return res.status(200).json({ success: true, blocked: false });
     } catch (err) {
       console.error('host-listings (toggleBlockedDate) error:', err);
       return res.status(500).json({ error: 'Could not remove this block right now.' });
+    }
+  }
+
+  // ---- Unblock a dragged date range ----
+  // scope 'selection' frees exactly the dates the host dragged over,
+  // splitting or trimming each overlapping block row. scope 'wholeBlock'
+  // deletes every block row the selection touches, even the parts outside
+  // it — the "remove the whole block, not just these nights" choice the
+  // Status calendar offers when a drag lands inside a longer block.
+  if (req.method === 'POST' && req.body && req.body.unblockRange) {
+    try {
+      const { listingId, roomId, startDate, endDate, scope } = req.body.unblockRange;
+      if (!listingId || !startDate || !endDate
+          || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+        return res.status(400).json({ error: 'Missing or invalid listing/date range.' });
+      }
+      if (endDate <= startDate) {
+        return res.status(400).json({ error: 'That date range is empty.' });
+      }
+      const owns = await sql`
+        SELECT l.id FROM listings l
+        JOIN guests g ON g.host_id = l.host_id
+        WHERE l.id = ${listingId} AND g.id = ${guestId}
+      `;
+      if (!owns[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
+      const safeRoomId = roomId || null;
+      // Overlap test for two half-open ranges: they overlap when each
+      // starts before the other ends.
+      const overlapping = await sql`
+        SELECT id FROM listing_blocked_dates
+        WHERE listing_id = ${listingId}
+          AND (room_id = ${safeRoomId} OR (room_id IS NULL AND ${safeRoomId}::int IS NULL))
+          AND start_date < ${endDate}::date AND end_date > ${startDate}::date
+      `;
+      if (!overlapping.length) {
+        return res.status(400).json({ error: 'No blocked dates were found in that range.' });
+      }
+
+      if (scope === 'wholeBlock') {
+        for (const r of overlapping) {
+          await sql`DELETE FROM listing_blocked_dates WHERE id = ${r.id}`;
+        }
+      } else {
+        for (const r of overlapping) {
+          await unblockRangeFromRow(sql, r.id, startDate, endDate);
+        }
+      }
+      return res.status(200).json({ success: true, affected: overlapping.length });
+    } catch (err) {
+      console.error('host-listings (unblockRange) error:', err);
+      return res.status(500).json({ error: 'Could not unblock those dates right now.' });
     }
   }
 
