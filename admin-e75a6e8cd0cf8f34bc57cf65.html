@@ -706,6 +706,7 @@
         <h3>${l.property_name}</h3>
         ${cloneAlertHtml}
         <div class="meta">${metaLine}</div>
+        <div class="meta" style="opacity:0.6;">Submitted ${fmtDate(l.created_at)}</div>
         ${addressHtml}
         <div class="desc">${l.description}</div>
         ${tagListHtml('Amenities', l.amenities)}
@@ -852,6 +853,11 @@
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+  // Shared across every tab that shows a timestamp (all except Security
+  // Deposits, which has its own separate date-range display already) —
+  // one consistent format rather than each render function rolling its
+  // own.
+  const fmtDate = (d) => d ? new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
 
   // Real money movement — this hits Razorpay's refund API for every
   // eligible deposit. Confirmed explicitly rather than firing on page
@@ -928,6 +934,7 @@
         <div class="dispute-card" id="liveListing-${l.id}">
           <h4>${l.property_name} <span style="opacity:0.6; font-weight:400;">— ${statusLabel}</span></h4>
           <div class="dispute-meta">${l.city} · ${l.host_name} (${l.host_email})</div>
+          <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(l.created_at)}</div>
           ${reasonLine}
           <div class="resolve-row">${actions}</div>
           <span id="liveListingError-${l.id}" class="error"></span>
@@ -991,6 +998,7 @@
         <div class="dispute-card" id="verify-${v.id}-aadhaar">
           <h4>${v.name || v.email} — Aadhaar</h4>
           <div class="dispute-meta">${v.email}${v.phone ? ' · ' + v.phone : ''}</div>
+          <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(v.aadhaar_submitted_at)}</div>
           <p><a href="${v.aadhaar_document_url}" target="_blank" rel="noopener">Open the uploaded document ↗</a></p>
           <div class="resolve-row">
             <button type="button" class="approve-btn" onclick="decideVerification(${v.id}, 'aadhaar', 'approve')">Approve</button>
@@ -1003,6 +1011,7 @@
         <div class="dispute-card" id="verify-${v.id}-bank">
           <h4>${v.name || v.email} — Bank Details</h4>
           <div class="dispute-meta">${v.email}${v.phone ? ' · ' + v.phone : ''}</div>
+          <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(v.bank_submitted_at)}</div>
           <p>Account holder: ${v.bank_account_holder_name || '—'}<br>
              Account ending: ••••${v.bank_account_number ? v.bank_account_number.slice(-4) : '—'}<br>
              IFSC: ${v.bank_ifsc || '—'}</p>
