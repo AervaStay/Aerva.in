@@ -611,13 +611,20 @@ module.exports = async (req, res) => {
   // becoming 'verified' (see host-listings.js for why this changed).
   if (req.query.verifications === '1') {
     try {
+      // No dedicated "submitted at" column exists on hosts itself —
+      // reused from audit_log instead (see host-listings.js, which
+      // already logs host_aadhaar_submitted / host_bank_details_submitted
+      // there), rather than adding a new column just to duplicate a
+      // timestamp that's effectively already being recorded.
       const verifications = await sql`
-        SELECT id, guest_id, email, name, phone,
-               aadhaar_document_url, aadhaar_status,
-               bank_account_number, bank_ifsc, bank_account_holder_name, bank_status
-        FROM hosts
-        WHERE aadhaar_status = 'pending_review' OR bank_status = 'pending_review'
-        ORDER BY id ASC
+        SELECT h.id, h.guest_id, h.email, h.name, h.phone,
+               h.aadhaar_document_url, h.aadhaar_status,
+               h.bank_account_number, h.bank_ifsc, h.bank_account_holder_name, h.bank_status,
+               (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_aadhaar_submitted' AND actor_identifier = h.id::text) AS aadhaar_submitted_at,
+               (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_bank_details_submitted' AND actor_identifier = h.id::text) AS bank_submitted_at
+        FROM hosts h
+        WHERE h.aadhaar_status = 'pending_review' OR h.bank_status = 'pending_review'
+        ORDER BY h.id ASC
       `;
       return res.status(200).json({ verifications });
     } catch (err) {
