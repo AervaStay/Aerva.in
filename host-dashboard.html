@@ -2072,7 +2072,14 @@
   let sbListingId = null;
   let sbToken = null;
   let sbNightlyRate = null, sbCity = null, sbArea = null;
-  let sbCommissionRate = 15;
+  // Platform base commission, kept in sync by hand with create-order.js's
+  // BASE_COMMISSION_RATE — that file is the source of truth for what a
+  // host is actually charged. Deliberately NOT read from the listing's
+  // own commission_rate column any more: that column is vestigial (see
+  // create-order.js), and older listings still carry 15 in it, which made
+  // this preview quote a commission the host was never actually charged.
+  const BASE_COMMISSION_RATE = 10;
+  let sbCommissionRate = BASE_COMMISSION_RATE;
 
   // Live "what will I actually get" preview — recalculates on every
   // keystroke in the price field, and again whenever a new promotion is
@@ -2248,7 +2255,6 @@
       // none of which this sidebar exposes any editing for.
       sbNightlyRate = l.nightly_rate;
       document.getElementById('sbNightlyRateInput').value = l.nightly_rate || '';
-      sbCommissionRate = l.commission_rate || 15;
       sbUpdatePriceSummary();
       sbResetSummaryToBase();
       sbCity = l.city;
@@ -2318,7 +2324,7 @@
   let expCalListingId = null;
   let expCalToken = null;
   let expCalNightlyRate = null, expCalCity = null, expCalArea = null;
-  let expCalCommissionRate = 15;
+  let expCalCommissionRate = BASE_COMMISSION_RATE;
   let expCalPriceUnit = 'per_person';
 
   function expUpdatePriceSummary(){
@@ -2397,7 +2403,6 @@
       expCalNightlyRate = l.nightly_rate;
       document.getElementById('expPriceInput').value = l.nightly_rate || '';
       document.getElementById('expPriceUnitInput').value = l.experience_price_unit || 'per_person';
-      expCalCommissionRate = l.commission_rate || 15;
       expUpdatePriceSummary();
       expResetSummaryToBase();
       expCalCity = l.city;
