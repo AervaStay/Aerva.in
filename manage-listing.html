@@ -268,6 +268,12 @@
         <p class="price-history-note">Every change here is recorded, so you can always see your rate history.</p>
       </div>
 
+      <div class="field" id="maxGuestsField">
+        <label for="maxGuests">Max Guests <span style="color:#a3402f;">*</span></label>
+        <input id="maxGuests" type="number" min="1" placeholder="e.g. 4">
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">The most guests this property can sleep — used to stop a booking for more people than the space actually fits.</p>
+      </div>
+
       <div class="form-row" id="discountFieldsRow">
         <div class="field">
           <label for="discountType">Discount Type</label>
@@ -1568,12 +1574,14 @@
       const data = await res.json();
       const l = data.listing;
 
-      // A listing that hasn't been approved yet has nothing live to
-      // manage — shown as its own distinct state rather than the full
-      // form, matching the block the backend itself enforces (see
-      // update-listing-pricing.js) so this isn't just a UI-only
-      // courtesy that a direct API call could bypass.
-      if(l.status !== 'approved'){
+      // A listing auto-blocked by the compliance system (see
+      // _compliance.js on the backend) is a deliberate exception here —
+      // the host needs to be able to reach this page specifically to fix
+      // the issue and get automatically restored. A listing an admin
+      // blocked manually for an unrelated reason still correctly shows
+      // the pending/blocked state below.
+      const isComplianceBlocked = l.status === 'blocked' && l.status_before_compliance_block;
+      if(l.status !== 'approved' && !isComplianceBlocked){
         loadingState.style.display = 'none';
         document.getElementById('pendingHeading').textContent = l.status === 'rejected' ? 'Listing not approved' : 'Still under review';
         document.getElementById('pendingMessage').textContent = l.status === 'rejected'
@@ -1582,11 +1590,23 @@
         document.getElementById('pendingState').style.display = 'block';
         return;
       }
+      if(isComplianceBlocked){
+        // Shown alongside the normal form, not instead of it — the host
+        // needs the actual editing fields visible to fix this, unlike
+        // the pending/rejected cases above where there's nothing to edit
+        // yet at all.
+        const pricingFormEl = document.getElementById('pricingForm');
+        const banner = document.createElement('div');
+        banner.style.cssText = 'background:#fdece8; border:1px solid #e0a99c; padding:14px 16px; margin-bottom:20px; border-radius:4px;';
+        banner.innerHTML = `<p style="font-size:13.5px; margin:0; color:#a3402f;"><strong>This listing is temporarily hidden from guests:</strong> ${l.admin_status_reason || 'An outstanding requirement needs to be fixed.'} It'll go back live automatically as soon as this is fixed and saved.</p>`;
+        pricingFormEl.parentElement.insertBefore(banner, pricingFormEl);
+      }
 
       document.getElementById('propertyNameHeading').textContent = l.property_name;
       document.getElementById('listingCity').value = l.city || '';
       document.getElementById('listingArea').value = l.area || '';
       document.getElementById('listPincode').value = l.pincode || '';
+      document.getElementById('maxGuests').value = l.max_guests || '';
       if(l.latitude && l.longitude){
         document.getElementById('listLatitude').value = l.latitude;
         document.getElementById('listLongitude').value = l.longitude;
@@ -1665,6 +1685,7 @@
         // pet policy, security deposit, and paid amenities.
         document.getElementById('pricingCurrencyField').style.display = 'none';
         document.getElementById('nightlyRateField').style.display = 'none';
+        document.getElementById('maxGuestsField').style.display = 'none';
         document.getElementById('discountFieldsRow').style.display = 'none';
         document.getElementById('discountFieldsRow2').style.display = 'none';
         document.getElementById('interiorPhotosField').style.display = 'none';
@@ -1799,6 +1820,7 @@
         body: JSON.stringify({
           token,
           nightlyRate: toInr(document.getElementById('nightlyRate').value),
+          maxGuests: document.getElementById('maxGuests').value,
           city: document.getElementById('listingCity').value,
           area: document.getElementById('listingArea').value,
           latitude: document.getElementById('listLatitude').value,
