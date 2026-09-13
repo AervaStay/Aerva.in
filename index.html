@@ -758,6 +758,18 @@
     padding:20px; width:600px; max-width:90vw;
   }
   .calendar-dropdown.open{display:block;}
+  /* Actual visibility is mobile-only (see the max-width:640px rule
+     below) — on desktop this anchored dropdown already works fine with
+     a normal click-outside-to-close, no full-screen dimming needed.
+     The JS toggles this class unconditionally on both screen sizes;
+     it's this media query split that decides whether it's ever
+     actually seen. */
+  .calendar-dropdown-backdrop{display:none;}
+  .calendar-dropdown-close{
+    display:none; position:absolute; top:12px; right:12px; width:32px; height:32px; border-radius:50%;
+    background:var(--cream, #f4ebe3); border:1px solid var(--line-dark); font-size:20px; line-height:1;
+    cursor:pointer; align-items:center; justify-content:center; z-index:1;
+  }
   .quick-date-row{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid var(--line-dark);}
   .quick-date-btn{
     background:none; border:1px solid var(--line-dark); border-radius:999px; padding:7px 14px;
@@ -1109,6 +1121,16 @@
       position:fixed; top:50%; left:50%; transform:translate(-50%, -50%);
       width:calc(100vw - 32px); max-width:420px; max-height:80vh; overflow-y:auto;
     }
+    /* Same fix, same reason, for the other two dropdowns sharing
+       openDropdownAsPortal — that function no longer sets inline top/
+       left on mobile for any of the three, so all three need their own
+       centered-overlay position here rather than just the calendar. */
+    .guests-dropdown, .more-filters-dropdown{
+      position:fixed; top:50%; left:50%; transform:translate(-50%, -50%);
+      width:calc(100vw - 32px); max-width:420px; max-height:80vh; overflow-y:auto;
+    }
+    .calendar-dropdown-close{display:flex;}
+    .calendar-dropdown-backdrop.open{display:block; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:299;}
     .calendar-months{flex-direction:column; gap:20px;}
     /* Two columns at tablet width (900px breakpoint above) becomes two
        cramped, narrow cards on an actual phone — a genuine single-column
@@ -1424,7 +1446,9 @@
       <div class="search-field date-range-wrapper">
         <label>When</label>
         <button type="button" class="date-range-btn" id="dateRangeBtn">Add dates</button>
+        <div class="calendar-dropdown-backdrop" id="calendarDropdownBackdrop"></div>
         <div class="calendar-dropdown" id="calendarDropdown">
+          <button type="button" class="calendar-dropdown-close" id="calendarDropdownCloseBtn" aria-label="Close">×</button>
           <div class="quick-date-row" id="quickDateRow">
             <button type="button" class="quick-date-btn" data-days="1">1 night</button>
             <button type="button" class="quick-date-btn" data-days="2">2 nights</button>
@@ -1466,7 +1490,9 @@
         <label for="searchGuests">Who</label>
         <button type="button" class="date-range-btn placeholder" id="guestsTriggerBtn">Add guests</button>
         <input type="hidden" id="searchGuests" value="">
+        <div class="calendar-dropdown-backdrop" id="guestsDropdownBackdrop"></div>
         <div class="guests-dropdown" id="guestsDropdown">
+          <button type="button" class="calendar-dropdown-close" id="guestsDropdownCloseBtn" aria-label="Close">×</button>
           <div class="guest-row">
             <div class="guest-row-text">
               <div class="guest-row-title">Adults</div>
@@ -1522,7 +1548,9 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
             More Filters
           </button>
+          <div class="calendar-dropdown-backdrop" id="moreFiltersDropdownBackdrop"></div>
           <div class="more-filters-dropdown" id="moreFiltersDropdown">
+            <button type="button" class="calendar-dropdown-close" id="moreFiltersDropdownCloseBtn" aria-label="Close">×</button>
             <div class="search-field sort-field">
               <label for="sortPrice">Sort by</label>
               <select id="sortPrice">
@@ -10978,12 +11006,27 @@
   // reparented on open; closing just hides it in place via the .open
   // class exactly as before, so nothing about the show/hide logic
   // elsewhere needs to change.
+  //
+  // On mobile, top/left are deliberately NOT set here — this is the
+  // actual root cause of the calendar appearing off-center on phones:
+  // an inline style set via JS always overrides a stylesheet rule
+  // (including one inside a media query), no matter how specific that
+  // rule is. The CSS media query centers the calendar as a fixed
+  // overlay, but this function was silently fighting it on every single
+  // open, recalculating top/left from the trigger button's position and
+  // overwriting the centering underneath it. Desktop keeps the original
+  // anchored-to-trigger behavior; only mobile skips it.
   function openDropdownAsPortal(dropdownEl, wrapperEl){
     document.body.appendChild(dropdownEl);
-    const rect = wrapperEl.getBoundingClientRect();
     dropdownEl.style.position = 'fixed';
-    dropdownEl.style.top = (rect.bottom + 10) + 'px';
-    dropdownEl.style.left = rect.left + 'px';
+    if(window.innerWidth > 640){
+      const rect = wrapperEl.getBoundingClientRect();
+      dropdownEl.style.top = (rect.bottom + 10) + 'px';
+      dropdownEl.style.left = rect.left + 'px';
+    } else {
+      dropdownEl.style.top = '';
+      dropdownEl.style.left = '';
+    }
   }
 
   function openCalendar(){
@@ -10991,6 +11034,14 @@
     closeMoreFiltersDropdown();
     openDropdownAsPortal(calendarDropdown, dateRangeBtn.closest('.date-range-wrapper'));
     calendarDropdown.classList.add('open');
+    // Moved to <body> for the same reason the dropdown itself is
+    // (openDropdownAsPortal, above) — nested inside the search bar, this
+    // backdrop would be contained by its .reveal.in transform (even a
+    // translateY(0) counts — any non-"none" transform value creates a
+    // new containing block for position:fixed), meaning it would only
+    // ever cover the search bar's own box, not the actual viewport.
+    document.body.appendChild(document.getElementById('calendarDropdownBackdrop'));
+    document.getElementById('calendarDropdownBackdrop').classList.add('open');
     const anchor = searchArrivalDate ? new Date(searchArrivalDate) : calMinDate;
     calViewYear = anchor.getFullYear();
     calViewMonth = anchor.getMonth();
@@ -10998,6 +11049,7 @@
   }
   function closeCalendar(){
     calendarDropdown.classList.remove('open');
+    document.getElementById('calendarDropdownBackdrop').classList.remove('open');
   }
 
   dateRangeBtn.addEventListener('click', (e) => {
@@ -11085,9 +11137,12 @@
     closeMoreFiltersDropdown();
     openDropdownAsPortal(guestsDropdown, guestsTriggerBtn.closest('.search-field'));
     guestsDropdown.classList.add('open');
+    document.body.appendChild(document.getElementById('guestsDropdownBackdrop'));
+    document.getElementById('guestsDropdownBackdrop').classList.add('open');
   }
   function closeGuestsDropdown(){
     guestsDropdown.classList.remove('open');
+    document.getElementById('guestsDropdownBackdrop').classList.remove('open');
   }
 
   guestsTriggerBtn.addEventListener('click', (e) => {
@@ -11133,10 +11188,24 @@
     closeGuestsDropdown();
     openDropdownAsPortal(moreFiltersDropdown, moreFiltersBtn.closest('.more-filters-wrapper'));
     moreFiltersDropdown.classList.add('open');
+    document.body.appendChild(document.getElementById('moreFiltersDropdownBackdrop'));
+    document.getElementById('moreFiltersDropdownBackdrop').classList.add('open');
   }
   function closeMoreFiltersDropdown(){
     moreFiltersDropdown.classList.remove('open');
+    document.getElementById('moreFiltersDropdownBackdrop').classList.remove('open');
   }
+
+  // Explicit close (×) buttons and backdrop-tap-to-dismiss — only
+  // visible/active on mobile (see the max-width:640px rule), where this
+  // becomes a centered overlay rather than an anchored dropdown a guest
+  // could tap outside of on the visible page behind it.
+  document.getElementById('calendarDropdownCloseBtn').addEventListener('click', (e) => { e.stopPropagation(); closeCalendar(); });
+  document.getElementById('calendarDropdownBackdrop').addEventListener('click', closeCalendar);
+  document.getElementById('guestsDropdownCloseBtn').addEventListener('click', (e) => { e.stopPropagation(); closeGuestsDropdown(); });
+  document.getElementById('guestsDropdownBackdrop').addEventListener('click', closeGuestsDropdown);
+  document.getElementById('moreFiltersDropdownCloseBtn').addEventListener('click', (e) => { e.stopPropagation(); closeMoreFiltersDropdown(); });
+  document.getElementById('moreFiltersDropdownBackdrop').addEventListener('click', closeMoreFiltersDropdown);
 
   moreFiltersBtn.addEventListener('click', (e) => {
     e.stopPropagation();
