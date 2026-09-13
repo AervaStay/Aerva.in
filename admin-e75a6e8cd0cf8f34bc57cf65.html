@@ -564,12 +564,21 @@
   }
 
   async function decideRoomChange(roomId, action){
-    if(action === 'reject_room' && !confirm('Discard this room\'s proposed change? Every other room is unaffected either way.')) return;
+    let reason = null;
+    if(action === 'reject_room'){
+      // Optional, not required — a reason isn't always needed (an
+      // obvious duplicate room, say), but when there IS one, giving the
+      // host something concrete to act on is far more useful than a
+      // bare "rejected" with no explanation, same as a whole-listing
+      // rejection already asks for one.
+      reason = prompt('Optional: why is this room change being rejected? The host will see this note on that room. Leave blank for no reason given.');
+      if(reason === null) return; // cancelled the prompt entirely
+    }
     try{
       const res = await fetch(API_BASE + '/api/approve-listing', {
         method: 'POST',
         headers: authHeaders(true),
-        body: JSON.stringify({ roomId, action })
+        body: JSON.stringify({ roomId, action, reason: reason || null })
       });
       if(!res.ok){
         const data = await res.json().catch(() => ({}));
