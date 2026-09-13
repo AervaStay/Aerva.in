@@ -28,34 +28,6 @@
   }
   .listing-card{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:14px; display:flex; gap:16px; align-items:center; transition:border-color .15s ease;}
   .listing-tabs{display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;}
-  /* Status tab's portfolio-wide calendar — same table-based sticky-
-     first-column approach as manage-listing.html's per-room Calendar
-     tab, for the same reason: far more reliable on iOS Safari than
-     position:sticky on an arbitrary div inside a horizontally-scrolling
-     container. */
-  .status-cal-table{border-collapse:separate; border-spacing:0; font-size:11.5px; white-space:nowrap;}
-  .status-cal-table th, .status-cal-table td{padding:0; border-right:1px solid #ede1d0; border-bottom:1px solid #ede1d0;}
-  .status-cal-table th{padding:6px 4px; font-weight:600; text-align:center; background:#faf5ee; min-width:34px; font-size:10px; color:#6b6153;}
-  .status-cal-listing-cell{
-    position:sticky; left:0; z-index:2; background:#fff; padding:8px 12px !important;
-    font-weight:600; text-align:left; border-right:1px solid #ddd0bc !important; min-width:140px; max-width:190px;
-    overflow:hidden; text-overflow:ellipsis;
-  }
-  .status-cal-table th.status-cal-listing-cell{background:#faf5ee; z-index:3;}
-  .status-cal-cell{
-    width:56px; height:36px; text-align:center; vertical-align:middle;
-    font-size:10.5px; font-weight:600; color:var(--ink, #1c1a17); overflow:hidden;
-  }
-  .status-cal-cell.is-available{background:#eef6ef;}
-  .status-cal-cell.is-booked{background:#a3402f; color:#fff;}
-  .status-cal-cell.is-blocked{background:#8a7f6c; color:#fff;}
-  .status-cal-cell.is-promo{background:#2f5c2a; color:#c9e8bf;}
-  .status-cal-cell.is-today{box-shadow:inset 0 0 0 2px #8a6c39;}
-  .status-cal-cell .cal-day-guest{
-    font-size:8.5px; text-transform:uppercase; letter-spacing:0.02em; overflow:hidden;
-    text-overflow:ellipsis; white-space:nowrap; display:block; padding:0 2px;
-  }
-  .status-cal-cell .cal-day-price{font-size:10.5px; font-weight:600; line-height:1;}
   .listing-tab-btn{
     background:none; border:1px solid #ddd0bc; padding:9px 18px; font-size:12.5px;
     cursor:pointer; color:#1c1a17; letter-spacing:0.02em;
@@ -574,24 +546,6 @@
           </div>
         </div>
       </div>
-    </div>
-  </div>
-
-  <h2 class="section-heading" id="statusSection">Status</h2>
-  <p style="font-size:12.5px; opacity:0.65; margin:-8px 0 14px;">Every approved stay, next 30 days. A Resort's rooms each get their own row here — no need to open the listing separately to see per-room availability. Each square shows the real price for that date (discounted if a promotion applies), or the guest's name if it's booked. Click any open square to block that date directly, or a square you've already blocked to remove it — a real guest booking can't be changed here.</p>
-  <div style="display:flex; gap:14px; align-items:center; margin-bottom:14px; font-size:11.5px; flex-wrap:wrap;">
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#eef6ef; border:1px solid #3a7d44; display:inline-block; border-radius:2px;"></span> Available</span>
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#a3402f; display:inline-block; border-radius:2px;"></span> Booked</span>
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#8a7f6c; display:inline-block; border-radius:2px;"></span> Blocked by you</span>
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#2f5c2a; display:inline-block; border-radius:2px;"></span> Promotion applied</span>
-  </div>
-  <div id="statusCalendarWrap" style="overflow-x:auto; -webkit-overflow-scrolling:touch; touch-action:pan-x; border:1px solid #ddd0bc; border-radius:4px;">
-    <p style="padding:16px; opacity:0.6; font-size:13px;">Loading…</p>
-  </div>
-  <div id="statusBookingDetailOverlay" style="display:none; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:50; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target === this) closeStatusBookingDetail()">
-    <div style="background:#fff; border-radius:6px; padding:22px 24px; max-width:360px; width:100%;">
-      <div id="statusBookingDetailContent" style="font-size:13.5px; line-height:1.7;"></div>
-      <button type="button" onclick="closeStatusBookingDetail()" style="margin-top:16px; width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;">Close</button>
     </div>
   </div>
 
@@ -2107,131 +2061,6 @@
     renderListingsForCurrentTab();
   });
 
-  async function loadStatusCalendar(){
-    const wrap = document.getElementById('statusCalendarWrap');
-    try{
-      const res = await fetch(API_BASE + '/api/host-listings?statusCalendar=1', {
-        headers: { 'Authorization': 'Bearer ' + sessionToken }
-      });
-      const data = await res.json();
-      if(!res.ok){
-        wrap.innerHTML = `<p style="padding:16px; color:#a3402f; font-size:13px;">${data.error || 'Could not load the status calendar.'}</p>`;
-        return;
-      }
-      renderStatusCalendar(data);
-    } catch(err){
-      wrap.innerHTML = '<p style="padding:16px; color:#a3402f; font-size:13px;">Could not reach the server — please try again.</p>';
-    }
-  }
-
-  function renderStatusCalendar(data){
-    const wrap = document.getElementById('statusCalendarWrap');
-    if(!data.rows || !data.rows.length){
-      wrap.innerHTML = '<p style="padding:16px; opacity:0.6; font-size:13px;">No approved listings yet.</p>';
-      return;
-    }
-    const start = new Date(data.startDate + 'T00:00:00Z');
-    const days = [];
-    for(let i = 0; i < data.days; i++){
-      const d = new Date(start);
-      d.setUTCDate(d.getUTCDate() + i);
-      days.push(d);
-    }
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const fmtDay = (d) => d.toLocaleDateString('en-IN', { day: 'numeric' });
-    const fmtWeekday = (d) => d.toLocaleDateString('en-IN', { weekday: 'narrow' });
-    const statusLabel = { available: 'Available — click to block', booked: 'Booked (real guest)', blocked: 'Blocked by you — click to unblock' };
-
-    const headerCells = days.map(d => `<th>${fmtWeekday(d)}<br>${fmtDay(d)}</th>`).join('');
-    // Same lookup-by-index approach as manage-listing.html's Calendar
-    // tab — a guest email or label containing a quote character would
-    // otherwise break embedding this data directly in an onclick
-    // attribute.
-    window.statusBookingLookup = [];
-    const bodyRows = data.rows.map(row => {
-      const cells = row.dayStatuses.map((status, i) => {
-        const dateStr = days[i].toISOString().slice(0, 10);
-        const isToday = dateStr === todayStr;
-        const pricing = (row.dayPricing && row.dayPricing[i]) || { price: 0, promoName: null };
-        let clickAttr, innerHtml, cellTitle;
-        if(status === 'booked'){
-          // A room's status is computed per-day, but the actual booking
-          // details live in row.bookings as date RANGES — matched here
-          // by whichever range this specific date falls inside.
-          const booking = (row.bookings || []).find(b => dateStr >= b.start_date && dateStr < b.end_date);
-          const idx = window.statusBookingLookup.length;
-          window.statusBookingLookup.push({ label: row.label, ...(booking || {}) });
-          clickAttr = ` onclick="showStatusBookingDetail(${idx})" style="cursor:pointer;"`;
-          const shortName = booking && booking.guest_email ? booking.guest_email.split('@')[0] : 'Booked';
-          innerHtml = `<span class="cal-day-guest">${shortName}</span>`;
-          cellTitle = `${row.label} — ${dateStr}: ${booking ? booking.guest_email : 'Booked'}`;
-        } else {
-          // Only available/blocked cells toggle a block — a real
-          // booking can never be created or removed from this view.
-          clickAttr = ` onclick="toggleBlockedDate(${row.listingId}, ${row.roomId || 'null'}, '${dateStr}', this)" style="cursor:pointer;"`;
-          innerHtml = pricing.price ? `<span class="cal-day-price">${formatCompactPrice(pricing.price)}</span>` : '';
-          cellTitle = `${row.label} — ${dateStr}: ${statusLabel[status] || status}` + (pricing.promoName ? ` — ${pricing.promoName} applied` : '');
-        }
-        const promoClass = (status === 'available' && pricing.promoName) ? ' is-promo' : '';
-        return `<td class="status-cal-cell is-${status}${promoClass}${isToday ? ' is-today' : ''}" title="${cellTitle}"${clickAttr}>${innerHtml}</td>`;
-      }).join('');
-      return `<tr><td class="status-cal-listing-cell">${row.label}</td>${cells}</tr>`;
-    }).join('');
-
-    wrap.innerHTML = `
-      <table class="status-cal-table">
-        <thead><tr><th class="status-cal-listing-cell">Listing / Room</th>${headerCells}</tr></thead>
-        <tbody>${bodyRows}</tbody>
-      </table>
-    `;
-  }
-
-  // Blocks or unblocks the ONE date clicked, then updates just that cell
-  // — no full re-fetch/re-render needed for a single click, which
-  // matters on mobile where the whole grid re-rendering could visibly
-  // jump/flash and lose the scroll position the host just navigated to.
-  function showStatusBookingDetail(idx){
-    const b = window.statusBookingLookup[idx];
-    if(!b) return;
-    const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-    document.getElementById('statusBookingDetailContent').innerHTML = `
-      <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Booking Detail</p>
-      <p style="font-size:16px; font-weight:600; margin:0 0 12px;">${b.label || 'Booking'}</p>
-      <p style="margin:4px 0;"><strong>Guest:</strong> ${b.guest_email || '—'}</p>
-      <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}${b.nights ? ` (${b.nights} night${b.nights === 1 ? '' : 's'})` : ''}</p>
-      ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${b.guests}</p>` : ''}
-      ${b.total ? `<p style="margin:4px 0;"><strong>Total paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
-    `;
-    document.getElementById('statusBookingDetailOverlay').style.display = 'flex';
-  }
-
-  function closeStatusBookingDetail(){
-    document.getElementById('statusBookingDetailOverlay').style.display = 'none';
-  }
-
-  async function toggleBlockedDate(listingId, roomId, dateStr, cellEl){
-    cellEl.style.opacity = '0.4';
-    try{
-      const res = await fetch(API_BASE + '/api/host-listings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-        body: JSON.stringify({ toggleBlockedDate: { listingId, roomId, date: dateStr } })
-      });
-      const data = await res.json();
-      if(!res.ok){
-        alert(data.error || 'Could not update this date.');
-        cellEl.style.opacity = '';
-        return;
-      }
-      cellEl.classList.remove('is-available', 'is-blocked');
-      cellEl.classList.add(data.blocked ? 'is-blocked' : 'is-available');
-      cellEl.title = cellEl.title.replace(/: .*/, data.blocked ? ': Blocked by you — click to unblock' : ': Available — click to block');
-    } catch(err){
-      alert('Could not reach the server — please try again.');
-    }
-    cellEl.style.opacity = '';
-  }
-
   // ============================================================
   // Right-side sidebar: block dates, promotions, paid amenities for
   // whichever approved listing was just clicked. Ported from
@@ -3407,19 +3236,6 @@
 
   if(sessionToken){
     loadListings();
-    // A plain #statusSection anchor jump on initial page load can land
-    // in the wrong spot — the listings and calendar above it are still
-    // loading asynchronously at that point, so the page's height (and
-    // therefore where "Status" actually sits) keeps shifting for a
-    // moment after the browser's own anchor-scroll already happened.
-    // Re-scrolled here, after the calendar's own content has actually
-    // rendered, to land in the right place regardless of load timing.
-    loadStatusCalendar().then(() => {
-      if(window.location.hash === '#statusSection'){
-        const el = document.getElementById('statusSection');
-        if(el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    });
     loadGuestProfile();
     // Deep links from index.html's account menu — "Account Settings"
     // opens the Profile modal; "List Experience" opens its own separate
