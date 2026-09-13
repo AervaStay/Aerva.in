@@ -90,6 +90,7 @@ const bcrypt = require('bcryptjs');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
 const { createToken, verifyToken } = require('./_approval-token');
+const { COMPLIANCE_CHECKS } = require('./_compliance');
 
 const sql = neon(process.env.DATABASE_URL);
 const razorpay = new Razorpay({
@@ -367,6 +368,87 @@ module.exports = async (req, res) => {
   }
 
   if (req.method === 'POST') {
+    // ---- Compliance requirements: a general mechanism for "every
+    // listing needs X, but some already-approved ones don't have it" —
+    // not specific to any one field. Adding a future requirement means
+    // registering a new key in _compliance.js (a message + a query for
+    // which listings are missing it), not building a new one-off
+    // feature each time.
+
+    // ---- Admin-triggered: scan every listing for one requirement,
+    // flagging whichever don't currently meet it. Safe to re-run — the
+    // partial unique index on compliance_flags means a listing that's
+    // already flagged and still unresolved doesn't get a second,
+    // duplicate flag.
+    if (req.body && req.body.runComplianceCheck) {
+      try {
+        const { key } = req.body.runComplianceCheck;
+        const check = COMPLIANCE_CHECKS[key];
+        if (!check) return res.status(400).json({ error: `Unknown compliance requirement: ${key}` });
+        const affectedIds = await check.findAffectedListingIds(sql);
+        let flaggedCount = 0;
+        for (const listingId of affectedIds) {
+          const inserted = await sql`
+            INSERT INTO compliance_flags (listing_id, requirement_key, message, deadline)
+            VALUES (${listingId}, ${key}, ${check.message}, now() + (${check.deadlineDays} || ' days')::interval)
+            ON CONFLICT DO NOTHING
+            RETURNING id
+          `;
+          if (inserted[0]) flaggedCount++;
+        }
+        await logAudit(sql, {
+          action: 'compliance_check_run', success: true, actorType: 'admin', actorIdentifier: null,
+          targetType: 'compliance', targetId: null,
+          metadata: { key, affectedCount: affectedIds.length, newlyFlagged: flaggedCount }
+        });
+        return res.status(200).json({ success: true, affectedCount: affectedIds.length, newlyFlagged: flaggedCount });
+      } catch (err) {
+        console.error('get-pending-listings (runComplianceCheck) error:', err);
+        return res.status(500).json({ error: 'Could not run this compliance check: ' + (err.message || 'unknown error') });
+      }
+    }
+
+    // ---- Cron-callable (or admin-triggered): blocks every listing whose
+    // deadline has passed without being resolved. Uses the SAME
+    // x-admin-secret auth already checked above — a scheduled job sends
+    // that header the same way a manual admin action would, no separate
+    // secret mechanism needed.
+    if (req.body && req.body.enforceCompliance === true) {
+      try {
+        const overdue = await sql`
+          SELECT cf.id AS flag_id, cf.listing_id, cf.message, l.status AS current_status, l.property_name, l.host_email
+          FROM compliance_flags cf
+          JOIN listings l ON l.id = cf.listing_id
+          WHERE cf.resolved_at IS NULL AND cf.deadline < now() AND cf.auto_blocked = FALSE
+        `;
+        let blockedCount = 0;
+        for (const row of overdue) {
+          // A listing an admin already blocked/removed for an unrelated
+          // reason is left alone — this only ever blocks something that
+          // was otherwise still live, and only ever restores it to
+          // 'approved' later, never overriding a separate moderation
+          // decision.
+          if (row.current_status === 'approved') {
+            await sql`
+              UPDATE listings SET status = 'blocked', admin_status_reason = ${row.message}, status_before_compliance_block = ${row.current_status}
+              WHERE id = ${row.listing_id}
+            `;
+            blockedCount++;
+          }
+          await sql`UPDATE compliance_flags SET auto_blocked = TRUE WHERE id = ${row.flag_id}`;
+          await logAudit(sql, {
+            action: 'compliance_deadline_enforced', success: true, actorType: 'system', actorIdentifier: null,
+            targetType: 'listing', targetId: row.listing_id,
+            metadata: { flagId: row.flag_id, wasBlocked: row.current_status === 'approved' }
+          });
+        }
+        return res.status(200).json({ success: true, checked: overdue.length, blocked: blockedCount });
+      } catch (err) {
+        console.error('get-pending-listings (enforceCompliance) error:', err);
+        return res.status(500).json({ error: 'Could not enforce compliance deadlines: ' + (err.message || 'unknown error') });
+      }
+    }
+
     // ---- Block / unblock / remove / restore an already-approved listing ----
     if (req.body && req.body.setListingStatus) {
       try {
@@ -652,6 +734,26 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('get-pending-listings (disputes) error:', err);
       return res.status(500).json({ error: 'Could not fetch disputes' });
+    }
+  }
+
+  // ---- Every currently-open compliance flag, for admin visibility —
+  // which listings have an outstanding requirement, how much time is
+  // left, and whether it's already been auto-enforced.
+  if (req.query.complianceFlags === '1') {
+    try {
+      const flags = await sql`
+        SELECT cf.id, cf.listing_id, cf.requirement_key, cf.message, cf.deadline, cf.created_at, cf.auto_blocked,
+               l.property_name, l.host_email, l.status AS listing_status
+        FROM compliance_flags cf
+        JOIN listings l ON l.id = cf.listing_id
+        WHERE cf.resolved_at IS NULL
+        ORDER BY cf.deadline ASC
+      `;
+      return res.status(200).json({ flags });
+    } catch (err) {
+      console.error('get-pending-listings (complianceFlags) error:', err);
+      return res.status(500).json({ error: 'Could not fetch compliance flags: ' + (err.message || 'unknown error') });
     }
   }
 

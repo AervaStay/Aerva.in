@@ -32,6 +32,7 @@
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
+const { resolveSatisfiedComplianceFlags } = require('./_compliance');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -80,7 +81,7 @@ module.exports = async (req, res) => {
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                experience_price_unit, commission_rate,
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
-               auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review
+               auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -162,7 +163,7 @@ module.exports = async (req, res) => {
 
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, promotions,
-              latitude, longitude, formattedAddress, city, area, pincode,
+              latitude, longitude, formattedAddress, city, area, pincode, maxGuests,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
               customFields, autoSendCheckinInstructions, checkinPhotos, rooms, bedrooms } = req.body || {};
@@ -186,16 +187,20 @@ module.exports = async (req, res) => {
       const before = await sql`
         SELECT nightly_rate, exterior_photo_urls, interior_photo_urls,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
-               property_type, bedrooms, status, rooms_pending_review
+               property_type, bedrooms, status, rooms_pending_review, status_before_compliance_block
         FROM listings WHERE id = ${listingId}
       `;
       if (!before[0]) return res.status(404).json({ error: 'This listing could not be found.' });
-      // A listing that hasn't been approved yet has nothing live to
-      // manage — editing it here would conflict with (or silently
-      // discard) whatever's staged in pending_room_photos awaiting the
-      // admin's initial review. Host has to wait for that first
-      // approval before this page does anything.
-      if (before[0].status !== 'approved') {
+      // A listing auto-blocked by the compliance system (see
+      // _compliance.js) is a deliberate exception to "must be approved
+      // to manage" below — the whole point of that block is to give the
+      // host a way to fix the specific issue and get automatically
+      // restored, so locking them out of the one page that lets them fix
+      // it would defeat the entire mechanism. A listing an admin blocked
+      // manually for an unrelated reason (status_before_compliance_block
+      // is NULL in that case) still correctly stays locked.
+      const isComplianceBlocked = before[0].status === 'blocked' && before[0].status_before_compliance_block;
+      if (before[0].status !== 'approved' && !isComplianceBlocked) {
         return res.status(403).json({
           error: before[0].status === 'rejected'
             ? 'This listing was not approved and needs to be resubmitted before it can be managed here. Please contact hello@aerva.in if you have questions about the rejection.'
@@ -316,6 +321,7 @@ module.exports = async (req, res) => {
           longitude = COALESCE(${safeLng ?? null}, longitude),
           formatted_address = COALESCE(${formattedAddress || null}, formatted_address),
           pincode = COALESCE(${typeof pincode === 'string' && pincode.trim() ? pincode.trim().slice(0, 20) : null}, pincode),
+          max_guests = COALESCE(${(maxGuests !== undefined && maxGuests !== null && String(maxGuests).trim() && Number(maxGuests) > 0) ? String(Math.floor(Number(maxGuests))) : null}, max_guests),
           pet_friendly = ${finalPetFriendly}, max_pets_allowed = ${finalMaxPets},
           allowed_pet_types = ${JSON.stringify(finalPetTypes)}, pet_fee = ${finalPetFee},
           security_deposit = ${finalSecurityDeposit},
@@ -328,13 +334,20 @@ module.exports = async (req, res) => {
           auto_send_checkin_instructions = ${autoSendCheckinInstructions === true},
           checkin_photos = ${JSON.stringify(safeCheckinPhotos)}
         WHERE id = ${listingId}
-        RETURNING id, property_name, host_email
+        RETURNING id, property_name, host_email, max_guests
       `;
       const listing = updated[0];
 
       if (rateChanged) {
         await sql`INSERT INTO price_history (listing_id, nightly_rate) VALUES (${listingId}, ${rate})`;
       }
+
+      // Checked right after the save that actually changed max_guests
+      // (among possibly other fields) — resolves any open compliance
+      // flag on THIS listing now satisfied, restoring it from an auto-
+      // block if every flag that caused it is now clear. Never blocks or
+      // fails the save itself either way (see _compliance.js).
+      await resolveSatisfiedComplianceFlags(sql, listingId, { max_guests: listing.max_guests });
 
       // ---- Sync dynamic custom check-in fields: same "submitted array
       // is the full set" pattern as paid amenities below — matched rows
