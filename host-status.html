@@ -40,6 +40,53 @@
   .status-cal-cell.is-blocked::after{content:''; position:absolute; left:15%; right:15%; top:50%; height:2px; background:#f4ebe3; transform:translateY(-50%); opacity:0.7; pointer-events:none;}
   .status-cal-cell.is-promo{background:#2f5c2a; color:#c9e8bf;}
   .status-cal-cell.is-today{box-shadow:inset 0 0 0 2px #8a6c39;}
+
+  /* ---- Detail popovers ----
+     These used to be full-screen modals (position:fixed; inset:0) with a
+     dark backdrop. On a laptop that meant tapping one date hid the entire
+     calendar behind a dimmed sheet — you lost the row, the dates either
+     side, and the context you clicked from, which is exactly what you
+     need to see while deciding whether to remove a promotion.
+     Now: a card anchored next to the cell on desktop, a bottom sheet on
+     phones (where there isn't room to sit beside anything). No backdrop,
+     so the grid stays readable underneath. */
+  .status-popover{
+    display:none; position:absolute; z-index:60; width:300px; max-width:92vw;
+    background:#fff; border:1px solid #ddd0bc; border-radius:8px;
+    padding:18px 20px; box-shadow:0 12px 34px rgba(28,26,23,0.20);
+    font-size:13.5px; line-height:1.7;
+  }
+  .status-popover.open{display:block;}
+  /* Small rotated square forming the pointer. JS sets --arrow-x/--arrow-y
+     and flips it above or below depending on where the card landed. */
+  .status-popover .status-popover-arrow{
+    position:absolute; width:11px; height:11px; background:#fff;
+    border-left:1px solid #ddd0bc; border-top:1px solid #ddd0bc;
+    transform:rotate(45deg);
+  }
+  .status-popover-close{
+    margin-top:14px; width:100%; padding:9px; background:#fff;
+    border:1px solid #ddd0bc; color:#1c1a17; border-radius:4px;
+    cursor:pointer; font-size:12.5px; letter-spacing:0.04em;
+  }
+  .status-popover-danger{
+    margin-top:14px; width:100%; padding:9px; background:#a3402f; color:#fff;
+    border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;
+  }
+  /* Phone: there is no useful "beside the cell", so the card becomes a
+     bottom sheet — thumb-reachable, full width, and the calendar is still
+     visible above it. */
+  @media (max-width: 640px){
+    .status-popover{
+      position:fixed !important; left:0 !important; right:0 !important;
+      bottom:0 !important; top:auto !important; width:auto; max-width:none;
+      border-radius:14px 14px 0 0; border-left:none; border-right:none; border-bottom:none;
+      padding:20px 20px calc(20px + env(safe-area-inset-bottom));
+      box-shadow:0 -8px 30px rgba(28,26,23,0.22);
+    }
+    .status-popover .status-popover-arrow{display:none;}
+  }
+
   .status-cal-cell.is-selecting{background:#8a6c39 !important; color:#fff;}
   .status-cal-cell .cal-day-guest{
     font-size:8.5px; text-transform:uppercase; letter-spacing:0.02em; overflow:hidden;
@@ -107,19 +154,17 @@
     </div>
   </div>
 
-  <div id="statusBookingDetailOverlay" style="display:none; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:50; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target === this) closeStatusBookingDetail()">
-    <div style="background:#fff; border-radius:6px; padding:22px 24px; max-width:360px; width:100%;">
-      <div id="statusBookingDetailContent" style="font-size:13.5px; line-height:1.7;"></div>
-      <button type="button" onclick="closeStatusBookingDetail()" style="margin-top:16px; width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;">Close</button>
-    </div>
+  <div id="statusBookingDetailOverlay" class="status-popover">
+    <span class="status-popover-arrow"></span>
+    <div id="statusBookingDetailContent"></div>
+    <button type="button" class="status-popover-close" onclick="closeStatusBookingDetail()">Close</button>
   </div>
 
-  <div id="promoDetailOverlay" style="display:none; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:50; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target === this) closePromoDetail()">
-    <div style="background:#fff; border-radius:6px; padding:22px 24px; max-width:360px; width:100%;">
-      <div id="promoDetailContent" style="font-size:13.5px; line-height:1.7;"></div>
-      <button type="button" id="promoDetailRemoveBtn" style="margin-top:16px; width:100%; padding:10px; background:#a3402f; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;">Remove This Promotion</button>
-      <button type="button" onclick="closePromoDetail()" style="margin-top:8px; width:100%; padding:10px; background:#fff; border:1px solid #ddd0bc; color:#1c1a17; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;">Close</button>
-    </div>
+  <div id="promoDetailOverlay" class="status-popover">
+    <span class="status-popover-arrow"></span>
+    <div id="promoDetailContent"></div>
+    <button type="button" id="promoDetailRemoveBtn" class="status-popover-danger">Remove This Promotion</button>
+    <button type="button" class="status-popover-close" onclick="closePromoDetail()">Close</button>
   </div>
 </div>
 
@@ -329,6 +374,106 @@
   // Shows exactly what was applied — name, discount, dates, minimum
   // nights, and the actual before/after price — rather than a bare
   // "remove this?" confirm with no detail to verify against.
+  // ---- Popover positioning ----
+  // Anchors a detail card beside the cell that was clicked instead of
+  // covering the calendar with a modal. Below the cell by default; flips
+  // above when there isn't room, and is clamped horizontally so it never
+  // hangs off the edge. Under 640px the CSS turns it into a bottom sheet
+  // and all of this is skipped.
+  let openPopoverEl = null;
+  let openPopoverAnchor = null;
+
+  function isBottomSheet(){ return window.matchMedia('(max-width: 640px)').matches; }
+
+  function positionPopover(el, anchorEl){
+    if(isBottomSheet()) return; // CSS pins it to the bottom edge
+    const GAP = 10, MARGIN = 8;
+    const r = anchorEl.getBoundingClientRect();
+    const w = el.offsetWidth, h = el.offsetHeight;
+
+    // Prefer below the cell; flip above if it would run off the bottom
+    // and there's more room up top.
+    const spaceBelow = window.innerHeight - r.bottom;
+    const placeAbove = spaceBelow < h + GAP + MARGIN && r.top > spaceBelow;
+    let top = placeAbove ? r.top - h - GAP : r.bottom + GAP;
+
+    // Centre on the cell, then pull back inside the viewport.
+    let left = r.left + (r.width / 2) - (w / 2);
+    left = Math.max(MARGIN, Math.min(left, window.innerWidth - w - MARGIN));
+
+    el.style.top = (top + window.scrollY) + 'px';
+    el.style.left = (left + window.scrollX) + 'px';
+
+    // Point the arrow back at the cell, clamped so it stays on the card.
+    const arrow = el.querySelector('.status-popover-arrow');
+    if(arrow){
+      const ax = Math.max(14, Math.min(r.left + r.width / 2 - left, w - 22));
+      arrow.style.left = ax + 'px';
+      if(placeAbove){
+        arrow.style.top = (h - 6) + 'px';
+        arrow.style.transform = 'rotate(225deg)';
+      } else {
+        arrow.style.top = '-6px';
+        arrow.style.transform = 'rotate(45deg)';
+      }
+    }
+  }
+
+  function openPopover(el, anchorEl){
+    closeAllPopovers();
+    el.classList.add('open');
+    openPopoverEl = el;
+    openPopoverAnchor = anchorEl || null;
+    if(anchorEl) positionPopover(el, anchorEl);
+    else if(!isBottomSheet()){
+      // No anchor to work from (shouldn't normally happen) — centre it
+      // rather than leaving the card at 0,0 in the corner.
+      el.style.top = (window.scrollY + window.innerHeight / 2 - el.offsetHeight / 2) + 'px';
+      el.style.left = (window.innerWidth / 2 - el.offsetWidth / 2) + 'px';
+    }
+  }
+
+  function closeAllPopovers(){
+    document.querySelectorAll('.status-popover.open').forEach(el => el.classList.remove('open'));
+    openPopoverEl = null;
+    openPopoverAnchor = null;
+  }
+
+  // The calendar scrolls horizontally in its own container, so an anchored
+  // card has to follow its cell — otherwise it detaches and floats over
+  // unrelated dates.
+  function repositionOpenPopover(){
+    if(!openPopoverEl || !openPopoverAnchor) return;
+    if(!document.body.contains(openPopoverAnchor)){ closeAllPopovers(); return; }
+    positionPopover(openPopoverEl, openPopoverAnchor);
+  }
+  window.addEventListener('resize', repositionOpenPopover);
+  window.addEventListener('scroll', repositionOpenPopover, { passive: true });
+  document.addEventListener('DOMContentLoaded', () => {
+    const wrap = document.getElementById('statusCalendarWrap');
+    if(wrap) wrap.addEventListener('scroll', repositionOpenPopover, { passive: true });
+  });
+
+  // Click anywhere that isn't the card itself closes it. Capture phase so
+  // this runs before a cell's own handler opens the next one.
+  document.addEventListener('mousedown', (e) => {
+    if(!openPopoverEl) return;
+    if(openPopoverEl.contains(e.target)) return;
+    closeAllPopovers();
+  });
+  document.addEventListener('keydown', (e) => {
+    if(e.key === 'Escape') closeAllPopovers();
+  });
+
+  // Records which cell was clicked so the show* functions below have
+  // something to anchor to, without having to change every onclick in the
+  // rendered table markup.
+  let lastClickedCell = null;
+  document.addEventListener('click', (e) => {
+    const cell = e.target.closest && e.target.closest('.status-cal-cell');
+    if(cell) lastClickedCell = cell;
+  }, true);
+
   function showPromoDetail(idx){
     const p = window.statusPromoLookup[idx];
     if(!p) return;
@@ -344,12 +489,10 @@
       ${p.promoMinNights ? `<p style="margin:4px 0;"><strong>Minimum nights:</strong> ${p.promoMinNights}</p>` : ''}
     `;
     document.getElementById('promoDetailRemoveBtn').onclick = () => removePromo(p.promotionId);
-    document.getElementById('promoDetailOverlay').style.display = 'flex';
+    openPopover(document.getElementById('promoDetailOverlay'), lastClickedCell);
   }
 
-  function closePromoDetail(){
-    document.getElementById('promoDetailOverlay').style.display = 'none';
-  }
+  function closePromoDetail(){ closeAllPopovers(); }
 
   function renderStatusCalendar(data){
     const wrap = document.getElementById('statusCalendarWrap');
@@ -444,12 +587,10 @@
       ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${b.guests}</p>` : ''}
       ${b.total ? `<p style="margin:4px 0;"><strong>Total paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
     `;
-    document.getElementById('statusBookingDetailOverlay').style.display = 'flex';
+    openPopover(document.getElementById('statusBookingDetailOverlay'), lastClickedCell);
   }
 
-  function closeStatusBookingDetail(){
-    document.getElementById('statusBookingDetailOverlay').style.display = 'none';
-  }
+  function closeStatusBookingDetail(){ closeAllPopovers(); }
 
   if(sessionToken){
     loadStatusCalendar();
