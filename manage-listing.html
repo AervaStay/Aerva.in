@@ -1124,7 +1124,13 @@
                 <div style="height:1px; background:#ddd0bc; margin:14px 0;"></div>
               ` : ''}
               <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Don't see the room you want? Create it now with these same photos already filled in.</p>
-              <button type="button" class="add-paid-amenity-btn" data-clone-new-room style="width:auto; padding:8px 16px; font-size:11px;">+ Clone into a New Room</button>
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <button type="button" class="add-paid-amenity-btn" data-clone-new-room style="width:auto; padding:8px 16px; font-size:11px;">+ Clone into New Room(s)</button>
+                <label style="display:flex; align-items:center; gap:6px; font-size:12px; opacity:0.75;">
+                  × <input type="number" min="1" max="30" value="1" data-clone-new-room-count style="width:52px; padding:6px 8px; font-size:12px;">
+                </label>
+              </div>
+              <p style="font-size:11px; opacity:0.55; margin-top:4px;">Set a count above to create several identical rooms at once — useful for a resort with multiple copies of the same room type. Each one still gets its own name, price, and occupancy afterward.</p>
             </div>
           ` : ''}
         </div>
@@ -1199,10 +1205,34 @@
           // above — this creates it AND clones the photos into it in one
           // action, rather than making the host add an empty room first,
           // then come back to this same panel to find it as an option.
-          roomRows.push({
-            id: null, roomName: '', maxOccupancy: '', nightlyRate: '', description: '', isActive: true,
-            photos: room.photos.map(p => ({ file: p.file, url: p.url }))
-          });
+          // A resort often has several genuinely identical rooms (the
+          // same room type repeated), so a count above 1 creates that
+          // many copies in one action instead of repeating this click.
+          const countInput = el.querySelector('[data-clone-new-room-count]');
+          const count = Math.min(30, Math.max(1, parseInt(countInput && countInput.value, 10) || 1));
+          // Existing room names (this room plus any already in the
+          // list) checked up front, so auto-numbering skips a name
+          // that's already taken instead of creating two rooms with the
+          // exact same name.
+          const takenNames = new Set(roomRows.map(r => (r.roomName || '').trim().toLowerCase()).filter(Boolean));
+          const baseName = (room.roomName || 'Room').trim();
+          let suffix = 2;
+          for(let i = 0; i < count; i++){
+            let candidateName = '';
+            if(baseName){
+              candidateName = `${baseName} (Copy ${suffix})`;
+              while(takenNames.has(candidateName.toLowerCase())){
+                suffix++;
+                candidateName = `${baseName} (Copy ${suffix})`;
+              }
+              takenNames.add(candidateName.toLowerCase());
+              suffix++;
+            }
+            roomRows.push({
+              id: null, roomName: candidateName, maxOccupancy: room.maxOccupancy || '', nightlyRate: room.nightlyRate || '', description: room.description || '', isActive: true,
+              photos: room.photos.map(p => ({ file: p.file, url: p.url }))
+            });
+          }
           renderRooms();
         });
       }
