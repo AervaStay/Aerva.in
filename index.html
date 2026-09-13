@@ -7596,6 +7596,42 @@
     document.getElementById('inboxPanel').classList.remove('details-open');
   });
 
+  // ---- Message body rendering ----
+  // Messages are stored as PLAIN TEXT and must be escaped before they
+  // touch innerHTML. Interpolating display_text directly (as this used
+  // to) meant anything a guest or host typed was parsed as HTML — a
+  // message containing an <img onerror=...> tag would execute script in
+  // the other party's browser, using their logged-in session. Escaping
+  // first closes that off; everything below re-introduces markup only
+  // for patterns this function itself recognises.
+  function escapeMessageHtml(text){
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // Check-in photos arrive as "Caption: https://…jpeg" lines, because a
+  // message is text and a photo can only travel as a link (see
+  // _template-scheduling.js). Pasting a 130-character blob URL into the
+  // thread is unreadable, so an image link is rendered as the actual
+  // image — the way any real messaging product shows a photo — and any
+  // other link becomes a normal tappable anchor.
+  const IMAGE_URL_PATTERN = /^https?:\/\/[^\s]+\.(jpe?g|png|webp|gif)(\?[^\s]*)?$/i;
+  function renderMessageBody(text){
+    const escaped = escapeMessageHtml(text);
+    // Split on whole URLs. Escaping happened first, so the only thing
+    // being matched here is text this function put through itself.
+    return escaped.replace(/https?:&#x2F;&#x2F;[^\s]+|https?:\/\/[^\s]+/gi, (url) => {
+      const clean = url.replace(/&amp;/g, '&');
+      if (IMAGE_URL_PATTERN.test(clean)) {
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer" style="display:block; margin-top:6px;">`
+          + `<img src="${url}" alt="" loading="lazy" style="max-width:220px; width:100%; border-radius:10px; display:block;">`
+          + `</a>`;
+      }
+      return `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:underline; word-break:break-all;">${url}</a>`;
+    });
+  }
+
   async function refreshInboxMessages(){
     const token = guestAuthToken();
     const container = document.getElementById('inboxMessages');
@@ -7653,7 +7689,7 @@
           <div class="inbox-message-avatar"></div>
           <div>
             <div class="inbox-message-meta">${label} · ${time}</div>
-            <div class="inbox-message-bubble" data-msg-id="${m.id}">${shownText}</div>
+            <div class="inbox-message-bubble" data-msg-id="${m.id}">${renderMessageBody(shownText)}</div>
             ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
             ${showOriginalLink}
           </div>
