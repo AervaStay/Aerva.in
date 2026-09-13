@@ -253,8 +253,14 @@
           <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#a3402f; display:inline-block; border-radius:2px;"></span> Booked</span>
           <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#8a7f6c; display:inline-block; border-radius:2px;"></span> Blocked</span>
         </div>
-        <div id="roomCalendarWrap" style="overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid #ddd0bc; border-radius:4px;">
+        <div id="roomCalendarWrap" style="overflow-x:auto; -webkit-overflow-scrolling:touch; touch-action:pan-x; border:1px solid #ddd0bc; border-radius:4px;">
           <p style="padding:16px; opacity:0.6; font-size:13px;">Loading calendar…</p>
+        </div>
+        <div id="bookingDetailOverlay" style="display:none; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:50; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target === this) closeBookingDetail()">
+          <div style="background:#fff; border-radius:6px; padding:22px 24px; max-width:360px; width:100%;">
+            <div id="bookingDetailContent" style="font-size:13.5px; line-height:1.7;"></div>
+            <button type="button" onclick="closeBookingDetail()" style="margin-top:16px; width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;">Close</button>
+          </div>
         </div>
       </div>
 
@@ -1962,18 +1968,28 @@
     // overlap).
     function statusForDate(room, dateStr){
       for(const r of room.ranges){
-        if(dateStr >= r.start && dateStr < r.end) return { type: r.type, label: r.label };
+        if(dateStr >= r.start && dateStr < r.end) return r;
       }
       return { type: 'available', label: 'Available' };
     }
 
     const headerCells = days.map(d => `<th>${fmtWeekday(d)}<br>${fmtDay(d)}</th>`).join('');
+    // Booking data referenced by index rather than embedded directly in
+    // the onclick attribute — a guest email, label, or reason containing
+    // a quote character would otherwise break the generated HTML.
+    window.roomCalBookingLookup = [];
     const bodyRows = data.rooms.map(room => {
       const cells = days.map(d => {
         const dateStr = d.toISOString().slice(0, 10);
-        const status = statusForDate(room, dateStr);
+        const range = statusForDate(room, dateStr);
         const isToday = dateStr === todayStr;
-        return `<td class="room-cal-cell is-${status.type}${isToday ? ' is-today' : ''}" title="${room.roomName} — ${dateStr}: ${status.label}"></td>`;
+        let clickAttr = '';
+        if(range.type === 'booked'){
+          const idx = window.roomCalBookingLookup.length;
+          window.roomCalBookingLookup.push({ roomName: room.roomName, ...range });
+          clickAttr = ` onclick="showBookingDetail(${idx})" style="cursor:pointer;"`;
+        }
+        return `<td class="room-cal-cell is-${range.type}${isToday ? ' is-today' : ''}" title="${room.roomName} — ${dateStr}: ${range.label}"${clickAttr}></td>`;
       }).join('');
       return `<tr><td class="room-cal-room-cell">${room.roomName || 'Untitled room'}</td>${cells}</tr>`;
     }).join('');
@@ -1984,6 +2000,25 @@
         <tbody>${bodyRows}</tbody>
       </table>
     `;
+  }
+
+  function showBookingDetail(idx){
+    const b = window.roomCalBookingLookup[idx];
+    if(!b) return;
+    const fmtDate = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    document.getElementById('bookingDetailContent').innerHTML = `
+      <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Booking Detail</p>
+      <p style="font-size:16px; font-weight:600; margin:0 0 12px;">${b.roomName || 'Room'}</p>
+      <p style="margin:4px 0;"><strong>Guest:</strong> ${b.guestEmail || b.label || '—'}</p>
+      <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start)} – ${fmtDate(b.end)}${b.nights ? ` (${b.nights} night${b.nights === 1 ? '' : 's'})` : ''}</p>
+      ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${b.guests}</p>` : ''}
+      ${b.total ? `<p style="margin:4px 0;"><strong>Total paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
+    `;
+    document.getElementById('bookingDetailOverlay').style.display = 'flex';
+  }
+
+  function closeBookingDetail(){
+    document.getElementById('bookingDetailOverlay').style.display = 'none';
   }
 
   document.querySelectorAll('.mgmt-tab-btn').forEach(btn => {
