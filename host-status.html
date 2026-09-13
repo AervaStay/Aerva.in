@@ -81,7 +81,8 @@
 
       <p style="font-size:10.5px; opacity:0.55; text-align:center; margin:0 0 14px;">— or run a promotion for these dates instead —</p>
 
-      <p style="font-size:12px; font-weight:600; margin:0 0 8px;">Add a promotion</p>
+      <p style="font-size:12px; font-weight:600; margin:0 0 4px;">Add a promotion</p>
+      <p id="rangePromoScopeNote" style="font-size:11px; opacity:0.6; margin:0 0 8px;"></p>
       <input type="text" id="rangePromoName" placeholder="Promotion name, e.g. Diwali Sale" style="width:100%; box-sizing:border-box; padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc; margin-bottom:8px;">
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
         <select id="rangePromoType" style="padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc;">
@@ -201,6 +202,9 @@
     document.getElementById('rangePromoType').value = 'percentage';
     document.getElementById('rangePromoValue').value = '';
     document.getElementById('rangePromoMinNights').value = '';
+    document.getElementById('rangePromoScopeNote').textContent = row.roomId
+      ? `Applies only to ${row.label} — every other room keeps its own separate pricing.`
+      : `Applies to the whole listing.`;
     document.getElementById('rangeConfirmError').style.display = 'none';
     document.getElementById('rangeConfirmOverlay').style.display = 'flex';
     // Selection stays highlighted (selStart/selRowKey untouched) while
@@ -253,7 +257,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
         body: JSON.stringify({ addPromotion: {
-          listingId: selListingId, name, discountType, discountValue, minNights: minNights || null,
+          listingId: selListingId, roomId: selRoomId, name, discountType, discountValue, minNights: minNights || null,
           startDate: window.pendingRangeStart, endDate: nextDayStr(window.pendingRangeEndInclusive)
         } })
       });
