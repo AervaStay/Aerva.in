@@ -110,7 +110,7 @@ module.exports = async (req, res) => {
       // single-unit listing has no rooms at all, this just comes back
       // empty for those.
       const rooms = await sql`
-        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls, is_active, pending_review, pending_changes
+        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls, is_active, pending_review, pending_changes, last_rejection_reason, last_rejected_at
         FROM listing_rooms WHERE listing_id = ${listingId} ORDER BY sort_order ASC, created_at ASC
       `;
 
@@ -568,7 +568,8 @@ module.exports = async (req, res) => {
                 await sql`
                   UPDATE listing_rooms SET
                     pending_changes = ${JSON.stringify({ roomName, maxOccupancy, nightlyRate: roomRate, description, isActive, coverPhotoUrl, photoUrls })},
-                    pending_review = TRUE, pending_since = now(), is_active = FALSE
+                    pending_review = TRUE, pending_since = now(), is_active = FALSE,
+                    last_rejection_reason = NULL, last_rejected_at = NULL
                   WHERE id = ${Number(r.id)} AND listing_id = ${listingId}
                 `;
                 roomsStagedForReview.push(roomName || cur.room_name || `Room ${i + 1}`);

@@ -340,7 +340,7 @@ async function applyDecision(listingId, action, reason = null) {
 // listing) — a room-level decision, separate from approving the
 // listing itself, since this only ever runs on an already-approved,
 // already-live listing's individual room.
-async function applyRoomChangeDecision(roomId, action) {
+async function applyRoomChangeDecision(roomId, action, reason = null) {
   const rows = await sql`
     SELECT lr.id, lr.listing_id, lr.pending_changes, l.host_email, l.property_name
     FROM listing_rooms lr JOIN listings l ON l.id = lr.listing_id
@@ -360,7 +360,8 @@ async function applyRoomChangeDecision(roomId, action) {
     if (isNewRoomProposal) {
       await sql`
         UPDATE listing_rooms SET is_active = ${!!room.pending_changes.newRoomIntendedActive},
-          pending_changes = NULL, pending_review = FALSE, pending_since = NULL
+          pending_changes = NULL, pending_review = FALSE, pending_since = NULL,
+          last_rejection_reason = NULL, last_rejected_at = NULL
         WHERE id = ${room.id}
       `;
     } else {
@@ -371,7 +372,8 @@ async function applyRoomChangeDecision(roomId, action) {
           description = ${p.description || null}, is_active = ${p.isActive !== false},
           cover_photo_url = COALESCE(${p.coverPhotoUrl || null}, cover_photo_url),
           photo_urls = ${JSON.stringify(p.photoUrls || [])},
-          pending_changes = NULL, pending_review = FALSE, pending_since = NULL
+          pending_changes = NULL, pending_review = FALSE, pending_since = NULL,
+          last_rejection_reason = NULL, last_rejected_at = NULL
         WHERE id = ${room.id}
       `;
     }
@@ -384,22 +386,25 @@ async function applyRoomChangeDecision(roomId, action) {
     `;
     await sql`UPDATE listings SET nightly_rate = ${cheapestActiveRoom[0].min_rate} WHERE id = ${room.listing_id}`;
   } else if (action === 'reject_room') {
-    if (isNewRoomProposal) {
-      // Never went live — nothing else references it, safe to remove
-      // outright rather than leaving a permanently-inactive orphan row.
-      await sql`DELETE FROM listing_rooms WHERE id = ${room.id}`;
-    } else {
-      // The room reverts to exactly how it was before the edit attempt
-      // — active again, proposal discarded, nothing else affected.
-      await sql`UPDATE listing_rooms SET pending_changes = NULL, pending_review = FALSE, pending_since = NULL, is_active = TRUE WHERE id = ${room.id}`;
-    }
+    // Both branches now KEEP the row rather than deleting a rejected new
+    // room outright — a room that's simply gone with no trace tells the
+    // host nothing; this way manage-listing.html can show exactly which
+    // room was rejected and why, and the host can either fix it and
+    // resubmit or remove it themselves once they've seen the reason.
+    await sql`
+      UPDATE listing_rooms SET
+        pending_changes = NULL, pending_review = FALSE, pending_since = NULL,
+        is_active = ${isNewRoomProposal ? false : true},
+        last_rejection_reason = ${reason || null}, last_rejected_at = now()
+      WHERE id = ${room.id}
+    `;
   }
 
   await logAudit(sql, {
     action: action === 'approve_room' ? 'room_change_approved' : 'room_change_rejected',
     success: true, actorType: 'admin', actorIdentifier: null,
     targetType: 'listing_room', targetId: room.id,
-    metadata: { listingId: room.listing_id, isNewRoom: isNewRoomProposal }
+    metadata: { listingId: room.listing_id, isNewRoom: isNewRoomProposal, reason: reason || null }
   });
   return room;
 }
@@ -496,7 +501,7 @@ module.exports = async (req, res) => {
     try {
       const { listingId, roomId, action, reason } = req.body;
       const result = (action === 'approve_room' || action === 'reject_room')
-        ? await applyRoomChangeDecision(roomId, action)
+        ? await applyRoomChangeDecision(roomId, action, reason || null)
         : await applyDecision(listingId, action, reason || null);
       if (!result) return res.status(404).json({ error: 'Listing or room not found' });
       return res.status(200).json({ success: true, listing: result });
