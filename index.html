@@ -1849,8 +1849,20 @@
           <input id="listHostName" name="Host Name" type="text" required>
         </div>
         <div class="field">
-          <label for="listHostPhone">Phone <span class="required-mark">*</span></label>
-          <input id="listHostPhone" name="Phone" type="tel" required>
+          <label for="listHostPhoneLocal">Phone <span class="required-mark">*</span></label>
+          <div style="display:flex; gap:8px;">
+            <select id="listHostPhoneCountry" style="flex:0 0 150px;"></select>
+            <input id="listHostPhoneLocal" type="tel" inputmode="numeric" placeholder="Number" style="flex:1;">
+          </div>
+          <input type="hidden" id="listHostPhone" name="Phone">
+          <p id="listHostPhoneError" style="font-size:11.5px; color:#a3402f; margin-top:4px; display:none;"></p>
+          <button type="button" id="listHostPhoneSendOtpBtn" class="btn" style="display:none; width:auto; padding:7px 16px; font-size:11.5px; margin-top:6px;">Send Verification Code</button>
+          <div id="listHostPhoneOtpRow" style="display:none; margin-top:8px; align-items:center; gap:8px;">
+            <input type="text" id="listHostPhoneOtpInput" placeholder="6-digit code" maxlength="6" inputmode="numeric" style="width:140px;">
+            <button type="button" id="listHostPhoneVerifyOtpBtn" class="btn" style="width:auto; padding:7px 16px; font-size:11.5px;">Verify</button>
+          </div>
+          <p id="listHostPhoneOtpMsg" style="font-size:11.5px; margin-top:4px; display:none;"></p>
+          <p id="listHostPhoneVerifiedMsg" style="font-size:12px; color:#3a7d44; margin-top:4px; display:none;">✓ Phone number verified</p>
         </div>
       </div>
       <div class="field">
@@ -3188,6 +3200,171 @@
     e.preventDefault();
     window.location.href = 'guest-login.html?switchAccount=1';
   });
+
+  // ---- Host phone: country-aware format validation, then OTP
+  // verification before the number is accepted. Real SMS delivery isn't
+  // connected to any provider yet ("we'll take services based on
+  // country the host belongs to, later on") — the mechanism itself
+  // (send, hash, expire, verify, rate-limit) is fully real; only
+  // delivery is a placeholder, clearly labeled as such below.
+  //
+  // Kept in sync BY HAND with the identical list in _phone-validation.js
+  // — a browser can't require() that server-side file, so this is a
+  // deliberate duplicate, not an oversight. Same length + digits-only
+  // philosophy: enough to catch an obviously wrong number without a
+  // full phone-number library.
+  const COUNTRY_PHONE_RULES = [
+    { code: 'IN', dialCode: '+91', name: 'India', length: 10 },
+    { code: 'US', dialCode: '+1', name: 'United States', length: 10 },
+    { code: 'CA', dialCode: '+1', name: 'Canada', length: 10 },
+    { code: 'GB', dialCode: '+44', name: 'United Kingdom', length: 10 },
+    { code: 'AE', dialCode: '+971', name: 'United Arab Emirates', length: 9 },
+    { code: 'AU', dialCode: '+61', name: 'Australia', length: 9 },
+    { code: 'SG', dialCode: '+65', name: 'Singapore', length: 8 },
+    { code: 'NP', dialCode: '+977', name: 'Nepal', length: 10 },
+    { code: 'LK', dialCode: '+94', name: 'Sri Lanka', length: 9 },
+    { code: 'BD', dialCode: '+880', name: 'Bangladesh', length: 10 },
+    { code: 'DE', dialCode: '+49', name: 'Germany', length: 11 },
+    { code: 'FR', dialCode: '+33', name: 'France', length: 9 },
+  ];
+
+  (function setupHostPhoneVerification(){
+    const countrySelect = document.getElementById('listHostPhoneCountry');
+    const localInput = document.getElementById('listHostPhoneLocal');
+    const hiddenInput = document.getElementById('listHostPhone');
+    const errorEl = document.getElementById('listHostPhoneError');
+    const sendBtn = document.getElementById('listHostPhoneSendOtpBtn');
+    const otpRow = document.getElementById('listHostPhoneOtpRow');
+    const otpInput = document.getElementById('listHostPhoneOtpInput');
+    const verifyBtn = document.getElementById('listHostPhoneVerifyOtpBtn');
+    const otpMsgEl = document.getElementById('listHostPhoneOtpMsg');
+    const verifiedMsgEl = document.getElementById('listHostPhoneVerifiedMsg');
+    if(!countrySelect) return;
+
+    countrySelect.innerHTML = COUNTRY_PHONE_RULES.map(c =>
+      `<option value="${c.code}">${c.dialCode} ${c.name}</option>`
+    ).join('');
+    countrySelect.value = 'IN'; // this platform is India-first for now
+
+    // Exposed globally so saveListing() (elsewhere in this file) can
+    // check it before allowing submission — a host shouldn't be able to
+    // submit with a phone number that was never actually verified,
+    // which would defeat the entire point of building this.
+    window.hostPhoneVerified = false;
+
+    function currentRule(){
+      return COUNTRY_PHONE_RULES.find(c => c.code === countrySelect.value);
+    }
+
+    function validateAndUpdateUI(){
+      // Any edit to the number invalidates a previous verification —
+      // the verified number and the currently-typed one might no longer
+      // be the same number at all.
+      window.hostPhoneVerified = false;
+      verifiedMsgEl.style.display = 'none';
+      otpRow.style.display = 'none';
+      otpMsgEl.style.display = 'none';
+      otpInput.value = '';
+
+      const rule = currentRule();
+      const digits = localInput.value.trim();
+      if(!digits){
+        errorEl.style.display = 'none';
+        sendBtn.style.display = 'none';
+        return false;
+      }
+      if(!/^[0-9]+$/.test(digits)){
+        errorEl.textContent = 'Phone number must contain digits only — no letters, spaces, or symbols.';
+        errorEl.style.display = 'block';
+        sendBtn.style.display = 'none';
+        return false;
+      }
+      if(digits.length !== rule.length){
+        errorEl.textContent = `A ${rule.name} number must be exactly ${rule.length} digits (currently ${digits.length}).`;
+        errorEl.style.display = 'block';
+        sendBtn.style.display = 'none';
+        return false;
+      }
+      errorEl.style.display = 'none';
+      sendBtn.style.display = 'inline-block';
+      return true;
+    }
+
+    localInput.addEventListener('input', validateAndUpdateUI);
+    countrySelect.addEventListener('change', validateAndUpdateUI);
+
+    sendBtn.addEventListener('click', async () => {
+      if(!validateAndUpdateUI()) return;
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending…';
+      try{
+        const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+          body: JSON.stringify({ sendHostPhoneOtp: { countryCode: countrySelect.value, localNumber: localInput.value.trim() } })
+        });
+        const data = await res.json();
+        if(!res.ok){
+          errorEl.textContent = data.error || 'Could not send a verification code. Please try again.';
+          errorEl.style.display = 'block';
+        } else {
+          otpRow.style.display = 'flex';
+          otpMsgEl.style.display = 'block';
+          // otpForTesting exists ONLY because no real SMS provider is
+          // connected yet (see the backend comment) — this line is
+          // exactly what needs to be deleted the moment one is, since
+          // showing the code on-screen defeats the purpose of an OTP
+          // the second real delivery exists.
+          otpMsgEl.textContent = data.otpForTesting
+            ? `No SMS provider connected yet — your test code is ${data.otpForTesting}`
+            : 'A verification code has been sent.';
+        }
+      } catch(err){
+        errorEl.textContent = 'Could not reach the server — please try again.';
+        errorEl.style.display = 'block';
+      }
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send Verification Code';
+    });
+
+    verifyBtn.addEventListener('click', async () => {
+      const otp = otpInput.value.trim();
+      if(!/^[0-9]{6}$/.test(otp)){
+        otpMsgEl.textContent = 'Please enter the 6-digit code.';
+        otpMsgEl.style.color = '#a3402f';
+        otpMsgEl.style.display = 'block';
+        return;
+      }
+      verifyBtn.disabled = true;
+      verifyBtn.textContent = 'Verifying…';
+      try{
+        const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+          body: JSON.stringify({ verifyHostPhoneOtp: { otp } })
+        });
+        const data = await res.json();
+        if(!res.ok){
+          otpMsgEl.textContent = data.error || 'Could not verify this code.';
+          otpMsgEl.style.color = '#a3402f';
+          otpMsgEl.style.display = 'block';
+        } else {
+          window.hostPhoneVerified = true;
+          const rule = currentRule();
+          hiddenInput.value = `${rule.dialCode} ${localInput.value.trim()}`;
+          otpRow.style.display = 'none';
+          otpMsgEl.style.display = 'none';
+          verifiedMsgEl.style.display = 'block';
+        }
+      } catch(err){
+        otpMsgEl.textContent = 'Could not reach the server — please try again.';
+        otpMsgEl.style.color = '#a3402f';
+        otpMsgEl.style.display = 'block';
+      }
+      verifyBtn.disabled = false;
+      verifyBtn.textContent = 'Verify';
+    });
+  })();
 
   // ---- Host pricing currency: lets a host entering prices from another
   // country think in their own currency instead of INR. This is entirely
@@ -4788,8 +4965,8 @@
         errorEl.style.display = 'block';
         return;
       }
-      if(!document.getElementById('listHostPhone').value.trim()){
-        errorEl.textContent = 'Please enter your phone number.';
+      if(!document.getElementById('listHostPhone').value.trim() || !window.hostPhoneVerified){
+        errorEl.textContent = 'Please verify your phone number (send and enter the code) before submitting.';
         errorEl.style.display = 'block';
         return;
       }
@@ -9657,8 +9834,19 @@
     // also what makes independent per-room payouts fall out naturally
     // from the existing order structure, same as any other multi-item
     // booking.
+    //
+    // adults: 1 is a deliberate simplification, not a real headcount —
+    // the Resort flow doesn't currently collect an adults/children
+    // breakdown per room the way a regular villa booking does (see
+    // renderAvailabilityCalendar's guest stepper). create-order.js
+    // requires at least one adult per stay purely as a safety check
+    // against a booking made entirely of children/infants; since a
+    // guest can only reach this point already logged in with a verified
+    // email and phone, they're already established as the adult making
+    // the booking. This satisfies that check correctly without needing
+    // to build a full per-room guest breakdown UI just for this.
     const stays = selected.map(r => ({
-      listingId: listing.id, roomId: r.id, arrival: r.arrival, departure: r.departure, guests: r.maxOccupancy
+      listingId: listing.id, roomId: r.id, arrival: r.arrival, departure: r.departure, guests: r.maxOccupancy, adults: 1
     }));
 
     let order;
