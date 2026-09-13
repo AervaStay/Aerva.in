@@ -1092,9 +1092,20 @@
           <button type="button" class="cancel-room-pending-btn" style="width:auto; padding:6px 14px; font-size:11.5px; background:none; border:1px solid #a3402f; color:#a3402f; cursor:pointer; border-radius:4px;">Cancel This Change</button>
         </div>
       ` : '';
+      // Shown only once the room is no longer pending — a rejection and
+      // an active review are mutually exclusive states, so this never
+      // overlaps with the banner above. Making a new edit and saving
+      // clears this automatically (see update-listing-pricing.js), so it
+      // only lingers until the host actually acts on it.
+      const rejectedBannerHtml = (!isPending && room.lastRejectionReason) ? `
+        <div style="background:#fdece8; border:1px solid #e0a99c; padding:10px 12px; margin-bottom:12px; border-radius:4px;">
+          <p style="font-size:12.5px; margin:0; color:#a3402f;"><strong>Your last change to this room was rejected:</strong> ${room.lastRejectionReason}</p>
+        </div>
+      ` : '';
       el.innerHTML = `
         <div class="room-card-top" style="flex-direction:column; align-items:stretch;">
           ${pendingBannerHtml}
+          ${rejectedBannerHtml}
           <div class="room-card-fields" style="margin-bottom:12px;">
             <input type="text" class="room-name-input" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${room.roomName || ''}" ${isPending ? 'disabled' : ''}>
             <div class="room-card-numbers">
@@ -1688,7 +1699,8 @@
           return {
             id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
             nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
-            photos, pendingReview: !!r.pending_review, pendingChanges: r.pending_changes || null
+            photos, pendingReview: !!r.pending_review, pendingChanges: r.pending_changes || null,
+            lastRejectionReason: r.last_rejection_reason || null
           };
         });
         renderRooms();
