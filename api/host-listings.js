@@ -311,7 +311,7 @@ module.exports = async (req, res) => {
       if (!guest || !guest.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
 
       const listings = await sql`
-        SELECT id, property_name, property_type FROM listings
+        SELECT id, property_name, property_type, nightly_rate FROM listings
         WHERE host_id = ${guest.host_id} AND status = 'approved' AND listing_type = 'stay'
         ORDER BY created_at DESC
       `;
@@ -328,6 +328,23 @@ module.exports = async (req, res) => {
       const endStr = dayStrs[dayStrs.length - 1];
       const startStr = dayStrs[0];
 
+      // Same real-price-per-date logic as the sidebar's Block Dates/
+      // Promotions calendar (sbComputePriceForDate in host-dashboard.html)
+      // — a promotion's discount is applied and shown as an actual rupee
+      // amount, not a bare percentage, since the number a host gets paid
+      // matters more here than how the discount happens to be expressed.
+      // That existing function is scoped to whichever single listing is
+      // currently open in the sidebar; this is the same math applied
+      // across every row here at once instead.
+      function priceForDate(baseRate, promotions, dateStr){
+        const promo = promotions.find(p => dateStr >= p.start_date && dateStr < p.end_date);
+        if (!promo) return { price: baseRate, promoName: null };
+        const discounted = promo.discount_type === 'flat'
+          ? Math.max(0, baseRate - Number(promo.discount_value))
+          : Math.max(0, baseRate - Math.round(baseRate * (Number(promo.discount_value) / 100)));
+        return { price: discounted, promoName: promo.name };
+      }
+
       // Each ROW here is one bookable unit — a Resort's individual
       // rooms each get their own row, not aggregated into one line for
       // the whole resort, so a host can see and act on a specific
@@ -335,8 +352,13 @@ module.exports = async (req, res) => {
       // opening that listing separately.
       const rows = [];
       for (const listing of listings) {
+        const promotions = await sql`
+          SELECT name, discount_type, discount_value, start_date, end_date FROM listing_promotions
+          WHERE listing_id = ${listing.id} AND is_active = TRUE
+            AND start_date < ${endStr}::date AND end_date > ${startStr}::date
+        `;
         if (listing.property_type === 'Resort') {
-          const rooms = await sql`SELECT id, room_name FROM listing_rooms WHERE listing_id = ${listing.id} AND is_active = TRUE ORDER BY sort_order ASC, created_at ASC`;
+          const rooms = await sql`SELECT id, room_name, nightly_rate FROM listing_rooms WHERE listing_id = ${listing.id} AND is_active = TRUE ORDER BY sort_order ASC, created_at ASC`;
           for (const room of rooms) {
             const bookedRanges = await sql`
               SELECT id, arrival AS start_date, departure AS end_date, guest_email, guests, nights, total FROM orders
@@ -353,13 +375,14 @@ module.exports = async (req, res) => {
               if (blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'blocked';
               return 'available';
             });
+            const dayPricing = dayStrs.map(dateStr => priceForDate(Number(room.nightly_rate) || 0, promotions, dateStr));
             rows.push({
               listingId: listing.id, roomId: room.id, label: `${listing.property_name} — ${room.room_name || 'Room'}`,
-              propertyType: listing.property_type, dayStatuses, bookings: bookedRanges
+              propertyType: listing.property_type, dayStatuses, dayPricing, bookings: bookedRanges
             });
           }
           if (!rooms.length) {
-            rows.push({ listingId: listing.id, roomId: null, label: `${listing.property_name} (no active rooms yet)`, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available'), bookings: [] });
+            rows.push({ listingId: listing.id, roomId: null, label: `${listing.property_name} (no active rooms yet)`, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available'), dayPricing: dayStrs.map(() => ({ price: 0, promoName: null })), bookings: [] });
           }
         } else {
           const bookedRanges = await sql`
@@ -377,7 +400,8 @@ module.exports = async (req, res) => {
             if (blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'blocked';
             return 'available';
           });
-          rows.push({ listingId: listing.id, roomId: null, label: listing.property_name, propertyType: listing.property_type, dayStatuses, bookings: bookedRanges });
+          const dayPricing = dayStrs.map(dateStr => priceForDate(Number(listing.nightly_rate) || 0, promotions, dateStr));
+          rows.push({ listingId: listing.id, roomId: null, label: listing.property_name, propertyType: listing.property_type, dayStatuses, dayPricing, bookings: bookedRanges });
         }
       }
 
