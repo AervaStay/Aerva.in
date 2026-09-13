@@ -2430,6 +2430,27 @@
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <script>
+  // Every localStorage.getItem/setItem/removeItem call in this file goes
+  // through this wrapper instead of calling localStorage directly. The
+  // reason: Safari in Private Browsing mode (and some phones under
+  // stricter privacy settings) makes localStorage EXIST but throws a
+  // SecurityError the moment any method on it is actually called. A
+  // "first visit, on a phone, not logged in" is exactly the situation
+  // where a guest is most likely to be in a fresh/private tab. The very
+  // first unguarded localStorage call anywhere in this script (there
+  // were several, scattered across features added at different times)
+  // would throw uncaught, which halts ALL subsequent script execution
+  // in this block — including initSite() much further down, which is
+  // what actually fetches and renders the listings grid. The visible
+  // symptom was the page stuck forever on "Loading homes…", with no
+  // visible error to the guest at all. Confirmed by reproducing this
+  // exact failure mode in a headless test before writing this fix.
+  const safeStorage = {
+    get(key){ try { return localStorage.getItem(key); } catch(e){ return null; } },
+    set(key, value){ try { localStorage.setItem(key, value); } catch(e){ /* silently no-op — a guest in this situation still gets a fully working site, just without persisted preferences */ } },
+    remove(key){ try { localStorage.removeItem(key); } catch(e){ /* same reasoning as set() */ } },
+  };
+
   // Builds 'YYYY-MM-DD' from a Date object's LOCAL calendar fields —
   // deliberately NOT toISOString(), which converts to UTC first. For
   // anyone in a timezone ahead of UTC (IST, +5:30 — Aerva's whole
@@ -2582,7 +2603,7 @@
     // Priority: explicit choice (this browser) > logged-in account's
     // saved preference (applied later once login state is known, see
     // checkGuestSession) > detected location > INR.
-    const stored = localStorage.getItem(CURRENCY_STORAGE_KEY);
+    const stored = safeStorage.get(CURRENCY_STORAGE_KEY);
     if(stored && SUPPORTED_CURRENCIES[stored]){
       currentCurrency = stored;
     } else {
@@ -2602,7 +2623,7 @@
   async function setCurrency(code, persistToAccount){
     if(!SUPPORTED_CURRENCIES[code]) return;
     currentCurrency = code;
-    localStorage.setItem(CURRENCY_STORAGE_KEY, code);
+    safeStorage.set(CURRENCY_STORAGE_KEY, code);
     updateCurrencyTriggerLabel();
     if(code !== 'INR' && !currencyRatesLoaded){
       // The initial load never got real rates — try again now rather
@@ -3225,8 +3246,8 @@
   // ---- Login gate: a listing must belong to a real, logged-in account ----
   // (single login now — see guest-auth.js/guest-phone-auth.js — there's
   // no separate "host account" to sign into anymore)
-  const hostSessionToken = localStorage.getItem('aerva_guest_session');
-  const hostSessionEmail = localStorage.getItem('aerva_guest_email');
+  const hostSessionToken = safeStorage.get('aerva_guest_session');
+  const hostSessionEmail = safeStorage.get('aerva_guest_email');
   if(!hostSessionToken){
     document.getElementById('loggedOutGate').style.display = 'block';
     listingForm.style.display = 'none';
@@ -5923,11 +5944,11 @@
     const params = new URLSearchParams(window.location.search);
     if(params.get('clone') !== '1') return;
 
-    const raw = localStorage.getItem('aerva_clone_listing');
-    localStorage.removeItem('aerva_clone_listing');
+    const raw = safeStorage.get('aerva_clone_listing');
+    safeStorage.remove('aerva_clone_listing');
     if(!raw) return;
-    const cloneWithPhotos = localStorage.getItem('aerva_clone_with_photos') === '1';
-    localStorage.removeItem('aerva_clone_with_photos');
+    const cloneWithPhotos = safeStorage.get('aerva_clone_with_photos') === '1';
+    safeStorage.remove('aerva_clone_with_photos');
 
     let source;
     try { source = JSON.parse(raw); } catch(err) { return; }
@@ -6152,14 +6173,14 @@
   const LOCATION_PROMPTED_KEY = 'aerva_location_prompted';
 
   async function promptLocationOnceForGuest(){
-    if(localStorage.getItem(LOCATION_PROMPTED_KEY)) return;
+    if(safeStorage.get(LOCATION_PROMPTED_KEY)) return;
     if(!navigator.geolocation){
-      localStorage.setItem(LOCATION_PROMPTED_KEY, '1');
+      safeStorage.set(LOCATION_PROMPTED_KEY, '1');
       return;
     }
     navigator.geolocation.getCurrentPosition(
       async function(position){
-        localStorage.setItem(LOCATION_PROMPTED_KEY, '1');
+        safeStorage.set(LOCATION_PROMPTED_KEY, '1');
         guestLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
         const nearMeBtn = document.getElementById('showDistanceBtn');
         if(nearMeBtn) setNearMeLabel(nearMeBtn, 'Showing nearest first');
@@ -6216,7 +6237,7 @@
         // a guest who said no (or whose browser/device can't provide it)
         // on every subsequent page load. Browsing continues completely
         // normally, unfiltered, same as before this feature existed.
-        localStorage.setItem(LOCATION_PROMPTED_KEY, '1');
+        safeStorage.set(LOCATION_PROMPTED_KEY, '1');
       },
       { timeout: 10000 }
     );
@@ -6267,7 +6288,7 @@
   const FAVORITES_KEY = 'aerva_favorite_listings';
   function getFavoriteIds(){
     try {
-      return JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
+      return JSON.parse(safeStorage.get(FAVORITES_KEY) || '[]');
     } catch(err){
       return [];
     }
@@ -6277,7 +6298,7 @@
     let favs = getFavoriteIds();
     const isFav = favs.includes(id);
     favs = isFav ? favs.filter(f => f !== id) : [...favs, id];
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(favs));
+    safeStorage.set(FAVORITES_KEY, JSON.stringify(favs));
     if(btnEl){
       btnEl.classList.toggle('is-fav', !isFav);
       btnEl.setAttribute('aria-pressed', String(!isFav));
@@ -6292,7 +6313,7 @@
   const MAX_RECENT_SEARCHES = 6;
   function getRecentSearches(){
     try {
-      return JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || '[]');
+      return JSON.parse(safeStorage.get(RECENT_SEARCHES_KEY) || '[]');
     } catch(err){
       return [];
     }
@@ -6302,7 +6323,7 @@
     if(!trimmed) return;
     let list = getRecentSearches().filter(item => item.text.toLowerCase() !== trimmed.toLowerCase());
     list.unshift({ text: trimmed, lat: lat || '', lng: lng || '' });
-    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
+    safeStorage.set(RECENT_SEARCHES_KEY, JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
   }
 
   // ---- Aerva Experience: fetched eagerly alongside listings now (see
@@ -6563,15 +6584,15 @@
 
   function trackRecentlyViewed(type, id){
     let list = [];
-    try{ list = JSON.parse(localStorage.getItem(RECENTLY_VIEWED_KEY)) || []; } catch(e){ list = []; }
+    try{ list = JSON.parse(safeStorage.get(RECENTLY_VIEWED_KEY)) || []; } catch(e){ list = []; }
     list = list.filter(entry => !(entry.type === type && String(entry.id) === String(id)));
     list.unshift({ type, id, viewedAt: Date.now() });
-    localStorage.setItem(RECENTLY_VIEWED_KEY, JSON.stringify(list.slice(0, RECENTLY_VIEWED_MAX)));
+    safeStorage.set(RECENTLY_VIEWED_KEY, JSON.stringify(list.slice(0, RECENTLY_VIEWED_MAX)));
   }
 
   function getRecentlyViewedEntries(){
     let list = [];
-    try{ list = JSON.parse(localStorage.getItem(RECENTLY_VIEWED_KEY)) || []; } catch(e){ list = []; }
+    try{ list = JSON.parse(safeStorage.get(RECENTLY_VIEWED_KEY)) || []; } catch(e){ list = []; }
     // 'suites'/'experiences' narrow to one type; 'all' keeps both, in the
     // same most-recent-first order they were actually viewed in.
     return list.filter(entry => {
@@ -6932,7 +6953,7 @@
   let placesGeocoder = null;
 
   // ---- My Bookings + Chat ----
-  function guestAuthToken(){ return localStorage.getItem('aerva_guest_session'); }
+  function guestAuthToken(){ return safeStorage.get('aerva_guest_session'); }
 
   // ---- Login gate before payment ----
   // Bookings are no longer allowed without an account at all (see
@@ -7051,7 +7072,7 @@
         errEl.textContent = data.error || 'Could not log in.';
         errEl.style.display = 'block';
       } else {
-        localStorage.setItem('aerva_guest_session', data.sessionToken);
+        safeStorage.set('aerva_guest_session', data.sessionToken);
         const cb = bookingLoginSuccessCallback;
         closeBookingLoginGate();
         if(cb) cb();
@@ -11598,13 +11619,13 @@
     const guestLogoutLinkMobile = document.getElementById('guestLogoutLinkMobile');
 
     function clearGuestSession(){
-      localStorage.removeItem('aerva_guest_session');
-      localStorage.removeItem('aerva_guest_email');
-      localStorage.removeItem('aerva_guest_name');
+      safeStorage.remove('aerva_guest_session');
+      safeStorage.remove('aerva_guest_email');
+      safeStorage.remove('aerva_guest_name');
     }
 
     async function checkGuestSession(){
-      const token = localStorage.getItem('aerva_guest_session');
+      const token = safeStorage.get('aerva_guest_session');
       if(!token) return;
       try{
         const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
@@ -11675,7 +11696,7 @@
             if(profileRes.ok){
               const profileData = await profileRes.json();
               if(profileData.guest){
-                if(!localStorage.getItem(CURRENCY_STORAGE_KEY) && profileData.guest.preferredCurrency){
+                if(!safeStorage.get(CURRENCY_STORAGE_KEY) && profileData.guest.preferredCurrency){
                   setCurrency(profileData.guest.preferredCurrency, false);
                 }
                 const photoUrl = profileData.guest.profilePhotoUrl;
