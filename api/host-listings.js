@@ -299,7 +299,99 @@ module.exports = async (req, res) => {
     }
   }
 
-  // ---- Raise a concern on a held security deposit ----
+  // ---- Unified 30-day status across this host's WHOLE portfolio, one
+  // row per listing — the "Status" tab on host-dashboard.html. Separate
+  // from the per-room Calendar tab on manage-listing.html, which is the
+  // detailed view for ONE Resort at a time; this is the fast, at-a-
+  // glance overview across everything a host manages.
+  if (req.method === 'GET' && req.query.statusCalendar === '1') {
+    try {
+      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      const guest = guestRows[0];
+      if (!guest || !guest.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
+      const listings = await sql`
+        SELECT id, property_name, property_type FROM listings
+        WHERE host_id = ${guest.host_id} AND status = 'approved' AND listing_type = 'stay'
+        ORDER BY created_at DESC
+      `;
+
+      const DAYS = 30;
+      const startDate = new Date();
+      startDate.setUTCHours(0, 0, 0, 0);
+      const dayStrs = [];
+      for (let i = 0; i < DAYS; i++) {
+        const d = new Date(startDate);
+        d.setUTCDate(d.getUTCDate() + i);
+        dayStrs.push(d.toISOString().slice(0, 10));
+      }
+      const endStr = dayStrs[dayStrs.length - 1];
+      const startStr = dayStrs[0];
+
+      const results = [];
+      for (const listing of listings) {
+        if (listing.property_type === 'Resort') {
+          const rooms = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${listing.id} AND is_active = TRUE`;
+          if (!rooms.length) {
+            results.push({ id: listing.id, propertyName: listing.property_name, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available') });
+            continue;
+          }
+          const roomIds = rooms.map(r => r.id);
+          const bookedRanges = await sql`
+            SELECT room_id, arrival AS start_date, departure AS end_date FROM orders
+            WHERE room_id = ANY(${roomIds}) AND status = 'paid'
+              AND arrival < ${endStr}::date AND departure > ${startStr}::date
+          `;
+          const blockedRanges = await sql`
+            SELECT room_id, start_date, end_date FROM listing_blocked_dates
+            WHERE listing_id = ${listing.id} AND (room_id = ANY(${roomIds}) OR room_id IS NULL)
+              AND start_date < ${endStr}::date AND end_date > ${startStr}::date
+          `;
+          // For each day, how many of this resort's rooms are occupied
+          // (booked OR blocked) versus its total room count — that ratio
+          // is what turns into available/partial/booked below.
+          const dayStatuses = dayStrs.map(dateStr => {
+            const occupiedRoomIds = new Set();
+            [...bookedRanges, ...blockedRanges].forEach(r => {
+              if (dateStr >= r.start_date && dateStr < r.end_date) {
+                if (r.room_id) occupiedRoomIds.add(r.room_id);
+                else roomIds.forEach(id => occupiedRoomIds.add(id)); // a whole-listing block (room_id NULL) occupies every room
+              }
+            });
+            if (occupiedRoomIds.size === 0) return 'available';
+            if (occupiedRoomIds.size >= roomIds.length) return 'booked';
+            return 'partial';
+          });
+          results.push({ id: listing.id, propertyName: listing.property_name, propertyType: listing.property_type, dayStatuses });
+        } else {
+          const bookedRanges = await sql`
+            SELECT arrival AS start_date, departure AS end_date FROM orders
+            WHERE listing_id = ${listing.id} AND status = 'paid'
+              AND arrival < ${endStr}::date AND departure > ${startStr}::date
+          `;
+          const blockedRanges = await sql`
+            SELECT start_date, end_date FROM listing_blocked_dates
+            WHERE listing_id = ${listing.id}
+              AND start_date < ${endStr}::date AND end_date > ${startStr}::date
+          `;
+          const dayStatuses = dayStrs.map(dateStr => {
+            const isBooked = bookedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date);
+            if (isBooked) return 'booked';
+            const isBlocked = blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date);
+            if (isBlocked) return 'blocked';
+            return 'available';
+          });
+          results.push({ id: listing.id, propertyName: listing.property_name, propertyType: listing.property_type, dayStatuses });
+        }
+      }
+
+      return res.status(200).json({ startDate: startStr, days: DAYS, listings: results });
+    } catch (err) {
+      console.error('host-listings (statusCalendar) error:', err);
+      return res.status(500).json({ error: 'Could not load the status calendar right now.' });
+    }
+  }
+
   // Separate from the verification-submission branch above — this only
   // ever touches one order's deposit_status, gated on it actually
   // belonging to this host and still being within the 7-day hold.
