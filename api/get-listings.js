@@ -667,7 +667,7 @@ module.exports = async (req, res) => {
       const resortIdsInResults = filtered.filter(l => l.property_type === 'Resort').map(l => l.id);
       if (resortIdsInResults.length) {
         const detailedRoomRows = await sql`
-          SELECT id, listing_id, room_name, max_occupancy, nightly_rate, description, cover_photo_url
+          SELECT id, listing_id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls
           FROM listing_rooms
           WHERE listing_id = ANY(${resortIdsInResults}) AND is_active = TRUE
           ORDER BY sort_order ASC, created_at ASC
@@ -675,6 +675,13 @@ module.exports = async (req, res) => {
         const roomsByListing = {};
         for (const r of detailedRoomRows) {
           if (!roomsByListing[r.listing_id]) roomsByListing[r.listing_id] = [];
+          // Cover photo first, then the rest of the room's own gallery,
+          // deduplicated — a guest browsing one room's photos shouldn't
+          // see its own cover shot appear a second time further down.
+          const gallery = Array.isArray(r.photo_urls) ? r.photo_urls : [];
+          const photos = r.cover_photo_url
+            ? [r.cover_photo_url, ...gallery.filter(u => u !== r.cover_photo_url)]
+            : gallery;
           roomsByListing[r.listing_id].push({
             id: r.id,
             roomName: r.room_name,
@@ -682,6 +689,7 @@ module.exports = async (req, res) => {
             price: r.nightly_rate,
             description: r.description,
             coverPhotoUrl: r.cover_photo_url,
+            photos,
           });
         }
         filtered.forEach(l => { if (l.property_type === 'Resort') l.rooms = roomsByListing[l.id] || []; });
