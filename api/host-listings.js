@@ -338,11 +338,11 @@ module.exports = async (req, res) => {
       // across every row here at once instead.
       function priceForDate(baseRate, promotions, dateStr){
         const promo = promotions.find(p => dateStr >= p.start_date && dateStr < p.end_date);
-        if (!promo) return { price: baseRate, promoName: null };
+        if (!promo) return { price: baseRate, promoName: null, promoId: null };
         const discounted = promo.discount_type === 'flat'
           ? Math.max(0, baseRate - Number(promo.discount_value))
           : Math.max(0, baseRate - Math.round(baseRate * (Number(promo.discount_value) / 100)));
-        return { price: discounted, promoName: promo.name };
+        return { price: discounted, promoName: promo.name, promoId: promo.id };
       }
 
       // Each ROW here is one bookable unit — a Resort's individual
@@ -353,7 +353,7 @@ module.exports = async (req, res) => {
       const rows = [];
       for (const listing of listings) {
         const promotions = await sql`
-          SELECT name, discount_type, discount_value, start_date, end_date FROM listing_promotions
+          SELECT id, name, discount_type, discount_value, start_date, end_date FROM listing_promotions
           WHERE listing_id = ${listing.id} AND is_active = TRUE
             AND start_date < ${endStr}::date AND end_date > ${startStr}::date
         `;
@@ -382,7 +382,7 @@ module.exports = async (req, res) => {
             });
           }
           if (!rooms.length) {
-            rows.push({ listingId: listing.id, roomId: null, label: `${listing.property_name} (no active rooms yet)`, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available'), dayPricing: dayStrs.map(() => ({ price: 0, promoName: null })), bookings: [] });
+            rows.push({ listingId: listing.id, roomId: null, label: `${listing.property_name} (no active rooms yet)`, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available'), dayPricing: dayStrs.map(() => ({ price: 0, promoName: null, promoId: null })), bookings: [] });
           }
         } else {
           const bookedRanges = await sql`
@@ -419,6 +419,15 @@ module.exports = async (req, res) => {
   // makes available/blocked cells clickable in the first place, and
   // this double-checks that server-side too, since a direct API call
   // could try to send a booked date anyway.
+  // ---- Removes whichever block entry covers this date, whole entry at
+  // once — regardless of whether it was a single day or a multi-day
+  // range from a bulk selection. Renamed in behavior (kept the same
+  // endpoint key for simplicity) from its original toggle/create-or-
+  // delete design: creating a block now always goes through the
+  // range-select + confirm flow below (bulkBlockRange), even for a
+  // single day, matching exactly how the sidebar's per-listing
+  // calendar already works — one consistent flow instead of two
+  // different ones depending on whether 1 day or several were picked.
   if (req.method === 'POST' && req.body && req.body.toggleBlockedDate) {
     try {
       const { listingId, roomId, date } = req.body.toggleBlockedDate;
@@ -432,44 +441,133 @@ module.exports = async (req, res) => {
       `;
       if (!listingRows[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
 
+      const safeRoomId = roomId || null;
+      const existing = await sql`
+        SELECT id FROM listing_blocked_dates
+        WHERE listing_id = ${listingId} AND (room_id = ${safeRoomId} OR (room_id IS NULL AND ${safeRoomId}::int IS NULL))
+          AND start_date <= ${date}::date AND end_date > ${date}::date
+        LIMIT 1
+      `;
+      if (!existing[0]) {
+        return res.status(400).json({ error: 'No block was found covering this date.' });
+      }
+      await sql`DELETE FROM listing_blocked_dates WHERE id = ${existing[0].id}`;
+      return res.status(200).json({ success: true, blocked: false });
+    } catch (err) {
+      console.error('host-listings (toggleBlockedDate) error:', err);
+      return res.status(500).json({ error: 'Could not remove this block right now.' });
+    }
+  }
+
+  // ---- Bulk block a whole date range in one action — the drag-select
+  // outcome on the Status page's calendar, matching the same "select a
+  // range, then Block or Add Promotion" flow the sidebar's per-listing
+  // calendar already offers, just extended to work across every
+  // listing/room from one shared view instead of one listing at a time.
+  if (req.method === 'POST' && req.body && req.body.bulkBlockRange) {
+    try {
+      const { listingId, roomId, startDate, endDate, reason } = req.body.bulkBlockRange;
+      if (!listingId || !startDate || !endDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+        return res.status(400).json({ error: 'Missing or invalid listing/date range.' });
+      }
+      const listingRows = await sql`
+        SELECT l.id FROM listings l
+        JOIN guests g ON g.host_id = l.host_id
+        WHERE l.id = ${listingId} AND g.id = ${guestId}
+      `;
+      if (!listingRows[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
       if (roomId) {
         const roomRows = await sql`SELECT id FROM listing_rooms WHERE id = ${roomId} AND listing_id = ${listingId}`;
         if (!roomRows[0]) return res.status(400).json({ error: 'That room could not be found on this listing.' });
       }
 
+      const safeRoomId = roomId || null;
       const bookedRows = await sql`
         SELECT 1 FROM orders
-        WHERE status = 'paid' AND arrival <= ${date}::date AND departure > ${date}::date
+        WHERE status = 'paid' AND arrival < ${endDate}::date AND departure > ${startDate}::date
           AND (
-            (${roomId || null}::int IS NOT NULL AND room_id = ${roomId || null})
-            OR (${roomId || null}::int IS NULL AND listing_id = ${listingId})
+            (${safeRoomId}::int IS NOT NULL AND room_id = ${safeRoomId})
+            OR (${safeRoomId}::int IS NULL AND listing_id = ${listingId})
           )
         LIMIT 1
       `;
       if (bookedRows[0]) {
-        return res.status(400).json({ error: 'This date already has a real booking and can\'t be blocked here.' });
+        return res.status(400).json({ error: 'Part of this range already has a real booking — please adjust the dates and try again.' });
       }
 
-      const safeRoomId = roomId || null;
-      const existing = await sql`
-        SELECT id FROM listing_blocked_dates
-        WHERE listing_id = ${listingId} AND (room_id = ${safeRoomId} OR (room_id IS NULL AND ${safeRoomId}::int IS NULL))
-          AND start_date = ${date}::date AND end_date = (${date}::date + interval '1 day')
-        LIMIT 1
+      await sql`
+        INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason)
+        VALUES (${listingId}, ${safeRoomId}, ${startDate}::date, ${endDate}::date, ${reason && reason.trim() ? reason.trim() : 'Blocked by host'})
       `;
-      if (existing[0]) {
-        await sql`DELETE FROM listing_blocked_dates WHERE id = ${existing[0].id}`;
-        return res.status(200).json({ success: true, blocked: false });
-      } else {
-        await sql`
-          INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason)
-          VALUES (${listingId}, ${safeRoomId}, ${date}::date, (${date}::date + interval '1 day'), 'Blocked by host')
-        `;
-        return res.status(200).json({ success: true, blocked: true });
-      }
+      return res.status(200).json({ success: true });
     } catch (err) {
-      console.error('host-listings (toggleBlockedDate) error:', err);
-      return res.status(500).json({ error: 'Could not update this date right now.' });
+      console.error('host-listings (bulkBlockRange) error:', err);
+      return res.status(500).json({ error: 'Could not block this range right now.' });
+    }
+  }
+
+  // ---- Add a promotion over a selected range — same drag-select flow
+  // as above, the other of the two outcomes offered for a selection.
+  // Promotions are listing-wide by design (see listing_promotions'
+  // schema — no room_id column), so selecting one room's row on a
+  // Resort still creates a promotion for the WHOLE resort, same as
+  // dragging on the base rate in the sidebar calendar already does;
+  // there's no such thing as a single-room-only promotion today.
+  if (req.method === 'POST' && req.body && req.body.addPromotion) {
+    try {
+      const { listingId, name, discountType, discountValue, minNights, startDate, endDate } = req.body.addPromotion;
+      if (!listingId || !startDate || !endDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+        return res.status(400).json({ error: 'Missing or invalid listing/date range.' });
+      }
+      if (!name || !name.trim()) return res.status(400).json({ error: 'Please give this promotion a name.' });
+      if (discountType !== 'flat' && discountType !== 'percentage') return res.status(400).json({ error: 'Invalid discount type.' });
+      const value = Number(discountValue);
+      if (!value || value <= 0) return res.status(400).json({ error: 'Please enter a discount amount greater than 0.' });
+      if (discountType === 'percentage' && value > 100) return res.status(400).json({ error: "A percentage discount can't be more than 100." });
+
+      const listingRows = await sql`
+        SELECT l.id FROM listings l
+        JOIN guests g ON g.host_id = l.host_id
+        WHERE l.id = ${listingId} AND g.id = ${guestId}
+      `;
+      if (!listingRows[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
+      await sql`
+        INSERT INTO listing_promotions (listing_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
+        VALUES (${listingId}, ${name.trim()}, ${discountType}, ${value}, ${minNights ? Number(minNights) : null}, ${startDate}::date, ${endDate}::date, TRUE)
+      `;
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('host-listings (addPromotion) error:', err);
+      return res.status(500).json({ error: 'Could not add this promotion right now.' });
+    }
+  }
+
+  // ---- Removes an entire promotion, whole entry at once — the Status
+  // page's equivalent of clicking a promoted date on the sidebar
+  // calendar. Deliberately simple: removes the whole promotion, not a
+  // single day carved out of it — the sidebar calendar offers that finer
+  // single-day-exception option (sbRemovePromoForSingleDay) because it's
+  // scoped to one listing already open for editing; here, offering
+  // full removal only keeps the interaction fast across a multi-listing
+  // view.
+  if (req.method === 'POST' && req.body && req.body.removePromotion) {
+    try {
+      const { promotionId } = req.body.removePromotion;
+      if (!promotionId) return res.status(400).json({ error: 'Missing promotion.' });
+      const rows = await sql`
+        SELECT lp.id FROM listing_promotions lp
+        JOIN listings l ON l.id = lp.listing_id
+        JOIN guests g ON g.host_id = l.host_id
+        WHERE lp.id = ${promotionId} AND g.id = ${guestId}
+      `;
+      if (!rows[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
+      await sql`DELETE FROM listing_promotions WHERE id = ${promotionId}`;
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('host-listings (removePromotion) error:', err);
+      return res.status(500).json({ error: 'Could not remove this promotion right now.' });
     }
   }
 
