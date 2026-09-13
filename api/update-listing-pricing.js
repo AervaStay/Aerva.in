@@ -105,7 +105,7 @@ module.exports = async (req, res) => {
       const roomsWithRanges = [];
       for (const room of rooms) {
         const bookedRows = await sql`
-          SELECT arrival AS start_date, departure AS end_date, guest_email
+          SELECT id, arrival AS start_date, departure AS end_date, guest_email, guests, nights, total
           FROM orders
           WHERE room_id = ${room.id} AND status = 'paid'
             AND arrival < ${endStr}::date AND departure > ${startStr}::date
@@ -122,7 +122,10 @@ module.exports = async (req, res) => {
           id: room.id,
           roomName: room.room_name,
           ranges: [
-            ...bookedRows.map(r => ({ start: r.start_date, end: r.end_date, type: 'booked', label: r.guest_email || 'Booked' })),
+            ...bookedRows.map(r => ({
+              start: r.start_date, end: r.end_date, type: 'booked', label: r.guest_email || 'Booked',
+              orderId: r.id, guestEmail: r.guest_email, guests: r.guests, nights: r.nights, total: r.total
+            })),
             ...blockedRows.map(r => ({ start: r.start_date, end: r.end_date, type: 'blocked', label: r.reason || 'Blocked' })),
           ]
         });
