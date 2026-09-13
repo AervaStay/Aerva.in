@@ -355,26 +355,47 @@ module.exports = async (req, res) => {
       // the whole resort, so a host can see and act on a specific
       // room's availability directly from this one view without
       // opening that listing separately.
+      // Postgres DATE columns can come back from the driver as either
+      // plain 'YYYY-MM-DD' strings or JS Date objects, depending on
+      // subtle differences in how a column was originally defined —
+      // orders/listing_blocked_dates have consistently come back as
+      // strings (matching every dateStr comparison elsewhere in this
+      // file), but there's no guarantee listing_promotions does too.
+      // Comparing a string dateStr against a Date object with >=/< does
+      // NOT throw — it just silently evaluates wrong every time, which
+      // would produce exactly this symptom: a promotion saves
+      // successfully but can never be found as "covering" any date.
+      // Normalized here, once, right after fetching, so every
+      // downstream comparison is guaranteed to be string-to-string
+      // regardless of what the driver actually handed back.
+      function toDateStr(d) {
+        if (d instanceof Date) return d.toISOString().slice(0, 10);
+        return typeof d === 'string' ? d.slice(0, 10) : d;
+      }
+
       const rows = [];
       for (const listing of listings) {
-        const promotions = await sql`
+        const rawPromotions = await sql`
           SELECT id, room_id, name, discount_type, discount_value, min_nights, start_date, end_date FROM listing_promotions
           WHERE listing_id = ${listing.id} AND is_active = TRUE
             AND start_date < ${endStr}::date AND end_date > ${startStr}::date
         `;
+        const promotions = rawPromotions.map(p => ({ ...p, start_date: toDateStr(p.start_date), end_date: toDateStr(p.end_date) }));
         if (listing.property_type === 'Resort') {
           const rooms = await sql`SELECT id, room_name, nightly_rate FROM listing_rooms WHERE listing_id = ${listing.id} AND is_active = TRUE ORDER BY sort_order ASC, created_at ASC`;
           for (const room of rooms) {
-            const bookedRanges = await sql`
+            const bookedRangesRaw = await sql`
               SELECT id, arrival AS start_date, departure AS end_date, guest_email, guests, nights, total FROM orders
               WHERE room_id = ${room.id} AND status = 'paid'
                 AND arrival < ${endStr}::date AND departure > ${startStr}::date
             `;
-            const blockedRanges = await sql`
+            const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
+            const blockedRangesRaw = await sql`
               SELECT start_date, end_date FROM listing_blocked_dates
               WHERE listing_id = ${listing.id} AND (room_id = ${room.id} OR room_id IS NULL)
                 AND start_date < ${endStr}::date AND end_date > ${startStr}::date
             `;
+            const blockedRanges = blockedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
             const dayStatuses = dayStrs.map(dateStr => {
               if (bookedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'booked';
               if (blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'blocked';
@@ -391,19 +412,28 @@ module.exports = async (req, res) => {
             });
           }
           if (!rooms.length) {
-            rows.push({ listingId: listing.id, roomId: null, label: `${listing.property_name} (no active rooms yet)`, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available'), dayPricing: dayStrs.map(() => ({ price: 0, promoName: null, promoId: null })), bookings: [] });
+            // Previously hard-coded to price:0/no-promo regardless of
+            // what was actually saved — a listing-wide promotion on a
+            // Resort with no rooms yet would silently never show. Now
+            // uses the real promotions list, same as the non-Resort
+            // path below, with nightly_rate falling back to 0 since a
+            // roomless Resort has no meaningful base rate to discount.
+            const dayPricing = dayStrs.map(dateStr => priceForDate(0, promotions, dateStr));
+            rows.push({ listingId: listing.id, roomId: null, label: `${listing.property_name} (no active rooms yet)`, propertyType: listing.property_type, dayStatuses: dayStrs.map(() => 'available'), dayPricing, bookings: [] });
           }
         } else {
-          const bookedRanges = await sql`
+          const bookedRangesRaw = await sql`
             SELECT id, arrival AS start_date, departure AS end_date, guest_email, guests, nights, total FROM orders
             WHERE listing_id = ${listing.id} AND status = 'paid'
               AND arrival < ${endStr}::date AND departure > ${startStr}::date
           `;
-          const blockedRanges = await sql`
+          const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
+          const blockedRangesRaw = await sql`
             SELECT start_date, end_date FROM listing_blocked_dates
             WHERE listing_id = ${listing.id}
               AND start_date < ${endStr}::date AND end_date > ${startStr}::date
           `;
+          const blockedRanges = blockedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
           const dayStatuses = dayStrs.map(dateStr => {
             if (bookedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'booked';
             if (blockedRanges.some(r => dateStr >= r.start_date && dateStr < r.end_date)) return 'blocked';
