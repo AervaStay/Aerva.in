@@ -1094,7 +1094,21 @@
     .search-bar, .filter-bar{flex-direction:column; align-items:stretch;}
     .sort-field{ max-width:none; }
     .search-bar .btn{width:100%;}
-    .calendar-dropdown{width:calc(100vw - 48px);}
+    /* An anchored position:absolute dropdown (left:0 relative to the
+       "When" field) drifts unpredictably on mobile — its actual pixel
+       position depends on the .wrap container's own padding, the pill
+       search's internal field padding, AND the search bar's scroll-
+       reveal transform, all stacking in ways that pushed this
+       significantly off-center in practice (see the reported
+       screenshot). Converted to a fixed, viewport-centered overlay
+       instead — completely independent of wherever the "When" button
+       happens to sit, so it can't drift regardless of what changes
+       around it later.
+    */
+    .calendar-dropdown{
+      position:fixed; top:50%; left:50%; transform:translate(-50%, -50%);
+      width:calc(100vw - 32px); max-width:420px; max-height:80vh; overflow-y:auto;
+    }
     .calendar-months{flex-direction:column; gap:20px;}
     /* Two columns at tablet width (900px breakpoint above) becomes two
        cramped, narrow cards on an actual phone — a genuine single-column
