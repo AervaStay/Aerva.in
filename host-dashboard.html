@@ -27,7 +27,27 @@
     text-decoration:none; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:30px;
   }
   .listing-card{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:14px; display:flex; gap:16px; align-items:center; transition:border-color .15s ease;}
-  .listing-tabs{display:flex; gap:8px; margin-bottom:16px;}
+  .listing-tabs{display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;}
+  /* Status tab's portfolio-wide calendar — same table-based sticky-
+     first-column approach as manage-listing.html's per-room Calendar
+     tab, for the same reason: far more reliable on iOS Safari than
+     position:sticky on an arbitrary div inside a horizontally-scrolling
+     container. */
+  .status-cal-table{border-collapse:separate; border-spacing:0; font-size:11.5px; white-space:nowrap;}
+  .status-cal-table th, .status-cal-table td{padding:0; border-right:1px solid #ede1d0; border-bottom:1px solid #ede1d0;}
+  .status-cal-table th{padding:6px 4px; font-weight:600; text-align:center; background:#faf5ee; min-width:34px; font-size:10px; color:#6b6153;}
+  .status-cal-listing-cell{
+    position:sticky; left:0; z-index:2; background:#fff; padding:8px 12px !important;
+    font-weight:600; text-align:left; border-right:1px solid #ddd0bc !important; min-width:140px; max-width:190px;
+    overflow:hidden; text-overflow:ellipsis;
+  }
+  .status-cal-table th.status-cal-listing-cell{background:#faf5ee; z-index:3;}
+  .status-cal-cell{width:34px; height:32px;}
+  .status-cal-cell.is-available{background:#eef6ef;}
+  .status-cal-cell.is-partial{background:#e8a23a;}
+  .status-cal-cell.is-booked{background:#a3402f;}
+  .status-cal-cell.is-blocked{background:#8a7f6c;}
+  .status-cal-cell.is-today{box-shadow:inset 0 0 0 2px #8a6c39;}
   .listing-tab-btn{
     background:none; border:1px solid #ddd0bc; padding:9px 18px; font-size:12.5px;
     cursor:pointer; color:#1c1a17; letter-spacing:0.02em;
@@ -359,9 +379,22 @@
         <div class="listing-tabs" id="listingTabs">
           <button type="button" class="listing-tab-btn active" data-tab="active" id="tabActiveBtn">Active</button>
           <button type="button" class="listing-tab-btn" data-tab="inactive" id="tabInactiveBtn">Inactive</button>
+          <button type="button" class="listing-tab-btn" data-tab="status" id="tabStatusBtn">Status</button>
         </div>
         <div id="listingsContainer">
           <p class="loading">Loading your listings…</p>
+        </div>
+        <div id="statusCalendarView" style="display:none;">
+          <p style="font-size:12.5px; opacity:0.65; margin:0 0 14px;">Every approved stay, one row each, next 30 days. A Resort shows as one row here — open it individually for the full per-room breakdown.</p>
+          <div style="display:flex; gap:14px; align-items:center; margin-bottom:14px; font-size:11.5px; flex-wrap:wrap;">
+            <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#eef6ef; border:1px solid #3a7d44; display:inline-block; border-radius:2px;"></span> Available</span>
+            <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#e8a23a; display:inline-block; border-radius:2px;"></span> Partially booked (Resort)</span>
+            <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#a3402f; display:inline-block; border-radius:2px;"></span> Booked / Fully booked</span>
+            <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#8a7f6c; display:inline-block; border-radius:2px;"></span> Blocked</span>
+          </div>
+          <div id="statusCalendarWrap" style="overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid #ddd0bc; border-radius:4px;">
+            <p style="padding:16px; opacity:0.6; font-size:13px;">Loading…</p>
+          </div>
         </div>
       </div>
       <div class="listing-sidebar" id="listingSidebar">
@@ -1109,9 +1142,19 @@
       const stayNote = item.experience_type === 'with_stay' ? 'Includes a stay' : 'Experience only';
       const calendarHintHtml = item.status === 'approved'
         ? `<p class="calendar-hint">📅 Click to manage price, dates &amp; promotions</p>`
+        : item.status === 'pending'
+        ? `<p class="calendar-hint calendar-hint-muted">Awaiting review — editing unlocks once that's complete</p>`
         : `<p class="calendar-hint calendar-hint-muted">Calendar unlocks once approved</p>`;
+      // A pending experience used to link straight to the edit form here
+      // regardless of status — a host could fill out changes only to
+      // have the save itself rejected server-side (see submit-listing.js),
+      // since editing mid-review is blocked there now. Removed at the
+      // source instead of just letting that failure happen after the fact.
+      const experienceActionHtml = item.status === 'pending'
+        ? `<span class="manage-link" style="opacity:0.5; cursor:default;" title="This experience is still awaiting its first review.">Awaiting Review</span>`
+        : `<a class="manage-link" href="${editUrl}">Manage</a>`;
       return `
-        <div class="listing-card" data-href="${editUrl}" data-experience-id="${item.id}" data-status="${item.status}" data-listing-type="experience" style="cursor:pointer;">
+        <div class="listing-card" data-href="${item.status === 'pending' ? '' : editUrl}" data-experience-id="${item.id}" data-status="${item.status}" data-listing-type="experience" style="cursor:${item.status === 'pending' ? 'default' : 'pointer'};">
           ${thumbHtml}
           <div class="listing-info">
             <h3>${item.property_name || '(Untitled)'} <span style="font-size:10px; opacity:0.5; text-transform:uppercase; letter-spacing:0.04em;">Experience</span></h3>
@@ -1120,7 +1163,7 @@
             ${calendarHintHtml}
           </div>
           <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
-            <a class="manage-link" href="${editUrl}">Manage</a>
+            ${experienceActionHtml}
           </div>
         </div>
       `;
@@ -1201,7 +1244,16 @@
   function cloneListing(listingId){
     const listing = currentListings.find(l => l.id === listingId);
     if(!listing) return;
+    // Exterior photos are already real, permanently-hosted Blob URLs —
+    // reusing them directly (see index.html's cloneListingIfLinked) is
+    // both faster for the host and avoids re-uploading identical bytes
+    // for no reason. Still offered as a genuine choice, though — a
+    // clone is sometimes a different configuration of the same physical
+    // property (different room count, etc.), where the original's
+    // exterior shots may not even apply.
+    const withPhotos = confirm('Clone this listing WITH its existing exterior photos?\n\nOK = carry over the exterior photos (still editable/removable after).\nCancel = start with a blank photo gallery instead.\n\nEverything else about the listing is copied either way, and room/interior photos always need re-uploading regardless of this choice.');
     localStorage.setItem('aerva_clone_listing', JSON.stringify(listing));
+    localStorage.setItem('aerva_clone_with_photos', withPhotos ? '1' : '0');
     window.location.href = 'index.html?view=list-property&clone=1';
   }
 
@@ -2033,14 +2085,81 @@
     window.location.href = card.dataset.href;
   });
 
+  let statusCalendarLoaded = false;
   document.getElementById('listingTabs').addEventListener('click', (e) => {
     const btn = e.target.closest('.listing-tab-btn');
     if(!btn) return;
     currentListingsTab = btn.dataset.tab;
     document.getElementById('tabActiveBtn').classList.toggle('active', currentListingsTab === 'active');
     document.getElementById('tabInactiveBtn').classList.toggle('active', currentListingsTab === 'inactive');
-    renderListingsForCurrentTab();
+    document.getElementById('tabStatusBtn').classList.toggle('active', currentListingsTab === 'status');
+    const isStatusTab = currentListingsTab === 'status';
+    document.getElementById('listingsContainer').style.display = isStatusTab ? 'none' : '';
+    document.getElementById('statusCalendarView').style.display = isStatusTab ? 'block' : 'none';
+    const sidebarEl = document.getElementById('listingSidebar');
+    if(sidebarEl) sidebarEl.style.display = isStatusTab ? 'none' : '';
+    if(isStatusTab){
+      if(!statusCalendarLoaded){
+        statusCalendarLoaded = true;
+        loadStatusCalendar();
+      }
+    } else {
+      renderListingsForCurrentTab();
+    }
   });
+
+  async function loadStatusCalendar(){
+    const wrap = document.getElementById('statusCalendarWrap');
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings?statusCalendar=1', {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      const data = await res.json();
+      if(!res.ok){
+        wrap.innerHTML = `<p style="padding:16px; color:#a3402f; font-size:13px;">${data.error || 'Could not load the status calendar.'}</p>`;
+        return;
+      }
+      renderStatusCalendar(data);
+    } catch(err){
+      wrap.innerHTML = '<p style="padding:16px; color:#a3402f; font-size:13px;">Could not reach the server — please try again.</p>';
+    }
+  }
+
+  function renderStatusCalendar(data){
+    const wrap = document.getElementById('statusCalendarWrap');
+    if(!data.listings || !data.listings.length){
+      wrap.innerHTML = '<p style="padding:16px; opacity:0.6; font-size:13px;">No approved listings yet.</p>';
+      return;
+    }
+    const start = new Date(data.startDate + 'T00:00:00Z');
+    const days = [];
+    for(let i = 0; i < data.days; i++){
+      const d = new Date(start);
+      d.setUTCDate(d.getUTCDate() + i);
+      days.push(d);
+    }
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const fmtDay = (d) => d.toLocaleDateString('en-IN', { day: 'numeric' });
+    const fmtWeekday = (d) => d.toLocaleDateString('en-IN', { weekday: 'narrow' });
+    const statusLabel = { available: 'Available', partial: 'Partially booked', booked: 'Booked', blocked: 'Blocked' };
+
+    const headerCells = days.map(d => `<th>${fmtWeekday(d)}<br>${fmtDay(d)}</th>`).join('');
+    const bodyRows = data.listings.map(listing => {
+      const cells = listing.dayStatuses.map((status, i) => {
+        const dateStr = days[i].toISOString().slice(0, 10);
+        const isToday = dateStr === todayStr;
+        return `<td class="status-cal-cell is-${status}${isToday ? ' is-today' : ''}" title="${listing.propertyName} — ${dateStr}: ${statusLabel[status] || status}"></td>`;
+      }).join('');
+      return `<tr><td class="status-cal-listing-cell">${listing.propertyName}${listing.propertyType === 'Resort' ? ' <span style="opacity:0.5; font-weight:400;">(Resort)</span>' : ''}</td>${cells}</tr>`;
+    }).join('');
+
+    wrap.innerHTML = `
+      <table class="status-cal-table">
+        <thead><tr><th class="status-cal-listing-cell">Listing</th>${headerCells}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    `;
+  }
 
   // ============================================================
   // Right-side sidebar: block dates, promotions, paid amenities for
