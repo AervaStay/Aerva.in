@@ -41,7 +41,14 @@ function hasNonLatinScript(str) {
 
 // Aerva's cut on bookings — set by the platform, not the host, same as
 // Airbnb's host service fee. Applied to every new listing at submission time.
-const DEFAULT_COMMISSION_RATE = 15;
+// Kept in sync by hand with create-order.js's BASE_COMMISSION_RATE,
+// which is what actually determines commission on a real booking. This
+// column is no longer read when pricing a booking (see create-order.js's
+// comment) — it survives as the number shown in host-facing payout
+// previews, so it has to match. It used to be 15, which meant a host's
+// "what will I actually get" preview quoted a commission 5 points higher
+// than the one they were really charged.
+const DEFAULT_COMMISSION_RATE = 10;
 
 const SITE_BASE = 'https://aerva.in';
 // Distinct from SITE_BASE on purpose: SITE_BASE is the static frontend

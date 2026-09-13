@@ -53,6 +53,7 @@ const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { verifyGoogleIdToken } = require('./_social-auth');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
+const { normalizeToE164 } = require('./_phone-validation');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -518,9 +519,35 @@ module.exports = async (req, res) => {
       }
 
       const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+      // Phone is stored in ONE format platform-wide — E.164 — so that a
+      // guest who signs up here with "9876543210" and later logs in via
+      // phone/OTP with "+919876543210" lands on the SAME account. Before
+      // this, those were two different strings, the partial unique index
+      // on guests.phone saw no conflict, and the person quietly ended up
+      // with two accounts holding separate bookings and coupons.
+      let normalizedPhone = null;
+      if (phone && String(phone).trim()) {
+        normalizedPhone = normalizeToE164(phone);
+        if (!normalizedPhone) {
+          return res.status(400).json({ error: "That phone number doesn't look right. Include your country code, like +919876543210." });
+        }
+        // idx_guests_phone_unique would reject this at the database level
+        // anyway, but as an opaque 500 — checking here means the person
+        // gets told what actually happened.
+        const phoneTaken = await sql`SELECT id FROM guests WHERE phone = ${normalizedPhone}`;
+        if (phoneTaken[0]) {
+          await logAudit(sql, {
+            action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
+            metadata: { reason: 'phone_already_registered', ip: clientIp }
+          });
+          return res.status(409).json({ error: 'An account already uses this phone number. Try logging in with your phone instead.' });
+        }
+      }
+
       const inserted = await sql`
         INSERT INTO guests (email, password_hash, name, phone, email_verified)
-        VALUES (${cleanEmail}, ${passwordHash}, ${name || null}, ${phone || null}, FALSE)
+        VALUES (${cleanEmail}, ${passwordHash}, ${name || null}, ${normalizedPhone}, FALSE)
         RETURNING id, email, name, phone, account_type
       `;
       const guest = inserted[0];

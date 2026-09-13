@@ -31,10 +31,17 @@ module.exports = async (req, res) => {
       body: req.body,
       request: req,
       onBeforeGenerateToken: async (pathname, clientPayload) => {
-        // No user accounts on this site, so there's no "is this the right
-        // person" check to do — instead we restrict *what* can be uploaded:
+        // This endpoint hands out an upload token without checking WHO is
+        // asking. That's a deliberate limitation, not an oversight: the
+        // browser calls this before it has anything to upload, and the
+        // Vercel client-upload handshake doesn't carry a session token
+        // through. (Accounts do exist — see guests/hosts in schema.sql —
+        // so this is worth revisiting by passing the session token
+        // through clientPayload and verifying it here.)
+        //
+        // What protects it today is restricting *what* can be uploaded:
         // images only (plus PDF for the Aadhaar case above), capped size,
-        // so this endpoint can't be abused to host arbitrary files.
+        // so it can't be abused to host arbitrary files.
         const isAadhaarUpload = clientPayload === 'aadhaar-verification';
         const allowedContentTypes = isAadhaarUpload
           ? ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']

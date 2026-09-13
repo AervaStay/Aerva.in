@@ -31,7 +31,16 @@ function resolveBasePlaceholders(text, data) {
   let result = text;
   for (const [key, getValue] of Object.entries(TEMPLATE_PLACEHOLDER_MAP)) {
     if (result.toLowerCase().includes(key)) {
-      result = result.replace(new RegExp(key, 'gi'), getValue(data));
+      // The lookahead is what stops a SHORTER key from eating a LONGER
+      // placeholder that starts with it: '@checkin' is a prefix of
+      // '@checkininfo', so without this, "@checkininfo" became
+      // "2:00 PMinfo" — the check-in time plus a stray "info" — and the
+      // @checkininfo handler below never saw anything left to replace.
+      // Requiring the next character to not be alphanumeric means each
+      // key only matches a whole placeholder word, and any future
+      // '@checkin…'-prefixed placeholder stays safe too. Kept in sync by
+      // hand with index.html's identical client-side resolver.
+      result = result.replace(new RegExp(key + '(?![a-z0-9])', 'gi'), getValue(data));
     }
   }
   return result;

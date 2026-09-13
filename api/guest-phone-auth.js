@@ -21,15 +21,30 @@
 const { neon } = require('@neondatabase/serverless');
 const { createToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
+const { getClientIp, countRecentAttempts } = require('./_rate-limit');
+const { E164_PATTERN, normalizeToE164, phoneMatchSuffix } = require('./_phone-validation');
 
 const sql = neon(process.env.DATABASE_URL);
 
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — matches email login
 
-// E.164: a leading +, then 8-15 digits, first digit 1-9. Catches the
-// common mistake of a local number without a country code (e.g.
-// "9876543210" instead of "+919876543210") before we ever call Twilio.
-const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
+// Twilio Verify rate-limits per DESTINATION number on its own, which
+// stops someone hammering one person's phone. What it does not stop is
+// one script requesting codes for thousands of DIFFERENT numbers — every
+// one of those is a real SMS that Aerva pays for. That's SMS pumping
+// (a.k.a. toll fraud), and the bill lands before anyone notices the
+// traffic. These caps are the actual protection; Twilio's own limits are
+// a second layer underneath, not a substitute.
+const OTP_REQUESTS_PER_IP_PER_HOUR = 10;
+const OTP_REQUESTS_PER_NUMBER_PER_HOUR = 5;
+// Verification is cheap (no SMS sent), but uncapped it's a brute-force
+// surface against a 6-digit code, so it gets a looser limit of its own.
+const OTP_VERIFY_FAILURES_PER_IP_PER_HOUR = 20;
+
+// E.164 shape check, plus the normalizer that accepts the same number
+// written with spaces, dashes, a 00 prefix, or no country code at all —
+// both shared with guest-auth.js's signup so every write to guests.phone
+// lands in one consistent format. See _phone-validation.js.
 
 function twilioAuthHeader() {
   const creds = `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`;
@@ -55,14 +70,46 @@ module.exports = async (req, res) => {
   }
 
   const { mode, phone, code } = req.body || {};
+  const clientIp = getClientIp(req);
 
-  if (!phone || typeof phone !== 'string' || !E164_PATTERN.test(phone.trim())) {
+  // Accept whatever the person typed and normalize it, rather than
+  // rejecting anything that isn't already perfect E.164 — "098765 43210"
+  // and "+91 98765-43210" are the same number, and Twilio only ever sees
+  // the canonical form.
+  const cleanPhone = normalizeToE164(phone);
+  if (!cleanPhone || !E164_PATTERN.test(cleanPhone)) {
     return res.status(400).json({ error: 'Please enter your phone number with country code, like +919876543210.' });
   }
-  const cleanPhone = phone.trim();
 
   // ---- Request an OTP ----
   if (mode === 'request') {
+    // Checked BEFORE the Twilio call — the whole point is to not send
+    // (and not pay for) the message in the first place. countRecentAttempts
+    // fails open on a database error, which is the right trade here: a
+    // broken rate-limit check shouldn't lock every real guest out of
+    // logging in.
+    const requestsByIp = await countRecentAttempts(sql, {
+      action: 'guest_phone_otp_requested', windowMinutes: 60, byIp: clientIp, onlyFailures: false
+    });
+    if (requestsByIp >= OTP_REQUESTS_PER_IP_PER_HOUR) {
+      await logAudit(sql, {
+        action: 'guest_phone_otp_blocked', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
+        metadata: { reason: 'ip_rate_limited', ip: clientIp }
+      });
+      return res.status(429).json({ error: 'Too many codes requested from this connection. Please try again later.' });
+    }
+
+    const requestsByNumber = await countRecentAttempts(sql, {
+      action: 'guest_phone_otp_requested', windowMinutes: 60, byActor: cleanPhone, onlyFailures: false
+    });
+    if (requestsByNumber >= OTP_REQUESTS_PER_NUMBER_PER_HOUR) {
+      await logAudit(sql, {
+        action: 'guest_phone_otp_blocked', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
+        metadata: { reason: 'number_rate_limited', ip: clientIp }
+      });
+      return res.status(429).json({ error: 'Too many codes requested for this number. Please try again later.' });
+    }
+
     try {
       const verifyRes = await fetch(
         `https://verify.twilio.com/v2/Services/${process.env.TWILIO_VERIFY_SERVICE_SID}/Verifications`,
@@ -82,7 +129,7 @@ module.exports = async (req, res) => {
         console.error('Twilio Verify (start) failed:', verifyRes.status, detail);
         await logAudit(sql, {
           action: 'guest_phone_otp_requested', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
-          metadata: { reason: 'twilio_error', status: verifyRes.status }
+          metadata: { reason: 'twilio_error', status: verifyRes.status, ip: clientIp }
         });
         // A 4xx here is almost always an invalid/unreachable number.
         if (verifyRes.status >= 400 && verifyRes.status < 500) {
@@ -92,14 +139,15 @@ module.exports = async (req, res) => {
       }
 
       await logAudit(sql, {
-        action: 'guest_phone_otp_requested', success: true, actorType: 'guest', actorIdentifier: cleanPhone
+        action: 'guest_phone_otp_requested', success: true, actorType: 'guest', actorIdentifier: cleanPhone,
+        metadata: { ip: clientIp }
       });
       return res.status(200).json({ success: true });
     } catch (err) {
       console.error('guest-phone-auth (request) error:', err);
       await logAudit(sql, {
         action: 'guest_phone_otp_requested', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
-        metadata: { reason: 'server_error' }
+        metadata: { reason: 'server_error', ip: clientIp }
       });
       return res.status(500).json({ error: 'Could not send the code right now. Please try again shortly.' });
     }
@@ -109,6 +157,20 @@ module.exports = async (req, res) => {
   if (mode === 'verify') {
     if (!code || typeof code !== 'string') {
       return res.status(400).json({ error: 'Please enter the code you received.' });
+    }
+
+    // A 6-digit code is only 10^6 possibilities; Twilio expires codes and
+    // caps checks per verification, but nothing there stops one IP
+    // grinding away across many numbers at once.
+    const failedVerifies = await countRecentAttempts(sql, {
+      action: 'guest_phone_otp_verified', windowMinutes: 60, byIp: clientIp, onlyFailures: true
+    });
+    if (failedVerifies >= OTP_VERIFY_FAILURES_PER_IP_PER_HOUR) {
+      await logAudit(sql, {
+        action: 'guest_phone_otp_blocked', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
+        metadata: { reason: 'verify_rate_limited', ip: clientIp }
+      });
+      return res.status(429).json({ error: 'Too many incorrect codes. Please try again later.' });
     }
 
     try {
@@ -130,7 +192,7 @@ module.exports = async (req, res) => {
         console.error('Twilio Verify (check) not approved:', checkRes.status, checkData);
         await logAudit(sql, {
           action: 'guest_phone_otp_verified', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
-          metadata: { reason: 'code_rejected' }
+          metadata: { reason: 'code_rejected', ip: clientIp }
         });
         return res.status(401).json({ error: 'That code is incorrect or has expired. Please request a new one.' });
       }
@@ -138,6 +200,46 @@ module.exports = async (req, res) => {
       // Code approved — find or create the guest account by phone.
       let rows = await sql`SELECT id, email, name, phone FROM guests WHERE phone = ${cleanPhone}`;
       let guest = rows[0];
+
+      // No exact match. Before creating a NEW account, check for one
+      // written before phone normalization existed — a guest who signed
+      // up by email and typed "9876543210" into the old free-text phone
+      // field has the same number stored as a different string, and
+      // creating a second account here would split their bookings,
+      // coupons, and message threads across two identities with no way
+      // to merge them afterwards.
+      //
+      // The match is on the last 10 digits, which is deliberately narrow:
+      // it only ever ADOPTS a row whose number is the same one Twilio
+      // just verified the person controls. Twilio's approval is what
+      // authenticates them — the suffix only decides which existing row
+      // that verified number belongs to. If more than one row somehow
+      // matches, none is adopted, since guessing between two real
+      // accounts is worse than making a new one.
+      if (!guest) {
+        const suffix = phoneMatchSuffix(cleanPhone);
+        if (suffix) {
+          const legacy = await sql`
+            SELECT id, email, name, phone FROM guests
+            WHERE phone IS NOT NULL
+              AND phone NOT LIKE '+%'
+              AND regexp_replace(phone, '[^0-9]', '', 'g') LIKE ${'%' + suffix}
+          `;
+          if (legacy.length === 1) {
+            const adopted = await sql`
+              UPDATE guests SET phone = ${cleanPhone} WHERE id = ${legacy[0].id}
+              RETURNING id, email, name, phone
+            `;
+            guest = adopted[0];
+            await logAudit(sql, {
+              action: 'guest_phone_legacy_adopted', success: true, actorType: 'guest', actorIdentifier: cleanPhone,
+              targetType: 'guest', targetId: guest.id,
+              metadata: { previousFormat: legacy[0].phone, ip: clientIp }
+            });
+          }
+        }
+      }
+
       if (!guest) {
         const inserted = await sql`
           INSERT INTO guests (phone) VALUES (${cleanPhone})
@@ -149,7 +251,7 @@ module.exports = async (req, res) => {
       const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
       await logAudit(sql, {
         action: 'guest_phone_otp_verified', success: true, actorType: 'guest', actorIdentifier: cleanPhone,
-        targetType: 'guest', targetId: guest.id
+        targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
       });
 
       return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
@@ -157,7 +259,7 @@ module.exports = async (req, res) => {
       console.error('guest-phone-auth (verify) error:', err);
       await logAudit(sql, {
         action: 'guest_phone_otp_verified', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
-        metadata: { reason: 'server_error' }
+        metadata: { reason: 'server_error', ip: clientIp }
       });
       return res.status(500).json({ error: 'Could not verify that code right now. Please try again.' });
     }
