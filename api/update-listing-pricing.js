@@ -72,6 +72,69 @@ module.exports = async (req, res) => {
   }
 
   // ---- Load current pricing for the form ----
+  // ---- Room-level availability for the next 30 days, for the Resort
+  // calendar view (manage-listing.html's Calendar tab). Kept as its own
+  // lightweight mode rather than folded into the main GET below — the
+  // main GET already returns the full listing plus every room's own
+  // details, but not per-room booked/blocked date RANGES, which this
+  // specifically needs and the calendar UI polls independently of the
+  // rest of the page.
+  if (req.method === 'GET' && req.query.roomCalendar === '1') {
+    try {
+      const listingRows = await sql`SELECT id, property_name, property_type FROM listings WHERE id = ${listingId}`;
+      const listing = listingRows[0];
+      if (!listing) return res.status(404).json({ error: 'This listing could not be found.' });
+      if (listing.property_type !== 'Resort') {
+        return res.status(200).json({ propertyName: listing.property_name, rooms: [], startDate: null, days: 0 });
+      }
+
+      const rooms = await sql`
+        SELECT id, room_name FROM listing_rooms
+        WHERE listing_id = ${listingId} AND is_active = TRUE
+        ORDER BY sort_order ASC, created_at ASC
+      `;
+
+      const DAYS = 30;
+      const startDate = new Date();
+      startDate.setUTCHours(0, 0, 0, 0);
+      const endDate = new Date(startDate);
+      endDate.setUTCDate(endDate.getUTCDate() + DAYS);
+      const startStr = startDate.toISOString().slice(0, 10);
+      const endStr = endDate.toISOString().slice(0, 10);
+
+      const roomsWithRanges = [];
+      for (const room of rooms) {
+        const bookedRows = await sql`
+          SELECT arrival AS start_date, departure AS end_date, guest_email
+          FROM orders
+          WHERE room_id = ${room.id} AND status = 'paid'
+            AND arrival < ${endStr}::date AND departure > ${startStr}::date
+          ORDER BY arrival ASC
+        `;
+        const blockedRows = await sql`
+          SELECT start_date, end_date, reason
+          FROM listing_blocked_dates
+          WHERE listing_id = ${listingId} AND (room_id = ${room.id} OR room_id IS NULL)
+            AND start_date < ${endStr}::date AND end_date > ${startStr}::date
+          ORDER BY start_date ASC
+        `;
+        roomsWithRanges.push({
+          id: room.id,
+          roomName: room.room_name,
+          ranges: [
+            ...bookedRows.map(r => ({ start: r.start_date, end: r.end_date, type: 'booked', label: r.guest_email || 'Booked' })),
+            ...blockedRows.map(r => ({ start: r.start_date, end: r.end_date, type: 'blocked', label: r.reason || 'Blocked' })),
+          ]
+        });
+      }
+
+      return res.status(200).json({ propertyName: listing.property_name, rooms: roomsWithRanges, startDate: startStr, days: DAYS });
+    } catch (err) {
+      console.error('update-listing-pricing (roomCalendar) error:', err);
+      return res.status(500).json({ error: 'Could not load the room calendar right now.' });
+    }
+  }
+
   if (req.method === 'GET') {
     try {
       const rows = await sql`

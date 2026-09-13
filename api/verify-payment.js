@@ -28,10 +28,10 @@
 //                pay the host vs. refund the guest.
 
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
-const { sendBookingConfirmedTemplates } = require('./_template-scheduling');
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const PDFDocument = require('pdfkit');
+const { logAudit } = require('./_audit-log');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -279,16 +279,14 @@ module.exports = async (req, res) => {
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
             charge_currency, charge_amount, coupon_id, coupon_discount,
-            razorpay_order_id, razorpay_payment_id, status, order_type, pet_types,
-            service_animal_types, young_litter_count
+            razorpay_order_id, razorpay_payment_id, status, order_type, pet_types
           ) VALUES (
             ${stay.suite}, ${stay.listingId || null}, ${stay.roomId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             ${depositAmount}, ${depositStatus}, ${depositReleaseAt},
             ${chargeCurrency}, ${chargeAmount}, ${thisRowCouponId}, ${thisRowCouponDiscount},
-            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay', ${JSON.stringify(Array.isArray(stay.petTypes) ? stay.petTypes : [])},
-            ${JSON.stringify(Array.isArray(stay.serviceAnimalTypes) ? stay.serviceAnimalTypes : [])}, ${Number(stay.youngLitterCount) || 0}
+            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay', ${JSON.stringify(Array.isArray(stay.petTypes) ? stay.petTypes : [])}
           )
           RETURNING id
         `;
@@ -298,14 +296,17 @@ module.exports = async (req, res) => {
         }
         const newOrderId = inserted[0].id;
 
-        // "Send automatically once a guest confirms a booking" — the one
-        // scheduling trigger currently supported (see
-        // _template-scheduling.js's own comment on why the timed/delayed
-        // ones are deferred). Fired right here, at the exact moment the
-        // order is confirmed as paid — never blocks or fails the booking
-        // itself if something goes wrong sending a template message.
-        await sendBookingConfirmedTemplates(sql, {
-          id: newOrderId, listing_id: stay.listingId || null, guest_id: guestId, guest_email: email
+        // "What they actually booked" — logged here, not at order
+        // creation in create-order.js, since that's just the Razorpay
+        // order being created (the guest could still abandon payment).
+        // This is the real, paid, confirmed booking.
+        await logAudit(sql, {
+          action: 'booking_confirmed', success: true, actorType: 'guest', actorIdentifier: email || null,
+          targetType: 'order', targetId: newOrderId,
+          metadata: {
+            listingId: stay.listingId || null, roomId: stay.roomId || null, suiteName: stay.suite, arrival: stay.arrival, departure: stay.departure,
+            guests: stay.guests, nights: stay.nights, total: stayTotal, razorpayOrderId: razorpay_order_id
+          }
         });
 
         // Persist which paid amenities (and specific nights) were part of
@@ -361,6 +362,14 @@ module.exports = async (req, res) => {
         if (thisRowCouponId) {
           await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${insertedEx[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
         }
+        await logAudit(sql, {
+          action: 'booking_confirmed', success: true, actorType: 'guest', actorIdentifier: email || null,
+          targetType: 'order', targetId: insertedEx[0].id,
+          metadata: {
+            listingId: ex.listingId || null, suiteName: ex.suite, date: ex.date, endDate: ex.endDate || ex.date,
+            guests: ex.guests, durationDays: ex.durationDays || 1, total, razorpayOrderId: razorpay_order_id, isExperience: true
+          }
+        });
       }
     } catch (dbErr) {
       // A booking that's paid-for but not logged to `orders` is recoverable

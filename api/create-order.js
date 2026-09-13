@@ -280,11 +280,18 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: `Stay ${i + 1}: missing home selection, dates, or guest count` });
       }
 
-      // Each property can only appear once per booking request.
-      if (seenListingIds.has(s.listingId)) {
-        return res.status(400).json({ error: `Stay ${i + 1} repeats a home already used in this request.` });
+      // Each property can only appear once per booking request — EXCEPT
+      // a Resort, where booking several different rooms of the same
+      // resort in one order is completely normal and valid. Keyed on
+      // listingId+roomId together so two different rooms never collide,
+      // while two requests for the SAME room (or the same non-Resort
+      // listing, which has no roomId to distinguish by) still correctly
+      // get caught as a genuine duplicate.
+      const dedupeKey = s.listingId + ':' + (s.roomId || '');
+      if (seenListingIds.has(dedupeKey)) {
+        return res.status(400).json({ error: `Stay ${i + 1} repeats a room or home already used in this request.` });
       }
-      seenListingIds.add(s.listingId);
+      seenListingIds.add(dedupeKey);
 
       // The listing is looked up fresh from the database — this is the
       // "validate against what the owner actually shared" step. A listing
@@ -302,7 +309,32 @@ module.exports = async (req, res) => {
       if (!listing) {
         return res.status(400).json({ error: `Stay ${i + 1}: this home is no longer available to book.` });
       }
-      if (!listing.nightly_rate) {
+
+      // A Resort's real price and capacity live on the SPECIFIC ROOM
+      // being booked, never on the listing itself — the listing's own
+      // nightly_rate for a Resort is just the cheapest active room's
+      // price (used for card display/sorting), not what any particular
+      // room actually costs. Using it directly here would have meant a
+      // guest booking an expensive room could be charged the cheapest
+      // room's rate instead. room stays null for a non-Resort stay,
+      // where the listing's own fields are correctly authoritative.
+      let room = null;
+      if (listing.property_type === 'Resort') {
+        if (!s.roomId) {
+          return res.status(400).json({ error: `Stay ${i + 1}: please select a specific room for this resort.` });
+        }
+        const roomRows = await sql`
+          SELECT id, room_name, max_occupancy, nightly_rate, is_active
+          FROM listing_rooms WHERE id = ${s.roomId} AND listing_id = ${listing.id}
+        `;
+        room = roomRows[0];
+        if (!room || !room.is_active) {
+          return res.status(400).json({ error: `Stay ${i + 1}: this room is no longer available to book.` });
+        }
+        if (!room.nightly_rate) {
+          return res.status(400).json({ error: `Stay ${i + 1}: this room doesn't have a rate set yet.` });
+        }
+      } else if (!listing.nightly_rate) {
         return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} doesn't have a rate set yet.` });
       }
 
@@ -327,17 +359,15 @@ module.exports = async (req, res) => {
       // A stay is a single physical unit (a villa, a studio, a room) —
       // priced flat per night regardless of how many people are in it,
       // but still genuinely limited by how many people can actually fit.
-      // Only checked for non-Resort properties: a Resort's real capacity
-      // lives per-room (max_occupancy on listing_rooms), not on the
-      // listing itself, so max_guests there isn't a meaningful ceiling
-      // to enforce here.
-      if (listing.property_type !== 'Resort') {
-        const maxGuestsAllowed = Number(listing.max_guests);
-        if (maxGuestsAllowed > 0 && guests > maxGuestsAllowed) {
-          return res.status(400).json({
-            error: `Stay ${i + 1}: ${listing.property_name} sleeps up to ${maxGuestsAllowed} guests, but ${guests} were requested. Please reduce the guest count or book an additional stay for the rest of your group.`
-          });
-        }
+      // For a Resort this checks the SPECIFIC room's own capacity, not
+      // any listing-level number (which isn't meaningful for a Resort).
+      const capacityLimit = room ? Number(room.max_occupancy) : Number(listing.max_guests);
+      if (capacityLimit > 0 && guests > capacityLimit) {
+        return res.status(400).json({
+          error: room
+            ? `Stay ${i + 1}: ${room.room_name || 'This room'} sleeps up to ${capacityLimit} guests, but ${guests} were requested. Please choose a larger room or book an additional room for the rest of your group.`
+            : `Stay ${i + 1}: ${listing.property_name} sleeps up to ${capacityLimit} guests, but ${guests} were requested. Please reduce the guest count or book an additional stay for the rest of your group.`
+        });
       }
 
       // ---- Availability, checked here for real (not just in the search
@@ -350,27 +380,46 @@ module.exports = async (req, res) => {
       //    point-in-time filter — nothing stopped two guests racing to
       //    pay for the same dates, or a guest paying from a stale page.
       //    This is the actual guarantee against a double-booked stay.
+      // A NULL room_id on listing_blocked_dates blocks the WHOLE listing
+      // (e.g. the resort's grounds are shut for a day) — always checked.
+      // A room_id-specific block only applies to that one room, so for a
+      // non-Resort stay (room is null) this condition is simply skipped,
+      // matching the old listing-wide-only behavior exactly.
       const blockedRows = await sql`
         SELECT 1 FROM listing_blocked_dates
         WHERE listing_id = ${listing.id}
+          AND (room_id IS NULL OR room_id = ${room ? room.id : null})
           AND start_date < ${s.departure}::date
           AND end_date > ${s.arrival}::date
         LIMIT 1
       `;
       if (blockedRows[0]) {
-        return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} isn't available for those dates.` });
+        return res.status(400).json({ error: `Stay ${i + 1}: ${room ? (room.room_name || 'This room') : listing.property_name} isn't available for those dates.` });
       }
-      const overlapRows = await sql`
-        SELECT 1 FROM orders
-        WHERE listing_id = ${listing.id} AND status = 'paid'
-          AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date
-        LIMIT 1
-      `;
+      // For a Resort, only an existing PAID booking of the SAME room
+      // counts as an overlap — a different room at the same resort being
+      // booked for the same dates is completely fine and expected. This
+      // was previously checked at the whole-listing level, which meant
+      // one room's booking could incorrectly block every other room at
+      // the same resort from ever being booked for those dates.
+      const overlapRows = room
+        ? await sql`
+            SELECT 1 FROM orders
+            WHERE room_id = ${room.id} AND status = 'paid'
+              AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date
+            LIMIT 1
+          `
+        : await sql`
+            SELECT 1 FROM orders
+            WHERE listing_id = ${listing.id} AND status = 'paid'
+              AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date
+            LIMIT 1
+          `;
       if (overlapRows[0]) {
-        return res.status(400).json({ error: `Stay ${i + 1}: ${listing.property_name} was just booked for those dates. Please choose different dates.` });
+        return res.status(400).json({ error: `Stay ${i + 1}: ${room ? (room.room_name || 'This room') : listing.property_name} was just booked for those dates. Please choose different dates.` });
       }
 
-      const rate = Number(listing.nightly_rate);
+      const rate = room ? Number(room.nightly_rate) : Number(listing.nightly_rate);
       const roomTotal = rate * nights;
       const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
       const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
@@ -447,7 +496,8 @@ module.exports = async (req, res) => {
 
       stayDetails.push({
         listingId: listing.id,
-        suite: listing.property_name,
+        roomId: room ? room.id : null,
+        suite: room ? `${listing.property_name} — ${room.room_name || 'Room'}` : listing.property_name,
         arrival: s.arrival,
         departure: s.departure,
         guests,
