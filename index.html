@@ -309,7 +309,7 @@
   .suite-badge-rooms{ background:rgba(28,26,23,0.78); color:#fff; }
   .suite-photo-slider{
     position:absolute; inset:0; display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
-    -webkit-overflow-scrolling:touch; scrollbar-width:none;
+    -webkit-overflow-scrolling:touch; touch-action:pan-x; scrollbar-width:none;
   }
   .suite-photo-slider::-webkit-scrollbar{display:none;}
   .suite-photo-slider img{
@@ -359,7 +359,7 @@
   }
   .map-recenter-btn:hover{ background:var(--cream-deep); }
   .listing-modal-photos{
-    display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch;
+    display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; touch-action:pan-x;
     scrollbar-width:none;
   }
   .listing-modal-photos::-webkit-scrollbar{display:none;}
@@ -596,7 +596,7 @@
   /* ---------- RECENTLY VIEWED STRIP ---------- */
   .recent-strip-wrap{padding:56px 0 0;}
   .recent-strip{
-    display:flex; gap:20px; overflow-x:auto; padding-bottom:8px; scroll-snap-type:x proximity;
+    display:flex; gap:20px; overflow-x:auto; padding-bottom:8px; scroll-snap-type:x proximity; touch-action:pan-x;
     scrollbar-width:thin;
   }
   .recent-card{
