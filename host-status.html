@@ -39,6 +39,7 @@
   .status-cal-cell.is-blocked{background:#8a7f6c; color:#fff;}
   .status-cal-cell.is-promo{background:#2f5c2a; color:#c9e8bf;}
   .status-cal-cell.is-today{box-shadow:inset 0 0 0 2px #8a6c39;}
+  .status-cal-cell.is-selecting{background:#c9a24a !important; color:#fff;}
   .status-cal-cell .cal-day-guest{
     font-size:8.5px; text-transform:uppercase; letter-spacing:0.02em; overflow:hidden;
     text-overflow:ellipsis; white-space:nowrap; display:block; padding:0 2px;
@@ -57,16 +58,46 @@
     <button class="logout-btn" id="logoutBtn">Log Out</button>
   </div>
 
-  <p style="font-size:12.5px; opacity:0.65; margin:-8px 0 14px;">Every approved stay, next 30 days. A Resort's rooms each get their own row here — no need to open the listing separately to see per-room availability. Each square shows the real price for that date (discounted if a promotion applies), or the guest's name if it's booked. Click any open square to block that date directly, or a square you've already blocked to remove it — a real guest booking can't be changed here.</p>
+  <p style="font-size:12.5px; opacity:0.65; margin:-8px 0 14px;">Every approved stay, next 30 days. A Resort's rooms each get their own row here — no need to open the listing separately to see per-room availability. Each square shows the real price for that date (discounted if a promotion applies), or the guest's name if it's booked. Tap a date to start a selection, then tap another date in the SAME row to pick a range — you'll be asked to Block those dates or run a Promotion over them. Tap a single date and tap it again for a one-day selection. Tap an already-blocked or promoted date to remove it — a real guest booking can't be changed here.</p>
   <div style="display:flex; gap:14px; align-items:center; margin-bottom:14px; font-size:11.5px; flex-wrap:wrap;">
     <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#eef6ef; border:1px solid #3a7d44; display:inline-block; border-radius:2px;"></span> Available</span>
     <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#a3402f; display:inline-block; border-radius:2px;"></span> Booked</span>
     <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#8a7f6c; display:inline-block; border-radius:2px;"></span> Blocked by you</span>
     <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#2f5c2a; display:inline-block; border-radius:2px;"></span> Promotion applied</span>
+    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#c9a24a; display:inline-block; border-radius:2px;"></span> Selecting</span>
   </div>
   <div id="statusCalendarWrap" style="overflow-x:auto; -webkit-overflow-scrolling:touch; touch-action:pan-x; border:1px solid #ddd0bc; border-radius:4px;">
     <p style="padding:16px; opacity:0.6; font-size:13px;">Loading…</p>
   </div>
+
+  <div id="rangeConfirmOverlay" style="display:none; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:50; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target === this) cancelSelection()">
+    <div style="background:#fff; border-radius:6px; padding:22px 24px; max-width:380px; width:100%; max-height:88vh; overflow-y:auto;">
+      <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;" id="rangeConfirmRowLabel"></p>
+      <p id="rangeConfirmDateLabel" style="font-size:16px; font-weight:600; margin:0 0 16px;"></p>
+
+      <p style="font-size:12px; font-weight:600; margin:0 0 8px;">Block these dates</p>
+      <input type="text" id="rangeBlockReason" placeholder="Reason (optional)" style="width:100%; box-sizing:border-box; padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc; margin-bottom:10px;">
+      <button type="button" id="rangeBlockBtn" style="width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em; margin-bottom:18px;">Block These Dates</button>
+
+      <p style="font-size:10.5px; opacity:0.55; text-align:center; margin:0 0 14px;">— or run a promotion for these dates instead —</p>
+
+      <p style="font-size:12px; font-weight:600; margin:0 0 8px;">Add a promotion</p>
+      <input type="text" id="rangePromoName" placeholder="Promotion name, e.g. Diwali Sale" style="width:100%; box-sizing:border-box; padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc; margin-bottom:8px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+        <select id="rangePromoType" style="padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc;">
+          <option value="percentage">% off</option>
+          <option value="flat">₹ off</option>
+        </select>
+        <input type="number" id="rangePromoValue" placeholder="Amount" min="0" style="padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc;">
+      </div>
+      <input type="number" id="rangePromoMinNights" placeholder="Minimum nights (optional)" min="1" style="width:100%; box-sizing:border-box; padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc; margin-bottom:12px;">
+      <button type="button" id="rangePromoBtn" style="width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em; margin-bottom:10px;">Add Promotion</button>
+
+      <button type="button" onclick="cancelSelection()" style="width:100%; padding:10px; background:#fff; border:1px solid #ddd0bc; color:#1c1a17; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;">Cancel</button>
+      <p id="rangeConfirmError" class="error" style="display:none; margin-top:10px;"></p>
+    </div>
+  </div>
+
   <div id="statusBookingDetailOverlay" style="display:none; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:50; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target === this) closeStatusBookingDetail()">
     <div style="background:#fff; border-radius:6px; padding:22px 24px; max-width:360px; width:100%;">
       <div id="statusBookingDetailContent" style="font-size:13.5px; line-height:1.7;"></div>
@@ -112,10 +143,164 @@
         wrap.innerHTML = `<p class="error" style="padding:16px;">${data.error || 'Could not load the status calendar.'}</p>`;
         return;
       }
+      lastStatusData = data;
       renderStatusCalendar(data);
     } catch(err){
       wrap.innerHTML = '<p class="error" style="padding:16px;">Could not reach the server — please try again.</p>';
     }
+  }
+
+  // ---- Selection state for the tap-to-start/tap-to-end range picker ----
+  // A true click-and-drag range select (like the sidebar calendar uses)
+  // isn't viable here on a phone: this calendar's own container scrolls
+  // horizontally (touch-action:pan-x) so the browser would just treat a
+  // horizontal drag as scrolling, not a custom selection gesture — the
+  // two would constantly fight each other. Tap-to-start, tap-to-end
+  // works identically and reliably on both desktop and mobile instead,
+  // since discrete taps never conflict with scrolling. Tapping the same
+  // date twice (or a date, then immediately confirming) makes a
+  // single-day selection, same outcome as a one-cell drag would give.
+  let lastStatusData = null;
+  let selRowKey = null;
+  let selListingId = null;
+  let selRoomId = null;
+  let selRowLabel = null;
+  let selStart = null;
+
+  function rowKeyFor(row){ return row.listingId + ':' + (row.roomId || ''); }
+
+  function cancelSelection(){
+    selRowKey = null; selStart = null;
+    document.getElementById('rangeConfirmOverlay').style.display = 'none';
+    if(lastStatusData) renderStatusCalendar(lastStatusData);
+  }
+
+  function onAvailableCellClick(row, dateStr){
+    const thisRowKey = rowKeyFor(row);
+    if(selRowKey === thisRowKey && selStart){
+      // Second tap on the same row — that's the range, in whichever
+      // order the two taps happened to land.
+      const start = selStart <= dateStr ? selStart : dateStr;
+      const endInclusive = selStart <= dateStr ? dateStr : selStart;
+      openRangeConfirm(row, start, endInclusive);
+    } else {
+      // First tap, or a tap on a different row than whatever was mid-
+      // selection — start fresh on this row+date.
+      selRowKey = thisRowKey; selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label; selStart = dateStr;
+      renderStatusCalendar(lastStatusData);
+    }
+  }
+
+  function openRangeConfirm(row, start, endInclusive){
+    document.getElementById('rangeConfirmRowLabel').textContent = row.label;
+    document.getElementById('rangeConfirmDateLabel').textContent = start === endInclusive
+      ? new Date(start + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+      : `${new Date(start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – ${new Date(endInclusive + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    document.getElementById('rangeBlockReason').value = '';
+    document.getElementById('rangePromoName').value = '';
+    document.getElementById('rangePromoType').value = 'percentage';
+    document.getElementById('rangePromoValue').value = '';
+    document.getElementById('rangePromoMinNights').value = '';
+    document.getElementById('rangeConfirmError').style.display = 'none';
+    document.getElementById('rangeConfirmOverlay').style.display = 'flex';
+    // Selection stays highlighted (selStart/selRowKey untouched) while
+    // this popup is open — cancelSelection() clears it either on
+    // Cancel or after a successful action.
+    window.pendingRangeStart = start;
+    window.pendingRangeEndInclusive = endInclusive;
+  }
+
+  function nextDayStr(dateStr){
+    const d = new Date(dateStr + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+
+  document.getElementById('rangeBlockBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('rangeConfirmError');
+    errEl.style.display = 'none';
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ bulkBlockRange: {
+          listingId: selListingId, roomId: selRoomId,
+          startDate: window.pendingRangeStart, endDate: nextDayStr(window.pendingRangeEndInclusive),
+          reason: document.getElementById('rangeBlockReason').value
+        } })
+      });
+      const data = await res.json();
+      if(!res.ok){ errEl.textContent = data.error || 'Could not block these dates.'; errEl.style.display = 'block'; return; }
+      cancelSelection();
+      loadStatusCalendar();
+    } catch(err){
+      errEl.textContent = 'Could not reach the server — please try again.'; errEl.style.display = 'block';
+    }
+  });
+
+  document.getElementById('rangePromoBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('rangeConfirmError');
+    errEl.style.display = 'none';
+    const name = document.getElementById('rangePromoName').value.trim();
+    const discountType = document.getElementById('rangePromoType').value;
+    const discountValue = Number(document.getElementById('rangePromoValue').value);
+    const minNights = document.getElementById('rangePromoMinNights').value;
+    if(!name){ errEl.textContent = 'Please give this promotion a name.'; errEl.style.display = 'block'; return; }
+    if(!discountValue || discountValue <= 0){ errEl.textContent = 'Please enter a discount amount greater than 0.'; errEl.style.display = 'block'; return; }
+    if(discountType === 'percentage' && discountValue > 100){ errEl.textContent = "A percentage discount can't be more than 100."; errEl.style.display = 'block'; return; }
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ addPromotion: {
+          listingId: selListingId, name, discountType, discountValue, minNights: minNights || null,
+          startDate: window.pendingRangeStart, endDate: nextDayStr(window.pendingRangeEndInclusive)
+        } })
+      });
+      const data = await res.json();
+      if(!res.ok){ errEl.textContent = data.error || 'Could not add this promotion.'; errEl.style.display = 'block'; return; }
+      cancelSelection();
+      loadStatusCalendar();
+    } catch(err){
+      errEl.textContent = 'Could not reach the server — please try again.'; errEl.style.display = 'block';
+    }
+  });
+
+  async function removeBlockAt(listingId, roomId, dateStr){
+    if(!confirm('Remove this block?')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ toggleBlockedDate: { listingId, roomId, date: dateStr } })
+      });
+      const data = await res.json();
+      if(!res.ok){ alert(data.error || 'Could not remove this block.'); return; }
+      loadStatusCalendar();
+    } catch(err){
+      alert('Could not reach the server — please try again.');
+    }
+  }
+
+  async function removePromo(promotionId, promoName){
+    if(!confirm(`Remove the entire "${promoName}" promotion?`)) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ removePromotion: { promotionId } })
+      });
+      const data = await res.json();
+      if(!res.ok){ alert(data.error || 'Could not remove this promotion.'); return; }
+      loadStatusCalendar();
+    } catch(err){
+      alert('Could not reach the server — please try again.');
+    }
+  }
+
+  function removePromoAt(idx){
+    const p = window.statusPromoLookup[idx];
+    if(p) removePromo(p.promotionId, p.promoName);
   }
 
   function renderStatusCalendar(data){
@@ -134,18 +319,24 @@
     const todayStr = new Date().toISOString().slice(0, 10);
     const fmtDay = (d) => d.toLocaleDateString('en-IN', { day: 'numeric' });
     const fmtWeekday = (d) => d.toLocaleDateString('en-IN', { weekday: 'narrow' });
-    const statusLabel = { available: 'Available — click to block', booked: 'Booked (real guest)', blocked: 'Blocked by you — click to unblock' };
+    const statusLabel = { available: 'Available — tap to start a selection', booked: 'Booked (real guest)', blocked: 'Blocked by you — tap to remove' };
 
     const headerCells = days.map(d => `<th>${fmtWeekday(d)}<br>${fmtDay(d)}</th>`).join('');
-    // Lookup-by-index — a guest email or label containing a quote
-    // character would otherwise break embedding this data directly in
-    // an onclick attribute.
+    // Lookup-by-index for row/booking/promo data — a guest email, label,
+    // or promo name containing a quote character would otherwise break
+    // embedding this data directly in an onclick attribute.
     window.statusBookingLookup = [];
+    window.statusRowLookup = [];
+    window.statusPromoLookup = [];
     const bodyRows = data.rows.map(row => {
+      const rowIdx = window.statusRowLookup.length;
+      window.statusRowLookup.push(row);
+      const thisRowKey = rowKeyFor(row);
       const cells = row.dayStatuses.map((status, i) => {
         const dateStr = days[i].toISOString().slice(0, 10);
         const isToday = dateStr === todayStr;
-        const pricing = (row.dayPricing && row.dayPricing[i]) || { price: 0, promoName: null };
+        const pricing = (row.dayPricing && row.dayPricing[i]) || { price: 0, promoName: null, promoId: null };
+        const isSelecting = selRowKey === thisRowKey && selStart === dateStr;
         let clickAttr, innerHtml, cellTitle;
         if(status === 'booked'){
           // A room's status is computed per-day, but the actual booking
@@ -158,15 +349,29 @@
           const shortName = booking && booking.guest_email ? booking.guest_email.split('@')[0] : 'Booked';
           innerHtml = `<span class="cal-day-guest">${shortName}</span>`;
           cellTitle = `${row.label} — ${dateStr}: ${booking ? booking.guest_email : 'Booked'}`;
-        } else {
-          // Only available/blocked cells toggle a block — a real
-          // booking can never be created or removed from this view.
-          clickAttr = ` onclick="toggleBlockedDate(${row.listingId}, ${row.roomId || 'null'}, '${dateStr}', this)" style="cursor:pointer;"`;
+        } else if(status === 'blocked'){
+          clickAttr = ` onclick="removeBlockAt(${row.listingId}, ${row.roomId || 'null'}, '${dateStr}')" style="cursor:pointer;"`;
+          innerHtml = '';
+          cellTitle = `${row.label} — ${dateStr}: ${statusLabel.blocked}`;
+        } else if(pricing.promoName){
+          // An existing promotion takes priority over starting a new
+          // selection — tapping it offers to remove it, matching the
+          // sidebar calendar's same "existing entry, tap removes it"
+          // behavior, rather than silently starting a block-selection
+          // on top of an active promotion.
+          const promoIdx = window.statusPromoLookup.length;
+          window.statusPromoLookup.push({ promotionId: pricing.promoId, promoName: pricing.promoName });
+          clickAttr = ` onclick="removePromoAt(${promoIdx})" style="cursor:pointer;"`;
           innerHtml = pricing.price ? `<span class="cal-day-price">${formatCompactPrice(pricing.price)}</span>` : '';
-          cellTitle = `${row.label} — ${dateStr}: ${statusLabel[status] || status}` + (pricing.promoName ? ` — ${pricing.promoName} applied` : '');
+          cellTitle = `${row.label} — ${dateStr}: ${pricing.promoName} applied — tap to remove`;
+        } else {
+          clickAttr = ` onclick="onAvailableCellClick(window.statusRowLookup[${rowIdx}], '${dateStr}')" style="cursor:pointer;"`;
+          innerHtml = pricing.price ? `<span class="cal-day-price">${formatCompactPrice(pricing.price)}</span>` : '';
+          cellTitle = `${row.label} — ${dateStr}: ${statusLabel[status] || status}`;
         }
         const promoClass = (status === 'available' && pricing.promoName) ? ' is-promo' : '';
-        return `<td class="status-cal-cell is-${status}${promoClass}${isToday ? ' is-today' : ''}" title="${cellTitle}"${clickAttr}>${innerHtml}</td>`;
+        const selectingClass = isSelecting ? ' is-selecting' : '';
+        return `<td class="status-cal-cell is-${status}${promoClass}${selectingClass}${isToday ? ' is-today' : ''}" title="${cellTitle}"${clickAttr}>${innerHtml}</td>`;
       }).join('');
       return `<tr><td class="status-cal-listing-cell">${row.label}</td>${cells}</tr>`;
     }).join('');
@@ -196,33 +401,6 @@
 
   function closeStatusBookingDetail(){
     document.getElementById('statusBookingDetailOverlay').style.display = 'none';
-  }
-
-  // Blocks or unblocks the ONE date clicked, then updates just that cell
-  // — no full re-fetch/re-render needed for a single click, which
-  // matters on mobile where the whole grid re-rendering could visibly
-  // jump/flash and lose the scroll position the host just navigated to.
-  async function toggleBlockedDate(listingId, roomId, dateStr, cellEl){
-    cellEl.style.opacity = '0.4';
-    try{
-      const res = await fetch(API_BASE + '/api/host-listings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-        body: JSON.stringify({ toggleBlockedDate: { listingId, roomId, date: dateStr } })
-      });
-      const data = await res.json();
-      if(!res.ok){
-        alert(data.error || 'Could not update this date.');
-        cellEl.style.opacity = '';
-        return;
-      }
-      cellEl.classList.remove('is-available', 'is-blocked');
-      cellEl.classList.add(data.blocked ? 'is-blocked' : 'is-available');
-      cellEl.title = cellEl.title.replace(/: .*/, data.blocked ? ': Blocked by you — click to unblock' : ': Available — click to block');
-    } catch(err){
-      alert('Could not reach the server — please try again.');
-    }
-    cellEl.style.opacity = '';
   }
 
   if(sessionToken){
