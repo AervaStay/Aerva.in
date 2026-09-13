@@ -191,6 +191,7 @@
       <button class="tab-btn" id="tabLiveBtn" onclick="switchTab('live')">Live Listings</button>
       <button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications</button>
       <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
+      <button class="tab-btn" id="tabComplianceBtn" onclick="switchTab('compliance')">Compliance</button>
     </div>
     <button type="button" onclick="refreshCurrentView()" style="background:none; border:1px solid #ddd0bc; padding:8px 14px; font-size:12px; cursor:pointer; border-radius:4px;" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </div>
@@ -229,6 +230,26 @@
       <h3>Disputed Deposits</h3>
       <p>A host has raised a concern on each of these — decide how much of the deposit compensates the host; the remainder is refunded to the guest.</p>
       <div id="disputesContainer"><p class="empty">Loading…</p></div>
+    </div>
+  </div>
+
+  <div id="complianceView" style="display:none;">
+    <div class="deposit-section">
+      <h3>Run a Compliance Check</h3>
+      <p>Scans every approved listing for one requirement, flagging any that don't currently meet it with a 14-day deadline to fix it. Safe to run repeatedly — a listing already flagged and still unresolved never gets a duplicate flag.</p>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <select id="complianceCheckSelect" style="padding:9px 11px; font-size:14px; border:1px solid #ccc;">
+          <option value="max_guests_required">Max Guests required (non-Resort stays)</option>
+        </select>
+        <button type="button" class="process-btn" id="runComplianceBtn" onclick="runComplianceCheck()">Run This Check</button>
+      </div>
+      <div class="process-results" id="complianceRunResults"></div>
+    </div>
+
+    <div class="deposit-section">
+      <h3>Currently Open Flags</h3>
+      <p>Every listing with an outstanding, unresolved requirement — clears automatically once the host fixes it and saves. Auto-Blocked means the deadline already passed and the listing was taken off guests' search results until it's fixed.</p>
+      <div id="complianceFlagsContainer"><p class="empty">Loading…</p></div>
     </div>
   </div>
 </div>
@@ -830,13 +851,16 @@
     document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
     document.getElementById('tabVerificationsBtn').classList.toggle('active', tab === 'verifications');
     document.getElementById('tabDepositsBtn').classList.toggle('active', tab === 'deposits');
+    document.getElementById('tabComplianceBtn').classList.toggle('active', tab === 'compliance');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
     document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
     document.getElementById('depositsView').style.display = tab === 'deposits' ? 'block' : 'none';
+    document.getElementById('complianceView').style.display = tab === 'compliance' ? 'block' : 'none';
     if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();
+    if(tab === 'compliance') loadComplianceFlags();
   }
 
   // This whole dashboard only fetches data once, per tab, the first time
@@ -850,6 +874,7 @@
     else if(document.getElementById('tabLiveBtn').classList.contains('active')) loadLiveListings();
     else if(document.getElementById('tabVerificationsBtn').classList.contains('active')) loadVerifications();
     else if(document.getElementById('tabDepositsBtn').classList.contains('active')) loadDisputes();
+    else if(document.getElementById('tabComplianceBtn').classList.contains('active')) loadComplianceFlags();
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -1120,6 +1145,78 @@
     } catch(err){
       errorEl.textContent = 'Could not resolve this dispute. Please try again.';
     }
+  }
+
+  // ---- Compliance: the actual admin-facing UI for the backend built
+  // earlier (get-pending-listings.js's runComplianceCheck/complianceFlags
+  // modes) — without this, that entire system had no way to be triggered
+  // or seen at all.
+  async function runComplianceCheck(){
+    const key = document.getElementById('complianceCheckSelect').value;
+    const btn = document.getElementById('runComplianceBtn');
+    const resultsEl = document.getElementById('complianceRunResults');
+    btn.disabled = true;
+    btn.textContent = 'Running…';
+    resultsEl.innerHTML = '';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ runComplianceCheck: { key } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        resultsEl.innerHTML = `<div class="success">Checked every listing — ${data.affectedCount} currently fail this requirement (${data.newlyFlagged} newly flagged just now; the rest were already flagged from an earlier run).</div>`;
+        loadComplianceFlags();
+      } else {
+        resultsEl.innerHTML = `<div class="error">${data.error || 'Could not run this check.'}</div>`;
+      }
+    } catch(err){
+      resultsEl.innerHTML = '<div class="error">Could not reach the server — please try again.</div>';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Run This Check';
+  }
+
+  async function loadComplianceFlags(){
+    const container = document.getElementById('complianceFlagsContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?complianceFlags=1', {
+        headers: authHeaders()
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){
+        container.innerHTML = `<p class="error">Could not load compliance flags: ${data.error || `server returned ${res.status}`}.</p>`;
+        return;
+      }
+      renderComplianceFlags(data.flags || []);
+    } catch(err){
+      container.innerHTML = '<p class="error">Could not load compliance flags. Please refresh.</p>';
+    }
+  }
+
+  function renderComplianceFlags(flags){
+    const container = document.getElementById('complianceFlagsContainer');
+    if(!flags.length){
+      container.innerHTML = '<p class="empty">No open compliance flags right now.</p>';
+      return;
+    }
+    container.innerHTML = flags.map(f => {
+      const deadlinePassed = new Date(f.deadline) < new Date();
+      const statusLabel = f.auto_blocked
+        ? '<span style="color:#a3402f; font-weight:600;">Auto-Blocked</span>'
+        : deadlinePassed
+        ? '<span style="color:#a3402f;">Deadline passed — will be blocked shortly</span>'
+        : `Due ${fmtDate(f.deadline)}`;
+      return `
+        <div class="dispute-card" id="complianceFlag-${f.id}">
+          <h4>${f.property_name} <span style="opacity:0.6; font-weight:400;">— ${f.listing_status}</span></h4>
+          <div class="dispute-meta">${f.host_email} · flagged ${fmtDate(f.created_at)}</div>
+          <p style="font-size:13px; margin:8px 0;">${f.message}</p>
+          <div class="dispute-meta">${statusLabel}</div>
+        </div>
+      `;
+    }).join('');
   }
 </script>
 
