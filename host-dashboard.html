@@ -2896,13 +2896,25 @@
     for(const promo of [...rows]) rows = sbCarveRangeOutOfPromo(rows, promo, start, endExcl);
     return rows;
   }
-  // The unbroken promoted run containing dateStr, bounded by the
-  // promotion's own dates and by any blocked night on either side.
-  function sbPromoRunAround(promo, dateStr, blockedRowFor){
-    let start = dateStr;
-    while(start > promo.startDate && !blockedRowFor(sbPrevDay(start))) start = sbPrevDay(start);
-    let endExcl = sbNextDay(dateStr);
-    while(endExcl < promo.endDate && !blockedRowFor(endExcl)) endExcl = sbNextDay(endExcl);
+  // The unbroken promoted run containing dateStr, as the CALENDAR shows
+  // it: walk outward while some promotion covers the night and it isn't
+  // blocked. Deliberately not bounded by the clicked row's own dates —
+  // a promotion that has been split into several rows (by a block, or by
+  // the add-past-a-block flow) still reads as one green stretch, and
+  // "entire" has to mean that stretch, not whichever row happened to be
+  // under the cursor.
+  function sbPromoRunAround(promoRowFor, dateStr, blockedRowFor){
+    let start = dateStr, guard = 0;
+    while(guard++ < 400){
+      const prev = sbPrevDay(start);
+      if(!promoRowFor(prev) || blockedRowFor(prev)) break;
+      start = prev;
+    }
+    let endExcl = sbNextDay(dateStr); guard = 0;
+    while(guard++ < 400){
+      if(!promoRowFor(endExcl) || blockedRowFor(endExcl)) break;
+      endExcl = sbNextDay(endExcl);
+    }
     return { start, endExcl };
   }
   function sbOnCalMouseDown(dateStr){
@@ -2963,11 +2975,12 @@
         // If a block sits inside the promotion's range, the nights on the
         // far side of it are a separate stretch and are left alone — the
         // host removes those by clicking a date over there.
-        const run = sbPromoRunAround(existingPromo, dateStr, sbBlockedRowFor);
+        const run = sbPromoRunAround(sbPromoRowFor, dateStr, sbBlockedRowFor);
         const lastNight = sbPrevDay(run.endExcl);
         const label = run.start === lastNight ? run.start : `${run.start} to ${lastNight}`;
-        if(window.confirm(`Remove "${existingPromo.name}" for ${label}?`)){
-          sbPromotionRows = sbCarveRangeOutOfPromo(sbPromotionRows, existingPromo, run.start, run.endExcl);
+        if(window.confirm(`Remove the promotion for ${label}?`)){
+          // Every row overlapping the run, not just the one clicked.
+          sbPromotionRows = sbCarveRangeOutOfAllPromos(sbPromotionRows, run.start, run.endExcl);
           sbRenderPromotionsList(); sbRenderCalendar();
           sbResetSummaryToBase();
         }
