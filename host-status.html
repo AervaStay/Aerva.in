@@ -641,6 +641,25 @@
     } catch(err){ alert('Could not reach the server — please try again.'); }
   }
 
+  // "Remove Entire Promotion": the server works out the unbroken promoted
+  // run around this night — stopping at any blocked night — and removes
+  // exactly that, whatever rows or names make it up.
+  async function removePromoRun(listingId, roomId, dateStr){
+    if(!listingId || !dateStr) return;
+    if(!window.confirm('Remove the promotion from every night in this stretch? It stops at the nearest blocked night on either side.')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ removePromotionRun: { listingId, roomId, date: dateStr } })
+      });
+      const data = await res.json();
+      if(!res.ok){ alert(data.error || 'Could not remove this promotion.'); return; }
+      closePromoDetail();
+      loadStatusCalendar();
+    } catch(err){ alert('Could not reach the server — please try again.'); }
+  }
+
   async function removePromo(promotionId){
     try{
       const res = await fetch(API_BASE + '/api/host-listings', {
@@ -777,7 +796,7 @@
     // The status endpoint names the id promoId (see dayPricing in
     // host-listings.js); this read promotionId, so both buttons sent
     // undefined and the server replied "Missing promotion."
-    document.getElementById('promoDetailRemoveBtn').onclick = () => removePromo(p.promoId);
+    document.getElementById('promoDetailRemoveBtn').onclick = () => removePromoRun(p.listingId, p.roomId, p.dateStr);
     // "This day only" splits the promotion around the clicked night —
     // same two choices the host dashboard's summary panel offers.
     document.getElementById('promoDetailRemoveDayBtn').onclick = () => removePromoDay(p.promoId, p.dateStr);
@@ -852,7 +871,7 @@
           // shows/removes it" behavior, rather than silently starting a
           // block-selection on top of an active promotion.
           const promoIdx = window.statusPromoLookup.length;
-          window.statusPromoLookup.push({ label: row.label, dateStr, ...pricing });
+          window.statusPromoLookup.push({ label: row.label, dateStr, listingId: row.listingId, roomId: row.roomId, ...pricing });
           clickAttr = ` onclick="showPromoDetail(${promoIdx})" style="cursor:pointer;"`;
           innerHtml = pricing.price ? `<span class="cal-day-price">${formatCompactPrice(pricing.price)}</span>` : '';
           cellTitle = `${row.label} — ${dateStr}: ${pricing.promoName} applied — tap for details`;
