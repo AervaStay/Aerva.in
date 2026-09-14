@@ -364,6 +364,19 @@
     }
   }
 
+  // Date maths here is done in UTC, deliberately. The calendar builds its
+  // day columns with 'T00:00:00Z' (UTC), so any date string compared
+  // against them has to be produced the same way. Parsing as LOCAL time
+  // and then calling toISOString() silently shifts the result a day back
+  // for anyone east of UTC — in IST, '2026-09-26' came out as
+  // '2026-09-25', which is why highlighted ranges never matched and why
+  // nextDayStr returned the SAME day instead of the next one.
+  function ymdToUTC(str){
+    const [y, m, d] = String(str).split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
+  }
+  function utcToYmd(dateObj){ return dateObj.toISOString().slice(0, 10); }
+
   function formatDateShort(d){
     return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   }
@@ -375,12 +388,12 @@
   function expandRange(startStr, endStr){
     if(!startStr || !endStr || endStr < startStr) return [];
     const out = [];
-    const d = new Date(startStr + 'T00:00:00');
-    const end = new Date(endStr + 'T00:00:00');
+    const d = ymdToUTC(startStr);
+    const end = ymdToUTC(endStr);
     let guard = 0;
     while(d <= end && guard++ < 400){
-      out.push(d.toISOString().slice(0, 10));
-      d.setDate(d.getDate() + 1);
+      out.push(utcToYmd(d));
+      d.setUTCDate(d.getUTCDate() + 1);
     }
     return out;
   }
@@ -468,9 +481,9 @@
   }
 
   function nextDayStr(dateStr){
-    const d = new Date(dateStr + 'T00:00:00');
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().slice(0, 10);
+    const d = ymdToUTC(dateStr);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return utcToYmd(d);
   }
 
   document.getElementById('rangeBlockBtn').addEventListener('click', async () => {
@@ -702,7 +715,7 @@
       <p style="margin:4px 0;"><strong>Applies to:</strong> ${p.label}</p>
       <p style="margin:4px 0;"><strong>Discount:</strong> ${discountLabel}</p>
       <p style="margin:4px 0;"><strong>Price:</strong> ₹${Number(p.basePrice).toLocaleString('en-IN')} → ₹${Number(p.price).toLocaleString('en-IN')}</p>
-      <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(p.promoStartDate)} – ${fmtDate(new Date(new Date(p.promoEndDate + 'T00:00:00').getTime() - 86400000).toISOString().slice(0, 10))}</p>
+      <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(p.promoStartDate)} – ${fmtDate(utcToYmd(new Date(ymdToUTC(p.promoEndDate).getTime() - 86400000)))}</p>
       ${p.promoMinNights ? `<p style="margin:4px 0;"><strong>Minimum nights:</strong> ${p.promoMinNights}</p>` : ''}
     `;
     document.getElementById('promoDetailRemoveBtn').onclick = () => removePromo(p.promotionId);
