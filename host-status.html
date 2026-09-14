@@ -368,6 +368,53 @@
     return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   }
 
+  // Expands an inclusive date range into every date it covers, so the
+  // calendar can highlight the whole window the host has typed — not just
+  // the one cell they originally clicked. Capped so a mistyped year
+  // can't spin here; anything past the visible 30 days simply isn't drawn.
+  function expandRange(startStr, endStr){
+    if(!startStr || !endStr || endStr < startStr) return [];
+    const out = [];
+    const d = new Date(startStr + 'T00:00:00');
+    const end = new Date(endStr + 'T00:00:00');
+    let guard = 0;
+    while(d <= end && guard++ < 400){
+      out.push(d.toISOString().slice(0, 10));
+      d.setDate(d.getDate() + 1);
+    }
+    return out;
+  }
+
+  function describeRange(dates){
+    if(!dates.length) return '';
+    const n = dates.length;
+    const first = formatDateShort(dates[0]);
+    if(n === 1) return first;
+    return `${first} – ${formatDateShort(dates[n - 1])}  ·  ${n} nights`;
+  }
+
+  // Keeps the calendar highlight in step with whichever date pair the
+  // host is editing. Called on every keystroke/pick, so the selection is
+  // always what's actually about to be submitted.
+  function syncHighlight(startId, endId){
+    const startStr = document.getElementById(startId).value;
+    const endStr = document.getElementById(endId).value;
+    selectedDates = expandRange(startStr, endStr);
+    document.getElementById('rangeConfirmDateLabel').textContent =
+      describeRange(selectedDates) || formatDateShort(startStr || endStr || '');
+    if(lastStatusData) renderStatusCalendar(lastStatusData);
+  }
+
+  ['rangeBlockStartDate', 'rangeBlockEndDate'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('change', () => syncHighlight('rangeBlockStartDate', 'rangeBlockEndDate'));
+  });
+  ['rangePromoStartDate', 'rangePromoEndDate'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('change', () => syncHighlight('rangePromoStartDate', 'rangePromoEndDate'));
+  });
+
+
   function refreshRangePanel(row){
     document.getElementById('rangeConfirmDateLabel').textContent = formatDateShort(selectedDates[0]);
     // Promotions run over a continuous window, so the inputs track the
