@@ -2449,7 +2449,7 @@
       if(expCalSelStart && expCalSelEnd){
         const selMin = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
         const selMax = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
-        selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
+        selecting = !blockedRow && sbInRange(dateStr, selMin, sbNextDay(selMax));
       }
       let cls = 'cal-day';
       if(isPast) cls += ' cal-day--past cal-day--disabled';
@@ -2485,6 +2485,41 @@
       });
     });
   }
+  // Same rule as the stays calendar: a drag can't run through a blocked
+  // date, in either direction.
+  function expCalClampSelEnd(startStr, candidateStr){
+    if(candidateStr === startStr) return candidateStr;
+    if(candidateStr > startStr){
+      let d = sbNextDay(startStr), last = startStr;
+      while(d <= candidateStr){
+        if(expCalBlockedRowFor(d)) return last;
+        last = d; d = sbNextDay(d);
+      }
+      return candidateStr;
+    }
+    let d = sbPrevDay(startStr), last = startStr;
+    while(d >= candidateStr){
+      if(expCalBlockedRowFor(d)) return last;
+      last = d; d = sbPrevDay(d);
+    }
+    return candidateStr;
+  }
+  // Mirrors sbRemovePromoForSingleDay: frees one date from a stored
+  // block range by trimming an end or splitting it in two, so removing a
+  // night from the middle doesn't reopen the whole stretch.
+  function expRemoveBlockForSingleDay(block, dateStr){
+    const isFirst = dateStr === block.startDate;
+    const isLast = sbNextDay(dateStr) === block.endDate;
+    if(isFirst && isLast){ expCalBlockedDateRows = expCalBlockedDateRows.filter(b => b !== block); }
+    else if(isFirst){ block.startDate = sbNextDay(dateStr); }
+    else if(isLast){ block.endDate = dateStr; }
+    else {
+      const after = { ...block, id: null, startDate: sbNextDay(dateStr) };
+      block.endDate = dateStr;
+      expCalBlockedDateRows.push(after);
+    }
+    expRenderBlockedList(); expRenderCalendar();
+  }
   function expCalOnMouseDown(dateStr){
     if(expCalBlockedRowFor(dateStr) || expPromoRowFor(dateStr)) return;
     expCalDragging = true; expCalSelStart = dateStr; expCalSelEnd = dateStr;
@@ -2492,11 +2527,11 @@
   }
   function expCalOnMouseEnter(dateStr){
     if(!expCalDragging || !expCalSelStart) return;
-    expCalSelEnd = dateStr; expRenderCalendar();
+    expCalSelEnd = expCalClampSelEnd(expCalSelStart, dateStr); expRenderCalendar();
   }
   function expCalOnMouseUp(dateStr){
     if(!expCalDragging) return;
-    expCalDragging = false; expCalSelEnd = dateStr;
+    expCalDragging = false; expCalSelEnd = expCalClampSelEnd(expCalSelStart, dateStr);
     if(expCalSelStart) expShowCalConfirm();
   }
   function expCalOnClick(dateStr){
@@ -2531,7 +2566,17 @@
     }
     const existingBlock = expCalBlockedRowFor(dateStr);
     if(existingBlock){
-      if(window.confirm(`Remove this block (${existingBlock.startDate} to ${existingBlock.endDate}${existingBlock.reason ? ', ' + existingBlock.reason : ''})?`)){
+      // A block is a RANGE — removing it outright reopens every date in
+      // it. The host chooses the scope, same as the Status page.
+      const lastNight = sbPrevDay(existingBlock.endDate);
+      const isSingle = existingBlock.startDate === lastNight;
+      if(isSingle){
+        if(window.confirm(`Unblock ${dateStr}?`)) expRemoveBlockForSingleDay(existingBlock, dateStr);
+        return;
+      }
+      if(window.confirm(`Unblock ONLY ${dateStr}?\n\nOK = just this date (the rest of ${existingBlock.startDate} to ${lastNight} stays blocked)\nCancel = choose whether to remove the whole block instead`)){
+        expRemoveBlockForSingleDay(existingBlock, dateStr);
+      } else if(window.confirm(`Remove the WHOLE block, ${existingBlock.startDate} to ${lastNight}${existingBlock.reason ? ' (' + existingBlock.reason + ')' : ''}?`)){
         expCalBlockedDateRows = expCalBlockedDateRows.filter(b => b !== existingBlock);
         expRenderBlockedList(); expRenderCalendar();
       }
@@ -2732,7 +2777,7 @@
       if(sbCalSelStart && sbCalSelEnd){
         const selMin = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
         const selMax = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
-        selecting = sbInRange(dateStr, selMin, sbNextDay(selMax));
+        selecting = !blockedRow && sbInRange(dateStr, selMin, sbNextDay(selMax));
       }
       let cls = 'cal-day';
       if(isPast) cls += ' cal-day--past cal-day--disabled';
@@ -2779,6 +2824,30 @@
       });
     });
   }
+  function sbPrevDay(dateStr){ const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() - 1); return sbToDateStr(d); }
+
+  // A drag can't run THROUGH a blocked night. Dragging from an open date
+  // towards a block stops on the last open night before it, in either
+  // direction — so a selection is always an unbroken stretch of nights
+  // that can actually be sold, and the blocked cells never light up as
+  // if they'd been picked. Same rule the Status page applies.
+  function sbClampSelEnd(startStr, candidateStr){
+    if(candidateStr === startStr) return candidateStr;
+    if(candidateStr > startStr){
+      let d = sbNextDay(startStr), last = startStr;
+      while(d <= candidateStr){
+        if(sbBlockedRowFor(d)) return last;
+        last = d; d = sbNextDay(d);
+      }
+      return candidateStr;
+    }
+    let d = sbPrevDay(startStr), last = startStr;
+    while(d >= candidateStr){
+      if(sbBlockedRowFor(d)) return last;
+      last = d; d = sbPrevDay(d);
+    }
+    return candidateStr;
+  }
   function sbOnCalMouseDown(dateStr){
     if(sbBlockedRowFor(dateStr) || sbPromoRowFor(dateStr)) return;
     sbCalDragging = true; sbCalSelStart = dateStr; sbCalSelEnd = dateStr;
@@ -2786,11 +2855,11 @@
   }
   function sbOnCalMouseEnter(dateStr){
     if(!sbCalDragging || !sbCalSelStart) return;
-    sbCalSelEnd = dateStr; sbRenderCalendar();
+    sbCalSelEnd = sbClampSelEnd(sbCalSelStart, dateStr); sbRenderCalendar();
   }
   function sbOnCalMouseUp(dateStr){
     if(!sbCalDragging) return;
-    sbCalDragging = false; sbCalSelEnd = dateStr;
+    sbCalDragging = false; sbCalSelEnd = sbClampSelEnd(sbCalSelStart, dateStr);
     if(sbCalSelStart) sbShowCalConfirm();
   }
   // Clicking an existing entry removes it — a date can (unusually) carry
@@ -2829,7 +2898,17 @@
     }
     const existingBlock = sbBlockedRowFor(dateStr);
     if(existingBlock){
-      if(window.confirm(`Remove this block (${existingBlock.startDate} to ${existingBlock.endDate}${existingBlock.reason ? ', ' + existingBlock.reason : ''})?`)){
+      // A block is a RANGE — removing it outright reopens every date in
+      // it. The host chooses the scope, same as the Status page.
+      const lastNight = sbPrevDay(existingBlock.endDate);
+      const isSingle = existingBlock.startDate === lastNight;
+      if(isSingle){
+        if(window.confirm(`Unblock ${dateStr}?`)) sbRemoveBlockForSingleDay(existingBlock, dateStr);
+        return;
+      }
+      if(window.confirm(`Unblock ONLY ${dateStr}?\n\nOK = just this night (the rest of ${existingBlock.startDate} to ${lastNight} stays blocked)\nCancel = choose whether to remove the whole block instead`)){
+        sbRemoveBlockForSingleDay(existingBlock, dateStr);
+      } else if(window.confirm(`Remove the WHOLE block, ${existingBlock.startDate} to ${lastNight}${existingBlock.reason ? ' (' + existingBlock.reason + ')' : ''}?`)){
         sbBlockedDateRows = sbBlockedDateRows.filter(b => b !== existingBlock);
         sbRenderBlockedList(); sbRenderCalendar();
       }
@@ -2840,6 +2919,21 @@
   // only ever being able to remove the whole thing — a single-day
   // exception (e.g. a public holiday) shouldn't force re-creating the
   // whole promotion around it.
+  // Mirrors sbRemovePromoForSingleDay for blocks: trim an end or split
+  // the range in two, so freeing one night never reopens the rest.
+  function sbRemoveBlockForSingleDay(block, dateStr){
+    const isFirst = dateStr === block.startDate;
+    const isLast = sbNextDay(dateStr) === block.endDate;
+    if(isFirst && isLast){ sbBlockedDateRows = sbBlockedDateRows.filter(b => b !== block); }
+    else if(isFirst){ block.startDate = sbNextDay(dateStr); }
+    else if(isLast){ block.endDate = dateStr; }
+    else {
+      const after = { ...block, id: null, startDate: sbNextDay(dateStr) };
+      block.endDate = dateStr;
+      sbBlockedDateRows.push(after);
+    }
+    sbRenderBlockedList(); sbRenderCalendar();
+  }
   function sbRemovePromoForSingleDay(promo, dateStr){
     const isFirstDay = dateStr === promo.startDate;
     const isLastDay = sbNextDay(dateStr) === promo.endDate;
