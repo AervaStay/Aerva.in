@@ -1,3 +1,18 @@
+const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ bulkBlockRange: {
+          listingId: selListingId, roomId: selRoomId,
+          startDate: blockStart, endDate: nextDayStr(blockEndInclusive),
+          reason: document.getElementById('rangeBlockReason').value
+        } })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not block these dates.';
+        errEl.style.display = 'block'; errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+      }
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -154,7 +169,14 @@
         <p style="font-size:10.5px; opacity:0.55; margin:8px 0 0;">A blocked stretch is stored as one block. "Only these nights" splits it and keeps the rest blocked; "the whole block" clears every night in it.</p>
       </div>
 
+      <div id="rangeActionSections">
       <p style="font-size:12px; font-weight:600; margin:0 0 4px;">Block these dates</p>
+      <label style="font-size:10.5px; opacity:0.6; display:block; margin-bottom:3px;">Nights to block</label>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:6px;">
+        <input type="date" id="rangeBlockStartDate" style="padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc;">
+        <input type="date" id="rangeBlockEndDate" style="padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc;">
+      </div>
+      <p style="font-size:10.5px; opacity:0.5; margin:0 0 10px;">Starts on the date you clicked — widen it to block a longer stretch.</p>
       <input type="text" id="rangeBlockReason" placeholder="Reason (optional)" style="width:100%; box-sizing:border-box; padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc; margin-bottom:10px;">
       <p id="rangeBlockError" class="error" style="display:none; margin-bottom:10px; padding:9px 12px; background:#fdeceb; border:1px solid #e0b8ac; border-radius:4px;"></p>
       <button type="button" id="rangeBlockBtn" style="width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em; margin-bottom:18px;">Block These Dates</button>
@@ -191,6 +213,8 @@
       <input type="number" id="rangePromoMinNights" placeholder="Minimum nights (optional)" min="1" style="width:100%; box-sizing:border-box; padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc; margin-bottom:12px;">
       <p id="rangeConfirmError" class="error" style="display:none; margin-bottom:10px; padding:9px 12px; background:#fdeceb; border:1px solid #e0b8ac; border-radius:4px;"></p>
       <button type="button" id="rangePromoBtn" style="width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em; margin-bottom:10px;">Add Promotion</button>
+
+      </div>
 
       <button type="button" onclick="cancelSelection()" style="width:100%; padding:10px; background:#fff; border:1px solid #ddd0bc; color:#1c1a17; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;">Cancel</button>
   </div>
@@ -273,6 +297,7 @@
   // un-tapping 22 leaves {21, 23} — and the block or promotion applies to
   // exactly those two nights, skipping the 22nd.
   let selectedDates = [];
+  let selectionIsBlocked = false;  // true when the panel was opened from a blocked date
 
   function rowKeyFor(row){ return row.listingId + ':' + (row.roomId || ''); }
 
@@ -283,30 +308,16 @@
   }
 
   function onAvailableCellClick(row, dateStr){
-    const thisRowKey = rowKeyFor(row);
-    const panelOpen = document.getElementById('rangeConfirmOverlay').classList.contains('open');
-
-    // Same row, panel already open — toggle this date in or out of the
-    // selection. The panel doesn't cover the calendar any more, which is
-    // what makes tapping a second (or third, or fourth) date possible.
-    // Tap-based rather than drag: discrete taps behave the same on a
-    // phone and a laptop, and don't fight the calendar's own horizontal
-    // scroll gesture.
-    if(panelOpen && selRowKey === thisRowKey){
-      const at = selectedDates.indexOf(dateStr);
-      if(at >= 0) selectedDates.splice(at, 1);
-      else selectedDates.push(dateStr);
-      selectedDates.sort();
-      // Un-tapping the last remaining date closes the panel rather than
-      // leaving it open over an empty selection.
-      if(!selectedDates.length){ cancelSelection(); return; }
-      refreshRangePanel(row);
-      return;
-    }
-
-    // First tap, or a tap in a different row — start fresh here.
-    selRowKey = thisRowKey; selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label;
+    // One click opens the panel seeded with this date. Blocking and
+    // promotions are both RANGE actions now — the two date fields in the
+    // panel are how you widen them. An earlier version accumulated taps
+    // into a set of individual nights; that turned out to be more
+    // machinery than the job needs, and it made the panel's own date
+    // fields a second, competing source of truth.
+    selRowKey = rowKeyFor(row);
+    selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label;
     selectedDates = [dateStr];
+    selectionIsBlocked = false;
     openRangeConfirm(row);
   }
 
@@ -325,38 +336,16 @@
     return out;
   }
 
-  // Blocked dates select exactly like open ones: tap to add, tap again to
-  // remove. Previously a single click fired an immediate confirm() and
-  // unblocked one date with no way to pick several, and no way to change
-  // your mind mid-selection.
+  // Clicking a blocked date opens the panel in unblock mode, where the
+  // host picks the scope rather than it being assumed: a blocked stretch
+  // is stored as ONE row, so "this night" has to split that row while
+  // "the whole block" clears it.
   function onBlockedCellClick(row, dateStr){
-    const thisRowKey = rowKeyFor(row);
-    const panelOpen = document.getElementById('rangeConfirmOverlay').classList.contains('open');
-    if(panelOpen && selRowKey === thisRowKey){
-      const at = selectedDates.indexOf(dateStr);
-      if(at >= 0) selectedDates.splice(at, 1);
-      else selectedDates.push(dateStr);
-      selectedDates.sort();
-      if(!selectedDates.length){ cancelSelection(); return; }
-      refreshRangePanel(row);
-      return;
-    }
-    selRowKey = thisRowKey; selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label;
+    selRowKey = rowKeyFor(row);
+    selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label;
     selectedDates = [dateStr];
+    selectionIsBlocked = true;
     openRangeConfirm(row);
-  }
-
-  // True when any selected date is currently blocked — decides whether the
-  // panel offers the Unblock section at all.
-  function selectionHasBlocked(){
-    if(!lastStatusData || !selectedDates.length) return false;
-    const row = (lastStatusData.rows || []).find(r => rowKeyFor(r) === selRowKey);
-    if(!row) return false;
-    const days = statusDayList();
-    return selectedDates.some(d => {
-      const i = days.indexOf(d);
-      return i >= 0 && row.dayStatuses[i] === 'blocked';
-    });
   }
 
   async function unblockSelected(scope){
@@ -367,26 +356,20 @@
       errEl.style.display = 'block'; return;
     }
     try{
-      // Same contiguous-run split as blocking, so a gapped selection frees
-      // only the nights actually tapped.
-      for(const run of datesToRuns(selectedDates)){
-        const res = await fetch(API_BASE + '/api/host-listings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-          body: JSON.stringify({ unblockRange: {
-            listingId: selListingId, roomId: selRoomId,
-            startDate: run.start, endDate: nextDayStr(run.end), scope
-          } })
-        });
-        const data = await res.json();
-        // A run with nothing blocked in it isn't an error when the
-        // selection mixes open and blocked dates — skip and carry on.
-        if(!res.ok && !/No blocked dates/i.test(data.error || '')){
-          errEl.textContent = data.error || 'Could not unblock those dates.';
-          errEl.style.display = 'block';
-          loadStatusCalendar();
-          return;
-        }
+      const target = selectedDates[0];
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ unblockRange: {
+          listingId: selListingId, roomId: selRoomId,
+          startDate: target, endDate: nextDayStr(target), scope
+        } })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not unblock those dates.';
+        errEl.style.display = 'block';
+        return;
       }
       cancelSelection();
       loadStatusCalendar();
@@ -396,52 +379,29 @@
     }
   }
 
-  // Collapses the selected dates into CONTIGUOUS runs. Both the block and
-  // promotion endpoints take a start/end pair, so a gapped selection like
-  // {21, 23} becomes two separate calls rather than one 21-23 range that
-  // would wrongly swallow the 22nd.
-  function datesToRuns(dates){
-    const sorted = [...dates].sort();
-    const runs = [];
-    for(const d of sorted){
-      const last = runs[runs.length - 1];
-      if(last && nextDayStr(last.end) === d) last.end = d;
-      else runs.push({ start: d, end: d });
-    }
-    return runs;
-  }
-
   function formatDateShort(d){
     return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   }
 
-  // Describes the selection in the panel: contiguous runs read as ranges,
-  // gaps are shown explicitly so it's obvious the 22nd was left out.
-  function describeSelection(){
-    const runs = datesToRuns(selectedDates);
-    const parts = runs.map(r => r.start === r.end
-      ? formatDateShort(r.start)
-      : `${formatDateShort(r.start)} – ${formatDateShort(r.end)}`);
-    const n = selectedDates.length;
-    return `${parts.join(', ')}  ·  ${n} night${n === 1 ? '' : 's'}`;
-  }
-
   function refreshRangePanel(row){
-    document.getElementById('rangeConfirmDateLabel').textContent = describeSelection();
+    document.getElementById('rangeConfirmDateLabel').textContent = formatDateShort(selectedDates[0]);
     // Promotions run over a continuous window, so the inputs track the
     // OUTER bounds of whatever is tapped. Blocking stays per-night.
     if(selectedDates.length){
       document.getElementById('rangePromoStartDate').value = selectedDates[0];
-      document.getElementById('rangePromoEndDate').value = selectedDates[selectedDates.length - 1];
+      document.getElementById('rangePromoEndDate').value = selectedDates[0];
+      document.getElementById('rangeBlockStartDate').value = selectedDates[0];
+      document.getElementById('rangeBlockEndDate').value = selectedDates[0];
     }
-    document.getElementById('rangeUnblockSection').style.display = selectionHasBlocked() ? 'block' : 'none';
+    document.getElementById('rangeUnblockSection').style.display = selectionIsBlocked ? 'block' : 'none';
+    document.getElementById('rangeActionSections').style.display = selectionIsBlocked ? 'none' : 'block';
     document.getElementById('rangeUnblockError').style.display = 'none';
     if(lastStatusData) renderStatusCalendar(lastStatusData);
   }
 
   function openRangeConfirm(row){
     document.getElementById('rangeConfirmRowLabel').textContent = row.label;
-    document.getElementById('rangeConfirmDateLabel').textContent = describeSelection();
+    document.getElementById('rangeConfirmDateLabel').textContent = formatDateShort(selectedDates[0]);
     document.getElementById('rangeBlockReason').value = '';
     document.getElementById('rangePromoName').value = '';
     document.getElementById('rangePromoType').value = 'percentage';
@@ -457,14 +417,17 @@
     // OUTER bounds of whatever is tapped. Blocking stays per-night.
     if(selectedDates.length){
       document.getElementById('rangePromoStartDate').value = selectedDates[0];
-      document.getElementById('rangePromoEndDate').value = selectedDates[selectedDates.length - 1];
+      document.getElementById('rangePromoEndDate').value = selectedDates[0];
+      document.getElementById('rangeBlockStartDate').value = selectedDates[0];
+      document.getElementById('rangeBlockEndDate').value = selectedDates[0];
     }
-    document.getElementById('rangeUnblockSection').style.display = selectionHasBlocked() ? 'block' : 'none';
+    document.getElementById('rangeUnblockSection').style.display = selectionIsBlocked ? 'block' : 'none';
+    document.getElementById('rangeActionSections').style.display = selectionIsBlocked ? 'none' : 'block';
     document.getElementById('rangeUnblockError').style.display = 'none';
     // Selection stays highlighted while the panel is open —
     // cancelSelection() clears it on Cancel or after a successful action.
     document.getElementById('rangeConfirmNights').textContent =
-      'Tap more dates to add them · tap a selected date to remove it';
+      selectionIsBlocked ? 'This night is blocked — choose how much to remove' : 'Set the window below, then Block or run a Promotion';
     rangeBaseNightly = baseNightlyFor(row, start);
     updatePromoPreview();
     // Repaint so every date in the range shows as Selecting, not just
@@ -480,32 +443,33 @@
 
   document.getElementById('rangeBlockBtn').addEventListener('click', async () => {
     const blockErr = document.getElementById('rangeBlockError');
-    if(!selectedDates.length){
-      blockErr.textContent = 'Tap at least one date on the calendar first.';
+    const blockStart = document.getElementById('rangeBlockStartDate').value;
+    const blockEndInclusive = document.getElementById('rangeBlockEndDate').value;
+    if(!blockStart || !blockEndInclusive){
+      blockErr.textContent = 'Please set both a start and end date.';
+      blockErr.style.display = 'block'; return;
+    }
+    if(blockEndInclusive < blockStart){
+      blockErr.textContent = 'The end date is before the start date.';
       blockErr.style.display = 'block'; return;
     }
     const errEl = document.getElementById('rangeBlockError');
     errEl.style.display = 'none';
     try{
-      // One call per contiguous run, so a gapped selection blocks only
-      // the nights actually tapped.
-      for(const run of datesToRuns(selectedDates)){
-        const res = await fetch(API_BASE + '/api/host-listings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-          body: JSON.stringify({ bulkBlockRange: {
-            listingId: selListingId, roomId: selRoomId,
-            startDate: run.start, endDate: nextDayStr(run.end),
-            reason: document.getElementById('rangeBlockReason').value
-          } })
-        });
-        const data = await res.json();
-        if(!res.ok){
-          errEl.textContent = data.error || 'Could not block these dates.';
-          errEl.style.display = 'block'; errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          loadStatusCalendar(); // some runs may already have saved
-          return;
-        }
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ bulkBlockRange: {
+          listingId: selListingId, roomId: selRoomId,
+          startDate: blockStart, endDate: nextDayStr(blockEndInclusive),
+          reason: document.getElementById('rangeBlockReason').value
+        } })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not block these dates.';
+        errEl.style.display = 'block'; errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
       }
       cancelSelection();
       loadStatusCalendar();
