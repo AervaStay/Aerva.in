@@ -1,18 +1,3 @@
-const res = await fetch(API_BASE + '/api/host-listings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-        body: JSON.stringify({ bulkBlockRange: {
-          listingId: selListingId, roomId: selRoomId,
-          startDate: blockStart, endDate: nextDayStr(blockEndInclusive),
-          reason: document.getElementById('rangeBlockReason').value
-        } })
-      });
-      const data = await res.json();
-      if(!res.ok){
-        errEl.textContent = data.error || 'Could not block these dates.';
-        errEl.style.display = 'block'; errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        return;
-      }
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -505,6 +490,18 @@ const res = await fetch(API_BASE + '/api/host-listings', {
       });
       const data = await res.json();
       if(!res.ok){ showPromoError(data.error || 'Could not add this promotion.'); return; }
+      // The server truncates a promotion at the first blocked night
+      // rather than refusing the whole thing. When that happens it says
+      // where it stopped — shown here, with the panel left open, so the
+      // next step (clicking the first open date after the block) is
+      // obvious instead of the host wondering why the range shrank.
+      if(data.notice){
+        errEl.textContent = data.notice;
+        errEl.style.display = 'block';
+        errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        loadStatusCalendar();
+        return;
+      }
       cancelSelection();
       loadStatusCalendar();
     } catch(err){
