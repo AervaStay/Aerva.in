@@ -37,7 +37,9 @@
   .status-cal-cell.is-available{background:#fff;}
   .status-cal-cell.is-booked{background:#4a463d; color:#f4ebe3;}
   .status-cal-cell.is-blocked{position:relative; background:#000000; color:#f4ebe3;}
-  .status-cal-cell.is-blocked::after{content:''; position:absolute; left:15%; right:15%; top:50%; height:2px; background:#f4ebe3; transform:translateY(-50%); opacity:0.7; pointer-events:none;}
+  .status-cal-cell.is-blocked .cal-day-price{text-decoration:line-through; text-decoration-thickness:2px; opacity:0.85;}
+  /* Fallback dash only when there's no price to strike through. */
+  .status-cal-cell.is-blocked:empty::after{content:''; position:absolute; left:15%; right:15%; top:50%; height:2px; background:#f4ebe3; transform:translateY(-50%); opacity:0.7; pointer-events:none;}
   .status-cal-cell.is-promo{background:#2f5c2a; color:#c9e8bf;}
   .status-cal-cell.is-today{box-shadow:inset 0 0 0 2px #8a6c39;}
 
@@ -814,7 +816,11 @@
           cellTitle = `${row.label} — ${dateStr}: ${booking ? booking.guest_email : 'Booked'}`;
         } else if(status === 'blocked'){
           clickAttr = ` onclick="onBlockedCellClick(window.statusRowLookup[${rowIdx}], '${dateStr}')" style="cursor:pointer;"`;
-          innerHtml = '';
+          // The price still shows on a blocked night, struck through — the
+          // same treatment the host dashboard's calendar gives it. A host
+          // scanning the row can see what the night would earn without
+          // having to unblock it to find out.
+          innerHtml = pricing.price ? `<span class="cal-day-price">${formatCompactPrice(pricing.price)}</span>` : '';
           cellTitle = `${row.label} — ${dateStr}: ${statusLabel.blocked}`;
         } else if(pricing.promoName){
           // An existing promotion takes priority over starting a new
