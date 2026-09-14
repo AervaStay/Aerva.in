@@ -448,13 +448,14 @@
                 <button type="button" class="sidebar-add-btn" id="sbRemovePromoSingleDayBtn" style="margin-top:14px; color:#a3402f; border-color:#e0b8ac;">Remove for this day only</button>
                 <button type="button" class="sidebar-add-btn" id="sbRemovePromoWholeBtn" style="color:#a3402f; border-color:#e0b8ac;">Remove entire promotion</button>
               </div>
+              <!-- Save lives INSIDE the summary box, not after it. The box
+                   is position:sticky, so anything placed as a sibling below
+                   it scrolls away while the box stays pinned — the button
+                   would vanish exactly when a host scrolls the long form to
+                   check the number. Inside the box, they move together. -->
+              <button type="button" class="sidebar-save-btn" id="sidebarSaveBtn" style="margin-top:16px;">Save Changes</button>
+              <p class="sidebar-save-msg" id="sidebarSaveMsg"></p>
             </div>
-            <!-- Save sits directly under the price summary so the number a
-                 host has just checked and the action that commits it are
-                 next to each other, instead of the button being at the
-                 bottom of the long form column on the left. -->
-            <button type="button" class="sidebar-save-btn" id="sidebarSaveBtn" style="margin-top:14px;">Save Changes</button>
-            <p class="sidebar-save-msg" id="sidebarSaveMsg"></p>
           </div>
         </div>
 
