@@ -1148,13 +1148,24 @@
       ? `<a class="manage-link" href="index.html?view=list-property&edit=${item.id}">Edit &amp; Resubmit</a>`
       : `<a class="manage-link" href="${item.manageLink}">Manage</a>`;
     const cloneLink = `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${item.id})">Clone</button>`;
-    const calendarHintHtml = item.status === 'approved'
+    // A Resort has no calendar here at all — only Manage and Clone.
+    // Its availability is per-ROOM, and this sidebar is built around one
+    // calendar for one bookable unit, so a resort could only ever be
+    // shown wrong here (either aggregated into a single misleading row,
+    // or silently editing just one of its rooms). The Status page
+    // already explodes each resort into one row per room and is the
+    // correct place to act on them — see host-listings.js's
+    // statusCalendar handler, which has done this from the start.
+    const isResort = item.property_type === 'Resort';
+    const calendarHintHtml = isResort
+      ? ''
+      : item.status === 'approved'
       ? `<p class="calendar-hint">📅 Click to manage price, dates, promotions &amp; amenities</p>`
       : item.status === 'pending'
       ? `<p class="calendar-hint calendar-hint-muted">Calendar &amp; promotions unlock once approved</p>`
       : '';
     return `
-      <div class="listing-card" data-href="${actionHref}" data-listing-id="${item.id}" data-status="${item.status}" data-listing-type="stay" style="cursor:pointer;">
+      <div class="listing-card" data-href="${actionHref}" data-listing-id="${item.id}" data-status="${item.status}" data-listing-type="stay" data-calendar="${isResort ? 'off' : 'on'}" style="cursor:pointer;">
         ${thumbHtml}
         <div class="listing-info">
           <h3>${item.property_name || '(Untitled draft)'}</h3>
@@ -2026,7 +2037,12 @@
       // a stay first if there is one (full toolset), otherwise the
       // first live experience (blocked-dates-only sidebar) — matches
       // the merged list's own stays-then-experiences ordering.
-      const firstApprovedStay = (data.listings || []).find(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay'));
+      // Resorts are skipped here for the same reason their cards aren't
+      // clickable into the sidebar: no per-room calendar exists on this
+      // page. Without this, a host whose newest listing is a resort
+      // would land on the dashboard with a resort sidebar auto-opened,
+      // straight past the card-level gate.
+      const firstApprovedStay = (data.listings || []).find(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay') && l.property_type !== 'Resort');
       const firstApprovedExperience = (data.listings || []).find(l => l.status === 'approved' && l.listing_type === 'experience');
       if(firstApprovedStay) selectListingForSidebar(firstApprovedStay.id);
       else if(firstApprovedExperience) selectExperienceForCalendar(firstApprovedExperience.id);
@@ -2046,6 +2062,14 @@
     if(e.target.closest('a.manage-link')) return;
     const card = e.target.closest('.listing-card');
     if(!card || !card.dataset.href) return;
+    // data-calendar="off" is set for Resorts (see the card renderer) —
+    // they get no sidebar calendar at all, so the click falls through to
+    // the same Manage page the card's own Manage link points at rather
+    // than opening a sidebar that can't represent per-room availability.
+    if(card.dataset.calendar === 'off'){
+      window.location.href = card.dataset.href;
+      return;
+    }
     if(card.dataset.status === 'approved' && card.dataset.listingType === 'stay'){
       selectListingForSidebar(Number(card.dataset.listingId));
       return;
@@ -2232,6 +2256,13 @@
   async function selectListingForSidebar(listingId){
     const listing = currentListings.find(l => l.id === listingId);
     if(!listing || !listing.manageLink) return;
+    // Single authoritative refusal for Resorts, rather than relying on
+    // every call site remembering to check. There are three (the card
+    // click handler, the auto-open on load, and this function's own
+    // future callers), and a resort reaching the sidebar would edit only
+    // one room's worth of dates while appearing to act on the whole
+    // property — silently wrong, which is worse than not opening.
+    if(listing.property_type === 'Resort') return;
 
     document.querySelectorAll('.listing-card').forEach(c => c.classList.toggle('selected', c.dataset.listingId != null && Number(c.dataset.listingId) === listingId && c.dataset.listingType === 'stay'));
     document.getElementById('sidebarPlaceholder').style.display = 'none';
