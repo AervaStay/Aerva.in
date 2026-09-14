@@ -123,7 +123,13 @@
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;" id="rangeConfirmRowLabel"></p>
       <p id="rangeConfirmDateLabel" style="font-size:16px; font-weight:600; margin:0 0 16px;"></p>
 
-      <p style="font-size:12px; font-weight:600; margin:0 0 8px;">Block these dates</p>
+      <p style="font-size:12px; font-weight:600; margin:0 0 4px;">Block these dates</p>
+      <label style="font-size:10.5px; opacity:0.6; display:block; margin-bottom:3px;">Nights to block</label>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:6px;">
+        <input type="date" id="rangeBlockStartDate" style="padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc;">
+        <input type="date" id="rangeBlockEndDate" style="padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc;">
+      </div>
+      <p style="font-size:10.5px; opacity:0.5; margin:0 0 10px;">Defaults to the date you clicked — widen it here to block a longer stretch.</p>
       <input type="text" id="rangeBlockReason" placeholder="Reason (optional)" style="width:100%; box-sizing:border-box; padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc; margin-bottom:10px;">
       <p id="rangeBlockError" class="error" style="display:none; margin-bottom:10px; padding:9px 12px; background:#fdeceb; border:1px solid #e0b8ac; border-radius:4px;"></p>
       <button type="button" id="rangeBlockBtn" style="width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em; margin-bottom:18px;">Block These Dates</button>
@@ -238,19 +244,15 @@
   }
 
   function onAvailableCellClick(row, dateStr){
-    const thisRowKey = rowKeyFor(row);
-    if(selRowKey === thisRowKey && selStart){
-      // Second tap on the same row — that's the range, in whichever
-      // order the two taps happened to land.
-      const start = selStart <= dateStr ? selStart : dateStr;
-      const endInclusive = selStart <= dateStr ? dateStr : selStart;
-      openRangeConfirm(row, start, endInclusive);
-    } else {
-      // First tap, or a tap on a different row than whatever was mid-
-      // selection — start fresh on this row+date.
-      selRowKey = thisRowKey; selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label; selStart = dateStr;
-      renderStatusCalendar(lastStatusData);
-    }
+    // ONE click opens the dialog on that single date. This used to take
+    // two taps — the first only armed a selection, which meant nothing
+    // visibly happened on the click that mattered. Ranges aren't lost:
+    // both the Block and Promotion sections carry their own from/to date
+    // fields, pre-filled with the tapped date and widenable there.
+    selRowKey = rowKeyFor(row);
+    selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label;
+    selStart = dateStr;
+    openRangeConfirm(row, dateStr, dateStr);
   }
 
   function openRangeConfirm(row, start, endInclusive){
@@ -258,6 +260,8 @@
     document.getElementById('rangeConfirmDateLabel').textContent = start === endInclusive
       ? new Date(start + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
       : `${new Date(start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – ${new Date(endInclusive + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    document.getElementById('rangeBlockStartDate').value = start;
+    document.getElementById('rangeBlockEndDate').value = endInclusive;
     document.getElementById('rangeBlockReason').value = '';
     document.getElementById('rangePromoName').value = '';
     document.getElementById('rangePromoType').value = 'percentage';
@@ -285,6 +289,17 @@
   }
 
   document.getElementById('rangeBlockBtn').addEventListener('click', async () => {
+    const blockStart = document.getElementById('rangeBlockStartDate').value;
+    const blockEndInclusive = document.getElementById('rangeBlockEndDate').value;
+    const blockErr = document.getElementById('rangeBlockError');
+    if(!blockStart || !blockEndInclusive){
+      blockErr.textContent = 'Please pick both a start and end date.';
+      blockErr.style.display = 'block'; return;
+    }
+    if(blockEndInclusive < blockStart){
+      blockErr.textContent = 'The end date is before the start date.';
+      blockErr.style.display = 'block'; return;
+    }
     const errEl = document.getElementById('rangeBlockError');
     errEl.style.display = 'none';
     try{
@@ -293,7 +308,9 @@
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
         body: JSON.stringify({ bulkBlockRange: {
           listingId: selListingId, roomId: selRoomId,
-          startDate: window.pendingRangeStart, endDate: nextDayStr(window.pendingRangeEndInclusive),
+          // Read from the block date fields, not the clicked cell — the
+          // host may have widened the range after the dialog opened.
+          startDate: blockStart, endDate: nextDayStr(blockEndInclusive),
           reason: document.getElementById('rangeBlockReason').value
         } })
       });
