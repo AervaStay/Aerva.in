@@ -528,7 +528,7 @@ module.exports = async (req, res) => {
       const safeRoomId = roomId || null;
       const existing = await sql`
         SELECT id FROM listing_blocked_dates
-        WHERE listing_id = ${listingId} AND (room_id = ${safeRoomId} OR (room_id IS NULL AND ${safeRoomId}::int IS NULL))
+        WHERE listing_id = ${listingId} AND (room_id = ${safeRoomId} OR room_id IS NULL)
           AND start_date <= ${date}::date AND end_date > ${date}::date
         LIMIT 1
       `;
@@ -551,6 +551,18 @@ module.exports = async (req, res) => {
     }
   }
 
+
+// NOTE on block scope (applies to toggleBlockedDate, unblockRange and the
+// addPromotion overlap check below): a block row with room_id NULL is a
+// LISTING-LEVEL block — for a resort, "the whole property is closed" —
+// and it applies to every room. The Status calendar already draws it on
+// every room row (see the (room_id = X OR room_id IS NULL) test in the
+// status query). These three actions now use the same test, so what a
+// host can SEE on a room row they can also ACT on. A request with no
+// roomId matches NULL rows only, so a whole-listing action never reaches
+// into an individual room's blocks. Consequence worth knowing: unblocking
+// a listing-level block from a room row reopens that night for the whole
+// resort, because that is what the row is.
   // ---- Unblock a dragged date range ----
   // scope 'selection' frees exactly the dates the host dragged over,
   // splitting or trimming each overlapping block row. scope 'wholeBlock'
@@ -580,7 +592,7 @@ module.exports = async (req, res) => {
       const overlapping = await sql`
         SELECT id FROM listing_blocked_dates
         WHERE listing_id = ${listingId}
-          AND (room_id = ${safeRoomId} OR (room_id IS NULL AND ${safeRoomId}::int IS NULL))
+          AND (room_id = ${safeRoomId} OR room_id IS NULL)
           AND start_date < ${endDate}::date AND end_date > ${startDate}::date
       `;
       if (!overlapping.length) {
@@ -698,7 +710,7 @@ module.exports = async (req, res) => {
       const blockedOverlap = await sql`
         SELECT start_date, end_date FROM listing_blocked_dates
         WHERE listing_id = ${listingId}
-          AND (room_id = ${safeRoomId} OR (room_id IS NULL AND ${safeRoomId}::int IS NULL))
+          AND (room_id = ${safeRoomId} OR room_id IS NULL)
           AND start_date < ${endDate}::date AND end_date > ${startDate}::date
         ORDER BY start_date ASC
       `;
