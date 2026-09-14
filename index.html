@@ -7294,9 +7294,16 @@
     }
     container.innerHTML = messages.map(m => {
       const isMine = m.sender_type === viewerRole;
+      // Goes through renderMessageBody (escapeMessageHtml + link/image
+      // handling) for exactly the same reason the inbox renderer does:
+      // display_text is plain text typed by the other party, and
+      // interpolating it raw here parsed it as HTML, so an <img
+      // onerror=...> in a message ran script in this viewer's browser
+      // under their own session. This renderer was missed when the inbox
+      // one was fixed — the two must stay on the same path.
       return `
         <div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;">
-          <div style="background:${isMine ? 'var(--ink)' : 'var(--cream-deep)'}; color:${isMine ? 'var(--cream)' : 'var(--ink)'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${m.display_text}</div>
+          <div style="background:${isMine ? 'var(--ink)' : 'var(--cream-deep)'}; color:${isMine ? 'var(--cream)' : 'var(--ink)'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${renderMessageBody(m.display_text)}</div>
           ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
         </div>
       `;
