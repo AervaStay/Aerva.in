@@ -186,15 +186,6 @@
       </div>
       <!-- Live preview of what the guest actually pays, so the effect of a
            discount is visible before committing to it rather than after. -->
-      <div id="rangePromoPreview" style="display:none; background:#f7f2ec; border:1px solid #e6dbc9; border-radius:6px; padding:10px 12px; margin-bottom:12px;">
-        <p style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Guest pays</p>
-        <p style="margin:0; font-size:15px; font-weight:600;">
-          <span id="rangePromoPreviewNew"></span>
-          <span id="rangePromoPreviewOld" style="font-size:12px; font-weight:400; opacity:0.5; text-decoration:line-through; margin-left:7px;"></span>
-          <span id="rangePromoPreviewPct" style="font-size:11px; font-weight:400; opacity:0.7; margin-left:6px;"></span>
-        </p>
-        <p id="rangePromoPreviewNote" style="font-size:10.5px; opacity:0.55; margin:4px 0 0;"></p>
-      </div>
       <input type="number" id="rangePromoMinNights" placeholder="Minimum nights (optional)" min="1" style="width:100%; box-sizing:border-box; padding:9px; font-size:13px; font-family:'Jost', sans-serif; border:1px solid #ccc; margin-bottom:12px;">
       <p id="rangeConfirmError" class="error" style="display:none; margin-bottom:10px; padding:9px 12px; background:#fdeceb; border:1px solid #e0b8ac; border-radius:4px;"></p>
       <button type="button" id="rangePromoBtn" style="width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em; margin-bottom:10px;">Add Promotion</button>
@@ -305,6 +296,16 @@
       const anchor = selectedDates[0];
       const start = dateStr < anchor ? dateStr : anchor;
       const end = dateStr < anchor ? anchor : dateStr;
+      // A range can't span a blocked night. If the second click lands on
+      // the far side of a block, the earlier selection is dropped and a
+      // new one starts from this date — the host can only ever select an
+      // unbroken stretch of open nights.
+      const blockedInside = firstBlockedFrom(thisRowKey, start);
+      if(blockedInside && blockedInside <= end){
+        selectedDates = [dateStr];
+        setPanelRange(dateStr, dateStr);
+        return;
+      }
       setPanelRange(start, end);
       return;
     }
@@ -316,10 +317,56 @@
     openRangeConfirm(row);
   }
 
+  // The visible dates as YYYY-MM-DD, built the same UTC way the renderer
+  // builds its day columns, so indexes line up with row.dayStatuses.
+  function statusDayList(){
+    if(!lastStatusData) return [];
+    const start = new Date(lastStatusData.startDate + 'T00:00:00Z');
+    const out = [];
+    for(let i = 0; i < lastStatusData.days; i++){
+      const d = new Date(start);
+      d.setUTCDate(d.getUTCDate() + i);
+      out.push(d.toISOString().slice(0, 10));
+    }
+    return out;
+  }
+
+  // Blocked dates in the row the panel is open for, as YYYY-MM-DD, using
+  // the same UTC day list the renderer uses so the strings line up.
+  function blockedDatesForRow(rowKey){
+    if(!lastStatusData) return [];
+    const row = (lastStatusData.rows || []).find(r => rowKeyFor(r) === rowKey);
+    if(!row) return [];
+    const days = statusDayList();
+    return days.filter((d, i) => row.dayStatuses[i] === 'blocked');
+  }
+
+  // The first blocked date at or after `start` in this row, or null. A
+  // selection is never allowed to reach this far: the calendar shows a
+  // range as a single unbroken stretch, so it must not silently include
+  // nights that can't be sold.
+  function firstBlockedFrom(rowKey, start){
+    const blocked = blockedDatesForRow(rowKey).filter(d => d >= start).sort();
+    return blocked.length ? blocked[0] : null;
+  }
+
   // Single place that writes the range into BOTH date pairs, updates the
   // heading and repaints the calendar highlight, so the fields, the label
   // and the highlighted cells can never disagree.
   function setPanelRange(start, end){
+    // Typed or clicked, the end is clamped to the night before the first
+    // block after the start — same rule as clicking, so the two paths
+    // can't disagree. Only the visible 30 days are known here; a block
+    // further out is still caught by the server when the promotion is
+    // actually added.
+    if(!selectionIsBlocked && selRowKey){
+      const blockedAhead = firstBlockedFrom(selRowKey, start);
+      if(blockedAhead && blockedAhead <= end){
+        const d = ymdToUTC(blockedAhead); d.setUTCDate(d.getUTCDate() - 1);
+        end = utcToYmd(d);
+        if(end < start) end = start;
+      }
+    }
     document.getElementById('rangeBlockStartDate').value = start;
     document.getElementById('rangeBlockEndDate').value = end;
     document.getElementById('rangePromoStartDate').value = start;
@@ -464,11 +511,6 @@
     // cancelSelection() clears it on Cancel or after a successful action.
     document.getElementById('rangeConfirmNights').textContent =
       selectionIsBlocked ? 'This night is blocked — choose how much to remove' : 'Set the window below, then Block or run a Promotion';
-    rangeBaseNightly = baseNightlyFor(row, start);
-    updatePromoPreview();
-    // Repaint so every date in the range shows as Selecting, not just
-    // the one most recently tapped.
-    if(lastStatusData) renderStatusCalendar(lastStatusData);
   }
 
   function nextDayStr(dateStr){
@@ -541,16 +583,20 @@
       });
       const data = await res.json();
       if(!res.ok){ showPromoError(data.error || 'Could not add this promotion.'); return; }
-      // The server truncates a promotion at the first blocked night
-      // rather than refusing the whole thing. When that happens it says
-      // where it stopped — shown here, with the panel left open, so the
-      // next step (clicking the first open date after the block) is
-      // obvious instead of the host wondering why the range shrank.
-      if(data.notice){
-        errEl.textContent = data.notice;
-        errEl.style.display = 'block';
-        errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        loadStatusCalendar();
+      // The server applied the promotion up to the first blocked night
+      // and told us where the calendar is open again. Move the start date
+      // there, keep the end, keep the name and discount, and leave the
+      // panel open — one more click on Add Promotion covers the next
+      // stretch. No message: the newly-green cells and the moved start
+      // date say it themselves.
+      if(data.resumeFrom){
+        await loadStatusCalendar();
+        if(data.resumeFrom <= promoEndInclusive){
+          setPanelRange(data.resumeFrom, promoEndInclusive);
+          return;
+        }
+        // The block ran past the requested end — nothing left to add.
+        cancelSelection();
         return;
       }
       cancelSelection();
@@ -752,7 +798,8 @@
         const isToday = dateStr === todayStr;
         const pricing = (row.dayPricing && row.dayPricing[i]) || { price: 0, promoName: null, promoId: null };
         // Highlights every date in the selection set.
-        const isSelecting = selRowKey === thisRowKey && selectedDates.includes(dateStr);
+        const isSelecting = selRowKey === thisRowKey && selectedDates.includes(dateStr)
+          && (status !== 'blocked' || selectionIsBlocked);
         let clickAttr, innerHtml, cellTitle;
         if(status === 'booked'){
           // A room's status is computed per-day, but the actual booking
@@ -821,13 +868,6 @@
     loadStatusCalendar();
   }
 
-  ['rangePromoType', 'rangePromoValue'].forEach(id => {
-    const el = document.getElementById(id);
-    if(el){
-      el.addEventListener('input', updatePromoPreview);
-      el.addEventListener('change', updatePromoPreview);
-    }
-  });
 
 </script>
 
