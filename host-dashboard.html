@@ -2625,6 +2625,7 @@
     const start = expCalSelStart <= expCalSelEnd ? expCalSelStart : expCalSelEnd;
     const endInclusive = expCalSelStart <= expCalSelEnd ? expCalSelEnd : expCalSelStart;
     expCalBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('expCalConfirmReason').value.trim() });
+    expPromotionRows = sbCarveRangeOutOfAllPromos(expPromotionRows, start, sbNextDay(endInclusive));
     expRenderBlockedList(); expHideCalConfirm();
   });
   document.getElementById('expPromoConfirmAddBtn').addEventListener('click', () => {
@@ -2870,6 +2871,39 @@
     }
     return candidateStr;
   }
+  // ---- Promotions never overlap blocks ----
+  // Carves [start, endExcl) out of one promotion row: trims an end, splits
+  // it in two around the gap, or drops it entirely if nothing is left.
+  // Used when a block lands on promoted nights (the block wins, and the
+  // discount is removed from exactly those nights) and by "Remove entire
+  // promotion", which removes the contiguous promoted run the host
+  // clicked rather than a range that might span a block.
+  function sbCarveRangeOutOfPromo(rows, promo, start, endExcl){
+    if(endExcl <= promo.startDate || start >= promo.endDate) return rows; // no overlap
+    const keepLeft = start > promo.startDate;
+    const keepRight = endExcl < promo.endDate;
+    if(!keepLeft && !keepRight) return rows.filter(p => p !== promo);
+    if(keepLeft && keepRight){
+      const after = { ...promo, id: null, startDate: endExcl };
+      promo.endDate = start;
+      return [...rows, after];
+    }
+    if(keepLeft) promo.endDate = start; else promo.startDate = endExcl;
+    return rows;
+  }
+  function sbCarveRangeOutOfAllPromos(rows, start, endExcl){
+    for(const promo of [...rows]) rows = sbCarveRangeOutOfPromo(rows, promo, start, endExcl);
+    return rows;
+  }
+  // The unbroken promoted run containing dateStr, bounded by the
+  // promotion's own dates and by any blocked night on either side.
+  function sbPromoRunAround(promo, dateStr, blockedRowFor){
+    let start = dateStr;
+    while(start > promo.startDate && !blockedRowFor(sbPrevDay(start))) start = sbPrevDay(start);
+    let endExcl = sbNextDay(dateStr);
+    while(endExcl < promo.endDate && !blockedRowFor(endExcl)) endExcl = sbNextDay(endExcl);
+    return { start, endExcl };
+  }
   function sbOnCalMouseDown(dateStr){
     if(sbBlockedRowFor(dateStr) || sbPromoRowFor(dateStr)) return;
     // A second click while a selection is open sets the OTHER END of the
@@ -2924,8 +2958,15 @@
         sbResetSummaryToBase();
       };
       document.getElementById('sbRemovePromoWholeBtn').onclick = () => {
-        if(window.confirm(`Remove the entire "${existingPromo.name}" promotion (${existingPromo.startDate} to ${existingPromo.endDate})?`)){
-          sbPromotionRows = sbPromotionRows.filter(p => p !== existingPromo);
+        // Removes the unbroken promoted stretch this night belongs to.
+        // If a block sits inside the promotion's range, the nights on the
+        // far side of it are a separate stretch and are left alone — the
+        // host removes those by clicking a date over there.
+        const run = sbPromoRunAround(existingPromo, dateStr, sbBlockedRowFor);
+        const lastNight = sbPrevDay(run.endExcl);
+        const label = run.start === lastNight ? run.start : `${run.start} to ${lastNight}`;
+        if(window.confirm(`Remove "${existingPromo.name}" for ${label}?`)){
+          sbPromotionRows = sbCarveRangeOutOfPromo(sbPromotionRows, existingPromo, run.start, run.endExcl);
           sbRenderPromotionsList(); sbRenderCalendar();
           sbResetSummaryToBase();
         }
@@ -3020,7 +3061,10 @@
     const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
     const endInclusive = sbCalSelStart <= sbCalSelEnd ? sbCalSelEnd : sbCalSelStart;
     sbBlockedDateRows.push({ id: null, startDate: start, endDate: sbNextDay(endInclusive), reason: document.getElementById('sbCalConfirmReason').value.trim() });
-    sbRenderBlockedList(); sbHideCalConfirm();
+    // A blocked night can't carry a discount — the block wins, and the
+    // promotion is trimmed or split around it so the two never overlap.
+    sbPromotionRows = sbCarveRangeOutOfAllPromos(sbPromotionRows, start, sbNextDay(endInclusive));
+    sbRenderBlockedList(); sbRenderPromotionsList(); sbHideCalConfirm();
   });
   document.getElementById('sbPromoConfirmAddBtn').addEventListener('click', () => {
     const start = sbCalSelStart <= sbCalSelEnd ? sbCalSelStart : sbCalSelEnd;
