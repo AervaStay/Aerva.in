@@ -293,32 +293,40 @@
   }
 
   function onAvailableCellClick(row, dateStr){
-    // One click opens the panel seeded with this date. Blocking and
-    // promotions are both RANGE actions now — the two date fields in the
-    // panel are how you widen them. An earlier version accumulated taps
-    // into a set of individual nights; that turned out to be more
-    // machinery than the job needs, and it made the panel's own date
-    // fields a second, competing source of truth.
-    selRowKey = rowKeyFor(row);
+    const thisRowKey = rowKeyFor(row);
+    const panelOpen = document.getElementById('rangeConfirmOverlay').classList.contains('open');
+
+    // A SECOND click in the same row sets the other end of the range,
+    // rather than starting over. Previously every click reset both date
+    // fields to the clicked date, so clicking the end of a range just
+    // overwrote the start — the range could only be built by typing in
+    // the panel's date fields.
+    if(panelOpen && !selectionIsBlocked && selRowKey === thisRowKey && selectedDates.length){
+      const anchor = selectedDates[0];
+      const start = dateStr < anchor ? dateStr : anchor;
+      const end = dateStr < anchor ? anchor : dateStr;
+      setPanelRange(start, end);
+      return;
+    }
+
+    selRowKey = thisRowKey;
     selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label;
     selectedDates = [dateStr];
     selectionIsBlocked = false;
     openRangeConfirm(row);
   }
 
-  // The list of visible dates as YYYY-MM-DD, built the same UTC way the
-  // renderer builds its day columns so the indexes line up with
-  // row.dayStatuses.
-  function statusDayList(){
-    if(!lastStatusData) return [];
-    const start = new Date(lastStatusData.startDate + 'T00:00:00Z');
-    const out = [];
-    for(let i = 0; i < lastStatusData.days; i++){
-      const d = new Date(start);
-      d.setUTCDate(d.getUTCDate() + i);
-      out.push(d.toISOString().slice(0, 10));
-    }
-    return out;
+  // Single place that writes the range into BOTH date pairs, updates the
+  // heading and repaints the calendar highlight, so the fields, the label
+  // and the highlighted cells can never disagree.
+  function setPanelRange(start, end){
+    document.getElementById('rangeBlockStartDate').value = start;
+    document.getElementById('rangeBlockEndDate').value = end;
+    document.getElementById('rangePromoStartDate').value = start;
+    document.getElementById('rangePromoEndDate').value = end;
+    selectedDates = expandRange(start, end);
+    document.getElementById('rangeConfirmDateLabel').textContent = describeRange(selectedDates);
+    if(lastStatusData) renderStatusCalendar(lastStatusData);
   }
 
   // Clicking a blocked date opens the panel in unblock mode, where the
@@ -412,10 +420,8 @@
   function syncHighlight(startId, endId){
     const startStr = document.getElementById(startId).value;
     const endStr = document.getElementById(endId).value;
-    selectedDates = expandRange(startStr, endStr);
-    document.getElementById('rangeConfirmDateLabel').textContent =
-      describeRange(selectedDates) || formatDateShort(startStr || endStr || '');
-    if(lastStatusData) renderStatusCalendar(lastStatusData);
+    if(!startStr || !endStr) return;
+    setPanelRange(startStr, endStr);
   }
 
   ['rangeBlockStartDate', 'rangeBlockEndDate'].forEach(id => {
@@ -428,21 +434,6 @@
   });
 
 
-  function refreshRangePanel(row){
-    document.getElementById('rangeConfirmDateLabel').textContent = formatDateShort(selectedDates[0]);
-    // Promotions run over a continuous window, so the inputs track the
-    // OUTER bounds of whatever is tapped. Blocking stays per-night.
-    if(selectedDates.length){
-      document.getElementById('rangePromoStartDate').value = selectedDates[0];
-      document.getElementById('rangePromoEndDate').value = selectedDates[0];
-      document.getElementById('rangeBlockStartDate').value = selectedDates[0];
-      document.getElementById('rangeBlockEndDate').value = selectedDates[0];
-    }
-    document.getElementById('rangeUnblockSection').style.display = selectionIsBlocked ? 'block' : 'none';
-    document.getElementById('rangeActionSections').style.display = selectionIsBlocked ? 'none' : 'block';
-    document.getElementById('rangeUnblockError').style.display = 'none';
-    if(lastStatusData) renderStatusCalendar(lastStatusData);
-  }
 
   function openRangeConfirm(row){
     document.getElementById('rangeConfirmRowLabel').textContent = row.label;
@@ -461,10 +452,11 @@
     // Promotions run over a continuous window, so the inputs track the
     // OUTER bounds of whatever is tapped. Blocking stays per-night.
     if(selectedDates.length){
-      document.getElementById('rangePromoStartDate').value = selectedDates[0];
-      document.getElementById('rangePromoEndDate').value = selectedDates[0];
-      document.getElementById('rangeBlockStartDate').value = selectedDates[0];
-      document.getElementById('rangeBlockEndDate').value = selectedDates[0];
+      const d = selectedDates[0];
+      document.getElementById('rangeBlockStartDate').value = d;
+      document.getElementById('rangeBlockEndDate').value = d;
+      document.getElementById('rangePromoStartDate').value = d;
+      document.getElementById('rangePromoEndDate').value = d;
     }
     document.getElementById('rangeUnblockSection').style.display = selectionIsBlocked ? 'block' : 'none';
     document.getElementById('rangeActionSections').style.display = selectionIsBlocked ? 'none' : 'block';
