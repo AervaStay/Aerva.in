@@ -711,6 +711,7 @@ module.exports = async (req, res) => {
       // cover dates nobody can book.
       let effectiveEndDate = endDate;
       let truncatedAt = null;
+      let resumeFrom = null; // first open night after the block, for the client to continue from
       if (blockedOverlap.length) {
         const firstBlockedStart = new Date(blockedOverlap[0].start_date).toISOString().slice(0, 10);
         if (firstBlockedStart <= startDate) {
@@ -722,6 +723,11 @@ module.exports = async (req, res) => {
         }
         effectiveEndDate = firstBlockedStart; // exclusive, so it stops the night before
         truncatedAt = firstBlockedStart;
+        // end_date is exclusive in storage, so it IS the first night that
+        // is open again. The client moves its start date here so the host
+        // can add the next stretch with one more click, without being
+        // told anything — the calendar makes it obvious what happened.
+        resumeFrom = new Date(blockedOverlap[0].end_date).toISOString().slice(0, 10);
       }
 
       if (safeRoomId) {
@@ -734,12 +740,7 @@ module.exports = async (req, res) => {
         VALUES (${listingId}, ${safeRoomId}, ${name.trim()}, ${discountType}, ${value}, ${minNights ? Number(minNights) : null}, ${startDate}::date, ${effectiveEndDate}::date, TRUE)
       `;
       if (truncatedAt) {
-        const lastApplied = new Date(truncatedAt + 'T00:00:00');
-        lastApplied.setDate(lastApplied.getDate() - 1);
-        return res.status(200).json({
-          success: true,
-          notice: `Promotion applied through ${lastApplied.toISOString().slice(0, 10)}. It stopped there because ${truncatedAt} is blocked — click the next open date to run a promotion on the nights after it.`
-        });
+        return res.status(200).json({ success: true, resumeFrom });
       }
       return res.status(200).json({ success: true });
     } catch (err) {
