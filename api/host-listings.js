@@ -882,6 +882,86 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- Remove the contiguous promoted run around a date ----
+  // The Status page's "Remove Entire Promotion". "Entire" is defined by
+  // the CALENDAR, not by promotion names or row boundaries: starting at
+  // the clicked night, walk outward while nights are promoted and not
+  // blocked. A blocked night is a hard stop in either direction. Every
+  // promotion row overlapping that run then has the run carved out of it
+  // (deleted, trimmed, or split), so the nights on the far side of a
+  // block — or beyond the run — keep whatever they had. This makes the
+  // result identical whether the promotion is one long row, several rows
+  // from the resume-from-block flow, or rows with different names.
+  if (req.method === 'POST' && req.body && req.body.removePromotionRun) {
+    try {
+      const { listingId, roomId, date } = req.body.removePromotionRun;
+      if (!listingId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'Missing listing or date.' });
+      }
+      const owns = await sql`
+        SELECT l.id FROM listings l JOIN guests g ON g.host_id = l.host_id
+        WHERE l.id = ${listingId} AND g.id = ${guestId}
+      `;
+      if (!owns[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
+      const safeRoomId = roomId || null;
+
+      const ymd = (d) => new Date(d).toISOString().slice(0, 10);
+      const shift = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+
+      const promos = (await sql`
+        SELECT id, listing_id, room_id, name, discount_type, discount_value, min_nights, is_active, start_date, end_date
+        FROM listing_promotions
+        WHERE listing_id = ${listingId} AND is_active = TRUE
+          AND (room_id = ${safeRoomId} OR room_id IS NULL)
+      `).map(p => ({ ...p, start: ymd(p.start_date), end: ymd(p.end_date) }));
+      const blocks = (await sql`
+        SELECT start_date, end_date FROM listing_blocked_dates
+        WHERE listing_id = ${listingId} AND (room_id = ${safeRoomId} OR room_id IS NULL)
+      `).map(b => ({ start: ymd(b.start_date), end: ymd(b.end_date) }));
+
+      const isPromoted = (d) => promos.some(p => d >= p.start && d < p.end);
+      const isBlocked = (d) => blocks.some(b => d >= b.start && d < b.end);
+      if (!isPromoted(date) || isBlocked(date)) {
+        return res.status(400).json({ error: 'That night has no active promotion to remove.' });
+      }
+
+      let runStart = date, guard = 0;
+      while (guard++ < 400) {
+        const prev = shift(runStart, -1);
+        if (!isPromoted(prev) || isBlocked(prev)) break;
+        runStart = prev;
+      }
+      let runEnd = shift(date, 1); guard = 0; // exclusive
+      while (guard++ < 400) {
+        if (!isPromoted(runEnd) || isBlocked(runEnd)) break;
+        runEnd = shift(runEnd, 1);
+      }
+
+      for (const p of promos) {
+        if (runEnd <= p.start || runStart >= p.end) continue; // no overlap
+        const keepLeft = runStart > p.start;
+        const keepRight = runEnd < p.end;
+        if (!keepLeft && !keepRight) {
+          await sql`DELETE FROM listing_promotions WHERE id = ${p.id}`;
+        } else if (keepLeft && keepRight) {
+          await sql`UPDATE listing_promotions SET end_date = ${runStart}::date WHERE id = ${p.id}`;
+          await sql`
+            INSERT INTO listing_promotions (listing_id, room_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
+            VALUES (${p.listing_id}, ${p.room_id}, ${p.name}, ${p.discount_type}, ${p.discount_value}, ${p.min_nights}, ${runEnd}::date, ${p.end}::date, ${p.is_active})
+          `;
+        } else if (keepLeft) {
+          await sql`UPDATE listing_promotions SET end_date = ${runStart}::date WHERE id = ${p.id}`;
+        } else {
+          await sql`UPDATE listing_promotions SET start_date = ${runEnd}::date WHERE id = ${p.id}`;
+        }
+      }
+      return res.status(200).json({ success: true, removedFrom: runStart, removedToExclusive: runEnd });
+    } catch (err) {
+      console.error('host-listings (removePromotionRun) error:', err);
+      return res.status(500).json({ error: 'Could not remove this promotion right now.' });
+    }
+  }
+
   // ---- Raise a concern on a held security deposit ----
   // Separate from the verification-submission branch above — this only
   // ever touches one order's deposit_status, gated on it actually
