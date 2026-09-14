@@ -158,9 +158,16 @@ module.exports = async (req, res) => {
         FROM listing_amenities WHERE listing_id = ${listingId} ORDER BY created_at ASC
       `;
 
+      // Listing-level rows only (room_id IS NULL). Per-room blocks are
+      // created and managed on the Status page; loading them here made
+      // the dashboard treat a "Room 2 is blocked" row as if the whole
+      // listing were blocked, and its full-replace save could then
+      // delete or flatten them.
       const blockedDates = await sql`
         SELECT id, start_date, end_date, reason
-        FROM listing_blocked_dates WHERE listing_id = ${listingId} ORDER BY start_date ASC
+        FROM listing_blocked_dates
+        WHERE listing_id = ${listingId} AND room_id IS NULL
+        ORDER BY start_date ASC
       `;
 
       const promotions = await sql`
@@ -228,7 +235,7 @@ module.exports = async (req, res) => {
       }
 
       const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
-              exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, promotions,
+              exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, blockedDatesLoadedIds, promotions,
               latitude, longitude, formattedAddress, city, area, pincode, maxGuests,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
@@ -772,9 +779,24 @@ module.exports = async (req, res) => {
       let blockedDatesError = null;
       if (Array.isArray(blockedDates)) {
         try {
-          const existingRows = await sql`SELECT id FROM listing_blocked_dates WHERE listing_id = ${listingId}`;
+          // Only listing-level rows are in scope — a per-room block made
+          // on the Status page is never touched by this save.
+          const existingRows = await sql`SELECT id FROM listing_blocked_dates WHERE listing_id = ${listingId} AND room_id IS NULL`;
           const existingIds = new Set(existingRows.map(r => r.id));
           const submittedIds = new Set();
+
+          // The stale-overwrite guard. The dashboard holds a copy of the
+          // blocks from when the page loaded; if the host blocks dates on
+          // the Status page in the meantime, those rows exist in the
+          // database but not in the dashboard's copy. Deleting "anything
+          // not resubmitted" (the old behaviour) silently wiped them.
+          // Now the client says which ids it loaded, and only THOSE can be
+          // deleted — rows created since load survive untouched. If an
+          // older client doesn't send the list, fall back to the previous
+          // behaviour, but still scoped to listing-level rows.
+          const loadedIds = Array.isArray(blockedDatesLoadedIds)
+            ? new Set(blockedDatesLoadedIds.map(Number).filter(Number.isFinite))
+            : null;
 
           for (const b of blockedDates) {
             const startDate = typeof b.startDate === 'string' ? b.startDate : null;
@@ -787,7 +809,7 @@ module.exports = async (req, res) => {
             if (b.id && existingIds.has(Number(b.id))) {
               await sql`
                 UPDATE listing_blocked_dates SET start_date = ${startDate}, end_date = ${endDate}, reason = ${reason}
-                WHERE id = ${Number(b.id)} AND listing_id = ${listingId}
+                WHERE id = ${Number(b.id)} AND listing_id = ${listingId} AND room_id IS NULL
               `;
               submittedIds.add(Number(b.id));
             } else {
@@ -800,7 +822,9 @@ module.exports = async (req, res) => {
             }
           }
 
-          const idsToDelete = [...existingIds].filter(id => !submittedIds.has(id));
+          const idsToDelete = [...existingIds].filter(id =>
+            !submittedIds.has(id) && (loadedIds === null || loadedIds.has(id))
+          );
           if (idsToDelete.length) {
             await sql`DELETE FROM listing_blocked_dates WHERE id = ANY(${idsToDelete}) AND listing_id = ${listingId}`;
           }
