@@ -682,6 +682,48 @@ module.exports = async (req, res) => {
       if (!listingRows[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
 
       const safeRoomId = roomId || null;
+
+      // A promotion can't sit on top of a blocked night. Blocked means the
+      // night isn't for sale at all, so discounting it would advertise a
+      // price for something nobody can book. The host has to unblock
+      // first. Checked HERE and not only in the UI because a promotion is
+      // set as a RANGE — a host can widen the window across blocked
+      // nights without ever clicking one of them, so the calendar's own
+      // "clicking a blocked date only offers unblock" behaviour can't
+      // catch this case on its own.
+      //
+      // Blocking OVER an existing promotion stays allowed and is the
+      // reverse direction: the block simply wins, and once blocked the
+      // same rule applies again if the host later wants to re-promote.
+      const blockedOverlap = await sql`
+        SELECT start_date, end_date FROM listing_blocked_dates
+        WHERE listing_id = ${listingId}
+          AND (room_id = ${safeRoomId} OR (room_id IS NULL AND ${safeRoomId}::int IS NULL))
+          AND start_date < ${endDate}::date AND end_date > ${startDate}::date
+        ORDER BY start_date ASC
+      `;
+      // The promotion runs up to — but not into — the first blocked
+      // night, and stops there. The nights after the block aren't
+      // silently included: the host returns to the calendar, clicks the
+      // next open date, and sets a second promotion for that stretch.
+      // That keeps each promotion a continuous window over nights that
+      // are actually for sale, instead of one entry that pretends to
+      // cover dates nobody can book.
+      let effectiveEndDate = endDate;
+      let truncatedAt = null;
+      if (blockedOverlap.length) {
+        const firstBlockedStart = new Date(blockedOverlap[0].start_date).toISOString().slice(0, 10);
+        if (firstBlockedStart <= startDate) {
+          // The very first night asked for is already blocked, so there's
+          // nothing to apply at all.
+          return res.status(409).json({
+            error: 'Those nights are blocked. Unblock them first, then add the promotion.'
+          });
+        }
+        effectiveEndDate = firstBlockedStart; // exclusive, so it stops the night before
+        truncatedAt = firstBlockedStart;
+      }
+
       if (safeRoomId) {
         const roomRows = await sql`SELECT id FROM listing_rooms WHERE id = ${safeRoomId} AND listing_id = ${listingId}`;
         if (!roomRows[0]) return res.status(400).json({ error: 'That room could not be found on this listing.' });
@@ -689,8 +731,16 @@ module.exports = async (req, res) => {
 
       await sql`
         INSERT INTO listing_promotions (listing_id, room_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
-        VALUES (${listingId}, ${safeRoomId}, ${name.trim()}, ${discountType}, ${value}, ${minNights ? Number(minNights) : null}, ${startDate}::date, ${endDate}::date, TRUE)
+        VALUES (${listingId}, ${safeRoomId}, ${name.trim()}, ${discountType}, ${value}, ${minNights ? Number(minNights) : null}, ${startDate}::date, ${effectiveEndDate}::date, TRUE)
       `;
+      if (truncatedAt) {
+        const lastApplied = new Date(truncatedAt + 'T00:00:00');
+        lastApplied.setDate(lastApplied.getDate() - 1);
+        return res.status(200).json({
+          success: true,
+          notice: `Promotion applied through ${lastApplied.toISOString().slice(0, 10)}. It stopped there because ${truncatedAt} is blocked — click the next open date to run a promotion on the nights after it.`
+        });
+      }
       return res.status(200).json({ success: true });
     } catch (err) {
       console.error('host-listings (addPromotion) error:', err);
