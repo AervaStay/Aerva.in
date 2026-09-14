@@ -6097,13 +6097,39 @@
   // guest's actual selected dates/nights at checkout, the same "picks
   // whichever discount saves the most, standing or promo" logic as
   // there, just evaluated here without a specific stay to check against.
+  // The guest's searched stay, if any. A promotion only ever applies to
+  // specific nights, so a card can't truthfully promise "20% OFF" until
+  // the guest has said which nights they want.
+  function searchedStay(){
+    const a = (typeof searchArrivalDate !== 'undefined' && searchArrivalDate) || '';
+    const d = (typeof searchDepartureDate !== 'undefined' && searchDepartureDate) || '';
+    if(!a || !d || d <= a) return null;
+    const nights = Math.round((new Date(d + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
+    return { arrival: a, departure: d, nights };
+  }
+
+  // Does this promotion cover any night of the searched stay, and is the
+  // stay long enough for it? endDate is exclusive, same as everywhere.
+  function promoAppliesToStay(p, stay){
+    if(!p.startDate || !p.endDate) return false;
+    const overlaps = p.startDate < stay.departure && p.endDate > stay.arrival;
+    const minOk = !p.minNights || stay.nights >= Number(p.minNights);
+    return overlaps && minOk;
+  }
+
   function bestActivePromotion(listing){
-    const promos = Array.isArray(listing.active_promotions) ? listing.active_promotions : [];
+    let promos = Array.isArray(listing.active_promotions) ? listing.active_promotions : [];
     // Stays use nightly_rate; get-listings.js aliases an experience's own
     // price column to .price instead — without this fallback, this always
     // silently returned null for every experience, since .nightly_rate
     // simply doesn't exist on that object.
     const rate = Number(listing.nightly_rate || listing.price);
+    // No dates searched → no specific promotion is "active" for this
+    // guest yet. The card shows a soft hint instead (see
+    // formatPromotionBadge); the real figure appears once dates are in.
+    const stay = searchedStay();
+    if(!stay) return null;
+    promos = promos.filter(p => promoAppliesToStay(p, stay));
     if(!promos.length || !rate) return null;
     let best = null, bestSavings = -1;
     for(const p of promos){
@@ -6116,7 +6142,13 @@
 
   function formatPromotionBadge(listing){
     const promo = bestActivePromotion(listing);
-    if(!promo) return '';
+    if(!promo){
+      // Dates not searched yet, but the listing does run promotions —
+      // say so without committing to a number that may not apply to
+      // the nights the guest eventually picks.
+      const any = Array.isArray(listing.active_promotions) && listing.active_promotions.length > 0;
+      return (any && !searchedStay()) ? 'Discount may be applicable' : '';
+    }
     const label = promo.discountType === 'percentage' ? `${Number(promo.discountValue)}% OFF` : `${fmtGuest(Number(promo.discountValue))} OFF`;
     return `${promo.name} — ${label}`;
   }
