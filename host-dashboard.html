@@ -423,11 +423,9 @@
         <div id="sbAmenitiesList"></div>
         <button type="button" class="sidebar-add-btn" id="sbAddAmenityBtn">+ Add a Paid Amenity</button>
 
-        <button type="button" class="sidebar-save-btn" id="sidebarSaveBtn">Save Changes</button>
-        <p class="sidebar-save-msg" id="sidebarSaveMsg"></p>
             </div>
             <div class="price-summary-box">
-              <div class="sidebar-section-title" style="margin-top:0;" id="sbSummaryHeading">Your Payout — Base Rate</div>
+              <div class="sidebar-section-title" style="margin-top:0;" id="sbSummaryHeading">Price Summary</div>
               <p id="sbSummaryDateLabel" style="font-size:11px; opacity:0.6; margin:-8px 0 10px;">Not tied to a specific date — this is the standard rate.</p>
               <div class="price-summary-row"><span class="label">Nightly Rate</span><span id="sbSummaryRate">₹0</span></div>
               <div class="price-summary-row"><span class="label" id="sbSummaryCommissionLabel">Commission</span><span id="sbSummaryCommission">− ₹0</span></div>
@@ -451,6 +449,12 @@
                 <button type="button" class="sidebar-add-btn" id="sbRemovePromoWholeBtn" style="color:#a3402f; border-color:#e0b8ac;">Remove entire promotion</button>
               </div>
             </div>
+            <!-- Save sits directly under the price summary so the number a
+                 host has just checked and the action that commits it are
+                 next to each other, instead of the button being at the
+                 bottom of the long form column on the left. -->
+            <button type="button" class="sidebar-save-btn" id="sidebarSaveBtn" style="margin-top:14px;">Save Changes</button>
+            <p class="sidebar-save-msg" id="sidebarSaveMsg"></p>
           </div>
         </div>
 
@@ -2907,7 +2911,7 @@
         : Math.max(0, rate - Math.round(rate * (existingPromo.discountValue / 100)));
       const discountedPayout = discountedRate - Math.round(discountedRate * (sbCommissionRate / 100));
 
-      document.getElementById('sbSummaryHeading').textContent = 'Your Payout — Selected Date';
+      document.getElementById('sbSummaryHeading').textContent = 'Price Summary — Selected Date';
       document.getElementById('sbSummaryDateLabel').textContent = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
       document.getElementById('sbSummaryPromoPreview').style.display = 'none';
       document.getElementById('sbExistingPromoName').textContent = existingPromo.name;
@@ -2984,7 +2988,7 @@
   }
 
   function sbResetSummaryToBase(){
-    document.getElementById('sbSummaryHeading').textContent = 'Your Payout — Base Rate';
+    document.getElementById('sbSummaryHeading').textContent = 'Price Summary';
     document.getElementById('sbSummaryDateLabel').textContent = 'Not tied to a specific date — this is the standard rate.';
     document.getElementById('sbExistingPromoDetails').style.display = 'none';
   }
