@@ -2269,6 +2269,11 @@
         id: b.id, startDate: b.start_date ? b.start_date.slice(0, 10) : '',
         endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || ''
       }));
+      // Snapshot of the ids this page loaded. Sent back on save so the
+      // server only deletes rows this page actually saw — a block added
+      // on the Status page in the meantime is left alone instead of
+      // being wiped by a full-replace save.
+      sbBlockedLoadedIds = sbBlockedDateRows.map(b => b.id).filter(Boolean);
       sbPromotionRows = (data.promotions || []).map(p => ({
         id: p.id, name: p.name, discountType: p.discount_type, discountValue: Number(p.discount_value),
         minNights: p.min_nights || null,
@@ -2303,6 +2308,7 @@
 
   // ---- Blocked-dates calendar ----
   let sbBlockedDateRows = [];
+  let sbBlockedLoadedIds = [];
   let sbCalMonth = new Date(); sbCalMonth.setDate(1); sbCalMonth.setHours(0,0,0,0);
   let sbCalSelStart = null, sbCalSelEnd = null, sbCalDragging = false;
 
@@ -2372,6 +2378,7 @@
   let expPromotionRows = [];
   let expCalMonth = new Date(); expCalMonth.setDate(1); expCalMonth.setHours(0,0,0,0);
   let expCalSelStart = null, expCalSelEnd = null, expCalDragging = false;
+  let expCalBlockedLoadedIds = [];
 
   async function selectExperienceForCalendar(experienceId){
     const exp = currentExperiences.find(e => e.id === experienceId);
@@ -2412,6 +2419,7 @@
         id: b.id, startDate: b.start_date ? b.start_date.slice(0, 10) : '',
         endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || ''
       }));
+      expCalBlockedLoadedIds = expCalBlockedDateRows.map(b => b.id).filter(Boolean);
       expPromotionRows = (data.promotions || []).map(p => ({
         id: p.id, name: p.name, discountType: p.discount_type, discountValue: Number(p.discount_value),
         minNights: null,
@@ -2723,6 +2731,7 @@
           city: expCalCity,
           area: expCalArea,
           blockedDates: expCalBlockedDateRows,
+          blockedDatesLoadedIds: expCalBlockedLoadedIds,
           promotions: expPromotionRows
         })
       });
@@ -3124,6 +3133,7 @@
           discountDescription: sbDiscountDescription,
           securityDeposit: sbSecurityDeposit,
           blockedDates: sbBlockedDateRows,
+          blockedDatesLoadedIds: sbBlockedLoadedIds,
           promotions: sbPromotionRows,
           paidAmenities: sbAmenityRows.filter(a => a.name && a.price)
         })
