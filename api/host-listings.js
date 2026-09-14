@@ -176,6 +176,43 @@ function requireGuestId(req) {
 //
 // [from, to) is the half-open range being freed, matching the storage
 // convention so the comparisons stay consistent.
+// ---- Splitting a listing-level block into per-room blocks ----
+// For a resort, every room is its own inventory. A block row with
+// room_id NULL on a resort means "every room" — but the moment a host
+// wants to free ONE room's night, that single row can't express it.
+// So before acting on a NULL row for a specific room, the row is
+// exploded into one identical row per room, the NULL row is deleted,
+// and the action proceeds on just the requested room's copy. The other
+// rooms end up exactly as blocked as they were, in their own rows.
+//
+// Returns the id of the row to act on: the original id if nothing
+// needed splitting (a room-level row, a non-resort listing, or a
+// request with no room), else the new row for the requested room.
+async function resolveBlockRowForRoom(sql, rowId, roomId) {
+  if (!roomId) return rowId;
+  const rows = await sql`SELECT id, listing_id, room_id, start_date, end_date, reason FROM listing_blocked_dates WHERE id = ${rowId}`;
+  const row = rows[0];
+  if (!row || row.room_id !== null) return rowId;
+
+  const rooms = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${row.listing_id} ORDER BY id ASC`;
+  if (!rooms.length) return rowId; // not a resort — a NULL row is the only kind there is
+
+  let targetId = null;
+  for (const room of rooms) {
+    const inserted = await sql`
+      INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason)
+      VALUES (${row.listing_id}, ${room.id}, ${row.start_date}, ${row.end_date}, ${row.reason})
+      RETURNING id
+    `;
+    if (Number(room.id) === Number(roomId)) targetId = inserted[0].id;
+  }
+  await sql`DELETE FROM listing_blocked_dates WHERE id = ${row.id}`;
+  // If the requested room somehow isn't on this listing, there's nothing
+  // of it to act on; the split still stands, since it's a pure
+  // re-expression of the same block.
+  return targetId;
+}
+
 async function unblockRangeFromRow(sql, rowId, from, to) {
   const rows = await sql`SELECT id, listing_id, room_id, start_date, end_date, reason FROM listing_blocked_dates WHERE id = ${rowId}`;
   const row = rows[0];
@@ -543,7 +580,8 @@ module.exports = async (req, res) => {
       const nextDay = new Date(date + 'T00:00:00');
       nextDay.setDate(nextDay.getDate() + 1);
       const dayAfter = nextDay.toISOString().slice(0, 10);
-      await unblockRangeFromRow(sql, existing[0].id, date, dayAfter);
+      const targetRowId = await resolveBlockRowForRoom(sql, existing[0].id, roomId || null);
+      if (targetRowId) await unblockRangeFromRow(sql, targetRowId, date, dayAfter);
       return res.status(200).json({ success: true, blocked: false });
     } catch (err) {
       console.error('host-listings (toggleBlockedDate) error:', err);
@@ -601,11 +639,13 @@ module.exports = async (req, res) => {
 
       if (scope === 'wholeBlock') {
         for (const r of overlapping) {
-          await sql`DELETE FROM listing_blocked_dates WHERE id = ${r.id}`;
+          const targetRowId = await resolveBlockRowForRoom(sql, r.id, safeRoomId);
+          if (targetRowId) await sql`DELETE FROM listing_blocked_dates WHERE id = ${targetRowId}`;
         }
       } else {
         for (const r of overlapping) {
-          await unblockRangeFromRow(sql, r.id, startDate, endDate);
+          const targetRowId = await resolveBlockRowForRoom(sql, r.id, safeRoomId);
+          if (targetRowId) await unblockRangeFromRow(sql, targetRowId, startDate, endDate);
         }
       }
       return res.status(200).json({ success: true, affected: overlapping.length });
