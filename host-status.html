@@ -206,7 +206,8 @@
   <div id="promoDetailOverlay" class="status-popover">
     <span class="status-popover-arrow"></span>
     <div id="promoDetailContent"></div>
-    <button type="button" id="promoDetailRemoveBtn" class="status-popover-danger">Remove This Promotion</button>
+    <button type="button" id="promoDetailRemoveDayBtn" class="status-popover-danger">Remove For This Day Only</button>
+    <button type="button" id="promoDetailRemoveBtn" class="status-popover-close" style="color:#a3402f; border-color:#e0b8ac; margin-top:8px;">Remove Entire Promotion</button>
     <button type="button" class="status-popover-close" onclick="closePromoDetail()">Close</button>
   </div>
 </div>
@@ -624,6 +625,22 @@
     }
   }
 
+  async function removePromoDay(promotionId, dateStr){
+    if(!promotionId || !dateStr) return;
+    if(!window.confirm(`Remove this promotion for ${formatDateShort(dateStr)} only? The rest of its dates keep the discount.`)) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ removePromotionDay: { promotionId, date: dateStr } })
+      });
+      const data = await res.json();
+      if(!res.ok){ alert(data.error || 'Could not update this promotion.'); return; }
+      closePromoDetail();
+      loadStatusCalendar();
+    } catch(err){ alert('Could not reach the server — please try again.'); }
+  }
+
   async function removePromo(promotionId){
     try{
       const res = await fetch(API_BASE + '/api/host-listings', {
@@ -758,6 +775,9 @@
       ${p.promoMinNights ? `<p style="margin:4px 0;"><strong>Minimum nights:</strong> ${p.promoMinNights}</p>` : ''}
     `;
     document.getElementById('promoDetailRemoveBtn').onclick = () => removePromo(p.promotionId);
+    // "This day only" splits the promotion around the clicked night —
+    // same two choices the host dashboard's summary panel offers.
+    document.getElementById('promoDetailRemoveDayBtn').onclick = () => removePromoDay(p.promotionId, p.dateStr);
     openPopover(document.getElementById('promoDetailOverlay'), lastClickedCell);
   }
 
@@ -829,7 +849,7 @@
           // shows/removes it" behavior, rather than silently starting a
           // block-selection on top of an active promotion.
           const promoIdx = window.statusPromoLookup.length;
-          window.statusPromoLookup.push({ label: row.label, ...pricing });
+          window.statusPromoLookup.push({ label: row.label, dateStr, ...pricing });
           clickAttr = ` onclick="showPromoDetail(${promoIdx})" style="cursor:pointer;"`;
           innerHtml = pricing.price ? `<span class="cal-day-price">${formatCompactPrice(pricing.price)}</span>` : '';
           cellTitle = `${row.label} — ${dateStr}: ${pricing.promoName} applied — tap for details`;
