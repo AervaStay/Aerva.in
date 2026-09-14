@@ -828,6 +828,60 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- Remove ONE night from a promotion ----
+  // The Status page's "Remove for this day only", matching the host
+  // dashboard's same button. A promotion is stored as one date range, so
+  // taking a single night out means trimming an end or splitting it into
+  // two rows around the night — exactly what unblockRangeFromRow does for
+  // blocks. Deleting the row (removePromotion above) stays as "Remove
+  // entire promotion".
+  if (req.method === 'POST' && req.body && req.body.removePromotionDay) {
+    try {
+      const { promotionId, date } = req.body.removePromotionDay;
+      if (!promotionId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'Missing promotion or date.' });
+      }
+      const rows = await sql`
+        SELECT lp.id, lp.listing_id, lp.room_id, lp.name, lp.discount_type, lp.discount_value, lp.min_nights, lp.is_active,
+               lp.start_date, lp.end_date
+        FROM listing_promotions lp
+        JOIN listings l ON l.id = lp.listing_id
+        JOIN guests g ON g.host_id = l.host_id
+        WHERE lp.id = ${promotionId} AND g.id = ${guestId}
+      `;
+      const promo = rows[0];
+      if (!promo) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
+      const start = new Date(promo.start_date).toISOString().slice(0, 10);
+      const end = new Date(promo.end_date).toISOString().slice(0, 10); // exclusive
+      if (date < start || date >= end) {
+        return res.status(400).json({ error: "That date isn't inside this promotion." });
+      }
+      const next = new Date(date + 'T00:00:00Z'); next.setUTCDate(next.getUTCDate() + 1);
+      const dayAfter = next.toISOString().slice(0, 10);
+
+      const keepLeft = date > start;
+      const keepRight = dayAfter < end;
+      if (!keepLeft && !keepRight) {
+        await sql`DELETE FROM listing_promotions WHERE id = ${promo.id}`;
+      } else if (keepLeft && keepRight) {
+        await sql`UPDATE listing_promotions SET end_date = ${date}::date WHERE id = ${promo.id}`;
+        await sql`
+          INSERT INTO listing_promotions (listing_id, room_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
+          VALUES (${promo.listing_id}, ${promo.room_id}, ${promo.name}, ${promo.discount_type}, ${promo.discount_value}, ${promo.min_nights}, ${dayAfter}::date, ${end}::date, ${promo.is_active})
+        `;
+      } else if (keepLeft) {
+        await sql`UPDATE listing_promotions SET end_date = ${date}::date WHERE id = ${promo.id}`;
+      } else {
+        await sql`UPDATE listing_promotions SET start_date = ${dayAfter}::date WHERE id = ${promo.id}`;
+      }
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('host-listings (removePromotionDay) error:', err);
+      return res.status(500).json({ error: 'Could not update this promotion right now.' });
+    }
+  }
+
   // ---- Raise a concern on a held security deposit ----
   // Separate from the verification-submission branch above — this only
   // ever touches one order's deposit_status, gated on it actually
