@@ -41,6 +41,29 @@
   .status-cal-cell.is-promo{background:#2f5c2a; color:#c9e8bf;}
   .status-cal-cell.is-today{box-shadow:inset 0 0 0 2px #8a6c39;}
 
+  /* ---- Range panel ----
+     This was a full-screen modal (inset:0 + backdrop). That made
+     multi-date selection impossible: once it opened on the first tap
+     there was no way to reach the calendar to tap a second date. It's
+     now a docked panel with no backdrop, so the grid stays live
+     underneath and each further tap extends the range. */
+  #rangeConfirmOverlay.range-panel{
+    display:none; position:fixed; z-index:55;
+    right:18px; bottom:18px; width:340px; max-width:calc(100vw - 36px);
+    max-height:82vh; overflow-y:auto;
+    background:#fff; border:1px solid #ddd0bc; border-radius:10px;
+    padding:20px 22px; box-shadow:0 14px 40px rgba(28,26,23,0.22);
+  }
+  #rangeConfirmOverlay.range-panel.open{display:block;}
+  @media (max-width: 640px){
+    #rangeConfirmOverlay.range-panel{
+      right:0; left:0; bottom:0; width:auto; max-width:none;
+      border-radius:14px 14px 0 0; border-left:none; border-right:none; border-bottom:none;
+      padding-bottom:calc(20px + env(safe-area-inset-bottom));
+    }
+  }
+
+
   /* ---- Detail popovers ----
      These used to be full-screen modals (position:fixed; inset:0) with a
      dark backdrop. On a laptop that meant tapping one date hid the entire
@@ -118,8 +141,7 @@
     <p style="padding:16px; opacity:0.6; font-size:13px;">Loading…</p>
   </div>
 
-  <div id="rangeConfirmOverlay" style="display:none; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:50; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target === this) cancelSelection()">
-    <div style="background:#fff; border-radius:6px; padding:22px 24px; max-width:380px; width:100%; max-height:88vh; overflow-y:auto;">
+  <div id="rangeConfirmOverlay" class="range-panel">
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;" id="rangeConfirmRowLabel"></p>
       <p id="rangeConfirmDateLabel" style="font-size:16px; font-weight:600; margin:0 0 16px;"></p>
 
@@ -157,7 +179,6 @@
       <button type="button" id="rangePromoBtn" style="width:100%; padding:10px; background:#1c1a17; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em; margin-bottom:10px;">Add Promotion</button>
 
       <button type="button" onclick="cancelSelection()" style="width:100%; padding:10px; background:#fff; border:1px solid #ddd0bc; color:#1c1a17; border-radius:4px; cursor:pointer; font-size:12.5px; letter-spacing:0.04em;">Cancel</button>
-    </div>
   </div>
 
   <div id="statusBookingDetailOverlay" class="status-popover">
@@ -234,24 +255,38 @@
   let selRoomId = null;
   let selRowLabel = null;
   let selStart = null;
+  let selEnd = null;   // inclusive; equals selStart until a further tap extends it
 
   function rowKeyFor(row){ return row.listingId + ':' + (row.roomId || ''); }
 
   function cancelSelection(){
-    selRowKey = null; selStart = null;
-    document.getElementById('rangeConfirmOverlay').style.display = 'none';
+    selRowKey = null; selStart = null; selEnd = null;
+    document.getElementById('rangeConfirmOverlay').classList.remove('open');
     if(lastStatusData) renderStatusCalendar(lastStatusData);
   }
 
   function onAvailableCellClick(row, dateStr){
-    // ONE click opens the dialog on that single date. This used to take
-    // two taps — the first only armed a selection, which meant nothing
-    // visibly happened on the click that mattered. Ranges aren't lost:
-    // both the Block and Promotion sections carry their own from/to date
-    // fields, pre-filled with the tapped date and widenable there.
-    selRowKey = rowKeyFor(row);
-    selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label;
-    selStart = dateStr;
+    const thisRowKey = rowKeyFor(row);
+    const panelOpen = document.getElementById('rangeConfirmOverlay').classList.contains('open');
+
+    // Tapping another date in the SAME row while the panel is open
+    // EXTENDS the selection rather than starting over — tap 21, 22, 23
+    // and the range grows to 21-23, with the panel updating in place.
+    // The panel no longer covers the calendar, which is what makes this
+    // possible at all. Deliberately tap-based rather than drag: discrete
+    // taps behave identically on a phone and a laptop, and don't fight
+    // the calendar's own horizontal scroll gesture.
+    if(panelOpen && selRowKey === thisRowKey && selStart){
+      // Grow outward from whatever is already selected, so tapping
+      // backwards (23 then 21) works as naturally as forwards.
+      const start = dateStr < selStart ? dateStr : selStart;
+      const end = dateStr > selEnd ? dateStr : selEnd;
+      openRangeConfirm(row, start, end);
+      return;
+    }
+
+    // First tap, or a tap in a different row — start fresh on this date.
+    selRowKey = thisRowKey; selListingId = row.listingId; selRoomId = row.roomId; selRowLabel = row.label;
     openRangeConfirm(row, dateStr, dateStr);
   }
 
@@ -274,12 +309,15 @@
       : `Applies to the whole listing.`;
     document.getElementById('rangeBlockError').style.display = 'none';
     document.getElementById('rangeConfirmError').style.display = 'none';
-    document.getElementById('rangeConfirmOverlay').style.display = 'flex';
+    document.getElementById('rangeConfirmOverlay').classList.add('open');
     // Selection stays highlighted (selStart/selRowKey untouched) while
     // this popup is open — cancelSelection() clears it either on
     // Cancel or after a successful action.
-    window.pendingRangeStart = start;
-    window.pendingRangeEndInclusive = endInclusive;
+    selStart = start;
+    selEnd = endInclusive;
+    // Repaint so every date in the range shows as Selecting, not just
+    // the one most recently tapped.
+    if(lastStatusData) renderStatusCalendar(lastStatusData);
   }
 
   function nextDayStr(dateStr){
@@ -544,7 +582,10 @@
         const dateStr = days[i].toISOString().slice(0, 10);
         const isToday = dateStr === todayStr;
         const pricing = (row.dayPricing && row.dayPricing[i]) || { price: 0, promoName: null, promoId: null };
-        const isSelecting = selRowKey === thisRowKey && selStart === dateStr;
+        // Highlights the WHOLE selected range, not just the last date
+        // tapped — string comparison is safe on YYYY-MM-DD.
+        const isSelecting = selRowKey === thisRowKey && selStart && selEnd
+          && dateStr >= selStart && dateStr <= selEnd;
         let clickAttr, innerHtml, cellTitle;
         if(status === 'booked'){
           // A room's status is computed per-day, but the actual booking
