@@ -2522,6 +2522,15 @@
   }
   function expCalOnMouseDown(dateStr){
     if(expCalBlockedRowFor(dateStr) || expPromoRowFor(dateStr)) return;
+    // Second click extends the open selection — see sbOnCalMouseDown.
+    if(expCalSelStart && !expCalDragging && dateStr !== expCalSelStart){
+      const clamped = expCalClampSelEnd(expCalSelStart, dateStr);
+      if(clamped === dateStr){
+        expCalDragging = true; expCalSelEnd = dateStr;
+        expRenderCalendar();
+        return;
+      }
+    }
     expCalDragging = true; expCalSelStart = dateStr; expCalSelEnd = dateStr;
     expRenderCalendar();
   }
@@ -2850,6 +2859,20 @@
   }
   function sbOnCalMouseDown(dateStr){
     if(sbBlockedRowFor(dateStr) || sbPromoRowFor(dateStr)) return;
+    // A second click while a selection is open sets the OTHER END of the
+    // range, the same as the Status page — it used to start a brand-new
+    // selection, so clicking 7 then 9 lost the 7. Drag still works: the
+    // mouseup that follows finishes the range either way. If the new
+    // click sits on the far side of a block, the old selection is
+    // dropped and a fresh one starts here.
+    if(sbCalSelStart && !sbCalDragging && dateStr !== sbCalSelStart){
+      const clamped = sbClampSelEnd(sbCalSelStart, dateStr);
+      if(clamped === dateStr){
+        sbCalDragging = true; sbCalSelEnd = dateStr;
+        sbRenderCalendar();
+        return;
+      }
+    }
     sbCalDragging = true; sbCalSelStart = dateStr; sbCalSelEnd = dateStr;
     sbRenderCalendar();
   }
