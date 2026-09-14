@@ -774,10 +774,13 @@
       <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(p.promoStartDate)} – ${fmtDate(utcToYmd(new Date(ymdToUTC(p.promoEndDate).getTime() - 86400000)))}</p>
       ${p.promoMinNights ? `<p style="margin:4px 0;"><strong>Minimum nights:</strong> ${p.promoMinNights}</p>` : ''}
     `;
-    document.getElementById('promoDetailRemoveBtn').onclick = () => removePromo(p.promotionId);
+    // The status endpoint names the id promoId (see dayPricing in
+    // host-listings.js); this read promotionId, so both buttons sent
+    // undefined and the server replied "Missing promotion."
+    document.getElementById('promoDetailRemoveBtn').onclick = () => removePromo(p.promoId);
     // "This day only" splits the promotion around the clicked night —
     // same two choices the host dashboard's summary panel offers.
-    document.getElementById('promoDetailRemoveDayBtn').onclick = () => removePromoDay(p.promotionId, p.dateStr);
+    document.getElementById('promoDetailRemoveDayBtn').onclick = () => removePromoDay(p.promoId, p.dateStr);
     openPopover(document.getElementById('promoDetailOverlay'), lastClickedCell);
   }
 
