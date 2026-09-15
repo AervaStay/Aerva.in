@@ -909,10 +909,10 @@
   }
   .nav-avatar-circle img{width:100%; height:100%; object-fit:cover; display:block;}
   .nav-account-name{font-size:14px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.75;}
-  /* Host-only — shown in the header next to the login/account area, same
-     visibility rule as "My Collection" (accountType === 'guest_host').
-     Links straight to the host dashboard's Messages tab so a host never
-     has to go hunting for whether a guest has written to them. */
+  /* Shown in the header next to the login/account area for every
+     logged-in account, host or not — a guest-only account can still have
+     a live conversation about a booking they made. (This was host-only
+     once, hence the class name; the gating moved but the name stayed.) */
   .host-messages-icon{
     position:relative; display:flex; align-items:center; justify-content:center;
     width:22px; height:22px; color:var(--ink);
@@ -11887,16 +11887,25 @@
             guestLoginLinkMobile.style.display = 'none';
             guestAccountBoxMobile.style.display = 'flex';
           }
-          // "My Listings" only shows once this account has actually
-          // listed a property — account_type flips to 'guest_host'
-          // automatically the moment that happens (see schema.sql /
-          // submit-listing.js). "List Experience" is deliberately NOT
-          // gated the same way — a host can list an experience without
-          // ever having listed a property first (a without-stay
-          // experience needs no property at all; see the "Hosted At"
-          // rule in submit-listing.js), so it's shown to any logged-in
-          // account.
-          if(data.guest.accountType === 'guest_host'){
+          // The host-only links — My Collection, Status, My Earnings —
+          // appear only once this account has a LIVE listing. An account
+          // with nothing listed, or whose only listing is still pending
+          // review or was rejected, sees just My Bookings and Account
+          // Settings.
+          //
+          // Gated on hasActiveListing (computed by guest-auth.js's
+          // session check), NOT on accountType. account_type flips to
+          // 'guest_host' the instant a property is submitted, which meant
+          // someone awaiting review was shown three pages that had
+          // nothing to show them and no explanation why.
+          //
+          // "List Experience" is deliberately NOT gated at all — a host
+          // can list an experience without ever having listed a property
+          // first (a without-stay experience needs no property; see the
+          // "Hosted At" rule in submit-listing.js), so it stays visible
+          // to any logged-in account. That is the route by which someone
+          // with no listing gets their first one.
+          if(data.guest.hasActiveListing === true){
             // .nav-account-menu a's CSS expects display:block (full-width,
             // stacked, with its own top/bottom padding) — display:inline
             // was silently breaking that spacing the whole time. Only
@@ -11908,9 +11917,9 @@
             const statusMenuLinkMobile = document.getElementById('statusMenuLinkMobile');
             if(statusMenuLink) statusMenuLink.style.display = 'block';
             if(statusMenuLinkMobile) statusMenuLinkMobile.style.display = 'block';
-            // My Earnings is gated on exactly the same condition as
-            // Status — both are host-only pages, and a guest with no
-            // linked host account has nothing to show on either.
+            // My Earnings sits under the same gate as Status — both are
+            // host-only pages, and neither has anything to show until a
+            // listing is actually live and taking bookings.
             const earningsMenuLink = document.getElementById('earningsMenuLink');
             const earningsMenuLinkMobile = document.getElementById('earningsMenuLinkMobile');
             if(earningsMenuLink) earningsMenuLink.style.display = 'block';
