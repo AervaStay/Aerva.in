@@ -1,0 +1,605 @@
+// /api/_tiers.js
+// The guest and host reputation ladders, in one place. Not an API
+// endpoint itself — the leading underscore is what tells Vercel that,
+// same convention as _audit-log.js, _compliance.js, etc.
+//
+// Deliberately NOT called "Superhost" — that is Airbnb's term, and this
+// is Aerva's own ladder. Same reasoning as the original computeBadge()
+// note in guest-profile.js, which this file replaces and extends.
+//
+// Tiers are COMPUTED on every read, never stored on the row. A stored
+// tier goes stale the moment a booking completes or a review lands, and
+// then needs a backfill job nobody remembers to run. Recomputing costs
+// one cheap aggregate and is always correct.
+//
+// Every threshold below is "at least" — a host or guest sits in the
+// highest tier whose conditions they fully meet.
+
+// ---------------------------------------------------------------------
+// Guest ladder — earned on BOOKING VALUE and on how hosts have rated them.
+//
+// Value, not stay count: a guest who books a ₹2,00,000 week is worth more
+// to the platform than one who books six ₹4,000 nights, and the badge is
+// meant to mark exactly that. minSpend is lifetime gross paid on
+// confirmed bookings.
+//
+// PROMOTION NEEDS BOTH: the cumulative spend for the rung AND a review
+// score at or above its threshold. Spend alone never promotes — a guest
+// who books heavily but leaves properties badly stays where they are.
+//
+// minAvgValue is now a single flat ₹10,000 floor on every rung, not a
+// rising gate. It exists only to stop a long tail of token bookings
+// manufacturing a badge; it is no longer the thing that decides which
+// rung someone reaches. That job belongs to spend and rating. Booking
+// value still counts toward speed through BOOKING_VALUE_BANDS.
+//
+// Each rung up needs 5 more than the last — but for guests the count is
+// satisfied by BOOKINGS, not strictly by reviews: one completed booking
+// counts as one, whether or not the host got round to reviewing it. A
+// guest cannot make their host write a review, so requiring reviews alone
+// would cap a loyal guest's badge on someone else's inaction. Every
+// review belongs to a booking, so the effective count is simply whichever
+// is larger, which is normally the booking count.
+//
+// The rating average is separate and unchanged: judged only once real
+// reviews exist, because no reviews is absence of evidence, not evidence
+// of a problem. So unreviewed bookings can carry a guest UP the ladder,
+// but a genuinely poor average still holds them back.
+// ---------------------------------------------------------------------
+const GUEST_TIERS = [
+  { key: 'aerva_favorite', label: 'Aerva Favorite', minSpend: 300000, minAvgValue: 10000, minCount: 10, minScore: 4.8, minRating: 4.8,
+    blurb: 'A substantial booking history, consistently rated exceptional by hosts.' },
+  { key: 'trusted_guest',  label: 'Trusted Guest',  minSpend: 100000,  minAvgValue: 10000, minCount: 5,  minScore: 4.5, minRating: 4.5,
+    blurb: 'A strong booking history and excellent host ratings.' },
+  { key: 'valued_guest',   label: 'Valued Guest',   minSpend: 40000,   minAvgValue: 10000, minCount: 0,  minScore: 4.0, minRating: 4.0,
+    blurb: 'A confirmed booking and a good word from the host.' }
+];
+
+// An unreviewed booking counts HALF. A guest cannot make their host write
+// a review, so bookings have to count for something — but counting them
+// one-for-one meant ten bookings and no reviews reached the top badge on
+// volume alone, which is what this ladder is supposed to prevent. Half
+// credit keeps an unreviewed guest progressing while making a reviewed
+// record worth twice as much, so reaching the top without reviews takes
+// roughly twice the history.
+// ---------------------------------------------------------------------
+// Average booking value bands.
+//
+// minAvgValue on each tier is a floor — pass or fail. These bands are the
+// other half: what a booking is WORTH toward the count. A guest averaging
+// ₹1,20,000 a stay is not doing the same thing as one averaging ₹18,000,
+// and counting both as "one booking" flattens the difference the whole
+// ladder exists to notice.
+//
+// The multiplier applies to booking credit only, never to spend or to
+// ratings: money already counts directly through minSpend, and a guest
+// cannot buy a better review. So a premium guest reaches a rung on fewer
+// stays, not on a lower standard of behaviour.
+//
+// Bands are read highest-first; the first whose minAvg is met wins.
+const BOOKING_VALUE_BANDS = [
+  { key: 'signature', label: 'Signature', minAvg: 100000, multiplier: 2 },
+  { key: 'premium',   label: 'Premium',   minAvg: 40000,  multiplier: 1.5 },
+  { key: 'standard',  label: 'Standard',  minAvg: 15000,  multiplier: 1 },
+  { key: 'entry',     label: 'Entry',     minAvg: 0,      multiplier: 0.5 }
+];
+
+function bookingValueBand(avgValue) {
+  const v = num(avgValue);
+  return BOOKING_VALUE_BANDS.find(b => v >= b.minAvg) || BOOKING_VALUE_BANDS[BOOKING_VALUE_BANDS.length - 1];
+}
+
+const UNREVIEWED_BOOKING_CREDIT = 0.5;
+
+// The entry rung carries no count requirement on purpose. With half
+// credit, requiring 1 meant a guest's FIRST booking scored 0.5 and earned
+// nothing at all — the spend and average-value floors already prove that
+// booking was real, so the count has nothing left to add there. It only
+// starts mattering from the second rung, which is where "is this a
+// pattern or a one-off" becomes the actual question.
+
+// ---------------------------------------------------------------------
+// Host ladder — earned on payout received AND on guest ratings.
+//
+// Both must hold. Revenue alone would let a high-volume host with poor
+// reviews reach the top, which is the opposite of what a badge is for: it
+// tells a guest this property is a safe choice, not that the host is busy.
+//
+// Each rung up needs 10 more reviews than the last. Same two rules as the
+// guest ladder: count is required unconditionally, average is judged only
+// once there is something to judge — so one bad review demotes
+// immediately, while a first GOOD review can never cost a rung.
+// ---------------------------------------------------------------------
+// minReviews is now only a CREDIBILITY FLOOR — enough reviews that the
+// scores aren't noise — not the thing being measured. What separates the
+// rungs is minScore (the weighted quality across all five factors) and
+// minFactor (the worst single factor a host is allowed to have). Counts
+// dropped accordingly: two perfect reviews still shouldn't crown anyone,
+// but thirty mediocre ones shouldn't either, and the old ladder only
+// guarded against the first of those.
+// icon names the badge mark a page should draw. Only three exist, and the
+// two elite marks are the same feather silhouette as the plain one —
+// differing only in fill — so the set reads as one family rather than
+// three unrelated icons:
+//   feather-diamond — Aerva Elite: faceted, cut-gem outline, icy fill
+//   feather-gold    — Golden Elite: warm metallic fill
+//   feather         — every rung below: plain outline
+// The SVG itself lives in the page that renders it, not here; this file
+// stays free of markup so it can be required by any endpoint.
+// minScore is on the DEDUCTION scale (see reviewScore), where each 0.1
+// lost across every factor costs 0.54 — so these look far lower than the
+// old weighted-mean thresholds while describing a stricter standard.
+// Roughly, in uniform-rating terms:
+//   Aerva Elite 4.70  ≈ every factor at 4.95
+//   Golden Elite 4.35 ≈ every factor at 4.92
+//   Elite 3.90        ≈ every factor at 4.80
+//   Signature 3.10    ≈ every factor at 4.65
+//   Established 2.00  ≈ every factor at 4.45
+const HOST_TIERS = [
+  // Three elite rungs, tightest first. The gap between them is mostly in
+  // the score, because at this end of the ladder every host already has
+  // the revenue and the volume — what separates them is whether the
+  // reviews are excellent, near-perfect, or essentially flawless.
+  { key: 'aerva_elite',      label: 'Aerva Elite',      icon: 'feather-diamond', minPayout: 5000000, minScore: 4.96, minFactor: 4.7, minReviews: 30,
+    blurb: 'The highest standard on Aerva — essentially flawless, sustained.' },
+  { key: 'golden_elite',     label: 'Golden Elite',     icon: 'feather-gold',    minPayout: 2500000, minScore: 4.92, minFactor: 4.6, minReviews: 20,
+    blurb: 'Near-perfect reviews across a substantial body of stays.' },
+  { key: 'elite',            label: 'Elite',            icon: 'feather',         minPayout: 1000000, minScore: 4.85, minFactor: 4.5, minReviews: 10,
+    blurb: 'Exceptional across every part of the stay.' },
+  { key: 'signature_host',   label: 'Signature Host',   icon: 'feather',         minPayout: 300000,  minScore: 4.60, minFactor: 4.2, minReviews: 6,
+    blurb: 'Consistently well reviewed, with no weak spots.' },
+  { key: 'established_host', label: 'Established Host', icon: 'feather',         minPayout: 75000,   minScore: 4.30, minFactor: 3.8, minReviews: 3,
+    blurb: 'A proven track record of happy guests.' },
+  { key: 'rising_host',      label: 'Rising Host',      icon: 'feather',         minPayout: 1,       minScore: 0,    minFactor: 0,   minReviews: 0,
+    blurb: 'Off to a strong start.' }
+];
+
+
+function num(v) { return Number(v) || 0; }
+
+// ---------------------------------------------------------------------
+// Review quality — the five factors a guest scores a PROPERTY on after
+// checkout. These belong to the host ladder only.
+//
+// A host reviewing a GUEST gives one overall rating plus a comment, not a
+// factor breakdown, and location in particular has no meaning there: a
+// guest does not have an address, and nothing about where a property sits
+// says anything about the person who stayed in it. resolveTier reads
+// stats.factors on the host path only, so a factors object passed
+// alongside guest stats is ignored rather than silently scored — see the
+// isGuest branches there.
+//
+// A single overall average is easy to game and easy to misread: a host
+// with spotless hygiene and a beautiful location can carry a real
+// communication problem for a long time behind one blended number. So
+// quality is judged two ways at once — a WEIGHTED score across all five,
+// and a floor that EVERY factor must clear on its own.
+//
+// Most factors count at face value — a 5 is a 5, a 1 is a 1 — with two
+// exceptions at either end.
+//
+// HYGIENE counts one and a half, COMMUNICATION one point four. These are
+// the two a guest cannot negotiate around and the two most squarely in
+// the host's control: a dirty room ends the stay, and an unanswered
+// message turns every other problem into a bigger one. Weighting them up
+// puts the most pressure exactly where a host can act.
+//
+// Services and value for money stay at face value — they matter, but a
+// thin breakfast or a slightly steep rate is a disappointment, not a
+// ruined stay.
+//
+// LOCATION counts 0.1 — a tenth of a full-weight factor, and a fifteenth
+// of hygiene. A host cannot move the property, so marking them down for
+// an address they disclosed truthfully measures the address, not the
+// hosting. At this weight it is close to symbolic: it registers that the
+// guest felt the location let the stay down, without letting geography
+// decide a badge that is meant to describe hosting. A point lost on
+// location costs 0.10; a point lost on hygiene costs 1.50.
+//
+// Weights sum to 5.0. Nothing relies on that number — reviewScore divides
+// by whatever the weights actually sum to, so retuning any of them is a
+// one-line change with no other arithmetic to update.
+// weight is the factor's nominal standing — location is a full factor and
+// a guest scores it like any other. cost is what a point lost on it
+// actually deducts. For four of the five the two are the same number;
+// only location separates them, and that separation is the point: the
+// factor is not diminished, only its power to cost a host a badge.
+//
+// Costs sum to 5.0, so a straight 5 scores exactly 5.0 and a straight 1
+// scores exactly 0.0 — the scale has real ends.
+const REVIEW_FACTORS = [
+  { key: 'hygiene',       label: 'Hygiene',         weight: 1.5 },
+  { key: 'communication', label: 'Communication',   weight: 1.4 },
+  { key: 'services',      label: 'Services',        weight: 1 },
+  { key: 'value',         label: 'Value for money', weight: 1 },
+  // floorExempt: counted in the weighted score, but never held against a
+  // host by the per-factor floor. A host cannot move the property. The
+  // floor exists to stop a fixable weak spot — a dirty room, unanswered
+  // messages — being masked by strong scores elsewhere, and an address is
+  // not a fixable weak spot. Leaving location in the floor re-imposed at
+  // full force exactly the penalty the low weight was meant to soften,
+  // capping well-run properties in quiet locations.
+  { key: 'location',      label: 'Location',        weight: 0.1, floorExempt: true }
+];
+
+// factors: { hygiene: 4.6, communication: 4.9, ... } — each a 1-5 average.
+// Missing factors are skipped rather than counted as zero; a factor a
+// guest declined to score is not a complaint.
+// ---------------------------------------------------------------------
+// The four factors a HOST scores a GUEST on after checkout. A separate
+// set from the property factors above: a guest has no address, so there
+// is no location here, and cleanliness means "left the place decent"
+// rather than "arrived clean".
+//
+// Cleanliness and respectfulness carry 1.5 because they are what make a
+// guest genuinely expensive to host — damage and bad behaviour cost real
+// money and real standing. Communication and rules-followed carry 1:
+// irritating when poor, but recoverable.
+const GUEST_FACTORS = [
+  { key: 'cleanliness',   label: 'Cleanliness',    weight: 1.5 },
+  { key: 'communication', label: 'Communication',  weight: 1 },
+  { key: 'respectful',    label: 'Respectful',     weight: 1.5 },
+  { key: 'rules',         label: 'Rules followed', weight: 1 }
+];
+
+// A WEIGHTED MEAN, so the score reads as a rating: straight 4.9s score
+// 4.90, straight 5s score 5.00. The weights set only how much each factor
+// pulls on that average.
+//
+// This replaced a deduction model where each factor subtracted its weight
+// per point lost. That amplified every shortfall by the sum of the
+// weights — a 4.9 became 4.50 and a 4.68 average became 3.40 — so the
+// score could not be shown to anyone as a rating without confusing them.
+//
+// A missing factor is skipped rather than counted as zero: someone who
+// declined to score it has not complained about it. Its weight leaves the
+// denominator too, so the remaining factors keep their relative pull.
+function reviewScore(factors, set) {
+  if (!factors) return 0;
+  const FACTORS = set || REVIEW_FACTORS;
+  let total = 0, weight = 0;
+  FACTORS.forEach(f => {
+    const v = num(factors[f.key]);
+    if (v > 0) { total += v * f.weight; weight += f.weight; }
+  });
+  if (!weight) return 0;
+  // Rounded to 3dp so a score sitting exactly on a threshold is not
+  // dropped a rung by float drift.
+  return Math.round((total / weight) * 1000) / 1000;
+}
+
+// The factor dragging hardest — what to tell a host to fix. Returns the
+// lowest-scoring factor below `floor`, or null if nothing is below it.
+function weakestFactor(factors, floor, set) {
+  let worst = null;
+  (set || REVIEW_FACTORS).forEach(f => {
+    if (f.floorExempt) return;
+    const v = num(factors && factors[f.key]);
+    if (v > 0 && v < floor && (!worst || v < worst.value)) worst = { key: f.key, label: f.label, value: v };
+  });
+  return worst;
+}
+
+
+// Shared by both ladders — they differ only in which money field they
+// read, so the eligibility rules live in one place and cannot drift.
+function resolveTier(ladder, stats, moneyField) {
+  const money = num(stats && stats[moneyField]);
+  const reviews = num(stats && stats.reviewCount);
+  const bookings = num(stats && stats.bookingCount);
+  const avg = num(stats && stats.avgRating);
+  const isGuest = moneyField === 'totalSpend';
+  const minMoney = isGuest ? 'minSpend' : 'minPayout';
+  const minCountField = isGuest ? 'minCount' : 'minReviews';
+  // Guests: every review already sits on a booking, so the remaining
+  // bookings are the unreviewed ones and they earn half credit. Hosts
+  // count reviews only — a host CAN influence whether guests review them,
+  // and their badge is a signal to strangers choosing a property, so it
+  // has to rest on real feedback.
+
+  // Average booking value, so a long tail of cheap bookings can't climb
+  // the ladder the way a few substantial ones legitimately do.
+  const avgValue = isGuest && bookings > 0 ? money / bookings : Infinity;
+  // Hosts are judged on the five factors; guests have no factor breakdown
+  // (a host rates them once, overall), so they keep the single average.
+  // A valid review carries ALL FIVE ratings AND a comment — both are
+  // mandatory at submission, and a review missing either is not accepted.
+  // The comment is informational only: it is shown to guests, never scored
+  // and never counted. Only the ratings move a tier.
+  //
+  // The fallback below therefore guards against data that should not
+  // exist: rows written before that rule, imported from elsewhere, or
+  // partially saved. It is kept because the failure is silent and
+  // asymmetric — an unrated review counted as real would push a host past
+  // the credibility floor on evidence that says nothing, then fail them on
+  // a score of 0 they never earned. Treating it as no review at all is the
+  // only reading that cannot punish a host for a row they did not create.
+  //
+  // reviewCount must therefore be the number of VALID reviews. Under the
+  // mandatory-fields rule that is simply every row of listing_reviews, but
+  // the query should still filter to rows carrying ratings rather than
+  // assume it — the assumption is free to make and expensive to be wrong
+  // about.
+  const factorSet = isGuest ? GUEST_FACTORS : REVIEW_FACTORS;
+  const rawFactors = stats && stats.factors;
+  const factors = rawFactors && factorSet.some(f => num(rawFactors[f.key]) > 0) ? rawFactors : null;
+  // Same rule on both sides of the ladder. A host reviewing a guest must
+  // give a rating AND a comment, exactly as a guest reviewing a property
+  // must; the comment is shown but never scored. A guest review carrying
+  // no rating is therefore treated as no review — avg of 0 is the tell,
+  // since a real rating is 1-5 and can never be 0.
+  //
+  // Without this the guest ladder had the mirror-image flaw of the host
+  // one: unrated rows would inflate reviewCount past the credibility floor
+  // and then fail the guest on an average of 0 they never received.
+  const rated = factors ? reviews : (avg > 0 ? reviews : 0);
+  const score = factors ? reviewScore(factors, factorSet) : avg;
+  // Guests: a rated review is worth full credit, every other booking half
+  // (see UNREVIEWED_BOOKING_CREDIT). An unrated review is not a review, so
+  // its booking falls back to half credit rather than counting as one.
+  // Guests: a rated review is worth full credit, every other booking half
+  // (see UNREVIEWED_BOOKING_CREDIT), and the whole lot is then scaled by
+  // the value band the guest actually books in.
+  const band = isGuest ? bookingValueBand(avgValue === Infinity ? 0 : avgValue) : null;
+  const count = isGuest
+    ? (rated + Math.max(bookings - rated, 0) * UNREVIEWED_BOOKING_CREDIT) * band.multiplier
+    : reviews;
+  for (const t of ladder) {
+    if (money < t[minMoney]) continue;
+    if ((isGuest ? count : rated) < t[minCountField]) continue;
+    if (t.minAvgValue && avgValue < t.minAvgValue) continue;
+    if (rated > 0) {
+      if (score < (t.minScore !== undefined ? t.minScore : t.minRating)) continue;
+      // No single factor may sit below the tier's floor, however strong
+      // the others are. This is the whole point of scoring five things:
+      // a filthy room is not offset by a great location.
+      if (t.minFactor && factors && weakestFactor(factors, t.minFactor, factorSet)) continue;
+    }
+    return { key: t.key, label: t.label, blurb: t.blurb, icon: t.icon || null };
+  }
+  return null; // no track record yet — callers show no badge at all
+}
+
+// stats: { totalSpend, bookingCount, reviewCount, avgRating }
+// stats.factors is deliberately NOT read here — guests are rated once,
+// overall. The five property factors (location included) never apply.
+function guestTier(stats) { return resolveTier(GUEST_TIERS, stats, 'totalSpend'); }
+
+// stats: { totalPayout, reviewCount, avgRating }
+function hostTier(stats) { return resolveTier(HOST_TIERS, stats, 'totalPayout'); }
+
+// What this host or guest still needs for the next rung up. Shown on
+// their own dashboard only — never to anyone else, since "needs 3 more
+// reviews" is nobody else's business. Returns null at the top.
+function nextTierProgress(ladder, stats, currentKey) {
+  const idx = currentKey ? ladder.findIndex(t => t.key === currentKey) : ladder.length;
+  if (idx === 0) return null;
+  const next = ladder[idx - 1];
+  if (!next) return null;
+  const isGuest = Object.prototype.hasOwnProperty.call(next, 'minSpend');
+  const have = num(isGuest ? stats.totalSpend : stats.totalPayout);
+  const need = isGuest ? next.minSpend : next.minPayout;
+  const needs = [];
+  if (have < need) {
+    needs.push(`₹${(need - have).toLocaleString('en-IN')} more in ${isGuest ? 'booking value' : 'payouts'}`);
+  }
+  const haveCount = isGuest
+    ? num(stats.reviewCount) + Math.max(num(stats.bookingCount) - num(stats.reviewCount), 0) * UNREVIEWED_BOOKING_CREDIT
+    : num(stats.reviewCount);
+  const needCount = isGuest ? next.minCount : next.minReviews;
+  if (needCount && haveCount < needCount) {
+    const gap = needCount - haveCount;
+    needs.push(isGuest
+      ? `${Math.ceil(gap / UNREVIEWED_BOOKING_CREDIT)} more booking${Math.ceil(gap / UNREVIEWED_BOOKING_CREDIT) === 1 ? '' : 's'} (or ${Math.ceil(gap)} reviewed)`
+      : `${Math.ceil(gap)} more review${Math.ceil(gap) === 1 ? '' : 's'}`);
+  }
+  if (isGuest && next.minAvgValue) {
+    const bk = num(stats.bookingCount);
+    const avgV = bk > 0 ? num(stats.totalSpend) / bk : 0;
+    if (bk > 0 && avgV < next.minAvgValue) {
+      needs.push(`an average booking of ₹${next.minAvgValue.toLocaleString('en-IN')}`);
+    }
+  }
+  if (num(stats.reviewCount) > 0) {
+    const f = stats.factors;
+    const score = f ? reviewScore(f) : num(stats.avgRating);
+    const wantScore = next.minScore !== undefined ? next.minScore : next.minRating;
+    if (wantScore && score < wantScore) needs.push(`an overall review score of ${wantScore}`);
+    // Named explicitly — "improve your reviews" is not actionable, but
+    // "hygiene is at 3.6, needs 4.2" tells a host exactly what to fix.
+    if (next.minFactor && f) {
+      const weak = weakestFactor(f, next.minFactor);
+      if (weak) needs.push(`${weak.label.toLowerCase()} at ${next.minFactor} or above (currently ${weak.value.toFixed(1)})`);
+    }
+  }
+  return { label: next.label, needs };
+}
+
+// ---------------------------------------------------------------------
+// Periodic review
+//
+// Guests are reviewed ANNUALLY, on 1 January.
+// Hosts are reviewed QUARTERLY, on 1 Jan / 1 Apr / 1 Jul / 1 Oct.
+//
+// Both are assessed against a rolling TWELVE MONTHS, not against the
+// single period just ended. The thresholds above (₹10L payout, 30 reviews
+// for Elite) describe a year's worth of trading; judging one quarter
+// against them would mean needing 30 reviews in three months, which
+// almost no host would ever clear. Reviewing quarterly makes the badge
+// responsive — a host who slips is caught within three months instead of
+// twelve — without quietly making it four times harder to earn.
+//
+// Two rules keep decay fair rather than brutal:
+//
+//   1. At most ONE rung is lost per review. Falling from Aerva Elite to
+//      nothing over one quiet spell reads as punishment and is the surest
+//      way to make someone stop trying.
+//   2. There is no cap on gains. Earning three rungs at once awards all
+//      three — the cap exists to soften loss, not to slow people down.
+//
+// Note this does mean a host can slide four rungs in a year where a guest
+// slides one. That is the intended consequence of a tighter review cycle:
+// a host badge is a promise to strangers choosing a property, so it
+// should go stale faster than a guest's.
+//
+// Deliberately computed by walking the period history rather than stored
+// on the row. A stored tier needs a cron that must fire on exactly the
+// right day and goes silently wrong if it is missed, retried, or runs
+// twice. Walking the history gives the same answer on any day, from any
+// caller, with nothing to schedule and nothing to repair.
+
+const CADENCES = {
+  annual:    { perYear: 1, windowPeriods: 1 },  // 1 period = 12 months
+  quarterly: { perYear: 4, windowPeriods: 4 }   // 4 periods = 12 months
+};
+
+// Period keys are sortable strings: "2026" annually, "2026-Q3" quarterly.
+function periodKey(year, index, cadence) {
+  return cadence === 'quarterly' ? `${year}-Q${index + 1}` : String(year);
+}
+function periodsBetween(fromYear, fromIdx, toYear, toIdx, cadence) {
+  const per = CADENCES[cadence].perYear;
+  const out = [];
+  let y = fromYear, i = fromIdx;
+  while (y < toYear || (y === toYear && i <= toIdx)) {
+    out.push({ year: y, index: i, key: periodKey(y, i, cadence) });
+    i += 1;
+    if (i >= per) { i = 0; y += 1; }
+  }
+  return out;
+}
+
+// The period that most recently ENDED — the one the latest review judged.
+function assessmentPeriod(now, cadence) {
+  const d = now || new Date();
+  const per = CADENCES[cadence].perYear;
+  const idx = Math.floor(d.getUTCMonth() / (12 / per));  // 0-based
+  return idx === 0
+    ? { year: d.getUTCFullYear() - 1, index: per - 1 }   // still in the first period → previous year's last
+    : { year: d.getUTCFullYear(), index: idx - 1 };
+}
+function assessmentYear(now) { return assessmentPeriod(now, 'annual').year; }
+
+// Sum several periods into one stats object. avgRating is weighted by
+// review count — a straight mean of period averages would let a quarter
+// with two reviews count as much as one with two hundred.
+function mergeStats(list) {
+  const out = { totalSpend: 0, totalPayout: 0, bookingCount: 0, reviewCount: 0, avgRating: 0, factors: {} };
+  let ratingWeight = 0;
+  const fTotal = {}, fWeight = {};
+  (list || []).forEach(st => {
+    if (!st) return;
+    out.totalSpend += num(st.totalSpend);
+    out.totalPayout += num(st.totalPayout);
+    out.bookingCount += num(st.bookingCount);
+    const rc = num(st.reviewCount);
+    out.reviewCount += rc;
+    if (rc > 0 && num(st.avgRating) > 0) { out.avgRating += num(st.avgRating) * rc; ratingWeight += rc; }
+    // Each factor averaged across periods, weighted by that period's
+    // review count — same reasoning as the overall average: a quarter
+    // with two reviews must not count as much as one with two hundred.
+    if (rc > 0 && st.factors) {
+      Object.keys(st.factors).forEach(k => {
+        const v = num(st.factors[k]);
+        if (v > 0) { fTotal[k] = (fTotal[k] || 0) + v * rc; fWeight[k] = (fWeight[k] || 0) + rc; }
+      });
+    }
+  });
+  out.avgRating = ratingWeight > 0 ? out.avgRating / ratingWeight : 0;
+  Object.keys(fWeight).forEach(k => { out.factors[k] = fTotal[k] / fWeight[k]; });
+  if (!Object.keys(out.factors).length) delete out.factors;
+  return out;
+}
+
+function rungOf(ladder, key) {
+  if (!key) return -1;
+  const i = ladder.findIndex(t => t.key === key);
+  return i < 0 ? -1 : (ladder.length - 1 - i); // 0 = lowest rung
+}
+function tierAtRung(ladder, rung) {
+  if (rung < 0) return null;
+  const t = ladder[ladder.length - 1 - rung];
+  return t ? { key: t.key, label: t.label, blurb: t.blurb, icon: t.icon || null } : null;
+}
+
+// statsByPeriod: { "2026-Q1": {...} } quarterly, { "2026": {...} } annually.
+// Missing periods are treated as empty — a period with no bookings must
+// decay exactly like a recorded zero, or someone active once keeps a badge
+// indefinitely, which is what the review exists to prevent.
+function reviewTiers(ladder, statsByPeriod, moneyField, now, cadence) {
+  const cad = CADENCES[cadence] ? cadence : 'annual';
+  const win = CADENCES[cad].windowPeriods;
+  const today = now || new Date();
+  const assessed = assessmentPeriod(today, cad);
+  const stats = statsByPeriod || {};
+
+  const known = Object.keys(stats).filter(k => stats[k]).sort();
+  let startYear = assessed.year, startIdx = assessed.index;
+  if (known.length) {
+    const first = known[0];
+    startYear = Number(first.slice(0, 4));
+    startIdx = cad === 'quarterly' ? Number(first.slice(6, 7)) - 1 : 0;
+  }
+
+  const timeline = periodsBetween(startYear, startIdx, assessed.year, assessed.index, cad);
+  let heldRung = -1;
+  let earnedAtAssessment = null;
+  const history = [];
+
+  timeline.forEach((p, i) => {
+    // Rolling window: this period plus the preceding ones, so the
+    // thresholds keep describing twelve months of activity.
+    const windowKeys = timeline.slice(Math.max(0, i - win + 1), i + 1).map(x => x.key);
+    const earned = resolveTier(ladder, mergeStats(windowKeys.map(k => stats[k])), moneyField);
+    const earnedRung = rungOf(ladder, earned && earned.key);
+    heldRung = earnedRung >= heldRung ? earnedRung : Math.max(earnedRung, heldRung - 1);
+    history.push({ period: p.key, earned: earned ? earned.label : null, held: (tierAtRung(ladder, heldRung) || {}).label || null });
+    if (p.key === periodKey(assessed.year, assessed.index, cad)) earnedAtAssessment = earned;
+  });
+
+  // Where the period currently RUNNING is heading — what the next review
+  // would award if it closed today. Turns the review from a nasty
+  // surprise into something the person can still act on.
+  const per = CADENCES[cad].perYear;
+  const curIdx = Math.floor(today.getUTCMonth() / (12 / per));
+  const current = periodsBetween(today.getUTCFullYear(), curIdx, today.getUTCFullYear(), curIdx, cad)[0];
+  const provWindow = [];
+  let py = current.year, pi = current.index;
+  for (let k = 0; k < win; k++) {
+    provWindow.push(periodKey(py, pi, cad));
+    pi -= 1; if (pi < 0) { pi = per - 1; py -= 1; }
+  }
+  const provisional = resolveTier(ladder, mergeStats(provWindow.map(k => stats[k])), moneyField);
+
+  let ny = current.year, ni = current.index + 1;
+  if (ni >= per) { ni = 0; ny += 1; }
+  const nextMonth = String(ni * (12 / per) + 1).padStart(2, '0');
+
+  return {
+    current: tierAtRung(ladder, heldRung),
+    earned: earnedAtAssessment,
+    provisional,
+    cadence: cad,
+    assessmentPeriod: periodKey(assessed.year, assessed.index, cad),
+    nextReview: `${ny}-${nextMonth}-01`,
+    history
+  };
+}
+
+// Convenience wrappers so callers can't accidentally pair the wrong
+// ladder with the wrong cadence.
+function reviewGuestTiers(statsByYear, now) {
+  return reviewTiers(GUEST_TIERS, statsByYear, 'totalSpend', now, 'annual');
+}
+function reviewHostTiers(statsByQuarter, now) {
+  return reviewTiers(HOST_TIERS, statsByQuarter, 'totalPayout', now, 'quarterly');
+}
+
+module.exports = {
+  GUEST_TIERS, HOST_TIERS, UNREVIEWED_BOOKING_CREDIT, CADENCES, REVIEW_FACTORS, GUEST_FACTORS,
+  BOOKING_VALUE_BANDS, bookingValueBand,
+  reviewScore, weakestFactor,
+  guestTier, hostTier, nextTierProgress, mergeStats,
+  assessmentYear, assessmentPeriod, reviewTiers,
+  reviewGuestTiers, reviewHostTiers
+};
