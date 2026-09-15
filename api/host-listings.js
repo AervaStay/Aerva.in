@@ -401,8 +401,20 @@ module.exports = async (req, res) => {
   // The row count stays small: at most 24 months × listings × 3 buckets,
   // and only combinations that actually have a booking appear at all.
   //
-  // Money is bucketed by the stay's ARRIVAL month, so a booking counts in
-  // the month the guest actually stays, not the month they booked it.
+  // Money is bucketed by the BOOKING month (orders.created_at), because
+  // that is when the host is actually paid — the full payout lands at
+  // booking time, not at check-in. Bucketing by arrival would report
+  // money in a month it never arrived in.
+  //
+  // Each booking is then marked by whether its STAY has been delivered:
+  //   current  — the guest has arrived (stay under way or finished)
+  //   upcoming — the stay is still ahead
+  // So 'upcoming' is revenue already banked against nights not yet
+  // delivered: the host has the money but still owes the stay. Splitting
+  // on booking month is what makes both meaningful at once — within one
+  // arrival month every stay is either all past or all future, so that
+  // grouping could never show both.
+  //
   // Only status='paid' rows count: cancelled and pending orders are not
   // earnings and would flatter every figure.
   if (req.method === 'GET' && req.query.analytics === '1') {
@@ -425,13 +437,13 @@ module.exports = async (req, res) => {
       // expected income the host hasn't realised yet. departure is the
       // day the guest leaves, so departure <= today means fully over.
       const rows = await sql`
-        SELECT to_char(date_trunc('month', o.arrival), 'YYYY-MM') AS month,
+        SELECT to_char(date_trunc('month', o.created_at), 'YYYY-MM') AS month,
+               to_char(date_trunc('month', o.arrival), 'YYYY-MM')    AS "stayMonth",
                o.listing_id                                        AS "listingId",
                l.property_name                                     AS "listingName",
                COALESCE(l.listing_type, 'stay')                     AS "listingType",
                CASE
-                 WHEN o.departure <= CURRENT_DATE THEN 'past'
-                 WHEN o.arrival   <= CURRENT_DATE THEN 'current'
+                 WHEN o.arrival <= CURRENT_DATE THEN 'current'
                  ELSE 'upcoming'
                END                                                 AS bucket,
                COALESCE(SUM(o.total), 0)             AS gross,
@@ -442,8 +454,8 @@ module.exports = async (req, res) => {
         FROM orders o
         JOIN listings l ON l.id = o.listing_id
         WHERE l.host_id = ${guest.host_id} AND o.status = 'paid'
-          AND o.arrival >= ${windowStart} AND o.arrival < ${windowEnd}
-        GROUP BY 1, 2, 3, 4, 5
+          AND o.created_at >= ${windowStart} AND o.created_at < ${windowEnd}
+        GROUP BY 1, 2, 3, 4, 5, 6
       `;
 
       // Every approved listing, including ones with no bookings at all —
@@ -459,6 +471,7 @@ module.exports = async (req, res) => {
       return res.status(200).json({
         rows: rows.map(r => ({
           month: r.month,
+          stayMonth: r.stayMonth,
           listingId: r.listingId,
           listingName: r.listingName,
           listingType: r.listingType,
