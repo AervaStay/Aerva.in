@@ -56,6 +56,7 @@
 // correctly against old and new data alike.
 
 const { neon } = require('@neondatabase/serverless');
+const { hostTier } = require('./_tiers');
 const sql = neon(process.env.DATABASE_URL);
 
 function parseMaxGuests(raw) {
@@ -499,7 +500,8 @@ module.exports = async (req, res) => {
                 AND b.end_date > ${arrivalFilter}::date
             )
           )
-        ) AS is_available
+        ) AS is_available,
+        host_id
       FROM listings
       WHERE status = 'approved' AND listing_type = 'stay'
         AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter} OR area ILIKE ${effectiveCityFilter})
@@ -724,6 +726,56 @@ module.exports = async (req, res) => {
       }
       filtered.forEach(l => { l.active_promotions = promotionsByListing[l.id] || []; });
     }
+
+    // ---- Host badge ----
+    // One aggregate for the whole page, not one per listing: a results
+    // page can carry 50 cards from a dozen hosts, and a per-card query
+    // would be a dozen round trips for a decoration.
+    //
+    // Only the three elite rungs are ever sent. Every other host resolves
+    // to Rising Host or nothing, and stamping "Rising Host" on a public
+    // card tells a guest nothing useful while quietly disparaging a
+    // perfectly good property — the absence of a badge is the correct way
+    // to say "not yet outstanding". This also means no badge appears at
+    // all until listing_reviews exists, which is the honest state.
+    //
+    // Payout and reviews are summed over a rolling twelve months, the
+    // same window _tiers.js's quarterly review uses, so the badge on a
+    // card always agrees with the one on the host's own dashboard.
+    const PUBLIC_BADGE_KEYS = ['elite', 'golden_elite', 'aerva_elite'];
+    try {
+      const hostIds = [...new Set(filtered.map(l => l.host_id).filter(Boolean))];
+      if (hostIds.length) {
+        const stats = await sql`
+          SELECT l.host_id,
+                 COALESCE(SUM(o.payout_amount), 0) AS payout,
+                 COUNT(o.id)                       AS bookings
+          FROM listings l
+          LEFT JOIN orders o
+            ON o.listing_id = l.id AND o.status = 'paid'
+            AND o.created_at >= NOW() - INTERVAL '12 months'
+          WHERE l.host_id = ANY(${hostIds})
+          GROUP BY l.host_id
+        `;
+        const byHost = {};
+        stats.forEach(r => {
+          // No factors passed: listing_reviews does not exist yet, so
+          // reviewCount is 0 and every host resolves below the badge
+          // threshold. When that table ships, the per-factor averages get
+          // joined in here and the badges light up with no other change.
+          const tier = hostTier({ totalPayout: Number(r.payout) || 0, reviewCount: 0 });
+          if (tier && PUBLIC_BADGE_KEYS.includes(tier.key)) {
+            byHost[r.host_id] = { key: tier.key, label: tier.label, icon: tier.icon };
+          }
+        });
+        filtered.forEach(l => { l.host_tier = byHost[l.host_id] || null; });
+      }
+    } catch (err) {
+      // A badge is decoration. If this fails the listings still render.
+      console.error('host tier lookup failed (non-fatal):', err);
+    }
+    // host_id is internal — never send it to a browser.
+    filtered.forEach(l => { delete l.host_id; });
 
     return res.status(200).json({ listings: filtered });
   } catch (err) {
