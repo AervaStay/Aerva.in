@@ -301,6 +301,13 @@
      photo that changes a decision. Everything else up there is context
      and now reads as quiet glass pills instead of competing blocks. */
   .suite-badge-discount{ background:#a3402f; color:#fff; font-weight:500; }
+  .host-tier-badge{
+    display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 7px; border-radius:100px;
+    font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; backdrop-filter:blur(3px);
+  }
+  .host-tier-badge svg{width:11px; height:auto; display:block; flex:0 0 auto;}
+  .tier-gold{ background:rgba(28,20,12,0.82); color:#f0d27a; }
+  .tier-diamond{ background:rgba(16,24,32,0.82); color:#cfe6f5; }
   .suite-badge-stay{ background:#4d9a56; color:#fff; }
   /* Distinguishes a stay from an experience only where it's actually
      ambiguous — the mixed "All" grid. Suites-only/Experience-only tabs
@@ -6479,6 +6486,39 @@
     return card;
   }
 
+  // Host tier badge. Only the three elite rungs are ever sent by
+  // get-listings.js (see PUBLIC_BADGE_KEYS there) — the absence of a
+  // badge is how a not-yet-outstanding host is shown, never a lesser
+  // label, which would disparage a perfectly good property.
+  //
+  // One feather silhouette for all of them, differing only in fill, so
+  // the set reads as a family rather than three unrelated icons.
+  const FEATHER_PATH = 'M0 -36 C 17 -22, 23 -2, 16 20 C 11 33, 4 39, 0 42 C -4 39, -11 33, -16 20 C -23 -2, -17 -22, 0 -36 Z';
+  const FEATHER_BARBS = 'M0 -24 L12 -10 M0 -14 L15 2 M0 -4 L14 14 M0 8 L10 24 M0 -24 L-12 -10 M0 -14 L-15 2 M0 -4 L-14 14 M0 8 L-10 24';
+  function hostTierBadgeHtml(tier){
+    if(!tier || !tier.label) return '';
+    const dia = tier.icon === 'feather-diamond';
+    const gold = tier.icon === 'feather-gold';
+    // Gradient ids are suffixed per-card: several cards render at once and
+    // duplicate ids would make every feather adopt the first card's fill.
+    const uid = 'ft' + Math.random().toString(36).slice(2, 8);
+    const fill = dia ? `url(#${uid})` : (gold ? `url(#${uid})` : 'none');
+    const stops = dia
+      ? '<stop offset="0" stop-color="#eaf6ff"/><stop offset="0.4" stop-color="#b9d9ec"/><stop offset="0.75" stop-color="#8fb8d4"/><stop offset="1" stop-color="#dff1fb"/>'
+      : '<stop offset="0" stop-color="#f0d27a"/><stop offset="0.45" stop-color="#c9a227"/><stop offset="1" stop-color="#8a6c39"/>';
+    const edge = dia ? '#dff1fb' : '#f0d27a';
+    const barb = dia ? '#ffffff' : '#fff3cf';
+    const facets = dia ? `<path d="M0 -36 L16 8 L0 42 L-16 8 Z" fill="none" stroke="#ffffff" stroke-width="1.4" opacity="0.5"/>` : '';
+    return `<span class="host-tier-badge ${dia ? 'tier-diamond' : 'tier-gold'}" title="${escapeMessageHtml(tier.label)}">
+      <svg viewBox="-26 -40 52 86" aria-hidden="true">
+        <defs><linearGradient id="${uid}" x1="0" y1="0" x2="${dia ? 1 : 0}" y2="1">${stops}</linearGradient></defs>
+        <path d="${FEATHER_PATH}" fill="${fill}" stroke="${edge}" stroke-width="2"/>
+        <path d="M0 -36 L0 42" stroke="${edge}" stroke-width="1.6" opacity="0.7"/>
+        <path d="${FEATHER_BARBS}" stroke="${barb}" stroke-width="1.3" opacity="0.7" fill="none"/>
+        ${facets}
+      </svg>${escapeMessageHtml(tier.label)}</span>`;
+  }
+
   function buildSuiteCard(listing, index){
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
@@ -6614,6 +6654,7 @@
           ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-stay">Stay</span>' : ''}
           ${isNew ? '<span class="suite-badge">New</span>' : ''}
           ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
+          ${hostTierBadgeHtml(listing.host_tier)}
         </div>
         <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
           <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
