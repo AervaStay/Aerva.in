@@ -67,6 +67,7 @@
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const { verifyToken, createToken } = require('./_approval-token');
+const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
@@ -420,6 +421,79 @@ module.exports = async (req, res) => {
   // that month" including ones later cancelled or refunded — history a
   // paid-only query erases. The dashboard defaults to paid, so money
   // figures are unaffected unless the host deliberately widens it.
+  // ---- Host reviews a guest ----
+  // POST { reviewGuest: { orderId, cleanliness, communication, respectful,
+  // rules, comment } }
+  //
+  // Mirror of the guest's property review in guest-profile.js: all four
+  // ratings and the comment mandatory, one per booking, inside the same
+  // window, and published by the same daily sweep rather than here.
+  if (req.method === 'POST' && req.body && req.body.reviewGuest) {
+    try {
+      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      const me = guestRows[0];
+      if (!me || !me.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
+      const b = req.body.reviewGuest || {};
+      const orderId = Number(b.orderId);
+      if (!orderId) return res.status(400).json({ error: 'Which booking is this review for?' });
+
+      // Scoped through listings.host_id, so a host can only ever review a
+      // guest who actually stayed at one of their own properties.
+      const rows = await sql`
+        SELECT o.id, o.listing_id, o.guest_id, o.departure, o.status
+        FROM orders o JOIN listings l ON l.id = o.listing_id
+        WHERE o.id = ${orderId} AND l.host_id = ${me.host_id}
+      `;
+      const order = rows[0];
+      if (!order) return res.status(404).json({ error: 'Booking not found.' });
+      if (order.status !== 'paid') return res.status(400).json({ error: 'Only completed stays can be reviewed.' });
+      if (!order.guest_id) return res.status(400).json({ error: 'This booking has no guest account to review.' });
+      if (!submissionOpen(order.departure)) {
+        return res.status(400).json({ error: `Reviews can be left for ${REVIEW_WINDOW_DAYS} days after checkout. This window has closed.` });
+      }
+
+      const FIELDS = ['cleanliness', 'communication', 'respectful', 'rules'];
+      const vals = {};
+      for (const f of FIELDS) {
+        const v = Number(b[f]);
+        if (!Number.isFinite(v) || v < 1 || v > 5) {
+          return res.status(400).json({ error: `Please rate ${f === 'rules' ? 'rules followed' : f} between 1 and 5.` });
+        }
+        vals[f] = v;
+      }
+      const comment = typeof b.comment === 'string' ? b.comment.trim() : '';
+      if (comment.length < 10) return res.status(400).json({ error: 'Please write a few words about this guest.' });
+
+      // guest_reviews.rating predates the factor columns and is still read
+      // by older code paths, so it is kept in step: the plain mean of the
+      // four, not a weighted score, because that is what it always meant.
+      const blended = Number((FIELDS.reduce((a, f) => a + vals[f], 0) / FIELDS.length).toFixed(2));
+
+      const existing = await sql`SELECT id FROM guest_reviews WHERE order_id = ${order.id}`;
+      if (existing.length) return res.status(409).json({ error: 'You have already reviewed this stay.' });
+
+      const inserted = await sql`
+        INSERT INTO guest_reviews
+          (order_id, guest_id, host_id, listing_id, rating, comment,
+           cleanliness, communication, respectful, rules)
+        VALUES
+          (${order.id}, ${order.guest_id}, ${me.host_id}, ${order.listing_id}, ${blended}, ${comment},
+           ${vals.cleanliness}, ${vals.communication}, ${vals.respectful}, ${vals.rules})
+        RETURNING id
+      `;
+      await logAudit(sql, {
+        action: 'guest_review_submitted', success: true, actorType: 'host', actorIdentifier: String(guestId),
+        targetType: 'guest_review', targetId: inserted[0].id,
+        metadata: { orderId: order.id, guestId: order.guest_id }
+      });
+      return res.status(200).json({ success: true, held: true });
+    } catch (err) {
+      console.error('reviewGuest error:', err);
+      return res.status(500).json({ error: 'Could not save your review right now.' });
+    }
+  }
+
   if (req.method === 'GET' && req.query.analytics === '1') {
     try {
       const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;

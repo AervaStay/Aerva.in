@@ -56,7 +56,8 @@
 // correctly against old and new data alike.
 
 const { neon } = require('@neondatabase/serverless');
-const { hostTier } = require('./_tiers');
+const { hostTier, reviewScore, REVIEW_FACTORS } = require('./_tiers');
+const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const sql = neon(process.env.DATABASE_URL);
 
 function parseMaxGuests(raw) {
@@ -87,6 +88,103 @@ function haversineDistanceKm(lat1, lon1, lat2, lon2) {
 }
 
 module.exports = async (req, res) => {
+  // ---- Daily review sweep (cron) ----
+  // GET ?reviewSweep=1 — runs once a day from vercel.json. Two jobs:
+  //
+  //   1. Publish what is due. A review goes live the moment BOTH sides
+  //      have reviewed, or once the window closes, whichever comes first.
+  //      Both cases are handled here rather than at submission time so
+  //      there is a single place that decides visibility.
+  //   2. Prompt guests who checked out yesterday and have not reviewed.
+  //
+  // Vercel's Hobby plan caps cron at once per day, which is why "publish
+  // immediately when both sides review" is really "within a day". That is
+  // a plan limit, not a design choice — on Pro this becomes hourly by
+  // changing the schedule alone, no code change.
+  if (req.method === 'GET' && req.query.reviewSweep === '1') {
+    try {
+      // Both sides in — release the pair together.
+      const pairs = await sql`
+        UPDATE listing_reviews lr SET published_at = now()
+        FROM guest_reviews gr
+        WHERE gr.order_id = lr.order_id
+          AND lr.published_at IS NULL AND lr.admin_reverted_at IS NULL
+          AND gr.admin_reverted_at IS NULL
+        RETURNING lr.id
+      `;
+      const pairsBack = await sql`
+        UPDATE guest_reviews gr SET published_at = now()
+        FROM listing_reviews lr
+        WHERE lr.order_id = gr.order_id
+          AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
+          AND lr.admin_reverted_at IS NULL
+        RETURNING gr.id
+      `;
+      // Window closed — publish whatever is there, unmatched. Anchored to
+      // the stay's departure, never to when the review was written.
+      const lapsedListing = await sql`
+        UPDATE listing_reviews lr SET published_at = now()
+        FROM orders o
+        WHERE o.id = lr.order_id
+          AND lr.published_at IS NULL AND lr.admin_reverted_at IS NULL
+          AND o.departure < CURRENT_DATE - ${REVIEW_WINDOW_DAYS}
+        RETURNING lr.id
+      `;
+      const lapsedGuest = await sql`
+        UPDATE guest_reviews gr SET published_at = now()
+        FROM orders o
+        WHERE o.id = gr.order_id
+          AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
+          AND o.departure < CURRENT_DATE - ${REVIEW_WINDOW_DAYS}
+        RETURNING gr.id
+      `;
+
+      // Prompt yesterday's checkouts. review_prompt_sent_at is what stops
+      // this messaging the same guest every morning until they review.
+      const toPrompt = await sql`
+        SELECT o.id, o.guest_id, o.guest_email, o.listing_id, o.suite_name, l.host_id
+        FROM orders o JOIN listings l ON l.id = o.listing_id
+        WHERE o.status = 'paid'
+          AND o.departure < CURRENT_DATE
+          AND o.departure >= CURRENT_DATE - 3
+          AND o.review_prompt_sent_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
+        LIMIT 200
+      `;
+      for (const o of toPrompt) {
+        try {
+          let convRows = await sql`SELECT id FROM conversations WHERE order_id = ${o.id}`;
+          let conversationId = convRows[0] && convRows[0].id;
+          if (!conversationId) {
+            const ins = await sql`
+              INSERT INTO conversations (order_id, listing_id, guest_id, guest_email, host_id)
+              VALUES (${o.id}, ${o.listing_id}, ${o.guest_id}, ${o.guest_email}, ${o.host_id})
+              RETURNING id`;
+            conversationId = ins[0].id;
+          }
+          const text = `How was your stay at ${o.suite_name}? Please rate it on hygiene, communication, services, value for money and location — it takes a minute, and you have ${REVIEW_WINDOW_DAYS} days from checkout.`;
+          await sql`
+            INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
+            VALUES (${conversationId}, 'system', ${text}, ${text}, false)`;
+          await sql`UPDATE orders SET review_prompt_sent_at = now() WHERE id = ${o.id}`;
+        } catch (err) {
+          // One bad order must not stop the sweep for every other guest.
+          console.error('review prompt failed for order', o.id, err);
+        }
+      }
+
+      return res.status(200).json({
+        publishedPaired: pairs.length + pairsBack.length,
+        publishedLapsed: lapsedListing.length + lapsedGuest.length,
+        prompted: toPrompt.length
+      });
+    } catch (err) {
+      console.error('reviewSweep error:', err);
+      return res.status(500).json({ error: 'Review sweep failed.' });
+    }
+  }
+
+
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -742,6 +840,51 @@ module.exports = async (req, res) => {
     // Payout and reviews are summed over a rolling twelve months, the
     // same window _tiers.js's quarterly review uses, so the badge on a
     // card always agrees with the one on the host's own dashboard.
+    // ---- Published review ratings ----
+    // Only rows that are actually published and not reverted count. A
+    // held review must stay invisible in every sense: showing its effect
+    // on a listing's average would leak it before the window closes, which
+    // is the whole thing double-blind publication exists to prevent.
+    try {
+      const listingIds = [...new Set(filtered.map(l => l.id).filter(Boolean))];
+      if (listingIds.length) {
+        const revRows = await sql`
+          SELECT listing_id,
+                 AVG(hygiene)       AS hygiene,
+                 AVG(communication) AS communication,
+                 AVG(services)      AS services,
+                 AVG(value_rating)  AS value,
+                 AVG(location)      AS location,
+                 COUNT(*)           AS n
+          FROM listing_reviews
+          WHERE listing_id = ANY(${listingIds})
+            AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+          GROUP BY listing_id
+        `;
+        const byListing = {};
+        revRows.forEach(r => {
+          // The same weighted score the host ladder uses, so the number a
+          // guest sees on a card and the number a badge rests on can never
+          // disagree.
+          byListing[r.listing_id] = {
+            rating: reviewScore({
+              hygiene: Number(r.hygiene), communication: Number(r.communication),
+              services: Number(r.services), value: Number(r.value), location: Number(r.location)
+            }, REVIEW_FACTORS),
+            count: Number(r.n) || 0
+          };
+        });
+        filtered.forEach(l => {
+          const r = byListing[l.id];
+          l.rating = r ? r.rating : null;
+          l.review_count = r ? r.count : 0;
+        });
+      }
+    } catch (err) {
+      // Ratings are decoration on top of a listing; never block the page.
+      console.error('review rating lookup failed (non-fatal):', err);
+    }
+
     const PUBLIC_BADGE_KEYS = ['elite', 'golden_elite', 'aerva_elite'];
     try {
       const hostIds = [...new Set(filtered.map(l => l.host_id).filter(Boolean))];
