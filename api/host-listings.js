@@ -415,8 +415,11 @@ module.exports = async (req, res) => {
   // arrival month every stay is either all past or all future, so that
   // grouping could never show both.
   //
-  // Only status='paid' rows count: cancelled and pending orders are not
-  // earnings and would flatter every figure.
+  // Order status is returned as part of the grain rather than filtered
+  // here, so the dashboard can answer "how many bookings did we take
+  // that month" including ones later cancelled or refunded — history a
+  // paid-only query erases. The dashboard defaults to paid, so money
+  // figures are unaffected unless the host deliberately widens it.
   if (req.method === 'GET' && req.query.analytics === '1') {
     try {
       const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
@@ -446,6 +449,7 @@ module.exports = async (req, res) => {
                  WHEN o.arrival <= CURRENT_DATE THEN 'current'
                  ELSE 'upcoming'
                END                                                 AS bucket,
+               o.status                                            AS status,
                COALESCE(SUM(o.total), 0)             AS gross,
                COALESCE(SUM(o.payout_amount), 0)     AS payout,
                COALESCE(SUM(o.commission_amount), 0) AS commission,
@@ -453,9 +457,9 @@ module.exports = async (req, res) => {
                COUNT(*)                              AS bookings
         FROM orders o
         JOIN listings l ON l.id = o.listing_id
-        WHERE l.host_id = ${guest.host_id} AND o.status = 'paid'
+        WHERE l.host_id = ${guest.host_id}
           AND o.created_at >= ${windowStart} AND o.created_at < ${windowEnd}
-        GROUP BY 1, 2, 3, 4, 5, 6
+        GROUP BY 1, 2, 3, 4, 5, 6, 7
       `;
 
       // Every approved listing, including ones with no bookings at all —
@@ -476,6 +480,7 @@ module.exports = async (req, res) => {
           listingName: r.listingName,
           listingType: r.listingType,
           bucket: r.bucket,
+          status: r.status,
           gross: Number(r.gross) || 0,
           payout: Number(r.payout) || 0,
           commission: Number(r.commission) || 0,
