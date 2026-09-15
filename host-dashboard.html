@@ -3597,7 +3597,18 @@
       });
       if(!res.ok) throw new Error('failed');
       const d = await res.json();
-      const months = Array.isArray(d.months) ? d.months : [];
+      // `months` is the marker that this really is an analytics reply.
+      // An older deployment of host-listings.js ignores ?analytics=1 and
+      // falls through to its normal GET, which returns a payload that
+      // also has a `listings` key — accepted blindly, that renders a
+      // section of "Untitled" bars at zero instead of saying anything is
+      // wrong. Front-end and endpoint must ship together; this makes a
+      // mismatch obvious rather than silently wrong.
+      if(!Array.isArray(d.months)){
+        box.innerHTML = '<p class="an-empty">Analytics needs the latest server update. Please try again shortly.</p>';
+        return;
+      }
+      const months = d.months;
       const listings = Array.isArray(d.listings) ? d.listings : [];
       const t = d.totals || {};
 
