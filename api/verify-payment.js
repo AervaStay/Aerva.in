@@ -32,6 +32,7 @@ const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const PDFDocument = require('pdfkit');
 const { logAudit } = require('./_audit-log');
+const { sendBookingConfirmedTemplates } = require('./_template-scheduling');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -320,6 +321,29 @@ module.exports = async (req, res) => {
             VALUES (${newOrderId}, ${a.id || null}, ${a.name}, ${a.pricePerNight}, ${JSON.stringify(a.dates)}, ${a.total})
           `;
         }
+
+        // The "guest confirmed a booking" trigger for host message
+        // templates and the auto-sent check-in instructions. Placed here,
+        // at the very end of the iteration, so the order row and its
+        // amenities are fully written before any message referencing them
+        // is generated.
+        //
+        // This call is what _template-scheduling.js was written for and
+        // has always documented itself as having — it was never actually
+        // wired up, so until now a host could tick "send on booking
+        // confirmed" on a template, or enable auto-send check-in
+        // instructions on a listing, and nothing would ever be sent.
+        //
+        // Stays only: the module resolves listing check-in/WiFi/access
+        // fields that experiences don't have. It never throws (same
+        // principle as logAudit above) so a template problem can't break
+        // a payment that has genuinely succeeded.
+        await sendBookingConfirmedTemplates(sql, {
+          id: newOrderId,
+          listing_id: stay.listingId || null,
+          guest_id: guestId,
+          guest_email: email
+        });
       }
 
       // Experience bookings — arrival/departure and nights now reflect
