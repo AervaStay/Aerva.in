@@ -339,6 +339,10 @@
      each was its own full-width block — the map link especially, which
      had a border-top and uppercase tracking that made a secondary
      utility link the loudest element on the card, louder than the price. */
+  .suite-rating{display:flex; align-items:center; gap:4px; margin-top:6px; font-size:13px; color:var(--ink);}
+  .suite-star{color:#c9a227; font-size:13px; line-height:1;}
+  .suite-rating-count{font-size:11.5px; opacity:0.55;}
+  .suite-rating-new{font-size:11.5px; opacity:0.55; margin-top:6px; letter-spacing:0.03em;}
   .suite-meta{
     display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px;
     margin-top:8px; font-size:12px; opacity:0.62; line-height:1.4;
@@ -1585,6 +1589,7 @@
                 <option value="">Recommended</option>
                 <option value="asc">Price: Low to High</option>
                 <option value="desc">Price: High to Low</option>
+                <option value="rating">Rating: Highest first</option>
               </select>
             </div>
             <div class="search-field">
@@ -6519,6 +6524,17 @@
       </svg>${escapeMessageHtml(tier.label)}</span>`;
   }
 
+  // Star rating from published reviews only. A listing with none shows
+  // "New to Aerva" rather than a zero or an empty star row — no reviews is
+  // not a bad score, and rendering it as one would punish every new
+  // listing on the page.
+  function ratingHtml(listing){
+    const n = Number(listing.review_count) || 0;
+    if(!n || listing.rating == null) return '<div class="suite-rating-new">New to Aerva</div>';
+    const r = Number(listing.rating);
+    return `<div class="suite-rating"><span class="suite-star">\u2605</span>${r.toFixed(2)}<span class="suite-rating-count">(${n})</span></div>`;
+  }
+
   function buildSuiteCard(listing, index){
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
@@ -6663,6 +6679,7 @@
       <div class="suite-body">
         <h3>${listing.property_name}</h3>
         <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        ${ratingHtml(listing)}
         <div class="suite-meta">
           ${capacityText ? `<span>${capacityText}</span>` : ''}
           ${distanceHtml}
@@ -6965,8 +6982,19 @@
     const wantsPetFriendly = guestCounts.pets > 0;
 
     const sortOrder = document.getElementById('sortPrice').value;
+    // A listing with no reviews sorts mid-table rather than last. Sending
+    // every new listing to the bottom of a rating sort is a trap: nothing
+    // new is seen, so it never earns the reviews that would lift it.
+    const UNRATED_PLACEHOLDER = 4.2;
+    const ratingOf = (l) => (Number(l.review_count) || 0) > 0 && l.rating != null
+      ? Number(l.rating) : UNRATED_PLACEHOLDER;
+    // Review count breaks ties so a 5.00 from one review does not outrank
+    // a 4.90 from forty.
+    const byRating = (a, b) => ratingOf(b) - ratingOf(a) || (Number(b.review_count)||0) - (Number(a.review_count)||0);
+
     if(sortOrder === 'asc') suiteList.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
     else if(sortOrder === 'desc') suiteList.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
+    else if(sortOrder === 'rating') suiteList.sort(byRating);
     else if(guestLocation){
       // "Recommended" (no explicit price sort) becomes "nearest first" once
       // the guest has shared their location via the Near Me button — a
@@ -6976,6 +7004,9 @@
         const db = (b.latitude && b.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(b.latitude), Number(b.longitude)) : Infinity;
         return da - db;
       });
+    } else {
+      // "Recommended" with no location known: best reviewed first.
+      suiteList.sort(byRating);
     }
 
     const experienceList = approvedExperiences.slice();

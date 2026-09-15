@@ -192,6 +192,7 @@
       <button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications</button>
       <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
       <button class="tab-btn" id="tabComplianceBtn" onclick="switchTab('compliance')">Compliance</button>
+      <button class="tab-btn" id="tabPolicyBtn" onclick="switchTab('policy')">Review Policy</button>
     </div>
     <button type="button" onclick="refreshCurrentView()" style="background:none; border:1px solid #ddd0bc; padding:8px 14px; font-size:12px; cursor:pointer; border-radius:4px;" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </div>
@@ -230,6 +231,19 @@
       <h3>Disputed Deposits</h3>
       <p>A host has raised a concern on each of these — decide how much of the deposit compensates the host; the remainder is refunded to the guest.</p>
       <div id="disputesContainer"><p class="empty">Loading…</p></div>
+    </div>
+  </div>
+
+  <div id="policyView" style="display:none;">
+    <div class="deposit-section">
+      <h3>Review Policy</h3>
+      <p><strong>Internal reference.</strong> This policy is not shown to guests or hosts anywhere on the site. It exists so that reviews are judged consistently when a dispute reaches you.</p>
+      <div id="policyBody"><p>Loading…</p></div>
+    </div>
+    <div class="deposit-section">
+      <h3>Conflicts to Review</h3>
+      <p>Surfaced for a human to read. Nothing here is actioned automatically — reverting on a rule would make the override as gameable as the reviews it polices.</p>
+      <div id="policyConflicts"><p>Loading…</p></div>
     </div>
   </div>
 
@@ -846,21 +860,100 @@
   }
 
   // ---- Tab switching (four tabs now: listings, live, verifications, deposits) ----
+  // ---- Review policy + conflict queue ----
+  // The policy TEXT comes from the server (_review-policy.js), never from
+  // a copy in this page: an admin reading it and an endpoint enforcing it
+  // must not be able to drift apart.
+  function escAdmin(t){
+    return String(t == null ? '' : t)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  async function loadReviewPolicy(){
+    const body = document.getElementById('policyBody');
+    const conf = document.getElementById('policyConflicts');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?reviewPolicy=1', { headers: authHeaders() });
+      if(!res.ok) throw new Error('failed');
+      const d = await res.json();
+      const p = d.policy || {};
+      body.innerHTML =
+        '<p style="opacity:0.7; font-size:13px;">Version ' + escAdmin(p.version) + ' &middot; ' + escAdmin(p.audience) + '</p>'
+        + (p.sections || []).map(sec =>
+            '<h4 style="margin:18px 0 6px;">' + escAdmin(sec.title) + '</h4><ul style="margin:0; padding-left:20px; line-height:1.7;">'
+            + (sec.points || []).map(pt => '<li>' + escAdmin(pt) + '</li>').join('') + '</ul>').join('');
+
+      const c = d.conflicts || {};
+      const held = d.held || {};
+      const block = (title, detail, rows, render) =>
+        '<h4 style="margin:18px 0 6px;">' + escAdmin(title) + ' <span style="opacity:0.6; font-weight:400;">(' + rows.length + ')</span></h4>'
+        + '<p style="font-size:13px; opacity:0.7; margin:0 0 8px;">' + escAdmin(detail) + '</p>'
+        + (rows.length ? rows.map(render).join('') : '<p style="opacity:0.6; font-size:13px;">Nothing flagged.</p>');
+
+      const revertBtn = (kind, id) =>
+        '<button type="button" class="process-btn" style="padding:4px 10px; font-size:12px;" onclick="revertReview(\'' + kind + '\',' + Number(id) + ')">Revert</button>';
+
+      conf.innerHTML =
+        '<p style="font-size:13px;">Currently held, awaiting the other side or the window: '
+        + Number(held.listing_held || 0) + ' property review(s), ' + Number(held.guest_held || 0) + ' guest review(s).</p>'
+        + block('Both sides rated each other poorly', 'Usually one real dispute, not two independent bad experiences.',
+            c.mutualLow || [], r =>
+              '<div class="process-results" style="margin-bottom:8px;"><div><strong>Booking #' + Number(r.order_id) + '</strong></div>'
+              + '<div style="font-size:13px;">Guest wrote: ' + escAdmin(r.guest_comment) + '</div>'
+              + '<div style="font-size:13px;">Host wrote: ' + escAdmin(r.host_comment) + '</div>'
+              + '<div style="margin-top:6px; display:flex; gap:8px;">' + revertBtn('listing', r.listing_review_id) + revertBtn('guest', r.guest_review_id) + '</div></div>')
+        + block('Reported by the other party', 'Explicitly flagged as unfair or untrue. Always read.',
+            c.reported || [], r =>
+              '<div class="process-results" style="margin-bottom:8px;"><div><strong>Booking #' + Number(r.order_id) + '</strong> &middot; ' + escAdmin(r.kind) + '</div>'
+              + '<div style="font-size:13px;">' + escAdmin(r.comment) + '</div>'
+              + '<div style="font-size:13px; opacity:0.7;">Reason: ' + escAdmin(r.reported_reason) + '</div>'
+              + '<div style="margin-top:6px;">' + revertBtn(r.kind === 'listing_review' ? 'listing' : 'guest', r.id) + '</div></div>')
+        + block('Far below the listing\u2019s own average', 'One low score against a strong history. Sometimes accurate, sometimes a grudge.',
+            c.outliers || [], r =>
+              '<div class="process-results" style="margin-bottom:8px;"><div><strong>Listing #' + Number(r.listing_id) + '</strong> &middot; this review '
+              + Number(r.this_score).toFixed(2) + ' vs average ' + Number(r.avg_score).toFixed(2) + ' across ' + Number(r.n) + '</div>'
+              + '<div style="font-size:13px;">' + escAdmin(r.comment) + '</div>'
+              + '<div style="margin-top:6px;">' + revertBtn('listing', r.id) + '</div></div>');
+    }catch(err){
+      console.error('policy load failed', err);
+      body.innerHTML = '<p>Could not load the policy.</p>';
+      conf.innerHTML = '';
+    }
+  }
+
+  async function revertReview(kind, id){
+    const reason = prompt('Why is this review being reverted? (recorded in the audit log)');
+    if(reason === null) return;
+    if(reason.trim().length < 10){ alert('Please give a reason of at least 10 characters.'); return; }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST', headers: authHeaders(true),
+        body: JSON.stringify({ revertReview: { kind, id, reason: reason.trim() } })
+      });
+      const d = await res.json();
+      if(!res.ok){ alert(d.error || 'Could not revert that review.'); return; }
+      loadReviewPolicy();
+    }catch(err){ alert('Could not revert that review.'); }
+  }
+
   function switchTab(tab){
     document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
     document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
     document.getElementById('tabVerificationsBtn').classList.toggle('active', tab === 'verifications');
     document.getElementById('tabDepositsBtn').classList.toggle('active', tab === 'deposits');
     document.getElementById('tabComplianceBtn').classList.toggle('active', tab === 'compliance');
+    document.getElementById('tabPolicyBtn').classList.toggle('active', tab === 'policy');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
     document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
     document.getElementById('depositsView').style.display = tab === 'deposits' ? 'block' : 'none';
     document.getElementById('complianceView').style.display = tab === 'compliance' ? 'block' : 'none';
+    document.getElementById('policyView').style.display = tab === 'policy' ? 'block' : 'none';
     if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();
     if(tab === 'compliance') loadComplianceFlags();
+    if(tab === 'policy') loadReviewPolicy();
   }
 
   // This whole dashboard only fetches data once, per tab, the first time
@@ -875,6 +968,7 @@
     else if(document.getElementById('tabVerificationsBtn').classList.contains('active')) loadVerifications();
     else if(document.getElementById('tabDepositsBtn').classList.contains('active')) loadDisputes();
     else if(document.getElementById('tabComplianceBtn').classList.contains('active')) loadComplianceFlags();
+    else if(document.getElementById('tabPolicyBtn').classList.contains('active')) loadReviewPolicy();
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
