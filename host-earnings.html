@@ -56,6 +56,18 @@
   .an-toggle{display:flex; gap:6px; margin-bottom:12px;}
   .an-toggle button{font-size:12px; padding:5px 12px; border:1px solid #e0d5c0; background:white; cursor:pointer; font-family:inherit; color:inherit;}
   .an-toggle button.on{background:#1c1a17; color:#f4ebe3; border-color:#1c1a17;}
+  .an-controls{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px;}
+  .an-controls .an-toggle{margin-bottom:0;}
+  .an-select{
+    font-size:12px; padding:5px 10px; border:1px solid #e0d5c0; background:white;
+    font-family:inherit; color:inherit; max-width:220px;
+  }
+  .an-clear{
+    font-size:11px; margin-left:8px; padding:2px 8px; border:1px solid #e0d5c0;
+    background:white; cursor:pointer; font-family:inherit; color:#8a6c39;
+  }
+  .an-total .an-label{display:flex; align-items:center; gap:5px;}
+  .an-card svg text{user-select:none;}
   .booking-row{background:white; border:1px solid #e0d5c0; padding:16px 20px; margin-bottom:10px;}
   .booking-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
   .booking-top h4{margin:0; font-size:14.5px; font-family:Georgia,serif;}
@@ -454,6 +466,36 @@
     }
   }
 
+  // ================= ANALYTICS =================
+  // One fetch (?analytics=1) returns the raw grain — one row per
+  // month × listing × timing bucket. Every control below is a different
+  // grouping of those same rows, done in memory, so switching a filter
+  // or clicking a month bar is instant and never re-queries.
+  //
+  // Bars are hand-built inline SVG rather than a charting library:
+  // nothing else on this page loads a third-party script, and an SVG
+  // with a viewBox and no fixed width scales itself on a phone.
+
+  // Two buckets, not three. The host is paid in full at booking time, so
+  // every rupee here has already landed — what differs is whether the
+  // STAY has been delivered yet. 'Upcoming' is therefore revenue already
+  // banked against nights still owed, which is the forecast a host cares
+  // about, not money still to arrive.
+  const AN_BUCKETS = [
+    { key:'current',  label:'Stays delivered', color:'#3a7d44' },
+    { key:'upcoming', label:'Still to deliver', color:'#c2b49a' }
+  ];
+  const AN_MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+
+  let anData = null;                 // whole payload from the server
+  let anYear = null;                 // a year number, or 'compare'
+  let anType = 'all';                // all | stay | experience
+  let anListingId = 'all';           // 'all' or a listing id
+  let anSelectedMonth = null;        // 'YYYY-MM' when a bar is clicked
+
+  // Listing names are host-supplied text going into markup. Same rule as
+  // the message renderers in index.html — escape before it reaches
+  // innerHTML, or a property named with an <img onerror=...> runs script.
   function anEsc(s){
     return String(s == null ? '' : s)
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -466,156 +508,264 @@
     if(v >= 1000)     return '₹' + (v/1000).toFixed(1).replace(/\.0$/,'') + 'k';
     return '₹' + v.toLocaleString('en-IN');
   }
-  // 2026-03 -> MAR. Built from the string, never through new Date(), so
-  // a month label can't shift by one in a negative-offset timezone.
-  const AN_MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  function anMoneyFull(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN'); }
+  // Built from the string, never through new Date(), so a month label
+  // can't shift by one in a negative-offset timezone.
   function anMonthLabel(key){ return AN_MONTHS[Number(key.slice(5,7)) - 1] || key; }
 
-  // Stacked vertical bars: payout sits below commission so the full bar
-  // height reads as gross, and the green portion is what the host
-  // actually receives.
-  function anStackedChart(rows){
-    const W = 720, H = 200, padL = 46, padB = 26, padT = 10;
-    const max = Math.max(...rows.map(r => r.gross), 1);
-    const plotH = H - padB - padT, plotW = W - padL - 8;
-    const slot = plotW / rows.length, bw = Math.min(slot * 0.58, 42);
-    let bars = '', labels = '';
-    rows.forEach((r, i) => {
-      const cx = padL + slot * i + slot / 2;
-      const gH = (r.gross / max) * plotH;
-      const pH = (r.payout / max) * plotH;
-      const y = padT + plotH - gH;
-      if(r.gross > 0){
-        bars += `<rect x="${cx-bw/2}" y="${y}" width="${bw}" height="${(gH-pH).toFixed(1)}" fill="#8a6c39"></rect>`;
-        bars += `<rect x="${cx-bw/2}" y="${(padT+plotH-pH).toFixed(1)}" width="${bw}" height="${pH.toFixed(1)}" fill="#3a7d44"></rect>`;
-        bars += `<title>${anMonthLabel(r.month)} — payout ${anMoney(r.payout)}, commission ${anMoney(r.commission)}</title>`;
-      } else {
-        bars += `<rect x="${cx-bw/2}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
-      }
-      labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a7f6c">${anMonthLabel(r.month)}</text>`;
+  // The filters, applied once. Everything downstream works off this.
+  function anRows(){
+    if(!anData) return [];
+    return anData.rows.filter(r => {
+      if(anType !== 'all' && r.listingType !== anType) return false;
+      if(anListingId !== 'all' && String(r.listingId) !== String(anListingId)) return false;
+      return true;
     });
-    let grid = '';
+  }
+
+  // 12 zeroed month slots for a year, then filled — so a month with no
+  // bookings is a visible gap in the series rather than a missing bar
+  // that silently shifts every later month leftwards.
+  function anMonthSeries(year){
+    const slots = [];
+    for(let m = 1; m <= 12; m++){
+      slots.push({ month: year + '-' + String(m).padStart(2,'0'),
+                   current:0, upcoming:0, total:0, bookings:0, nights:0 });
+    }
+    const byKey = {};
+    slots.forEach(s => { byKey[s.month] = s; });
+    anRows().forEach(r => {
+      const s = byKey[r.month];
+      if(!s) return;
+      s[r.bucket] += r.payout;
+      s.total += r.payout;
+      s.bookings += r.bookings;
+      s.nights += r.nights;
+    });
+    return slots;
+  }
+
+  function anYearTotals(year){
+    const t = { current:0, upcoming:0, total:0, bookings:0, nights:0 };
+    anRows().forEach(r => {
+      if(r.month.slice(0,4) !== String(year)) return;
+      t[r.bucket] += r.payout; t.total += r.payout;
+      t.bookings += r.bookings; t.nights += r.nights;
+    });
+    return t;
+  }
+
+  // Stacked monthly bars, one stack per month, segments in past →
+  // current → upcoming order so the realised money always sits at the
+  // bottom and the speculative part on top.
+  function anMonthChart(series){
+    const W = 720, H = 210, padL = 48, padB = 26, padT = 12;
+    const max = Math.max(...series.map(s => Math.max(s.current, s.upcoming)), 1);
+    const plotH = H - padB - padT, plotW = W - padL - 8;
+    const slot = plotW / 12, bw = Math.min(slot * 0.30, 18);
+    let grid = '', bars = '', labels = '';
     for(let g = 0; g <= 2; g++){
-      const y = padT + plotH - (plotH / 2) * g;
+      const y = padT + plotH - (plotH/2)*g;
       grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#f0e6d6" stroke-width="1"></line>`;
       grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${anMoney(max*g/2)}</text>`;
     }
-    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Earnings by month">${grid}${bars}${labels}</svg>`;
+    series.forEach((s, i) => {
+      const cx = padL + slot*i + slot/2;
+      const isSel = anSelectedMonth === s.month;
+      // Full-height hit area, so a month with a tiny bar (or none at all)
+      // is still comfortably clickable.
+      bars += `<rect class="an-hit" data-month="${s.month}" x="${cx-slot/2}" y="${padT}" width="${slot}" height="${plotH}" fill="${isSel ? 'rgba(138,108,57,0.10)' : 'transparent'}" style="cursor:pointer"></rect>`;
+      // Side by side, not stacked: the two are answers to different
+      // questions (money for nights already given vs nights still owed),
+      // and a host compares them against each other rather than reading
+      // their sum off the axis.
+      AN_BUCKETS.forEach((b, bi) => {
+        const v = s[b.key];
+        const x = cx + (bi === 0 ? -bw - 1 : 1);
+        if(v > 0){
+          const h = (v/max)*plotH;
+          bars += `<rect data-month="${s.month}" x="${x}" y="${(padT+plotH-h).toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" fill="${b.color}" style="cursor:pointer" opacity="${anSelectedMonth && !isSel ? 0.45 : 1}"><title>${anMonthLabel(s.month)} — ${b.label} ${anMoneyFull(v)}</title></rect>`;
+        } else {
+          bars += `<rect x="${x}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
+        }
+      });
+      labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="${isSel ? '#1c1a17' : '#8a7f6c'}" font-weight="${isSel ? '600' : '400'}" style="pointer-events:none">${anMonthLabel(s.month)}</text>`;
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Payout by month">${grid}${bars}${labels}</svg>`;
   }
 
-  // Nights booked per month, with occupancy shown above each bar.
-  function anNightsChart(rows){
-    const W = 720, H = 200, padL = 34, padB = 26, padT = 16;
-    const max = Math.max(...rows.map(r => r.nights), 1);
+  // Two years side by side, one pair of bars per month.
+  function anCompareChart(yearA, yearB){
+    const a = anMonthSeries(yearA), b = anMonthSeries(yearB);
+    const W = 720, H = 210, padL = 48, padB = 26, padT = 12;
+    const max = Math.max(...a.map(s=>s.total), ...b.map(s=>s.total), 1);
     const plotH = H - padB - padT, plotW = W - padL - 8;
-    const slot = plotW / rows.length, bw = Math.min(slot * 0.58, 42);
-    let bars = '', labels = '', grid = '';
-    rows.forEach((r, i) => {
-      const cx = padL + slot * i + slot / 2;
-      const h = (r.nights / max) * plotH;
-      const y = padT + plotH - h;
-      bars += r.nights > 0
-        ? `<rect x="${cx-bw/2}" y="${y.toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" fill="#1c1a17"><title>${anMonthLabel(r.month)} — ${r.nights} nights${r.occupancy!=null?', '+r.occupancy+'% occupancy':''}</title></rect>`
-        : `<rect x="${cx-bw/2}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
-      if(r.occupancy != null && r.nights > 0){
-        labels += `<text x="${cx}" y="${(y-4).toFixed(1)}" text-anchor="middle" font-size="9" fill="#8a6c39">${r.occupancy}%</text>`;
-      }
-      labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a7f6c">${anMonthLabel(r.month)}</text>`;
-    });
+    const slot = plotW / 12, bw = Math.min(slot*0.30, 16);
+    let grid = '', bars = '', labels = '';
     for(let g = 0; g <= 2; g++){
-      const y = padT + plotH - (plotH / 2) * g;
+      const y = padT + plotH - (plotH/2)*g;
       grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#f0e6d6" stroke-width="1"></line>`;
-      grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${Math.round(max*g/2)}</text>`;
+      grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${anMoney(max*g/2)}</text>`;
     }
-    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Nights booked by month">${grid}${bars}${labels}</svg>`;
+    for(let i = 0; i < 12; i++){
+      const cx = padL + slot*i + slot/2;
+      [[a[i], yearA, '#c2b49a', -1],[b[i], yearB, '#3a7d44', 1]].forEach(([s, yr, color, side]) => {
+        const h = (s.total/max)*plotH;
+        const x = cx + (side < 0 ? -bw-1 : 1);
+        if(s.total > 0){
+          bars += `<rect x="${x}" y="${(padT+plotH-h).toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" fill="${color}"><title>${anMonthLabel(s.month)} ${yr} — ${anMoneyFull(s.total)}</title></rect>`;
+        } else {
+          bars += `<rect x="${x}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
+        }
+      });
+      labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a7f6c">${AN_MONTHS[i]}</text>`;
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Year comparison">${grid}${bars}${labels}</svg>`;
   }
 
-  // Horizontal bars — listing names need the room to be readable, which
-  // vertical bars don't give on a phone.
-  function anListingChart(listings){
-    const rowH = 30, W = 720, padL = 150, padR = 74;
-    const H = Math.max(listings.length * rowH + 10, 40);
-    const max = Math.max(...listings.map(l => l.gross), 1);
-    const plotW = W - padL - padR;
-    let out = '';
-    listings.forEach((l, i) => {
-      const y = i * rowH + 6;
-      const w = (l.gross / max) * plotW;
-      const nm = l.name && l.name.length > 22 ? l.name.slice(0,21) + '…' : (l.name || 'Untitled');
-      out += `<text x="${padL-8}" y="${y+14}" text-anchor="end" font-size="11" fill="#1c1a17">${anEsc(nm)}</text>`;
-      out += l.gross > 0
-        ? `<rect x="${padL}" y="${y+3}" width="${Math.max(w,2).toFixed(1)}" height="15" fill="#8a6c39"><title>${anEsc(l.name)} — ${anMoney(l.gross)}, ${l.nights} nights${l.occupancy!=null?', '+l.occupancy+'% occupancy':''}</title></rect>`
-        : `<rect x="${padL}" y="${y+3}" width="2" height="15" fill="#e0d5c0"></rect>`;
-      out += `<text x="${padL+Math.max(w,2)+7}" y="${y+15}" font-size="10" fill="#8a7f6c">${anMoney(l.gross)}${l.occupancy!=null?' · '+l.occupancy+'%':''}</text>`;
+  // Per-listing breakdown for whatever is currently in scope — the whole
+  // year, or just the clicked month.
+  function anListingBreakdown(year, monthKey){
+    const agg = {};
+    anRows().forEach(r => {
+      if(monthKey ? r.month !== monthKey : r.month.slice(0,4) !== String(year)) return;
+      const k = r.listingId;
+      if(!agg[k]) agg[k] = { name:r.listingName, type:r.listingType, payout:0, gross:0, bookings:0, nights:0 };
+      agg[k].payout += r.payout; agg[k].gross += r.gross;
+      agg[k].bookings += r.bookings; agg[k].nights += r.nights;
     });
-    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Earnings by listing">${out}</svg>`;
+    const list = Object.values(agg).sort((x,y) => y.payout - x.payout);
+    if(!list.length) return '<p class="an-empty">No bookings in this period.</p>';
+    const max = Math.max(...list.map(l => l.payout), 1);
+    const rowH = 30, W = 720, padLl = 150, padR = 86;
+    const H = Math.max(list.length*rowH + 10, 40);
+    const plotW = W - padLl - padR;
+    let out = '';
+    list.forEach((l, i) => {
+      const y = i*rowH + 6;
+      const w = (l.payout/max)*plotW;
+      const nm = l.name && l.name.length > 22 ? l.name.slice(0,21) + '…' : (l.name || 'Untitled');
+      out += `<text x="${padLl-8}" y="${y+14}" text-anchor="end" font-size="11" fill="#1c1a17">${anEsc(nm)}</text>`;
+      out += `<rect x="${padLl}" y="${y+3}" width="${Math.max(w,2).toFixed(1)}" height="15" fill="${l.type === 'experience' ? '#8a6c39' : '#3a7d44'}"><title>${anEsc(l.name)} — ${anMoneyFull(l.payout)} across ${l.bookings} booking${l.bookings===1?'':'s'}</title></rect>`;
+      out += `<text x="${padLl+Math.max(w,2)+7}" y="${y+15}" font-size="10" fill="#8a7f6c">${anMoney(l.payout)} · ${l.bookings} bkg</text>`;
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Payout by listing">${out}</svg>`;
   }
 
-  let anMonthsWindow = 12;
+  function anTotalsStrip(t, caption){
+    return `<p class="an-sub">${anEsc(caption)}</p><div class="an-totals">
+      ${AN_BUCKETS.map(b => `<div class="an-total"><span class="an-label"><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span><span class="an-value">${anMoney(t[b.key])}</span></div>`).join('')}
+      <div class="an-total"><span class="an-label">Total payout</span><span class="an-value payout-value">${anMoney(t.total)}</span></div>
+    </div>`;
+  }
+
+  function anRender(){
+    const box = document.getElementById('analyticsContainer');
+    if(!anData) return;
+    const years = anData.years || [];
+    const listings = (anData.listings || []).filter(l => anType === 'all' || l.type === anType);
+
+    const controls = `<div class="an-controls">
+      <div class="an-toggle">
+        ${[['all','All'],['stay','Stays'],['experience','Experiences']].map(([v,l]) =>
+          `<button type="button" data-an-type="${v}" class="${anType===v?'on':''}">${l}</button>`).join('')}
+      </div>
+      <div class="an-toggle">
+        ${years.map(y => `<button type="button" data-an-year="${y}" class="${String(anYear)===String(y)?'on':''}">${y}</button>`).join('')}
+        ${years.length === 2 ? `<button type="button" data-an-year="compare" class="${anYear==='compare'?'on':''}">Compare</button>` : ''}
+      </div>
+      <select class="an-select" id="anListingSelect">
+        <option value="all">All listings</option>
+        ${listings.map(l => `<option value="${l.id}" ${String(anListingId)===String(l.id)?'selected':''}>${anEsc(l.name)}</option>`).join('')}
+      </select>
+    </div>`;
+
+    let body;
+    if(anYear === 'compare'){
+      const [yA, yB] = years;
+      const tA = anYearTotals(yA), tB = anYearTotals(yB);
+      const diff = tB.total - tA.total;
+      const pct = tA.total > 0 ? Math.round((diff/tA.total)*100) : null;
+      body = `<div class="an-card"><h4>${yA} vs ${yB}</h4>
+        <p class="an-sub">Total payout per month, both years side by side.</p>
+        ${anCompareChart(yA, yB)}
+        <div class="an-legend">
+          <span><i class="an-swatch" style="background:#c2b49a"></i>${yA} — ${anMoney(tA.total)}</span>
+          <span><i class="an-swatch" style="background:#3a7d44"></i>${yB} — ${anMoney(tB.total)}</span>
+          <span style="color:${diff>=0?'#3a7d44':'#a3402f'}">${diff>=0?'▲':'▼'} ${anMoney(Math.abs(diff))}${pct!==null?` (${diff>=0?'+':'−'}${Math.abs(pct)}%)`:''}</span>
+        </div></div>`;
+    } else {
+      const series = anMonthSeries(anYear);
+      const sel = anSelectedMonth && anSelectedMonth.slice(0,4) === String(anYear)
+        ? series.find(s => s.month === anSelectedMonth) : null;
+      const scopeTotals = sel
+        ? { current:sel.current, upcoming:sel.upcoming, total:sel.total, bookings:sel.bookings, nights:sel.nights }
+        : anYearTotals(anYear);
+      const caption = sel
+        ? `${anMonthLabel(sel.month)} ${anYear} — ${sel.bookings} booking${sel.bookings===1?'':'s'}, ${sel.nights} night${sel.nights===1?'':'s'}`
+        : `${anYear} — ${scopeTotals.bookings} booking${scopeTotals.bookings===1?'':'s'}, ${scopeTotals.nights} night${scopeTotals.nights===1?'':'s'}`;
+      body = anTotalsStrip(scopeTotals, caption)
+        + `<div class="an-card"><h4>Payout by booking month</h4>
+           <p class="an-sub">Counted in the month you were paid, split by whether the stay has happened yet. Tap a month for its own numbers.${sel?' <button type="button" class="an-clear" id="anClearMonth">Show whole year</button>':''}</p>
+           ${anMonthChart(series)}
+           <div class="an-legend">${AN_BUCKETS.map(b=>`<span><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span>`).join('')}</div>
+           </div>`
+        + `<div class="an-card"><h4>By listing${sel?' — '+anMonthLabel(sel.month)+' '+anYear:''}</h4>
+           <p class="an-sub">Payout, highest first.</p>
+           ${anListingBreakdown(anYear, sel ? sel.month : null)}</div>`;
+    }
+
+    box.innerHTML = controls + body;
+
+    box.querySelectorAll('[data-an-type]').forEach(b => b.addEventListener('click', () => {
+      anType = b.dataset.anType;
+      // A listing filter pinned to something the new type filter hides
+      // would silently produce an empty view with no obvious cause.
+      const still = (anData.listings||[]).some(l => String(l.id)===String(anListingId) && (anType==='all'||l.type===anType));
+      if(!still) anListingId = 'all';
+      anRender();
+    }));
+    box.querySelectorAll('[data-an-year]').forEach(b => b.addEventListener('click', () => {
+      const v = b.dataset.anYear;
+      anYear = v === 'compare' ? 'compare' : Number(v);
+      if(anYear === 'compare') anSelectedMonth = null;
+      anRender();
+    }));
+    const sel = document.getElementById('anListingSelect');
+    if(sel) sel.addEventListener('change', () => { anListingId = sel.value; anRender(); });
+    const clr = document.getElementById('anClearMonth');
+    if(clr) clr.addEventListener('click', () => { anSelectedMonth = null; anRender(); });
+    box.querySelectorAll('svg [data-month]').forEach(el => el.addEventListener('click', () => {
+      const m = el.getAttribute('data-month');
+      anSelectedMonth = (anSelectedMonth === m) ? null : m;  // click again to clear
+      anRender();
+    }));
+  }
+
   async function loadAnalytics(){
     const box = document.getElementById('analyticsContainer');
     if(!box) return;
     try{
-      const res = await fetch(API_BASE + '/api/host-listings?analytics=1&months=' + anMonthsWindow, {
+      const res = await fetch(API_BASE + '/api/host-listings?analytics=1', {
         headers: { 'Authorization': 'Bearer ' + sessionToken }
       });
       if(!res.ok) throw new Error('failed');
       const d = await res.json();
-      // `months` is the marker that this really is an analytics reply.
-      // An older deployment of host-listings.js ignores ?analytics=1 and
-      // falls through to its normal GET, which returns a payload that
-      // also has a `listings` key — accepted blindly, that renders a
-      // section of "Untitled" bars at zero instead of saying anything is
-      // wrong. Front-end and endpoint must ship together; this makes a
-      // mismatch obvious rather than silently wrong.
-      if(!Array.isArray(d.months)){
+      // `rows` is the marker that this really is an analytics reply. An
+      // older deployment of host-listings.js ignores ?analytics=1 and
+      // falls through to its normal GET, whose payload would otherwise be
+      // accepted and rendered as an empty chart rather than an error.
+      if(!Array.isArray(d.rows) || !Array.isArray(d.years)){
         box.innerHTML = '<p class="an-empty">Analytics needs the latest server update. Please try again shortly.</p>';
         return;
       }
-      const months = d.months;
-      const listings = Array.isArray(d.listings) ? d.listings : [];
-      const t = d.totals || {};
-
-      if(!listings.length){
+      anData = d;
+      anYear = d.years[d.years.length - 1];
+      if(!d.listings || !d.listings.length){
         box.innerHTML = '<p class="an-empty">Analytics appear here once you have an approved listing.</p>';
         return;
       }
-
-      const toggle = `<div class="an-toggle">
-        <button type="button" data-months="6" class="${anMonthsWindow===6?'on':''}">6 months</button>
-        <button type="button" data-months="12" class="${anMonthsWindow===12?'on':''}">12 months</button>
-      </div>`;
-
-      const totals = `<div class="an-totals">
-        <div class="an-total"><span class="an-label">Your payout</span><span class="an-value payout-value">${anMoney(t.payout)}</span></div>
-        <div class="an-total"><span class="an-label">Guest paid</span><span class="an-value">${anMoney(t.gross)}</span></div>
-        <div class="an-total"><span class="an-label">Nights booked</span><span class="an-value">${Number(t.nights)||0}</span></div>
-        <div class="an-total"><span class="an-label">Occupancy</span><span class="an-value">${t.occupancy!=null?t.occupancy+'%':'—'}</span></div>
-      </div>`;
-
-      const anyMoney = months.some(m => m.gross > 0);
-      const anyNights = months.some(m => m.nights > 0);
-
-      box.innerHTML = toggle + totals
-        + `<div class="an-card"><h4>Earnings by month</h4><p class="an-sub">Counted in the month of the stay, not the month it was booked.</p>`
-        + (anyMoney ? anStackedChart(months) + `<div class="an-legend">
-             <span><i class="an-swatch" style="background:#3a7d44"></i>Your payout</span>
-             <span><i class="an-swatch" style="background:#8a6c39"></i>Aerva commission</span></div>`
-           : '<p class="an-empty">No completed bookings in this period yet.</p>')
-        + `</div>`
-        + `<div class="an-card"><h4>Nights booked</h4><p class="an-sub">Occupancy is nights booked against nights available, counted from when each listing went live.</p>`
-        + (anyNights ? anNightsChart(months) : '<p class="an-empty">No nights booked in this period yet.</p>')
-        + `</div>`
-        + `<div class="an-card"><h4>By listing</h4><p class="an-sub">Total guest spend across the period.</p>`
-        + anListingChart(listings) + `</div>`;
-
-      box.querySelectorAll('.an-toggle button').forEach(b => {
-        b.addEventListener('click', () => {
-          anMonthsWindow = Number(b.dataset.months);
-          box.innerHTML = '<p class="loading">Loading your analytics…</p>';
-          loadAnalytics();
-        });
-      });
+      anRender();
     }catch(err){
       console.error('analytics load failed:', err);
       box.innerHTML = '<p class="an-empty">Could not load your analytics. Please refresh.</p>';
