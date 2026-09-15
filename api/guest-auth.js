@@ -258,10 +258,43 @@ module.exports = async (req, res) => {
       // Reuses the generically-named "listingId" field from
       // _approval-token.js — same pattern as host-auth.js, here it holds
       // a guest's id instead.
-      const rows = await sql`SELECT id, email, name, phone, account_type FROM guests WHERE id = ${payload.listingId}`;
+      const rows = await sql`SELECT id, email, name, phone, account_type, host_id FROM guests WHERE id = ${payload.listingId}`;
       const guest = rows[0];
       if (!guest) return res.status(401).json({ error: 'Please log in again.' });
-      return res.status(200).json({ guest: safeGuest(guest) });
+
+      // Whether this account has a LIVE listing — not merely whether it
+      // has ever submitted one. account_type flips to 'guest_host' the
+      // moment a property is submitted, so gating the host-only nav on
+      // that showed My Collection / Status / My Earnings to someone whose
+      // only listing was still pending review, or had been rejected:
+      // three pages with nothing to show and no explanation why.
+      //
+      // Deliberately not restricted to listing_type = 'stay'. An approved
+      // experience is a live listing too, and its host has real bookings,
+      // earnings and messages to manage.
+      //
+      // Only computed on this session check, which is what the nav
+      // renders from. Cheap: an EXISTS that stops at the first row, and
+      // skipped entirely for the common case of an account with no host
+      // record at all.
+      let hasActiveListing = false;
+      if (guest.host_id) {
+        try {
+          const live = await sql`
+            SELECT 1 FROM listings
+            WHERE host_id = ${guest.host_id} AND status = 'approved'
+            LIMIT 1
+          `;
+          hasActiveListing = live.length > 0;
+        } catch (err) {
+          // A failure here must not log anyone out. Falling back to false
+          // hides the host nav for one page load rather than breaking the
+          // session; the links are reachable again on the next check.
+          console.error('hasActiveListing check failed (non-fatal):', err);
+        }
+      }
+
+      return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing } });
     } catch (err) {
       console.error('guest-auth (GET) error:', err);
       return res.status(500).json({ error: 'Could not verify your session.' });
