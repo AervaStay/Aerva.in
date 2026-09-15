@@ -55,6 +55,22 @@
   .empty{text-align:center; opacity:0.6; padding:60px 0;}
   .loading{text-align:center; opacity:0.6; padding:60px 0;}
   .section-heading{font-family:Georgia,serif; font-size:19px; margin:36px 0 14px;}
+  /* ---- Analytics ---- */
+  .an-totals{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;}
+  .an-total{background:white; border:1px solid #e0d5c0; padding:12px 16px; flex:1 1 128px;}
+  .an-total .an-label{font-size:10px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; display:block; margin-bottom:3px;}
+  .an-total .an-value{font-size:19px; font-family:Georgia,serif;}
+  .an-card{background:white; border:1px solid #e0d5c0; padding:16px 18px; margin-bottom:12px;}
+  .an-card h4{margin:0 0 2px; font-size:14px; font-family:Georgia,serif;}
+  .an-sub{font-size:11.5px; opacity:0.55; margin:0 0 12px;}
+  .an-card svg{width:100%; height:auto; display:block; overflow:visible;}
+  .an-legend{display:flex; gap:14px; flex-wrap:wrap; font-size:11px; opacity:0.7; margin-top:10px;}
+  .an-legend span{display:flex; align-items:center; gap:5px;}
+  .an-swatch{width:10px; height:10px; border-radius:2px; display:inline-block;}
+  .an-empty{text-align:center; opacity:0.55; padding:26px 0; font-size:13px;}
+  .an-toggle{display:flex; gap:6px; margin-bottom:12px;}
+  .an-toggle button{font-size:12px; padding:5px 12px; border:1px solid #e0d5c0; background:white; cursor:pointer; font-family:inherit; color:inherit;}
+  .an-toggle button.on{background:#1c1a17; color:#f4ebe3; border-color:#1c1a17;}
   .booking-row{background:white; border:1px solid #e0d5c0; padding:16px 20px; margin-bottom:10px;}
   .booking-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
   .booking-top h4{margin:0; font-size:14.5px; font-family:Georgia,serif;}
@@ -557,6 +573,11 @@
   <!-- Messages moved to index.html's header message icon (an overlay on
        the main site, opened without navigating away) — retired here to
        avoid maintaining two separate messaging UIs. -->
+
+  <h2 class="section-heading">Your Performance</h2>
+  <div id="analyticsContainer">
+    <p class="loading">Loading your analytics…</p>
+  </div>
 
   <h2 class="section-heading">Your Earnings</h2>
   <div id="bookingsContainer">
@@ -3459,9 +3480,177 @@
     this.textContent = 'Submit Experience';
   });
 
+  // ================= ANALYTICS =================
+  // Bar charts are hand-built inline SVG rather than a charting library:
+  // nothing else on this page pulls in a third-party script, and a
+  // <script src> would be one more thing to keep working. An SVG with a
+  // viewBox and no fixed width scales itself on a phone, which a canvas
+  // chart would not.
+
+  // Listing names are host-supplied text going into markup. Same rule as
+  // the message renderers in index.html — escape before it reaches
+  // innerHTML, or a property named with an <img onerror=...> runs script.
+  function anEsc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function anMoney(n){
+    const v = Number(n) || 0;
+    if(v >= 10000000) return '₹' + (v/10000000).toFixed(2).replace(/\.00$/,'') + 'Cr';
+    if(v >= 100000)   return '₹' + (v/100000).toFixed(2).replace(/\.00$/,'') + 'L';
+    if(v >= 1000)     return '₹' + (v/1000).toFixed(1).replace(/\.0$/,'') + 'k';
+    return '₹' + v.toLocaleString('en-IN');
+  }
+  // 2026-03 -> MAR. Built from the string, never through new Date(), so
+  // a month label can't shift by one in a negative-offset timezone.
+  const AN_MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  function anMonthLabel(key){ return AN_MONTHS[Number(key.slice(5,7)) - 1] || key; }
+
+  // Stacked vertical bars: payout sits below commission so the full bar
+  // height reads as gross, and the green portion is what the host
+  // actually receives.
+  function anStackedChart(rows){
+    const W = 720, H = 200, padL = 46, padB = 26, padT = 10;
+    const max = Math.max(...rows.map(r => r.gross), 1);
+    const plotH = H - padB - padT, plotW = W - padL - 8;
+    const slot = plotW / rows.length, bw = Math.min(slot * 0.58, 42);
+    let bars = '', labels = '';
+    rows.forEach((r, i) => {
+      const cx = padL + slot * i + slot / 2;
+      const gH = (r.gross / max) * plotH;
+      const pH = (r.payout / max) * plotH;
+      const y = padT + plotH - gH;
+      if(r.gross > 0){
+        bars += `<rect x="${cx-bw/2}" y="${y}" width="${bw}" height="${(gH-pH).toFixed(1)}" fill="#8a6c39"></rect>`;
+        bars += `<rect x="${cx-bw/2}" y="${(padT+plotH-pH).toFixed(1)}" width="${bw}" height="${pH.toFixed(1)}" fill="#3a7d44"></rect>`;
+        bars += `<title>${anMonthLabel(r.month)} — payout ${anMoney(r.payout)}, commission ${anMoney(r.commission)}</title>`;
+      } else {
+        bars += `<rect x="${cx-bw/2}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
+      }
+      labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a7f6c">${anMonthLabel(r.month)}</text>`;
+    });
+    let grid = '';
+    for(let g = 0; g <= 2; g++){
+      const y = padT + plotH - (plotH / 2) * g;
+      grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#f0e6d6" stroke-width="1"></line>`;
+      grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${anMoney(max*g/2)}</text>`;
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Earnings by month">${grid}${bars}${labels}</svg>`;
+  }
+
+  // Nights booked per month, with occupancy shown above each bar.
+  function anNightsChart(rows){
+    const W = 720, H = 200, padL = 34, padB = 26, padT = 16;
+    const max = Math.max(...rows.map(r => r.nights), 1);
+    const plotH = H - padB - padT, plotW = W - padL - 8;
+    const slot = plotW / rows.length, bw = Math.min(slot * 0.58, 42);
+    let bars = '', labels = '', grid = '';
+    rows.forEach((r, i) => {
+      const cx = padL + slot * i + slot / 2;
+      const h = (r.nights / max) * plotH;
+      const y = padT + plotH - h;
+      bars += r.nights > 0
+        ? `<rect x="${cx-bw/2}" y="${y.toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" fill="#1c1a17"><title>${anMonthLabel(r.month)} — ${r.nights} nights${r.occupancy!=null?', '+r.occupancy+'% occupancy':''}</title></rect>`
+        : `<rect x="${cx-bw/2}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
+      if(r.occupancy != null && r.nights > 0){
+        labels += `<text x="${cx}" y="${(y-4).toFixed(1)}" text-anchor="middle" font-size="9" fill="#8a6c39">${r.occupancy}%</text>`;
+      }
+      labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a7f6c">${anMonthLabel(r.month)}</text>`;
+    });
+    for(let g = 0; g <= 2; g++){
+      const y = padT + plotH - (plotH / 2) * g;
+      grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#f0e6d6" stroke-width="1"></line>`;
+      grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${Math.round(max*g/2)}</text>`;
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Nights booked by month">${grid}${bars}${labels}</svg>`;
+  }
+
+  // Horizontal bars — listing names need the room to be readable, which
+  // vertical bars don't give on a phone.
+  function anListingChart(listings){
+    const rowH = 30, W = 720, padL = 150, padR = 74;
+    const H = Math.max(listings.length * rowH + 10, 40);
+    const max = Math.max(...listings.map(l => l.gross), 1);
+    const plotW = W - padL - padR;
+    let out = '';
+    listings.forEach((l, i) => {
+      const y = i * rowH + 6;
+      const w = (l.gross / max) * plotW;
+      const nm = l.name && l.name.length > 22 ? l.name.slice(0,21) + '…' : (l.name || 'Untitled');
+      out += `<text x="${padL-8}" y="${y+14}" text-anchor="end" font-size="11" fill="#1c1a17">${anEsc(nm)}</text>`;
+      out += l.gross > 0
+        ? `<rect x="${padL}" y="${y+3}" width="${Math.max(w,2).toFixed(1)}" height="15" fill="#8a6c39"><title>${anEsc(l.name)} — ${anMoney(l.gross)}, ${l.nights} nights${l.occupancy!=null?', '+l.occupancy+'% occupancy':''}</title></rect>`
+        : `<rect x="${padL}" y="${y+3}" width="2" height="15" fill="#e0d5c0"></rect>`;
+      out += `<text x="${padL+Math.max(w,2)+7}" y="${y+15}" font-size="10" fill="#8a7f6c">${anMoney(l.gross)}${l.occupancy!=null?' · '+l.occupancy+'%':''}</text>`;
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Earnings by listing">${out}</svg>`;
+  }
+
+  let anMonthsWindow = 12;
+  async function loadAnalytics(){
+    const box = document.getElementById('analyticsContainer');
+    if(!box) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings?analytics=1&months=' + anMonthsWindow, {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      if(!res.ok) throw new Error('failed');
+      const d = await res.json();
+      const months = Array.isArray(d.months) ? d.months : [];
+      const listings = Array.isArray(d.listings) ? d.listings : [];
+      const t = d.totals || {};
+
+      if(!listings.length){
+        box.innerHTML = '<p class="an-empty">Analytics appear here once you have an approved listing.</p>';
+        return;
+      }
+
+      const toggle = `<div class="an-toggle">
+        <button type="button" data-months="6" class="${anMonthsWindow===6?'on':''}">6 months</button>
+        <button type="button" data-months="12" class="${anMonthsWindow===12?'on':''}">12 months</button>
+      </div>`;
+
+      const totals = `<div class="an-totals">
+        <div class="an-total"><span class="an-label">Your payout</span><span class="an-value payout-value">${anMoney(t.payout)}</span></div>
+        <div class="an-total"><span class="an-label">Guest paid</span><span class="an-value">${anMoney(t.gross)}</span></div>
+        <div class="an-total"><span class="an-label">Nights booked</span><span class="an-value">${Number(t.nights)||0}</span></div>
+        <div class="an-total"><span class="an-label">Occupancy</span><span class="an-value">${t.occupancy!=null?t.occupancy+'%':'—'}</span></div>
+      </div>`;
+
+      const anyMoney = months.some(m => m.gross > 0);
+      const anyNights = months.some(m => m.nights > 0);
+
+      box.innerHTML = toggle + totals
+        + `<div class="an-card"><h4>Earnings by month</h4><p class="an-sub">Counted in the month of the stay, not the month it was booked.</p>`
+        + (anyMoney ? anStackedChart(months) + `<div class="an-legend">
+             <span><i class="an-swatch" style="background:#3a7d44"></i>Your payout</span>
+             <span><i class="an-swatch" style="background:#8a6c39"></i>Aerva commission</span></div>`
+           : '<p class="an-empty">No completed bookings in this period yet.</p>')
+        + `</div>`
+        + `<div class="an-card"><h4>Nights booked</h4><p class="an-sub">Occupancy is nights booked against nights available, counted from when each listing went live.</p>`
+        + (anyNights ? anNightsChart(months) : '<p class="an-empty">No nights booked in this period yet.</p>')
+        + `</div>`
+        + `<div class="an-card"><h4>By listing</h4><p class="an-sub">Total guest spend across the period.</p>`
+        + anListingChart(listings) + `</div>`;
+
+      box.querySelectorAll('.an-toggle button').forEach(b => {
+        b.addEventListener('click', () => {
+          anMonthsWindow = Number(b.dataset.months);
+          box.innerHTML = '<p class="loading">Loading your analytics…</p>';
+          loadAnalytics();
+        });
+      });
+    }catch(err){
+      console.error('analytics load failed:', err);
+      box.innerHTML = '<p class="an-empty">Could not load your analytics. Please refresh.</p>';
+    }
+  }
+
   if(sessionToken){
     loadListings();
     loadGuestProfile();
+    loadAnalytics();
     // Deep links from index.html's account menu — "Account Settings"
     // opens the Profile modal; "List Experience" opens its own separate
     // modal entirely (see openExperienceModal above — deliberately not
