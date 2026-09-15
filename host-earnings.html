@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Earnings — Aerva</title>
+<meta name="robots" content="noindex, nofollow">
+<!--
+  host-earnings.html — the host's money view, split out of
+  host-dashboard.html so that page is purely about managing listings.
+  Holds what used to be its "Your Performance" and "Your Earnings"
+  sections, unchanged in behaviour: the same ?analytics=1 aggregates and
+  the same per-booking payout rows, including the deposit dispute,
+  host-initiated cancellation and compensation-coupon flows.
+
+  Authenticates with the same aerva_guest_session token every other host
+  page uses (see guest-auth.js) — there is no separate host login.
+  Reached from index.html's account menu, directly under Status.
+-->
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<style>
+  body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1100px; margin:0 auto;}
+  .back-home{
+    display:inline-block; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
+    color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:20px;
+  }
+  .back-home:hover{opacity:1;}
+  .top-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;}
+  h1{font-family:Georgia,serif; font-size:26px; margin:0;}
+  .status-badge{font-size:11px; padding:3px 9px; border-radius:3px; text-transform:uppercase; letter-spacing:0.04em;}
+  .status-approved{background:#e3f0e5; color:#3a7d44;}
+  .status-pending{background:#f5ecd7; color:#8a6c39;}
+  .status-rejected{background:#f5e0da; color:#a3402f;}
+  .status-draft{background:#e6e6e6; color:#555;}
+  .status-paid{background:#e3f0e5; color:#3a7d44;}
+  .status-refunded{background:#f5ecd7; color:#8a6c39;}
+  .status-cancelled{background:#f5e0da; color:#a3402f;}
+  .manage-link{font-size:12.5px; color:#8a6c39; text-decoration:underline; white-space:nowrap;}
+  .empty{text-align:center; opacity:0.6; padding:60px 0;}
+  .loading{text-align:center; opacity:0.6; padding:60px 0;}
+  .section-heading{font-family:Georgia,serif; font-size:19px; margin:36px 0 14px;}
+  /* ---- Analytics ---- */
+  .an-totals{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;}
+  .an-total{background:white; border:1px solid #e0d5c0; padding:12px 16px; flex:1 1 128px;}
+  .an-total .an-label{font-size:10px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; display:block; margin-bottom:3px;}
+  .an-total .an-value{font-size:19px; font-family:Georgia,serif;}
+  .an-card{background:white; border:1px solid #e0d5c0; padding:16px 18px; margin-bottom:12px;}
+  .an-card h4{margin:0 0 2px; font-size:14px; font-family:Georgia,serif;}
+  .an-sub{font-size:11.5px; opacity:0.55; margin:0 0 12px;}
+  .an-card svg{width:100%; height:auto; display:block; overflow:visible;}
+  .an-legend{display:flex; gap:14px; flex-wrap:wrap; font-size:11px; opacity:0.7; margin-top:10px;}
+  .an-legend span{display:flex; align-items:center; gap:5px;}
+  .an-swatch{width:10px; height:10px; border-radius:2px; display:inline-block;}
+  .an-empty{text-align:center; opacity:0.55; padding:26px 0; font-size:13px;}
+  .an-toggle{display:flex; gap:6px; margin-bottom:12px;}
+  .an-toggle button{font-size:12px; padding:5px 12px; border:1px solid #e0d5c0; background:white; cursor:pointer; font-family:inherit; color:inherit;}
+  .an-toggle button.on{background:#1c1a17; color:#f4ebe3; border-color:#1c1a17;}
+  .booking-row{background:white; border:1px solid #e0d5c0; padding:16px 20px; margin-bottom:10px;}
+  .booking-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
+  .booking-top h4{margin:0; font-size:14.5px; font-family:Georgia,serif;}
+  .booking-dates{font-size:12.5px; opacity:0.65;}
+  .booking-figures{display:flex; gap:24px; flex-wrap:wrap; font-size:12.5px; margin-top:8px;}
+  .booking-figures .figure-label{opacity:0.55; text-transform:uppercase; letter-spacing:0.05em; font-size:10px; display:block; margin-bottom:2px;}
+  .booking-figures .figure-value{font-size:14px;}
+  .payout-value{color:#3a7d44; font-weight:600;}
+  .deposit-row{margin-top:12px; padding-top:12px; border-top:1px solid #f0e6d6;}
+  .deposit-status-badge{font-size:10.5px; padding:3px 9px; border-radius:3px; text-transform:uppercase; letter-spacing:0.04em; margin-left:8px;}
+  .deposit-status-held{background:#f5ecd7; color:#8a6c39;}
+  .deposit-status-disputed{background:#f5e0da; color:#a3402f;}
+  .deposit-status-refunded{background:#e3f0e5; color:#3a7d44;}
+  .deposit-status-resolved{background:#e3f0e5; color:#3a7d44;}
+  .sidebar-add-btn{
+    background:white; border:1px dashed #ddd0bc; padding:9px; font-size:11px; letter-spacing:0.05em;
+    text-transform:uppercase; cursor:pointer; width:100%; color:#8a6c39; margin-bottom:6px;
+  }
+  .profile-modal-body{padding:24px;}
+  .profile-modal-body .field{display:flex; flex-direction:column; gap:6px; margin-bottom:16px;}
+  .profile-modal-body .field label{font-size:11.5px; letter-spacing:0.04em; text-transform:uppercase; opacity:0.6;}
+  .profile-modal-body .field input{
+    padding:11px; font-size:14px; border:1px solid #ccc; background:white; color:#1c1a17;
+    font-family:'Jost', sans-serif;
+  }
+  .profile-modal-body .field input:disabled{background:#ebe2d4; opacity:0.7; cursor:not-allowed;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <a href="host-dashboard.html" class="back-home">&larr; Back to My Collection</a>
+  <div class="top-row">
+    <div><h1>My Earnings</h1></div>
+  </div>
+
+  <h2 class="section-heading">Your Performance</h2>
+  <div id="analyticsContainer">
+    <p class="loading">Loading your analytics…</p>
+  </div>
+
+  <h2 class="section-heading">Your Earnings</h2>
+  <div id="bookingsContainer">
+    <p class="loading">Loading your bookings…</p>
+  </div>
+</div>
+
+<script>
+  const API_BASE = 'https://aerva-in.vercel.app';
+  const RAZORPAY_KEY_ID = 'rzp_test_TRBdgq9nPS2wfy'; // public Key ID only — safe to expose, same key used everywhere else
+  const sessionToken = localStorage.getItem('aerva_guest_session');
+  if(!sessionToken) window.location.replace('guest-login.html');
+
+  function statusBadgeHtml(status){
+    return `<span class="status-badge status-${status}">${status}</span>`;
+  }
+
+  // The earnings block below calls loadListings() after a dispute,
+  // cancellation or coupon purchase to pull fresh figures. On the
+  // dashboard that reloaded the listing grid too; here there is no grid,
+  // so it maps onto the bookings refresh alone. Kept under the original
+  // name so the moved code is byte-identical to what it was and can be
+  // diffed against the dashboard if anything ever looks wrong.
+  function loadListings(){ return loadEarnings(); }
+
+  async function loadEarnings(){
+    const container = document.getElementById('bookingsContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      if(res.status === 401){
+        localStorage.removeItem('aerva_guest_session');
+        window.location.replace('guest-login.html');
+        return;
+      }
+      if(!res.ok) throw new Error('failed');
+      const data = await res.json();
+      renderBookings(Array.isArray(data.bookings) ? data.bookings : []);
+    }catch(err){
+      console.error('earnings load failed:', err);
+      container.innerHTML = '<p class="empty">Could not load your bookings. Please refresh.</p>';
+    }
+  }
+
+  function renderBookings(bookings){
+    const container = document.getElementById('bookingsContainer');
+    if(!bookings.length){
+      container.innerHTML = '<p class="empty">No bookings yet.</p>';
+      return;
+    }
+    const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
+    container.innerHTML = bookings.map(b => {
+      const guestPaidForStay = Number(b.subtotal) + Number(b.gst);
+      const dateRange = new Date(b.arrival).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) +
+        ' – ' + new Date(b.departure).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      // Deposit section — only shown at all if this booking actually had
+      // one (deposit_status defaults to 'none' for bookings on listings
+      // with no security deposit set). "Raise a Concern" only appears
+      // while it's still 'held' and the 7-day window hasn't closed yet —
+      // the same two checks the backend enforces, so a host never sees a
+      // button that would just fail when clicked.
+      let depositHtml = '';
+      if(b.deposit_status && b.deposit_status !== 'none'){
+        const releaseDate = b.deposit_release_at ? new Date(b.deposit_release_at) : null;
+        const canDispute = b.deposit_status === 'held' && releaseDate && new Date() <= releaseDate;
+        const releaseLabel = releaseDate
+          ? releaseDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })
+          : '';
+
+        let statusNote = '';
+        if(b.deposit_status === 'held') statusNote = `Held until ${releaseLabel} unless you raise a concern.`;
+        else if(b.deposit_status === 'disputed') statusNote = 'Under review by Aerva — you\'ll hear back once it\'s resolved.';
+        else if(b.deposit_status === 'refunded') statusNote = 'The 7-day window passed with no concern raised — refunded to the guest in full.';
+        else if(b.deposit_status === 'resolved') statusNote = `Resolved — ${fmt(b.deposit_resolution_amount || 0)} credited toward your payout, remainder refunded to the guest.`;
+
+        depositHtml = `
+          <div class="deposit-row">
+            <span class="figure-label">Security Deposit</span>
+            <span class="figure-value">${fmt(b.deposit_amount)}<span class="deposit-status-badge deposit-status-${b.deposit_status}">${b.deposit_status}</span></span>
+            <div class="dispute-note">${statusNote}</div>
+            ${b.dispute_reason ? `<div class="dispute-reason-shown">Your note: "${b.dispute_reason}"</div>` : ''}
+            ${canDispute ? `
+              <button type="button" class="dispute-btn" data-order-id="${b.id}" onclick="toggleDisputeForm(${b.id})">Raise a Concern</button>
+              <div class="dispute-form" id="disputeForm-${b.id}">
+                <textarea id="disputeReason-${b.id}" rows="3" placeholder="What happened? (damage, missing items, extra cleaning needed, etc.)"></textarea>
+                <button type="button" class="btn-small" onclick="submitDispute(${b.id})">Submit</button>
+                <p class="verify-error" id="disputeError-${b.id}"></p>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+
+      // Cancellation — only offered while the booking is still 'paid'
+      // (not already cancelled) and check-in is more than 48 hours away.
+      // Same two checks the backend enforces, so a host never sees a
+      // button that would just fail when clicked.
+      const CANCELLATION_CUTOFF_HOURS = 48;
+      const hoursUntilArrival = (new Date(b.arrival + 'T00:00:00Z').getTime() - Date.now()) / (1000 * 60 * 60);
+      const canCancel = b.status === 'paid' && hoursUntilArrival >= CANCELLATION_CUTOFF_HOURS;
+      let cancellationHtml = '';
+      if(b.status === 'cancelled'){
+        cancellationHtml = `
+          <div class="deposit-row">
+            <span class="deposit-status-badge deposit-status-rejected">Cancelled</span>
+            ${b.cancellation_reason ? `<div class="dispute-reason-shown">Reason: "${b.cancellation_reason}"</div>` : ''}
+          </div>
+        `;
+      } else if(canCancel){
+        cancellationHtml = `
+          <div class="deposit-row">
+            <button type="button" class="dispute-btn" onclick="toggleCancelForm(${b.id})">Cancel This Booking</button>
+            <div class="dispute-form" id="cancelForm-${b.id}">
+              <p style="font-size:12.5px; opacity:0.7; margin-bottom:8px;">This refunds the guest in full and cannot be undone. Only available more than 48 hours before check-in.</p>
+              <textarea id="cancelReason-${b.id}" rows="3" placeholder="Why are you cancelling this booking?"></textarea>
+              <button type="button" class="btn-small" onclick="submitCancellation(${b.id})">Confirm Cancellation</button>
+              <p class="verify-error" id="cancelError-${b.id}"></p>
+            </div>
+          </div>
+        `;
+      } else if(b.status === 'paid'){
+        cancellationHtml = `<div class="deposit-row"><p style="font-size:12px; opacity:0.55;">This stay checks in within 48 hours — no longer cancellable from here. Contact hello@aerva.in if urgent.</p></div>`;
+      }
+
+      // Prioritizing a bigger booking: the guest must already have a
+      // coupon before this cancellation is even allowed — same 48-hour
+      // eligibility as a plain cancellation, plus this is genuinely a
+      // separate action, not an alternative reason on the same button,
+      // since it requires paying for and confirming a coupon first.
+      let swapHtml = '';
+      if(canCancel){
+        swapHtml = `
+          <div class="deposit-row">
+            <button type="button" class="dispute-btn" onclick="toggleSwapForm(${b.id})">Prioritize a Bigger Booking</button>
+            <div class="dispute-form" id="swapForm-${b.id}">
+              <p style="font-size:12.5px; opacity:0.7; margin-bottom:8px;">To cancel this booking in favor of a bigger one, you must first buy this guest a compensation coupon — paid by you to Aerva, then issued to the guest. Only once that's confirmed can this booking actually be cancelled.</p>
+              <div id="swapStep1-${b.id}">
+                <label style="font-size:12.5px;">Coupon amount (₹)</label>
+                <input type="number" id="swapAmount-${b.id}" min="1" placeholder="e.g. ${Math.round((Number(b.subtotal) + Number(b.gst)) * 0.10)}" style="width:100%; padding:8px; margin:6px 0 10px; box-sizing:border-box;">
+                <button type="button" class="btn-small" onclick="buyCoupon(${b.id})">Pay &amp; Issue Coupon</button>
+              </div>
+              <div id="swapStep2-${b.id}" style="display:none; margin-top:10px;">
+                <p style="font-size:12.5px; color:#3a7d44;">✓ Coupon issued and emailed to the guest.</p>
+                <button type="button" class="dispute-btn" style="border-color:#a3402f; color:#a3402f;" onclick="confirmSwapCancellation(${b.id})">Now Cancel This Booking</button>
+              </div>
+              <p class="verify-error" id="swapError-${b.id}"></p>
+            </div>
+          </div>
+        `;
+      }
+
+      // Real pet species, not just a headcount — see create-order.js's
+      // validation and the guest-facing picker in index.html that
+      // collects this. Only shown when the guest actually declared any.
+      const petTypesHtml = (Array.isArray(b.pet_types) && b.pet_types.length)
+        ? `<div class="booking-dates" style="opacity:0.75;">🐾 ${b.pet_types.join(', ')}</div>`
+        : '';
+
+      return `
+        <div class="booking-row">
+          <div class="booking-top">
+            <h4>${b.suite_name}</h4>
+            ${statusBadgeHtml(b.status)}
+          </div>
+          <div class="booking-dates">${dateRange} · ${b.nights} night${b.nights === 1 ? '' : 's'}${b.guests ? ' · ' + b.guests + ' guest' + (b.guests === 1 ? '' : 's') : ''}</div>
+          ${petTypesHtml}
+          <div class="booking-figures">
+            <div><span class="figure-label">Guest Paid (Stay)</span><span class="figure-value">${fmt(guestPaidForStay)}</span></div>
+            <div><span class="figure-label">Commission (${b.commission_rate}%)</span><span class="figure-value">− ${fmt(b.commission_amount)}</span></div>
+            <div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(b.payout_amount)}</span></div>
+          </div>
+          ${depositHtml}
+          ${cancellationHtml}
+          ${swapHtml}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function toggleDisputeForm(orderId){
+    const form = document.getElementById('disputeForm-' + orderId);
+    if(form) form.style.display = form.style.display === 'block' ? 'none' : 'block';
+  }
+
+  async function submitDispute(orderId){
+    const reasonEl = document.getElementById('disputeReason-' + orderId);
+    const errorEl = document.getElementById('disputeError-' + orderId);
+    errorEl.style.display = 'none';
+    const reason = reasonEl.value.trim();
+    if(!reason){
+      errorEl.textContent = 'Please describe the concern first.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ raiseDispute: { orderId, reason } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        loadListings();
+      } else {
+        errorEl.textContent = data.error || 'Could not submit your concern. Please try again.';
+        errorEl.style.display = 'block';
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not submit your concern. Please try again.';
+      errorEl.style.display = 'block';
+    }
+  }
+
+  function toggleCancelForm(orderId){
+    const form = document.getElementById('cancelForm-' + orderId);
+    if(form) form.style.display = form.style.display === 'block' ? 'none' : 'block';
+  }
+
+  async function submitCancellation(orderId){
+    const reasonEl = document.getElementById('cancelReason-' + orderId);
+    const errorEl = document.getElementById('cancelError-' + orderId);
+    errorEl.style.display = 'none';
+    const reason = reasonEl.value.trim();
+    if(!reason){
+      errorEl.textContent = 'Please explain why you\'re cancelling.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    // Real money movement, and irreversible — a confirm dialog is the
+    // safety check here, same reasoning as admin.html's deposit actions.
+    if(!confirm('This will cancel the booking and refund the guest in full. This cannot be undone. Continue?')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ cancelBooking: { orderId, reason } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        loadListings();
+      } else {
+        errorEl.textContent = data.error || 'Could not cancel this booking. Please try again.';
+        errorEl.style.display = 'block';
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not cancel this booking. Please try again.';
+      errorEl.style.display = 'block';
+    }
+  }
+
+  function toggleSwapForm(orderId){
+    const form = document.getElementById('swapForm-' + orderId);
+    if(form) form.style.display = form.style.display === 'block' ? 'none' : 'block';
+  }
+
+  // Step 1: host pays Aerva for the coupon — a genuinely different kind
+  // of Razorpay transaction than everything else on this site (host is
+  // the one paying, not a guest). Same create-order-then-verify pattern
+  // used throughout the app, just with host-listings.js's coupon-specific
+  // modes instead of create-order.js/verify-payment.js.
+  async function buyCoupon(bookingId){
+    const amountEl = document.getElementById('swapAmount-' + bookingId);
+    const errorEl = document.getElementById('swapError-' + bookingId);
+    errorEl.textContent = '';
+    const amount = Number(amountEl.value);
+    if(!amount || amount <= 0){
+      errorEl.textContent = 'Please enter a valid coupon amount.';
+      return;
+    }
+
+    let orderData;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ buyCouponOrder: { bookingId, amount } })
+      });
+      orderData = await res.json();
+      if(!res.ok){
+        errorEl.textContent = orderData.error || 'Could not start the coupon payment.';
+        return;
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not reach the server. Please try again.';
+      return;
+    }
+
+    if(typeof Razorpay === 'undefined'){
+      errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
+      return;
+    }
+
+    const options = {
+      key: RAZORPAY_KEY_ID,
+      order_id: orderData.razorpayOrderId,
+      amount: orderData.amount,
+      currency: orderData.currency,
+      name: 'Aerva',
+      description: 'Guest compensation coupon',
+      theme: { color: '#a9884f' },
+      handler: async function(response){
+        try{
+          const verifyRes = await fetch(API_BASE + '/api/host-listings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+            body: JSON.stringify({
+              verifyCouponPayment: {
+                couponId: orderData.couponId,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature
+              }
+            })
+          });
+          const verifyData = await verifyRes.json();
+          if(verifyData.verified){
+            document.getElementById('swapStep1-' + bookingId).style.display = 'none';
+            document.getElementById('swapStep2-' + bookingId).style.display = 'block';
+          } else {
+            errorEl.textContent = verifyData.error || 'Could not verify the coupon payment. Please contact hello@aerva.in.';
+          }
+        } catch(err){
+          errorEl.textContent = 'Payment went through, but could not be confirmed automatically. Please contact hello@aerva.in.';
+        }
+      }
+    };
+    const rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(response){
+      errorEl.textContent = 'Payment failed: ' + response.error.description;
+    });
+    rzp.open();
+  }
+
+  // Step 2: now that the coupon exists (confirmed by the backend, not
+  // just assumed from the UI state), the actual cancellation can happen.
+  async function confirmSwapCancellation(orderId){
+    const errorEl = document.getElementById('swapError-' + orderId);
+    errorEl.textContent = '';
+    if(!confirm('This will cancel the booking and refund the guest in full — the coupon has already been issued as compensation. This cannot be undone. Continue?')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ cancelWithCoupon: { orderId } })
+      });
+      const data = await res.json();
+      if(res.ok){
+        loadListings();
+      } else {
+        errorEl.textContent = data.error || 'Could not cancel this booking. Please try again.';
+      }
+    } catch(err){
+      errorEl.textContent = 'Could not cancel this booking. Please try again.';
+    }
+  }
+
+  function anEsc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function anMoney(n){
+    const v = Number(n) || 0;
+    if(v >= 10000000) return '₹' + (v/10000000).toFixed(2).replace(/\.00$/,'') + 'Cr';
+    if(v >= 100000)   return '₹' + (v/100000).toFixed(2).replace(/\.00$/,'') + 'L';
+    if(v >= 1000)     return '₹' + (v/1000).toFixed(1).replace(/\.0$/,'') + 'k';
+    return '₹' + v.toLocaleString('en-IN');
+  }
+  // 2026-03 -> MAR. Built from the string, never through new Date(), so
+  // a month label can't shift by one in a negative-offset timezone.
+  const AN_MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  function anMonthLabel(key){ return AN_MONTHS[Number(key.slice(5,7)) - 1] || key; }
+
+  // Stacked vertical bars: payout sits below commission so the full bar
+  // height reads as gross, and the green portion is what the host
+  // actually receives.
+  function anStackedChart(rows){
+    const W = 720, H = 200, padL = 46, padB = 26, padT = 10;
+    const max = Math.max(...rows.map(r => r.gross), 1);
+    const plotH = H - padB - padT, plotW = W - padL - 8;
+    const slot = plotW / rows.length, bw = Math.min(slot * 0.58, 42);
+    let bars = '', labels = '';
+    rows.forEach((r, i) => {
+      const cx = padL + slot * i + slot / 2;
+      const gH = (r.gross / max) * plotH;
+      const pH = (r.payout / max) * plotH;
+      const y = padT + plotH - gH;
+      if(r.gross > 0){
+        bars += `<rect x="${cx-bw/2}" y="${y}" width="${bw}" height="${(gH-pH).toFixed(1)}" fill="#8a6c39"></rect>`;
+        bars += `<rect x="${cx-bw/2}" y="${(padT+plotH-pH).toFixed(1)}" width="${bw}" height="${pH.toFixed(1)}" fill="#3a7d44"></rect>`;
+        bars += `<title>${anMonthLabel(r.month)} — payout ${anMoney(r.payout)}, commission ${anMoney(r.commission)}</title>`;
+      } else {
+        bars += `<rect x="${cx-bw/2}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
+      }
+      labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a7f6c">${anMonthLabel(r.month)}</text>`;
+    });
+    let grid = '';
+    for(let g = 0; g <= 2; g++){
+      const y = padT + plotH - (plotH / 2) * g;
+      grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#f0e6d6" stroke-width="1"></line>`;
+      grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${anMoney(max*g/2)}</text>`;
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Earnings by month">${grid}${bars}${labels}</svg>`;
+  }
+
+  // Nights booked per month, with occupancy shown above each bar.
+  function anNightsChart(rows){
+    const W = 720, H = 200, padL = 34, padB = 26, padT = 16;
+    const max = Math.max(...rows.map(r => r.nights), 1);
+    const plotH = H - padB - padT, plotW = W - padL - 8;
+    const slot = plotW / rows.length, bw = Math.min(slot * 0.58, 42);
+    let bars = '', labels = '', grid = '';
+    rows.forEach((r, i) => {
+      const cx = padL + slot * i + slot / 2;
+      const h = (r.nights / max) * plotH;
+      const y = padT + plotH - h;
+      bars += r.nights > 0
+        ? `<rect x="${cx-bw/2}" y="${y.toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" fill="#1c1a17"><title>${anMonthLabel(r.month)} — ${r.nights} nights${r.occupancy!=null?', '+r.occupancy+'% occupancy':''}</title></rect>`
+        : `<rect x="${cx-bw/2}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
+      if(r.occupancy != null && r.nights > 0){
+        labels += `<text x="${cx}" y="${(y-4).toFixed(1)}" text-anchor="middle" font-size="9" fill="#8a6c39">${r.occupancy}%</text>`;
+      }
+      labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a7f6c">${anMonthLabel(r.month)}</text>`;
+    });
+    for(let g = 0; g <= 2; g++){
+      const y = padT + plotH - (plotH / 2) * g;
+      grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#f0e6d6" stroke-width="1"></line>`;
+      grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${Math.round(max*g/2)}</text>`;
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Nights booked by month">${grid}${bars}${labels}</svg>`;
+  }
+
+  // Horizontal bars — listing names need the room to be readable, which
+  // vertical bars don't give on a phone.
+  function anListingChart(listings){
+    const rowH = 30, W = 720, padL = 150, padR = 74;
+    const H = Math.max(listings.length * rowH + 10, 40);
+    const max = Math.max(...listings.map(l => l.gross), 1);
+    const plotW = W - padL - padR;
+    let out = '';
+    listings.forEach((l, i) => {
+      const y = i * rowH + 6;
+      const w = (l.gross / max) * plotW;
+      const nm = l.name && l.name.length > 22 ? l.name.slice(0,21) + '…' : (l.name || 'Untitled');
+      out += `<text x="${padL-8}" y="${y+14}" text-anchor="end" font-size="11" fill="#1c1a17">${anEsc(nm)}</text>`;
+      out += l.gross > 0
+        ? `<rect x="${padL}" y="${y+3}" width="${Math.max(w,2).toFixed(1)}" height="15" fill="#8a6c39"><title>${anEsc(l.name)} — ${anMoney(l.gross)}, ${l.nights} nights${l.occupancy!=null?', '+l.occupancy+'% occupancy':''}</title></rect>`
+        : `<rect x="${padL}" y="${y+3}" width="2" height="15" fill="#e0d5c0"></rect>`;
+      out += `<text x="${padL+Math.max(w,2)+7}" y="${y+15}" font-size="10" fill="#8a7f6c">${anMoney(l.gross)}${l.occupancy!=null?' · '+l.occupancy+'%':''}</text>`;
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Earnings by listing">${out}</svg>`;
+  }
+
+  let anMonthsWindow = 12;
+  async function loadAnalytics(){
+    const box = document.getElementById('analyticsContainer');
+    if(!box) return;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings?analytics=1&months=' + anMonthsWindow, {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      if(!res.ok) throw new Error('failed');
+      const d = await res.json();
+      // `months` is the marker that this really is an analytics reply.
+      // An older deployment of host-listings.js ignores ?analytics=1 and
+      // falls through to its normal GET, which returns a payload that
+      // also has a `listings` key — accepted blindly, that renders a
+      // section of "Untitled" bars at zero instead of saying anything is
+      // wrong. Front-end and endpoint must ship together; this makes a
+      // mismatch obvious rather than silently wrong.
+      if(!Array.isArray(d.months)){
+        box.innerHTML = '<p class="an-empty">Analytics needs the latest server update. Please try again shortly.</p>';
+        return;
+      }
+      const months = d.months;
+      const listings = Array.isArray(d.listings) ? d.listings : [];
+      const t = d.totals || {};
+
+      if(!listings.length){
+        box.innerHTML = '<p class="an-empty">Analytics appear here once you have an approved listing.</p>';
+        return;
+      }
+
+      const toggle = `<div class="an-toggle">
+        <button type="button" data-months="6" class="${anMonthsWindow===6?'on':''}">6 months</button>
+        <button type="button" data-months="12" class="${anMonthsWindow===12?'on':''}">12 months</button>
+      </div>`;
+
+      const totals = `<div class="an-totals">
+        <div class="an-total"><span class="an-label">Your payout</span><span class="an-value payout-value">${anMoney(t.payout)}</span></div>
+        <div class="an-total"><span class="an-label">Guest paid</span><span class="an-value">${anMoney(t.gross)}</span></div>
+        <div class="an-total"><span class="an-label">Nights booked</span><span class="an-value">${Number(t.nights)||0}</span></div>
+        <div class="an-total"><span class="an-label">Occupancy</span><span class="an-value">${t.occupancy!=null?t.occupancy+'%':'—'}</span></div>
+      </div>`;
+
+      const anyMoney = months.some(m => m.gross > 0);
+      const anyNights = months.some(m => m.nights > 0);
+
+      box.innerHTML = toggle + totals
+        + `<div class="an-card"><h4>Earnings by month</h4><p class="an-sub">Counted in the month of the stay, not the month it was booked.</p>`
+        + (anyMoney ? anStackedChart(months) + `<div class="an-legend">
+             <span><i class="an-swatch" style="background:#3a7d44"></i>Your payout</span>
+             <span><i class="an-swatch" style="background:#8a6c39"></i>Aerva commission</span></div>`
+           : '<p class="an-empty">No completed bookings in this period yet.</p>')
+        + `</div>`
+        + `<div class="an-card"><h4>Nights booked</h4><p class="an-sub">Occupancy is nights booked against nights available, counted from when each listing went live.</p>`
+        + (anyNights ? anNightsChart(months) : '<p class="an-empty">No nights booked in this period yet.</p>')
+        + `</div>`
+        + `<div class="an-card"><h4>By listing</h4><p class="an-sub">Total guest spend across the period.</p>`
+        + anListingChart(listings) + `</div>`;
+
+      box.querySelectorAll('.an-toggle button').forEach(b => {
+        b.addEventListener('click', () => {
+          anMonthsWindow = Number(b.dataset.months);
+          box.innerHTML = '<p class="loading">Loading your analytics…</p>';
+          loadAnalytics();
+        });
+      });
+    }catch(err){
+      console.error('analytics load failed:', err);
+      box.innerHTML = '<p class="an-empty">Could not load your analytics. Please refresh.</p>';
+    }
+  }
+
+  loadEarnings();
+  loadAnalytics();
+</script>
+
+</body>
+</html>
