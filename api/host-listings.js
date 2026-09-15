@@ -386,6 +386,194 @@ module.exports = async (req, res) => {
   // from the per-room Calendar tab on manage-listing.html, which is the
   // detailed view for ONE Resort at a time; this is the fast, at-a-
   // glance overview across everything a host manages.
+  // ---- Host analytics ----
+  // GET ?analytics=1[&months=N] — aggregates for the logged-in host's
+  // OWN listings only. Folded in here as a mode rather than added as
+  // /api/analytics.js because this project is at Vercel's 12-function
+  // Hobby limit; a 13th file fails the whole deploy. Same reasoning and
+  // same auth path as the statusCalendar mode below.
+  //
+  // Two different time bases are used on purpose, because "what did I
+  // earn" and "how full was I" are different questions:
+  //   money      — bucketed by the stay's ARRIVAL month, so a booking
+  //                counts in the month the guest actually stays, not the
+  //                month they happened to book it.
+  //   nights     — exploded night by night, so a stay running 28 Mar to
+  //                3 Apr puts its nights in BOTH months instead of
+  //                dumping all six into March.
+  // Only status='paid' rows count anywhere here: cancelled and pending
+  // orders are not earnings and would flatter every number.
+  if (req.method === 'GET' && req.query.analytics === '1') {
+    try {
+      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      const guest = guestRows[0];
+      if (!guest || !guest.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
+      const requestedMonths = Number(req.query.months);
+      const MONTHS = Number.isInteger(requestedMonths) && requestedMonths >= 1 && requestedMonths <= 24
+        ? requestedMonths
+        : 12;
+
+      // Window runs from the first day of the month MONTHS-1 back, to the
+      // first day of NEXT month — so the current, partly-elapsed month is
+      // included rather than silently dropped.
+      const now = new Date();
+      const windowStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (MONTHS - 1), 1));
+      const windowEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+      const startStr = windowStart.toISOString().slice(0, 10);
+      const endStr = windowEnd.toISOString().slice(0, 10);
+
+      const monthKeys = [];
+      for (let i = 0; i < MONTHS; i++) {
+        const d = new Date(Date.UTC(windowStart.getUTCFullYear(), windowStart.getUTCMonth() + i, 1));
+        monthKeys.push(d.toISOString().slice(0, 7));
+      }
+
+      // Money by arrival month.
+      const moneyRows = await sql`
+        SELECT to_char(date_trunc('month', o.arrival), 'YYYY-MM') AS month,
+               COALESCE(SUM(o.total), 0)             AS gross,
+               COALESCE(SUM(o.payout_amount), 0)     AS payout,
+               COALESCE(SUM(o.commission_amount), 0) AS commission,
+               COUNT(*)                              AS bookings
+        FROM orders o
+        JOIN listings l ON l.id = o.listing_id
+        WHERE l.host_id = ${guest.host_id} AND o.status = 'paid'
+          AND o.arrival >= ${startStr} AND o.arrival < ${endStr}
+        GROUP BY 1
+      `;
+
+      // Nights, exploded one row per night stayed. departure is the day
+      // the guest LEAVES and is not itself a night, hence the -1.
+      const nightRows = await sql`
+        SELECT to_char(date_trunc('month', d), 'YYYY-MM') AS month, COUNT(*) AS nights
+        FROM orders o
+        JOIN listings l ON l.id = o.listing_id
+        CROSS JOIN LATERAL generate_series(o.arrival::date, o.departure::date - 1, interval '1 day') AS d
+        WHERE l.host_id = ${guest.host_id} AND o.status = 'paid'
+          AND d >= ${startStr} AND d < ${endStr}
+        GROUP BY 1
+      `;
+
+      // Per-listing totals across the whole window. LEFT JOIN so a
+      // listing with no bookings still appears — a zero bar is a real
+      // and useful answer, and dropping it would quietly hide the
+      // listings most in need of attention.
+      const listingRows = await sql`
+        SELECT l.id, l.property_name, l.property_type, l.created_at,
+               COALESCE(SUM(o.total), 0)         AS gross,
+               COALESCE(SUM(o.payout_amount), 0) AS payout,
+               COALESCE(SUM(o.nights), 0)        AS nights,
+               COUNT(o.id)                       AS bookings
+        FROM listings l
+        LEFT JOIN orders o
+          ON o.listing_id = l.id AND o.status = 'paid'
+          AND o.arrival >= ${startStr} AND o.arrival < ${endStr}
+        WHERE l.host_id = ${guest.host_id} AND l.status = 'approved' AND l.listing_type = 'stay'
+        GROUP BY l.id, l.property_name, l.property_type, l.created_at
+      `;
+
+      // Bookable units per listing — a resort sells each room
+      // separately, so its capacity is its active room count, not 1.
+      const roomRows = await sql`
+        SELECT l.id, COUNT(r.id) FILTER (WHERE r.is_active) AS rooms
+        FROM listings l
+        LEFT JOIN listing_rooms r ON r.listing_id = l.id
+        WHERE l.host_id = ${guest.host_id} AND l.status = 'approved' AND l.listing_type = 'stay'
+        GROUP BY l.id
+      `;
+      const roomsById = {};
+      roomRows.forEach(r => { roomsById[r.id] = Number(r.rooms) || 0; });
+      const unitsFor = (listing) => listing.property_type === 'Resort'
+        ? Math.max(roomsById[listing.id] || 0, 1)
+        : 1;
+
+      // Occupancy denominator, built in JS rather than SQL because a
+      // listing is only "available" from the day it was created. Counting
+      // a listing added last week against a full twelve months would
+      // report near-zero occupancy for a host who has actually been fully
+      // booked since launch.
+      const monthIndex = {};
+      monthKeys.forEach((k, i) => { monthIndex[k] = i; });
+      const capacityByMonth = monthKeys.map(() => 0);
+      for (const l of listingRows) {
+        const units = unitsFor(l);
+        const created = l.created_at ? new Date(l.created_at) : windowStart;
+        monthKeys.forEach((key, i) => {
+          const mStart = new Date(Date.UTC(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, 1));
+          const mEnd = new Date(Date.UTC(mStart.getUTCFullYear(), mStart.getUTCMonth() + 1, 1));
+          const from = created > mStart ? created : mStart;
+          const capped = mEnd < windowEnd ? mEnd : windowEnd;
+          const availableMs = capped - from;
+          if (availableMs <= 0) return;
+          const availableDays = Math.ceil(availableMs / 86400000);
+          const daysInMonth = Math.round((mEnd - mStart) / 86400000);
+          capacityByMonth[i] += units * Math.min(availableDays, daysInMonth);
+        });
+      }
+
+      const moneyByMonth = {};
+      moneyRows.forEach(r => { moneyByMonth[r.month] = r; });
+      const nightsByMonth = {};
+      nightRows.forEach(r => { nightsByMonth[r.month] = Number(r.nights) || 0; });
+
+      const months = monthKeys.map((key, i) => {
+        const m = moneyByMonth[key] || {};
+        const nights = nightsByMonth[key] || 0;
+        const capacity = capacityByMonth[i] || 0;
+        return {
+          month: key,
+          gross: Number(m.gross) || 0,
+          payout: Number(m.payout) || 0,
+          commission: Number(m.commission) || 0,
+          bookings: Number(m.bookings) || 0,
+          nights,
+          capacity,
+          occupancy: capacity > 0 ? Number(((nights / capacity) * 100).toFixed(1)) : null
+        };
+      });
+
+      const windowDays = Math.round((windowEnd - windowStart) / 86400000);
+      const listings = listingRows.map(l => {
+        const units = unitsFor(l);
+        const created = l.created_at ? new Date(l.created_at) : windowStart;
+        const from = created > windowStart ? created : windowStart;
+        const availableDays = Math.max(Math.ceil((windowEnd - from) / 86400000), 0);
+        const capacity = units * Math.min(availableDays, windowDays);
+        const nights = Number(l.nights) || 0;
+        return {
+          id: l.id,
+          name: l.property_name,
+          propertyType: l.property_type,
+          units,
+          gross: Number(l.gross) || 0,
+          payout: Number(l.payout) || 0,
+          nights,
+          bookings: Number(l.bookings) || 0,
+          occupancy: capacity > 0 ? Number(((nights / capacity) * 100).toFixed(1)) : null
+        };
+      }).sort((a, b) => b.gross - a.gross);
+
+      const totals = months.reduce((acc, m) => ({
+        gross: acc.gross + m.gross,
+        payout: acc.payout + m.payout,
+        commission: acc.commission + m.commission,
+        bookings: acc.bookings + m.bookings,
+        nights: acc.nights + m.nights
+      }), { gross: 0, payout: 0, commission: 0, bookings: 0, nights: 0 });
+
+      const totalCapacity = capacityByMonth.reduce((a, b) => a + b, 0);
+      totals.occupancy = totalCapacity > 0
+        ? Number(((totals.nights / totalCapacity) * 100).toFixed(1))
+        : null;
+
+      return res.status(200).json({ months, listings, totals, windowStart: startStr, windowEnd: endStr });
+    } catch (err) {
+      console.error('host analytics error:', err);
+      return res.status(500).json({ error: 'Could not load your analytics right now.' });
+    }
+  }
+
   if (req.method === 'GET' && req.query.statusCalendar === '1') {
     try {
       const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
