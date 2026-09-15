@@ -1399,6 +1399,7 @@
           <a href="index.html?view=my-bookings">My Bookings</a>
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Collection</a>
           <a href="host-status.html" id="statusMenuLink" style="display:none;">Status</a>
+          <a href="host-earnings.html" id="earningsMenuLink" style="display:none;">My Earnings</a>
           <a href="host-dashboard.html?openProfile=1">Account Settings</a>
           <div class="menu-divider"></div>
           <a href="#" id="guestLogoutLink">Log Out</a>
@@ -1430,6 +1431,7 @@
     </a>
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Collection</a>
     <a href="host-status.html" id="statusMenuLinkMobile" style="display:none;">Status</a>
+    <a href="host-earnings.html" id="earningsMenuLinkMobile" style="display:none;">My Earnings</a>
     <a href="host-dashboard.html?openProfile=1">Account Settings</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
     <a href="#" id="guestLogoutLinkMobile">Log Out</a>
@@ -11906,6 +11908,13 @@
             const statusMenuLinkMobile = document.getElementById('statusMenuLinkMobile');
             if(statusMenuLink) statusMenuLink.style.display = 'block';
             if(statusMenuLinkMobile) statusMenuLinkMobile.style.display = 'block';
+            // My Earnings is gated on exactly the same condition as
+            // Status — both are host-only pages, and a guest with no
+            // linked host account has nothing to show on either.
+            const earningsMenuLink = document.getElementById('earningsMenuLink');
+            const earningsMenuLinkMobile = document.getElementById('earningsMenuLinkMobile');
+            if(earningsMenuLink) earningsMenuLink.style.display = 'block';
+            if(earningsMenuLinkMobile) earningsMenuLinkMobile.style.display = 'block';
           }
           // Messages is available to every logged-in account now, not
           // just hosts — a guest-only account can still have an active
