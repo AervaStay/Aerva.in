@@ -6,6 +6,7 @@
     "razorpay": "^2.9.4",
     "@neondatabase/serverless": "^0.10.4",
     "@vercel/blob": "latest",
-    "bcryptjs": "^2.4.3"
+    "bcryptjs": "^2.4.3",
+    "pdfkit": "^0.20.2"
   }
 }
