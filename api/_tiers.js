@@ -47,23 +47,30 @@
 // but a genuinely poor average still holds them back.
 // ---------------------------------------------------------------------
 const GUEST_TIERS = [
-  // minBookings is a RAW count of completed bookings — never the
-  // band-multiplied credit, or a Signature-band guest would clear "5
-  // bookings" on three. minRatedReviews counts reviews that carry ratings.
+  // minBookings is a RAW count of QUALIFYING bookings — those at or above
+  // QUALIFYING_BOOKING_MIN. Counting every transaction let a guest pad to
+  // five with four ₹1,000 stays alongside one large one and clear the gate
+  // on a single real visit.
   //
-  // "Guest" is the floor: everyone who has stayed once holds it, so a host
-  // always sees a label rather than a blank. The rungs above it are earned
-  // — Valued Guest on spend, Trusted Guest on spend plus five stays,
-  // Aerva Favorite on all of that plus a real body of reviews.
-  { key: 'aerva_favorite', label: 'Aerva Favorite', minSpend: 300000, minAvgValue: 10000, minBookings: 5, minRatedReviews: 3, minScore: 4.8,
+  // unreviewedBookings is the higher bar an unreviewed guest must clear
+  // for the same rung. Without it, zero reviews beat mediocre reviews
+  // outright — five stays with no reviews reached Trusted while the same
+  // guest reviewed at 4.4 sat two rungs lower, so the rational play was to
+  // avoid ever being reviewed. Reviews remain the faster route; silence is
+  // still a route, just a longer one.
+  { key: 'aerva_favorite', label: 'Aerva Favorite', minSpend: 300000, minAvgValue: 10000, minBookings: 5, unreviewedBookings: null, minRatedReviews: 3, minScore: 4.8,
     blurb: 'A substantial booking history, consistently rated highly by hosts.' },
-  { key: 'trusted_guest',  label: 'Trusted Guest',  minSpend: 100000, minAvgValue: 10000, minBookings: 5, minRatedReviews: 0, minScore: 4.5,
+  { key: 'trusted_guest',  label: 'Trusted Guest',  minSpend: 100000, minAvgValue: 10000, minBookings: 5, unreviewedBookings: 8,    minRatedReviews: 0, minScore: 4.5,
     blurb: 'A strong booking history across at least five stays.' },
-  { key: 'valued_guest',   label: 'Valued Guest',   minSpend: 40000,  minAvgValue: 10000, minBookings: 1, minRatedReviews: 0, minScore: 4.0,
+  { key: 'valued_guest',   label: 'Valued Guest',   minSpend: 40000,  minAvgValue: 10000, minBookings: 1, unreviewedBookings: 2,    minRatedReviews: 0, minScore: 4.0,
     blurb: 'A confirmed booking history with Aerva.' },
-  { key: 'guest',          label: 'Guest',          minSpend: 0,      minAvgValue: 0,     minBookings: 1, minRatedReviews: 0, minScore: 0,
+  { key: 'guest',          label: 'Guest',          minSpend: 0,      minAvgValue: 0,     minBookings: 1, unreviewedBookings: 1,    minRatedReviews: 0, minScore: 0,
     blurb: 'Welcome to Aerva.' }
 ];
+
+// A booking below this does not count toward minBookings. It still counts
+// toward spend — the money is real — it just cannot manufacture a "stay".
+const QUALIFYING_BOOKING_MIN = 10000;
 
 // An unreviewed booking counts HALF. A guest cannot make their host write
 // a review, so bookings have to count for something — but counting them
@@ -357,12 +364,21 @@ function resolveTier(ladder, stats, moneyField) {
   // Kept separate from `count` above on purpose. count is soft credit used
   // for pace; these two are hard gates and must not be inflatable by the
   // value band or by unreviewed-booking credit.
-  const rawBookings = bookings;
+  // qualifyingBookings is supplied by the caller (a COUNT of bookings at or
+  // above QUALIFYING_BOOKING_MIN). Falls back to the raw count when absent
+  // so older callers keep working, but the query should provide it.
+  const rawBookings = stats && stats.qualifyingBookings !== undefined
+    ? num(stats.qualifyingBookings)
+    : bookings;
   const ratedReviews = rated;
   for (const t of ladder) {
     if (money < t[minMoney]) continue;
     if (isGuest) {
-      if (rawBookings < num(t.minBookings)) continue;
+      // An unreviewed guest is held to the higher bar, where one exists.
+      const needBookings = ratedReviews > 0
+        ? num(t.minBookings)
+        : (t.unreviewedBookings === null ? Infinity : num(t.unreviewedBookings));
+      if (rawBookings < needBookings) continue;
       if (ratedReviews < num(t.minRatedReviews)) continue;
     } else if (rated < t.minReviews) continue;
     if (t.minAvgValue && avgValue < t.minAvgValue) continue;
@@ -615,7 +631,7 @@ function reviewHostTiers(statsByQuarter, now) {
 
 module.exports = {
   GUEST_TIERS, HOST_TIERS, UNREVIEWED_BOOKING_CREDIT, CADENCES, REVIEW_FACTORS, GUEST_FACTORS,
-  BOOKING_VALUE_BANDS, bookingValueBand,
+  BOOKING_VALUE_BANDS, bookingValueBand, QUALIFYING_BOOKING_MIN,
   reviewScore, weakestFactor,
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers,
