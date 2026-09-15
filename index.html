@@ -290,13 +290,17 @@
   .suite-photo img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .5s ease;}
   .suite-card:hover .suite-photo img{transform:scale(1.06);}
   .suite-badges{
-    position:absolute; top:12px; left:12px; z-index:6; display:flex; flex-direction:column; gap:6px; align-items:flex-start;
+    position:absolute; top:12px; left:12px; z-index:6; display:flex; flex-wrap:wrap; gap:6px;
+    align-items:flex-start; max-width:calc(100% - 68px);
   }
   .suite-badge{
-    background:var(--ink); color:var(--cream);
-    font-size:10px; letter-spacing:0.1em; text-transform:uppercase; padding:5px 10px; border-radius:3px;
+    background:rgba(28,26,23,0.82); color:var(--cream); backdrop-filter:blur(3px);
+    font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; padding:4px 9px; border-radius:100px;
   }
-  .suite-badge-discount{ background:#a3402f; color:#fff; }
+  /* The one badge that earns real emphasis — it's the only thing on the
+     photo that changes a decision. Everything else up there is context
+     and now reads as quiet glass pills instead of competing blocks. */
+  .suite-badge-discount{ background:#a3402f; color:#fff; font-weight:500; }
   .suite-badge-stay{ background:#4d9a56; color:#fff; }
   /* Distinguishes a stay from an experience only where it's actually
      ambiguous — the mixed "All" grid. Suites-only/Experience-only tabs
@@ -321,9 +325,19 @@
   .suite-photo-dots span{
     width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.55);
   }
-  .suite-body{padding:26px 26px 24px; display:flex; flex-direction:column; flex-grow:1;}
-  .suite-card h3{font-size:19px; font-weight:500; line-height:1.3;}
-  .suite-card .loc{font-size:11.5px; letter-spacing:0.12em; color:var(--gold-deep); margin-top:10px; text-transform:uppercase;}
+  .suite-body{padding:20px 20px 18px; display:flex; flex-direction:column; flex-grow:1;}
+  .suite-card h3{font-size:19px; font-weight:500; line-height:1.25;}
+  .suite-card .loc{font-size:10.5px; letter-spacing:0.1em; color:var(--gold-deep); margin-top:7px; text-transform:uppercase; opacity:0.9;}
+  /* Capacity, distance and the map link share one quiet row. Previously
+     each was its own full-width block — the map link especially, which
+     had a border-top and uppercase tracking that made a secondary
+     utility link the loudest element on the card, louder than the price. */
+  .suite-meta{
+    display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px;
+    margin-top:8px; font-size:12px; opacity:0.62; line-height:1.4;
+  }
+  .suite-meta > *:not(:last-child)::after{ content:'·'; margin-left:10px; opacity:0.5; }
+  .suite-map-link{ color:var(--gold-deep); text-decoration:underline; text-underline-offset:2px; }
   .suite-card .desc{font-size:13.5px; line-height:1.75; opacity:0.75; margin-top:14px; flex-grow:1;}
 
   /* ---------- LISTING DETAIL MODAL ---------- */
@@ -468,20 +482,25 @@
     .listing-modal{max-width:none; max-height:100vh; height:100vh;}
   }
 
-  .amenity-tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:12px;}
+  .amenity-tags{display:flex; flex-wrap:wrap; gap:5px; margin-top:10px;}
   .amenity-tag{
-    font-size:10.5px; letter-spacing:0.03em; padding:4px 10px; border:1px solid var(--line-dark);
-    color:var(--ink); opacity:0.75; white-space:normal; max-width:100%; word-break:break-word;
+    font-size:11px; letter-spacing:0.02em; padding:3px 9px; border-radius:100px;
+    background:var(--cream-deep); border:1px solid transparent; opacity:0.85;
+    white-space:normal; max-width:100%; word-break:break-word;
   }
-  .amenity-tag-more{color:var(--gold-deep); opacity:1; border-color:var(--gold-deep);}
+  .amenity-tag-more{color:var(--gold-deep); opacity:1; background:transparent; border-color:var(--line-dark);}
+  /* Pushed to the bottom of the card so the price line sits on a
+     consistent baseline across a row of cards of differing heights. */
+  .suite-foot{margin-top:auto; padding-top:14px;}
+  .suite-card .price{font-size:15px; margin-top:0; color:var(--ink); opacity:1; line-height:1.3;}
+  .suite-card .price strong{font-weight:600; font-size:18px;}
+  .suite-card .offer{font-size:11.5px; letter-spacing:0.03em; color:var(--gold-deep); margin-top:4px; font-style:italic; font-family:'Bodoni Moda', serif;}
+  .suite-card .offer-promo{color:#2f5c2a;}
   .suite-card .link{margin-top:20px; font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink); border-top:1px solid var(--line-dark); padding-top:16px; display:flex; justify-content:space-between; align-items:center;}
   .suite-card .link svg{width:13px; height:13px; transition:transform .25s ease; stroke:var(--gold-deep);}
   .suite-card:hover .link svg{transform:translateX(4px);}
   .suite-photo-placeholder{width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:linear-gradient(160deg, var(--cream-deep), var(--cream) 70%);}
   .suite-photo-placeholder span{font-family:'Bodoni Moda', serif; font-size:42px; color:var(--gold-deep); opacity:0.55;}
-  .suite-card .price{font-size:13px; margin-top:10px; color:var(--ink); opacity:0.85;}
-  .suite-card .price strong{font-weight:500;}
-  .suite-card .offer{font-size:11.5px; letter-spacing:0.03em; color:var(--gold-deep); margin-top:6px; font-style:italic; font-family:'Bodoni Moda', serif;}
   .suites-empty{text-align:center; padding:40px 20px; opacity:0.6; font-size:14px; grid-column:1/-1;}
   .suites-loading{text-align:center; padding:40px 20px; opacity:0.5; font-size:14px; grid-column:1/-1;}
 
@@ -6553,10 +6572,10 @@
     let distanceHtml = '';
     if(guestLocation && listing.latitude && listing.longitude){
       const km = haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(listing.latitude), Number(listing.longitude));
-      distanceHtml = `<div class="loc" style="opacity:0.65;">${km < 1 ? 'Less than 1 km' : Math.round(km) + ' km'} from you</div>`;
+      distanceHtml = `<span>${km < 1 ? 'Less than 1 km' : Math.round(km) + ' km'} from you</span>`;
     }
     const mapLinkHtml = (listing.latitude && listing.longitude)
-      ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="link" style="font-size:12.5px; margin-top:4px;">View on map</a>`
+      ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="suite-map-link">View on map</a>`
       : '';
 
     // Pet policy line — only shown when the host has actually set one via
@@ -6572,6 +6591,15 @@
       petPolicyHtml = `<div class="amenity-tags"><span class="amenity-tag">${petTypes}${petFeeNote}</span></div>`;
     }
 
+    // Capacity/room availability reads as quiet metadata next to the
+    // location, not as a fourth badge stacked down the photo. Four
+    // stacked overlays covered most of the image and made the one badge
+    // that genuinely matters — an active discount — compete with three
+    // pieces of plain information.
+    const capacityText = (listing.property_type === 'Resort' && listing.resort_room_count)
+      ? `${listing.resort_available_room_count || 0} of ${listing.resort_room_count} rooms · sleeps ${listing.resort_available_capacity || listing.resort_total_capacity || 0}`
+      : (Number(listing.max_guests) > 0 ? `Sleeps up to ${Number(listing.max_guests)}` : '');
+
     card.className = 'suite-card';
     card.style.transitionDelay = ((index || 0) % 8) * 60 + 'ms';
     card.dataset.listingId = listing.id;
@@ -6584,9 +6612,6 @@
           ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-stay">Stay</span>' : ''}
           ${isNew ? '<span class="suite-badge">New</span>' : ''}
           ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
-          ${listing.property_type === 'Resort' && listing.resort_room_count
-            ? `<span class="suite-badge suite-badge-rooms">${listing.resort_available_room_count || 0} of ${listing.resort_room_count} rooms · sleeps up to ${listing.resort_available_capacity || listing.resort_total_capacity || 0}</span>`
-            : (Number(listing.max_guests) > 0 ? `<span class="suite-badge suite-badge-rooms">Sleeps up to ${Number(listing.max_guests)}</span>` : '')}
         </div>
         <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
           <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
@@ -6595,13 +6620,18 @@
       <div class="suite-body">
         <h3>${listing.property_name}</h3>
         <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
-        ${distanceHtml}
-        ${mapLinkHtml}
+        <div class="suite-meta">
+          ${capacityText ? `<span>${capacityText}</span>` : ''}
+          ${distanceHtml}
+          ${mapLinkHtml}
+        </div>
         ${amenitiesHtml}
         ${petPolicyHtml}
-        <div class="price">${priceLine}</div>
-        ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
-        ${promoOfferLine ? `<div class="offer" style="color:#2f5c2a;">${promoOfferLine}</div>` : ''}
+        <div class="suite-foot">
+          <div class="price">${priceLine}</div>
+          ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
+          ${promoOfferLine ? `<div class="offer offer-promo">${promoOfferLine}</div>` : ''}
+        </div>
       </div>
     `;
     const favBtn = card.querySelector('.fav-heart');
@@ -6646,6 +6676,35 @@
   // up-to-20-entry history.
   let recentlyViewedShownIds = new Set();
 
+  // Single source of truth for "does this stay survive the current
+  // filters". Every row that shows stay cards runs listings through
+  // this, so Recently Viewed / Near You / Resorts can't drift from the
+  // main Available grid — which is exactly what they used to do: the
+  // three rows rendered straight from listingsById and never saw the
+  // price filters at all, so a 4,000–15,000 filter still left ₹20,000
+  // and ₹2,000 cards sitting on screen.
+  //
+  // Sort order is deliberately NOT part of this. Recently Viewed is
+  // ordered by recency and Near You by distance; re-sorting either by
+  // price would destroy the only thing that makes those rows meaningful.
+  function passesStayFilters(l){
+    if(!l) return false;
+    const minPriceEl = document.getElementById('minPrice');
+    const maxPriceEl = document.getElementById('maxPrice');
+    const minPrice = minPriceEl ? minPriceEl.value : '';
+    const maxPrice = maxPriceEl ? maxPriceEl.value : '';
+    if(minPrice && !(l.nightly_rate && Number(l.nightly_rate) >= Number(minPrice))) return false;
+    if(maxPrice && !(l.nightly_rate && Number(l.nightly_rate) <= Number(maxPrice))) return false;
+    // Same pet rule as the main grid. Left out, a guest travelling with a
+    // dog would still be shown homes that don't take pets in these rows
+    // — the identical inconsistency, just with a different field.
+    if(guestCounts.pets > 0){
+      if(l.pet_friendly !== true) return false;
+      if(l.max_pets_allowed && Number(l.max_pets_allowed) < guestCounts.pets) return false;
+    }
+    return true;
+  }
+
   function renderRecentlyViewedRow(){
     const row = document.getElementById('recentlyViewedRow');
     const container = document.getElementById('recentlyViewedContainer');
@@ -6657,7 +6716,10 @@
       // A previously-viewed listing/experience may since have been
       // removed, unapproved, or blocked — skip it silently rather than
       // showing a broken or stale card.
-      if(entry.type === 'stay' && listingsById[entry.id]) cards.push({ type: 'stay', data: listingsById[entry.id] });
+      // Filtered here, before the 3-card cap, so a filtered-out listing
+      // doesn't consume one of the three slots and leave the row looking
+      // emptier than it should.
+      if(entry.type === 'stay' && listingsById[entry.id] && passesStayFilters(listingsById[entry.id])) cards.push({ type: 'stay', data: listingsById[entry.id] });
       else if(entry.type === 'experience' && experiencesById[entry.id]) cards.push({ type: 'experience', data: experiencesById[entry.id] });
     });
     // Capped at the 3 most recent — entries are already newest-first (see
@@ -6711,7 +6773,7 @@
       .filter(item => item.km <= 200);
 
     let candidates = [];
-    if(currentCategoryFilter !== 'experiences') candidates = candidates.concat(withDistance(approvedListings, 'stay'));
+    if(currentCategoryFilter !== 'experiences') candidates = candidates.concat(withDistance(approvedListings.filter(passesStayFilters), 'stay'));
     if(currentCategoryFilter !== 'suites') candidates = candidates.concat(withDistance(approvedExperiences, 'experience'));
     candidates.sort((a, b) => a.km - b.km);
     candidates = candidates.slice(0, 8);
@@ -6749,6 +6811,7 @@
     const shownIds = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
     const resorts = approvedListings
       .filter(l => l.property_type === 'Resort')
+      .filter(passesStayFilters)
       .filter(l => !shownIds.has('stay:' + l.id))
       .slice(0, 8);
 
@@ -6852,21 +6915,11 @@
     // policy) — they only ever narrow the suites portion of the list.
     // Experiences are included as-is regardless of those two filters,
     // same as they always were on their own separate view.
-    let suiteList = approvedListings.slice();
+    // Now the same predicate the three rows above use, so the main grid
+    // and those rows can never disagree about what passes.
+    let suiteList = approvedListings.filter(passesStayFilters);
 
-    const minPrice = document.getElementById('minPrice').value;
-    const maxPrice = document.getElementById('maxPrice').value;
-    if(minPrice) suiteList = suiteList.filter(l => l.nightly_rate && Number(l.nightly_rate) >= Number(minPrice));
-    if(maxPrice) suiteList = suiteList.filter(l => l.nightly_rate && Number(l.nightly_rate) <= Number(maxPrice));
-
-    // Bringing a pet narrows results to homes the host has actually
-    // marked pet-friendly, and further excludes any that cap pets below
-    // how many the guest is bringing — both real fields the host set in
-    // the dedicated Pet Policy section, never guessed from anything else.
     const wantsPetFriendly = guestCounts.pets > 0;
-    if(wantsPetFriendly){
-      suiteList = suiteList.filter(l => l.pet_friendly === true && (!l.max_pets_allowed || Number(l.max_pets_allowed) >= guestCounts.pets));
-    }
 
     const sortOrder = document.getElementById('sortPrice').value;
     if(sortOrder === 'asc') suiteList.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
