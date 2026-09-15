@@ -90,6 +90,7 @@ const bcrypt = require('bcryptjs');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
 const { createToken, verifyToken } = require('./_approval-token');
+const { REVIEW_POLICY, CONFLICT_CHECKS, REVIEW_WINDOW_DAYS, publicationState } = require('./_review-policy');
 const { COMPLIANCE_CHECKS } = require('./_compliance');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -365,6 +366,110 @@ module.exports = async (req, res) => {
   const hasValidSecret = adminSecret && adminSecret === process.env.ADMIN_SECRET;
   if (!hasValidSession && !hasValidSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // ---- Review policy + conflicts (admin only) ----
+  // GET ?reviewPolicy=1 — the written policy plus the conflict queue.
+  // Admin-only by construction: it sits below the auth gate above, and
+  // nothing in it is ever served to a guest or host.
+  if (req.method === 'GET' && req.query.reviewPolicy === '1') {
+    try {
+      // Reviews an admin should read, newest first. Deliberately a small
+      // set of pointed queries rather than one clever join — each maps to
+      // a named check in CONFLICT_CHECKS so the UI can explain WHY a row
+      // is here, which a generic "suspicious" list never can.
+      const mutualLow = await sql`
+        SELECT lr.id AS listing_review_id, gr.id AS guest_review_id, lr.order_id,
+               lr.comment AS guest_comment, gr.comment AS host_comment, lr.created_at
+        FROM listing_reviews lr
+        JOIN guest_reviews gr ON gr.order_id = lr.order_id
+        WHERE lr.admin_reverted_at IS NULL AND gr.admin_reverted_at IS NULL
+          AND (lr.hygiene + lr.communication + lr.services + lr.value_rating + lr.location) / 5 < 3
+          AND gr.rating < 3
+        ORDER BY lr.created_at DESC LIMIT 50
+      `;
+      const reported = await sql`
+        SELECT id, order_id, comment, reported_at, reported_reason, 'listing_review' AS kind
+        FROM listing_reviews WHERE reported_at IS NOT NULL AND admin_reverted_at IS NULL
+        UNION ALL
+        SELECT id, order_id, comment, reported_at, reported_reason, 'guest_review' AS kind
+        FROM guest_reviews WHERE reported_at IS NOT NULL AND admin_reverted_at IS NULL
+        ORDER BY reported_at DESC LIMIT 50
+      `;
+      // A single review far below the listing's own history — the classic
+      // grudge shape. Needs at least 3 prior reviews to mean anything.
+      const outliers = await sql`
+        SELECT lr.id, lr.order_id, lr.listing_id, lr.comment, lr.created_at,
+               (lr.hygiene + lr.communication + lr.services + lr.value_rating + lr.location) / 5 AS this_score,
+               agg.avg_score, agg.n
+        FROM listing_reviews lr
+        JOIN (
+          SELECT listing_id, AVG((hygiene + communication + services + value_rating + location) / 5) AS avg_score, COUNT(*) AS n
+          FROM listing_reviews WHERE admin_reverted_at IS NULL GROUP BY listing_id
+        ) agg ON agg.listing_id = lr.listing_id
+        WHERE lr.admin_reverted_at IS NULL AND agg.n >= 3
+          AND (lr.hygiene + lr.communication + lr.services + lr.value_rating + lr.location) / 5 < agg.avg_score - 1.5
+        ORDER BY lr.created_at DESC LIMIT 50
+      `;
+      const heldCount = await sql`
+        SELECT
+          (SELECT COUNT(*) FROM listing_reviews WHERE published_at IS NULL AND admin_reverted_at IS NULL) AS listing_held,
+          (SELECT COUNT(*) FROM guest_reviews   WHERE published_at IS NULL AND admin_reverted_at IS NULL) AS guest_held
+      `;
+      return res.status(200).json({
+        policy: REVIEW_POLICY,
+        windowDays: REVIEW_WINDOW_DAYS,
+        checks: CONFLICT_CHECKS,
+        conflicts: { mutualLow, reported, outliers },
+        held: heldCount[0] || { listing_held: 0, guest_held: 0 }
+      });
+    } catch (err) {
+      console.error('reviewPolicy error:', err);
+      return res.status(500).json({ error: 'Could not load the review policy right now.' });
+    }
+  }
+
+  // ---- Admin reverts a review ----
+  // POST { revertReview: { kind: 'listing'|'guest', id, reason } }
+  // Withdraws it from display AND from every tier calculation. The row is
+  // kept, not deleted: a dispute can be re-examined, and deleting would
+  // erase the evidence the decision rested on.
+  if (req.method === 'POST' && req.body && req.body.revertReview) {
+    try {
+      const { kind, id, reason } = req.body.revertReview;
+      const reviewId = Number(id);
+      const why = typeof reason === 'string' ? reason.trim() : '';
+      if (!reviewId || (kind !== 'listing' && kind !== 'guest')) {
+        return res.status(400).json({ error: 'Which review, and of which kind?' });
+      }
+      // A reason is required. An unexplained revert is indistinguishable
+      // from a mistake when someone reads the audit log a year later.
+      if (why.length < 10) return res.status(400).json({ error: 'Please record why this review is being reverted.' });
+
+      const adminId = hasValidSession ? sessionPayload.listingId : null;
+      const rows = kind === 'listing'
+        ? await sql`
+            UPDATE listing_reviews
+            SET admin_reverted_at = now(), admin_reverted_by = ${adminId}, admin_revert_reason = ${why}
+            WHERE id = ${reviewId} AND admin_reverted_at IS NULL
+            RETURNING id, order_id`
+        : await sql`
+            UPDATE guest_reviews
+            SET admin_reverted_at = now(), admin_reverted_by = ${adminId}, admin_revert_reason = ${why}
+            WHERE id = ${reviewId} AND admin_reverted_at IS NULL
+            RETURNING id, order_id`;
+      if (!rows.length) return res.status(404).json({ error: 'Review not found, or already reverted.' });
+
+      await logAudit(sql, {
+        action: 'review_reverted', success: true, actorType: 'admin', actorIdentifier: String(adminId || 'secret'),
+        targetType: kind === 'listing' ? 'listing_review' : 'guest_review', targetId: reviewId,
+        metadata: { orderId: rows[0].order_id, reason: why }
+      });
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('revertReview error:', err);
+      return res.status(500).json({ error: 'Could not revert that review right now.' });
+    }
   }
 
   if (req.method === 'POST') {

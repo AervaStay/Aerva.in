@@ -34,6 +34,7 @@
 // message-filtering approach and its real, worth-knowing limitations.
 
 const { neon } = require('@neondatabase/serverless');
+const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 
@@ -474,6 +475,74 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     const { mode } = req.body || {};
     try {
+      // ---- Guest reviews a property ----
+      // POST { mode: 'submitReview', orderId, hygiene, communication,
+      // services, value, location, comment }
+      //
+      // All five ratings and the comment are mandatory; the database
+      // enforces that too (see migration_reviews.sql), so a malformed
+      // insert fails loudly rather than storing a half review.
+      //
+      // Nothing is published here. published_at stays NULL and the daily
+      // sweep decides — immediately if the host has also reviewed, or
+      // after the window closes. See _review-policy.js.
+      if (mode === 'submitReview') {
+        const b = req.body || {};
+        const orderId = Number(b.orderId);
+        if (!orderId) return res.status(400).json({ error: 'Which booking is this review for?' });
+
+        const rows = await sql`
+          SELECT o.id, o.listing_id, o.room_id, o.departure, o.status, l.host_id
+          FROM orders o JOIN listings l ON l.id = o.listing_id
+          WHERE o.id = ${orderId} AND o.guest_id = ${guestId}
+        `;
+        const order = rows[0];
+        if (!order) return res.status(404).json({ error: 'Booking not found.' });
+        if (order.status !== 'paid') return res.status(400).json({ error: 'Only completed stays can be reviewed.' });
+        if (!submissionOpen(order.departure)) {
+          return res.status(400).json({ error: `Reviews can be left for ${REVIEW_WINDOW_DAYS} days after checkout. This window has closed.` });
+        }
+
+        const FIELDS = ['hygiene', 'communication', 'services', 'value', 'location'];
+        const vals = {};
+        for (const f of FIELDS) {
+          const v = Number(b[f]);
+          if (!Number.isFinite(v) || v < 1 || v > 5) {
+            return res.status(400).json({ error: `Please rate ${f === 'value' ? 'value for money' : f} between 1 and 5.` });
+          }
+          vals[f] = v;
+        }
+        const comment = typeof b.comment === 'string' ? b.comment.trim() : '';
+        if (comment.length < 10) {
+          return res.status(400).json({ error: 'Please write a few words about your stay.' });
+        }
+
+        try {
+          const inserted = await sql`
+            INSERT INTO listing_reviews
+              (order_id, listing_id, room_id, guest_id, host_id,
+               hygiene, communication, services, value_rating, location, comment)
+            VALUES
+              (${order.id}, ${order.listing_id}, ${order.room_id || null}, ${guestId}, ${order.host_id},
+               ${vals.hygiene}, ${vals.communication}, ${vals.services}, ${vals.value}, ${vals.location}, ${comment})
+            RETURNING id
+          `;
+          await logAudit(sql, {
+            action: 'listing_review_submitted', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+            targetType: 'listing_review', targetId: inserted[0].id,
+            metadata: { orderId: order.id, listingId: order.listing_id }
+          });
+          return res.status(200).json({ success: true, held: true });
+        } catch (err) {
+          // The one-per-order unique constraint is the expected failure.
+          if (String(err && err.message || '').includes('one_per_order')) {
+            return res.status(409).json({ error: 'You have already reviewed this stay.' });
+          }
+          console.error('submitReview error:', err);
+          return res.status(500).json({ error: 'Could not save your review right now.' });
+        }
+      }
+
       if (mode === 'send') {
         const { conversationId, text, role } = req.body || {};
         const rawText = typeof text === 'string' ? text.trim().slice(0, 2000) : '';

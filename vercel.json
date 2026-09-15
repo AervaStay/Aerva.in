@@ -3,6 +3,10 @@
     {
       "path": "/api/get-listings?refreshCurrencyRates=1",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/get-listings?reviewSweep=1",
+      "schedule": "0 2 * * *"
     }
   ]
 }
