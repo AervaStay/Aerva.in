@@ -47,12 +47,22 @@
 // but a genuinely poor average still holds them back.
 // ---------------------------------------------------------------------
 const GUEST_TIERS = [
-  { key: 'aerva_favorite', label: 'Aerva Favorite', minSpend: 300000, minAvgValue: 10000, minCount: 10, minScore: 4.8, minRating: 4.8,
-    blurb: 'A substantial booking history, consistently rated exceptional by hosts.' },
-  { key: 'trusted_guest',  label: 'Trusted Guest',  minSpend: 100000,  minAvgValue: 10000, minCount: 5,  minScore: 4.5, minRating: 4.5,
-    blurb: 'A strong booking history and excellent host ratings.' },
-  { key: 'valued_guest',   label: 'Valued Guest',   minSpend: 40000,   minAvgValue: 10000, minCount: 0,  minScore: 4.0, minRating: 4.0,
-    blurb: 'A confirmed booking and a good word from the host.' }
+  // minBookings is a RAW count of completed bookings — never the
+  // band-multiplied credit, or a Signature-band guest would clear "5
+  // bookings" on three. minRatedReviews counts reviews that carry ratings.
+  //
+  // "Guest" is the floor: everyone who has stayed once holds it, so a host
+  // always sees a label rather than a blank. The rungs above it are earned
+  // — Valued Guest on spend, Trusted Guest on spend plus five stays,
+  // Aerva Favorite on all of that plus a real body of reviews.
+  { key: 'aerva_favorite', label: 'Aerva Favorite', minSpend: 300000, minAvgValue: 10000, minBookings: 5, minRatedReviews: 3, minScore: 4.8,
+    blurb: 'A substantial booking history, consistently rated highly by hosts.' },
+  { key: 'trusted_guest',  label: 'Trusted Guest',  minSpend: 100000, minAvgValue: 10000, minBookings: 5, minRatedReviews: 0, minScore: 4.5,
+    blurb: 'A strong booking history across at least five stays.' },
+  { key: 'valued_guest',   label: 'Valued Guest',   minSpend: 40000,  minAvgValue: 10000, minBookings: 1, minRatedReviews: 0, minScore: 4.0,
+    blurb: 'A confirmed booking history with Aerva.' },
+  { key: 'guest',          label: 'Guest',          minSpend: 0,      minAvgValue: 0,     minBookings: 1, minRatedReviews: 0, minScore: 0,
+    blurb: 'Welcome to Aerva.' }
 ];
 
 // An unreviewed booking counts HALF. A guest cannot make their host write
@@ -344,9 +354,17 @@ function resolveTier(ladder, stats, moneyField) {
   const count = isGuest
     ? (rated + Math.max(bookings - rated, 0) * UNREVIEWED_BOOKING_CREDIT) * band.multiplier
     : reviews;
+  // Kept separate from `count` above on purpose. count is soft credit used
+  // for pace; these two are hard gates and must not be inflatable by the
+  // value band or by unreviewed-booking credit.
+  const rawBookings = bookings;
+  const ratedReviews = rated;
   for (const t of ladder) {
     if (money < t[minMoney]) continue;
-    if ((isGuest ? count : rated) < t[minCountField]) continue;
+    if (isGuest) {
+      if (rawBookings < num(t.minBookings)) continue;
+      if (ratedReviews < num(t.minRatedReviews)) continue;
+    } else if (rated < t.minReviews) continue;
     if (t.minAvgValue && avgValue < t.minAvgValue) continue;
     if (rated > 0) {
       if (score < (t.minScore !== undefined ? t.minScore : t.minRating)) continue;
