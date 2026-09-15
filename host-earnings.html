@@ -68,6 +68,26 @@
   }
   .an-total .an-label{display:flex; align-items:center; gap:5px;}
   .an-card svg text{user-select:none;}
+  .an-bar{transition:opacity .12s ease;}
+  .an-card svg:hover .an-bar{opacity:0.55;}
+  .an-card svg .an-bar:hover{opacity:1 !important;}
+  .an-tooltip{
+    position:fixed; z-index:99; pointer-events:none; opacity:0;
+    background:#1c1a17; color:#f4ebe3; font-size:11.5px; line-height:1.4;
+    padding:6px 10px; border-radius:4px; white-space:nowrap;
+    transition:opacity .12s ease; box-shadow:0 4px 14px rgba(28,26,23,0.22);
+  }
+  .an-metric button{letter-spacing:0.02em;}
+  .an-card{padding:18px 20px 20px;}
+  .an-card h4{font-size:13px; letter-spacing:0.04em; text-transform:uppercase; opacity:0.75; margin-bottom:3px;}
+  .an-totals{gap:8px;}
+  .an-total{padding:11px 14px;}
+  .an-total .an-value{font-size:20px;}
+  @media (max-width:640px){
+    .an-controls{gap:8px;}
+    .an-select{flex:1 1 140px; max-width:none;}
+    .an-tooltip{display:none;}
+  }
   .booking-row{background:white; border:1px solid #e0d5c0; padding:16px 20px; margin-bottom:10px;}
   .booking-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
   .booking-top h4{margin:0; font-size:14.5px; font-family:Georgia,serif;}
@@ -492,6 +512,34 @@
   let anType = 'all';                // all | stay | experience
   let anListingId = 'all';           // 'all' or a listing id
   let anSelectedMonth = null;        // 'YYYY-MM' when a bar is clicked
+  let anStatus = 'paid';             // paid | all | cancelled | refunded
+  let anMetric = 'payout';           // payout | bookings
+
+  // Axis maximum, rounded UP to a clean number with headroom above the
+  // tallest bar. Scaling exactly to the data made the biggest bar touch
+  // the top of the plot with its value label clipped against the frame,
+  // and produced gridline labels like ₹137.4k.
+  function anNiceMax(raw){
+    const data = Math.max(raw, 1);
+    // Booking counts are whole things — a gridline reading "1.2 bookings"
+    // is nonsense — so round up to a multiple of 4, which is how many
+    // gridline intervals the charts draw.
+    if(anMetric === 'bookings'){
+      return Math.max(4, Math.ceil((data * 1.12) / 4) * 4);
+    }
+    const v = data * 1.10;
+    const mag = Math.pow(10, Math.floor(Math.log10(v)));
+    const n = v / mag;
+    // A fine ladder on purpose. A coarse one (1, 2, 5, 10) turned 90,000
+    // into an axis topping out at 200,000, leaving every bar under half
+    // height and the chart looking empty. Each of these divides into four
+    // readable gridline steps.
+    const ladder = [1, 1.2, 1.4, 1.6, 1.8, 2, 2.4, 3, 4, 5, 6, 8, 10];
+    const step = ladder.find(x => n <= x) || 10;
+    return step * mag;
+  }
+  function anFmt(v){ return anMetric === 'bookings' ? String(Math.round(v)) : anMoney(v); }
+  function anFmtFull(v){ return anMetric === 'bookings' ? Math.round(v) + (Math.round(v)===1?' booking':' bookings') : anMoneyFull(v); }
 
   // Listing names are host-supplied text going into markup. Same rule as
   // the message renderers in index.html — escape before it reaches
@@ -519,6 +567,7 @@
     return anData.rows.filter(r => {
       if(anType !== 'all' && r.listingType !== anType) return false;
       if(anListingId !== 'all' && String(r.listingId) !== String(anListingId)) return false;
+      if(anStatus !== 'all' && r.status !== anStatus) return false;
       return true;
     });
   }
@@ -530,15 +579,19 @@
     const slots = [];
     for(let m = 1; m <= 12; m++){
       slots.push({ month: year + '-' + String(m).padStart(2,'0'),
-                   current:0, upcoming:0, total:0, bookings:0, nights:0 });
+                   current:0, upcoming:0, total:0, payout:0, bookings:0, nights:0 });
     }
     const byKey = {};
     slots.forEach(s => { byKey[s.month] = s; });
     anRows().forEach(r => {
       const s = byKey[r.month];
       if(!s) return;
-      s[r.bucket] += r.payout;
-      s.total += r.payout;
+      // Bars plot whichever metric is selected; bookings/nights stay
+      // available alongside so the caption can report both regardless.
+      const v = anMetric === 'bookings' ? r.bookings : r.payout;
+      s[r.bucket] += v;
+      s.total += v;
+      s.payout += r.payout;
       s.bookings += r.bookings;
       s.nights += r.nights;
     });
@@ -546,11 +599,12 @@
   }
 
   function anYearTotals(year){
-    const t = { current:0, upcoming:0, total:0, bookings:0, nights:0 };
+    const t = { current:0, upcoming:0, total:0, payout:0, bookings:0, nights:0 };
     anRows().forEach(r => {
       if(r.month.slice(0,4) !== String(year)) return;
-      t[r.bucket] += r.payout; t.total += r.payout;
-      t.bookings += r.bookings; t.nights += r.nights;
+      const v = anMetric === 'bookings' ? r.bookings : r.payout;
+      t[r.bucket] += v; t.total += v;
+      t.payout += r.payout; t.bookings += r.bookings; t.nights += r.nights;
     });
     return t;
   }
@@ -560,14 +614,17 @@
   // bottom and the speculative part on top.
   function anMonthChart(series){
     const W = 720, H = 210, padL = 48, padB = 26, padT = 12;
-    const max = Math.max(...series.map(s => Math.max(s.current, s.upcoming)), 1);
+    const max = anNiceMax(Math.max(...series.map(s => Math.max(s.current, s.upcoming)), 1));
     const plotH = H - padB - padT, plotW = W - padL - 8;
     const slot = plotW / 12, bw = Math.min(slot * 0.30, 18);
     let grid = '', bars = '', labels = '';
-    for(let g = 0; g <= 2; g++){
-      const y = padT + plotH - (plotH/2)*g;
-      grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#f0e6d6" stroke-width="1"></line>`;
-      grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${anMoney(max*g/2)}</text>`;
+    // Four gridlines rather than two — easier to read a mid-range bar
+    // against, and the top line now sits above the tallest bar thanks to
+    // anNiceMax, so nothing is flush against the frame.
+    for(let g = 0; g <= 4; g++){
+      const y = padT + plotH - (plotH/4)*g;
+      grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="${g===0?'#ddd0bc':'#f3ebdd'}" stroke-width="1"></line>`;
+      grid += `<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${anFmt(max*g/4)}</text>`;
     }
     series.forEach((s, i) => {
       const cx = padL + slot*i + slot/2;
@@ -584,9 +641,9 @@
         const x = cx + (bi === 0 ? -bw - 1 : 1);
         if(v > 0){
           const h = (v/max)*plotH;
-          bars += `<rect data-month="${s.month}" x="${x}" y="${(padT+plotH-h).toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" fill="${b.color}" style="cursor:pointer" opacity="${anSelectedMonth && !isSel ? 0.45 : 1}"><title>${anMonthLabel(s.month)} — ${b.label} ${anMoneyFull(v)}</title></rect>`;
+          bars += `<rect class="an-bar" data-month="${s.month}" data-tip="${anEsc(anMonthLabel(s.month) + ' ' + s.month.slice(0,4) + ' · ' + b.label + ' · ' + anFmtFull(v))}" x="${x}" y="${(padT+plotH-h).toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" rx="2" fill="${b.color}" style="cursor:pointer" opacity="${anSelectedMonth && !isSel ? 0.4 : 1}"></rect>`;
         } else {
-          bars += `<rect x="${x}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
+          bars += `<rect x="${x}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e8dcc8"></rect>`;
         }
       });
       labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="${isSel ? '#1c1a17' : '#8a7f6c'}" font-weight="${isSel ? '600' : '400'}" style="pointer-events:none">${anMonthLabel(s.month)}</text>`;
@@ -598,14 +655,14 @@
   function anCompareChart(yearA, yearB){
     const a = anMonthSeries(yearA), b = anMonthSeries(yearB);
     const W = 720, H = 210, padL = 48, padB = 26, padT = 12;
-    const max = Math.max(...a.map(s=>s.total), ...b.map(s=>s.total), 1);
+    const max = anNiceMax(Math.max(...a.map(s=>s.total), ...b.map(s=>s.total), 1));
     const plotH = H - padB - padT, plotW = W - padL - 8;
     const slot = plotW / 12, bw = Math.min(slot*0.30, 16);
     let grid = '', bars = '', labels = '';
-    for(let g = 0; g <= 2; g++){
-      const y = padT + plotH - (plotH/2)*g;
-      grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#f0e6d6" stroke-width="1"></line>`;
-      grid += `<text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${anMoney(max*g/2)}</text>`;
+    for(let g = 0; g <= 4; g++){
+      const y = padT + plotH - (plotH/4)*g;
+      grid += `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="${g===0?'#ddd0bc':'#f3ebdd'}" stroke-width="1"></line>`;
+      grid += `<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="9" fill="#8a7f6c">${anFmt(max*g/4)}</text>`;
     }
     for(let i = 0; i < 12; i++){
       const cx = padL + slot*i + slot/2;
@@ -613,9 +670,9 @@
         const h = (s.total/max)*plotH;
         const x = cx + (side < 0 ? -bw-1 : 1);
         if(s.total > 0){
-          bars += `<rect x="${x}" y="${(padT+plotH-h).toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" fill="${color}"><title>${anMonthLabel(s.month)} ${yr} — ${anMoneyFull(s.total)}</title></rect>`;
+          bars += `<rect class="an-bar" data-tip="${anEsc(anMonthLabel(s.month) + ' ' + yr + ' · ' + anFmtFull(s.total))}" x="${x}" y="${(padT+plotH-h).toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" rx="2" fill="${color}"></rect>`;
         } else {
-          bars += `<rect x="${x}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e0d5c0"></rect>`;
+          bars += `<rect x="${x}" y="${padT+plotH-2}" width="${bw}" height="2" fill="#e8dcc8"></rect>`;
         }
       });
       labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a7f6c">${AN_MONTHS[i]}</text>`;
@@ -646,7 +703,7 @@
       const w = (l.payout/max)*plotW;
       const nm = l.name && l.name.length > 22 ? l.name.slice(0,21) + '…' : (l.name || 'Untitled');
       out += `<text x="${padLl-8}" y="${y+14}" text-anchor="end" font-size="11" fill="#1c1a17">${anEsc(nm)}</text>`;
-      out += `<rect x="${padLl}" y="${y+3}" width="${Math.max(w,2).toFixed(1)}" height="15" fill="${l.type === 'experience' ? '#8a6c39' : '#3a7d44'}"><title>${anEsc(l.name)} — ${anMoneyFull(l.payout)} across ${l.bookings} booking${l.bookings===1?'':'s'}</title></rect>`;
+      out += `<rect class="an-bar" data-tip="${anEsc(l.name + ' · ' + anMoneyFull(l.payout) + ' · ' + l.bookings + (l.bookings===1?' booking':' bookings') + ' · ' + l.nights + (l.nights===1?' night':' nights'))}" x="${padLl}" y="${y+3}" width="${Math.max(w,2).toFixed(1)}" height="15" rx="2" fill="${l.type === 'experience' ? '#8a6c39' : '#3a7d44'}"></rect>`;
       out += `<text x="${padLl+Math.max(w,2)+7}" y="${y+15}" font-size="10" fill="#8a7f6c">${anMoney(l.payout)} · ${l.bookings} bkg</text>`;
     });
     return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Payout by listing">${out}</svg>`;
@@ -654,9 +711,40 @@
 
   function anTotalsStrip(t, caption){
     return `<p class="an-sub">${anEsc(caption)}</p><div class="an-totals">
-      ${AN_BUCKETS.map(b => `<div class="an-total"><span class="an-label"><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span><span class="an-value">${anMoney(t[b.key])}</span></div>`).join('')}
-      <div class="an-total"><span class="an-label">Total payout</span><span class="an-value payout-value">${anMoney(t.total)}</span></div>
+      ${AN_BUCKETS.map(b => `<div class="an-total"><span class="an-label"><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span><span class="an-value">${anFmt(t[b.key])}</span></div>`).join('')}
+      <div class="an-total"><span class="an-label">${anMetric === 'bookings' ? 'Total bookings' : 'Total payout'}</span><span class="an-value payout-value">${anFmt(t.total)}</span></div>
     </div>`;
+  }
+
+  // A real hover tooltip. SVG <title> works but waits for the browser's
+  // own ~1s delay and can't be styled, which made reading a chart feel
+  // broken. This follows the pointer, and is bound after every render
+  // because innerHTML replaces the nodes each time.
+  function anBindTooltip(box){
+    let tip = document.getElementById('anTooltip');
+    if(!tip){
+      tip = document.createElement('div');
+      tip.id = 'anTooltip';
+      tip.className = 'an-tooltip';
+      document.body.appendChild(tip);
+    }
+    const hide = () => { tip.style.opacity = '0'; };
+    box.querySelectorAll('.an-bar').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        tip.textContent = el.getAttribute('data-tip') || '';
+        tip.style.opacity = '1';
+      });
+      el.addEventListener('mousemove', (e) => {
+        // Clamped to the viewport so a bar near the right edge doesn't
+        // push the tooltip off-screen.
+        const w = tip.offsetWidth || 160;
+        const x = Math.min(e.clientX + 14, window.innerWidth - w - 10);
+        tip.style.left = Math.max(8, x) + 'px';
+        tip.style.top = (e.clientY - 34) + 'px';
+      });
+      el.addEventListener('mouseleave', hide);
+    });
+    box.addEventListener('mouseleave', hide);
   }
 
   function anRender(){
@@ -674,10 +762,18 @@
         ${years.map(y => `<button type="button" data-an-year="${y}" class="${String(anYear)===String(y)?'on':''}">${y}</button>`).join('')}
         ${years.length === 2 ? `<button type="button" data-an-year="compare" class="${anYear==='compare'?'on':''}">Compare</button>` : ''}
       </div>
-      <select class="an-select" id="anListingSelect">
+      <select class="an-select" id="anListingSelect" aria-label="Filter by listing">
         <option value="all">All listings</option>
         ${listings.map(l => `<option value="${l.id}" ${String(anListingId)===String(l.id)?'selected':''}>${anEsc(l.name)}</option>`).join('')}
       </select>
+      <select class="an-select" id="anStatusSelect" aria-label="Filter by booking status">
+        ${[['paid','Confirmed bookings'],['all','All bookings'],['cancelled','Cancelled only'],['refunded','Refunded only']]
+          .map(([v,l]) => `<option value="${v}" ${anStatus===v?'selected':''}>${l}</option>`).join('')}
+      </select>
+      <div class="an-toggle an-metric">
+        ${[['payout','₹ Payout'],['bookings','# Bookings']].map(([v,l]) =>
+          `<button type="button" data-an-metric="${v}" class="${anMetric===v?'on':''}">${l}</button>`).join('')}
+      </div>
     </div>`;
 
     let body;
@@ -701,11 +797,13 @@
       const scopeTotals = sel
         ? { current:sel.current, upcoming:sel.upcoming, total:sel.total, bookings:sel.bookings, nights:sel.nights }
         : anYearTotals(anYear);
-      const caption = sel
-        ? `${anMonthLabel(sel.month)} ${anYear} — ${sel.bookings} booking${sel.bookings===1?'':'s'}, ${sel.nights} night${sel.nights===1?'':'s'}`
-        : `${anYear} — ${scopeTotals.bookings} booking${scopeTotals.bookings===1?'':'s'}, ${scopeTotals.nights} night${scopeTotals.nights===1?'':'s'}`;
+      const statusWord = { paid:'confirmed', all:'', cancelled:'cancelled', refunded:'refunded' }[anStatus];
+      const scopeLabel = sel ? `${anMonthLabel(sel.month)} ${anYear}` : String(anYear);
+      const caption = `${scopeLabel} — ${scopeTotals.bookings} ${statusWord ? statusWord + ' ' : ''}booking${scopeTotals.bookings===1?'':'s'}`
+        + `, ${scopeTotals.nights} night${scopeTotals.nights===1?'':'s'}`
+        + `, ${anMoneyFull(scopeTotals.payout)} paid out`;
       body = anTotalsStrip(scopeTotals, caption)
-        + `<div class="an-card"><h4>Payout by booking month</h4>
+        + `<div class="an-card"><h4>${anMetric === 'bookings' ? 'Bookings' : 'Payout'} by booking month</h4>
            <p class="an-sub">Counted in the month you were paid, split by whether the stay has happened yet. Tap a month for its own numbers.${sel?' <button type="button" class="an-clear" id="anClearMonth">Show whole year</button>':''}</p>
            ${anMonthChart(series)}
            <div class="an-legend">${AN_BUCKETS.map(b=>`<span><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span>`).join('')}</div>
@@ -733,6 +831,12 @@
     }));
     const sel = document.getElementById('anListingSelect');
     if(sel) sel.addEventListener('change', () => { anListingId = sel.value; anRender(); });
+    const stSel = document.getElementById('anStatusSelect');
+    if(stSel) stSel.addEventListener('change', () => { anStatus = stSel.value; anRender(); });
+    box.querySelectorAll('[data-an-metric]').forEach(b => b.addEventListener('click', () => {
+      anMetric = b.dataset.anMetric; anRender();
+    }));
+    anBindTooltip(box);
     const clr = document.getElementById('anClearMonth');
     if(clr) clr.addEventListener('click', () => { anSelectedMonth = null; anRender(); });
     box.querySelectorAll('svg [data-month]').forEach(el => el.addEventListener('click', () => {
