@@ -122,6 +122,13 @@ const UNREVIEWED_BOOKING_CREDIT = 0.5;
 // reviews reach the top, which is the opposite of what a badge is for: it
 // tells a guest this property is a safe choice, not that the host is busy.
 //
+// Judged on the WEIGHTED AVERAGE only. There is no per-factor floor: a
+// single weak factor drags the average and that is the whole of its
+// effect. The weights are what express that some factors matter more —
+// hygiene at 1.5 already costs three times what location does — so a
+// second gate on top of them was doing the same job twice, and made a
+// host's standing turn on a threshold they could cross by a hundredth.
+//
 // Each rung up needs 10 more reviews than the last. Same two rules as the
 // guest ladder: count is required unconditionally, average is judged only
 // once there is something to judge — so one bad review demotes
@@ -130,7 +137,7 @@ const UNREVIEWED_BOOKING_CREDIT = 0.5;
 // minReviews is now only a CREDIBILITY FLOOR — enough reviews that the
 // scores aren't noise — not the thing being measured. What separates the
 // rungs is minScore (the weighted quality across all five factors) and
-// minFactor (the worst single factor a host is allowed to have). Counts
+// Counts
 // dropped accordingly: two perfect reviews still shouldn't crown anyone,
 // but thirty mediocre ones shouldn't either, and the old ladder only
 // guarded against the first of those.
@@ -167,7 +174,7 @@ const HOST_TIERS = [
     blurb: 'Consistently well reviewed, with no weak spots.' },
   { key: 'established_host', label: 'Established Host', icon: 'feather',         minPayout: 75000,   minScore: 4.30, minFactor: 3.8, minReviews: 3,
     blurb: 'A proven track record of happy guests.' },
-  { key: 'rising_host',      label: 'Rising Host',      icon: 'feather',         minPayout: 1,       minScore: 0,    minFactor: 0,   minReviews: 0,
+  { key: 'rising_host',      label: 'Rising Host',      icon: 'feather',         minPayout: 1,       minScore: 0,   minReviews: 0,
     blurb: 'Off to a strong start.' }
 ];
 
@@ -230,12 +237,10 @@ const REVIEW_FACTORS = [
   { key: 'services',      label: 'Services',        weight: 1 },
   { key: 'value',         label: 'Value for money', weight: 1 },
   // floorExempt: counted in the weighted score, but never held against a
-  // host by the per-factor floor. A host cannot move the property. The
-  // floor exists to stop a fixable weak spot — a dirty room, unanswered
-  // messages — being masked by strong scores elsewhere, and an address is
-  // not a fixable weak spot. Leaving location in the floor re-imposed at
-  // full force exactly the penalty the low weight was meant to soften,
-  // capping well-run properties in quiet locations.
+  // host by a per-factor floor. No ladder uses one any more — standing is
+  // the weighted average and nothing else — but the flag is kept because
+  // weakestFactor is still used to tell a host WHICH factor is dragging
+  // them down, and naming their address there would be unhelpful.
   { key: 'location',      label: 'Location',        weight: 0.1, floorExempt: true }
 ];
 
@@ -385,8 +390,15 @@ function resolveTier(ladder, stats, moneyField) {
     if (rated > 0) {
       if (score < (t.minScore !== undefined ? t.minScore : t.minRating)) continue;
       // No single factor may sit below the tier's floor, however strong
-      // the others are. This is the whole point of scoring five things:
-      // a filthy room is not offset by a great location.
+      // the others are. A weighted mean lets a weak factor hide: four
+      // excellent scores carry a hygiene of 3.0 to an average that still
+      // passes, and the host then holds a badge reading "a proven track
+      // record of happy guests" while a third of guests found the place
+      // dirty. The floor is what stops the one thing a guest most needs to
+      // know being averaged away.
+      //
+      // Location is exempt — a host cannot move the property, so an
+      // address is not a weak spot they can fix.
       if (t.minFactor && factors && weakestFactor(factors, t.minFactor, factorSet)) continue;
     }
     return { key: t.key, label: t.label, blurb: t.blurb, icon: t.icon || null };
@@ -441,10 +453,7 @@ function nextTierProgress(ladder, stats, currentKey) {
     if (wantScore && score < wantScore) needs.push(`an overall review score of ${wantScore}`);
     // Named explicitly — "improve your reviews" is not actionable, but
     // "hygiene is at 3.6, needs 4.2" tells a host exactly what to fix.
-    if (next.minFactor && f) {
-      const weak = weakestFactor(f, next.minFactor);
-      if (weak) needs.push(`${weak.label.toLowerCase()} at ${next.minFactor} or above (currently ${weak.value.toFixed(1)})`);
-    }
+
   }
   return { label: next.label, needs };
 }
@@ -661,14 +670,14 @@ function reviewHostTiers(statsByQuarter, now) {
 // exceptional, so a band can sit empty — better an empty badge than one
 // that means "least bad".
 const PROPERTY_TIERS = [
-  { key: 'aerva_exceptional', label: 'Aerva Exceptional', topN: 1,   minScore: 4.85, minReviews: 20,
-    blurb: 'The single highest rated stay on Aerva.' },
-  { key: 'exceptional',       label: 'Exceptional',       topN: 5,   minScore: 4.80, minReviews: 15,
-    blurb: 'Among the five highest rated stays on Aerva.' },
-  { key: 'outstanding',       label: 'Outstanding',       topN: 10,  minScore: 4.75, minReviews: 10,
-    blurb: 'Among the ten highest rated stays on Aerva.' },
-  { key: 'great_stay',        label: 'Great Stay',        topN: 100, minScore: 4.60, minReviews: 5,
-    blurb: 'Among the hundred highest rated stays on Aerva.' }
+  { key: 'aerva_exceptional', label: 'Aerva Exceptional', topPercent: 1,  minScore: 4.85, minReviews: 20,
+    blurb: 'In the top 1% of stays in its city.' },
+  { key: 'exceptional',       label: 'Exceptional',       topPercent: 5,  minScore: 4.80, minReviews: 15,
+    blurb: 'In the top 5% of stays in its city.' },
+  { key: 'outstanding',       label: 'Outstanding',       topPercent: 10, minScore: 4.75, minReviews: 10,
+    blurb: 'In the top 10% of stays in its city.' },
+  { key: 'great_stay',        label: 'Great Stay',        topPercent: 20, minScore: 4.60, minReviews: 5,
+    blurb: 'In the top 20% of stays in its city.' }
 ];
 
 // Flags are independent of the ladder and of each other. A property can
@@ -768,13 +777,73 @@ function propertyCutoffs(population, ladder) {
   const out = {};
   if (!scores.length) return out;
   (ladder || PROPERTY_TIERS).forEach(t => {
-    // The score of the listing at position topN. If the field is smaller
-    // than topN, everyone in it clears that band's rank — the floor is
-    // then the only thing standing between them and the badge.
-    const idx = Math.min(t.topN, scores.length) - 1;
-    out[t.key] = scores[idx];
+    // The score at the CUMULATIVE percentile boundary. Bands overlap by
+    // design — the top 5% contains the top 1% — and exclusivity comes
+    // from resolveTier returning the HIGHEST band a listing qualifies
+    // for, never from the cutoffs themselves. In a city of 100:
+    //   top 1%  -> rank 1     -> 1 listing  Aerva Exceptional
+    //   top 5%  -> ranks 1-5  -> the other 4 are Exceptional
+    //   top 10% -> ranks 1-10 -> the next 5 are Outstanding
+    //   top 20% -> ranks 1-20 -> the next 10 are Great Stay
+    //
+    // Floored at 1 so the top band is never empty in a field with anyone
+    // in it, and capped at the field size so a small city cannot index
+    // past the end.
+    const pct = t.topPercent !== undefined ? t.topPercent : 100;
+    const n = Math.min(Math.max(1, Math.round(scores.length * pct / 100)), scores.length);
+    out[t.key] = scores[n - 1];
   });
   return out;
+}
+
+// ---------------------------------------------------------------------
+// Per-CITY ranking.
+//
+// A villa in Manali was never meaningfully competing with Mumbai
+// inventory: different markets, different price points, different guests.
+// "Among the best in Goa" is a claim a guest can act on; "among the best
+// on Aerva" mostly measures which city has the most listings.
+//
+// The catch is small cities. In a city with three listings, top 1, top 5,
+// top 10 and top 100 all include every listing, so all three would take
+// the top badge. MIN_CITY_POOL is the guard: below it a city cannot rank
+// internally and its listings fall back to the national field, where they
+// compete on the same terms as everyone else rather than being crowned
+// for being one of three.
+const MIN_CITY_POOL = 10;
+
+// rows: [{ city, score }] for every live listing with enough reviews.
+// Returns { byCity: { <city>: cutoffs }, national: cutoffs }.
+//
+// City is matched case- and whitespace-insensitively, because the same
+// place is entered as "Goa", "goa" and " Goa " across listings and three
+// spellings would become three separate ranking pools, each too small to
+// qualify.
+function cityCutoffs(rows, ladder) {
+  const groups = {};
+  const all = [];
+  (rows || []).forEach(r => {
+    const score = Number(r.score);
+    if (!Number.isFinite(score)) return;
+    all.push(score);
+    const key = String(r.city || '').trim().toLowerCase();
+    if (!key) return;
+    (groups[key] = groups[key] || []).push(score);
+  });
+  const byCity = {};
+  Object.keys(groups).forEach(k => {
+    if (groups[k].length >= MIN_CITY_POOL) byCity[k] = propertyCutoffs(groups[k], ladder);
+  });
+  return { byCity, national: propertyCutoffs(all, ladder) };
+}
+
+// Picks the right field for a listing: its own city where that city is
+// big enough to rank within, otherwise the national one.
+function cutoffsForCity(cuts, city) {
+  if (!cuts) return {};
+  const key = String(city || '').trim().toLowerCase();
+  if (key && cuts.byCity && cuts.byCity[key]) return cuts.byCity[key];
+  return cuts.national || {};
 }
 
 // stats: { reviewCount, factors }
@@ -869,9 +938,7 @@ function describeLadders() {
       bands: PROPERTY_TIERS.map(t => ({
         label: t.label, blurb: t.blurb, publicBadge: true,
         requirements: [
-          t.topN === 1
-            ? 'The single highest rated live listing'
-            : `Ranked in the top ${t.topN} live listings by score`,
+          `In the top ${t.topPercent}% of live listings in its city`,
           `Score of at least ${t.minScore} regardless of rank`,
           `${t.minReviews} published reviews`
         ]
@@ -905,10 +972,9 @@ function describeLadders() {
       title: 'Host standing',
       basis: 'Earned on payout received and the ratings guests leave. Revenue alone never promotes.',
       reviewedBy: 'Reviewed quarterly \u2014 1 Jan, 1 Apr, 1 Jul, 1 Oct \u2014 each against a rolling twelve months.',
-      factors: `Guests rate a property on: ${factorLine(REVIEW_FACTORS)}. Location carries the least because a host cannot move the property, and is exempt from the per-factor floor for the same reason.`,
+      factors: `Guests rate a property on: ${factorLine(REVIEW_FACTORS)}. Location carries the least because a host cannot move the property \u2014 a point lost there costs a fifteenth of a point lost on hygiene.`,
       rules: [
-        'Both the score AND the per-factor floor must be met: one weak factor blocks a rung however strong the others are.',
-        'The per-factor floor covers what a host can fix. Location is excluded from it.',
+        'Judged on the weighted average alone. A weak factor pulls the average down and that is its whole effect \u2014 there is no separate minimum any single factor must clear.',
         'A host with no reviews climbs on payout alone up to the point a rung requires reviews \u2014 Elite and above never do.',
         'At most one rung is lost per quarterly review, so a full slide takes as long as the climb did.'
       ],
@@ -920,8 +986,7 @@ function describeLadders() {
         requirements: [
           t.minPayout > 1 ? `${money(t.minPayout)} paid out over 12 months` : 'Any completed booking',
           t.minReviews > 0 ? `${t.minReviews} published reviews` : 'No reviews required',
-          t.minScore > 0 ? `Score of ${t.minScore} or above` : 'No rating requirement',
-          t.minFactor > 0 ? `No single factor below ${t.minFactor} (location exempt)` : 'No per-factor floor'
+          t.minScore > 0 ? `Score of ${t.minScore} or above` : 'No rating requirement'
         ]
       }))
     }
@@ -935,6 +1000,7 @@ module.exports = {
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
   PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs,
+  cityCutoffs, cutoffsForCity, MIN_CITY_POOL,
   EXPERIENCE_TIERS, EXPERIENCE_FACTORS, experienceTier,
   reviewGuestTiers, reviewHostTiers
 };
