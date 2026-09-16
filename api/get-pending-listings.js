@@ -93,7 +93,8 @@ const { createToken, verifyToken } = require('./_approval-token');
 const { REVIEW_POLICY, CONFLICT_CHECKS, REVIEW_WINDOW_DAYS, publicationState } = require('./_review-policy');
 const { describeLadders, guestTier, hostTier, reviewScore, weakestFactor,
         REVIEW_FACTORS, GUEST_FACTORS, HOST_TIERS, GUEST_TIERS,
-        bookingValueBand, QUALIFYING_BOOKING_MIN } = require('./_tiers');
+        bookingValueBand, QUALIFYING_BOOKING_MIN,
+        propertyTier, propertyFlag, PROPERTY_TIERS, propertyCutoffs } = require('./_tiers');
 const { COMPLIANCE_CHECKS } = require('./_compliance');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -447,8 +448,56 @@ module.exports = async (req, res) => {
   if (req.method === 'POST' && req.body && req.body.simulateTier) {
     try {
       const inp = req.body.simulateTier || {};
-      const kind = inp.kind === 'host' ? 'host' : 'guest';
+      const kind = ['host', 'property'].includes(inp.kind) ? inp.kind : 'guest';
       const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+      if (kind === 'property') {
+        const factors = {
+          hygiene: num(inp.hygiene), communication: num(inp.communication),
+          services: num(inp.services), value: num(inp.value), location: num(inp.location)
+        };
+        const reviewCount = num(inp.reviewCount);
+        const stats = { reviewCount, factors };
+        // Property bands are RELATIVE, so a simulation needs a field to
+        // rank against. The live cutoffs are used by default, so the
+        // simulator answers the question an admin is actually asking:
+        // would this listing be badged today, against today's platform.
+        const minPool = Math.min(...PROPERTY_TIERS.map(x => x.minReviews));
+        let cutoffs = {};
+        try {
+          const pool = await sql`
+            SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
+                   AVG(services) AS services, AVG(value_rating) AS value,
+                   AVG(location) AS location
+            FROM listing_reviews
+            WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
+            GROUP BY listing_id
+            HAVING COUNT(*) >= ${minPool}
+          `;
+          cutoffs = propertyCutoffs(pool.map(r => reviewScore({
+            hygiene: Number(r.hygiene), communication: Number(r.communication),
+            services: Number(r.services), value: Number(r.value), location: Number(r.location)
+          }, REVIEW_FACTORS)));
+        } catch (err) { console.error('simulator cutoffs failed:', err); }
+
+        const t = propertyTier(stats, cutoffs), f = propertyFlag(stats);
+        const score = reviewScore(factors, REVIEW_FACTORS);
+        const haveCutoffs = Object.keys(cutoffs).length > 0;
+        const trace = PROPERTY_TIERS.map(tt => {
+          const fails = [];
+          if (reviewCount < tt.minReviews) fails.push(`fewer than ${tt.minReviews} reviews`);
+          if (score < tt.minScore) fails.push(`score ${score.toFixed(3)} below floor ${tt.minScore}`);
+          if (!haveCutoffs) fails.push('too few reviewed listings on the platform to rank against');
+          else if (score < cutoffs[tt.key]) fails.push(`score ${score.toFixed(3)} below the top ${tt.topPercent}% cutoff of ${Number(cutoffs[tt.key]).toFixed(3)}`);
+          return { label: tt.label, pass: fails.length === 0, blockedBy: fails };
+        });
+        return res.status(200).json({
+          kind, score: Number(score.toFixed(3)),
+          tier: t ? { key: t.key, label: t.label } : null,
+          flag: f ? { key: f.key, label: f.label } : null,
+          cutoffs, publicBadge: !!t, trace
+        });
+      }
 
       if (kind === 'host') {
         const factors = {

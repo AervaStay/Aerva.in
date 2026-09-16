@@ -630,6 +630,112 @@ function reviewHostTiers(statsByQuarter, now) {
 }
 
 // ---------------------------------------------------------------------
+// PROPERTY standing — earned purely on reviews, never on price.
+//
+// Deliberately separate from the host ladder, and measuring a different
+// thing. The host ladder answers "is this person worth hosting with",
+// and payout is part of that. This answers "is this place good", where
+// what a night costs is beside the point: a ₹2,000 room rated 4.97 is a
+// better stay than a ₹2,00,000 villa rated 4.2, and a badge that said
+// otherwise would be measuring the price tag.
+//
+// Naming is quality-led on purpose. Earlier attempts (Premium, Signature,
+// Rare, Lux) failed a simple test: ask ten people to order them and you
+// get several answers, so a guest comparing two cards could not tell which
+// was better. Great / Outstanding / Exceptional need no explaining.
+//
+// minReviews rises steeply because it is doing the work price used to do.
+// Without it a single five-star review makes a listing Exceptional.
+// Bands are RELATIVE — a share of the field, not a fixed score. Review
+// scores bunch hard near 5, so an absolute cutoff either catches almost
+// everything or almost nothing, and drifts as the platform matures. A
+// percentile stays meaningful without anyone retuning it.
+//
+// minScore is a floor, not the band: top 1% of a poor field should not be
+// called exceptional. Both the rank AND the floor must be met, so the
+// badge can be empty when nothing deserves it.
+const PROPERTY_TIERS = [
+  { key: 'aerva_exceptional', label: 'Aerva Exceptional', topPercent: 1,  minScore: 4.85, minReviews: 20,
+    blurb: 'Among the top 1% of stays on Aerva.' },
+  { key: 'outstanding',       label: 'Outstanding',       topPercent: 5,  minScore: 4.75, minReviews: 10,
+    blurb: 'Among the top 5% of stays on Aerva.' },
+  { key: 'great_stay',        label: 'Great Stay',        topPercent: 10, minScore: 4.60, minReviews: 5,
+    blurb: 'Among the top 10% of stays on Aerva.' }
+];
+
+// Flags are independent of the ladder and of each other. A property can
+// hold one flag alongside its tier; where several apply, the first match
+// in this order wins, so the rarer claim is the one shown.
+const PROPERTY_FLAGS = [
+  { key: 'hidden_treasure', label: 'Hidden Treasure', minScore: 4.85, maxReviews: 10, minReviews: 3,
+    blurb: 'Excellent, and not yet widely discovered.' },
+  { key: 'spotless',        label: 'Spotless',        minHygiene: 4.9, minReviews: 5,
+    blurb: 'Rated near-perfect on hygiene by every guest who scored it.' }
+];
+
+// Builds the score cutoff for each band from the current field.
+//
+// `population` is every eligible listing's score — one number each. Only
+// listings with enough reviews to be judged belong in it: including
+// one-review listings would let noise set the cutoff for everyone.
+//
+// A band with too few listings to be meaningful is dropped entirely
+// rather than awarded to whoever happens to be top. "Top 1%" of eleven
+// listings is one listing, which says nothing; MIN_POPULATION is what
+// stops a badge that means "we had barely any data".
+const MIN_POPULATION = 20;
+
+function propertyCutoffs(population) {
+  const scores = (population || []).map(Number).filter(n => Number.isFinite(n)).sort((a, b) => b - a);
+  const out = {};
+  if (scores.length < MIN_POPULATION) return out;
+  PROPERTY_TIERS.forEach(t => {
+    // Index of the last listing inside the band, at least one.
+    const n = Math.max(1, Math.floor(scores.length * (t.topPercent / 100)));
+    out[t.key] = scores[n - 1];
+  });
+  return out;
+}
+
+// stats: { reviewCount, factors }
+// cutoffs: from propertyCutoffs(). Without them no ladder badge is given
+// — a relative band cannot be resolved against an unknown field, and
+// guessing would be worse than showing nothing.
+function propertyTier(stats, cutoffs) {
+  const reviews = num(stats && stats.reviewCount);
+  const factors = stats && stats.factors;
+  if (!factors || !REVIEW_FACTORS.some(f => num(factors[f.key]) > 0)) return null;
+  if (!cutoffs || !Object.keys(cutoffs).length) return null;
+  const score = reviewScore(factors, REVIEW_FACTORS);
+  for (const t of PROPERTY_TIERS) {
+    if (reviews < t.minReviews) continue;
+    if (score < t.minScore) continue;          // absolute floor
+    const cut = cutoffs[t.key];
+    if (cut === undefined || score < cut) continue; // relative rank
+    return { key: t.key, label: t.label, blurb: t.blurb, score: Number(score.toFixed(3)) };
+  }
+  return null;
+}
+
+function propertyFlag(stats) {
+  const reviews = num(stats && stats.reviewCount);
+  const factors = stats && stats.factors;
+  if (!factors || !reviews) return null;
+  const score = reviewScore(factors, REVIEW_FACTORS);
+  for (const f of PROPERTY_FLAGS) {
+    if (f.minReviews && reviews < f.minReviews) continue;
+    // maxReviews is what makes "hidden" mean something: the flag is meant
+    // to disappear once a place is well known, so it is capped rather than
+    // floored. A property losing it by becoming popular is the point.
+    if (f.maxReviews !== undefined && reviews >= f.maxReviews) continue;
+    if (f.minScore && score < f.minScore) continue;
+    if (f.minHygiene && num(factors.hygiene) < f.minHygiene) continue;
+    return { key: f.key, label: f.label, blurb: f.blurb };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------
 // Human-readable description of both ladders, GENERATED from the arrays
 // above rather than written out separately. The admin tool renders this.
 //
@@ -668,6 +774,36 @@ function describeLadders() {
         ]
       }))
     },
+    property: {
+      title: 'Property standing',
+      basis: 'Earned purely on guest reviews. Price is deliberately not a factor \u2014 what a night costs says nothing about whether the stay was good.',
+      reviewedBy: 'Recomputed continuously from published reviews. No periodic review, no decay: a property is exactly as good as its current reviews say.',
+      factors: `Scored on the same five property factors as the host ladder: ${factorLine(REVIEW_FACTORS)}.`,
+      rules: [
+        'Only published, non-reverted reviews count \u2014 a held review must not move a listing\u2019s badge any more than it shows on the card.',
+        `Bands are relative \u2014 a share of the field, not a fixed score. An absolute cutoff either catches nearly everything or nearly nothing, because review scores bunch near 5.`,
+        `The minimum score is a floor on top of the rank: the top 1% of a poor field is still not exceptional, and the band is simply left empty.`,
+        `No ladder badge is awarded at all until ${MIN_POPULATION} listings have enough reviews to be judged \u2014 "top 1%" of a handful says nothing.`,
+        'A property may hold one flag alongside its rung. Where several flags apply, the rarer one wins.',
+        'Below the lowest rung no badge is shown at all \u2014 never a lesser label.'
+      ],
+      bands: PROPERTY_TIERS.map(t => ({
+        label: t.label, blurb: t.blurb, publicBadge: true,
+        requirements: [
+          `Top ${t.topPercent}% of eligible listings by score`,
+          `Score of at least ${t.minScore} regardless of rank`,
+          `${t.minReviews} published reviews`
+        ]
+      })).concat(PROPERTY_FLAGS.map(f => ({
+        label: f.label + ' (flag)', blurb: f.blurb, publicBadge: true,
+        requirements: [
+          f.minScore ? `Score of ${f.minScore} or above` : null,
+          f.minHygiene ? `Hygiene of ${f.minHygiene} or above` : null,
+          f.minReviews ? `At least ${f.minReviews} reviews` : null,
+          f.maxReviews !== undefined ? `Fewer than ${f.maxReviews} reviews \u2014 lost once widely reviewed` : null
+        ].filter(Boolean)
+      })))
+    },
     host: {
       title: 'Host standing',
       basis: 'Earned on payout received and the ratings guests leave. Revenue alone never promotes.',
@@ -701,5 +837,6 @@ module.exports = {
   reviewScore, weakestFactor,
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
+  PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs, MIN_POPULATION,
   reviewGuestTiers, reviewHostTiers
 };

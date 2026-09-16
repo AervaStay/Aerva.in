@@ -56,7 +56,8 @@
 // correctly against old and new data alike.
 
 const { neon } = require('@neondatabase/serverless');
-const { hostTier, reviewScore, REVIEW_FACTORS } = require('./_tiers');
+const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
+        propertyCutoffs, PROPERTY_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const sql = neon(process.env.DATABASE_URL);
 
@@ -866,18 +867,60 @@ module.exports = async (req, res) => {
           // The same weighted score the host ladder uses, so the number a
           // guest sees on a card and the number a badge rests on can never
           // disagree.
+          const factors = {
+            hygiene: Number(r.hygiene), communication: Number(r.communication),
+            services: Number(r.services), value: Number(r.value), location: Number(r.location)
+          };
           byListing[r.listing_id] = {
-            rating: reviewScore({
-              hygiene: Number(r.hygiene), communication: Number(r.communication),
-              services: Number(r.services), value: Number(r.value), location: Number(r.location)
-            }, REVIEW_FACTORS),
-            count: Number(r.n) || 0
+            rating: reviewScore(factors, REVIEW_FACTORS),
+            count: Number(r.n) || 0,
+            factors
           };
         });
+        // ---- Relative band cutoffs ----
+        // Computed across the WHOLE platform, not the filtered page. A
+        // percentile taken over whatever a guest happened to search for
+        // would mean "top 1% of this search", which changes with the
+        // query and is not a property of the listing at all.
+        //
+        // Only listings with enough reviews to be judged are in the
+        // population; the floor is the lowest minReviews on the ladder,
+        // so one-review listings cannot set the cutoff for everyone.
+        let cutoffs = {};
+        try {
+          const minReviewsForPool = Math.min(...PROPERTY_TIERS.map(t => t.minReviews));
+          const pool = await sql`
+            SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
+                   AVG(services) AS services, AVG(value_rating) AS value,
+                   AVG(location) AS location
+            FROM listing_reviews
+            WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
+            GROUP BY listing_id
+            HAVING COUNT(*) >= ${minReviewsForPool}
+          `;
+          cutoffs = propertyCutoffs(pool.map(r => reviewScore({
+            hygiene: Number(r.hygiene), communication: Number(r.communication),
+            services: Number(r.services), value: Number(r.value), location: Number(r.location)
+          }, REVIEW_FACTORS)));
+        } catch (err) {
+          // No cutoffs means no ladder badges — a relative band cannot be
+          // resolved against an unknown field, and guessing is worse than
+          // showing nothing. Flags are unaffected; they are absolute.
+          console.error('property cutoff computation failed (non-fatal):', err);
+        }
+
         filtered.forEach(l => {
           const r = byListing[l.id];
           l.rating = r ? r.rating : null;
           l.review_count = r ? r.count : 0;
+          // Property standing, from the same published-review aggregate
+          // the rating came from — so a card's stars and its badge can
+          // never rest on different data.
+          const stats = r ? { reviewCount: r.count, factors: r.factors } : null;
+          const pt = stats ? propertyTier(stats, cutoffs) : null;
+          const pf = stats ? propertyFlag(stats) : null;
+          l.property_tier = pt ? { key: pt.key, label: pt.label } : null;
+          l.property_flag = pf ? { key: pf.key, label: pf.label } : null;
         });
       }
     } catch (err) {
