@@ -629,11 +629,77 @@ function reviewHostTiers(statsByQuarter, now) {
   return reviewTiers(HOST_TIERS, statsByQuarter, 'totalPayout', now, 'quarterly');
 }
 
+// ---------------------------------------------------------------------
+// Human-readable description of both ladders, GENERATED from the arrays
+// above rather than written out separately. The admin tool renders this.
+//
+// Generated on purpose: a hand-written policy page and the code that
+// enforces it drift the moment anyone retunes a threshold, and a stale
+// policy is worse than none — an admin resolving a dispute would be
+// reading rules the system stopped applying months ago.
+function money(n) { return '\u20b9' + Number(n || 0).toLocaleString('en-IN'); }
+
+function describeLadders() {
+  const factorLine = (set) => set.map(f => `${f.label} \u00d7${f.weight}`).join(', ');
+
+  return {
+    guest: {
+      title: 'Guest standing',
+      basis: 'Earned on booking value, qualifying bookings, and the ratings hosts leave.',
+      reviewedBy: 'Reviewed annually, on 1 January, against the calendar year just ended.',
+      factors: `Hosts rate a guest on: ${factorLine(GUEST_FACTORS)}. Weights set how much each pulls on the score; the written comment is never scored.`,
+      rules: [
+        `A booking under ${money(QUALIFYING_BOOKING_MIN)} counts toward spend but not toward the booking count \u2014 it cannot manufacture a "stay".`,
+        'A guest with no reviews is held to a HIGHER booking count for the same rung, so silence is a slower route rather than a free pass.',
+        'A review with no ratings counts as no review at all, in either direction.',
+        'At most one rung is lost per annual review; gains are uncapped.'
+      ],
+      bands: GUEST_TIERS.map(t => ({
+        label: t.label,
+        blurb: t.blurb,
+        requirements: [
+          t.minSpend > 0 ? `${money(t.minSpend)} spent this year` : 'Any confirmed booking',
+          `${t.minBookings} qualifying booking${t.minBookings === 1 ? '' : 's'}` +
+            (t.unreviewedBookings && t.unreviewedBookings !== t.minBookings
+              ? ` (${t.unreviewedBookings} if never reviewed)`
+              : t.unreviewedBookings === null ? ' \u2014 unreachable without reviews' : ''),
+          t.minRatedReviews > 0 ? `${t.minRatedReviews} rated reviews` : 'No reviews required',
+          t.minScore > 0 ? `Score of ${t.minScore} or above` : 'No rating requirement'
+        ]
+      }))
+    },
+    host: {
+      title: 'Host standing',
+      basis: 'Earned on payout received and the ratings guests leave. Revenue alone never promotes.',
+      reviewedBy: 'Reviewed quarterly \u2014 1 Jan, 1 Apr, 1 Jul, 1 Oct \u2014 each against a rolling twelve months.',
+      factors: `Guests rate a property on: ${factorLine(REVIEW_FACTORS)}. Location carries the least because a host cannot move the property, and is exempt from the per-factor floor for the same reason.`,
+      rules: [
+        'Both the score AND the per-factor floor must be met: one weak factor blocks a rung however strong the others are.',
+        'The per-factor floor covers what a host can fix. Location is excluded from it.',
+        'A host with no reviews climbs on payout alone up to the point a rung requires reviews \u2014 Elite and above never do.',
+        'At most one rung is lost per quarterly review, so a full slide takes as long as the climb did.'
+      ],
+      bands: HOST_TIERS.map(t => ({
+        label: t.label,
+        blurb: t.blurb,
+        icon: t.icon || null,
+        publicBadge: ['elite', 'golden_elite', 'aerva_elite'].includes(t.key),
+        requirements: [
+          t.minPayout > 1 ? `${money(t.minPayout)} paid out over 12 months` : 'Any completed booking',
+          t.minReviews > 0 ? `${t.minReviews} published reviews` : 'No reviews required',
+          t.minScore > 0 ? `Score of ${t.minScore} or above` : 'No rating requirement',
+          t.minFactor > 0 ? `No single factor below ${t.minFactor} (location exempt)` : 'No per-factor floor'
+        ]
+      }))
+    }
+  };
+}
+
 module.exports = {
   GUEST_TIERS, HOST_TIERS, UNREVIEWED_BOOKING_CREDIT, CADENCES, REVIEW_FACTORS, GUEST_FACTORS,
   BOOKING_VALUE_BANDS, bookingValueBand, QUALIFYING_BOOKING_MIN,
   reviewScore, weakestFactor,
   guestTier, hostTier, nextTierProgress, mergeStats,
-  assessmentYear, assessmentPeriod, reviewTiers,
+  assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
   reviewGuestTiers, reviewHostTiers
 };

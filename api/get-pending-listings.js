@@ -91,6 +91,9 @@ const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
 const { createToken, verifyToken } = require('./_approval-token');
 const { REVIEW_POLICY, CONFLICT_CHECKS, REVIEW_WINDOW_DAYS, publicationState } = require('./_review-policy');
+const { describeLadders, guestTier, hostTier, reviewScore, weakestFactor,
+        REVIEW_FACTORS, GUEST_FACTORS, HOST_TIERS, GUEST_TIERS,
+        bookingValueBand, QUALIFYING_BOOKING_MIN } = require('./_tiers');
 const { COMPLIANCE_CHECKS } = require('./_compliance');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -418,6 +421,7 @@ module.exports = async (req, res) => {
       `;
       return res.status(200).json({
         policy: REVIEW_POLICY,
+        ladders: describeLadders(),
         windowDays: REVIEW_WINDOW_DAYS,
         checks: CONFLICT_CHECKS,
         conflicts: { mutualLow, reported, outliers },
@@ -426,6 +430,105 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('reviewPolicy error:', err);
       return res.status(500).json({ error: 'Could not load the review policy right now.' });
+    }
+  }
+
+  // ---- Tier simulator (admin only) ----
+  // POST { simulateTier: { kind: 'guest'|'host', ...inputs } }
+  //
+  // Runs the REAL ladder from _tiers.js on hypothetical numbers. That is
+  // the entire point: a simulator that reimplements the maths would agree
+  // with itself and disagree with production, which is worse than having
+  // no simulator at all. Any retune of a threshold changes this answer on
+  // the next deploy with no edit here.
+  //
+  // Returns the verdict AND why, gate by gate, so an admin can see which
+  // requirement failed rather than just that one did.
+  if (req.method === 'POST' && req.body && req.body.simulateTier) {
+    try {
+      const inp = req.body.simulateTier || {};
+      const kind = inp.kind === 'host' ? 'host' : 'guest';
+      const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+      if (kind === 'host') {
+        const factors = {
+          hygiene: num(inp.hygiene), communication: num(inp.communication),
+          services: num(inp.services), value: num(inp.value), location: num(inp.location)
+        };
+        const hasFactors = REVIEW_FACTORS.some(f => num(factors[f.key]) > 0);
+        const reviewCount = num(inp.reviewCount);
+        const totalPayout = num(inp.totalPayout);
+        const tier = hostTier({ totalPayout, reviewCount, factors: hasFactors ? factors : undefined });
+        const score = hasFactors ? reviewScore(factors, REVIEW_FACTORS) : 0;
+
+        // Walk every rung and record which gate stopped them. Reported
+        // highest-first, so the first 'pass' is the answer.
+        const trace = HOST_TIERS.map(t => {
+          const fails = [];
+          if (totalPayout < t.minPayout) fails.push(`payout below ${t.minPayout}`);
+          if (reviewCount < t.minReviews) fails.push(`fewer than ${t.minReviews} reviews`);
+          if (hasFactors && reviewCount > 0) {
+            if (score < t.minScore) fails.push(`score ${score.toFixed(3)} below ${t.minScore}`);
+            const weak = t.minFactor ? weakestFactor(factors, t.minFactor, REVIEW_FACTORS) : null;
+            if (weak) fails.push(`${weak.label.toLowerCase()} ${weak.value.toFixed(2)} below floor ${t.minFactor}`);
+          }
+          return { label: t.label, pass: fails.length === 0, blockedBy: fails };
+        });
+        return res.status(200).json({
+          kind, score: Number(score.toFixed(3)),
+          tier: tier ? { key: tier.key, label: tier.label, icon: tier.icon } : null,
+          publicBadge: !!(tier && ['elite', 'golden_elite', 'aerva_elite'].includes(tier.key)),
+          trace
+        });
+      }
+
+      const factors = {
+        cleanliness: num(inp.cleanliness), communication: num(inp.communication),
+        respectful: num(inp.respectful), rules: num(inp.rules)
+      };
+      const hasFactors = GUEST_FACTORS.some(f => num(factors[f.key]) > 0);
+      const reviewCount = num(inp.reviewCount);
+      const bookingCount = num(inp.bookingCount);
+      const qualifyingBookings = inp.qualifyingBookings !== undefined ? num(inp.qualifyingBookings) : bookingCount;
+      const totalSpend = num(inp.totalSpend);
+      const stats = { totalSpend, bookingCount, qualifyingBookings, reviewCount,
+                      factors: hasFactors ? factors : undefined };
+      const tier = guestTier(stats);
+      const score = hasFactors ? reviewScore(factors, GUEST_FACTORS) : 0;
+      const avgValue = bookingCount > 0 ? totalSpend / bookingCount : 0;
+      const band = bookingValueBand(avgValue);
+
+      const trace = GUEST_TIERS.map(t => {
+        const fails = [];
+        if (totalSpend < t.minSpend) fails.push(`spend below ${t.minSpend}`);
+        const needBookings = reviewCount > 0
+          ? t.minBookings
+          : (t.unreviewedBookings === null ? Infinity : t.unreviewedBookings);
+        if (qualifyingBookings < needBookings) {
+          fails.push(needBookings === Infinity
+            ? 'unreachable without at least one rated review'
+            : `fewer than ${needBookings} qualifying bookings${reviewCount > 0 ? '' : ' (unreviewed bar)'}`);
+        }
+        if (reviewCount < t.minRatedReviews) fails.push(`fewer than ${t.minRatedReviews} rated reviews`);
+        if (t.minAvgValue && bookingCount > 0 && avgValue < t.minAvgValue) {
+          fails.push(`average booking ${Math.round(avgValue)} below ${t.minAvgValue}`);
+        }
+        if (hasFactors && reviewCount > 0 && score < t.minScore) {
+          fails.push(`score ${score.toFixed(3)} below ${t.minScore}`);
+        }
+        return { label: t.label, pass: fails.length === 0, blockedBy: fails };
+      });
+      return res.status(200).json({
+        kind, score: Number(score.toFixed(3)),
+        avgBooking: Math.round(avgValue),
+        band: { label: band.label, multiplier: band.multiplier },
+        qualifyingMin: QUALIFYING_BOOKING_MIN,
+        tier: tier ? { key: tier.key, label: tier.label } : null,
+        trace
+      });
+    } catch (err) {
+      console.error('simulateTier error:', err);
+      return res.status(500).json({ error: 'Could not run that simulation.' });
     }
   }
 
