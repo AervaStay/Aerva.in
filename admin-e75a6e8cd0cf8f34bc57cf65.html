@@ -69,6 +69,9 @@
   .deposit-section{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:20px;}
   .deposit-section h3{margin:0 0 6px 0; font-family:Georgia,serif; font-size:17px;}
   .deposit-section p{font-size:13px; opacity:0.7; margin:0 0 14px;}
+  .sim-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px;}
+  .sim-grid label{display:flex; flex-direction:column; gap:4px; font-size:12px; opacity:0.8;}
+  .sim-grid input{padding:8px 10px; border:1px solid #ccc; font-size:14px; font-family:inherit;}
   .process-btn{
     background:#1c1a17; color:#f4eadc; border:none; padding:11px 22px;
     font-size:13px; cursor:pointer;
@@ -240,6 +243,53 @@
       <p><strong>Internal reference.</strong> This policy is not shown to guests or hosts anywhere on the site. It exists so that reviews are judged consistently when a dispute reaches you.</p>
       <div id="policyBody"><p>Loading…</p></div>
     </div>
+    <div class="deposit-section">
+      <h3>Bands</h3>
+      <p>Generated from the live ladder in <code>_tiers.js</code>, not written out separately — if a threshold is retuned, this page changes with it. A hand-written copy would go stale and an admin would end up resolving disputes against rules the system stopped applying.</p>
+      <div style="display:flex; gap:8px; margin:12px 0;">
+        <button type="button" class="process-btn" id="ladderGuestBtn" onclick="showLadder('guest')">Guest</button>
+        <button type="button" class="process-btn" id="ladderHostBtn" onclick="showLadder('host')">Host</button>
+      </div>
+      <div id="ladderBody"><p>Loading…</p></div>
+    </div>
+
+    <div class="deposit-section">
+      <h3>Tier Simulator</h3>
+      <p>Runs the real ladder on hypothetical numbers, so you can check what a given booking and review history <em>should</em> produce before deciding whether a live result is wrong. It calls the same code production uses — not a copy — so the two cannot disagree.</p>
+      <div style="display:flex; gap:8px; margin:12px 0;">
+        <button type="button" class="process-btn" id="simGuestBtn" onclick="switchSim('guest')">Simulate a Guest</button>
+        <button type="button" class="process-btn" id="simHostBtn" onclick="switchSim('host')">Simulate a Host</button>
+      </div>
+
+      <div id="simGuestForm">
+        <div class="sim-grid">
+          <label>Total spend this year (₹)<input type="number" id="simSpend" value="300000"></label>
+          <label>Bookings<input type="number" id="simBookings" value="5"></label>
+          <label>Of those, at or above ₹10,000<input type="number" id="simQualifying" value="5"></label>
+          <label>Rated reviews received<input type="number" id="simGReviews" value="3"></label>
+          <label>Cleanliness (1‑5)<input type="number" step="0.1" id="simCleanliness" value="4.9"></label>
+          <label>Communication (1‑5)<input type="number" step="0.1" id="simGComm" value="4.9"></label>
+          <label>Respectful (1‑5)<input type="number" step="0.1" id="simRespectful" value="4.9"></label>
+          <label>Rules followed (1‑5)<input type="number" step="0.1" id="simRules" value="4.9"></label>
+        </div>
+      </div>
+
+      <div id="simHostForm" style="display:none;">
+        <div class="sim-grid">
+          <label>Payout, last 12 months (₹)<input type="number" id="simPayout" value="1200000"></label>
+          <label>Published reviews<input type="number" id="simHReviews" value="10"></label>
+          <label>Hygiene (1‑5)<input type="number" step="0.01" id="simHygiene" value="4.9"></label>
+          <label>Communication (1‑5)<input type="number" step="0.01" id="simHComm" value="4.9"></label>
+          <label>Services (1‑5)<input type="number" step="0.01" id="simServices" value="4.9"></label>
+          <label>Value for money (1‑5)<input type="number" step="0.01" id="simValue" value="4.9"></label>
+          <label>Location (1‑5)<input type="number" step="0.01" id="simLocation" value="4.9"></label>
+        </div>
+      </div>
+
+      <button type="button" class="process-btn" style="margin-top:12px;" onclick="runSimulation()">Run Simulation</button>
+      <div class="process-results" id="simResults" style="margin-top:12px;"></div>
+    </div>
+
     <div class="deposit-section">
       <h3>Conflicts to Review</h3>
       <p>Surfaced for a human to read. Nothing here is actioned automatically — reverting on a rule would make the override as gameable as the reviews it polices.</p>
@@ -860,6 +910,82 @@
   }
 
   // ---- Tab switching (four tabs now: listings, live, verifications, deposits) ----
+  // ---- Bands + simulator ----
+  let ladderData = null;
+  function showLadder(which){
+    const d = ladderData && ladderData[which];
+    const body = document.getElementById('ladderBody');
+    document.getElementById('ladderGuestBtn').style.opacity = which === 'guest' ? '1' : '0.55';
+    document.getElementById('ladderHostBtn').style.opacity  = which === 'host'  ? '1' : '0.55';
+    if(!d){ body.innerHTML = '<p>Not loaded.</p>'; return; }
+    body.innerHTML =
+      '<p><strong>' + escAdmin(d.basis) + '</strong></p>'
+      + '<p style="font-size:13px; opacity:0.75;">' + escAdmin(d.reviewedBy) + '</p>'
+      + '<p style="font-size:13px; opacity:0.75;">' + escAdmin(d.factors) + '</p>'
+      + '<ul style="font-size:13px; line-height:1.7; padding-left:20px;">'
+      + (d.rules || []).map(r => '<li>' + escAdmin(r) + '</li>').join('') + '</ul>'
+      + (d.bands || []).map(b =>
+          '<div class="process-results" style="margin-bottom:8px;">'
+          + '<div><strong>' + escAdmin(b.label) + '</strong>'
+          + (b.publicBadge ? ' <span style="font-size:11px; opacity:0.7;">\u2014 shown publicly on listing cards</span>' : '')
+          + '</div>'
+          + '<div style="font-size:13px; opacity:0.75; margin:2px 0 6px;">' + escAdmin(b.blurb) + '</div>'
+          + '<ul style="font-size:13px; margin:0; padding-left:20px;">'
+          + (b.requirements || []).map(r => '<li>' + escAdmin(r) + '</li>').join('') + '</ul></div>').join('');
+  }
+
+  let simKind = 'guest';
+  function switchSim(kind){
+    simKind = kind;
+    document.getElementById('simGuestForm').style.display = kind === 'guest' ? 'block' : 'none';
+    document.getElementById('simHostForm').style.display  = kind === 'host'  ? 'block' : 'none';
+    document.getElementById('simGuestBtn').style.opacity = kind === 'guest' ? '1' : '0.55';
+    document.getElementById('simHostBtn').style.opacity  = kind === 'host'  ? '1' : '0.55';
+    document.getElementById('simResults').innerHTML = '';
+  }
+
+  const numVal = id => { const el = document.getElementById(id); return el ? Number(el.value) || 0 : 0; };
+
+  async function runSimulation(){
+    const out = document.getElementById('simResults');
+    out.innerHTML = 'Running\u2026';
+    const payload = simKind === 'host'
+      ? { kind:'host', totalPayout:numVal('simPayout'), reviewCount:numVal('simHReviews'),
+          hygiene:numVal('simHygiene'), communication:numVal('simHComm'), services:numVal('simServices'),
+          value:numVal('simValue'), location:numVal('simLocation') }
+      : { kind:'guest', totalSpend:numVal('simSpend'), bookingCount:numVal('simBookings'),
+          qualifyingBookings:numVal('simQualifying'), reviewCount:numVal('simGReviews'),
+          cleanliness:numVal('simCleanliness'), communication:numVal('simGComm'),
+          respectful:numVal('simRespectful'), rules:numVal('simRules') };
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method:'POST', headers: authHeaders(true), body: JSON.stringify({ simulateTier: payload })
+      });
+      const d = await res.json();
+      if(!res.ok){ out.innerHTML = escAdmin(d.error || 'Simulation failed.'); return; }
+      // The trace is the useful part: it names the gate that stopped each
+      // rung, so a surprising result can be explained rather than argued with.
+      out.innerHTML =
+        '<div style="font-size:16px; margin-bottom:6px;"><strong>'
+          + escAdmin(d.tier ? d.tier.label : 'No tier') + '</strong>'
+          + (d.publicBadge ? ' <span style="font-size:12px; opacity:0.7;">\u2014 badge visible on listing cards</span>' : '')
+        + '</div>'
+        + '<div style="font-size:13px; opacity:0.8;">Weighted score: ' + escAdmin(String(d.score))
+          + (d.avgBooking !== undefined ? ' &middot; average booking \u20b9' + escAdmin(String(d.avgBooking)) : '')
+          + (d.band ? ' &middot; band ' + escAdmin(d.band.label) + ' (\u00d7' + escAdmin(String(d.band.multiplier)) + ')' : '')
+        + '</div>'
+        + '<table style="width:100%; border-collapse:collapse; margin-top:10px; font-size:13px;">'
+        + '<tr><th style="text-align:left; padding:4px 6px;">Rung</th><th style="text-align:left; padding:4px 6px;">Result</th></tr>'
+        + (d.trace || []).map(t =>
+            '<tr><td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(t.label) + '</td>'
+            + '<td style="padding:4px 6px; border-top:1px solid #eee;">'
+            + (t.pass ? '<span style="color:#3a7d44;">reached</span>'
+                      : '<span style="opacity:0.7;">blocked \u2014 ' + escAdmin((t.blockedBy||[]).join('; ')) + '</span>')
+            + '</td></tr>').join('')
+        + '</table>';
+    }catch(err){ out.innerHTML = 'Could not run that simulation.'; }
+  }
+
   // ---- Review policy + conflict queue ----
   // The policy TEXT comes from the server (_review-policy.js), never from
   // a copy in this page: an admin reading it and an endpoint enforcing it
@@ -876,6 +1002,8 @@
       const res = await fetch(API_BASE + '/api/get-pending-listings?reviewPolicy=1', { headers: authHeaders() });
       if(!res.ok) throw new Error('failed');
       const d = await res.json();
+      ladderData = d.ladders || null;
+      showLadder('guest');
       const p = d.policy || {};
       body.innerHTML =
         '<p style="opacity:0.7; font-size:13px;">Version ' + escAdmin(p.version) + ' &middot; ' + escAdmin(p.audience) + '</p>'
