@@ -277,6 +277,12 @@
       </div>
 
       <div id="simPropForm" style="display:none;">
+        <p style="font-size:13px; opacity:0.75; margin:0 0 8px;">Search a real listing to load its actual numbers, or type figures by hand below.</p>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+          <input type="text" id="propSearchInput" placeholder="Listing name, city, or id" style="flex:1 1 260px; padding:8px 10px; border:1px solid #ccc; font-size:14px; font-family:inherit;">
+          <button type="button" class="process-btn" onclick="searchProperties()">Search</button>
+        </div>
+        <div id="propSearchResults" style="margin-bottom:12px;"></div>
         <div class="sim-grid">
           <label>Published reviews<input type="number" id="simPReviews" value="15"></label>
           <label>Hygiene (1‑5)<input type="number" step="0.01" id="simPHygiene" value="4.9"></label>
@@ -923,6 +929,77 @@
   }
 
   // ---- Tab switching (four tabs now: listings, live, verifications, deposits) ----
+  // ---- Property lookup ----
+  // Typing scores by hand does not scale past a handful of listings. This
+  // pulls a real one up and loads its live numbers into the form, so a
+  // simulation starts from what the listing actually holds.
+  let propSearchTimer = null;
+  async function searchProperties(){
+    const q = (document.getElementById('propSearchInput').value || '').trim();
+    const box = document.getElementById('propSearchResults');
+    if(q.length < 2){ box.innerHTML = '<p style="font-size:13px; opacity:0.7;">Type at least two characters.</p>'; return; }
+    box.innerHTML = '<p style="font-size:13px;">Searching\u2026</p>';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?propertyLookup=' + encodeURIComponent(q), { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok){ box.innerHTML = escAdmin(d.error || 'Search failed.'); return; }
+      const rows = d.results || [];
+      if(!rows.length){ box.innerHTML = '<p style="font-size:13px; opacity:0.7;">No approved listings matched.</p>'; return; }
+      box.innerHTML = '<table style="width:100%; border-collapse:collapse; font-size:13px;">'
+        + '<tr><th style="text-align:left; padding:4px 6px;">Listing</th><th style="text-align:left; padding:4px 6px;">Reviews</th>'
+        + '<th style="text-align:left; padding:4px 6px;">Score</th><th style="text-align:left; padding:4px 6px;">Badge</th><th></th></tr>'
+        + rows.map(r =>
+            '<tr><td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(r.name)
+              + '<div style="opacity:0.6; font-size:11px;">#' + Number(r.id) + ' \u00b7 ' + escAdmin(r.city || '') + '</div></td>'
+            + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + Number(r.reviewCount) + '</td>'
+            + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + (r.score === null ? '\u2014' : escAdmin(String(r.score))) + '</td>'
+            + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(r.tier ? r.tier.label : '\u2014')
+              + (r.flag ? ' <span style="opacity:0.7;">+ ' + escAdmin(r.flag.label) + '</span>' : '') + '</td>'
+            + '<td style="padding:4px 6px; border-top:1px solid #eee; white-space:nowrap;">'
+              + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:12px;" onclick=\'loadProperty(' + JSON.stringify(r).replace(/'/g, "&#39;") + ')\'>Load</button> '
+              + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:12px;" onclick="propertyHistory(' + Number(r.id) + ')">History</button>'
+            + '</td></tr>').join('')
+        + '</table>';
+    }catch(err){ box.innerHTML = 'Search failed.'; }
+  }
+
+  function loadProperty(r){
+    document.getElementById('simPReviews').value  = r.reviewCount || 0;
+    document.getElementById('simPHygiene').value  = (r.factors.hygiene || 0).toFixed(2);
+    document.getElementById('simPComm').value     = (r.factors.communication || 0).toFixed(2);
+    document.getElementById('simPServices').value = (r.factors.services || 0).toFixed(2);
+    document.getElementById('simPValue').value    = (r.factors.value || 0).toFixed(2);
+    document.getElementById('simPLocation').value = (r.factors.location || 0).toFixed(2);
+    runSimulation();
+  }
+
+  async function propertyHistory(id){
+    const out = document.getElementById('simResults');
+    out.innerHTML = 'Building history\u2026';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?propertyHistory=' + Number(id), { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok){ out.innerHTML = escAdmin(d.error || 'Could not build that history.'); return; }
+      const tl = d.timeline || [];
+      out.innerHTML =
+        '<div style="font-size:15px; margin-bottom:4px;"><strong>Listing #' + Number(d.listingId) + '</strong> \u2014 '
+          + Number(d.reviewCount) + ' published review(s), currently ' + escAdmin(d.current || 'no badge') + '</div>'
+        + '<p style="font-size:12px; opacity:0.7; margin:0 0 10px;">' + escAdmin(d.caveat || '') + '</p>'
+        + (tl.length
+          ? '<table style="width:100%; border-collapse:collapse; font-size:13px;">'
+            + '<tr><th style="text-align:left; padding:4px 6px;">Date</th><th style="text-align:left; padding:4px 6px;">After review</th>'
+            + '<th style="text-align:left; padding:4px 6px;">Score</th><th style="text-align:left; padding:4px 6px;">Change</th></tr>'
+            + tl.map(t =>
+                '<tr><td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(String(t.at).slice(0,10)) + '</td>'
+                + '<td style="padding:4px 6px; border-top:1px solid #eee;">#' + Number(t.reviewNumber) + '</td>'
+                + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(String(t.score)) + '</td>'
+                + '<td style="padding:4px 6px; border-top:1px solid #eee;">'
+                  + escAdmin(t.from || 'no badge') + ' \u2192 <strong>' + escAdmin(t.to || 'no badge') + '</strong></td></tr>').join('')
+            + '</table>'
+          : '<p style="font-size:13px; opacity:0.7;">No rung changes \u2014 this listing has never held a badge.</p>');
+    }catch(err){ out.innerHTML = 'Could not build that history.'; }
+  }
+
   // ---- Bands + simulator ----
   let ladderData = null;
   function showLadder(which){
