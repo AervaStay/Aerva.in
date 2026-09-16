@@ -164,7 +164,12 @@
     font-size:13px; color:#1c1a17; line-height:1;
   }
   .cal-nav-btn:hover{border-color:#8a6c39;}
-  .cal-grid{display:grid; grid-template-columns:repeat(7, 1fr); gap:4px;}
+  /* minmax(0,1fr), not 1fr. A grid column's default minimum is its
+     content size, so a long guest name in a booked cell — APOORVA, say —
+     forced its column wider than the container and pushed the whole grid
+     past the panel's right edge, clipping Saturday. minmax(0,...) lets
+     the columns actually shrink to the space available. */
+  .cal-grid{display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:4px; width:100%;}
   .cal-weekday{font-size:8.5px; text-transform:uppercase; letter-spacing:0.05em; color:#8a7f6c; text-align:center; padding:3px 0;}
   /* Dark rounded card, every date — the date sits small at top, the
      actual nightly rate sits larger below it, so a host reading the
@@ -176,6 +181,7 @@
     aspect-ratio:1/1; display:flex; flex-direction:column; align-items:center; justify-content:center;
     background:white; color:#1c1a17; border:1px solid #e6dcc8; border-radius:12px;
     cursor:pointer; gap:2px; position:relative; padding:2px;
+    min-width:0; overflow:hidden;
   }
   .cal-day:hover:not(.cal-day--disabled){border-color:#8a6c39;}
   .cal-day-date{font-size:11px; opacity:0.6; line-height:1;}
@@ -186,7 +192,11 @@
   .cal-day--booked{background:#4a463d; color:#f4ebe3; border-color:#4a463d; cursor:pointer;}
   .cal-day--booked .cal-day-date{opacity:0.65;}
   .cal-day--booked:hover{border-color:#8a6c39;}
-  .cal-day-guest{font-size:8.5px; line-height:1; text-transform:uppercase; letter-spacing:0.02em; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 2px; opacity:0.85;}
+  /* min-width:0 is what makes the ellipsis actually work here. .cal-day
+     is a flex column, and a flex item defaults to min-width:auto, so a
+     nowrap span refuses to shrink below its full text width no matter
+     what overflow says — the truncation was being declared and ignored. */
+  .cal-day-guest{font-size:8.5px; line-height:1; text-transform:uppercase; letter-spacing:0.02em; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 2px; opacity:0.85;}
   .cal-day--blocked .cal-day-date{text-decoration:line-through; opacity:0.65;}
   .cal-day--blocked{position:relative; background:#000000; color:#f4ebe3; border-color:#000000;}
   .cal-day--blocked::after{content:''; position:absolute; left:15%; right:15%; top:50%; height:2px; background:#f4ebe3; transform:translateY(-50%); opacity:0.7; pointer-events:none;}
