@@ -435,6 +435,47 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- Listing location suggestions (admin only) ----
+  // GET ?listingCities=1 — distinct cities and areas across approved
+  // listings, each with a count.
+  //
+  // Deliberately NOT a geocoder lookup. Suggesting places from Google
+  // would offer cities Aerva has no property in, so an admin could type a
+  // perfectly valid suggestion and get zero results. Sourcing from the
+  // listings themselves means every suggestion is guaranteed to match
+  // something, and the counts tell you how much before you click.
+  if (req.method === 'GET' && req.query.listingCities === '1') {
+    try {
+      const rows = await sql`
+        SELECT city AS name, 'city' AS kind, COUNT(*) AS n
+        FROM listings
+        WHERE status = 'approved' AND city IS NOT NULL AND btrim(city) <> ''
+        GROUP BY city
+        UNION ALL
+        SELECT area AS name, 'area' AS kind, COUNT(*) AS n
+        FROM listings
+        WHERE status = 'approved' AND area IS NOT NULL AND btrim(area) <> ''
+        GROUP BY area
+        ORDER BY n DESC, name ASC
+        LIMIT 200
+      `;
+      // Deduplicated because a place is often recorded as both — Bandra is
+      // an area of Mumbai on one listing and the city on another. The
+      // higher count wins, since that is the more common usage.
+      const seen = {};
+      rows.forEach(r => {
+        const key = String(r.name).trim().toLowerCase();
+        const n = Number(r.n) || 0;
+        if (!seen[key] || n > seen[key].count) seen[key] = { name: String(r.name).trim(), kind: r.kind, count: n };
+      });
+      const places = Object.values(seen).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+      return res.status(200).json({ places });
+    } catch (err) {
+      console.error('listingCities error:', err);
+      return res.status(500).json({ error: 'Could not load locations.' });
+    }
+  }
+
   // ---- Property lookup (admin only) ----
   // GET ?propertyLookup=<query> — find a listing by name, city or id, and
   // return its live numbers plus the history of when it reached each rung.
