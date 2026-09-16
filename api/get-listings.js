@@ -57,7 +57,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
-        propertyCutoffs, PROPERTY_TIERS } = require('./_tiers');
+        propertyCutoffs, PROPERTY_TIERS, experienceTier } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN } = require('./_tiers');
 const { recordTierChange } = require('./_tier-history');
@@ -655,6 +655,46 @@ module.exports = async (req, res) => {
           });
         }
         filteredExperiences.forEach(e => { e.active_promotions = expPromotionsByListing[e.id] || []; });
+      }
+
+      // ---- Experience ratings and standing ----
+      // Absolute thresholds, no ranking and no pool. An experience earns
+      // its badge on its own reviews alone and cannot lose it because
+      // another host improved — see EXPERIENCE_TIERS in _tiers.js for why
+      // ranking was the wrong fit at this scale.
+      try {
+        const expIds = [...new Set(filteredExperiences.map(e => e.id).filter(Boolean))];
+        if (expIds.length) {
+          const revRows = await sql`
+            SELECT r.listing_id,
+                   AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
+                   AVG(r.services) AS services, AVG(r.value_rating) AS value,
+                   AVG(r.location) AS location, COUNT(*) AS n
+            FROM listing_reviews r
+            WHERE r.listing_id = ANY(${expIds})
+              AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+            GROUP BY r.listing_id
+          `;
+          const byExp = {};
+          revRows.forEach(r => {
+            const factors = {
+              hygiene: Number(r.hygiene), communication: Number(r.communication),
+              services: Number(r.services), value: Number(r.value), location: Number(r.location)
+            };
+            byExp[r.listing_id] = { factors, count: Number(r.n) || 0, rating: reviewScore(factors, REVIEW_FACTORS) };
+          });
+
+          filteredExperiences.forEach(e => {
+            const r = byExp[e.id];
+            e.rating = r ? r.rating : null;
+            e.review_count = r ? r.count : 0;
+            const t = r ? experienceTier({ reviewCount: r.count, factors: r.factors }) : null;
+            e.experience_tier = t ? { key: t.key, label: t.label } : null;
+          });
+        }
+      } catch (err) {
+        // Standing is decoration; never block the experiences list.
+        console.error('experience standing failed (non-fatal):', err);
       }
 
       return res.status(200).json({ experiences: filteredExperiences });

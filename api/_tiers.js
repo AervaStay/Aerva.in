@@ -681,6 +681,43 @@ const PROPERTY_FLAGS = [
     blurb: 'Rated near-perfect on hygiene by every guest who scored it.' }
 ];
 
+// ---------------------------------------------------------------------
+// EXPERIENCE standing — ABSOLUTE thresholds, not ranked.
+//
+// Unlike the property ladder, experiences are not in competition. A rank
+// needs a field to be meaningful, and there are few enough experiences
+// that "top 1" would mean "best of three" — a hollow claim, and one that
+// would flip between two experiences on a single review. An absolute bar
+// is honest at any size: an experience either earns it or does not, and
+// nothing another host does can take it away.
+//
+// Review counts are low for the same reason they are on the property
+// ladder's lowest rungs: experiences collect fewer written reviews than
+// stays, and holding them to a stay's volume would leave this empty.
+const EXPERIENCE_TIERS = [
+  { key: 'wow_experience',   label: 'Wow Experience',   minScore: 4.90, minReviews: 10,
+    blurb: 'Rated outstanding by a substantial number of guests.' },
+  { key: 'unforgettable',    label: 'Unforgettable',    minScore: 4.75, minReviews: 6,
+    blurb: 'Consistently rated among the best experiences on Aerva.' },
+  { key: 'great_experience', label: 'Great Experience', minScore: 4.55, minReviews: 3,
+    blurb: 'Well reviewed by the guests who have been.' }
+];
+
+// stats: { reviewCount, factors }
+// Takes no cutoffs: nothing here depends on the rest of the field.
+function experienceTier(stats) {
+  const reviews = num(stats && stats.reviewCount);
+  const factors = stats && stats.factors;
+  if (!factors || !REVIEW_FACTORS.some(f => num(factors[f.key]) > 0)) return null;
+  const score = reviewScore(factors, REVIEW_FACTORS);
+  for (const t of EXPERIENCE_TIERS) {
+    if (reviews < t.minReviews) continue;
+    if (score < t.minScore) continue;
+    return { key: t.key, label: t.label, blurb: t.blurb, score: Number(score.toFixed(3)) };
+  }
+  return null;
+}
+
 // Builds the score cutoff for each band from the current field.
 //
 // `population` is every ELIGIBLE listing's score — live listings with
@@ -691,11 +728,11 @@ const PROPERTY_FLAGS = [
 // share the top score, all three clear the top-1 bar. That is the honest
 // reading — there is no defensible way to rank identical records, and
 // silently picking one by id would be a lie dressed as precision.
-function propertyCutoffs(population) {
+function propertyCutoffs(population, ladder) {
   const scores = (population || []).map(Number).filter(n => Number.isFinite(n)).sort((a, b) => b - a);
   const out = {};
   if (!scores.length) return out;
-  PROPERTY_TIERS.forEach(t => {
+  (ladder || PROPERTY_TIERS).forEach(t => {
     // The score of the listing at position topN. If the field is smaller
     // than topN, everyone in it clears that band's rank — the floor is
     // then the only thing standing between them and the badge.
@@ -797,7 +834,9 @@ function describeLadders() {
       bands: PROPERTY_TIERS.map(t => ({
         label: t.label, blurb: t.blurb, publicBadge: true,
         requirements: [
-          `Ranked in the top ${t.topN} live listings by score`,
+          t.topN === 1
+            ? 'The single highest rated live listing'
+            : `Ranked in the top ${t.topN} live listings by score`,
           `Score of at least ${t.minScore} regardless of rank`,
           `${t.minReviews} published reviews`
         ]
@@ -810,6 +849,22 @@ function describeLadders() {
           f.maxReviews !== undefined ? `Fewer than ${f.maxReviews} reviews \u2014 lost once widely reviewed` : null
         ].filter(Boolean)
       })))
+    },
+    experience: {
+      title: 'Experience standing',
+      basis: 'Earned purely on guest reviews, against fixed thresholds. Experiences do not compete with each other and are never ranked.',
+      reviewedBy: 'Recomputed continuously from published reviews. No periodic review and no decay.',
+      factors: `Scored on the same five factors as a property: ${factorLine(REVIEW_FACTORS)}.`,
+      rules: [
+        'Absolute, not ranked. A rank needs a field to mean anything, and there are few enough experiences that "top 1" would mean "best of three" \u2014 a hollow claim that would flip between two hosts on a single review.',
+        'Because nothing is competitive, an experience cannot lose its badge to someone else improving. It keeps it as long as its own reviews hold up.',
+        'Review counts are low on purpose. Experiences collect fewer written reviews than stays, and holding them to a stay\u2019s volume would leave this ladder permanently empty.',
+        'Only published, non-reverted reviews count, and an inactive experience is not evaluated at all.'
+      ],
+      bands: EXPERIENCE_TIERS.map(t => ({
+        label: t.label, blurb: t.blurb, publicBadge: true,
+        requirements: [`Score of ${t.minScore} or above`, `${t.minReviews} published reviews`]
+      }))
     },
     host: {
       title: 'Host standing',
@@ -845,5 +900,6 @@ module.exports = {
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
   PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs,
+  EXPERIENCE_TIERS, experienceTier,
   reviewGuestTiers, reviewHostTiers
 };
