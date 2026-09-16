@@ -889,6 +889,11 @@ module.exports = async (req, res) => {
     try {
       const hostIds = [...new Set(filtered.map(l => l.host_id).filter(Boolean))];
       if (hostIds.length) {
+        // Payout and reviews are gathered in two queries rather than one
+        // join. Joining orders to reviews multiplies rows — a host with 30
+        // bookings and 30 reviews produces 900 — which silently inflates
+        // SUM(payout) by the review count. Two aggregates, combined in JS,
+        // cannot make that mistake.
         const stats = await sql`
           SELECT l.host_id,
                  COALESCE(SUM(o.payout_amount), 0) AS payout,
@@ -900,13 +905,40 @@ module.exports = async (req, res) => {
           WHERE l.host_id = ANY(${hostIds})
           GROUP BY l.host_id
         `;
+        // Published, non-reverted reviews only — the same rule the card
+        // rating uses, so a badge can never rest on a review a guest
+        // cannot see.
+        const hostReviews = await sql`
+          SELECT host_id,
+                 AVG(hygiene)       AS hygiene,
+                 AVG(communication) AS communication,
+                 AVG(services)      AS services,
+                 AVG(value_rating)  AS value,
+                 AVG(location)      AS location,
+                 COUNT(*)           AS n
+          FROM listing_reviews
+          WHERE host_id = ANY(${hostIds})
+            AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+          GROUP BY host_id
+        `;
+        const reviewsByHost = {};
+        hostReviews.forEach(r => {
+          reviewsByHost[r.host_id] = {
+            count: Number(r.n) || 0,
+            factors: {
+              hygiene: Number(r.hygiene), communication: Number(r.communication),
+              services: Number(r.services), value: Number(r.value), location: Number(r.location)
+            }
+          };
+        });
         const byHost = {};
         stats.forEach(r => {
-          // No factors passed: listing_reviews does not exist yet, so
-          // reviewCount is 0 and every host resolves below the badge
-          // threshold. When that table ships, the per-factor averages get
-          // joined in here and the badges light up with no other change.
-          const tier = hostTier({ totalPayout: Number(r.payout) || 0, reviewCount: 0 });
+          const rv = reviewsByHost[r.host_id];
+          const tier = hostTier({
+            totalPayout: Number(r.payout) || 0,
+            reviewCount: rv ? rv.count : 0,
+            factors: rv ? rv.factors : undefined
+          });
           if (tier && PUBLIC_BADGE_KEYS.includes(tier.key)) {
             byHost[r.host_id] = { key: tier.key, label: tier.label, icon: tier.icon };
           }
