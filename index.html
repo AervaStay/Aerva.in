@@ -6371,7 +6371,7 @@
   const FAVORITES_KEY = 'aerva_favorite_listings';
   function getFavoriteIds(){
     try {
-      return JSON.parse(safeStorage.get(FAVORITES_KEY) || '[]');
+      return JSON.parse(safeStorage.get(accountKey(FAVORITES_KEY)) || '[]');
     } catch(err){
       return [];
     }
@@ -6381,7 +6381,7 @@
     let favs = getFavoriteIds();
     const isFav = favs.includes(id);
     favs = isFav ? favs.filter(f => f !== id) : [...favs, id];
-    safeStorage.set(FAVORITES_KEY, JSON.stringify(favs));
+    safeStorage.set(accountKey(FAVORITES_KEY), JSON.stringify(favs));
     if(btnEl){
       btnEl.classList.toggle('is-fav', !isFav);
       btnEl.setAttribute('aria-pressed', String(!isFav));
@@ -6396,7 +6396,7 @@
   const MAX_RECENT_SEARCHES = 6;
   function getRecentSearches(){
     try {
-      return JSON.parse(safeStorage.get(RECENT_SEARCHES_KEY) || '[]');
+      return JSON.parse(safeStorage.get(accountKey(RECENT_SEARCHES_KEY)) || '[]');
     } catch(err){
       return [];
     }
@@ -6406,7 +6406,7 @@
     if(!trimmed) return;
     let list = getRecentSearches().filter(item => item.text.toLowerCase() !== trimmed.toLowerCase());
     list.unshift({ text: trimmed, lat: lat || '', lng: lng || '' });
-    safeStorage.set(RECENT_SEARCHES_KEY, JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
+    safeStorage.set(accountKey(RECENT_SEARCHES_KEY), JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
   }
 
   // ---- Aerva Experience: fetched eagerly alongside listings now (see
@@ -6730,29 +6730,42 @@
   // they have been.
   const RECENTLY_VIEWED_KEY = 'aerva_recently_viewed';
   const RECENTLY_VIEWED_MAX = 20;
-  let recentlyViewedOwner = 'anon';
-  function recentlyViewedKey(){ return RECENTLY_VIEWED_KEY + ':' + recentlyViewedOwner; }
+  // ---- Per-account browser storage ----
+  // Anything derived from what a PERSON did — viewed, saved, searched —
+  // is keyed by account. A single shared key meant a new account on a
+  // shared or demo device inherited the previous person's activity and
+  // saw it presented as their own.
+  //
+  // Deliberately not applied to device preferences (currency, the
+  // location prompt flag): those describe the browser, not the person,
+  // and resetting them on every login would be user-hostile.
+  let storageOwner = 'anon';
+  function accountKey(base){ return base + ':' + storageOwner; }
+  function recentlyViewedKey(){ return accountKey(RECENTLY_VIEWED_KEY); }
 
   // Called once the session check resolves, and again on logout. Switching
   // owner re-renders the row, because whatever is on screen at that moment
   // belongs to the previous identity.
   function setRecentlyViewedOwner(owner){
     const next = owner ? String(owner) : 'anon';
-    if(next === recentlyViewedOwner) return;
-    recentlyViewedOwner = next;
+    if(next === storageOwner) return;
+    storageOwner = next;
+    // Everything on screen at this moment belongs to the previous
+    // identity — the viewed row, the saved hearts, the search history.
     try{ renderRecentlyViewedRow(); }catch(e){}
+    try{ applyFiltersAndRender(); }catch(e){}
   }
 
   // One-time move of the old unnamespaced key into the anon bucket, so an
   // existing visitor's list survives this change instead of vanishing.
-  (function migrateLegacyRecentlyViewed(){
-    try{
-      const legacy = safeStorage.get(RECENTLY_VIEWED_KEY);
-      if(legacy && !safeStorage.get(RECENTLY_VIEWED_KEY + ':anon')){
-        safeStorage.set(RECENTLY_VIEWED_KEY + ':anon', legacy);
-      }
-      safeStorage.remove(RECENTLY_VIEWED_KEY);
-    }catch(e){}
+  (function migrateLegacyPersonalKeys(){
+    ['aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches'].forEach(base => {
+      try{
+        const legacy = safeStorage.get(base);
+        if(legacy && !safeStorage.get(base + ':anon')) safeStorage.set(base + ':anon', legacy);
+        safeStorage.remove(base);
+      }catch(e){}
+    });
   })();
 
   function trackRecentlyViewed(type, id){
@@ -11984,6 +11997,13 @@
       setRecentlyViewedOwner(null);
       safeStorage.remove('aerva_guest_email');
       safeStorage.remove('aerva_guest_name');
+      // A clone payload is a full copy of one host's listing, parked in
+      // storage between the dashboard and the listing form. It is normally
+      // consumed on arrival, but a host who clicks Clone and then logs out
+      // without completing would otherwise leave it for whoever logs in
+      // next on this device.
+      safeStorage.remove('aerva_clone_listing');
+      safeStorage.remove('aerva_clone_with_photos');
     }
 
     async function checkGuestSession(){
