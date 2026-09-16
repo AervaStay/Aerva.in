@@ -196,6 +196,7 @@
       <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
       <button class="tab-btn" id="tabComplianceBtn" onclick="switchTab('compliance')">Compliance</button>
       <button class="tab-btn" id="tabPolicyBtn" onclick="switchTab('policy')">Review Policy</button>
+      <button class="tab-btn" id="tabSimulatorBtn" onclick="switchTab('simulator')">Simulator</button>
     </div>
     <button type="button" onclick="refreshCurrentView()" style="background:none; border:1px solid #ddd0bc; padding:8px 14px; font-size:12px; cursor:pointer; border-radius:4px;" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </div>
@@ -255,6 +256,14 @@
     </div>
 
     <div class="deposit-section">
+      <h3>Conflicts to Review</h3>
+      <p>Surfaced for a human to read. Nothing here is actioned automatically — reverting on a rule would make the override as gameable as the reviews it polices.</p>
+      <div id="policyConflicts"><p>Loading…</p></div>
+    </div>
+  </div>
+
+  <div id="simulatorView" style="display:none;">
+    <div class="deposit-section">
       <h3>Tier Simulator</h3>
       <p>Runs the real ladder on hypothetical numbers, so you can check what a given booking and review history <em>should</em> produce before deciding whether a live result is wrong. It calls the same code production uses — not a copy — so the two cannot disagree.</p>
       <div style="display:flex; gap:8px; margin:12px 0;">
@@ -310,11 +319,6 @@
       <div class="process-results" id="simResults" style="margin-top:12px;"></div>
     </div>
 
-    <div class="deposit-section">
-      <h3>Conflicts to Review</h3>
-      <p>Surfaced for a human to read. Nothing here is actioned automatically — reverting on a rule would make the override as gameable as the reviews it polices.</p>
-      <div id="policyConflicts"><p>Loading…</p></div>
-    </div>
   </div>
 
   <div id="complianceView" style="display:none;">
@@ -1144,6 +1148,7 @@
   async function loadReviewPolicy(){
     const body = document.getElementById('policyBody');
     const conf = document.getElementById('policyConflicts');
+    if(body) body.innerHTML = '<p>Loading…</p>';
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings?reviewPolicy=1', { headers: authHeaders() });
       if(!res.ok) throw new Error('failed');
@@ -1151,12 +1156,16 @@
       ladderData = d.ladders || null;
       showLadder('guest');
       const p = d.policy || {};
+      // Guarded because this now runs from two tabs: the simulator needs
+      // the ladder data but has no policy body to write into.
+      if(!body){ return; }
       body.innerHTML =
         '<p style="opacity:0.7; font-size:13px;">Version ' + escAdmin(p.version) + ' &middot; ' + escAdmin(p.audience) + '</p>'
         + (p.sections || []).map(sec =>
             '<h4 style="margin:18px 0 6px;">' + escAdmin(sec.title) + '</h4><ul style="margin:0; padding-left:20px; line-height:1.7;">'
             + (sec.points || []).map(pt => '<li>' + escAdmin(pt) + '</li>').join('') + '</ul>').join('');
 
+      if(!conf) return;
       const c = d.conflicts || {};
       const held = d.held || {};
       const block = (title, detail, rows, render) =>
@@ -1190,8 +1199,8 @@
               + '<div style="margin-top:6px;">' + revertBtn('listing', r.id) + '</div></div>');
     }catch(err){
       console.error('policy load failed', err);
-      body.innerHTML = '<p>Could not load the policy.</p>';
-      conf.innerHTML = '';
+      if(body) body.innerHTML = '<p>Could not load the policy.</p>';
+      if(conf) conf.innerHTML = '';
     }
   }
 
@@ -1217,17 +1226,22 @@
     document.getElementById('tabDepositsBtn').classList.toggle('active', tab === 'deposits');
     document.getElementById('tabComplianceBtn').classList.toggle('active', tab === 'compliance');
     document.getElementById('tabPolicyBtn').classList.toggle('active', tab === 'policy');
+    document.getElementById('tabSimulatorBtn').classList.toggle('active', tab === 'simulator');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
     document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
     document.getElementById('depositsView').style.display = tab === 'deposits' ? 'block' : 'none';
     document.getElementById('complianceView').style.display = tab === 'compliance' ? 'block' : 'none';
     document.getElementById('policyView').style.display = tab === 'policy' ? 'block' : 'none';
+    document.getElementById('simulatorView').style.display = tab === 'simulator' ? 'block' : 'none';
     if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();
     if(tab === 'compliance') loadComplianceFlags();
     if(tab === 'policy') loadReviewPolicy();
+    // The simulator needs the ladders too (for band names in the trace),
+    // but only fetches them once — loadReviewPolicy guards on ladderData.
+    if(tab === 'simulator'){ if(!ladderData) loadReviewPolicy(); switchSim(simKind); }
   }
 
   // This whole dashboard only fetches data once, per tab, the first time
@@ -1243,6 +1257,7 @@
     else if(document.getElementById('tabDepositsBtn').classList.contains('active')) loadDisputes();
     else if(document.getElementById('tabComplianceBtn').classList.contains('active')) loadComplianceFlags();
     else if(document.getElementById('tabPolicyBtn').classList.contains('active')) loadReviewPolicy();
+    else if(document.getElementById('tabSimulatorBtn').classList.contains('active')) loadReviewPolicy();
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
