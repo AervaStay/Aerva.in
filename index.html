@@ -6719,20 +6719,53 @@
   // the main grid does, and never show the same card twice between the
   // two of them — Recently Viewed takes priority; Near You excludes
   // anything already shown there.
+  // Recently Viewed is keyed PER ACCOUNT, not per browser. A single
+  // shared key meant a brand new account immediately saw whatever the
+  // previous person on that device had browsed — their history presented
+  // as this guest's own, which is both wrong and a small privacy leak on
+  // any shared or demo machine.
+  //
+  // Logged-out browsing keeps its own ':anon' bucket rather than being
+  // discarded: someone browsing before signing up should still see where
+  // they have been.
   const RECENTLY_VIEWED_KEY = 'aerva_recently_viewed';
   const RECENTLY_VIEWED_MAX = 20;
+  let recentlyViewedOwner = 'anon';
+  function recentlyViewedKey(){ return RECENTLY_VIEWED_KEY + ':' + recentlyViewedOwner; }
+
+  // Called once the session check resolves, and again on logout. Switching
+  // owner re-renders the row, because whatever is on screen at that moment
+  // belongs to the previous identity.
+  function setRecentlyViewedOwner(owner){
+    const next = owner ? String(owner) : 'anon';
+    if(next === recentlyViewedOwner) return;
+    recentlyViewedOwner = next;
+    try{ renderRecentlyViewedRow(); }catch(e){}
+  }
+
+  // One-time move of the old unnamespaced key into the anon bucket, so an
+  // existing visitor's list survives this change instead of vanishing.
+  (function migrateLegacyRecentlyViewed(){
+    try{
+      const legacy = safeStorage.get(RECENTLY_VIEWED_KEY);
+      if(legacy && !safeStorage.get(RECENTLY_VIEWED_KEY + ':anon')){
+        safeStorage.set(RECENTLY_VIEWED_KEY + ':anon', legacy);
+      }
+      safeStorage.remove(RECENTLY_VIEWED_KEY);
+    }catch(e){}
+  })();
 
   function trackRecentlyViewed(type, id){
     let list = [];
-    try{ list = JSON.parse(safeStorage.get(RECENTLY_VIEWED_KEY)) || []; } catch(e){ list = []; }
+    try{ list = JSON.parse(safeStorage.get(recentlyViewedKey())) || []; } catch(e){ list = []; }
     list = list.filter(entry => !(entry.type === type && String(entry.id) === String(id)));
     list.unshift({ type, id, viewedAt: Date.now() });
-    safeStorage.set(RECENTLY_VIEWED_KEY, JSON.stringify(list.slice(0, RECENTLY_VIEWED_MAX)));
+    safeStorage.set(recentlyViewedKey(), JSON.stringify(list.slice(0, RECENTLY_VIEWED_MAX)));
   }
 
   function getRecentlyViewedEntries(){
     let list = [];
-    try{ list = JSON.parse(safeStorage.get(RECENTLY_VIEWED_KEY)) || []; } catch(e){ list = []; }
+    try{ list = JSON.parse(safeStorage.get(recentlyViewedKey())) || []; } catch(e){ list = []; }
     // 'suites'/'experiences' narrow to one type; 'all' keeps both, in the
     // same most-recent-first order they were actually viewed in.
     return list.filter(entry => {
@@ -11948,6 +11981,7 @@
 
     function clearGuestSession(){
       safeStorage.remove('aerva_guest_session');
+      setRecentlyViewedOwner(null);
       safeStorage.remove('aerva_guest_email');
       safeStorage.remove('aerva_guest_name');
     }
@@ -11961,6 +11995,10 @@
         });
         if(res.ok){
           const data = await res.json();
+          // Bind Recently Viewed to this account before anything renders
+          // with it, so a fresh login never shows the previous person's
+          // browsing on this device.
+          setRecentlyViewedOwner(data.guest.id);
           const greeting = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
           guestNameDisplay.textContent = greeting;
           guestLoginLink.style.display = 'none';
