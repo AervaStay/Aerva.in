@@ -57,7 +57,8 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
-        propertyCutoffs, PROPERTY_TIERS, experienceTier, EXPERIENCE_FACTORS } = require('./_tiers');
+        propertyCutoffs, PROPERTY_TIERS, experienceTier, EXPERIENCE_FACTORS,
+        cityCutoffs, cutoffsForCity, isReviewDay, nextReviewDate } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN } = require('./_tiers');
 const { recordTierChange } = require('./_tier-history');
@@ -184,7 +185,26 @@ module.exports = async (req, res) => {
       // The cutoffs are snapshotted with every property row. Without that
       // a historical score is uninterpretable: "4.93" means nothing unless
       // you also know the top-5% bar was 4.92 that day.
-      let changes = { listing: 0, host: 0, guest: 0 };
+      // Standing is recomputed only on a REVIEW DAY — 1 Jan, 1 Apr, 1 Jul,
+      // 1 Oct — assessing the quarter just ended, and holds unchanged
+      // between them. Everything above (publishing reviews, prompting
+      // guests) still runs daily; only the badges are frozen.
+      //
+      // ?forceTierSnapshot=1 recomputes off-cycle, for testing and for the
+      // first run after deploy, when tier_current is empty and waiting for
+      // the next quarter would mean no badges anywhere for months.
+      let changes = { listing: 0, host: 0, guest: 0, ran: false };
+      const forceSnapshot = req.query.forceTierSnapshot === '1';
+      if (!isReviewDay(new Date(), 'quarterly') && !forceSnapshot) {
+        return res.status(200).json({
+          publishedPaired: pairs.length + pairsBack.length,
+          publishedLapsed: lapsedListing.length + lapsedGuest.length,
+          prompted: toPrompt.length,
+          tierSnapshot: 'skipped — not a review day',
+          nextReview: nextReviewDate(new Date(), 'quarterly')
+        });
+      }
+      changes.ran = true;
       try {
         const minPool = Math.min(...PROPERTY_TIERS.map(t => t.minReviews));
         const pool = await sql`
@@ -192,7 +212,8 @@ module.exports = async (req, res) => {
                  AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
                  AVG(r.services) AS services, AVG(r.value_rating) AS value,
                  AVG(r.location) AS location, COUNT(*) AS n,
-                 BOOL_OR(l.status = 'approved') AS approved
+                 BOOL_OR(l.status = 'approved') AS approved,
+                 MIN(l.city) AS city
           FROM listing_reviews r
           JOIN listings l ON l.id = r.listing_id
           WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
@@ -201,6 +222,7 @@ module.exports = async (req, res) => {
         const scored = pool.map(r => ({
           listingId: r.listing_id,
           approved: r.approved === true,
+          city: r.city,
           n: Number(r.n) || 0,
           factors: {
             hygiene: Number(r.hygiene), communication: Number(r.communication),
@@ -211,9 +233,14 @@ module.exports = async (req, res) => {
         // removed listing with glowing reviews would otherwise raise the
         // cutoff for every live property, so a real host could lose a
         // badge to something no guest can even book.
-        const cutoffs = propertyCutoffs(
+        // Ranked within each listing's own CITY, with cities too small to
+        // rank internally falling back to the national field. Only live
+        // listings set a bar — a draft with glowing reviews must not raise
+        // the cutoff for properties a guest can actually book.
+        const cityCuts = cityCutoffs(
           scored.filter(x => x.approved && x.n >= minPool)
-                .map(x => reviewScore(x.factors, REVIEW_FACTORS))
+                .map(x => ({ city: x.city, score: reviewScore(x.factors, REVIEW_FACTORS) })),
+          PROPERTY_TIERS
         );
 
         for (const x of scored) {
@@ -231,11 +258,12 @@ module.exports = async (req, res) => {
           // earned against a vanished field would be the dishonest option.
           if (!x.approved) continue;
 
-          const t = propertyTier({ reviewCount: x.n, factors: x.factors }, cutoffs);
+          const t = propertyTier({ reviewCount: x.n, factors: x.factors },
+                                 cutoffsForCity(cityCuts, x.city));
           const r = await recordTierChange(sql, {
             subjectType: 'listing', subjectId: x.listingId, tier: t,
             score: Number(reviewScore(x.factors, REVIEW_FACTORS).toFixed(3)),
-            reviewCount: x.n, cutoffs
+            reviewCount: x.n, cutoffs: cutoffsForCity(cityCuts, x.city)
           });
           if (r.changed) changes.listing++;
         }
@@ -339,7 +367,8 @@ module.exports = async (req, res) => {
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
         prompted: toPrompt.length,
-        tierChanges: changes
+        tierChanges: changes,
+        nextReview: nextReviewDate(new Date(), 'quarterly')
       });
     } catch (err) {
       console.error('reviewSweep error:', err);
@@ -1090,38 +1119,28 @@ module.exports = async (req, res) => {
             factors
           };
         });
-        // ---- Relative band cutoffs ----
-        // Computed across the WHOLE platform, not the filtered page. A
-        // percentile taken over whatever a guest happened to search for
-        // would mean "top 1% of this search", which changes with the
-        // query and is not a property of the listing at all.
+        // ---- Frozen standing ----
+        // Read from tier_current, written by the quarterly snapshot. NOT
+        // recomputed here: a badge that moved on every page load would
+        // contradict the quarterly cadence, and two guests loading the
+        // same listing minutes apart could see different badges if a
+        // review landed between them.
         //
-        // Only listings with enough reviews to be judged are in the
-        // population; the floor is the lowest minReviews on the ladder,
-        // so one-review listings cannot set the cutoff for everyone.
-        let cutoffs = {};
+        // Also far cheaper — this replaced a per-request cutoff
+        // computation over every reviewed listing on the platform.
+        const standing = {};
         try {
-          const minReviewsForPool = Math.min(...PROPERTY_TIERS.map(t => t.minReviews));
-          const pool = await sql`
-            SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
-                   AVG(services) AS services, AVG(value_rating) AS value,
-                   AVG(location) AS location
-            FROM listing_reviews r
-            JOIN listings l ON l.id = r.listing_id AND l.status = 'approved'
-            WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
-            GROUP BY r.listing_id
-            HAVING COUNT(*) >= ${minReviewsForPool}
+          const cur = await sql`
+            SELECT subject_id, tier_key
+            FROM tier_current
+            WHERE subject_type = 'listing' AND subject_id = ANY(${listingIds})
           `;
-          cutoffs = propertyCutoffs(pool.map(r => reviewScore({
-            hygiene: Number(r.hygiene), communication: Number(r.communication),
-            services: Number(r.services), value: Number(r.value), location: Number(r.location)
-          }, REVIEW_FACTORS)));
+          cur.forEach(r => { standing[r.subject_id] = r.tier_key; });
         } catch (err) {
-          // No cutoffs means no ladder badges — a relative band cannot be
-          // resolved against an unknown field, and guessing is worse than
-          // showing nothing. Flags are unaffected; they are absolute.
-          console.error('property cutoff computation failed (non-fatal):', err);
+          console.error('standing lookup failed (non-fatal):', err);
         }
+        const TIER_LABELS = {};
+        PROPERTY_TIERS.forEach(t => { TIER_LABELS[t.key] = t.label; });
 
         filtered.forEach(l => {
           const r = byListing[l.id];
@@ -1131,9 +1150,12 @@ module.exports = async (req, res) => {
           // the rating came from — so a card's stars and its badge can
           // never rest on different data.
           const stats = r ? { reviewCount: r.count, factors: r.factors } : null;
-          const pt = stats ? propertyTier(stats, cutoffs) : null;
+          // Tier from the frozen snapshot; flags stay live because they are
+          // absolute — Spotless and Hidden Treasure describe the listing
+          // alone and need no field to rank against.
+          const key = standing[l.id] || null;
           const pf = stats ? propertyFlag(stats) : null;
-          l.property_tier = pt ? { key: pt.key, label: pt.label } : null;
+          l.property_tier = key && TIER_LABELS[key] ? { key, label: TIER_LABELS[key] } : null;
           l.property_flag = pf ? { key: pf.key, label: pf.label } : null;
         });
       }
