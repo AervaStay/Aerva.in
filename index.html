@@ -6631,8 +6631,18 @@
       <div class="suite-photo">
         ${photoHtml}
         <div class="suite-badges">
-          ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-experience">Experience</span>' : ''}
-          ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
+          ${/* ONE type badge, never two. "Experience" and "Experience Only"
+                were both rendering and saying the same thing, which cost a
+                slot on a card that also carries a category and a tier.
+                "Includes a Stay" replaces it where true, because that adds
+                information; where it is not true, the plain "Experience"
+                marker only earns its place in the mixed 'all' view — inside
+                the experiences tab every card is one already. */''}
+          ${exp.experience_type === 'with_stay'
+            ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>`
+            : (currentCategoryFilter === 'all'
+                ? '<span class="suite-badge suite-badge-type-experience">Experience</span>'
+                : '')}
           ${exp.experience_category ? `<span class="suite-badge">${exp.experience_category}</span>` : ''}
           ${exp.experience_tier && exp.experience_tier.label
             ? `<span class="suite-badge prop-badge prop-${escapeMessageHtml(exp.experience_tier.key)}">${escapeMessageHtml(exp.experience_tier.label)}</span>`
@@ -6734,7 +6744,11 @@
   function listingStandingHtml(listing){
     const n = Number(listing.review_count) || 0;
     const rated = n > 0 && listing.rating != null;
-    const tier = listing.property_tier && listing.property_tier.label ? listing.property_tier : null;
+    // Stays carry property_tier, experiences carry experience_tier. One
+    // helper serves both surfaces, so it accepts either rather than the
+    // experience modal silently rendering a strip with no badge in it.
+    const tierSrc = listing.property_tier || listing.experience_tier;
+    const tier = tierSrc && tierSrc.label ? tierSrc : null;
     const flag = listing.property_flag && listing.property_flag.label ? listing.property_flag : null;
     const host = listing.host_tier && listing.host_tier.label ? listing.host_tier : null;
     const hostName = String(listing.host_name || '').trim();
@@ -10919,10 +10933,16 @@
     return `
       <div class="listing-modal-content">
         <h2>${exp.property_name}</h2>
+        ${/* Same rule as the card: one type badge, and only where it says
+              something. On this page the heading already sits above a
+              category and a duration, so "Experience Only" was a third way
+              of telling a guest what they had just clicked on. */''}
+        ${exp.experience_type === 'with_stay' ? `
         <div class="suite-badges" style="position:static; flex-direction:row; margin:8px 0;">
-          ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
-        </div>
+          <span class="suite-badge suite-badge-stay">Includes a Stay</span>
+        </div>` : ''}
         <div class="loc">${exp.experience_category || ''}${durationLine ? ' · ' + durationLine : ''}</div>
+        ${listingStandingHtml(exp)}
         <div class="listing-three-col">
           <div class="listing-col-booking">
             <div class="listing-modal-section-title" style="margin-top:16px;">Book This Experience</div>
