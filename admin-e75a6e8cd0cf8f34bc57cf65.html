@@ -279,7 +279,8 @@
       <div id="simPropForm" style="display:none;">
         <p style="font-size:13px; opacity:0.75; margin:0 0 8px;">Search a real listing to load its actual numbers, or type figures by hand below.</p>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
-          <input type="text" id="propSearchInput" placeholder="Listing name, city, or id" style="flex:1 1 260px; padding:8px 10px; border:1px solid #ccc; font-size:14px; font-family:inherit;">
+          <input type="text" id="propSearchInput" list="propPlaceList" autocomplete="off" placeholder="Listing name, city, or id" style="flex:1 1 260px; padding:8px 10px; border:1px solid #ccc; font-size:14px; font-family:inherit;">
+          <datalist id="propPlaceList"></datalist>
           <button type="button" class="process-btn" onclick="searchProperties()">Search</button>
         </div>
         <div id="propSearchResults" style="margin-bottom:12px;"></div>
@@ -929,6 +930,30 @@
   }
 
   // ---- Tab switching (four tabs now: listings, live, verifications, deposits) ----
+  // ---- Location suggestions ----
+  // Sourced from the listings themselves, never a geocoder. A suggestion
+  // that returns nothing is worse than no suggestion, and Google would
+  // happily offer cities Aerva has no property in.
+  //
+  // A native <datalist> rather than a custom dropdown: it filters as you
+  // type, works with the keyboard, and needs no code to open, close or
+  // dismiss — all the places a hand-rolled autocomplete goes wrong.
+  let placesLoaded = false;
+  async function loadPlaceSuggestions(){
+    if(placesLoaded) return;
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?listingCities=1', { headers: authHeaders() });
+      if(!res.ok) return;
+      const d = await res.json();
+      const list = document.getElementById('propPlaceList');
+      if(!list) return;
+      list.innerHTML = (d.places || []).map(p =>
+        '<option value="' + escAdmin(p.name) + '">' + escAdmin(p.name) + ' \u2014 ' + Number(p.count) + ' listing' + (Number(p.count) === 1 ? '' : 's') + '</option>'
+      ).join('');
+      placesLoaded = true;
+    }catch(err){ /* suggestions are optional; typing still works */ }
+  }
+
   // ---- Property lookup ----
   // Typing scores by hand does not scale past a handful of listings. This
   // pulls a real one up and loads its live numbers into the form, so a
@@ -1054,6 +1079,9 @@
         if(f) f.style.display = kind === k ? 'block' : 'none';
         if(b) b.style.opacity = kind === k ? '1' : '0.55';
       });
+    // Fetched on first use rather than on page load: an admin who never
+    // opens this tab should not pay for a query they will not see.
+    if(kind === 'property') loadPlaceSuggestions();
     document.getElementById('simResults').innerHTML = '';
   }
 
