@@ -514,9 +514,10 @@ module.exports = async (req, res) => {
         const pool = await sql`
           SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
                  AVG(services) AS services, AVG(value_rating) AS value, AVG(location) AS location
-          FROM listing_reviews
-          WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
-          GROUP BY listing_id HAVING COUNT(*) >= ${minPool}
+          FROM listing_reviews r
+          JOIN listings l ON l.id = r.listing_id AND l.status = 'approved'
+          WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+          GROUP BY r.listing_id HAVING COUNT(*) >= ${minPool}
         `;
         cutoffs = propertyCutoffs(pool.map(r => reviewScore({
           hygiene: Number(r.hygiene), communication: Number(r.communication),
@@ -617,9 +618,10 @@ module.exports = async (req, res) => {
             SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
                    AVG(services) AS services, AVG(value_rating) AS value,
                    AVG(location) AS location
-            FROM listing_reviews
-            WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
-            GROUP BY listing_id
+            FROM listing_reviews r
+            JOIN listings l ON l.id = r.listing_id AND l.status = 'approved'
+            WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+            GROUP BY r.listing_id
             HAVING COUNT(*) >= ${minPool}
           `;
           cutoffs = propertyCutoffs(pool.map(r => reviewScore({
