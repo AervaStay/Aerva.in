@@ -350,6 +350,41 @@
   .rv-comment-label{display:block; font-size:12px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.6; margin:14px 0 6px;}
   #reviewComment{width:100%; box-sizing:border-box; padding:10px 12px; font-size:14px; font-family:inherit; border:1px solid var(--line-dark); background:white; resize:vertical;}
   .rv-error{color:#a3402f; font-size:13px; margin-top:10px;}
+  .trust-strip{
+    display:flex; align-items:center; gap:18px; margin:14px 0 4px;
+    padding:14px 18px; border:1px solid var(--line-dark); border-radius:12px;
+    background:linear-gradient(180deg, #ffffff, #fbf8f4);
+  }
+  .ts-score{flex:0 0 auto; text-align:center; padding-right:18px; border-right:1px solid var(--line-dark);}
+  .ts-score-num{font-family:Georgia,serif; font-size:30px; line-height:1; color:var(--ink);}
+  .ts-score-stars{margin-top:4px; letter-spacing:1px; font-size:11px;}
+  .ts-star{color:var(--line-dark);}
+  .ts-star.on{color:#c9a227;}
+  .ts-score-count{font-size:10.5px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.55; margin-top:4px;}
+  .ts-mid{flex:1 1 auto; min-width:0;}
+  .ts-badges{display:flex; flex-wrap:wrap; gap:6px;}
+  .ts-badge{
+    display:inline-flex; align-items:center; padding:5px 11px; border-radius:100px;
+    font-size:10px; letter-spacing:0.09em; text-transform:uppercase; white-space:nowrap;
+  }
+  .ts-badge-tier{background:rgba(28,26,23,0.86); color:var(--cream);}
+  .ts-badge-flag{background:var(--cream-deep); color:var(--gold-deep);}
+  .ts-host{display:flex; align-items:center; gap:9px; flex:0 0 auto;}
+  .ts-host-avatar{
+    width:32px; height:32px; border-radius:50%; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--gold-deep); color:#fff; font-size:13px; font-family:Georgia,serif;
+  }
+  .ts-host-text{display:flex; flex-direction:column; line-height:1.25;}
+  .ts-host-label{font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.5;}
+  .ts-host-name{font-size:13.5px; color:var(--ink);}
+  /* Stacks below the breakpoint: side by side the score's right rule and
+     the host block collide once the name is more than a word or two. */
+  @media (max-width:640px){
+    .trust-strip{flex-wrap:wrap; gap:12px; padding:12px 14px;}
+    .ts-score{padding-right:14px;}
+    .ts-host{width:100%; padding-top:10px; border-top:1px solid var(--line-dark);}
+  }
   .modal-standing{display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:10px;}
   .modal-host{
     display:inline-flex; align-items:center; gap:6px; margin-left:4px;
@@ -6662,34 +6697,59 @@
   // properties is choosing a place. hostTierBadgeHtml still exists and is
   // still fed by get-listings.js, so putting it back is a one-line change
   // if it belongs somewhere later.
+  // The trust strip under the property name. This is the last thing a
+  // guest reads before the price, so it is built to answer "is this a
+  // safe booking?" rather than to list attributes: the score is the
+  // largest element, the review count sits right under it as the reason
+  // to believe it, and the host is named with a face rather than being
+  // another pill in a row.
+  //
+  // It renders nothing at all when there is nothing to say. An empty
+  // frame with "no reviews yet" would actively discourage a booking,
+  // which is the opposite of the point.
   function listingStandingHtml(listing){
-    const bits = [];
     const n = Number(listing.review_count) || 0;
-    if(n && listing.rating != null){
-      bits.push(`<span class="modal-rating"><span class="suite-star">\u2605</span>${Number(listing.rating).toFixed(2)}<span class="suite-rating-count">(${n})</span></span>`);
-    }
-    if(listing.property_tier && listing.property_tier.label){
-      bits.push(`<span class="suite-badge prop-badge prop-${escapeMessageHtml(listing.property_tier.key)}">${escapeMessageHtml(listing.property_tier.label)}</span>`);
-    }
-    if(listing.property_flag && listing.property_flag.label){
-      bits.push(`<span class="suite-badge prop-flag">${escapeMessageHtml(listing.property_flag.label)}</span>`);
-    }
-    // Who is hosting it, after the property standing and separated by a
-    // rule rather than sat in the same run of pills. It is a claim about
-    // a DIFFERENT subject — everything before it describes the place,
-    // this describes the person — and run together they read as one list
-    // where a guest cannot tell which is which.
+    const rated = n > 0 && listing.rating != null;
+    const tier = listing.property_tier && listing.property_tier.label ? listing.property_tier : null;
+    const flag = listing.property_flag && listing.property_flag.label ? listing.property_flag : null;
     const host = listing.host_tier && listing.host_tier.label ? listing.host_tier : null;
     const hostName = String(listing.host_name || '').trim();
-    let hostHtml = '';
-    if(host || hostName){
-      hostHtml = '<span class="modal-host">'
-        + (hostName ? `<span class="modal-host-name">Hosted by ${escapeMessageHtml(hostName)}</span>` : '')
-        + (host ? hostTierBadgeHtml(host) : '')
-        + '</span>';
-    }
-    const all = bits.join('') + hostHtml;
-    return all ? `<div class="modal-standing">${all}</div>` : '';
+    if(!rated && !tier && !flag && !host && !hostName) return '';
+
+    const stars = rated
+      ? [1,2,3,4,5].map(i => `<span class="ts-star${Number(listing.rating) >= i - 0.25 ? ' on' : ''}">\u2605</span>`).join('')
+      : '';
+
+    const scoreBlock = rated ? `
+      <div class="ts-score">
+        <div class="ts-score-num">${Number(listing.rating).toFixed(2)}</div>
+        <div class="ts-score-stars">${stars}</div>
+        <div class="ts-score-count">${n} review${n === 1 ? '' : 's'}</div>
+      </div>` : '';
+
+    const badges = [];
+    if(tier) badges.push(`<span class="ts-badge ts-badge-tier prop-${escapeMessageHtml(tier.key)}">${escapeMessageHtml(tier.label)}</span>`);
+    if(flag) badges.push(`<span class="ts-badge ts-badge-flag">${escapeMessageHtml(flag.label)}</span>`);
+    const badgeBlock = badges.length ? `<div class="ts-badges">${badges.join('')}</div>` : '';
+
+    // The initial stands in for a photo. A named person with a mark
+    // reads as accountable in a way "Hosted by X" as plain text does not.
+    const initial = hostName ? escapeMessageHtml(hostName.trim().charAt(0).toUpperCase()) : '';
+    const hostBlock = (host || hostName) ? `
+      <div class="ts-host">
+        ${initial ? `<span class="ts-host-avatar">${initial}</span>` : ''}
+        <span class="ts-host-text">
+          ${hostName ? `<span class="ts-host-label">Hosted by</span><span class="ts-host-name">${escapeMessageHtml(hostName)}</span>` : ''}
+        </span>
+        ${host ? hostTierBadgeHtml(host) : ''}
+      </div>` : '';
+
+    const middle = badgeBlock;
+    return `<div class="trust-strip">
+      ${scoreBlock}
+      ${middle ? `<div class="ts-mid">${middle}</div>` : '<div class="ts-mid"></div>'}
+      ${hostBlock}
+    </div>`;
   }
 
   function buildSuiteCard(listing, index){
