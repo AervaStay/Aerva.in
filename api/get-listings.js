@@ -207,17 +207,30 @@ module.exports = async (req, res) => {
             services: Number(r.services), value: Number(r.value), location: Number(r.location)
           }
         }));
-        // Only APPROVED listings set the bar. A draft or rejected listing
-        // with glowing reviews would otherwise raise the cutoff for every
-        // live property, so a real host could lose a badge to something no
-        // guest can even book. Unapproved listings still get their own
-        // standing recorded — they just do not get a vote on the bar.
+        // Only APPROVED listings set the bar. A draft, deactivated or
+        // removed listing with glowing reviews would otherwise raise the
+        // cutoff for every live property, so a real host could lose a
+        // badge to something no guest can even book.
         const cutoffs = propertyCutoffs(
           scored.filter(x => x.approved && x.n >= minPool)
                 .map(x => reviewScore(x.factors, REVIEW_FACTORS))
         );
 
         for (const x of scored) {
+          // A listing that is not live is skipped entirely: no standing
+          // computed, no tier_current update, no history row. Its existing
+          // history is left exactly as it stands — an append-only log of
+          // what was true while it was live, which is the only honest
+          // record of it.
+          //
+          // The consequence on reactivation is deliberate and worth
+          // stating: nothing is restored. The next sweep recomputes from
+          // scratch against whatever the bar is THEN, and a listing that
+          // was Aerva Exceptional a year ago may come back to nothing,
+          // because the field moved on while it was away. Holding a badge
+          // earned against a vanished field would be the dishonest option.
+          if (!x.approved) continue;
+
           const t = propertyTier({ reviewCount: x.n, factors: x.factors }, cutoffs);
           const r = await recordTierChange(sql, {
             subjectType: 'listing', subjectId: x.listingId, tier: t,
@@ -239,12 +252,23 @@ module.exports = async (req, res) => {
           WHERE l.host_id IS NOT NULL
           GROUP BY l.host_id
         `;
+        // Host standing counts reviews from the last 12 months across ALL
+        // their listings, live or not.
+        //
+        // Deliberately NOT restricted to approved listings, unlike the
+        // property ladder. A host with one excellent property and one poor
+        // one could otherwise deactivate the poor one and watch their own
+        // average jump — deactivation would become a way to launder a bad
+        // record. The rolling window is what handles a genuinely retired
+        // property instead: its reviews age out after a year rather than
+        // being erased the day it comes down.
         const hostRev = await sql`
           SELECT host_id, AVG(hygiene) AS hygiene, AVG(communication) AS communication,
                  AVG(services) AS services, AVG(value_rating) AS value,
                  AVG(location) AS location, COUNT(*) AS n
           FROM listing_reviews
           WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
+            AND published_at >= NOW() - INTERVAL '12 months'
           GROUP BY host_id
         `;
         const revByHost = {};
@@ -1101,6 +1125,7 @@ module.exports = async (req, res) => {
           FROM listing_reviews
           WHERE host_id = ANY(${hostIds})
             AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+            AND published_at >= NOW() - INTERVAL '12 months'
           GROUP BY host_id
         `;
         const reviewsByHost = {};

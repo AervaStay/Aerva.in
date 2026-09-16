@@ -646,25 +646,33 @@ function reviewHostTiers(statsByQuarter, now) {
 //
 // minReviews rises steeply because it is doing the work price used to do.
 // Without it a single five-star review makes a listing Exceptional.
-// Bands are RELATIVE — a share of the field, not a fixed score. Review
-// scores bunch hard near 5, so an absolute cutoff either catches almost
-// everything or almost nothing, and drifts as the platform matures. A
-// percentile stays meaningful without anyone retuning it.
+// Bands are RANKED POSITIONS, not scores and not percentages. Listings
+// compete directly: the best one on the platform is Aerva Exceptional,
+// the next four are Exceptional, and so on down. Exactly one listing can
+// hold the top badge at a time.
 //
-// minScore is a floor, not the band: top 1% of a poor field should not be
-// called exceptional. Both the rank AND the floor must be met, so the
-// badge can be empty when nothing deserves it.
+// topN is a COUNT, deliberately. Percentages were tried first and cannot
+// work at small scale: top 1% of eight listings is one listing, and top
+// 1%, 5% and 10% of anything under sixty all resolve to the same row, so
+// the bands collapse into one. A count is unambiguous from the first
+// listing onwards and needs no minimum population to be meaningful.
+//
+// minScore is still a floor. Being the best of a poor field is not
+// exceptional, so a band can sit empty — better an empty badge than one
+// that means "least bad".
 const PROPERTY_TIERS = [
-  { key: 'aerva_exceptional', label: 'Aerva Exceptional', topPercent: 1,  minScore: 4.85, minReviews: 20,
-    blurb: 'Among the top 1% of stays on Aerva.' },
-  { key: 'outstanding',       label: 'Outstanding',       topPercent: 5,  minScore: 4.75, minReviews: 10,
-    blurb: 'Among the top 5% of stays on Aerva.' },
-  { key: 'great_stay',        label: 'Great Stay',        topPercent: 10, minScore: 4.60, minReviews: 5,
-    blurb: 'Among the top 10% of stays on Aerva.' }
+  { key: 'aerva_exceptional', label: 'Aerva Exceptional', topN: 1,   minScore: 4.85, minReviews: 20,
+    blurb: 'The single highest rated stay on Aerva.' },
+  { key: 'exceptional',       label: 'Exceptional',       topN: 5,   minScore: 4.80, minReviews: 15,
+    blurb: 'Among the five highest rated stays on Aerva.' },
+  { key: 'outstanding',       label: 'Outstanding',       topN: 10,  minScore: 4.75, minReviews: 10,
+    blurb: 'Among the ten highest rated stays on Aerva.' },
+  { key: 'great_stay',        label: 'Great Stay',        topN: 100, minScore: 4.60, minReviews: 5,
+    blurb: 'Among the hundred highest rated stays on Aerva.' }
 ];
 
 // Flags are independent of the ladder and of each other. A property can
-// hold one flag alongside its tier; where several apply, the first match
+// hold one flag alongside its rung; where several apply, the first match
 // in this order wins, so the rarer claim is the one shown.
 const PROPERTY_FLAGS = [
   { key: 'hidden_treasure', label: 'Hidden Treasure', minScore: 4.85, maxReviews: 10, minReviews: 3,
@@ -675,32 +683,31 @@ const PROPERTY_FLAGS = [
 
 // Builds the score cutoff for each band from the current field.
 //
-// `population` is every eligible listing's score — one number each. Only
-// listings with enough reviews to be judged belong in it: including
-// one-review listings would let noise set the cutoff for everyone.
+// `population` is every ELIGIBLE listing's score — live listings with
+// enough reviews to be judged. A listing that is not live does not
+// compete, so it neither holds a rank nor displaces anyone from one.
 //
-// A band with too few listings to be meaningful is dropped entirely
-// rather than awarded to whoever happens to be top. "Top 1%" of eleven
-// listings is one listing, which says nothing; MIN_POPULATION is what
-// stops a badge that means "we had barely any data".
-const MIN_POPULATION = 20;
-
+// Ties are handled by score, not by arbitrary ordering: if three listings
+// share the top score, all three clear the top-1 bar. That is the honest
+// reading — there is no defensible way to rank identical records, and
+// silently picking one by id would be a lie dressed as precision.
 function propertyCutoffs(population) {
   const scores = (population || []).map(Number).filter(n => Number.isFinite(n)).sort((a, b) => b - a);
   const out = {};
-  if (scores.length < MIN_POPULATION) return out;
+  if (!scores.length) return out;
   PROPERTY_TIERS.forEach(t => {
-    // Index of the last listing inside the band, at least one.
-    const n = Math.max(1, Math.floor(scores.length * (t.topPercent / 100)));
-    out[t.key] = scores[n - 1];
+    // The score of the listing at position topN. If the field is smaller
+    // than topN, everyone in it clears that band's rank — the floor is
+    // then the only thing standing between them and the badge.
+    const idx = Math.min(t.topN, scores.length) - 1;
+    out[t.key] = scores[idx];
   });
   return out;
 }
 
 // stats: { reviewCount, factors }
 // cutoffs: from propertyCutoffs(). Without them no ladder badge is given
-// — a relative band cannot be resolved against an unknown field, and
-// guessing would be worse than showing nothing.
+// — a ranked band cannot be resolved against an unknown field.
 function propertyTier(stats, cutoffs) {
   const reviews = num(stats && stats.reviewCount);
   const factors = stats && stats.factors;
@@ -711,7 +718,7 @@ function propertyTier(stats, cutoffs) {
     if (reviews < t.minReviews) continue;
     if (score < t.minScore) continue;          // absolute floor
     const cut = cutoffs[t.key];
-    if (cut === undefined || score < cut) continue; // relative rank
+    if (cut === undefined || score < cut) continue; // rank within the field
     return { key: t.key, label: t.label, blurb: t.blurb, score: Number(score.toFixed(3)) };
   }
   return null;
@@ -781,16 +788,16 @@ function describeLadders() {
       factors: `Scored on the same five property factors as the host ladder: ${factorLine(REVIEW_FACTORS)}.`,
       rules: [
         'Only published, non-reverted reviews count \u2014 a held review must not move a listing\u2019s badge any more than it shows on the card.',
-        `Bands are relative \u2014 a share of the field, not a fixed score. An absolute cutoff either catches nearly everything or nearly nothing, because review scores bunch near 5.`,
-        `The minimum score is a floor on top of the rank: the top 1% of a poor field is still not exceptional, and the band is simply left empty.`,
-        `No ladder badge is awarded at all until ${MIN_POPULATION} listings have enough reviews to be judged \u2014 "top 1%" of a handful says nothing.`,
+        `Bands are ranked positions, not scores. Listings compete directly \u2014 exactly one can be Aerva Exceptional at a time, and a listing loses it when another overtakes it.`,
+        `The minimum score is a floor on top of the rank: being best of a poor field is not exceptional, and the band is left empty instead.`,
+        `Only live listings compete. A deactivated or removed listing holds no rank and displaces nobody; on reactivation it is ranked afresh against the field as it stands then.`,
         'A property may hold one flag alongside its rung. Where several flags apply, the rarer one wins.',
         'Below the lowest rung no badge is shown at all \u2014 never a lesser label.'
       ],
       bands: PROPERTY_TIERS.map(t => ({
         label: t.label, blurb: t.blurb, publicBadge: true,
         requirements: [
-          `Top ${t.topPercent}% of eligible listings by score`,
+          `Ranked in the top ${t.topN} live listings by score`,
           `Score of at least ${t.minScore} regardless of rank`,
           `${t.minReviews} published reviews`
         ]
@@ -837,6 +844,6 @@ module.exports = {
   reviewScore, weakestFactor,
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
-  PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs, MIN_POPULATION,
+  PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs,
   reviewGuestTiers, reviewHostTiers
 };
