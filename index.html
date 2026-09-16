@@ -446,6 +446,8 @@
      different class from .suite-badge-stay above (which means "this
      experience happens to include a stay," a different fact). */
   .suite-badge-type-stay{ background:#2f6690; color:#fff; }
+  /* Type label inside the detail view, not on a photo. */
+  .suite-badges.listing-type-row{ position:static; max-width:none; margin:8px 0; }
   .suite-badge-type-experience{ background:#8a6c39; color:#fff; }
   .suite-badge-rooms{ background:rgba(28,26,23,0.78); color:#fff; }
   .suite-photo-slider{
@@ -6335,10 +6337,23 @@
       // say so without committing to a number that may not apply to
       // the nights the guest eventually picks.
       const any = Array.isArray(listing.active_promotions) && listing.active_promotions.length > 0;
-      return (any && !searchedStay()) ? 'Discount may be applicable' : '';
+      // Kept to one word so it fits on a single line on a phone. The
+      // explanation lives in the detail view (formatPromotionHint).
+      return (any && !searchedStay()) ? 'Offer' : '';
     }
-    const label = promo.discountType === 'percentage' ? `${Number(promo.discountValue)}% OFF` : `${fmtGuest(Number(promo.discountValue))} OFF`;
-    return `${promo.name} — ${label}`;
+    // The figure only. The promotion's name and its conditions are shown in
+    // the detail view and under the price, where there is room for them.
+    return promo.discountType === 'percentage' ? `${Number(promo.discountValue)}% off` : `${fmtGuest(Number(promo.discountValue))} off`;
+  }
+
+  // Detail-view counterpart of the "Offer" card badge: the listing runs
+  // promotions, but no dates are picked yet, so no figure can be promised.
+  // Without this, a guest who clicked a card showing "Offer" found nothing
+  // about it inside.
+  function formatPromotionHint(listing){
+    const any = Array.isArray(listing.active_promotions) && listing.active_promotions.length > 0;
+    if(!any || searchedStay() || bestActivePromotion(listing)) return '';
+    return 'Offers apply on some dates. Choose your dates to see your price.';
   }
 
   // Full sentence for the promotion, shown alongside (not instead of) the
@@ -6631,18 +6646,12 @@
       <div class="suite-photo">
         ${photoHtml}
         <div class="suite-badges">
-          ${/* ONE type badge, never two. "Experience" and "Experience Only"
-                were both rendering and saying the same thing, which cost a
-                slot on a card that also carries a category and a tier.
-                "Includes a Stay" replaces it where true, because that adds
-                information; where it is not true, the plain "Experience"
-                marker only earns its place in the mixed 'all' view — inside
-                the experiences tab every card is one already. */''}
+          ${/* No "Experience" or "Stay" type badge on any card: the type is
+                shown once the guest opens the listing. "Includes a Stay" is
+                kept because it is information, not a type label. */''}
           ${exp.experience_type === 'with_stay'
             ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>`
-            : (currentCategoryFilter === 'all'
-                ? '<span class="suite-badge suite-badge-type-experience">Experience</span>'
-                : '')}
+            : ''}
           ${exp.experience_category ? `<span class="suite-badge">${exp.experience_category}</span>` : ''}
           ${exp.experience_tier && exp.experience_tier.label
             ? `<span class="suite-badge prop-badge prop-${escapeMessageHtml(exp.experience_tier.key)}">${escapeMessageHtml(exp.experience_tier.label)}</span>`
@@ -6820,10 +6829,10 @@
       if(baselineTotal){
         if(listing.discount_type === 'percentage'){
           const rupees = Math.round(baselineTotal * (value / 100));
-          discountBadge = `${value}% (${fmtGuest(rupees)}) OFF`;
+          discountBadge = `${value}% off`;
         } else if(listing.discount_type === 'flat'){
           const percent = Math.round((value / baselineTotal) * 100);
-          discountBadge = `${fmtGuest(value)} (${percent}%) OFF`;
+          discountBadge = `${fmtGuest(value)} off`;
         }
       }
     }
@@ -6922,7 +6931,6 @@
       <div class="suite-photo">
         ${photoHtml}
         <div class="suite-badges">
-          ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-stay">Stay</span>' : ''}
           ${isNew ? '<span class="suite-badge">New</span>' : ''}
           ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
           ${propertyBadgeHtml(listing)}
@@ -9348,6 +9356,7 @@
       return `
         <div class="listing-modal-content">
           <h2>${listing.property_name}</h2>
+          <div class="suite-badges listing-type-row"><span class="suite-badge suite-badge-type-stay">Stay</span></div>
           <div class="loc">${formatCityArea(listing)} · Resort</div>
           ${listingStandingHtml(listing)}
           <div class="listing-three-col">
@@ -9404,6 +9413,7 @@
     return `
       <div class="listing-modal-content">
         <h2>${listing.property_name}</h2>
+        <div class="suite-badges listing-type-row"><span class="suite-badge suite-badge-type-stay">Stay</span></div>
         <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
         ${listingStandingHtml(listing)}
         <div class="listing-three-col">
@@ -9411,6 +9421,7 @@
             <div class="price">${priceLine}</div>
             ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
             ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
+            ${formatPromotionHint(listing) ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${formatPromotionHint(listing)}</div>` : ''}
             <div class="listing-modal-section-title" style="margin-top:16px;">Check Availability &amp; Price</div>
             <div id="availabilityCalendar" data-listing-id="${listing.id}">
               <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
@@ -10937,10 +10948,10 @@
               something. On this page the heading already sits above a
               category and a duration, so "Experience Only" was a third way
               of telling a guest what they had just clicked on. */''}
-        ${exp.experience_type === 'with_stay' ? `
-        <div class="suite-badges" style="position:static; flex-direction:row; margin:8px 0;">
-          <span class="suite-badge suite-badge-stay">Includes a Stay</span>
-        </div>` : ''}
+        <div class="suite-badges listing-type-row">
+          <span class="suite-badge suite-badge-type-experience">Experience</span>
+          ${exp.experience_type === 'with_stay' ? '<span class="suite-badge suite-badge-stay">Includes a Stay</span>' : ''}
+        </div>
         <div class="loc">${exp.experience_category || ''}${durationLine ? ' · ' + durationLine : ''}</div>
         ${listingStandingHtml(exp)}
         <div class="listing-three-col">
