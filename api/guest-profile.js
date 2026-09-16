@@ -35,7 +35,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
-const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN } = require('./_tiers');
+const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, EXPERIENCE_FACTORS } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 
@@ -539,23 +539,32 @@ module.exports = async (req, res) => {
         if (!orderId) return res.status(400).json({ error: 'Which booking is this review for?' });
 
         const rows = await sql`
-          SELECT o.id, o.listing_id, o.room_id, o.departure, o.status, l.host_id
+          SELECT o.id, o.listing_id, o.room_id, o.departure, o.status, o.order_type,
+                 l.host_id, COALESCE(l.listing_type, 'stay') AS listing_type
           FROM orders o JOIN listings l ON l.id = o.listing_id
           WHERE o.id = ${orderId} AND o.guest_id = ${guestId}
         `;
         const order = rows[0];
         if (!order) return res.status(404).json({ error: 'Booking not found.' });
-        if (order.status !== 'paid') return res.status(400).json({ error: 'Only completed stays can be reviewed.' });
+        if (order.status !== 'paid') return res.status(400).json({ error: 'Only completed bookings can be reviewed.' });
         if (!submissionOpen(order.departure)) {
           return res.status(400).json({ error: `Reviews can be left for ${REVIEW_WINDOW_DAYS} days after checkout. This window has closed.` });
         }
 
-        const FIELDS = ['hygiene', 'communication', 'services', 'value', 'location'];
+        // Which factors are mandatory depends on WHAT was booked. Asking a
+        // guest to rate the hygiene of a guided walk is a question with no
+        // sensible answer, and whatever they put would then carry the
+        // heaviest weight in that experience's score.
+        const isExperience = order.listing_type === 'experience';
+        const FIELDS = isExperience
+          ? ['organisation', 'safety', 'guide', 'value']
+          : ['hygiene', 'communication', 'services', 'value', 'location'];
+        const LABEL = { value: 'value for money', organisation: 'organisation', guide: 'the guide', safety: 'safety' };
         const vals = {};
         for (const f of FIELDS) {
           const v = Number(b[f]);
           if (!Number.isFinite(v) || v < 1 || v > 5) {
-            return res.status(400).json({ error: `Please rate ${f === 'value' ? 'value for money' : f} between 1 and 5.` });
+            return res.status(400).json({ error: `Please rate ${LABEL[f] || f} between 1 and 5.` });
           }
           vals[f] = v;
         }
@@ -565,13 +574,21 @@ module.exports = async (req, res) => {
         }
 
         try {
+          // One table, two shapes. The unused set is written as NULL rather
+          // than zero — a zero would be read as a rating of nothing, and
+          // _tiers.js treats an absent factor as "not scored", which is
+          // the truth here.
           const inserted = await sql`
             INSERT INTO listing_reviews
               (order_id, listing_id, room_id, guest_id, host_id,
-               hygiene, communication, services, value_rating, location, comment)
+               hygiene, communication, services, value_rating, location,
+               organisation, guide, safety, comment)
             VALUES
               (${order.id}, ${order.listing_id}, ${order.room_id || null}, ${guestId}, ${order.host_id},
-               ${vals.hygiene}, ${vals.communication}, ${vals.services}, ${vals.value}, ${vals.location}, ${comment})
+               ${vals.hygiene ?? null}, ${vals.communication ?? null}, ${vals.services ?? null},
+               ${vals.value}, ${vals.location ?? null},
+               ${vals.organisation ?? null}, ${vals.guide ?? null}, ${vals.safety ?? null},
+               ${comment})
             RETURNING id
           `;
           await logAudit(sql, {

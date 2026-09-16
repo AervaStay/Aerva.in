@@ -57,7 +57,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
-        propertyCutoffs, PROPERTY_TIERS, experienceTier } = require('./_tiers');
+        propertyCutoffs, PROPERTY_TIERS, experienceTier, EXPERIENCE_FACTORS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN } = require('./_tiers');
 const { recordTierChange } = require('./_tier-history');
@@ -665,11 +665,18 @@ module.exports = async (req, res) => {
       try {
         const expIds = [...new Set(filteredExperiences.map(e => e.id).filter(Boolean))];
         if (expIds.length) {
+          // Both factor sets are averaged. Experience reviews carry the
+          // new four; rows written before those columns existed carry the
+          // old five. AVG ignores NULLs, so each set averages only over
+          // the rows that actually have it, and experienceTier picks
+          // whichever is present.
           const revRows = await sql`
             SELECT r.listing_id,
+                   AVG(r.organisation) AS organisation, AVG(r.guide) AS guide,
+                   AVG(r.safety) AS safety, AVG(r.value_rating) AS value,
                    AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
-                   AVG(r.services) AS services, AVG(r.value_rating) AS value,
-                   AVG(r.location) AS location, COUNT(*) AS n
+                   AVG(r.services) AS services, AVG(r.location) AS location,
+                   COUNT(*) AS n
             FROM listing_reviews r
             WHERE r.listing_id = ANY(${expIds})
               AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
@@ -677,11 +684,15 @@ module.exports = async (req, res) => {
           `;
           const byExp = {};
           revRows.forEach(r => {
+            const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
             const factors = {
-              hygiene: Number(r.hygiene), communication: Number(r.communication),
-              services: Number(r.services), value: Number(r.value), location: Number(r.location)
+              organisation: num(r.organisation), guide: num(r.guide),
+              safety: num(r.safety), value: num(r.value),
+              hygiene: num(r.hygiene), communication: num(r.communication),
+              services: num(r.services), location: num(r.location)
             };
-            byExp[r.listing_id] = { factors, count: Number(r.n) || 0, rating: reviewScore(factors, REVIEW_FACTORS) };
+            const set = factors.organisation > 0 ? EXPERIENCE_FACTORS : REVIEW_FACTORS;
+            byExp[r.listing_id] = { factors, count: Number(r.n) || 0, rating: reviewScore(factors, set) };
           });
 
           filteredExperiences.forEach(e => {

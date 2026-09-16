@@ -682,6 +682,34 @@ const PROPERTY_FLAGS = [
 ];
 
 // ---------------------------------------------------------------------
+// The four factors a GUEST scores an EXPERIENCE on.
+//
+// A separate set from the property factors, because most of those do not
+// transfer. Hygiene is the clearest case: it carried the heaviest weight
+// on the property set and was, until this existed, the single largest
+// input to a sunset trek's score — measuring something that barely
+// applies. Location means something different too: for a stay it is where
+// you sleep, for an experience it is part of what you came for, and is
+// better captured by whether the thing was well run.
+//
+// Organisation and safety carry 1.5. Safety is weighted up rather than
+// down because it is the one factor where a poor score is not a
+// disappointment but a hazard — a badly run trek that was also unsafe
+// should fall further than one that was merely disorganised, and a badge
+// on an experience guests felt unsafe on is the worst thing this system
+// could put on a card. Guide and value carry 1: a dull guide spoils an
+// afternoon, an unsafe one ends worse.
+//
+// Costs sum to 5, the same as the other two sets, so a score means the
+// same thing on any ladder.
+const EXPERIENCE_FACTORS = [
+  { key: 'organisation',  label: 'Organisation',    weight: 1.5 },
+  { key: 'safety',        label: 'Safety',          weight: 1.5 },
+  { key: 'guide',         label: 'Guide',           weight: 1 },
+  { key: 'value',         label: 'Value for money', weight: 1 }
+];
+
+// ---------------------------------------------------------------------
 // EXPERIENCE standing — ABSOLUTE thresholds, not ranked.
 //
 // Unlike the property ladder, experiences are not in competition. A rank
@@ -708,8 +736,15 @@ const EXPERIENCE_TIERS = [
 function experienceTier(stats) {
   const reviews = num(stats && stats.reviewCount);
   const factors = stats && stats.factors;
-  if (!factors || !REVIEW_FACTORS.some(f => num(factors[f.key]) > 0)) return null;
-  const score = reviewScore(factors, REVIEW_FACTORS);
+  if (!factors) return null;
+  // Scored on the experience set. Falls back to the property set only for
+  // rows written before the experience columns existed — those carry the
+  // old five and would otherwise read as no review at all.
+  const set = EXPERIENCE_FACTORS.some(f => num(factors[f.key]) > 0)
+    ? EXPERIENCE_FACTORS
+    : (REVIEW_FACTORS.some(f => num(factors[f.key]) > 0) ? REVIEW_FACTORS : null);
+  if (!set) return null;
+  const score = reviewScore(factors, set);
   for (const t of EXPERIENCE_TIERS) {
     if (reviews < t.minReviews) continue;
     if (score < t.minScore) continue;
@@ -854,7 +889,7 @@ function describeLadders() {
       title: 'Experience standing',
       basis: 'Earned purely on guest reviews, against fixed thresholds. Experiences do not compete with each other and are never ranked.',
       reviewedBy: 'Recomputed continuously from published reviews. No periodic review and no decay.',
-      factors: `Scored on the same five factors as a property: ${factorLine(REVIEW_FACTORS)}.`,
+      factors: `Scored on its own four factors: ${factorLine(EXPERIENCE_FACTORS)}. Deliberately not the property set \u2014 hygiene and location say little about a guided walk, and hygiene carried the heaviest weight there.`,
       rules: [
         'Absolute, not ranked. A rank needs a field to mean anything, and there are few enough experiences that "top 1" would mean "best of three" \u2014 a hollow claim that would flip between two hosts on a single review.',
         'Because nothing is competitive, an experience cannot lose its badge to someone else improving. It keeps it as long as its own reviews hold up.',
@@ -900,6 +935,6 @@ module.exports = {
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
   PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs,
-  EXPERIENCE_TIERS, experienceTier,
+  EXPERIENCE_TIERS, EXPERIENCE_FACTORS, experienceTier,
   reviewGuestTiers, reviewHostTiers
 };
