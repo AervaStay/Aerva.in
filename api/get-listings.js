@@ -188,24 +188,33 @@ module.exports = async (req, res) => {
       try {
         const minPool = Math.min(...PROPERTY_TIERS.map(t => t.minReviews));
         const pool = await sql`
-          SELECT listing_id,
-                 AVG(hygiene) AS hygiene, AVG(communication) AS communication,
-                 AVG(services) AS services, AVG(value_rating) AS value,
-                 AVG(location) AS location, COUNT(*) AS n
-          FROM listing_reviews
-          WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
-          GROUP BY listing_id
+          SELECT r.listing_id,
+                 AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
+                 AVG(r.services) AS services, AVG(r.value_rating) AS value,
+                 AVG(r.location) AS location, COUNT(*) AS n,
+                 BOOL_OR(l.status = 'approved') AS approved
+          FROM listing_reviews r
+          JOIN listings l ON l.id = r.listing_id
+          WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+          GROUP BY r.listing_id
         `;
         const scored = pool.map(r => ({
           listingId: r.listing_id,
+          approved: r.approved === true,
           n: Number(r.n) || 0,
           factors: {
             hygiene: Number(r.hygiene), communication: Number(r.communication),
             services: Number(r.services), value: Number(r.value), location: Number(r.location)
           }
         }));
+        // Only APPROVED listings set the bar. A draft or rejected listing
+        // with glowing reviews would otherwise raise the cutoff for every
+        // live property, so a real host could lose a badge to something no
+        // guest can even book. Unapproved listings still get their own
+        // standing recorded — they just do not get a vote on the bar.
         const cutoffs = propertyCutoffs(
-          scored.filter(x => x.n >= minPool).map(x => reviewScore(x.factors, REVIEW_FACTORS))
+          scored.filter(x => x.approved && x.n >= minPool)
+                .map(x => reviewScore(x.factors, REVIEW_FACTORS))
         );
 
         for (const x of scored) {
@@ -1022,9 +1031,10 @@ module.exports = async (req, res) => {
             SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
                    AVG(services) AS services, AVG(value_rating) AS value,
                    AVG(location) AS location
-            FROM listing_reviews
-            WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
-            GROUP BY listing_id
+            FROM listing_reviews r
+            JOIN listings l ON l.id = r.listing_id AND l.status = 'approved'
+            WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+            GROUP BY r.listing_id
             HAVING COUNT(*) >= ${minReviewsForPool}
           `;
           cutoffs = propertyCutoffs(pool.map(r => reviewScore({
