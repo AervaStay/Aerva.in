@@ -51,7 +51,7 @@ const bcrypt = require('bcryptjs');
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
-const { guestTier, hostTier, QUALIFYING_BOOKING_MIN } = require('./_tiers');
+const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { verifyGoogleIdToken } = require('./_social-auth');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { normalizeToE164 } = require('./_phone-validation');
@@ -302,74 +302,26 @@ module.exports = async (req, res) => {
       // carry. A host with no badge-worthy standing falls back to their
       // guest tier rather than showing nothing.
       //
-      // Two small aggregates, both wrapped: this runs on every page load,
-      // and a badge must never be the reason a session check fails.
+      // Standing comes from tier_current, the quarterly snapshot written by
+      // the review sweep — the one source the listing cards and profile
+      // also read, so the header can never show a different badge. One
+      // small indexed lookup, wrapped: a badge must never be the reason a
+      // session check fails. A host's standing is shown in preference to
+      // their guest standing, as before.
       let tier = null;
       try {
-        if (guest.host_id) {
-          const hostStats = await sql`
-            SELECT COALESCE(SUM(o.payout_amount), 0) AS payout
-            FROM listings l
-            LEFT JOIN orders o
-              ON o.listing_id = l.id AND o.status = 'paid'
-              AND o.created_at >= NOW() - INTERVAL '12 months'
-            WHERE l.host_id = ${guest.host_id}
-          `;
-          const hostRev = await sql`
-            SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
-                   AVG(services) AS services, AVG(value_rating) AS value,
-                   AVG(location) AS location, COUNT(*) AS n
-            FROM listing_reviews
-            WHERE host_id = ${guest.host_id}
-              AND published_at IS NOT NULL AND admin_reverted_at IS NULL
-          `;
-          const hr = hostRev[0] || {};
-          const n = Number(hr.n) || 0;
-          const ht = hostTier({
-            totalPayout: Number(hostStats[0] && hostStats[0].payout) || 0,
-            reviewCount: n,
-            factors: n > 0 ? {
-              hygiene: Number(hr.hygiene), communication: Number(hr.communication),
-              services: Number(hr.services), value: Number(hr.value), location: Number(hr.location)
-            } : undefined
-          });
-          if (ht) tier = { ...ht, kind: 'host' };
-        }
-
-        if (!tier) {
-          // Spend and bookings over the calendar year the annual review
-          // assesses, not lifetime.
-          const sp = await sql`
-            SELECT COALESCE(SUM(total), 0) AS spend, COUNT(*) AS bookings,
-                   COUNT(*) FILTER (WHERE total >= ${QUALIFYING_BOOKING_MIN}) AS qualifying
-            FROM orders
-            WHERE guest_id = ${guest.id} AND status = 'paid'
-              AND created_at >= date_trunc('year', CURRENT_DATE)
-          `;
-          const gr = await sql`
-            SELECT AVG(cleanliness) AS cleanliness, AVG(communication) AS communication,
-                   AVG(respectful) AS respectful, AVG(rules) AS rules, COUNT(*) AS n
-            FROM guest_reviews
-            WHERE guest_id = ${guest.id} AND cleanliness IS NOT NULL
-              AND published_at IS NOT NULL AND admin_reverted_at IS NULL
-          `;
-          const g = gr[0] || {};
-          const gn = Number(g.n) || 0;
-          const s0 = sp[0] || {};
-          const gt = guestTier({
-            totalSpend: Number(s0.spend) || 0,
-            bookingCount: Number(s0.bookings) || 0,
-            qualifyingBookings: Number(s0.qualifying) || 0,
-            reviewCount: gn,
-            factors: gn > 0 ? {
-              cleanliness: Number(g.cleanliness), communication: Number(g.communication),
-              respectful: Number(g.respectful), rules: Number(g.rules)
-            } : undefined
-          });
-          if (gt) tier = { ...gt, kind: 'guest' };
-        }
+        const rows = await sql`
+          SELECT subject_type, tier_key FROM tier_current
+          WHERE (subject_type = 'host'  AND subject_id = ${guest.host_id || -1})
+             OR (subject_type = 'guest' AND subject_id = ${guest.id})
+        `;
+        const keyOf = (type) => (rows.find(r => r.subject_type === type) || {}).tier_key;
+        const ht = guest.host_id ? tierByKey(HOST_TIERS, keyOf('host')) : null;
+        const gt = tierByKey(GUEST_TIERS, keyOf('guest'));
+        if (ht) tier = { ...ht, kind: 'host' };
+        else if (gt) tier = { ...gt, kind: 'guest' };
       } catch (err) {
-        console.error('tier computation failed (non-fatal):', err);
+        console.error('tier lookup failed (non-fatal):', err);
       }
 
       return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing, tier } });

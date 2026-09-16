@@ -89,7 +89,7 @@ const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
-const { createToken, verifyToken } = require('./_approval-token');
+const { createToken, verifyToken, secretMatches } = require('./_approval-token');
 const { REVIEW_POLICY, CONFLICT_CHECKS, REVIEW_WINDOW_DAYS, publicationState } = require('./_review-policy');
 const { describeLadders, guestTier, hostTier, reviewScore, weakestFactor,
         REVIEW_FACTORS, GUEST_FACTORS, HOST_TIERS, GUEST_TIERS,
@@ -265,7 +265,7 @@ module.exports = async (req, res) => {
   // a second admin later. Not reachable with just an admin-session token.
   if (req.method === 'POST' && req.body && req.body.adminSignup) {
     const adminSecretHeader = req.headers['x-admin-secret'];
-    if (!adminSecretHeader || adminSecretHeader !== process.env.ADMIN_SECRET) {
+    if (!secretMatches(adminSecretHeader, process.env.ADMIN_SECRET)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     try {
@@ -368,7 +368,7 @@ module.exports = async (req, res) => {
   const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   const sessionPayload = sessionToken ? verifyToken(sessionToken) : null;
   const hasValidSession = sessionPayload && sessionPayload.action === 'admin-session';
-  const hasValidSecret = adminSecret && adminSecret === process.env.ADMIN_SECRET;
+  const hasValidSecret = secretMatches(adminSecret, process.env.ADMIN_SECRET);
   if (!hasValidSession && !hasValidSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -501,6 +501,7 @@ module.exports = async (req, res) => {
         FROM listings l
         LEFT JOIN listing_reviews r
           ON r.listing_id = l.id AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+          AND r.hygiene IS NOT NULL -- stay reviews only, same as the sweep
         WHERE l.status = 'approved'
           AND (l.id = ${asId} OR lower(l.property_name) LIKE ${like} OR lower(COALESCE(l.city,'')) LIKE ${like})
         GROUP BY l.id
@@ -517,6 +518,7 @@ module.exports = async (req, res) => {
           FROM listing_reviews r
           JOIN listings l ON l.id = r.listing_id AND l.status = 'approved'
           WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+            AND r.hygiene IS NOT NULL -- stay reviews only, same as the sweep
           GROUP BY r.listing_id HAVING COUNT(*) >= ${minPool}
         `;
         cutoffs = propertyCutoffs(pool.map(r => reviewScore({
@@ -621,6 +623,7 @@ module.exports = async (req, res) => {
             FROM listing_reviews r
             JOIN listings l ON l.id = r.listing_id AND l.status = 'approved'
             WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+              AND r.hygiene IS NOT NULL -- stay reviews only, same as the sweep
             GROUP BY r.listing_id
             HAVING COUNT(*) >= ${minPool}
           `;

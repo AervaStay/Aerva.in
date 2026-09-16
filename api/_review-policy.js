@@ -121,16 +121,19 @@ const REVIEW_POLICY = {
       title: 'How reviews affect standing',
       points: [
         'Host tiers use the weighted property score. Location carries the lowest weight because a host cannot move the property; hygiene carries the most.',
+        'Host tiers also set a minimum for each factor except location. One weak area blocks a rung however good the rest is: ratings of 5, 5, 4.4, 5, 5 average 4.88, above Elite\u2019s 4.85, but services at 4.4 is below Elite\u2019s 4.5 minimum, so the host is held at Signature Host.',
         'A host cannot reach Signature Host or above without a body of real reviews, regardless of revenue.',
         'Guest tiers use the weighted guest score alongside spend and qualifying bookings. Aerva Favorite additionally requires at least three rated reviews.',
-        'Host standing is reviewed quarterly; guest standing annually. At most one rung is lost per review; gains are uncapped.'
+        'Host and guest standing are both reviewed quarterly (1 Jan, 1 Apr, 1 Jul, 1 Oct), each against a rolling twelve months. At most one rung is lost per review; gains are uncapped.',
+        'Badges shown anywhere on the site are the ones set at the last quarterly review. They do not move between reviews, and a revert takes effect on badges at the next review.',
+        'Only reviews of stays count toward host and property standing. Experience reviews count only toward the experience\u2019s own badge.'
       ]
     },
     {
       title: 'Administrator override',
       points: [
         'Only an administrator may revert a review. There is no self-service path for either party.',
-        'A reverted review is withdrawn from publication and excluded from every tier calculation, immediately.',
+        'A reverted review is withdrawn from publication immediately, and is excluded from every standing calculation from the next quarterly review onward.',
         'A revert is never automatic. The conflict checks surface cases for a human to read; they do not act on their own.',
         'Every revert is written to audit_log with the administrator, the reason, and the affected review.',
         'A review should be reverted when it is factually false, retaliatory, or concerns something outside the other party\u2019s control. Not merely because it is unflattering.'

@@ -22,7 +22,7 @@
 // rather than failing the approval/rejection itself.
 
 const { neon } = require('@neondatabase/serverless');
-const { verifyToken, createToken } = require('./_approval-token');
+const { verifyToken, createToken, secretMatches } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -493,7 +493,7 @@ module.exports = async (req, res) => {
     const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     const sessionPayload = sessionToken ? verifyToken(sessionToken) : null;
     const hasValidSession = sessionPayload && sessionPayload.action === 'admin-session';
-    const hasValidSecret = adminSecret && adminSecret === process.env.ADMIN_SECRET;
+    const hasValidSecret = secretMatches(adminSecret, process.env.ADMIN_SECRET);
     if (!hasValidSession && !hasValidSecret) {
       return res.status(401).json({ error: 'Unauthorized' });
     }

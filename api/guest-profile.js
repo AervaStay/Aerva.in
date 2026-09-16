@@ -7,7 +7,7 @@
 //
 //   GET  (Authorization: Bearer <guestSessionToken>)
 //     Returns { guest, bookings, reviews }. "guest" includes a computed
-//     "badge" field derived from guest_reviews — see computeBadge() below.
+//     "badge" field — the label of the guest's quarterly standing.
 //
 //   GET  ?mode=conversation&orderId=X      — fetch/create the chat for one confirmed booking
 //   GET  ?mode=hostConversations           — a host's inbox across all their listings
@@ -35,7 +35,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
-const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, EXPERIENCE_FACTORS } = require('./_tiers');
+const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 
@@ -54,16 +54,6 @@ function toDateStr(val) {
   return String(val).slice(0, 10);
 }
 
-// Badge tiers, computed fresh from guest_reviews on every profile load —
-// not stored, so it's always accurate as new reviews come in. Deliberately
-// not called "Superhost" (that's Airbnb's term) — this is Aerva's own
-// guest-reputation ladder.
-function computeBadge(reviewCount, avgRating) {
-  if (reviewCount >= 5 && avgRating >= 4.8) return 'Aerva Favorite';
-  if (reviewCount >= 3 && avgRating >= 4.5) return 'Trusted Guest';
-  if (reviewCount >= 1 && avgRating >= 4.0) return 'Valued Guest';
-  return null; // not enough of a track record yet — profile just shows no badge
-}
 
 function requireGuest(req) {
   const authHeader = req.headers['authorization'] || '';
@@ -456,43 +446,19 @@ module.exports = async (req, res) => {
         : 0;
 
       // ---- Guest tier ----
-      // Spend and bookings over the SAME calendar year the annual review
-      // assesses, not lifetime. qualifyingBookings excludes token stays
-      // below QUALIFYING_BOOKING_MIN, which is what stops five ₹1,000
-      // bookings counting as five real ones.
+      // Read from the quarterly snapshot (tier_current), the same source as
+      // the header badge, so the profile and the header always agree and
+      // the badge only moves on a review day.
       let tier = null;
       try {
-        const spendRows = await sql`
-          SELECT COALESCE(SUM(total), 0) AS spend,
-                 COUNT(*)                AS bookings,
-                 COUNT(*) FILTER (WHERE total >= ${QUALIFYING_BOOKING_MIN}) AS qualifying
-          FROM orders
-          WHERE guest_id = ${guestId} AND status = 'paid'
-            AND created_at >= date_trunc('year', CURRENT_DATE)
+        const cur = await sql`
+          SELECT tier_key FROM tier_current
+          WHERE subject_type = 'guest' AND subject_id = ${guestId}
         `;
-        const sp = spendRows[0] || {};
-        // Factor averages across published reviews. Rows written before
-        // the factor columns existed contribute nothing, and _tiers.js
-        // treats an all-null factor set as no review rather than a zero.
-        const rated = reviews.filter(r => r.cleanliness != null);
-        const avgOf = (k) => rated.length
-          ? rated.reduce((a, r) => a + Number(r[k] || 0), 0) / rated.length
-          : 0;
-        const factors = rated.length ? {
-          cleanliness: avgOf('cleanliness'), communication: avgOf('communication'),
-          respectful: avgOf('respectful'), rules: avgOf('rules')
-        } : undefined;
-        tier = guestTier({
-          totalSpend: Number(sp.spend) || 0,
-          bookingCount: Number(sp.bookings) || 0,
-          qualifyingBookings: Number(sp.qualifying) || 0,
-          reviewCount: rated.length,
-          avgRating,
-          factors
-        });
+        tier = tierByKey(GUEST_TIERS, cur[0] && cur[0].tier_key);
       } catch (err) {
         // A badge is decoration; never fail the profile over it.
-        console.error('guest tier computation failed (non-fatal):', err);
+        console.error('guest tier lookup failed (non-fatal):', err);
       }
 
       return res.status(200).json({
@@ -504,7 +470,9 @@ module.exports = async (req, res) => {
           profilePhotoUrl: guest.profile_photo_url,
           preferredCurrency: guest.preferred_currency || null,
           memberSince: guest.created_at,
-          badge: computeBadge(reviewCount, avgRating),
+          // Kept for older clients; now the same label as `tier`, so there
+          // is one set of rules. The old computeBadge ladder is gone.
+          badge: tier ? tier.label : null,
           tier: tier ? { key: tier.key, label: tier.label, blurb: tier.blurb } : null,
           reviewCount,
           avgRating: reviewCount ? Number(avgRating.toFixed(2)) : null

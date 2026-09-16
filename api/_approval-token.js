@@ -62,4 +62,17 @@ function verifyToken(token) {
   return payload; // { listingId, action, exp }
 }
 
-module.exports = { createToken, verifyToken };
+// Constant-time check of a caller-supplied shared secret (the admin
+// x-admin-secret header) against the configured one. Fails CLOSED: an
+// unset or empty expected secret matches nothing, so a missing env var can
+// never turn into "any header is accepted". Length is checked first
+// because timingSafeEqual throws on unequal lengths.
+function secretMatches(given, expected) {
+  if (typeof given !== 'string' || !given) return false;
+  if (typeof expected !== 'string' || !expected) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+module.exports = { createToken, verifyToken, secretMatches };

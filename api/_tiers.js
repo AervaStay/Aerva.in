@@ -7,10 +7,13 @@
 // is Aerva's own ladder. Same reasoning as the original computeBadge()
 // note in guest-profile.js, which this file replaces and extends.
 //
-// Tiers are COMPUTED on every read, never stored on the row. A stored
-// tier goes stale the moment a booking completes or a review lands, and
-// then needs a backfill job nobody remembers to run. Recomputing costs
-// one cheap aggregate and is always correct.
+// Host, guest and property standing is decided at the QUARTERLY review
+// (1 Jan, 1 Apr, 1 Jul, 1 Oct) by get-listings.js's review sweep and
+// stored in tier_current. Every page that shows a badge — header, cards,
+// profile — reads that snapshot, so one person sees one badge everywhere
+// and it only moves on a review day. Experience standing and the property
+// flags (Spotless, Hidden Treasure) are absolute, not ranked, and are
+// still computed on read.
 //
 // Every threshold below is "at least" — a host or guest sits in the
 // highest tier whose conditions they fully meet.
@@ -122,12 +125,15 @@ const UNREVIEWED_BOOKING_CREDIT = 0.5;
 // reviews reach the top, which is the opposite of what a badge is for: it
 // tells a guest this property is a safe choice, not that the host is busy.
 //
-// Judged on the WEIGHTED AVERAGE only. There is no per-factor floor: a
-// single weak factor drags the average and that is the whole of its
-// effect. The weights are what express that some factors matter more —
-// hygiene at 1.5 already costs three times what location does — so a
-// second gate on top of them was doing the same job twice, and made a
-// host's standing turn on a threshold they could cross by a hundredth.
+// Judged TWO ways, and both must pass (decided Sept 2026):
+//   1. the WEIGHTED AVERAGE across all five factors must reach minScore;
+//   2. EVERY factor except location must individually reach minFactor.
+// A weighted mean lets one weak area hide behind four excellent ones —
+// 5 / 5 / 4.4 / 5 / 5 averages 4.88 and would clear Elite's 4.85 — and a
+// badge on a host whose services a third of guests found lacking is the
+// claim this ladder exists not to make. So one weak area blocks the rung
+// however good the rest is. Location is exempt (floorExempt below): a
+// host cannot move the property.
 //
 // Each rung up needs 10 more reviews than the last. Same two rules as the
 // guest ladder: count is required unconditionally, average is judged only
@@ -237,10 +243,8 @@ const REVIEW_FACTORS = [
   { key: 'services',      label: 'Services',        weight: 1 },
   { key: 'value',         label: 'Value for money', weight: 1 },
   // floorExempt: counted in the weighted score, but never held against a
-  // host by a per-factor floor. No ladder uses one any more — standing is
-  // the weighted average and nothing else — but the flag is kept because
-  // weakestFactor is still used to tell a host WHICH factor is dragging
-  // them down, and naming their address there would be unhelpful.
+  // host by the per-factor minimum (HOST_TIERS minFactor). A host cannot
+  // move the property, so their address is not a weak area they can fix.
   { key: 'location',      label: 'Location',        weight: 0.1, floorExempt: true }
 ];
 
@@ -653,6 +657,29 @@ function nextReviewDate(now, cadence) {
   return `${y}-${String(m + 1).padStart(2, '0')}-01`;
 }
 
+// Looks a stored tier key back up into the object callers render. The
+// quarterly snapshot stores keys only, so labels and icons always come
+// from the ladder as it is defined today.
+function tierByKey(ladder, key) {
+  const t = key ? ladder.find(x => x.key === key) : null;
+  return t ? { key: t.key, label: t.label, blurb: t.blurb, icon: t.icon || null } : null;
+}
+
+// The decay rule applied at each quarterly review: gains are uncapped,
+// losses are limited to ONE rung per review. `previousKey` is the standing
+// held going into this review (undefined or null = none yet), `earned` is
+// what the latest twelve months justify on their own. Returns the tier
+// actually held after the review.
+//
+// A subject with no previous standing takes what it earned — there is
+// nothing to soften.
+function applyDecayCap(ladder, previousKey, earned) {
+  const prevRung = rungOf(ladder, previousKey);
+  const earnedRung = rungOf(ladder, earned && earned.key);
+  if (prevRung < 0 || earnedRung >= prevRung) return earned || null;
+  return tierAtRung(ladder, Math.max(earnedRung, prevRung - 1));
+}
+
 // Convenience wrappers so callers can't accidentally pair the wrong
 // ladder with the wrong cadence.
 function reviewGuestTiers(statsByYear, now) {
@@ -924,19 +951,19 @@ function describeLadders() {
     guest: {
       title: 'Guest standing',
       basis: 'Earned on booking value, qualifying bookings, and the ratings hosts leave.',
-      reviewedBy: 'Reviewed annually, on 1 January, against the calendar year just ended.',
+      reviewedBy: 'Reviewed quarterly \u2014 1 Jan, 1 Apr, 1 Jul, 1 Oct \u2014 each against a rolling twelve months.',
       factors: `Hosts rate a guest on: ${factorLine(GUEST_FACTORS)}. Weights set how much each pulls on the score; the written comment is never scored.`,
       rules: [
         `A booking under ${money(QUALIFYING_BOOKING_MIN)} counts toward spend but not toward the booking count \u2014 it cannot manufacture a "stay".`,
         'A guest with no reviews is held to a HIGHER booking count for the same rung, so silence is a slower route rather than a free pass.',
         'A review with no ratings counts as no review at all, in either direction.',
-        'At most one rung is lost per annual review; gains are uncapped.'
+        'At most one rung is lost per quarterly review; gains are uncapped.'
       ],
       bands: GUEST_TIERS.map(t => ({
         label: t.label,
         blurb: t.blurb,
         requirements: [
-          t.minSpend > 0 ? `${money(t.minSpend)} spent this year` : 'Any confirmed booking',
+          t.minSpend > 0 ? `${money(t.minSpend)} spent over 12 months` : 'Any confirmed booking',
           `${t.minBookings} qualifying booking${t.minBookings === 1 ? '' : 's'}` +
             (t.unreviewedBookings && t.unreviewedBookings !== t.minBookings
               ? ` (${t.unreviewedBookings} if never reviewed)`
@@ -949,7 +976,7 @@ function describeLadders() {
     property: {
       title: 'Property standing',
       basis: 'Earned purely on guest reviews. Price is deliberately not a factor \u2014 what a night costs says nothing about whether the stay was good.',
-      reviewedBy: 'Recomputed continuously from published reviews. No periodic review, no decay: a property is exactly as good as its current reviews say.',
+      reviewedBy: 'Ranked at each quarterly review \u2014 1 Jan, 1 Apr, 1 Jul, 1 Oct \u2014 against the field as it stands that day. No decay cap: a property holds exactly the rank its reviews earned at the last review.',
       factors: `Scored on the same five property factors as the host ladder: ${factorLine(REVIEW_FACTORS)}.`,
       rules: [
         'Only published, non-reverted reviews count \u2014 a held review must not move a listing\u2019s badge any more than it shows on the card.',
@@ -998,8 +1025,10 @@ function describeLadders() {
       reviewedBy: 'Reviewed quarterly \u2014 1 Jan, 1 Apr, 1 Jul, 1 Oct \u2014 each against a rolling twelve months.',
       factors: `Guests rate a property on: ${factorLine(REVIEW_FACTORS)}. Location carries the least because a host cannot move the property \u2014 a point lost there costs a fifteenth of a point lost on hygiene.`,
       rules: [
-        'Judged on the weighted average alone. A weak factor pulls the average down and that is its whole effect \u2014 there is no separate minimum any single factor must clear.',
+        'Judged two ways, and both must pass: the weighted average must reach the rung\u2019s score, AND every factor except location must reach the rung\u2019s minimum on its own. One weak area blocks the rung however good the rest is.',
+        'Location is exempt from the per-factor minimum because a host cannot move the property. It still counts, lightly, in the average.',
         'A host with no reviews climbs on payout alone up to the point a rung requires reviews \u2014 Elite and above never do.',
+        'Only reviews of STAYS count. Experience reviews are scored on their own factors and never enter a host\u2019s or a property\u2019s score.',
         'At most one rung is lost per quarterly review, so a full slide takes as long as the climb did.'
       ],
       bands: HOST_TIERS.map(t => ({
@@ -1010,8 +1039,9 @@ function describeLadders() {
         requirements: [
           t.minPayout > 1 ? `${money(t.minPayout)} paid out over 12 months` : 'Any completed booking',
           t.minReviews > 0 ? `${t.minReviews} published reviews` : 'No reviews required',
-          t.minScore > 0 ? `Score of ${t.minScore} or above` : 'No rating requirement'
-        ]
+          t.minScore > 0 ? `Score of ${t.minScore} or above` : 'No rating requirement',
+          t.minFactor ? `Every factor except location at ${t.minFactor} or above` : null
+        ].filter(Boolean)
       }))
     }
   };
@@ -1023,7 +1053,7 @@ module.exports = {
   reviewScore, weakestFactor,
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
-  isReviewDay, nextReviewDate,
+  isReviewDay, nextReviewDate, tierByKey, applyDecayCap,
   PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs,
   cityCutoffs, cutoffsForCity, MIN_CITY_POOL,
   EXPERIENCE_TIERS, EXPERIENCE_FACTORS, experienceTier,

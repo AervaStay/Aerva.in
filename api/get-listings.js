@@ -60,7 +60,8 @@ const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
         propertyCutoffs, PROPERTY_TIERS, experienceTier, EXPERIENCE_FACTORS,
         cityCutoffs, cutoffsForCity, isReviewDay, nextReviewDate } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
-const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN } = require('./_tiers');
+const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
+        tierByKey, applyDecayCap } = require('./_tiers');
 const { recordTierChange } = require('./_tier-history');
 const sql = neon(process.env.DATABASE_URL);
 
@@ -242,6 +243,11 @@ module.exports = async (req, res) => {
           FROM listing_reviews r
           JOIN listings l ON l.id = r.listing_id
           WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+            -- Stay reviews only. Experience reviews carry no hygiene and
+            -- are scored on their own factors; counting them here would
+            -- inflate review counts and mix their value score into a
+            -- property's. See experienceTier for where they do count.
+            AND r.hygiene IS NOT NULL
           GROUP BY r.listing_id
         `;
         const scored = pool.map(r => ({
@@ -293,8 +299,18 @@ module.exports = async (req, res) => {
           if (r.changed) changes.listing++;
         }
 
+        // Standing held going into this review, for the one-rung decay cap.
+        // Read before any host or guest row is rewritten below.
+        const prevRows = await sql`
+          SELECT subject_type, subject_id, tier_key FROM tier_current
+          WHERE subject_type IN ('host', 'guest')
+        `;
+        const prevKey = { host: {}, guest: {} };
+        prevRows.forEach(r => { prevKey[r.subject_type][r.subject_id] = r.tier_key; });
+
         // Hosts: payout over a rolling twelve months plus their own
-        // published reviews, matching what the public badge reads.
+        // published reviews. This snapshot is now the ONLY place host
+        // standing is decided — the header and listing cards read it.
         const hostRows = await sql`
           SELECT l.host_id,
                  COALESCE(SUM(o.payout_amount), 0) AS payout
@@ -322,6 +338,7 @@ module.exports = async (req, res) => {
           FROM listing_reviews
           WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
             AND published_at >= NOW() - INTERVAL '12 months'
+            AND hygiene IS NOT NULL -- stay reviews only; see the property pool above
           GROUP BY host_id
         `;
         const revByHost = {};
@@ -333,7 +350,8 @@ module.exports = async (req, res) => {
             hygiene: Number(rv.hygiene), communication: Number(rv.communication),
             services: Number(rv.services), value: Number(rv.value), location: Number(rv.location)
           } : undefined;
-          const t = hostTier({ totalPayout: Number(h.payout) || 0, reviewCount: n, factors });
+          const earned = hostTier({ totalPayout: Number(h.payout) || 0, reviewCount: n, factors });
+          const t = applyDecayCap(HOST_TIERS, prevKey.host[h.host_id], earned);
           const r = await recordTierChange(sql, {
             subjectType: 'host', subjectId: h.host_id, tier: t,
             score: factors ? Number(reviewScore(factors, REVIEW_FACTORS).toFixed(3)) : null,
@@ -342,24 +360,34 @@ module.exports = async (req, res) => {
           if (r.changed) changes.host++;
         }
 
-        // Guests: spend and bookings within the calendar year the annual
-        // review assesses, plus the four-factor averages hosts gave them.
+        // Guests: quarterly, like hosts, against a ROLLING twelve months.
+        // This used to count from 1 January of the current year, which on
+        // the 1 January review day meant one day of spend, so every guest
+        // lost their badge at once.
+        //
+        // Every guest who has EVER had a paid booking is assessed, not just
+        // those active in the window. A guest who stopped booking must
+        // decay a rung per quarter; leaving them out would freeze their
+        // last badge forever.
         const guestRows = await sql`
           SELECT g.id AS guest_id,
                  COALESCE(SUM(o.total), 0) AS spend,
                  COUNT(o.id)               AS bookings,
                  COUNT(o.id) FILTER (WHERE o.total >= ${QUALIFYING_BOOKING_MIN}) AS qualifying
           FROM guests g
-          JOIN orders o ON o.guest_id = g.id AND o.status = 'paid'
-            AND o.created_at >= date_trunc('year', CURRENT_DATE)
+          LEFT JOIN orders o ON o.guest_id = g.id AND o.status = 'paid'
+            AND o.created_at >= NOW() - INTERVAL '12 months'
+          WHERE EXISTS (SELECT 1 FROM orders x WHERE x.guest_id = g.id AND x.status = 'paid')
           GROUP BY g.id
         `;
+        // Same twelve-month window as spend, and as the host side.
         const guestRev = await sql`
           SELECT guest_id, AVG(cleanliness) AS cleanliness, AVG(communication) AS communication,
                  AVG(respectful) AS respectful, AVG(rules) AS rules, COUNT(*) AS n
           FROM guest_reviews
           WHERE cleanliness IS NOT NULL
             AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+            AND published_at >= NOW() - INTERVAL '12 months'
           GROUP BY guest_id
         `;
         const revByGuest = {};
@@ -371,12 +399,13 @@ module.exports = async (req, res) => {
             cleanliness: Number(rv.cleanliness), communication: Number(rv.communication),
             respectful: Number(rv.respectful), rules: Number(rv.rules)
           } : undefined;
-          const t = guestTier({
+          const earned = guestTier({
             totalSpend: Number(g.spend) || 0,
             bookingCount: Number(g.bookings) || 0,
             qualifyingBookings: Number(g.qualifying) || 0,
             reviewCount: n, factors
           });
+          const t = applyDecayCap(GUEST_TIERS, prevKey.guest[g.guest_id], earned);
           const r = await recordTierChange(sql, {
             subjectType: 'guest', subjectId: g.guest_id, tier: t,
             score: factors ? Number(reviewScore(factors, GUEST_FACTORS).toFixed(3)) : null,
@@ -1126,6 +1155,7 @@ module.exports = async (req, res) => {
           FROM listing_reviews
           WHERE listing_id = ANY(${listingIds})
             AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+            AND hygiene IS NOT NULL -- stay reviews only
           GROUP BY listing_id
         `;
         const byListing = {};
@@ -1192,59 +1222,20 @@ module.exports = async (req, res) => {
     try {
       const hostIds = [...new Set(filtered.map(l => l.host_id).filter(Boolean))];
       if (hostIds.length) {
-        // Payout and reviews are gathered in two queries rather than one
-        // join. Joining orders to reviews multiplies rows — a host with 30
-        // bookings and 30 reviews produces 900 — which silently inflates
-        // SUM(payout) by the review count. Two aggregates, combined in JS,
-        // cannot make that mistake.
-        const stats = await sql`
-          SELECT l.host_id,
-                 COALESCE(SUM(o.payout_amount), 0) AS payout,
-                 COUNT(o.id)                       AS bookings
-          FROM listings l
-          LEFT JOIN orders o
-            ON o.listing_id = l.id AND o.status = 'paid'
-            AND o.created_at >= NOW() - INTERVAL '12 months'
-          WHERE l.host_id = ANY(${hostIds})
-          GROUP BY l.host_id
+        // Read from tier_current, the quarterly snapshot — the same source
+        // as the header badge, so a host sees one badge everywhere and it
+        // only moves on a review day. Computing it live here disagreed
+        // with the header (different review windows) and ignored the
+        // one-rung decay cap.
+        const cur = await sql`
+          SELECT subject_id, tier_key FROM tier_current
+          WHERE subject_type = 'host' AND subject_id = ANY(${hostIds})
         `;
-        // Published, non-reverted reviews only — the same rule the card
-        // rating uses, so a badge can never rest on a review a guest
-        // cannot see.
-        const hostReviews = await sql`
-          SELECT host_id,
-                 AVG(hygiene)       AS hygiene,
-                 AVG(communication) AS communication,
-                 AVG(services)      AS services,
-                 AVG(value_rating)  AS value,
-                 AVG(location)      AS location,
-                 COUNT(*)           AS n
-          FROM listing_reviews
-          WHERE host_id = ANY(${hostIds})
-            AND published_at IS NOT NULL AND admin_reverted_at IS NULL
-            AND published_at >= NOW() - INTERVAL '12 months'
-          GROUP BY host_id
-        `;
-        const reviewsByHost = {};
-        hostReviews.forEach(r => {
-          reviewsByHost[r.host_id] = {
-            count: Number(r.n) || 0,
-            factors: {
-              hygiene: Number(r.hygiene), communication: Number(r.communication),
-              services: Number(r.services), value: Number(r.value), location: Number(r.location)
-            }
-          };
-        });
         const byHost = {};
-        stats.forEach(r => {
-          const rv = reviewsByHost[r.host_id];
-          const tier = hostTier({
-            totalPayout: Number(r.payout) || 0,
-            reviewCount: rv ? rv.count : 0,
-            factors: rv ? rv.factors : undefined
-          });
+        cur.forEach(r => {
+          const tier = tierByKey(HOST_TIERS, r.tier_key);
           if (tier && PUBLIC_BADGE_KEYS.includes(tier.key)) {
-            byHost[r.host_id] = { key: tier.key, label: tier.label, icon: tier.icon };
+            byHost[r.subject_id] = { key: tier.key, label: tier.label, icon: tier.icon };
           }
         });
         filtered.forEach(l => { l.host_tier = byHost[l.host_id] || null; });
