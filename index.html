@@ -855,8 +855,8 @@
     font-size:16px; color:var(--ink); display:flex; align-items:center; justify-content:center; flex:0 0 auto;
   }
   .cal-nav:disabled{opacity:0.3; cursor:default;}
-  .calendar-weekdays{display:grid; grid-template-columns:repeat(7,1fr); text-align:center; font-size:10.5px; letter-spacing:0.06em; opacity:0.5; margin-bottom:4px; background-color:#f4ebe3;}
-  .calendar-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:2px; background-color:#f4ebe3;}
+  .calendar-weekdays{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); text-align:center; font-size:10.5px; letter-spacing:0.06em; opacity:0.5; margin-bottom:4px; background-color:#f4ebe3;}
+  .calendar-grid{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:2px; background-color:#f4ebe3;}
   .calendar-day{
     aspect-ratio:1/1; display:flex; align-items:center; justify-content:center;
     font-size:12.5px; cursor:pointer; border-radius:50%; color:var(--ink); background-color:#f4ebe3;
