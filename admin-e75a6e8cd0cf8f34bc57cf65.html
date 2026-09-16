@@ -249,6 +249,7 @@
       <div style="display:flex; gap:8px; margin:12px 0;">
         <button type="button" class="process-btn" id="ladderGuestBtn" onclick="showLadder('guest')">Guest</button>
         <button type="button" class="process-btn" id="ladderHostBtn" onclick="showLadder('host')">Host</button>
+        <button type="button" class="process-btn" id="ladderPropertyBtn" onclick="showLadder('property')">Property</button>
       </div>
       <div id="ladderBody"><p>Loading…</p></div>
     </div>
@@ -259,6 +260,7 @@
       <div style="display:flex; gap:8px; margin:12px 0;">
         <button type="button" class="process-btn" id="simGuestBtn" onclick="switchSim('guest')">Simulate a Guest</button>
         <button type="button" class="process-btn" id="simHostBtn" onclick="switchSim('host')">Simulate a Host</button>
+        <button type="button" class="process-btn" id="simPropBtn" onclick="switchSim('property')">Simulate a Property</button>
       </div>
 
       <div id="simGuestForm">
@@ -271,6 +273,17 @@
           <label>Communication (1‑5)<input type="number" step="0.1" id="simGComm" value="4.9"></label>
           <label>Respectful (1‑5)<input type="number" step="0.1" id="simRespectful" value="4.9"></label>
           <label>Rules followed (1‑5)<input type="number" step="0.1" id="simRules" value="4.9"></label>
+        </div>
+      </div>
+
+      <div id="simPropForm" style="display:none;">
+        <div class="sim-grid">
+          <label>Published reviews<input type="number" id="simPReviews" value="15"></label>
+          <label>Hygiene (1‑5)<input type="number" step="0.01" id="simPHygiene" value="4.9"></label>
+          <label>Communication (1‑5)<input type="number" step="0.01" id="simPComm" value="4.9"></label>
+          <label>Services (1‑5)<input type="number" step="0.01" id="simPServices" value="4.9"></label>
+          <label>Value for money (1‑5)<input type="number" step="0.01" id="simPValue" value="4.9"></label>
+          <label>Location (1‑5)<input type="number" step="0.01" id="simPLocation" value="4.9"></label>
         </div>
       </div>
 
@@ -915,8 +928,10 @@
   function showLadder(which){
     const d = ladderData && ladderData[which];
     const body = document.getElementById('ladderBody');
-    document.getElementById('ladderGuestBtn').style.opacity = which === 'guest' ? '1' : '0.55';
-    document.getElementById('ladderHostBtn').style.opacity  = which === 'host'  ? '1' : '0.55';
+    ['guest','host','property'].forEach(k => {
+      const b = document.getElementById('ladder' + k.charAt(0).toUpperCase() + k.slice(1) + 'Btn');
+      if(b) b.style.opacity = which === k ? '1' : '0.55';
+    });
     if(!d){ body.innerHTML = '<p>Not loaded.</p>'; return; }
     body.innerHTML =
       '<p><strong>' + escAdmin(d.basis) + '</strong></p>'
@@ -937,10 +952,12 @@
   let simKind = 'guest';
   function switchSim(kind){
     simKind = kind;
-    document.getElementById('simGuestForm').style.display = kind === 'guest' ? 'block' : 'none';
-    document.getElementById('simHostForm').style.display  = kind === 'host'  ? 'block' : 'none';
-    document.getElementById('simGuestBtn').style.opacity = kind === 'guest' ? '1' : '0.55';
-    document.getElementById('simHostBtn').style.opacity  = kind === 'host'  ? '1' : '0.55';
+    [['guest','simGuestForm','simGuestBtn'],['host','simHostForm','simHostBtn'],['property','simPropForm','simPropBtn']]
+      .forEach(([k, form, btn]) => {
+        const f = document.getElementById(form), b = document.getElementById(btn);
+        if(f) f.style.display = kind === k ? 'block' : 'none';
+        if(b) b.style.opacity = kind === k ? '1' : '0.55';
+      });
     document.getElementById('simResults').innerHTML = '';
   }
 
@@ -949,7 +966,11 @@
   async function runSimulation(){
     const out = document.getElementById('simResults');
     out.innerHTML = 'Running\u2026';
-    const payload = simKind === 'host'
+    const payload = simKind === 'property'
+      ? { kind:'property', reviewCount:numVal('simPReviews'),
+          hygiene:numVal('simPHygiene'), communication:numVal('simPComm'), services:numVal('simPServices'),
+          value:numVal('simPValue'), location:numVal('simPLocation') }
+      : simKind === 'host'
       ? { kind:'host', totalPayout:numVal('simPayout'), reviewCount:numVal('simHReviews'),
           hygiene:numVal('simHygiene'), communication:numVal('simHComm'), services:numVal('simServices'),
           value:numVal('simValue'), location:numVal('simLocation') }
@@ -968,6 +989,7 @@
       out.innerHTML =
         '<div style="font-size:16px; margin-bottom:6px;"><strong>'
           + escAdmin(d.tier ? d.tier.label : 'No tier') + '</strong>'
+          + (d.flag ? ' <span style="font-size:13px; opacity:0.8;">+ ' + escAdmin(d.flag.label) + '</span>' : '')
           + (d.publicBadge ? ' <span style="font-size:12px; opacity:0.7;">\u2014 badge visible on listing cards</span>' : '')
         + '</div>'
         + '<div style="font-size:13px; opacity:0.8;">Weighted score: ' + escAdmin(String(d.score))

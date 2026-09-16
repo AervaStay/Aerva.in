@@ -311,6 +311,10 @@
   .nav-tier-badge.tier-gold{ background:rgba(28,20,12,0.9); color:#f0d27a; border-color:transparent; }
   .nav-tier-badge.tier-diamond{ background:rgba(16,24,32,0.9); color:#cfe6f5; border-color:transparent; }
   @media (max-width:900px){ .nav-tier-badge{display:none !important;} }
+  .prop-badge{ background:rgba(28,26,23,0.82); color:var(--cream); font-weight:500; }
+  .prop-outstanding{ background:rgba(47,92,42,0.88); color:#eaf6e8; }
+  .prop-aerva_exceptional{ background:#2f5c2a; color:#fff; }
+  .prop-flag{ background:rgba(244,235,227,0.92); color:var(--ink); }
   .host-tier-badge{
     display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 7px; border-radius:100px;
     font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; backdrop-filter:blur(3px);
@@ -6557,6 +6561,20 @@
     return `<div class="suite-rating"><span class="suite-star">\u2605</span>${r.toFixed(2)}<span class="suite-rating-count">(${n})</span></div>`;
   }
 
+  // Property standing. At most two pills: the rung, plus one flag. The
+  // ladder describes how good the place is; the flag says something the
+  // rung cannot (hygiene specifically, or that it is not yet well known).
+  // Capped at two deliberately — this card already carries Stay, New, a
+  // discount flag and a host badge, and the badge tower is what the
+  // restyle removed.
+  function propertyBadgeHtml(listing){
+    const out = [];
+    const t = listing.property_tier, f = listing.property_flag;
+    if(t && t.label) out.push(`<span class="suite-badge prop-badge prop-${escapeMessageHtml(t.key)}">${escapeMessageHtml(t.label)}</span>`);
+    if(f && f.label) out.push(`<span class="suite-badge prop-flag">${escapeMessageHtml(f.label)}</span>`);
+    return out.join('');
+  }
+
   function buildSuiteCard(listing, index){
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
@@ -6693,6 +6711,7 @@
           ${isNew ? '<span class="suite-badge">New</span>' : ''}
           ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
           ${hostTierBadgeHtml(listing.host_tier)}
+          ${propertyBadgeHtml(listing)}
         </div>
         <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
           <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
