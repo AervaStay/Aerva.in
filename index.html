@@ -332,6 +332,13 @@
   .prop-badge{ background:rgba(28,26,23,0.82); color:var(--cream); font-weight:500; }
   .prop-outstanding{ background:rgba(47,92,42,0.88); color:#eaf6e8; }
   .prop-aerva_exceptional{ background:#2f5c2a; color:#fff; }
+  /* Experience rungs share the property pills' shape so the two ladders
+     read as one system, but take their own colours so a guest scanning a
+     mixed grid can tell at a glance which kind of thing they are
+     looking at. */
+  .prop-great_experience{ background:rgba(28,26,23,0.82); color:var(--cream); }
+  .prop-unforgettable{ background:rgba(90,58,110,0.88); color:#f2e9f7; }
+  .prop-wow_experience{ background:#5a3a6e; color:#fff; }
   .prop-flag{ background:rgba(244,235,227,0.92); color:var(--ink); }
   .host-tier-badge{
     display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 7px; border-radius:100px;
@@ -6523,11 +6530,15 @@
           ${currentCategoryFilter === 'all' ? '<span class="suite-badge suite-badge-type-experience">Experience</span>' : ''}
           ${exp.experience_type === 'with_stay' ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>` : `<span class="suite-badge">Experience Only</span>`}
           ${exp.experience_category ? `<span class="suite-badge">${exp.experience_category}</span>` : ''}
+          ${exp.experience_tier && exp.experience_tier.label
+            ? `<span class="suite-badge prop-badge prop-${escapeMessageHtml(exp.experience_tier.key)}">${escapeMessageHtml(exp.experience_tier.label)}</span>`
+            : ''}
         </div>
       </div>
       <div class="suite-body">
         <h3>${exp.property_name}</h3>
         ${hostedAtLine ? `<div class="loc">${hostedAtLine}</div>` : ''}
+        ${ratingHtml(exp)}
         ${exp.experience_duration_hours ? `<div class="amenity-tags"><span class="amenity-tag">${exp.experience_duration_hours}h</span></div>` : ''}
         <div class="price">${priceLine}</div>
       </div>

@@ -251,6 +251,7 @@
         <button type="button" class="process-btn" id="ladderGuestBtn" onclick="showLadder('guest')">Guest</button>
         <button type="button" class="process-btn" id="ladderHostBtn" onclick="showLadder('host')">Host</button>
         <button type="button" class="process-btn" id="ladderPropertyBtn" onclick="showLadder('property')">Property</button>
+        <button type="button" class="process-btn" id="ladderExperienceBtn" onclick="showLadder('experience')">Experience</button>
       </div>
       <div id="ladderBody"><p>Loading…</p></div>
     </div>
@@ -1053,7 +1054,7 @@
   function showLadder(which){
     const d = ladderData && ladderData[which];
     const body = document.getElementById('ladderBody');
-    ['guest','host','property'].forEach(k => {
+    ['guest','host','property','experience'].forEach(k => {
       const b = document.getElementById('ladder' + k.charAt(0).toUpperCase() + k.slice(1) + 'Btn');
       if(b) b.style.opacity = which === k ? '1' : '0.55';
     });
