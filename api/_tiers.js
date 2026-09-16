@@ -629,6 +629,30 @@ function reviewTiers(ladder, statsByPeriod, moneyField, now, cadence) {
   };
 }
 
+// Is `now` the first day of a review period? Quarterly: 1 Jan, 1 Apr,
+// 1 Jul, 1 Oct. Annual: 1 Jan. UTC on purpose — the sweep runs at 02:00
+// UTC (07:30 IST), so the UTC date and the Indian date always agree at
+// that hour. Used by get-listings.js's review sweep to decide whether to
+// recompute standing today; it imported these before they existed, which
+// made every sweep throw straight after publishing.
+function isReviewDay(now, cadence) {
+  const d = now || new Date();
+  const cad = CADENCES[cadence] ? cadence : 'annual';
+  const monthsPer = 12 / CADENCES[cad].perYear;
+  return d.getUTCDate() === 1 && d.getUTCMonth() % monthsPer === 0;
+}
+
+// The next review day strictly AFTER `now`, as YYYY-MM-DD.
+function nextReviewDate(now, cadence) {
+  const d = now || new Date();
+  const cad = CADENCES[cadence] ? cadence : 'annual';
+  const monthsPer = 12 / CADENCES[cad].perYear;
+  let y = d.getUTCFullYear();
+  let m = (Math.floor(d.getUTCMonth() / monthsPer) + 1) * monthsPer; // next period start, 0-based month
+  if (m >= 12) { m -= 12; y += 1; }
+  return `${y}-${String(m + 1).padStart(2, '0')}-01`;
+}
+
 // Convenience wrappers so callers can't accidentally pair the wrong
 // ladder with the wrong cadence.
 function reviewGuestTiers(statsByYear, now) {
@@ -999,6 +1023,7 @@ module.exports = {
   reviewScore, weakestFactor,
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
+  isReviewDay, nextReviewDate,
   PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs,
   cityCutoffs, cutoffsForCity, MIN_CITY_POOL,
   EXPERIENCE_TIERS, EXPERIENCE_FACTORS, experienceTier,

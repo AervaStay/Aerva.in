@@ -26,7 +26,16 @@ function createToken(listingId, action, lifetimeMs = TOKEN_LIFETIME_MS) {
   return `${payloadStr}.${signature}`;
 }
 
+// Returns null for anything that is not a valid, unexpired token — and
+// that includes "cannot check at all". Every caller already treats null
+// as "not signed in", so a missing secret now logs people out cleanly
+// instead of crashing every authenticated request with a 500. Logged on
+// each call so the real cause is unmissable in Vercel's logs.
 function verifyToken(token) {
+  if (!SECRET) {
+    console.error('APPROVAL_TOKEN_SECRET environment variable is not set in Vercel — every token is being rejected.');
+    return null;
+  }
   const [payloadStr, signature] = String(token).split('.');
   if (!payloadStr || !signature) return null;
 
@@ -39,8 +48,16 @@ function verifyToken(token) {
   if (sigBuffer.length !== expectedBuffer.length) return null;
   if (!crypto.timingSafeEqual(sigBuffer, expectedBuffer)) return null;
 
-  const payload = JSON.parse(Buffer.from(payloadStr, 'base64url').toString());
-  if (Date.now() > payload.exp) return null; // expired
+  // Only reachable with a correct signature, so in practice this is only
+  // ever our own JSON — guarded anyway, since a parse error here would be
+  // another way for a token check to become a 500.
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(payloadStr, 'base64url').toString());
+  } catch {
+    return null;
+  }
+  if (!payload || typeof payload.exp !== 'number' || Date.now() > payload.exp) return null; // expired or malformed
 
   return payload; // { listingId, action, exp }
 }

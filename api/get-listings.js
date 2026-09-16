@@ -91,6 +91,21 @@ function haversineDistanceKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Vercel Cron sends "Authorization: Bearer <CRON_SECRET>" on every
+// scheduled call once CRON_SECRET is set in the project's env vars. Both
+// cron paths below require it. Fails CLOSED: with no CRON_SECRET
+// configured, nothing is authorized — an unset secret must never turn
+// into "anyone may run this". Constant-time compare, same reasoning as
+// _approval-token.js.
+const crypto = require('crypto');
+function isCronAuthorized(req) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  const got = Buffer.from(String(req.headers['authorization'] || ''));
+  const want = Buffer.from(`Bearer ${secret}`);
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
 module.exports = async (req, res) => {
   // ---- Daily review sweep (cron) ----
   // GET ?reviewSweep=1 — runs once a day from vercel.json. Two jobs:
@@ -105,7 +120,17 @@ module.exports = async (req, res) => {
   // immediately when both sides review" is really "within a day". That is
   // a plan limit, not a design choice — on Pro this becomes hourly by
   // changing the schedule alone, no code change.
+  //
+  // Cron-only. Without this, anyone who found the URL could run the full
+  // tier recompute on demand — and with ?forceTierSnapshot=1, re-rate
+  // every host, guest and listing on any day of the quarter, not just a
+  // review day. To run it by hand (first deploy, testing):
+  //   curl -H "Authorization: Bearer $CRON_SECRET" \
+  //     "https://aerva-in.vercel.app/api/get-listings?reviewSweep=1&forceTierSnapshot=1"
   if (req.method === 'GET' && req.query.reviewSweep === '1') {
+    if (!isCronAuthorized(req)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
     try {
       // Both sides in — release the pair together.
       const pairs = await sql`
@@ -474,8 +499,7 @@ module.exports = async (req, res) => {
     // from hitting this URL and forcing a refresh (harmless on its own,
     // but still not something a public endpoint should allow arbitrarily).
     if (req.query.refreshCurrencyRates === '1') {
-      const authHeader = req.headers['authorization'] || '';
-      if (!process.env.CRON_SECRET || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      if (!isCronAuthorized(req)) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
       // Same two free/keyless sources the frontend used to call directly
