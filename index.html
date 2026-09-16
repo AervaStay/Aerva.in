@@ -308,6 +308,18 @@
     background:var(--cream-deep); color:var(--gold-deep); border:1px solid var(--line-dark);
   }
   .nav-tier-badge svg{width:9px; height:auto; display:block; flex:0 0 auto;}
+  .nav-tier-badge{position:relative; cursor:default;}
+  .nav-tier-tip{
+    position:absolute; top:calc(100% + 8px); right:0; z-index:60;
+    background:#1c1a17; color:#f4ebe3; padding:7px 11px; border-radius:5px;
+    font-size:11.5px; line-height:1.45; letter-spacing:0; text-transform:none;
+    white-space:normal; width:max-content; max-width:230px; text-align:left;
+    opacity:0; visibility:hidden; transition:opacity .14s ease;
+    box-shadow:0 5px 18px rgba(28,26,23,0.22); pointer-events:none;
+  }
+  /* Anchored right so it opens inward from the header edge — anchored
+     left it ran off the viewport, which is what the native tooltip did. */
+  .nav-tier-badge:hover .nav-tier-tip{opacity:1; visibility:visible;}
   .nav-tier-badge.tier-gold{ background:rgba(28,20,12,0.9); color:#f0d27a; border-color:transparent; }
   .nav-tier-badge.tier-diamond{ background:rgba(16,24,32,0.9); color:#cfe6f5; border-color:transparent; }
   @media (max-width:900px){ .nav-tier-badge{display:none !important;} }
@@ -12029,8 +12041,14 @@
       </svg>`;
     }
     el.className = 'nav-tier-badge' + (dia ? ' tier-diamond' : gold ? ' tier-gold' : '');
-    el.innerHTML = svg + escapeMessageHtml(tier.label);
-    el.title = tier.blurb ? escapeMessageHtml(tier.blurb) : '';
+    // The blurb is a styled bubble rather than a title attribute. Two
+    // reasons: the native tooltip is unstyleable and was rendering clipped
+    // against the header, and .title is a PLAIN TEXT property — escaping
+    // it, as this used to, makes a blurb containing an apostrophe display
+    // a literal &#39; to the user.
+    el.innerHTML = svg + escapeMessageHtml(tier.label)
+      + (tier.blurb ? `<span class="nav-tier-tip">${escapeMessageHtml(tier.blurb)}</span>` : '');
+    el.removeAttribute('title');
     el.style.display = 'inline-flex';
   }
 
