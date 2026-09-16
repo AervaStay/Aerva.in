@@ -301,6 +301,16 @@
      photo that changes a decision. Everything else up there is context
      and now reads as quiet glass pills instead of competing blocks. */
   .suite-badge-discount{ background:#a3402f; color:#fff; font-weight:500; }
+  .nav-tier-badge{
+    display:inline-flex; align-items:center; gap:4px; margin-left:8px;
+    padding:3px 9px 3px 7px; border-radius:100px; white-space:nowrap;
+    font-size:9px; letter-spacing:0.08em; text-transform:uppercase;
+    background:var(--cream-deep); color:var(--gold-deep); border:1px solid var(--line-dark);
+  }
+  .nav-tier-badge svg{width:9px; height:auto; display:block; flex:0 0 auto;}
+  .nav-tier-badge.tier-gold{ background:rgba(28,20,12,0.9); color:#f0d27a; border-color:transparent; }
+  .nav-tier-badge.tier-diamond{ background:rgba(16,24,32,0.9); color:#cfe6f5; border-color:transparent; }
+  @media (max-width:900px){ .nav-tier-badge{display:none !important;} }
   .host-tier-badge{
     display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 7px; border-radius:100px;
     font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; backdrop-filter:blur(3px);
@@ -1416,6 +1426,7 @@
             <div class="nav-avatar-circle" id="navAvatarCircle">?</div>
           </div>
           <span id="guestNameDisplay" class="nav-account-name"></span>
+          <span id="guestTierBadge" class="nav-tier-badge" style="display:none;"></span>
         </button>
         <div class="nav-account-menu" id="navAccountMenu">
           <a href="index.html?view=my-bookings">My Bookings</a>
@@ -7334,6 +7345,10 @@
         errEl.style.display = 'block';
       } else {
         safeStorage.set('aerva_guest_session', data.sessionToken);
+        // Re-read the session before anything else runs, so the header and
+        // every per-account store bind to the account that just logged in
+        // rather than whoever was here before.
+        try{ if(window.aervaRefreshIdentity) await window.aervaRefreshIdentity(); }catch(e){}
         const cb = bookingLoginSuccessCallback;
         closeBookingLoginGate();
         if(cb) cb();
@@ -11971,6 +11986,35 @@
     panel.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
   })();
 
+  // ---- Standing badge beside the name ----
+  // One badge, whichever applies. guest-auth.js decides which: a host's
+  // own listing badge wins over their guest tier, since that is the one
+  // strangers see. The elite rungs reuse the same feather silhouette the
+  // listing cards use, so a host recognises their own mark.
+  function renderNavTierBadge(tier){
+    const el = document.getElementById('guestTierBadge');
+    if(!el) return;
+    if(!tier || !tier.label){ el.style.display = 'none'; el.innerHTML = ''; return; }
+    const dia = tier.icon === 'feather-diamond';
+    const gold = tier.icon === 'feather-gold';
+    const uid = 'nvt' + Math.random().toString(36).slice(2, 7);
+    let svg = '';
+    if(dia || gold){
+      const stops = dia
+        ? '<stop offset="0" stop-color="#eaf6ff"/><stop offset="0.4" stop-color="#b9d9ec"/><stop offset="1" stop-color="#dff1fb"/>'
+        : '<stop offset="0" stop-color="#f0d27a"/><stop offset="0.45" stop-color="#c9a227"/><stop offset="1" stop-color="#8a6c39"/>';
+      svg = `<svg viewBox="-26 -40 52 86" aria-hidden="true">
+        <defs><linearGradient id="${uid}" x1="0" y1="0" x2="${dia ? 1 : 0}" y2="1">${stops}</linearGradient></defs>
+        <path d="${FEATHER_PATH}" fill="url(#${uid})" stroke="${dia ? '#dff1fb' : '#f0d27a'}" stroke-width="2"/>
+        <path d="${FEATHER_BARBS}" stroke="${dia ? '#ffffff' : '#fff3cf'}" stroke-width="1.3" opacity="0.7" fill="none"/>
+      </svg>`;
+    }
+    el.className = 'nav-tier-badge' + (dia ? ' tier-diamond' : gold ? ' tier-gold' : '');
+    el.innerHTML = svg + escapeMessageHtml(tier.label);
+    el.title = tier.blurb ? escapeMessageHtml(tier.blurb) : '';
+    el.style.display = 'inline-flex';
+  }
+
   // ---- Guest login status in the nav bar ----
   // Checks for a stored session token on every page load and asks the
   // backend to confirm it's still valid — this is what makes a returning
@@ -11997,6 +12041,7 @@
       setRecentlyViewedOwner(null);
       safeStorage.remove('aerva_guest_email');
       safeStorage.remove('aerva_guest_name');
+      try{ renderNavTierBadge(null); }catch(e){}
       // A clone payload is a full copy of one host's listing, parked in
       // storage between the dashboard and the listing form. It is normally
       // consumed on arrival, but a host who clicks Clone and then logs out
@@ -12008,7 +12053,14 @@
 
     async function checkGuestSession(){
       const token = safeStorage.get('aerva_guest_session');
-      if(!token) return;
+      if(!token){
+        // No session: make sure nothing from a previous identity is still
+        // on screen. Without this, a badge rendered for the last account
+        // would survive until the next full page load.
+        renderNavTierBadge(null);
+        setRecentlyViewedOwner(null);
+        return;
+      }
       try{
         const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
           headers: { 'Authorization': 'Bearer ' + token }
@@ -12019,6 +12071,7 @@
           // with it, so a fresh login never shows the previous person's
           // browsing on this device.
           setRecentlyViewedOwner(data.guest.id);
+          renderNavTierBadge(data.guest.tier);
           const greeting = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
           guestNameDisplay.textContent = greeting;
           guestLoginLink.style.display = 'none';
@@ -12152,6 +12205,14 @@
         }
       });
     }
+
+    // Exposed so an in-page login (the booking gate) can refresh the
+    // header without a page reload. Previously the token was stored and
+    // nothing re-read it, so after logging out of one account and into
+    // another in the same visit, the greeting, standing badge and host
+    // links all still described the PREVIOUS account until a reload.
+    // Every one of those is per-account, so a stale header is a leak.
+    window.aervaRefreshIdentity = checkGuestSession;
 
     checkGuestSession();
   })();
