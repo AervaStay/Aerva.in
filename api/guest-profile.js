@@ -197,7 +197,11 @@ module.exports = async (req, res) => {
         `;
         const order = orderRows[0];
         if (!order) return res.status(404).json({ error: 'Booking not found.' });
-        if (order.status !== 'paid') {
+        // A conversation OPENS only on a confirmed booking. Once it exists
+        // its history is kept for good — through checkout, and through a
+        // cancellation — so either side can always read back what was
+        // agreed. Nothing ever deletes messages.
+        if (order.status !== 'paid' && order.status !== 'cancelled') {
           return res.status(403).json({ error: 'A conversation only opens once a booking is confirmed.' });
         }
         const isGuest = order.guest_id === guestId;
@@ -208,6 +212,10 @@ module.exports = async (req, res) => {
         let conversationId;
         if (convRows.length) {
           conversationId = convRows[0].id;
+        } else if (order.status !== 'paid') {
+          // Cancelled with no messages ever sent: nothing to keep, and no
+          // reason to start a new thread now.
+          return res.status(404).json({ error: 'There are no messages for this booking.' });
         } else {
           const inserted = await sql`
             INSERT INTO conversations (order_id, listing_id, guest_id, guest_email, host_id)

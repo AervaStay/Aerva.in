@@ -5,6 +5,8 @@
 // what's guest-facing, or commission_rate.
 //
 // Supports optional filters via query params, all combinable:
+//   ?reviewsFor=<id>&offset=<n> — standalone mode: published reviews for
+//                              one live listing, first names only.
 //   ?city=Pune              — partial, case-insensitive match against city
 //                              (fallback only — see lat/lng below)
 //   ?lat=...&lng=...&radiusKm=200 — only listings within this distance of
@@ -62,7 +64,8 @@ const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
         tierByKey, applyDecayCap } = require('./_tiers');
-const { recordTierChange } = require('./_tier-history');
+const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
+        lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
 const sql = neon(process.env.DATABASE_URL);
 
 function parseMaxGuests(raw) {
@@ -105,6 +108,227 @@ function isCronAuthorized(req) {
   const got = Buffer.from(String(req.headers['authorization'] || ''));
   const want = Buffer.from(`Bearer ${secret}`);
   return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
+
+// Decides standing for hosts, guests and listings AS OF a moment, and
+// records it. Shared by the quarterly review and by admin corrections, so
+// both apply identical rules.
+//   asOf     — ISO timestamp; only bookings and published reviews before
+//              it count, over the twelve months before it.
+//   prev     — { host: {id: key}, guest: {id: key} }, standing held going
+//              into the review, for the one-rung decay cap.
+//   hosts    — null for every host, or an array of host ids.
+//   guests   — null for every guest, or an array of guest ids.
+//   listings — whether to re-rank listings (always all of them: bands are
+//              relative, so one listing cannot be re-ranked alone).
+async function runTierSnapshot({ asOf, prev, hosts, guests, listings }) {
+  const changes = { listing: 0, host: 0, guest: 0 };
+  // Empty array = "none requested", so skip entirely rather than letting
+  // ANY('{}') run a pointless query.
+  const hostFilter = hosts === null ? null : hosts;
+  const guestFilter = guests === null ? null : guests;
+  const minPool = Math.min(...PROPERTY_TIERS.map(t => t.minReviews));
+  const pool = !listings ? [] : await sql`
+    SELECT r.listing_id,
+           AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
+           AVG(r.services) AS services, AVG(r.value_rating) AS value,
+           AVG(r.location) AS location, COUNT(*) AS n,
+           BOOL_OR(l.status = 'approved') AS approved,
+           MIN(l.city) AS city
+    FROM listing_reviews r
+    JOIN listings l ON l.id = r.listing_id
+    WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+      AND r.published_at < ${asOf}
+      -- Stay reviews only. Experience reviews carry no hygiene and
+      -- are scored on their own factors; counting them here would
+      -- inflate review counts and mix their value score into a
+      -- property's. See experienceTier for where they do count.
+      AND r.hygiene IS NOT NULL
+    GROUP BY r.listing_id
+  `;
+  const scored = pool.map(r => ({
+    listingId: r.listing_id,
+    approved: r.approved === true,
+    city: r.city,
+    n: Number(r.n) || 0,
+    factors: {
+      hygiene: Number(r.hygiene), communication: Number(r.communication),
+      services: Number(r.services), value: Number(r.value), location: Number(r.location)
+    }
+  }));
+  // Only APPROVED listings set the bar. A draft, deactivated or
+  // removed listing with glowing reviews would otherwise raise the
+  // cutoff for every live property, so a real host could lose a
+  // badge to something no guest can even book.
+  // Ranked within each listing's own CITY, with cities too small to
+  // rank internally falling back to the national field. Only live
+  // listings set a bar — a draft with glowing reviews must not raise
+  // the cutoff for properties a guest can actually book.
+  const cityCuts = cityCutoffs(
+    scored.filter(x => x.approved && x.n >= minPool)
+          .map(x => ({ city: x.city, score: reviewScore(x.factors, REVIEW_FACTORS) })),
+    PROPERTY_TIERS
+  );
+
+  for (const x of (listings ? scored : [])) {
+    // A listing that is not live is skipped entirely: no standing
+    // computed, no tier_current update, no history row. Its existing
+    // history is left exactly as it stands — an append-only log of
+    // what was true while it was live, which is the only honest
+    // record of it.
+    //
+    // The consequence on reactivation is deliberate and worth
+    // stating: nothing is restored. The next sweep recomputes from
+    // scratch against whatever the bar is THEN, and a listing that
+    // was Aerva Exceptional a year ago may come back to nothing,
+    // because the field moved on while it was away. Holding a badge
+    // earned against a vanished field would be the dishonest option.
+    if (!x.approved) continue;
+
+    const t = propertyTier({ reviewCount: x.n, factors: x.factors },
+                           cutoffsForCity(cityCuts, x.city));
+    const r = await recordTierChange(sql, {
+      subjectType: 'listing', subjectId: x.listingId, tier: t,
+      score: Number(reviewScore(x.factors, REVIEW_FACTORS).toFixed(3)),
+      reviewCount: x.n, cutoffs: cutoffsForCity(cityCuts, x.city)
+    });
+    if (r.changed) changes.listing++;
+  }
+
+  // A live listing that USED to hold a badge but now has no counted
+  // reviews at all (every one reverted, say) never appears in the pool
+  // above, so it would keep that badge forever. Clear it explicitly.
+  // Non-live listings are still left alone, as described above.
+  if (listings) {
+    const scoredLive = new Set(scored.filter(x => x.approved).map(x => x.listingId));
+    const held = await sql`
+      SELECT tc.subject_id FROM tier_current tc
+      JOIN listings l ON l.id = tc.subject_id AND l.status = 'approved'
+      WHERE tc.subject_type = 'listing' AND tc.tier_key IS NOT NULL
+    `;
+    for (const h of held) {
+      if (scoredLive.has(h.subject_id)) continue;
+      const r = await recordTierChange(sql, {
+        subjectType: 'listing', subjectId: h.subject_id, tier: null,
+        score: null, reviewCount: 0, cutoffs: null
+      });
+      if (r.changed) changes.listing++;
+    }
+  }
+
+  // Hosts: payout over a rolling twelve months plus their own
+  // published reviews. This snapshot is now the ONLY place host
+  // standing is decided — the header and listing cards read it.
+  const hostRows = (hostFilter && !hostFilter.length) ? [] : await sql`
+    SELECT l.host_id,
+           COALESCE(SUM(o.payout_amount), 0) AS payout
+    FROM listings l
+    LEFT JOIN orders o
+      ON o.listing_id = l.id AND o.status = 'paid'
+      AND o.created_at >= ${asOf}::timestamptz - INTERVAL '12 months'
+      AND o.created_at < ${asOf}
+    WHERE l.host_id IS NOT NULL
+      AND (${hostFilter}::int[] IS NULL OR l.host_id = ANY(${hostFilter}::int[]))
+    GROUP BY l.host_id
+  `;
+  // Host standing counts reviews from the last 12 months across ALL
+  // their listings, live or not.
+  //
+  // Deliberately NOT restricted to approved listings, unlike the
+  // property ladder. A host with one excellent property and one poor
+  // one could otherwise deactivate the poor one and watch their own
+  // average jump — deactivation would become a way to launder a bad
+  // record. The rolling window is what handles a genuinely retired
+  // property instead: its reviews age out after a year rather than
+  // being erased the day it comes down.
+  const hostRev = (hostFilter && !hostFilter.length) ? [] : await sql`
+    SELECT host_id, AVG(hygiene) AS hygiene, AVG(communication) AS communication,
+           AVG(services) AS services, AVG(value_rating) AS value,
+           AVG(location) AS location, COUNT(*) AS n
+    FROM listing_reviews
+    WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
+      AND published_at >= ${asOf}::timestamptz - INTERVAL '12 months'
+      AND published_at < ${asOf}
+      AND hygiene IS NOT NULL -- stay reviews only; see the property pool above
+    GROUP BY host_id
+  `;
+  const revByHost = {};
+  hostRev.forEach(r => { revByHost[r.host_id] = r; });
+  for (const h of hostRows) {
+    const rv = revByHost[h.host_id];
+    const n = rv ? Number(rv.n) || 0 : 0;
+    const factors = n > 0 ? {
+      hygiene: Number(rv.hygiene), communication: Number(rv.communication),
+      services: Number(rv.services), value: Number(rv.value), location: Number(rv.location)
+    } : undefined;
+    const earned = hostTier({ totalPayout: Number(h.payout) || 0, reviewCount: n, factors });
+    const t = applyDecayCap(HOST_TIERS, prev.host[h.host_id], earned);
+    const r = await recordTierChange(sql, {
+      subjectType: 'host', subjectId: h.host_id, tier: t,
+      score: factors ? Number(reviewScore(factors, REVIEW_FACTORS).toFixed(3)) : null,
+      reviewCount: n, metric: Number(h.payout) || 0
+    });
+    if (r.changed) changes.host++;
+  }
+
+  // Guests: quarterly, like hosts, against a ROLLING twelve months.
+  // This used to count from 1 January of the current year, which on
+  // the 1 January review day meant one day of spend, so every guest
+  // lost their badge at once.
+  //
+  // Every guest who has EVER had a paid booking is assessed, not just
+  // those active in the window. A guest who stopped booking must
+  // decay a rung per quarter; leaving them out would freeze their
+  // last badge forever.
+  const guestRows = (guestFilter && !guestFilter.length) ? [] : await sql`
+    SELECT g.id AS guest_id,
+           COALESCE(SUM(o.total), 0) AS spend,
+           COUNT(o.id)               AS bookings,
+           COUNT(o.id) FILTER (WHERE o.total >= ${QUALIFYING_BOOKING_MIN}) AS qualifying
+    FROM guests g
+    LEFT JOIN orders o ON o.guest_id = g.id AND o.status = 'paid'
+      AND o.created_at >= ${asOf}::timestamptz - INTERVAL '12 months'
+      AND o.created_at < ${asOf}
+    WHERE EXISTS (SELECT 1 FROM orders x WHERE x.guest_id = g.id AND x.status = 'paid' AND x.created_at < ${asOf})
+      AND (${guestFilter}::int[] IS NULL OR g.id = ANY(${guestFilter}::int[]))
+    GROUP BY g.id
+  `;
+  // Same twelve-month window as spend, and as the host side.
+  const guestRev = (guestFilter && !guestFilter.length) ? [] : await sql`
+    SELECT guest_id, AVG(cleanliness) AS cleanliness, AVG(communication) AS communication,
+           AVG(respectful) AS respectful, AVG(rules) AS rules, COUNT(*) AS n
+    FROM guest_reviews
+    WHERE cleanliness IS NOT NULL
+      AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+      AND published_at >= ${asOf}::timestamptz - INTERVAL '12 months'
+      AND published_at < ${asOf}
+    GROUP BY guest_id
+  `;
+  const revByGuest = {};
+  guestRev.forEach(r => { revByGuest[r.guest_id] = r; });
+  for (const g of guestRows) {
+    const rv = revByGuest[g.guest_id];
+    const n = rv ? Number(rv.n) || 0 : 0;
+    const factors = n > 0 ? {
+      cleanliness: Number(rv.cleanliness), communication: Number(rv.communication),
+      respectful: Number(rv.respectful), rules: Number(rv.rules)
+    } : undefined;
+    const earned = guestTier({
+      totalSpend: Number(g.spend) || 0,
+      bookingCount: Number(g.bookings) || 0,
+      qualifyingBookings: Number(g.qualifying) || 0,
+      reviewCount: n, factors
+    });
+    const t = applyDecayCap(GUEST_TIERS, prev.guest[g.guest_id], earned);
+    const r = await recordTierChange(sql, {
+      subjectType: 'guest', subjectId: g.guest_id, tier: t,
+      score: factors ? Number(reviewScore(factors, GUEST_FACTORS).toFixed(3)) : null,
+      reviewCount: n, metric: Number(g.spend) || 0
+    });
+    if (r.changed) changes.guest++;
+  }
+  return changes;
 }
 
 module.exports = async (req, res) => {
@@ -157,7 +381,7 @@ module.exports = async (req, res) => {
         FROM orders o
         WHERE o.id = lr.order_id
           AND lr.published_at IS NULL AND lr.admin_reverted_at IS NULL
-          AND o.departure < CURRENT_DATE - ${REVIEW_WINDOW_DAYS}
+          AND o.departure <= CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
         RETURNING lr.id
       `;
       const lapsedGuest = await sql`
@@ -165,7 +389,7 @@ module.exports = async (req, res) => {
         FROM orders o
         WHERE o.id = gr.order_id
           AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
-          AND o.departure < CURRENT_DATE - ${REVIEW_WINDOW_DAYS}
+          AND o.departure <= CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
         RETURNING gr.id
       `;
 
@@ -219,211 +443,71 @@ module.exports = async (req, res) => {
       // ?forceTierSnapshot=1 recomputes off-cycle, for testing and for the
       // first run after deploy, when tier_current is empty and waiting for
       // the next quarter would mean no badges anywhere for months.
-      let changes = { listing: 0, host: 0, guest: 0, ran: false };
       const forceSnapshot = req.query.forceTierSnapshot === '1';
-      if (!isReviewDay(new Date(), 'quarterly') && !forceSnapshot) {
-        return res.status(200).json({
-          publishedPaired: pairs.length + pairsBack.length,
-          publishedLapsed: lapsedListing.length + lapsedGuest.length,
-          prompted: toPrompt.length,
-          tierSnapshot: 'skipped — not a review day',
-          nextReview: nextReviewDate(new Date(), 'quarterly')
-        });
-      }
-      changes.ran = true;
-      try {
-        const minPool = Math.min(...PROPERTY_TIERS.map(t => t.minReviews));
-        const pool = await sql`
-          SELECT r.listing_id,
-                 AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
-                 AVG(r.services) AS services, AVG(r.value_rating) AS value,
-                 AVG(r.location) AS location, COUNT(*) AS n,
-                 BOOL_OR(l.status = 'approved') AS approved,
-                 MIN(l.city) AS city
-          FROM listing_reviews r
-          JOIN listings l ON l.id = r.listing_id
-          WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
-            -- Stay reviews only. Experience reviews carry no hygiene and
-            -- are scored on their own factors; counting them here would
-            -- inflate review counts and mix their value score into a
-            -- property's. See experienceTier for where they do count.
-            AND r.hygiene IS NOT NULL
-          GROUP BY r.listing_id
-        `;
-        const scored = pool.map(r => ({
-          listingId: r.listing_id,
-          approved: r.approved === true,
-          city: r.city,
-          n: Number(r.n) || 0,
-          factors: {
-            hygiene: Number(r.hygiene), communication: Number(r.communication),
-            services: Number(r.services), value: Number(r.value), location: Number(r.location)
-          }
-        }));
-        // Only APPROVED listings set the bar. A draft, deactivated or
-        // removed listing with glowing reviews would otherwise raise the
-        // cutoff for every live property, so a real host could lose a
-        // badge to something no guest can even book.
-        // Ranked within each listing's own CITY, with cities too small to
-        // rank internally falling back to the national field. Only live
-        // listings set a bar — a draft with glowing reviews must not raise
-        // the cutoff for properties a guest can actually book.
-        const cityCuts = cityCutoffs(
-          scored.filter(x => x.approved && x.n >= minPool)
-                .map(x => ({ city: x.city, score: reviewScore(x.factors, REVIEW_FACTORS) })),
-          PROPERTY_TIERS
-        );
-
-        for (const x of scored) {
-          // A listing that is not live is skipped entirely: no standing
-          // computed, no tier_current update, no history row. Its existing
-          // history is left exactly as it stands — an append-only log of
-          // what was true while it was live, which is the only honest
-          // record of it.
-          //
-          // The consequence on reactivation is deliberate and worth
-          // stating: nothing is restored. The next sweep recomputes from
-          // scratch against whatever the bar is THEN, and a listing that
-          // was Aerva Exceptional a year ago may come back to nothing,
-          // because the field moved on while it was away. Holding a badge
-          // earned against a vanished field would be the dishonest option.
-          if (!x.approved) continue;
-
-          const t = propertyTier({ reviewCount: x.n, factors: x.factors },
-                                 cutoffsForCity(cityCuts, x.city));
-          const r = await recordTierChange(sql, {
-            subjectType: 'listing', subjectId: x.listingId, tier: t,
-            score: Number(reviewScore(x.factors, REVIEW_FACTORS).toFixed(3)),
-            reviewCount: x.n, cutoffs: cutoffsForCity(cityCuts, x.city)
-          });
-          if (r.changed) changes.listing++;
-        }
-
-        // Standing held going into this review, for the one-rung decay cap.
-        // Read before any host or guest row is rewritten below.
-        const prevRows = await sql`
-          SELECT subject_type, subject_id, tier_key FROM tier_current
-          WHERE subject_type IN ('host', 'guest')
-        `;
-        const prevKey = { host: {}, guest: {} };
-        prevRows.forEach(r => { prevKey[r.subject_type][r.subject_id] = r.tier_key; });
-
-        // Hosts: payout over a rolling twelve months plus their own
-        // published reviews. This snapshot is now the ONLY place host
-        // standing is decided — the header and listing cards read it.
-        const hostRows = await sql`
-          SELECT l.host_id,
-                 COALESCE(SUM(o.payout_amount), 0) AS payout
-          FROM listings l
-          LEFT JOIN orders o
-            ON o.listing_id = l.id AND o.status = 'paid'
-            AND o.created_at >= NOW() - INTERVAL '12 months'
-          WHERE l.host_id IS NOT NULL
-          GROUP BY l.host_id
-        `;
-        // Host standing counts reviews from the last 12 months across ALL
-        // their listings, live or not.
-        //
-        // Deliberately NOT restricted to approved listings, unlike the
-        // property ladder. A host with one excellent property and one poor
-        // one could otherwise deactivate the poor one and watch their own
-        // average jump — deactivation would become a way to launder a bad
-        // record. The rolling window is what handles a genuinely retired
-        // property instead: its reviews age out after a year rather than
-        // being erased the day it comes down.
-        const hostRev = await sql`
-          SELECT host_id, AVG(hygiene) AS hygiene, AVG(communication) AS communication,
-                 AVG(services) AS services, AVG(value_rating) AS value,
-                 AVG(location) AS location, COUNT(*) AS n
-          FROM listing_reviews
-          WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
-            AND published_at >= NOW() - INTERVAL '12 months'
-            AND hygiene IS NOT NULL -- stay reviews only; see the property pool above
-          GROUP BY host_id
-        `;
-        const revByHost = {};
-        hostRev.forEach(r => { revByHost[r.host_id] = r; });
-        for (const h of hostRows) {
-          const rv = revByHost[h.host_id];
-          const n = rv ? Number(rv.n) || 0 : 0;
-          const factors = n > 0 ? {
-            hygiene: Number(rv.hygiene), communication: Number(rv.communication),
-            services: Number(rv.services), value: Number(rv.value), location: Number(rv.location)
-          } : undefined;
-          const earned = hostTier({ totalPayout: Number(h.payout) || 0, reviewCount: n, factors });
-          const t = applyDecayCap(HOST_TIERS, prevKey.host[h.host_id], earned);
-          const r = await recordTierChange(sql, {
-            subjectType: 'host', subjectId: h.host_id, tier: t,
-            score: factors ? Number(reviewScore(factors, REVIEW_FACTORS).toFixed(3)) : null,
-            reviewCount: n, metric: Number(h.payout) || 0
-          });
-          if (r.changed) changes.host++;
-        }
-
-        // Guests: quarterly, like hosts, against a ROLLING twelve months.
-        // This used to count from 1 January of the current year, which on
-        // the 1 January review day meant one day of spend, so every guest
-        // lost their badge at once.
-        //
-        // Every guest who has EVER had a paid booking is assessed, not just
-        // those active in the window. A guest who stopped booking must
-        // decay a rung per quarter; leaving them out would freeze their
-        // last badge forever.
-        const guestRows = await sql`
-          SELECT g.id AS guest_id,
-                 COALESCE(SUM(o.total), 0) AS spend,
-                 COUNT(o.id)               AS bookings,
-                 COUNT(o.id) FILTER (WHERE o.total >= ${QUALIFYING_BOOKING_MIN}) AS qualifying
-          FROM guests g
-          LEFT JOIN orders o ON o.guest_id = g.id AND o.status = 'paid'
-            AND o.created_at >= NOW() - INTERVAL '12 months'
-          WHERE EXISTS (SELECT 1 FROM orders x WHERE x.guest_id = g.id AND x.status = 'paid')
-          GROUP BY g.id
-        `;
-        // Same twelve-month window as spend, and as the host side.
-        const guestRev = await sql`
-          SELECT guest_id, AVG(cleanliness) AS cleanliness, AVG(communication) AS communication,
-                 AVG(respectful) AS respectful, AVG(rules) AS rules, COUNT(*) AS n
-          FROM guest_reviews
-          WHERE cleanliness IS NOT NULL
-            AND published_at IS NOT NULL AND admin_reverted_at IS NULL
-            AND published_at >= NOW() - INTERVAL '12 months'
-          GROUP BY guest_id
-        `;
-        const revByGuest = {};
-        guestRev.forEach(r => { revByGuest[r.guest_id] = r; });
-        for (const g of guestRows) {
-          const rv = revByGuest[g.guest_id];
-          const n = rv ? Number(rv.n) || 0 : 0;
-          const factors = n > 0 ? {
-            cleanliness: Number(rv.cleanliness), communication: Number(rv.communication),
-            respectful: Number(rv.respectful), rules: Number(rv.rules)
-          } : undefined;
-          const earned = guestTier({
-            totalSpend: Number(g.spend) || 0,
-            bookingCount: Number(g.bookings) || 0,
-            qualifyingBookings: Number(g.qualifying) || 0,
-            reviewCount: n, factors
-          });
-          const t = applyDecayCap(GUEST_TIERS, prevKey.guest[g.guest_id], earned);
-          const r = await recordTierChange(sql, {
-            subjectType: 'guest', subjectId: g.guest_id, tier: t,
-            score: factors ? Number(reviewScore(factors, GUEST_FACTORS).toFixed(3)) : null,
-            reviewCount: n, metric: Number(g.spend) || 0
-          });
-          if (r.changed) changes.guest++;
-        }
-      } catch (err) {
-        console.error('tier snapshot failed (non-fatal):', err);
-      }
-
-      return res.status(200).json({
+      const summary = {
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
         prompted: toPrompt.length,
-        tierChanges: changes,
         nextReview: nextReviewDate(new Date(), 'quarterly')
-      });
+      };
+
+      // Full review: every subject, as of right now.
+      if (isReviewDay(new Date(), 'quarterly') || forceSnapshot) {
+        const startedAt = new Date().toISOString();
+        let changes;
+        try {
+          const prevRows = await sql`
+            SELECT subject_type, subject_id, tier_key FROM tier_current
+            WHERE subject_type IN ('host', 'guest')
+          `;
+          const prev = { host: {}, guest: {} };
+          prevRows.forEach(r => { prev[r.subject_type][r.subject_id] = r.tier_key; });
+          changes = await runTierSnapshot({ asOf: startedAt, prev, hosts: null, guests: null, listings: true });
+          await markSnapshotRun(sql, startedAt);
+          // A full review covers every pending admin correction too.
+          await clearTierRecomputes(sql, startedAt);
+        } catch (err) {
+          console.error('tier snapshot failed (non-fatal):', err);
+          changes = { error: true };
+        }
+        return res.status(200).json({ ...summary, tierChanges: changes });
+      }
+
+      // ---- Admin corrections (within 48 hours) ----
+      // Between review days badges stay frozen, EXCEPT where an admin has
+      // reverted a review. Those subjects get the last quarterly review
+      // re-run for them alone, as of the moment it ran, with the reverted
+      // review now excluded. See _tier-history.js.
+      const queue = await pendingTierRecomputes(sql);
+      if (!queue.length) {
+        return res.status(200).json({ ...summary, tierSnapshot: 'skipped — not a review day' });
+      }
+      const takenUpTo = queue.reduce((m, e) => (e.at && e.at > m ? e.at : m), '');
+      const lastRun = await lastSnapshotRun(sql);
+      if (!lastRun) {
+        // No review has ever run, so no badge exists to correct. The first
+        // full review will already leave the reverted review out.
+        await clearTierRecomputes(sql, takenUpTo);
+        return res.status(200).json({ ...summary, corrections: 'none needed — no review has run yet' });
+      }
+      try {
+        const ids = (type) => [...new Set(queue.filter(e => e.type === type && e.id != null).map(e => Number(e.id)))];
+        const prev = {
+          host: await standingBefore(sql, 'host', lastRun),
+          guest: await standingBefore(sql, 'guest', lastRun)
+        };
+        const changes = await runTierSnapshot({
+          asOf: lastRun, prev,
+          hosts: ids('host'), guests: ids('guest'),
+          listings: queue.some(e => e.type === 'listing')
+        });
+        await clearTierRecomputes(sql, takenUpTo);
+        return res.status(200).json({ ...summary, corrections: { requests: queue.length, asOf: lastRun, changes } });
+      } catch (err) {
+        // Queue left in place, so tomorrow's sweep retries.
+        console.error('tier correction failed (will retry tomorrow):', err);
+        return res.status(200).json({ ...summary, corrections: 'failed — will retry at the next sweep' });
+      }
     } catch (err) {
       console.error('reviewSweep error:', err);
       return res.status(500).json({ error: 'Review sweep failed.' });
@@ -438,6 +522,99 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
+    // ---- Published reviews for one listing ----
+    // GET ?reviewsFor=<listingId>&offset=<n>
+    // Public: shown under the photos on the listing page. Only what a guest
+    // is meant to see — published, non-reverted reviews of a LIVE listing,
+    // with the reviewer's FIRST NAME only and the month of the review.
+    // Never an email, surname, guest id or order id.
+    //
+    // The summary uses exactly the rule the listing card uses, so the
+    // stars on the card and the stars on the page always agree: stays are
+    // scored on stay reviews only; experiences on their own factor set.
+    if (req.query.reviewsFor !== undefined) {
+      const listingId = Number(req.query.reviewsFor);
+      const offset = Math.max(0, Math.min(10000, Number(req.query.offset) || 0));
+      const PAGE = 10;
+      if (!listingId) return res.status(400).json({ error: 'Which listing?' });
+      try {
+        const lr = await sql`
+          SELECT id, COALESCE(listing_type, 'stay') AS listing_type
+          FROM listings WHERE id = ${listingId} AND status = 'approved'
+        `;
+        if (!lr.length) return res.status(404).json({ error: 'Listing not found.' });
+        const isExperience = lr[0].listing_type === 'experience';
+        // Which rows count as "a review of this kind of listing". Stays:
+        // rows with the stay factors. Experiences: rows with either set
+        // (older experience reviews carry the stay set — same fallback
+        // as the card and experienceTier).
+        const summaryRows = await sql`
+          SELECT COUNT(*) AS n,
+                 AVG(hygiene) AS hygiene, AVG(communication) AS communication,
+                 AVG(services) AS services, AVG(value_rating) AS value, AVG(location) AS location,
+                 AVG(organisation) AS organisation, AVG(guide) AS guide, AVG(safety) AS safety
+          FROM listing_reviews
+          WHERE listing_id = ${listingId}
+            AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+            AND (hygiene IS NOT NULL OR (${isExperience} AND organisation IS NOT NULL))
+        `;
+        const rows = await sql`
+          SELECT r.published_at, r.comment,
+                 r.hygiene, r.communication, r.services, r.value_rating, r.location,
+                 r.organisation, r.guide, r.safety,
+                 g.name AS guest_name
+          FROM listing_reviews r
+          LEFT JOIN guests g ON g.id = r.guest_id
+          WHERE r.listing_id = ${listingId}
+            AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+            AND (r.hygiene IS NOT NULL OR (${isExperience} AND r.organisation IS NOT NULL))
+          ORDER BY r.published_at DESC, r.id DESC
+          LIMIT ${PAGE + 1} OFFSET ${offset}
+        `;
+        const n = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0; };
+        const setFor = (f) => (f.organisation > 0 ? EXPERIENCE_FACTORS : REVIEW_FACTORS);
+        const sr = summaryRows[0] || {};
+        const count = Number(sr.n) || 0;
+        const sumFactors = {
+          hygiene: n(sr.hygiene), communication: n(sr.communication), services: n(sr.services),
+          value: n(sr.value), location: n(sr.location),
+          organisation: n(sr.organisation), guide: n(sr.guide), safety: n(sr.safety)
+        };
+        // An experience with any new-style reviews is summarised on the
+        // experience set; otherwise the stay set.
+        const summarySet = isExperience && sumFactors.organisation > 0 ? EXPERIENCE_FACTORS : REVIEW_FACTORS;
+        const pick = (f, set) => set.map(x => ({ key: x.key, label: x.label, value: Number(f[x.key].toFixed(2)) })).filter(x => x.value > 0);
+        const firstName = (name) => {
+          const first = String(name || '').trim().split(/\s+/)[0];
+          return first ? first.slice(0, 40) : 'Guest';
+        };
+        const reviews = rows.slice(0, PAGE).map(r => {
+          const f = {
+            hygiene: n(r.hygiene), communication: n(r.communication), services: n(r.services),
+            value: n(r.value_rating), location: n(r.location),
+            organisation: n(r.organisation), guide: n(r.guide), safety: n(r.safety)
+          };
+          const set = setFor(f);
+          const d = new Date(r.published_at);
+          return {
+            name: firstName(r.guest_name),
+            month: isNaN(d) ? null : d.toISOString().slice(0, 7),
+            score: reviewScore(f, set),
+            factors: pick(f, set),
+            comment: String(r.comment || '')
+          };
+        });
+        return res.status(200).json({
+          summary: count ? { count, score: reviewScore(sumFactors, summarySet), factors: pick(sumFactors, summarySet) } : { count: 0 },
+          reviews,
+          nextOffset: rows.length > PAGE ? offset + PAGE : null
+        });
+      } catch (err) {
+        console.error('reviewsFor error:', err);
+        return res.status(500).json({ error: 'Could not load reviews right now.' });
+      }
+    }
+
     // ---- Availability lookup for one listing ----
     // Folded into this same endpoint (rather than its own /api file) to
     // stay under Vercel's Hobby-plan serverless function limit — adding a

@@ -69,4 +69,116 @@ async function tierHistoryFor(sql, subjectType, subjectId, limit = 50) {
   }
 }
 
-module.exports = { recordTierChange, tierHistoryFor };
+// ---------------------------------------------------------------------
+// Admin corrections
+//
+// Badges otherwise move only on a quarterly review day. An admin revert is
+// the exception: the badge it affected is corrected within 48 hours (in
+// practice at the next daily sweep, 02:00 UTC) by re-running the LAST
+// quarterly review for just the affected subjects, with the reverted
+// review left out. Nobody else's badge moves.
+//
+// Requests are queued in site_settings rather than a new table, so this
+// needs no migration. Each entry: { type: 'host'|'guest'|'listing', id,
+// reason, at }. type 'listing' re-ranks every listing, because property
+// bands are relative: removing one review can move the cutoffs.
+const QUEUE_KEY = 'tier_recompute_queue';
+const LAST_RUN_KEY = 'tier_snapshot_last_run';
+
+// Appends atomically (jsonb concatenation in one statement), so two admins
+// reverting at the same moment cannot overwrite each other's request.
+// Returns false on failure rather than throwing: the revert itself has
+// already succeeded and must not be reported as failed.
+async function requestTierRecompute(sql, entries) {
+  const list = (entries || []).filter(e => e && e.type).map(e => ({
+    type: e.type, id: e.id == null ? null : Number(e.id),
+    reason: e.reason || null, at: new Date().toISOString()
+  }));
+  if (!list.length) return true;
+  try {
+    await sql`
+      INSERT INTO site_settings (key, value, updated_at)
+      VALUES (${QUEUE_KEY}, ${JSON.stringify(list)}::jsonb, now())
+      ON CONFLICT (key) DO UPDATE
+        SET value = COALESCE(site_settings.value, '[]'::jsonb) || EXCLUDED.value, updated_at = now()
+    `;
+    return true;
+  } catch (err) {
+    console.error('requestTierRecompute failed:', err);
+    return false;
+  }
+}
+
+async function pendingTierRecomputes(sql) {
+  try {
+    const rows = await sql`SELECT value FROM site_settings WHERE key = ${QUEUE_KEY}`;
+    const v = rows[0] && rows[0].value;
+    return Array.isArray(v) ? v : [];
+  } catch (err) {
+    console.error('pendingTierRecomputes failed:', err);
+    return [];
+  }
+}
+
+// Removes only entries requested at or before `upTo` (an ISO string), so
+// a request made while a sweep was running is kept for the next one
+// instead of being silently dropped.
+async function clearTierRecomputes(sql, upTo) {
+  try {
+    await sql`
+      UPDATE site_settings
+      SET value = (
+            SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+            FROM jsonb_array_elements(value) e
+            WHERE (e->>'at') > ${upTo}
+          ),
+          updated_at = now()
+      WHERE key = ${QUEUE_KEY}
+    `;
+  } catch (err) {
+    console.error('clearTierRecomputes failed:', err);
+  }
+}
+
+// When the last full snapshot (quarterly, or forced) started. Corrections
+// re-run the review "as of" this moment.
+async function lastSnapshotRun(sql) {
+  try {
+    const rows = await sql`SELECT value FROM site_settings WHERE key = ${LAST_RUN_KEY}`;
+    const v = rows[0] && rows[0].value;
+    return typeof v === 'string' ? v : null;
+  } catch (err) {
+    console.error('lastSnapshotRun failed:', err);
+    return null;
+  }
+}
+
+async function markSnapshotRun(sql, startedAt) {
+  await sql`
+    INSERT INTO site_settings (key, value, updated_at)
+    VALUES (${LAST_RUN_KEY}, ${JSON.stringify(startedAt)}::jsonb, now())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+  `;
+}
+
+// The standing each subject held just BEFORE a given moment, read from the
+// change log. Used by corrections so the one-rung decay cap is measured
+// against what the subject held going into that review, not against what
+// the review (with the bad data) gave them.
+async function standingBefore(sql, subjectType, at) {
+  const rows = await sql`
+    SELECT DISTINCT ON (subject_id) subject_id, tier_key
+    FROM tier_history
+    WHERE subject_type = ${subjectType} AND changed_at < ${at}
+    ORDER BY subject_id, changed_at DESC
+  `;
+  const out = {};
+  rows.forEach(r => { out[r.subject_id] = r.tier_key; });
+  return out;
+}
+
+module.exports = {
+  recordTierChange, tierHistoryFor,
+  requestTierRecompute, pendingTierRecomputes, clearTierRecomputes,
+  lastSnapshotRun, markSnapshotRun, standingBefore
+};

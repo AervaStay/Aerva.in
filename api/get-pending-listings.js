@@ -95,7 +95,7 @@ const { describeLadders, guestTier, hostTier, reviewScore, weakestFactor,
         REVIEW_FACTORS, GUEST_FACTORS, HOST_TIERS, GUEST_TIERS,
         bookingValueBand, QUALIFYING_BOOKING_MIN,
         propertyTier, propertyFlag, PROPERTY_TIERS, propertyCutoffs } = require('./_tiers');
-const { tierHistoryFor } = require('./_tier-history');
+const { tierHistoryFor, requestTierRecompute } = require('./_tier-history');
 const { COMPLIANCE_CHECKS } = require('./_compliance');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -757,12 +757,12 @@ module.exports = async (req, res) => {
             UPDATE listing_reviews
             SET admin_reverted_at = now(), admin_reverted_by = ${adminId}, admin_revert_reason = ${why}
             WHERE id = ${reviewId} AND admin_reverted_at IS NULL
-            RETURNING id, order_id`
+            RETURNING id, order_id, host_id, listing_id`
         : await sql`
             UPDATE guest_reviews
             SET admin_reverted_at = now(), admin_reverted_by = ${adminId}, admin_revert_reason = ${why}
             WHERE id = ${reviewId} AND admin_reverted_at IS NULL
-            RETURNING id, order_id`;
+            RETURNING id, order_id, guest_id`;
       if (!rows.length) return res.status(404).json({ error: 'Review not found, or already reverted.' });
 
       await logAudit(sql, {
@@ -770,7 +770,23 @@ module.exports = async (req, res) => {
         targetType: kind === 'listing' ? 'listing_review' : 'guest_review', targetId: reviewId,
         metadata: { orderId: rows[0].order_id, reason: why }
       });
-      return res.status(200).json({ success: true });
+
+      // Badges normally move only on a quarterly review day. A revert is
+      // the exception: queue the affected subjects so the next daily sweep
+      // (02:00 UTC) re-runs the last review without this review — within
+      // 48 hours, and in practice within 24. A property review affects
+      // the listing's rank AND its host; a guest review affects the guest.
+      const r0 = rows[0];
+      const queued = await requestTierRecompute(sql, kind === 'listing'
+        ? [{ type: 'listing', id: r0.listing_id, reason: `revert:listing_review:${reviewId}` },
+           { type: 'host', id: r0.host_id, reason: `revert:listing_review:${reviewId}` }]
+        : [{ type: 'guest', id: r0.guest_id, reason: `revert:guest_review:${reviewId}` }]);
+      return res.status(200).json({
+        success: true,
+        badgeUpdate: queued
+          ? 'Review withdrawn now. Affected badges update within 48 hours.'
+          : 'Review withdrawn now, but the badge update could not be scheduled. Badges will correct at the next quarterly review.'
+      });
     } catch (err) {
       console.error('revertReview error:', err);
       return res.status(500).json({ error: 'Could not revert that review right now.' });

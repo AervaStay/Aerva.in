@@ -68,6 +68,7 @@ const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const { verifyToken, createToken } = require('./_approval-token');
 const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { GUEST_FACTORS, reviewScore } = require('./_tiers');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
@@ -468,7 +469,12 @@ module.exports = async (req, res) => {
       // guest_reviews.rating predates the factor columns and is still read
       // by older code paths, so it is kept in step: the plain mean of the
       // four, not a weighted score, because that is what it always meant.
-      const blended = Number((FIELDS.reduce((a, f) => a + vals[f], 0) / FIELDS.length).toFixed(2));
+      // ROUNDED: the column is smallint in Neon, and any mean that is not a
+      // whole number (5,4,4,4 -> 4.25) was rejected by Postgres, failing
+      // the whole review with a 500. Nothing scores from this column any
+      // more — standing uses the four factor columns — so rounding loses
+      // nothing that matters.
+      const blended = Math.round(FIELDS.reduce((a, f) => a + vals[f], 0) / FIELDS.length);
 
       const existing = await sql`SELECT id FROM guest_reviews WHERE order_id = ${order.id}`;
       if (existing.length) return res.status(409).json({ error: 'You have already reviewed this stay.' });
@@ -491,6 +497,75 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('reviewGuest error:', err);
       return res.status(500).json({ error: 'Could not save your review right now.' });
+    }
+  }
+
+  // ---- Host views a guest's profile ----
+  // GET ?guestProfileForOrder=<orderId>
+  // Only a guest's NAME and the published reviews other hosts have left
+  // about them — never email, phone, photo, spend or booking history.
+  //
+  // Keyed on the BOOKING, not a guest id, so a host can only ever look up
+  // someone who actually booked one of their own properties. Allowed from
+  // the moment the booking is confirmed, and still after checkout or a
+  // cancellation — the relationship happened, so the host keeps the view.
+  if (req.method === 'GET' && req.query.guestProfileForOrder !== undefined) {
+    try {
+      const orderId = Number(req.query.guestProfileForOrder);
+      if (!orderId) return res.status(400).json({ error: 'Which booking?' });
+      const meRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      const me = meRows[0];
+      if (!me || !me.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+
+      const rows = await sql`
+        SELECT o.guest_id, g.name
+        FROM orders o
+        JOIN listings l ON l.id = o.listing_id
+        JOIN guests g ON g.id = o.guest_id
+        WHERE o.id = ${orderId} AND l.host_id = ${me.host_id}
+          AND o.status IN ('paid', 'cancelled')
+      `;
+      // Same answer for "not yours" and "does not exist": a host must not
+      // be able to probe which booking ids are real.
+      if (!rows.length) return res.status(404).json({ error: 'Booking not found.' });
+      const guest = rows[0];
+
+      // Published and not reverted only — exactly what the review policy
+      // allows anyone to read. A review still held (double-blind) stays
+      // hidden, including the viewing host's own.
+      const reviews = await sql`
+        SELECT published_at, comment, rating, cleanliness, communication, respectful, rules
+        FROM guest_reviews
+        WHERE guest_id = ${guest.guest_id}
+          AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+        ORDER BY published_at DESC, id DESC
+        LIMIT 50
+      `;
+      const n = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0; };
+      const pick = (f) => GUEST_FACTORS.map(x => ({ key: x.key, label: x.label, value: Number(f[x.key].toFixed(2)) })).filter(x => x.value > 0);
+      const out = reviews.map(r => {
+        const f = { cleanliness: n(r.cleanliness), communication: n(r.communication), respectful: n(r.respectful), rules: n(r.rules) };
+        const rated = GUEST_FACTORS.some(x => f[x.key] > 0);
+        const d = new Date(r.published_at);
+        return {
+          month: isNaN(d) ? null : d.toISOString().slice(0, 7),
+          // Older reviews carry only the single overall rating.
+          score: rated ? reviewScore(f, GUEST_FACTORS) : (n(r.rating) || null),
+          factors: rated ? pick(f) : [],
+          comment: String(r.comment || '')
+        };
+      });
+      const rated = reviews.filter(r => r.cleanliness != null);
+      const avg = (k) => rated.reduce((a, r) => a + n(r[k]), 0) / (rated.length || 1);
+      const sumF = rated.length ? { cleanliness: avg('cleanliness'), communication: avg('communication'), respectful: avg('respectful'), rules: avg('rules') } : null;
+      return res.status(200).json({
+        guest: { name: String(guest.name || '').trim() || 'Guest' },
+        summary: sumF ? { count: reviews.length, score: reviewScore(sumF, GUEST_FACTORS), factors: pick(sumF) } : { count: reviews.length },
+        reviews: out
+      });
+    } catch (err) {
+      console.error('guestProfileForOrder error:', err);
+      return res.status(500).json({ error: 'Could not load this guest right now.' });
     }
   }
 
