@@ -1313,6 +1313,9 @@
     if(!v){
       document.getElementById('verificationBanner').style.display = 'none';
       updateProfileAvatar();
+      // Still fill the personal rows — this early return is exactly the
+      // path that used to leave them all reading "Not provided".
+      renderPersonalDetails();
       return;
     }
 
@@ -1338,11 +1341,18 @@
     // Pre-fill both the collapsed display rows AND the (hidden-by-default)
     // edit form inputs every time fresh data loads, so reopening the
     // modal — or cancelling an edit — always shows/resets to real values.
-    document.getElementById('profileNameDisplay').textContent = v.hostName || 'Not provided';
-    document.getElementById('profileName').value = v.hostName || '';
-    document.getElementById('profilePhoneDisplay').textContent = v.hostPhone || 'Not provided';
-    document.getElementById('profilePhone').value = v.hostPhone || '';
-    document.getElementById('profileEmailValue').textContent = hostEmail || '—';
+    // Host-held values win where they exist, but must never overwrite a
+    // real guest value with a blank: a host who has not filled in their
+    // hosts row still has a name and phone on their guest account, and
+    // wiping them to "Not provided" is worse than showing nothing new.
+    const gp = currentGuestProfile || {};
+    const nameVal  = v.hostName  || gp.name  || '';
+    const phoneVal = v.hostPhone || gp.phone || '';
+    document.getElementById('profileNameDisplay').textContent = nameVal || 'Not provided';
+    document.getElementById('profileName').value = nameVal;
+    document.getElementById('profilePhoneDisplay').textContent = phoneVal || 'Not provided';
+    document.getElementById('profilePhone').value = phoneVal;
+    document.getElementById('profileEmailValue').textContent = gp.email || hostEmail || '—';
     document.getElementById('profileCurrentBankNote').textContent = v.bankAccountNumberMasked
       ? `${v.bankAccountNumberMasked}${v.bankAccountHolderName ? ' (' + v.bankAccountHolderName + ')' : ''}`
       : 'No bank details on file yet.';
@@ -1704,10 +1714,32 @@
       if(res.ok){
         currentGuestProfile = data.guest;
         updateProfileAvatar();
+        renderPersonalDetails();
       }
     } catch(err){
       // Non-fatal — the avatar just falls back to initials/no photo.
     }
+  }
+
+  // Name, phone and email come from the GUEST account, which every
+  // logged-in person has. They were previously filled only by
+  // renderVerification(), which reads the hosts table and returns early
+  // when there is no verification record — so anyone without one saw
+  // "Not provided" on all three regardless of what their account held.
+  //
+  // Email in particular was read from a localStorage key that only
+  // guest-login.html ever writes, so logging in through the main site
+  // left it blank. The profile API is the one source that always knows.
+  function renderPersonalDetails(){
+    const p = currentGuestProfile;
+    if(!p) return;
+    const set = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
+    const fill = (id, val) => { const el = document.getElementById(id); if(el && !el.value) el.value = val || ''; };
+    set('profileNameDisplay',  p.name  || 'Not provided');
+    set('profilePhoneDisplay', p.phone || 'Not provided');
+    set('profileEmailValue',   p.email || localStorage.getItem('aerva_guest_email') || '—');
+    fill('profileName',  p.name);
+    fill('profilePhone', p.phone);
   }
 
   async function loadListings(){
