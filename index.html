@@ -41,11 +41,16 @@
     --line-dark: rgba(28,26,23,0.14);
     --line-light: rgba(244,234,220,0.16);
     --maxw:1180px;
+    /* Page canvas, separate from --cream. They were the same variable,
+       but --cream does double duty: 25 of its 49 uses are TEXT on dark
+       chips, so flipping it to white would have turned those labels
+       white-on-white. A dedicated page token changes only the canvas. */
+    --page:#ffffff;
   }
   *{margin:0;padding:0;box-sizing:border-box;}
   html{scroll-behavior:smooth;}
   body{
-    background:var(--cream);
+    background:var(--page);
     color:var(--ink);
     font-family:'Jost', sans-serif;
     font-weight:400;
@@ -275,9 +280,13 @@
     background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:10px; letter-spacing:0.06em;
     text-transform:uppercase; padding:5px 10px; border-radius:3px;
   }
+  /* The card stays cream. On a cream page its white border did the
+     separating; on a white page the relationship inverts and the cream
+     block separates itself, so the border becomes a hairline instead of
+     a 2px gap that would now read as a white halo. */
   .suite-card{
-    background:var(--cream); display:flex; flex-direction:column; border:2px solid #ffffff;
-    border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(28,26,23,0.08);
+    background:var(--cream); display:flex; flex-direction:column; border:1px solid var(--line-dark);
+    border-radius:8px; overflow:hidden; box-shadow:0 1px 6px rgba(28,26,23,0.05);
     transition:transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s ease, border-color .35s ease;
   }
   .suite-card:hover{
@@ -323,6 +332,15 @@
   .nav-tier-badge.tier-gold{ background:rgba(28,20,12,0.9); color:#f0d27a; border-color:transparent; }
   .nav-tier-badge.tier-diamond{ background:rgba(16,24,32,0.9); color:#cfe6f5; border-color:transparent; }
   @media (max-width:900px){ .nav-tier-badge{display:none !important;} }
+  .rv-set{margin:16px 0 8px;}
+  .rv-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--line);}
+  .rv-label{font-size:13.5px;}
+  .rv-stars{display:flex; gap:2px; flex:0 0 auto;}
+  .rv-star{background:none; border:none; cursor:pointer; font-size:20px; line-height:1; padding:0 1px; color:var(--line-dark);}
+  .rv-star.is-on{color:#c9a227;}
+  .rv-comment-label{display:block; font-size:12px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.6; margin:14px 0 6px;}
+  #reviewComment{width:100%; box-sizing:border-box; padding:10px 12px; font-size:14px; font-family:inherit; border:1px solid var(--line-dark); background:white; resize:vertical;}
+  .rv-error{color:#a3402f; font-size:13px; margin-top:10px;}
   .modal-standing{display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:10px;}
   .modal-rating{display:flex; align-items:center; gap:4px; font-size:14px; color:var(--ink); margin-right:2px;}
   /* The badges here reuse the card's pills, but the host feather sits on
@@ -1735,6 +1753,16 @@
 </div>
 
 <!-- ================= LISTING DETAIL MODAL ================= -->
+<!-- Review form. Its own overlay rather than reusing the listing modal:
+     both can be open at once (review opened from a booking card while a
+     listing is being viewed), and sharing one would close the wrong thing. -->
+<div class="listing-modal-overlay" id="reviewModalOverlay" style="display:none;">
+  <div class="listing-modal" style="max-width:520px;">
+    <button type="button" class="listing-modal-close" id="reviewModalClose" aria-label="Close">&times;</button>
+    <div class="listing-modal-body" id="reviewModalBody"></div>
+  </div>
+</div>
+
 <div class="listing-modal-overlay" id="listingModalOverlay" style="display:none;">
   <div class="listing-modal">
     <button type="button" class="listing-modal-close" id="listingModalClose" aria-label="Close">×</button>
@@ -7473,6 +7501,141 @@
     btn.textContent = 'Create Account';
   });
 
+  // ---- Review form ----
+  // Which factors are asked for depends on what was booked. Rating the
+  // hygiene of a guided walk is a question with no sensible answer, and
+  // the endpoint rejects the wrong set anyway — so the form has to branch
+  // or it produces submissions that cannot succeed.
+  const REVIEW_FACTOR_SETS = {
+    stay: [
+      { key: 'hygiene',       label: 'Cleanliness & hygiene' },
+      { key: 'communication', label: 'Communication with the host' },
+      { key: 'services',      label: 'Services provided' },
+      { key: 'value',         label: 'Value for money' },
+      { key: 'location',      label: 'Location' }
+    ],
+    experience: [
+      { key: 'organisation',  label: 'How well it was organised' },
+      { key: 'safety',        label: 'Safety' },
+      { key: 'guide',         label: 'The guide' },
+      { key: 'value',         label: 'Value for money' }
+    ]
+  };
+
+  let reviewOrderId = null;
+  let reviewScores = {};
+
+  function starRowHtml(f){
+    return `<div class="rv-row" data-factor="${f.key}">
+      <span class="rv-label">${escapeMessageHtml(f.label)}</span>
+      <span class="rv-stars">${[1,2,3,4,5].map(n =>
+        `<button type="button" class="rv-star" data-factor="${f.key}" data-value="${n}" aria-label="${n} out of 5">\u2605</button>`
+      ).join('')}</span>
+    </div>`;
+  }
+
+  function paintStars(){
+    document.querySelectorAll('.rv-star').forEach(btn => {
+      const on = (reviewScores[btn.dataset.factor] || 0) >= Number(btn.dataset.value);
+      btn.classList.toggle('is-on', on);
+    });
+  }
+
+  function openReviewModal(booking){
+    reviewOrderId = booking.id;
+    reviewScores = {};
+    const set = REVIEW_FACTOR_SETS[booking.listing_type === 'experience' ? 'experience' : 'stay'];
+    const isExp = booking.listing_type === 'experience';
+    document.getElementById('reviewModalBody').innerHTML = `
+      <div class="listing-modal-content">
+        <h2>How was it?</h2>
+        <div class="loc">${escapeMessageHtml(booking.suite_name || '')}</div>
+        <p style="font-size:13px; opacity:0.7; margin-top:10px;">
+          Your review stays hidden until the ${isExp ? 'host' : 'host'} has also reviewed you, or for
+          15 days after checkout \u2014 whichever comes first. Neither of you can read the other\u2019s first.
+        </p>
+        <div class="rv-set">${set.map(starRowHtml).join('')}</div>
+        <label class="rv-comment-label" for="reviewComment">Tell other guests about it</label>
+        <textarea id="reviewComment" rows="4" placeholder="What stood out? What should someone know before booking?"></textarea>
+        <p class="rv-error" id="reviewError" style="display:none;"></p>
+        <button type="button" class="filter-clear" id="reviewSubmitBtn" style="margin-top:12px;">Submit review</button>
+      </div>`;
+    document.getElementById('reviewModalOverlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    document.querySelectorAll('.rv-star').forEach(btn => btn.addEventListener('click', () => {
+      reviewScores[btn.dataset.factor] = Number(btn.dataset.value);
+      paintStars();
+    }));
+    document.getElementById('reviewSubmitBtn').addEventListener('click', () => submitReview(set));
+  }
+
+  function closeReviewModal(){
+    document.getElementById('reviewModalOverlay').style.display = 'none';
+    document.body.style.overflow = '';
+    reviewOrderId = null;
+  }
+
+  async function submitReview(set){
+    const errEl = document.getElementById('reviewError');
+    const btn = document.getElementById('reviewSubmitBtn');
+    errEl.style.display = 'none';
+    // Checked here as well as server-side so a guest is told which rating
+    // is missing, by name, instead of being handed a generic rejection
+    // after they have already pressed submit.
+    const missing = set.find(f => !reviewScores[f.key]);
+    if(missing){
+      errEl.textContent = `Please rate "${missing.label}" before submitting.`;
+      errEl.style.display = 'block'; return;
+    }
+    const comment = (document.getElementById('reviewComment').value || '').trim();
+    if(comment.length < 10){
+      errEl.textContent = 'Please write at least a sentence about your visit.';
+      errEl.style.display = 'block'; return;
+    }
+    btn.disabled = true; btn.textContent = 'Submitting\u2026';
+    try{
+      const payload = { mode: 'submitReview', orderId: reviewOrderId, comment };
+      set.forEach(f => { payload[f.key] = reviewScores[f.key]; });
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not save your review right now.';
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Submit review';
+        return;
+      }
+      document.getElementById('reviewModalBody').innerHTML = `
+        <div class="listing-modal-content">
+          <h2>Thank you</h2>
+          <p style="font-size:14px; margin-top:10px;">Your review is saved. It goes live once the host has reviewed you too, or 15 days after checkout.</p>
+        </div>`;
+      loadMyBookings();
+    }catch(err){
+      errEl.textContent = 'Could not save your review right now.';
+      errEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Submit review';
+    }
+  }
+
+  // Bound once at parse time. The close button is inside static markup,
+  // not the rebuilt modal body, so it survives every re-render.
+  (function bindReviewModal(){
+    const rv = document.getElementById('reviewModalOverlay');
+    if(!rv) return;
+    const btn = document.getElementById('reviewModalClose');
+    if(btn) btn.addEventListener('click', closeReviewModal);
+    // Click the backdrop to dismiss, but not a click inside the panel.
+    rv.addEventListener('click', (e) => { if(e.target === rv) closeReviewModal(); });
+    document.addEventListener('keydown', (e) => {
+      if(e.key === 'Escape' && rv.style.display === 'flex') closeReviewModal();
+    });
+  })();
+
   async function loadMyBookings(){
     const container = document.getElementById('myBookingsContainer');
     const token = guestAuthToken();
@@ -7500,18 +7663,34 @@
         const chatBtnHtml = b.status === 'paid'
           ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${b.suite_name}" style="margin-top:10px;">Message Host</button>`
           : '';
+        // Only 'open' gets a button. The other states are shown as plain
+        // text where they are worth explaining, and silently where they
+        // are not — a guest whose stay is next month does not need telling
+        // that reviews are not open yet.
+        const reviewHtml =
+          b.review_state === 'open'
+            ? `<button type="button" class="filter-clear" data-review-order="${b.id}" style="margin-top:10px; margin-left:8px;">Leave a review</button>`
+          : b.review_state === 'done'
+            ? `<span style="font-size:12px; opacity:0.6; margin-left:8px;">Review submitted</span>`
+          : b.review_state === 'closed'
+            ? `<span style="font-size:12px; opacity:0.6; margin-left:8px;">Review window closed</span>`
+          : '';
         return `
           <div class="listing-card" style="margin-bottom:14px;">
             <div class="listing-info">
               <h3>${b.suite_name}</h3>
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(b.status)}</div>
-              ${chatBtnHtml}
+              ${chatBtnHtml}${reviewHtml}
             </div>
           </div>
         `;
       }).join('');
       container.querySelectorAll('[data-order-id]').forEach(btn => {
         btn.addEventListener('click', () => openChatForOrder(Number(btn.dataset.orderId), btn.dataset.listingName));
+      });
+      container.querySelectorAll('[data-review-order]').forEach(btn => {
+        const booking = bookings.find(x => String(x.id) === btn.dataset.reviewOrder);
+        if(booking) btn.addEventListener('click', () => openReviewModal(booking));
       });
     } catch(err){
       container.innerHTML = '<p class="suites-empty">Could not load your bookings right now. Please refresh.</p>';
