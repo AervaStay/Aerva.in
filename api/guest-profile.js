@@ -35,6 +35,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 
@@ -438,16 +439,61 @@ module.exports = async (req, res) => {
         ORDER BY created_at DESC
       `;
 
+      // Published, non-reverted only — a held review must not move a
+      // guest's standing any more than it shows on a listing.
       const reviews = await sql`
-        SELECT rating, comment, created_at FROM guest_reviews
+        SELECT rating, comment, created_at,
+               cleanliness, communication, respectful, rules
+        FROM guest_reviews
         WHERE guest_id = ${guestId}
+          AND published_at IS NOT NULL AND admin_reverted_at IS NULL
         ORDER BY created_at DESC
       `;
 
       const reviewCount = reviews.length;
       const avgRating = reviewCount
-        ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviewCount
+        ? reviews.reduce((sum, r) => sum + Number(r.rating || 0), 0) / reviewCount
         : 0;
+
+      // ---- Guest tier ----
+      // Spend and bookings over the SAME calendar year the annual review
+      // assesses, not lifetime. qualifyingBookings excludes token stays
+      // below QUALIFYING_BOOKING_MIN, which is what stops five ₹1,000
+      // bookings counting as five real ones.
+      let tier = null;
+      try {
+        const spendRows = await sql`
+          SELECT COALESCE(SUM(total), 0) AS spend,
+                 COUNT(*)                AS bookings,
+                 COUNT(*) FILTER (WHERE total >= ${QUALIFYING_BOOKING_MIN}) AS qualifying
+          FROM orders
+          WHERE guest_id = ${guestId} AND status = 'paid'
+            AND created_at >= date_trunc('year', CURRENT_DATE)
+        `;
+        const sp = spendRows[0] || {};
+        // Factor averages across published reviews. Rows written before
+        // the factor columns existed contribute nothing, and _tiers.js
+        // treats an all-null factor set as no review rather than a zero.
+        const rated = reviews.filter(r => r.cleanliness != null);
+        const avgOf = (k) => rated.length
+          ? rated.reduce((a, r) => a + Number(r[k] || 0), 0) / rated.length
+          : 0;
+        const factors = rated.length ? {
+          cleanliness: avgOf('cleanliness'), communication: avgOf('communication'),
+          respectful: avgOf('respectful'), rules: avgOf('rules')
+        } : undefined;
+        tier = guestTier({
+          totalSpend: Number(sp.spend) || 0,
+          bookingCount: Number(sp.bookings) || 0,
+          qualifyingBookings: Number(sp.qualifying) || 0,
+          reviewCount: rated.length,
+          avgRating,
+          factors
+        });
+      } catch (err) {
+        // A badge is decoration; never fail the profile over it.
+        console.error('guest tier computation failed (non-fatal):', err);
+      }
 
       return res.status(200).json({
         guest: {
@@ -459,6 +505,7 @@ module.exports = async (req, res) => {
           preferredCurrency: guest.preferred_currency || null,
           memberSince: guest.created_at,
           badge: computeBadge(reviewCount, avgRating),
+          tier: tier ? { key: tier.key, label: tier.label, blurb: tier.blurb } : null,
           reviewCount,
           avgRating: reviewCount ? Number(avgRating.toFixed(2)) : null
         },
