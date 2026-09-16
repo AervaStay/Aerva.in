@@ -957,7 +957,7 @@
               + (r.flag ? ' <span style="opacity:0.7;">+ ' + escAdmin(r.flag.label) + '</span>' : '') + '</td>'
             + '<td style="padding:4px 6px; border-top:1px solid #eee; white-space:nowrap;">'
               + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:12px;" onclick=\'loadProperty(' + JSON.stringify(r).replace(/'/g, "&#39;") + ')\'>Load</button> '
-              + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:12px;" onclick="propertyHistory(' + Number(r.id) + ')">History</button>'
+              + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:12px;" onclick="propertyHistory(' + Number(r.id) + ', &#39;listing&#39;)">History</button>'
             + '</td></tr>').join('')
         + '</table>';
     }catch(err){ box.innerHTML = 'Search failed.'; }
@@ -973,31 +973,50 @@
     runSimulation();
   }
 
-  async function propertyHistory(id){
+  async function propertyHistory(id, subject){
     const out = document.getElementById('simResults');
-    out.innerHTML = 'Building history\u2026';
+    out.innerHTML = 'Loading history…';
     try{
-      const res = await fetch(API_BASE + '/api/get-pending-listings?propertyHistory=' + Number(id), { headers: authHeaders() });
+      const res = await fetch(API_BASE + '/api/get-pending-listings?tierHistory=' + Number(id)
+        + '&subject=' + encodeURIComponent(subject || 'listing'), { headers: authHeaders() });
       const d = await res.json();
-      if(!res.ok){ out.innerHTML = escAdmin(d.error || 'Could not build that history.'); return; }
-      const tl = d.timeline || [];
+      if(!res.ok){ out.innerHTML = escAdmin(d.error || 'Could not load that history.'); return; }
+      const h = d.history || [], c = d.current;
+      // The cutoffs stored alongside each row are what make an old score
+      // readable: 4.93 means nothing without the bar that applied that day.
+      const cutoffText = (cut) => {
+        if(!cut) return '';
+        try{
+          const o = typeof cut === 'string' ? JSON.parse(cut) : cut;
+          return Object.keys(o).length
+            ? '<div style="font-size:11px; opacity:0.6;">bar that day: '
+              + Object.entries(o).map(([k,v]) => escAdmin(k.replace(/_/g,' ')) + ' ' + Number(v).toFixed(3)).join(' · ')
+              + '</div>' : '';
+        }catch(e){ return ''; }
+      };
       out.innerHTML =
-        '<div style="font-size:15px; margin-bottom:4px;"><strong>Listing #' + Number(d.listingId) + '</strong> \u2014 '
-          + Number(d.reviewCount) + ' published review(s), currently ' + escAdmin(d.current || 'no badge') + '</div>'
-        + '<p style="font-size:12px; opacity:0.7; margin:0 0 10px;">' + escAdmin(d.caveat || '') + '</p>'
-        + (tl.length
+        '<div style="font-size:15px; margin-bottom:6px;"><strong>' + escAdmin(d.subject) + ' #' + Number(d.subjectId) + '</strong>'
+          + (c ? ' — currently ' + escAdmin(c.tier_key || 'no badge')
+               + (c.score != null ? ' (score ' + escAdmin(String(c.score)) + ')' : '')
+               + '<span style="opacity:0.6; font-size:12px;"> as of ' + escAdmin(String(c.updated_at).slice(0,10)) + '</span>'
+             : ' — no recorded standing')
+        + '</div>'
+        + (d.note ? '<p style="font-size:12px; opacity:0.7;">' + escAdmin(d.note) + '</p>' : '')
+        + (h.length
           ? '<table style="width:100%; border-collapse:collapse; font-size:13px;">'
-            + '<tr><th style="text-align:left; padding:4px 6px;">Date</th><th style="text-align:left; padding:4px 6px;">After review</th>'
-            + '<th style="text-align:left; padding:4px 6px;">Score</th><th style="text-align:left; padding:4px 6px;">Change</th></tr>'
-            + tl.map(t =>
-                '<tr><td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(String(t.at).slice(0,10)) + '</td>'
-                + '<td style="padding:4px 6px; border-top:1px solid #eee;">#' + Number(t.reviewNumber) + '</td>'
-                + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(String(t.score)) + '</td>'
+            + '<tr><th style="text-align:left; padding:4px 6px;">When</th><th style="text-align:left; padding:4px 6px;">Change</th>'
+            + '<th style="text-align:left; padding:4px 6px;">Score</th><th style="text-align:left; padding:4px 6px;">Reviews</th></tr>'
+            + h.map(r =>
+                '<tr><td style="padding:4px 6px; border-top:1px solid #eee; white-space:nowrap;">'
+                  + escAdmin(String(r.changed_at).replace('T',' ').slice(0,16)) + '</td>'
                 + '<td style="padding:4px 6px; border-top:1px solid #eee;">'
-                  + escAdmin(t.from || 'no badge') + ' \u2192 <strong>' + escAdmin(t.to || 'no badge') + '</strong></td></tr>').join('')
+                  + escAdmin(r.previous_key || 'no badge') + ' → <strong>' + escAdmin(r.tier_label || 'no badge') + '</strong>'
+                  + cutoffText(r.cutoffs) + '</td>'
+                + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(r.score == null ? '—' : String(r.score)) + '</td>'
+                + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(String(r.review_count == null ? '—' : r.review_count)) + '</td></tr>').join('')
             + '</table>'
-          : '<p style="font-size:13px; opacity:0.7;">No rung changes \u2014 this listing has never held a badge.</p>');
-    }catch(err){ out.innerHTML = 'Could not build that history.'; }
+          : '');
+    }catch(err){ out.innerHTML = 'Could not load that history.'; }
   }
 
   // ---- Bands + simulator ----
