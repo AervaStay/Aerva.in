@@ -434,6 +434,154 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- Property lookup (admin only) ----
+  // GET ?propertyLookup=<query> — find a listing by name, city or id, and
+  // return its live numbers plus the history of when it reached each rung.
+  //
+  // Exists because typing scores by hand does not scale: with a thousand
+  // listings an admin needs to pull up ONE and see what it actually holds,
+  // not approximate it.
+  if (req.method === 'GET' && req.query.propertyLookup !== undefined) {
+    try {
+      const q = String(req.query.propertyLookup || '').trim();
+      if (q.length < 2) return res.status(400).json({ error: 'Type at least two characters.' });
+      const asId = /^[0-9]+$/.test(q) ? Number(q) : -1;
+      const like = '%' + q.toLowerCase() + '%';
+
+      const rows = await sql`
+        SELECT l.id, l.property_name, l.city, l.area, l.property_type, l.nightly_rate,
+               COUNT(r.id)        AS reviews,
+               AVG(r.hygiene)       AS hygiene,
+               AVG(r.communication) AS communication,
+               AVG(r.services)      AS services,
+               AVG(r.value_rating)  AS value,
+               AVG(r.location)      AS location
+        FROM listings l
+        LEFT JOIN listing_reviews r
+          ON r.listing_id = l.id AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
+        WHERE l.status = 'approved'
+          AND (l.id = ${asId} OR lower(l.property_name) LIKE ${like} OR lower(COALESCE(l.city,'')) LIKE ${like})
+        GROUP BY l.id
+        ORDER BY COUNT(r.id) DESC, l.property_name ASC
+        LIMIT 25
+      `;
+
+      const minPool = Math.min(...PROPERTY_TIERS.map(x => x.minReviews));
+      let cutoffs = {};
+      try {
+        const pool = await sql`
+          SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
+                 AVG(services) AS services, AVG(value_rating) AS value, AVG(location) AS location
+          FROM listing_reviews
+          WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
+          GROUP BY listing_id HAVING COUNT(*) >= ${minPool}
+        `;
+        cutoffs = propertyCutoffs(pool.map(r => reviewScore({
+          hygiene: Number(r.hygiene), communication: Number(r.communication),
+          services: Number(r.services), value: Number(r.value), location: Number(r.location)
+        }, REVIEW_FACTORS)));
+      } catch (err) { console.error('lookup cutoffs failed:', err); }
+
+      const results = rows.map(r => {
+        const n = Number(r.reviews) || 0;
+        const factors = n > 0 ? {
+          hygiene: Number(r.hygiene), communication: Number(r.communication),
+          services: Number(r.services), value: Number(r.value), location: Number(r.location)
+        } : null;
+        const t = factors ? propertyTier({ reviewCount: n, factors }, cutoffs) : null;
+        const f = factors ? propertyFlag({ reviewCount: n, factors }) : null;
+        return {
+          id: r.id, name: r.property_name, city: r.city, area: r.area,
+          propertyType: r.property_type, nightlyRate: Number(r.nightly_rate) || 0,
+          reviewCount: n,
+          factors: factors || { hygiene: 0, communication: 0, services: 0, value: 0, location: 0 },
+          score: factors ? Number(reviewScore(factors, REVIEW_FACTORS).toFixed(3)) : null,
+          tier: t ? { key: t.key, label: t.label } : null,
+          flag: f ? { key: f.key, label: f.label } : null
+        };
+      });
+      return res.status(200).json({ results, cutoffs });
+    } catch (err) {
+      console.error('propertyLookup error:', err);
+      return res.status(500).json({ error: 'Could not search listings right now.' });
+    }
+  }
+
+  // ---- When a property reached each rung (admin only) ----
+  // GET ?propertyHistory=<listingId>
+  //
+  // Replays the listing's published reviews in order, recomputing the
+  // running average after each, and records the date its rung changed.
+  //
+  // IMPORTANT CAVEAT, surfaced to the admin rather than buried: the bands
+  // are RELATIVE, and historical cutoffs are not stored anywhere. This
+  // replays the score history against TODAY'S cutoffs. So it answers
+  // "when did this listing's score first clear the bar as it stands now",
+  // not "what badge did it display that day". Storing a cutoff snapshot
+  // per day would make it exact; that is a bigger change than this.
+  if (req.method === 'GET' && req.query.propertyHistory !== undefined) {
+    try {
+      const listingId = Number(req.query.propertyHistory);
+      if (!listingId) return res.status(400).json({ error: 'Which listing?' });
+
+      const reviews = await sql`
+        SELECT hygiene, communication, services, value_rating, location,
+               COALESCE(published_at, created_at) AS at
+        FROM listing_reviews
+        WHERE listing_id = ${listingId}
+          AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+        ORDER BY COALESCE(published_at, created_at) ASC
+      `;
+
+      const minPool = Math.min(...PROPERTY_TIERS.map(x => x.minReviews));
+      let cutoffs = {};
+      try {
+        const pool = await sql`
+          SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
+                 AVG(services) AS services, AVG(value_rating) AS value, AVG(location) AS location
+          FROM listing_reviews
+          WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
+          GROUP BY listing_id HAVING COUNT(*) >= ${minPool}
+        `;
+        cutoffs = propertyCutoffs(pool.map(r => reviewScore({
+          hygiene: Number(r.hygiene), communication: Number(r.communication),
+          services: Number(r.services), value: Number(r.value), location: Number(r.location)
+        }, REVIEW_FACTORS)));
+      } catch (err) { console.error('history cutoffs failed:', err); }
+
+      const sums = { hygiene: 0, communication: 0, services: 0, value: 0, location: 0 };
+      const timeline = [];
+      let last = null;
+      reviews.forEach((r, i) => {
+        sums.hygiene += Number(r.hygiene); sums.communication += Number(r.communication);
+        sums.services += Number(r.services); sums.value += Number(r.value_rating);
+        sums.location += Number(r.location);
+        const n = i + 1;
+        const factors = {
+          hygiene: sums.hygiene / n, communication: sums.communication / n,
+          services: sums.services / n, value: sums.value / n, location: sums.location / n
+        };
+        const t = propertyTier({ reviewCount: n, factors }, cutoffs);
+        const label = t ? t.label : null;
+        if (label !== last) {
+          timeline.push({
+            at: r.at, reviewNumber: n, from: last, to: label,
+            score: Number(reviewScore(factors, REVIEW_FACTORS).toFixed(3))
+          });
+          last = label;
+        }
+      });
+
+      return res.status(200).json({
+        listingId, reviewCount: reviews.length, current: last, timeline, cutoffs,
+        caveat: 'Replayed against today\u2019s cutoffs. Bands are relative and historical cutoffs are not stored, so this shows when the score first cleared the current bar \u2014 not necessarily what was displayed on the day.'
+      });
+    } catch (err) {
+      console.error('propertyHistory error:', err);
+      return res.status(500).json({ error: 'Could not build that history.' });
+    }
+  }
+
   // ---- Tier simulator (admin only) ----
   // POST { simulateTier: { kind: 'guest'|'host', ...inputs } }
   //
