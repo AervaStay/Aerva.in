@@ -95,6 +95,7 @@ const { describeLadders, guestTier, hostTier, reviewScore, weakestFactor,
         REVIEW_FACTORS, GUEST_FACTORS, HOST_TIERS, GUEST_TIERS,
         bookingValueBand, QUALIFYING_BOOKING_MIN,
         propertyTier, propertyFlag, PROPERTY_TIERS, propertyCutoffs } = require('./_tiers');
+const { tierHistoryFor } = require('./_tier-history');
 const { COMPLIANCE_CHECKS } = require('./_compliance');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -507,78 +508,36 @@ module.exports = async (req, res) => {
     }
   }
 
-  // ---- When a property reached each rung (admin only) ----
-  // GET ?propertyHistory=<listingId>
+  // ---- Recorded standing history (admin only) ----
+  // GET ?tierHistory=<id>&subject=listing|host|guest
   //
-  // Replays the listing's published reviews in order, recomputing the
-  // running average after each, and records the date its rung changed.
-  //
-  // IMPORTANT CAVEAT, surfaced to the admin rather than buried: the bands
-  // are RELATIVE, and historical cutoffs are not stored anywhere. This
-  // replays the score history against TODAY'S cutoffs. So it answers
-  // "when did this listing's score first clear the bar as it stands now",
-  // not "what badge did it display that day". Storing a cutoff snapshot
-  // per day would make it exact; that is a bigger change than this.
-  if (req.method === 'GET' && req.query.propertyHistory !== undefined) {
+  // Reads the LOGGED history written by the daily sweep, not a replay.
+  // The earlier version replayed old scores against today's cutoffs,
+  // which answered a subtly different question: the bands are relative,
+  // so "score 4.93" only means something alongside the bar that applied
+  // that day. Each logged row carries its own cutoff snapshot, so a row
+  // from last March can still be read correctly.
+  if (req.method === 'GET' && req.query.tierHistory !== undefined) {
     try {
-      const listingId = Number(req.query.propertyHistory);
-      if (!listingId) return res.status(400).json({ error: 'Which listing?' });
+      const subjectId = Number(req.query.tierHistory);
+      const subject = ['listing', 'host', 'guest'].includes(req.query.subject) ? req.query.subject : 'listing';
+      if (!subjectId) return res.status(400).json({ error: 'Which subject?' });
 
-      const reviews = await sql`
-        SELECT hygiene, communication, services, value_rating, location,
-               COALESCE(published_at, created_at) AS at
-        FROM listing_reviews
-        WHERE listing_id = ${listingId}
-          AND published_at IS NOT NULL AND admin_reverted_at IS NULL
-        ORDER BY COALESCE(published_at, created_at) ASC
+      const rows = await tierHistoryFor(sql, subject, subjectId, 100);
+      const current = await sql`
+        SELECT tier_key, score, review_count, metric, updated_at
+        FROM tier_current WHERE subject_type = ${subject} AND subject_id = ${subjectId}
       `;
-
-      const minPool = Math.min(...PROPERTY_TIERS.map(x => x.minReviews));
-      let cutoffs = {};
-      try {
-        const pool = await sql`
-          SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
-                 AVG(services) AS services, AVG(value_rating) AS value, AVG(location) AS location
-          FROM listing_reviews
-          WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
-          GROUP BY listing_id HAVING COUNT(*) >= ${minPool}
-        `;
-        cutoffs = propertyCutoffs(pool.map(r => reviewScore({
-          hygiene: Number(r.hygiene), communication: Number(r.communication),
-          services: Number(r.services), value: Number(r.value), location: Number(r.location)
-        }, REVIEW_FACTORS)));
-      } catch (err) { console.error('history cutoffs failed:', err); }
-
-      const sums = { hygiene: 0, communication: 0, services: 0, value: 0, location: 0 };
-      const timeline = [];
-      let last = null;
-      reviews.forEach((r, i) => {
-        sums.hygiene += Number(r.hygiene); sums.communication += Number(r.communication);
-        sums.services += Number(r.services); sums.value += Number(r.value_rating);
-        sums.location += Number(r.location);
-        const n = i + 1;
-        const factors = {
-          hygiene: sums.hygiene / n, communication: sums.communication / n,
-          services: sums.services / n, value: sums.value / n, location: sums.location / n
-        };
-        const t = propertyTier({ reviewCount: n, factors }, cutoffs);
-        const label = t ? t.label : null;
-        if (label !== last) {
-          timeline.push({
-            at: r.at, reviewNumber: n, from: last, to: label,
-            score: Number(reviewScore(factors, REVIEW_FACTORS).toFixed(3))
-          });
-          last = label;
-        }
-      });
-
       return res.status(200).json({
-        listingId, reviewCount: reviews.length, current: last, timeline, cutoffs,
-        caveat: 'Replayed against today\u2019s cutoffs. Bands are relative and historical cutoffs are not stored, so this shows when the score first cleared the current bar \u2014 not necessarily what was displayed on the day.'
+        subject, subjectId,
+        current: current[0] || null,
+        history: rows,
+        note: rows.length ? null
+          : 'No recorded changes yet. History is written by the daily sweep (/api/get-listings?reviewSweep=1); nothing is backfilled for the period before it first ran.'
       });
     } catch (err) {
-      console.error('propertyHistory error:', err);
-      return res.status(500).json({ error: 'Could not build that history.' });
+      console.error('tierHistory error:', err);
+      return res.status(500).json({ error: 'Could not load that history.' });
     }
   }
 

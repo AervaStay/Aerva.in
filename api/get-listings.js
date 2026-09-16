@@ -59,6 +59,8 @@ const { neon } = require('@neondatabase/serverless');
 const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
         propertyCutoffs, PROPERTY_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN } = require('./_tiers');
+const { recordTierChange } = require('./_tier-history');
 const sql = neon(process.env.DATABASE_URL);
 
 function parseMaxGuests(raw) {
@@ -174,10 +176,137 @@ module.exports = async (req, res) => {
         }
       }
 
+      // ---- Standing snapshot ----
+      // Runs after publication, so today's newly-visible reviews are
+      // already counted. Records a row only where standing actually
+      // changed; see _tier-history.js for why.
+      //
+      // The cutoffs are snapshotted with every property row. Without that
+      // a historical score is uninterpretable: "4.93" means nothing unless
+      // you also know the top-5% bar was 4.92 that day.
+      let changes = { listing: 0, host: 0, guest: 0 };
+      try {
+        const minPool = Math.min(...PROPERTY_TIERS.map(t => t.minReviews));
+        const pool = await sql`
+          SELECT listing_id,
+                 AVG(hygiene) AS hygiene, AVG(communication) AS communication,
+                 AVG(services) AS services, AVG(value_rating) AS value,
+                 AVG(location) AS location, COUNT(*) AS n
+          FROM listing_reviews
+          WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
+          GROUP BY listing_id
+        `;
+        const scored = pool.map(r => ({
+          listingId: r.listing_id,
+          n: Number(r.n) || 0,
+          factors: {
+            hygiene: Number(r.hygiene), communication: Number(r.communication),
+            services: Number(r.services), value: Number(r.value), location: Number(r.location)
+          }
+        }));
+        const cutoffs = propertyCutoffs(
+          scored.filter(x => x.n >= minPool).map(x => reviewScore(x.factors, REVIEW_FACTORS))
+        );
+
+        for (const x of scored) {
+          const t = propertyTier({ reviewCount: x.n, factors: x.factors }, cutoffs);
+          const r = await recordTierChange(sql, {
+            subjectType: 'listing', subjectId: x.listingId, tier: t,
+            score: Number(reviewScore(x.factors, REVIEW_FACTORS).toFixed(3)),
+            reviewCount: x.n, cutoffs
+          });
+          if (r.changed) changes.listing++;
+        }
+
+        // Hosts: payout over a rolling twelve months plus their own
+        // published reviews, matching what the public badge reads.
+        const hostRows = await sql`
+          SELECT l.host_id,
+                 COALESCE(SUM(o.payout_amount), 0) AS payout
+          FROM listings l
+          LEFT JOIN orders o
+            ON o.listing_id = l.id AND o.status = 'paid'
+            AND o.created_at >= NOW() - INTERVAL '12 months'
+          WHERE l.host_id IS NOT NULL
+          GROUP BY l.host_id
+        `;
+        const hostRev = await sql`
+          SELECT host_id, AVG(hygiene) AS hygiene, AVG(communication) AS communication,
+                 AVG(services) AS services, AVG(value_rating) AS value,
+                 AVG(location) AS location, COUNT(*) AS n
+          FROM listing_reviews
+          WHERE published_at IS NOT NULL AND admin_reverted_at IS NULL
+          GROUP BY host_id
+        `;
+        const revByHost = {};
+        hostRev.forEach(r => { revByHost[r.host_id] = r; });
+        for (const h of hostRows) {
+          const rv = revByHost[h.host_id];
+          const n = rv ? Number(rv.n) || 0 : 0;
+          const factors = n > 0 ? {
+            hygiene: Number(rv.hygiene), communication: Number(rv.communication),
+            services: Number(rv.services), value: Number(rv.value), location: Number(rv.location)
+          } : undefined;
+          const t = hostTier({ totalPayout: Number(h.payout) || 0, reviewCount: n, factors });
+          const r = await recordTierChange(sql, {
+            subjectType: 'host', subjectId: h.host_id, tier: t,
+            score: factors ? Number(reviewScore(factors, REVIEW_FACTORS).toFixed(3)) : null,
+            reviewCount: n, metric: Number(h.payout) || 0
+          });
+          if (r.changed) changes.host++;
+        }
+
+        // Guests: spend and bookings within the calendar year the annual
+        // review assesses, plus the four-factor averages hosts gave them.
+        const guestRows = await sql`
+          SELECT g.id AS guest_id,
+                 COALESCE(SUM(o.total), 0) AS spend,
+                 COUNT(o.id)               AS bookings,
+                 COUNT(o.id) FILTER (WHERE o.total >= ${QUALIFYING_BOOKING_MIN}) AS qualifying
+          FROM guests g
+          JOIN orders o ON o.guest_id = g.id AND o.status = 'paid'
+            AND o.created_at >= date_trunc('year', CURRENT_DATE)
+          GROUP BY g.id
+        `;
+        const guestRev = await sql`
+          SELECT guest_id, AVG(cleanliness) AS cleanliness, AVG(communication) AS communication,
+                 AVG(respectful) AS respectful, AVG(rules) AS rules, COUNT(*) AS n
+          FROM guest_reviews
+          WHERE cleanliness IS NOT NULL
+            AND published_at IS NOT NULL AND admin_reverted_at IS NULL
+          GROUP BY guest_id
+        `;
+        const revByGuest = {};
+        guestRev.forEach(r => { revByGuest[r.guest_id] = r; });
+        for (const g of guestRows) {
+          const rv = revByGuest[g.guest_id];
+          const n = rv ? Number(rv.n) || 0 : 0;
+          const factors = n > 0 ? {
+            cleanliness: Number(rv.cleanliness), communication: Number(rv.communication),
+            respectful: Number(rv.respectful), rules: Number(rv.rules)
+          } : undefined;
+          const t = guestTier({
+            totalSpend: Number(g.spend) || 0,
+            bookingCount: Number(g.bookings) || 0,
+            qualifyingBookings: Number(g.qualifying) || 0,
+            reviewCount: n, factors
+          });
+          const r = await recordTierChange(sql, {
+            subjectType: 'guest', subjectId: g.guest_id, tier: t,
+            score: factors ? Number(reviewScore(factors, GUEST_FACTORS).toFixed(3)) : null,
+            reviewCount: n, metric: Number(g.spend) || 0
+          });
+          if (r.changed) changes.guest++;
+        }
+      } catch (err) {
+        console.error('tier snapshot failed (non-fatal):', err);
+      }
+
       return res.status(200).json({
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
-        prompted: toPrompt.length
+        prompted: toPrompt.length,
+        tierChanges: changes
       });
     } catch (err) {
       console.error('reviewSweep error:', err);
