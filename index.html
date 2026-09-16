@@ -91,11 +91,17 @@
     transition:background .3s ease, border-color .3s ease, box-shadow .3s ease;
     border-bottom:1px solid transparent;
   }
+  /* White to match the page, with the separation carried by the border
+     and a real shadow rather than by a tone difference. The cream fill
+     used to do that job on its own; on a white page it would be the only
+     warm band left and would read as a stray stripe. Kept at 0.97 rather
+     than solid so the blur still has something to work with as content
+     scrolls beneath. */
   header.scrolled{
-    background:rgba(244,234,220,0.96);
+    background:rgba(255,255,255,0.97);
     backdrop-filter:blur(10px);
     border-bottom:1px solid var(--line-dark);
-    box-shadow:0 1px 0 rgba(0,0,0,0.03);
+    box-shadow:0 1px 4px rgba(28,26,23,0.06);
   }
   /* While transparent (unscrolled, floating over the hero photo), the
      logo/nav text was still using the same dark --ink color it uses
@@ -307,12 +313,27 @@
   .suite-photo{width:100%; aspect-ratio:4/3.1; overflow:hidden; background:var(--cream-deep); position:relative;}
   .suite-photo img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .5s ease;}
   .suite-card:hover .suite-photo img{transform:scale(1.06);}
+  /* A scrim behind the badge row rather than a hard white band. The
+     badges sat directly on the photo, so their legibility depended on
+     whatever happened to be behind them — a pale bathroom wall washed the
+     light pills out entirely. The scrim is full-bleed and fades to
+     nothing, so it lifts the labels without cropping the image or
+     drawing a line across it.
+     pointer-events:none so it never intercepts the card click. */
+  .suite-photo::before{
+    content:''; position:absolute; top:0; left:0; right:0; height:108px; z-index:5;
+    background:linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.72) 42%, rgba(255,255,255,0) 100%);
+    pointer-events:none;
+  }
   .suite-badges{
     position:absolute; top:12px; left:12px; z-index:6; display:flex; flex-wrap:wrap; gap:6px;
     align-items:flex-start; max-width:calc(100% - 68px);
   }
+  /* Dark pills on a light scrim: the blur is gone because there is no
+     longer a photo directly behind them to soften, and the fill is solid
+     so the contrast is the same on every image. */
   .suite-badge{
-    background:rgba(28,26,23,0.82); color:var(--cream); backdrop-filter:blur(3px);
+    background:rgba(28,26,23,0.88); color:#ffffff;
     font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; padding:4px 9px; border-radius:100px;
   }
   /* The one badge that earns real emphasis — it's the only thing on the
@@ -734,10 +755,13 @@
 
   /* ---------- FAVORITE HEART ---------- */
   .suite-photo{position:relative;}
+  /* Darkened from 35% to 62%. The old value relied on a photo behind it
+     for contrast; against the light scrim a translucent dark circle with
+     a white outline icon disappeared into the gradient. */
   .fav-heart{
-    position:absolute; top:12px; right:12px; z-index:6; width:34px; height:34px;
-    border:none; background:rgba(20,17,14,0.35); border-radius:50%; cursor:pointer;
-    display:flex; align-items:center; justify-content:center; transition:transform .15s ease;
+    position:absolute; top:12px; right:12px; z-index:7; width:34px; height:34px;
+    border:none; background:rgba(20,17,14,0.62); border-radius:50%; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; transition:transform .15s ease, background .15s ease;
   }
   .fav-heart:hover{transform:scale(1.08);}
   .fav-heart svg{width:17px; height:17px; stroke:#fff; fill:none; stroke-width:1.8; transition:fill .15s ease, stroke .15s ease;}
