@@ -447,7 +447,17 @@
      experience happens to include a stay," a different fact). */
   .suite-badge-type-stay{ background:#2f6690; color:#fff; }
   /* Type label inside the detail view, not on a photo. */
-  .suite-badges.listing-type-row{ position:static; max-width:none; margin:8px 0; }
+  .suite-badges.listing-type-row{ position:static; max-width:none; margin:0; }
+  /* Title, type badge and location on one line in the detail views. The
+     h2 and .loc carry their own margins for the stacked layout they used
+     to have, so both are reset here. Wraps on a narrow screen rather than
+     forcing a horizontal scroll. */
+  .listing-head-row{ display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 12px; margin-bottom:10px; }
+  /* .listing-modal-content's own h2/.loc rules appear later in this
+     sheet, so these are scoped the same way to actually win. */
+  .listing-modal-content .listing-head-row h2,
+  .listing-modal-content .listing-head-row .loc{ margin:0; }
+  .listing-head-row .suite-badges{ align-self:center; }
   .suite-badge-type-experience{ background:#8a6c39; color:#fff; }
   .suite-badge-rooms{ background:rgba(28,26,23,0.78); color:#fff; }
   .suite-photo-slider{
@@ -1751,6 +1761,12 @@
                 <option value="asc">Price: Low to High</option>
                 <option value="desc">Price: High to Low</option>
                 <option value="rating">Rating: Highest first</option>
+              </select>
+            </div>
+            <div class="search-field">
+              <label for="badgeFilter">Badge</label>
+              <select id="badgeFilter">
+                <option value="">Any badge</option>
               </select>
             </div>
             <div class="search-field">
@@ -7104,7 +7120,14 @@
       if(l.pet_friendly !== true) return false;
       if(l.max_pets_allowed && Number(l.max_pets_allowed) < guestCounts.pets) return false;
     }
+    if(!passesBadgeFilter(l, 'stay')) return false;
     return true;
+  }
+
+  // Experiences have no nightly rate or pet policy, so the badge filter
+  // is the only one that applies to them.
+  function passesExperienceFilters(e){
+    return !!e && passesBadgeFilter(e, 'experience');
   }
 
   function renderRecentlyViewedRow(){
@@ -7122,7 +7145,7 @@
       // doesn't consume one of the three slots and leave the row looking
       // emptier than it should.
       if(entry.type === 'stay' && listingsById[entry.id] && passesStayFilters(listingsById[entry.id])) cards.push({ type: 'stay', data: listingsById[entry.id] });
-      else if(entry.type === 'experience' && experiencesById[entry.id]) cards.push({ type: 'experience', data: experiencesById[entry.id] });
+      else if(entry.type === 'experience' && experiencesById[entry.id] && passesExperienceFilters(experiencesById[entry.id])) cards.push({ type: 'experience', data: experiencesById[entry.id] });
     });
     // Capped at the 3 most recent — entries are already newest-first (see
     // getRecentlyViewedEntries), sliced after filtering out stale ones so
@@ -7176,7 +7199,7 @@
 
     let candidates = [];
     if(currentCategoryFilter !== 'experiences') candidates = candidates.concat(withDistance(approvedListings.filter(passesStayFilters), 'stay'));
-    if(currentCategoryFilter !== 'suites') candidates = candidates.concat(withDistance(approvedExperiences, 'experience'));
+    if(currentCategoryFilter !== 'suites') candidates = candidates.concat(withDistance(approvedExperiences.filter(passesExperienceFilters), 'experience'));
     candidates.sort((a, b) => a.km - b.km);
     candidates = candidates.slice(0, 8);
 
@@ -7276,8 +7299,62 @@
     }
   }
 
+  // ---- Badge filter ----
+  // Values are "<kind>:<key>": property / flag / host for stays,
+  // experience for experiences. Options are rebuilt from the loaded
+  // results, so only badges some live listing actually holds are
+  // offered, and the labels always come from the API rather than a
+  // second copy of the ladder kept here.
+  const BADGE_GROUPS = [
+    { kind: 'property',   label: 'Property standing',   from: 'stay',       field: 'property_tier' },
+    { kind: 'flag',       label: 'Property highlights', from: 'stay',       field: 'property_flag' },
+    { kind: 'host',       label: 'Host standing',       from: 'stay',       field: 'host_tier' },
+    { kind: 'experience', label: 'Experience standing', from: 'experience', field: 'experience_tier' }
+  ];
+  function selectedBadge(){
+    const el = document.getElementById('badgeFilter');
+    const raw = el ? el.value : '';
+    if(!raw) return null;
+    const idx = raw.indexOf(':');
+    return idx < 0 ? null : { kind: raw.slice(0, idx), key: raw.slice(idx + 1) };
+  }
+  function refreshBadgeFilterOptions(){
+    const el = document.getElementById('badgeFilter');
+    if(!el) return;
+    const previous = el.value;
+    const html = ['<option value="">Any badge</option>'];
+    BADGE_GROUPS.forEach(group => {
+      const source = group.from === 'stay' ? approvedListings : approvedExperiences;
+      const seen = new Map();
+      (source || []).forEach(item => {
+        const b = item && item[group.field];
+        if(b && b.key && b.label && !seen.has(b.key)) seen.set(b.key, b.label);
+      });
+      if(!seen.size) return;
+      html.push(`<optgroup label="${escapeMessageHtml(group.label)}">`);
+      seen.forEach((label, key) => {
+        html.push(`<option value="${escapeMessageHtml(group.kind + ':' + key)}">${escapeMessageHtml(label)}</option>`);
+      });
+      html.push('</optgroup>');
+    });
+    el.innerHTML = html.join('');
+    // Keep the guest's choice if that badge is still on offer; otherwise
+    // fall back to "Any badge" rather than silently filtering by
+    // something no longer in the list.
+    el.value = [...el.options].some(o => o.value === previous) ? previous : '';
+  }
+  function passesBadgeFilter(item, type){
+    const sel = selectedBadge();
+    if(!sel) return true;
+    const group = BADGE_GROUPS.find(g => g.kind === sel.kind);
+    if(!group || group.from !== type) return false; // e.g. a host badge never matches an experience
+    const b = item && item[group.field];
+    return !!(b && b.key === sel.key);
+  }
+
   function applyFiltersAndRender(){
     const container = document.getElementById('suitesContainer');
+    refreshBadgeFilterOptions();
 
     // A place search that resolved to one specific property's own
     // address (see performSearch) replaces the whole results area with
@@ -7351,7 +7428,7 @@
       suiteList.sort(byRating);
     }
 
-    const experienceList = approvedExperiences.slice();
+    const experienceList = approvedExperiences.filter(passesExperienceFilters);
 
     // "All" interleaves both card types into one grid; "Suites" and
     // "Aerva Experience" are just filtered views of that exact same
@@ -7405,7 +7482,10 @@
     container.innerHTML = '';
     if(finalSuites.length === 0 && finalExperiences.length === 0){
       let message;
-      if(currentCategoryFilter === 'suites' && wantsPetFriendly) message = 'No pet-friendly homes match your other filters — try widening your price range or removing pets.';
+      const badgeSel = selectedBadge();
+      const badgeName = badgeSel ? (document.getElementById('badgeFilter').selectedOptions[0] || {}).text : '';
+      if(badgeSel) message = `Nothing with the ${badgeName} badge matches your other filters — try Any badge.`;
+      else if(currentCategoryFilter === 'suites' && wantsPetFriendly) message = 'No pet-friendly homes match your other filters — try widening your price range or removing pets.';
       else if(currentCategoryFilter === 'suites') message = 'No homes match these filters — try widening your price range.';
       else if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
       else if(datesWereSearched && (finalUnavailableSuites.length > 0 || finalUnavailableExperiences.length > 0)) message = 'Nothing available for those dates — see what\'s unavailable below, or try different dates.';
@@ -9430,9 +9510,11 @@
       const rooms = Array.isArray(listing.rooms) ? listing.rooms : [];
       return `
         <div class="listing-modal-content">
-          <h2>${listing.property_name}</h2>
-          <div class="suite-badges listing-type-row"><span class="suite-badge suite-badge-type-stay">Stay</span></div>
-          <div class="loc">${formatCityArea(listing)} · Resort</div>
+          <div class="listing-head-row">
+            <h2>${listing.property_name}</h2>
+            <div class="suite-badges listing-type-row"><span class="suite-badge suite-badge-type-stay">Stay</span></div>
+            <div class="loc">${formatCityArea(listing)} · Resort</div>
+          </div>
           ${listingStandingHtml(listing)}
           <div class="listing-three-col">
             <div class="listing-col-booking">
@@ -9488,9 +9570,11 @@
 
     return `
       <div class="listing-modal-content">
-        <h2>${listing.property_name}</h2>
-        <div class="suite-badges listing-type-row"><span class="suite-badge suite-badge-type-stay">Stay</span></div>
-        <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        <div class="listing-head-row">
+          <h2>${listing.property_name}</h2>
+          <div class="suite-badges listing-type-row"><span class="suite-badge suite-badge-type-stay">Stay</span></div>
+          <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        </div>
         ${listingStandingHtml(listing)}
         <div class="listing-three-col">
           <div class="listing-col-booking">
@@ -11118,16 +11202,17 @@
     // below the grid, same as amenities/pet-policy do on the listing page.
     return `
       <div class="listing-modal-content">
-        <h2>${exp.property_name}</h2>
-        ${/* Same rule as the card: one type badge, and only where it says
-              something. On this page the heading already sits above a
-              category and a duration, so "Experience Only" was a third way
-              of telling a guest what they had just clicked on. */''}
-        <div class="suite-badges listing-type-row">
-          <span class="suite-badge suite-badge-type-experience">Experience</span>
-          ${exp.experience_type === 'with_stay' ? '<span class="suite-badge suite-badge-stay">Includes a Stay</span>' : ''}
+        ${/* Title, type and location share one line — see .listing-head-row.
+              Same rule as the card: one type badge, and only where it says
+              something. */''}
+        <div class="listing-head-row">
+          <h2>${exp.property_name}</h2>
+          <div class="suite-badges listing-type-row">
+            <span class="suite-badge suite-badge-type-experience">Experience</span>
+            ${exp.experience_type === 'with_stay' ? '<span class="suite-badge suite-badge-stay">Includes a Stay</span>' : ''}
+          </div>
+          <div class="loc">${exp.experience_category || ''}${durationLine ? ' · ' + durationLine : ''}</div>
         </div>
-        <div class="loc">${exp.experience_category || ''}${durationLine ? ' · ' + durationLine : ''}</div>
         ${listingStandingHtml(exp)}
         <div class="listing-three-col">
           <div class="listing-col-booking">
@@ -11777,6 +11862,7 @@
   })();
 
   document.getElementById('sortPrice').addEventListener('change', applyFiltersAndRender);
+  document.getElementById('badgeFilter').addEventListener('change', applyFiltersAndRender);
   document.getElementById('minPrice').addEventListener('input', applyFiltersAndRender);
   document.getElementById('maxPrice').addEventListener('input', applyFiltersAndRender);
   // Debounced, and re-runs a full performSearch() rather than the
@@ -11813,6 +11899,7 @@
     guestCounts.pets = 0;
     updateGuestsTrigger();
     document.getElementById('sortPrice').value = '';
+    document.getElementById('badgeFilter').value = '';
     document.getElementById('minPrice').value = '';
     document.getElementById('maxPrice').value = '';
     document.getElementById('roomsNeeded').value = '';
