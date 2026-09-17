@@ -438,6 +438,9 @@
   .host-tier-badge svg{width:11px; height:auto; display:block; flex:0 0 auto;}
   .tier-gold{ background:rgba(28,20,12,0.82); color:#f0d27a; }
   .tier-diamond{ background:rgba(16,24,32,0.82); color:#cfe6f5; }
+  /* Rising / Established / Signature / Elite: the same stone as the other
+     card badges, so the two metals stay distinct at a glance. */
+  .tier-stone{ background:rgba(28,26,23,0.82); color:var(--cream); }
   .suite-badge-stay{ background:#4d9a56; color:#fff; }
   /* Distinguishes a stay from an experience only where it's actually
      ambiguous — the mixed "All" grid. Suites-only/Experience-only tabs
@@ -6718,10 +6721,10 @@
     return card;
   }
 
-  // Host tier badge. Only the three elite rungs are ever sent by
-  // get-listings.js (see PUBLIC_BADGE_KEYS there) — the absence of a
-  // badge is how a not-yet-outstanding host is shown, never a lesser
-  // label, which would disparage a perfectly good property.
+  // Host tier badge. Every rung is shown, Rising Host upward: the top two
+  // in their own metals (gold, diamond), the rest in the same stone as the
+  // other card badges. No badge at all means the host has not reached the
+  // first rung yet.
   //
   // One feather silhouette for all of them, differing only in fill, so
   // the set reads as a family rather than three unrelated icons.
@@ -6731,6 +6734,7 @@
     if(!tier || !tier.label) return '';
     const dia = tier.icon === 'feather-diamond';
     const gold = tier.icon === 'feather-gold';
+    const plain = !dia && !gold;
     // Gradient ids are suffixed per-card: several cards render at once and
     // duplicate ids would make every feather adopt the first card's fill.
     const uid = 'ft' + Math.random().toString(36).slice(2, 8);
@@ -6738,10 +6742,10 @@
     const stops = dia
       ? '<stop offset="0" stop-color="#eaf6ff"/><stop offset="0.4" stop-color="#b9d9ec"/><stop offset="0.75" stop-color="#8fb8d4"/><stop offset="1" stop-color="#dff1fb"/>'
       : '<stop offset="0" stop-color="#f0d27a"/><stop offset="0.45" stop-color="#c9a227"/><stop offset="1" stop-color="#8a6c39"/>';
-    const edge = dia ? '#dff1fb' : '#f0d27a';
-    const barb = dia ? '#ffffff' : '#fff3cf';
+    const edge = plain ? '#e8dccb' : (dia ? '#dff1fb' : '#f0d27a');
+    const barb = plain ? '#f4ebe3' : (dia ? '#ffffff' : '#fff3cf');
     const facets = dia ? `<path d="M0 -36 L16 8 L0 42 L-16 8 Z" fill="none" stroke="#ffffff" stroke-width="1.4" opacity="0.5"/>` : '';
-    return `<span class="host-tier-badge ${dia ? 'tier-diamond' : 'tier-gold'}" title="${escapeMessageHtml(tier.label)}">
+    return `<span class="host-tier-badge ${plain ? 'tier-stone' : (dia ? 'tier-diamond' : 'tier-gold')}" title="${escapeMessageHtml(tier.label)}">
       <svg viewBox="-26 -40 52 86" aria-hidden="true">
         <defs><linearGradient id="${uid}" x1="0" y1="0" x2="${dia ? 1 : 0}" y2="1">${stops}</linearGradient></defs>
         <path d="${FEATHER_PATH}" fill="${fill}" stroke="${edge}" stroke-width="2"/>
