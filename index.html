@@ -383,6 +383,16 @@
   .ts-star.on{color:#c9a227;}
   .ts-score-count{font-size:10.5px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.55; margin-top:4px;}
   .ts-mid{flex:1 1 auto; min-width:0;}
+  /* Name and address fill the middle of the strip. The address is allowed
+     two lines, then ellipsises, so a long one cannot push the host block
+     off the end of the row. */
+  .ts-place{min-width:0;}
+  .ts-place-name{font-family:'Bodoni Moda', serif; font-size:16px; line-height:1.25; color:var(--ink); overflow-wrap:anywhere;}
+  .ts-place-address{
+    font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--gold-deep);
+    margin-top:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  }
+  .ts-place + .ts-badges{margin-top:8px;}
   .ts-badges{display:flex; flex-wrap:wrap; gap:6px;}
   .ts-badge{
     display:inline-flex; align-items:center; padding:5px 11px; border-radius:100px;
@@ -6814,7 +6824,12 @@
     const flag = listing.property_flag && listing.property_flag.label ? listing.property_flag : null;
     const host = listing.host_tier && listing.host_tier.label ? listing.host_tier : null;
     const hostName = String(listing.host_name || '').trim();
-    if(!rated && !tier && !flag && !host && !hostName) return '';
+    // The name and address fill the middle of the strip, which otherwise
+    // sat empty on most listings. The saved address where the host set
+    // one, the area and city where they did not — never coordinates.
+    const placeName = String(listing.property_name || '').trim();
+    const placeAddress = String(listing.formatted_address || '').trim() || formatCityArea(listing);
+    if(!rated && !tier && !flag && !host && !hostName && !placeName) return '';
 
     const stars = rated
       ? [1,2,3,4,5].map(i => `<span class="ts-star${Number(listing.rating) >= i - 0.25 ? ' on' : ''}">\u2605</span>`).join('')
@@ -6831,6 +6846,11 @@
     if(tier) badges.push(`<span class="ts-badge ts-badge-tier prop-${escapeMessageHtml(tier.key)}">${escapeMessageHtml(tier.label)}</span>`);
     if(flag) badges.push(`<span class="ts-badge ts-badge-flag">${escapeMessageHtml(flag.label)}</span>`);
     const badgeBlock = badges.length ? `<div class="ts-badges">${badges.join('')}</div>` : '';
+    const placeBlock = placeName || placeAddress ? `
+      <div class="ts-place">
+        ${placeName ? `<div class="ts-place-name">${escapeMessageHtml(placeName)}</div>` : ''}
+        ${placeAddress ? `<div class="ts-place-address">${escapeMessageHtml(placeAddress)}</div>` : ''}
+      </div>` : '';
 
     // The initial stands in for a photo. A named person with a mark
     // reads as accountable in a way "Hosted by X" as plain text does not.
@@ -6844,7 +6864,7 @@
         ${host ? hostTierBadgeHtml(host) : ''}
       </div>` : '';
 
-    const middle = badgeBlock;
+    const middle = placeBlock + badgeBlock;
     return `<div class="trust-strip">
       ${scoreBlock}
       ${middle ? `<div class="ts-mid">${middle}</div>` : '<div class="ts-mid"></div>'}
@@ -9753,13 +9773,21 @@
         <p class="rv-item-text">${escapeMessageHtml(r.comment || '')}</p>
       </div>`;
   }
+  // How many reviews each press of View more brings in. Five on opening
+  // the page, then batches that take the list to 20, then 40, then the
+  // rest in 100s (the endpoint's own per-request cap).
+  const REVIEW_PAGE_STEPS = [5, 15, 20];
+  const REVIEW_PAGE_REST = 100;
   async function loadListingReviews(root, listingId){
     const slot = root && root.querySelector(`.listing-reviews[data-reviews-for="${Number(listingId)}"]`);
     if(!slot) return;
     slot.innerHTML = '';
     let offset = 0;
+    let step = 0;
     const load = async () => {
-      const res = await fetch(SUITES_API_BASE + `/api/get-listings?reviewsFor=${Number(listingId)}&offset=${offset}`);
+      const limit = REVIEW_PAGE_STEPS[step] || REVIEW_PAGE_REST;
+      step++;
+      const res = await fetch(SUITES_API_BASE + `/api/get-listings?reviewsFor=${Number(listingId)}&offset=${offset}&limit=${limit}`);
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Failed');
       return data;
@@ -9781,7 +9809,7 @@
         </div>
         <div class="rv-factors">${reviewFactorsHtml(sm.factors)}</div>
         <div class="rv-list"></div>
-        <button type="button" class="filter-clear rv-more" style="display:none;">Show more reviews</button>`;
+        <button type="button" class="filter-clear rv-more" style="display:none;">View more</button>`;
       const list = slot.querySelector('.rv-list');
       const more = slot.querySelector('.rv-more');
       const append = (d) => {
@@ -9794,7 +9822,7 @@
         more.disabled = true; more.textContent = 'Loading\u2026';
         try{ append(await load()); }
         catch(err){ /* keep what is shown; the button stays for a retry */ }
-        more.disabled = false; more.textContent = 'Show more reviews';
+        more.disabled = false; more.textContent = 'View more';
       });
     } catch(err){
       // Reviews are supporting detail. A failure here must never break
