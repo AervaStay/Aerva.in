@@ -371,12 +371,15 @@
   .rv-comment-label{display:block; font-size:12px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.6; margin:14px 0 6px;}
   #reviewComment{width:100%; box-sizing:border-box; padding:10px 12px; font-size:14px; font-family:inherit; border:1px solid var(--line-dark); background:white; resize:vertical;}
   .rv-error{color:#a3402f; font-size:13px; margin-top:10px;}
+  /* On a white page the old cream gradient card read as a second surface.
+     A plain rule under the row does the same job of setting the header
+     apart, with less furniture. */
   .trust-strip{
-    display:flex; align-items:center; gap:18px; margin:14px 0 4px;
-    padding:14px 18px; border:1px solid var(--line-dark); border-radius:12px;
-    background:linear-gradient(180deg, #ffffff, #fbf8f4);
+    display:flex; align-items:center; gap:22px; margin:0 0 6px;
+    padding:0 0 18px; border:none; border-bottom:1px solid rgba(28,26,23,0.10);
+    background:none; border-radius:0;
   }
-  .ts-score{flex:0 0 auto; text-align:center; padding-right:18px; border-right:1px solid var(--line-dark);}
+  .ts-score{flex:0 0 auto; text-align:center; padding-right:22px; border-right:1px solid rgba(28,26,23,0.10);}
   .ts-score-num{font-family:Georgia,serif; font-size:30px; line-height:1; color:var(--ink);}
   .ts-score-stars{margin-top:4px; letter-spacing:1px; font-size:11px;}
   .ts-star{color:var(--line-dark);}
@@ -387,12 +390,14 @@
      two lines, then ellipsises, so a long one cannot push the host block
      off the end of the row. */
   .ts-place{min-width:0;}
-  .ts-place-name{font-family:'Bodoni Moda', serif; font-size:16px; line-height:1.25; color:var(--ink); overflow-wrap:anywhere;}
+  .ts-place-name{font-family:'Bodoni Moda', serif; font-size:27px; line-height:1.15; color:var(--ink); overflow-wrap:anywhere;}
   .ts-place-address{
     font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--gold-deep);
     margin-top:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
   }
-  .ts-place + .ts-badges{margin-top:8px;}
+  .ts-place + .ts-badges{margin-top:10px;}
+  .ts-badge-type-stay{ background:#2f6690; color:#fff; }
+  .ts-badge-type-experience{ background:#5a3a6e; color:#fff; }
   .ts-badges{display:flex; flex-wrap:wrap; gap:6px;}
   .ts-badge{
     display:inline-flex; align-items:center; padding:5px 11px; border-radius:100px;
@@ -414,7 +419,7 @@
   @media (max-width:640px){
     .trust-strip{flex-wrap:wrap; gap:12px; padding:12px 14px;}
     .ts-score{padding-right:14px;}
-    .ts-host{width:100%; padding-top:10px; border-top:1px solid var(--line-dark);}
+    .ts-host{width:100%; padding-top:10px; border-top:1px solid rgba(28,26,23,0.10);}
   }
   .modal-standing{display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:10px;}
   .modal-host{
@@ -459,18 +464,6 @@
      different class from .suite-badge-stay above (which means "this
      experience happens to include a stay," a different fact). */
   .suite-badge-type-stay{ background:#2f6690; color:#fff; }
-  /* Type label inside the detail view, not on a photo. */
-  .suite-badges.listing-type-row{ position:static; max-width:none; margin:0; }
-  /* Title, type badge and location on one line in the detail views. The
-     h2 and .loc carry their own margins for the stacked layout they used
-     to have, so both are reset here. Wraps on a narrow screen rather than
-     forcing a horizontal scroll. */
-  .listing-head-row{ display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 12px; margin-bottom:10px; }
-  /* .listing-modal-content's own h2/.loc rules appear later in this
-     sheet, so these are scoped the same way to actually win. */
-  .listing-modal-content .listing-head-row h2,
-  .listing-modal-content .listing-head-row .loc{ margin:0; }
-  .listing-head-row .suite-badges{ align-self:center; }
   .suite-badge-type-experience{ background:#8a6c39; color:#fff; }
   .suite-badge-rooms{ background:rgba(28,26,23,0.78); color:#fff; }
   .suite-photo-slider{
@@ -512,7 +505,7 @@
     display:flex; align-items:center; justify-content:center; padding:24px;
   }
   .listing-modal{
-    background:var(--cream); max-width:1280px; width:100%; max-height:88vh; overflow:hidden;
+    background:#fff; max-width:1280px; width:100%; max-height:88vh; overflow:hidden;
     position:relative; border:1px solid var(--line-dark); display:flex; flex-direction:column;
   }
   /* top accounts for the device's safe area. On a phone the modal is
@@ -610,25 +603,33 @@
     .listing-three-col{grid-template-columns:1fr;}
   }
 
-  .listing-modal-content{padding:28px 30px 34px;}
+  /* The detail view reads as a white page: a document about one property
+     rather than another panel of the cream browsing surface. Everything
+     below is scoped to it, so cards, filters and the rest are untouched. */
+  .listing-modal-content{padding:28px 30px 34px; background:#fff;}
+  #listingFullView, #experienceFullView{background:#fff;}
+  .listing-modal-content .listing-modal-section-title{
+    color:#8e8577; border-bottom:1px solid rgba(28,26,23,0.08); padding-bottom:6px;
+  }
+  .listing-modal-content .listing-map-embed{border-color:rgba(28,26,23,0.12);}
   .listing-modal-content h2{font-size:26px; margin-bottom:6px;}
   .listing-modal-content .loc{font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep);}
   .listing-modal-content .desc{font-size:14.5px; line-height:1.8; opacity:0.8; margin-top:20px; white-space:pre-wrap;}
   .listing-modal-section-title{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c; margin:26px 0 10px;}
   /* Reviews under the photos (listing page) and in the host's guest profile. */
-  .rv-summary{display:flex; align-items:baseline; gap:10px; margin-bottom:8px;}
-  .rv-summary-score{font-family:'Bodoni Moda', serif; font-size:22px;}
-  .rv-summary-count{font-size:13px; opacity:0.65;}
-  .rv-factors{display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12.5px; margin-bottom:14px;}
-  .rv-factor-label{opacity:0.6;}
-  .rv-list{display:flex; flex-direction:column;}
-  .rv-item{padding:12px 0; border-top:1px solid var(--line-dark);}
-  .rv-item-head{display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; margin-bottom:4px;}
-  .rv-item-name{font-weight:500; font-size:14px;}
-  .rv-item-meta{font-size:12px; opacity:0.6;}
-  .rv-item-text{font-size:13.5px; line-height:1.6; margin:0; white-space:pre-line; overflow-wrap:anywhere;}
-  .rv-empty{font-size:13px; opacity:0.6;}
-  .rv-more{margin-top:10px;}
+  /* Reviews are plain text: a line of numbers, then name, date and what
+     the guest wrote. No cards, no pills, no rules between them. */
+  .rv-summary{font-size:14px; margin-bottom:2px;}
+  .rv-summary-score{font-weight:500;}
+  .rv-summary-count{opacity:0.6;}
+  .rv-factors{font-size:13px; line-height:1.7; opacity:0.75; margin-bottom:20px;}
+  .rv-list{display:flex; flex-direction:column; gap:18px;}
+  .rv-item-head{font-size:13px; margin-bottom:3px;}
+  .rv-item-name{font-weight:500;}
+  .rv-item-meta{opacity:0.55;}
+  .rv-item-text{font-size:14px; line-height:1.7; margin:0; white-space:pre-line; overflow-wrap:anywhere;}
+  .rv-empty{font-size:13.5px; opacity:0.6;}
+  .rv-more{margin-top:18px;}
   .listing-modal-amenity-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px 20px;}
   .listing-modal-amenity-grid span{font-size:13.5px; opacity:0.8;}
   .listing-modal-paid-amenity{
@@ -6813,7 +6814,7 @@
   // It renders nothing at all when there is nothing to say. An empty
   // frame with "no reviews yet" would actively discourage a booking,
   // which is the opposite of the point.
-  function listingStandingHtml(listing){
+  function listingStandingHtml(listing, opts){
     const n = Number(listing.review_count) || 0;
     const rated = n > 0 && listing.rating != null;
     // Stays carry property_tier, experiences carry experience_tier. One
@@ -6828,7 +6829,12 @@
     // sat empty on most listings. The saved address where the host set
     // one, the area and city where they did not — never coordinates.
     const placeName = String(listing.property_name || '').trim();
-    const placeAddress = String(listing.formatted_address || '').trim() || formatCityArea(listing);
+    const addressText = String(listing.formatted_address || '').trim() || formatCityArea(listing);
+    // Stay / Experience and the property type (or an experience's category
+    // and duration) used to sit in a heading above this strip, repeating
+    // the name and address it already carries.
+    const o = opts || {};
+    const placeAddress = [addressText, o.subtitle].filter(Boolean).join(' · ');
     if(!rated && !tier && !flag && !host && !hostName && !placeName) return '';
 
     const stars = rated
@@ -6843,6 +6849,12 @@
       </div>` : '';
 
     const badges = [];
+    if(o.type === 'experience'){
+      badges.push('<span class="ts-badge ts-badge-type ts-badge-type-experience">Experience</span>');
+      if(o.withStay) badges.push('<span class="ts-badge ts-badge-type ts-badge-type-stay">Includes a Stay</span>');
+    } else if(o.type === 'stay'){
+      badges.push('<span class="ts-badge ts-badge-type ts-badge-type-stay">Stay</span>');
+    }
     if(tier) badges.push(`<span class="ts-badge ts-badge-tier prop-${escapeMessageHtml(tier.key)}">${escapeMessageHtml(tier.label)}</span>`);
     if(flag) badges.push(`<span class="ts-badge ts-badge-flag">${escapeMessageHtml(flag.label)}</span>`);
     const badgeBlock = badges.length ? `<div class="ts-badges">${badges.join('')}</div>` : '';
@@ -7348,6 +7360,12 @@
     const previous = el.value;
     const html = ['<option value="">Any badge</option>'];
     BADGE_GROUPS.forEach(group => {
+      // A tab only offers the badges its own cards can carry: Suites shows
+      // property and host badges, Aerva Experience shows experience ones,
+      // All shows both. A choice the new tab cannot offer falls back to
+      // "Any badge" below rather than silently emptying the grid.
+      if(currentCategoryFilter === 'suites' && group.from !== 'stay') return;
+      if(currentCategoryFilter === 'experiences' && group.from !== 'experience') return;
       const source = group.from === 'stay' ? approvedListings : approvedExperiences;
       const seen = new Map();
       (source || []).forEach(item => {
@@ -8555,7 +8573,7 @@
         <p style="font-size:15px; margin:0 0 10px;">${escapeMessageHtml(data.guest && data.guest.name || 'Guest')}</p>
         ${sm.count ? `
           <div class="rv-summary">
-            ${sm.score ? `<span class="rv-summary-score">\u2605 ${Number(sm.score).toFixed(2)}</span>` : ''}
+            ${sm.score ? `<span class="rv-summary-score">${Number(sm.score).toFixed(2)} out of 5</span> &middot; ` : ''}
             <span class="rv-summary-count">${sm.count} review${sm.count === 1 ? '' : 's'} from hosts</span>
           </div>
           <div class="rv-factors">${reviewFactorsHtml(sm.factors)}</div>
@@ -9534,12 +9552,9 @@
       const rooms = Array.isArray(listing.rooms) ? listing.rooms : [];
       return `
         <div class="listing-modal-content">
-          <div class="listing-head-row">
-            <h2>${listing.property_name}</h2>
-            <div class="suite-badges listing-type-row"><span class="suite-badge suite-badge-type-stay">Stay</span></div>
-            <div class="loc">${formatCityArea(listing)} · Resort</div>
-          </div>
-          ${listingStandingHtml(listing)}
+          ${/* Name, address and type all sit in the strip below, so
+                nothing is repeated above it. */''}
+          ${listingStandingHtml(listing, { type: 'stay', subtitle: 'Resort' })}
           <div class="listing-three-col">
             <div class="listing-col-booking">
               <div class="listing-modal-section-title" style="margin-top:0;">Check Availability</div>
@@ -9594,12 +9609,7 @@
 
     return `
       <div class="listing-modal-content">
-        <div class="listing-head-row">
-          <h2>${listing.property_name}</h2>
-          <div class="suite-badges listing-type-row"><span class="suite-badge suite-badge-type-stay">Stay</span></div>
-          <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
-        </div>
-        ${listingStandingHtml(listing)}
+        ${listingStandingHtml(listing, { type: 'stay', subtitle: listing.property_type || '' })}
         <div class="listing-three-col">
           <div class="listing-col-booking">
             <div class="price">${priceLine}</div>
@@ -9758,17 +9768,17 @@
     const d = new Date(ym + '-01T00:00:00');
     return isNaN(d) ? '' : d.toLocaleDateString('en-IN', REVIEW_MONTH_FMT);
   }
+  // One plain line: "Hygiene 5.0 · Communication 5.0 · …"
   function reviewFactorsHtml(factors){
-    return (factors || []).map(f =>
-      `<span class="rv-factor"><span class="rv-factor-label">${escapeMessageHtml(f.label)}</span> ${Number(f.value).toFixed(1)}</span>`
-    ).join('');
+    return (factors || []).map(f => `${escapeMessageHtml(f.label)} ${Number(f.value).toFixed(1)}`).join(' &middot; ');
   }
   function reviewItemHtml(r, withName){
+    const meta = [reviewMonthLabel(r.month), r.score ? Number(r.score).toFixed(1) + ' out of 5' : ''].filter(Boolean).join(' · ');
     return `
       <div class="rv-item">
         <div class="rv-item-head">
           ${withName ? `<span class="rv-item-name">${escapeMessageHtml(r.name || 'Guest')}</span>` : ''}
-          <span class="rv-item-meta">${escapeMessageHtml(reviewMonthLabel(r.month))}${r.score ? ` · ★ ${Number(r.score).toFixed(1)}` : ''}</span>
+          ${meta ? `<span class="rv-item-meta">${withName ? ' &middot; ' : ''}${escapeMessageHtml(meta)}</span>` : ''}
         </div>
         <p class="rv-item-text">${escapeMessageHtml(r.comment || '')}</p>
       </div>`;
@@ -9804,8 +9814,8 @@
       slot.innerHTML = `
         <div class="listing-modal-section-title">Reviews</div>
         <div class="rv-summary">
-          <span class="rv-summary-score">★ ${Number(sm.score).toFixed(2)}</span>
-          <span class="rv-summary-count">${sm.count} review${sm.count === 1 ? '' : 's'}</span>
+          <span class="rv-summary-score">${Number(sm.score).toFixed(2)} out of 5</span>
+          <span class="rv-summary-count"> &middot; ${sm.count} review${sm.count === 1 ? '' : 's'}</span>
         </div>
         <div class="rv-factors">${reviewFactorsHtml(sm.factors)}</div>
         <div class="rv-list"></div>
@@ -11234,18 +11244,7 @@
     // below the grid, same as amenities/pet-policy do on the listing page.
     return `
       <div class="listing-modal-content">
-        ${/* Title, type and location share one line — see .listing-head-row.
-              Same rule as the card: one type badge, and only where it says
-              something. */''}
-        <div class="listing-head-row">
-          <h2>${exp.property_name}</h2>
-          <div class="suite-badges listing-type-row">
-            <span class="suite-badge suite-badge-type-experience">Experience</span>
-            ${exp.experience_type === 'with_stay' ? '<span class="suite-badge suite-badge-stay">Includes a Stay</span>' : ''}
-          </div>
-          <div class="loc">${exp.experience_category || ''}${durationLine ? ' · ' + durationLine : ''}</div>
-        </div>
-        ${listingStandingHtml(exp)}
+        ${listingStandingHtml(exp, { type: 'experience', subtitle: [exp.experience_category, durationLine].filter(Boolean).join(' · '), withStay: exp.experience_type === 'with_stay' })}
         <div class="listing-three-col">
           <div class="listing-col-booking">
             <div class="listing-modal-section-title" style="margin-top:16px;">Book This Experience</div>
