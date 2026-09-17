@@ -1395,7 +1395,6 @@ module.exports = async (req, res) => {
       console.error('review rating lookup failed (non-fatal):', err);
     }
 
-    const PUBLIC_BADGE_KEYS = ['elite', 'golden_elite', 'aerva_elite'];
     try {
       const hostIds = [...new Set(filtered.map(l => l.host_id).filter(Boolean))];
       if (hostIds.length) {
@@ -1410,10 +1409,12 @@ module.exports = async (req, res) => {
         `;
         const byHost = {};
         cur.forEach(r => {
+          // EVERY rung is shown, Rising Host upward — a badge is
+          // recognition, and withholding it from all but the top three
+          // meant almost no host ever carried one. Only a host below the
+          // lowest rung (no confirmed payout at all) has none.
           const tier = tierByKey(HOST_TIERS, r.tier_key);
-          if (tier && PUBLIC_BADGE_KEYS.includes(tier.key)) {
-            byHost[r.subject_id] = { key: tier.key, label: tier.label, icon: tier.icon };
-          }
+          if (tier) byHost[r.subject_id] = { key: tier.key, label: tier.label, icon: tier.icon };
         });
         filtered.forEach(l => { l.host_tier = byHost[l.host_id] || null; });
       }
