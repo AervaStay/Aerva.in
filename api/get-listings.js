@@ -5,8 +5,9 @@
 // what's guest-facing, or commission_rate.
 //
 // Supports optional filters via query params, all combinable:
-//   ?reviewsFor=<id>&offset=<n> — standalone mode: published reviews for
-//                              one live listing, first names only.
+//   ?reviewsFor=<id>&offset=<n>&limit=<n> — standalone mode: published
+//                              reviews for one live listing, first names
+//                              only. limit defaults to 5, capped at 100.
 //   ?city=Pune              — partial, case-insensitive match against city
 //                              (fallback only — see lat/lng below)
 //   ?lat=...&lng=...&radiusKm=200 — only listings within this distance of
@@ -535,7 +536,12 @@ module.exports = async (req, res) => {
     if (req.query.reviewsFor !== undefined) {
       const listingId = Number(req.query.reviewsFor);
       const offset = Math.max(0, Math.min(10000, Number(req.query.offset) || 0));
-      const PAGE = 10;
+      // The page asks for how many it wants: 5 on first load, then a
+      // larger batch each time the guest presses View more (see
+      // REVIEW_PAGE_STEPS in index.html). Capped so no single request can
+      // be asked for an unbounded number of rows.
+      const askedLimit = Number(req.query.limit);
+      const PAGE = Number.isFinite(askedLimit) && askedLimit >= 1 ? Math.min(100, Math.floor(askedLimit)) : 5;
       if (!listingId) return res.status(400).json({ error: 'Which listing?' });
       try {
         const lr = await sql`
