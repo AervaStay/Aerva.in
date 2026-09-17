@@ -2695,11 +2695,28 @@
   const SUITES_API_BASE = 'https://aerva-in.vercel.app';
   const EXTRA_GUEST_RATE = 1500;
   const BASE_OCCUPANCY = 2;
-  // GST is temporarily disabled for testing — set back to the correct
-  // rate (and update the "GST (12%)" label below) once ready to introduce
-  // it properly per government rules. Kept as a rate rather than deleted
-  // so re-enabling is a one-line change.
-  const GST_RATE = 0;
+  // GST — DISPLAY ONLY. What a guest is actually charged is decided by
+  // api/_gst.js; keep these numbers identical to it. Added on top of the
+  // price; charged on the stay (room + extra guests after discount),
+  // amenities, pet fees and experiences; never on the guest service fee
+  // or the refundable deposit.
+  const GST_ACCOMMODATION_SLABS = [
+    { upTo: 7500, rate: 5 },
+    { upTo: Infinity, rate: 18 }
+  ];
+  const GST_EXPERIENCE_RATE = 18;
+  // roomPortion: room + extra guests for the whole stay, after discount.
+  // extras: amenities + pet fees. Rate is set by the per-night room value.
+  function stayGstFor(roomPortion, nights, extras){
+    const n = Math.max(1, Number(nights) || 1);
+    const room = Math.max(0, Number(roomPortion) || 0);
+    const perNight = room / n;
+    const band = GST_ACCOMMODATION_SLABS.find(b => perNight <= b.upTo) || GST_ACCOMMODATION_SLABS[GST_ACCOMMODATION_SLABS.length - 1];
+    return { rate: band.rate, gst: Math.round((room + Math.max(0, Number(extras) || 0)) * band.rate / 100) };
+  }
+  function experienceGstFor(subtotal){
+    return { rate: GST_EXPERIENCE_RATE, gst: Math.round(Math.max(0, Number(subtotal) || 0) * GST_EXPERIENCE_RATE / 100) };
+  }
   // Matches create-order.js exactly — display-only here, purely so the
   // guest can see how the total breaks down. Never changes what's charged.
   // Note: host commission rates (10%/5%) are deliberately NOT defined
@@ -3205,6 +3222,7 @@
     const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow);
     let allValid = true;
     let grandSubtotal = 0;
+    let grandGstDisplay = 0;
     let grandGuestServiceFee = 0;
     const lines = [];
 
@@ -3272,6 +3290,7 @@
       const staySubtotal = beforeDiscount - discountAmount + amenityTotal;
 
       grandSubtotal += staySubtotal;
+      grandGstDisplay += stayGstFor(beforeDiscount - discountAmount, nights, amenityTotal).gst;
 
       // This IS shown to the guest — it's their own fee, added to what
       // they pay. Host commission (a completely separate rate, deducted
@@ -3297,7 +3316,7 @@
     }
 
     submitBtn.disabled = false;
-    const gst = Math.round(grandSubtotal * GST_RATE);
+    const gst = grandGstDisplay;
     const total = grandSubtotal + gst + grandGuestServiceFee;
 
     summaryLinesEl.innerHTML = lines.join('');
@@ -10362,6 +10381,7 @@
 
     const staySubtotal = beforeDiscount - discountAmount + petFeeAmount + amenityTotal;
     const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
+    const stayTax = stayGstFor(beforeDiscount - discountAmount, nights, petFeeAmount + amenityTotal);
     const total = staySubtotal + guestServiceFee;
 
     const rows = [];
@@ -10380,6 +10400,8 @@
     // includes it, not just the stay itself.
     const selectedExperience = (renderAvailabilityCalendar._lgSelectedExperience || {})[listing.id] || null;
     let experienceTotal = 0;
+    let experienceGst = 0;
+    let experienceFee = 0;
     if(selectedExperience){
       const expOptions = ((renderAvailabilityCalendar._lgExperienceOptions || {})[listing.id]) || [];
       const exp = expOptions.find(e => String(e.id) === String(selectedExperience.listingId));
@@ -10387,15 +10409,25 @@
         experienceTotal = exp.experience_price_unit === 'per_person'
           ? Number(exp.price) * (selectedExperience.guests || 1)
           : Number(exp.price);
-        rows.push(`<div class="sum-row"><span>${exp.property_name}</span><span>${fmtGuest(experienceTotal)}</span></div>`);
+        rows.push(`<div class="sum-row"><span>${escapeMessageHtml(exp.property_name || '')}</span><span>${fmtGuest(experienceTotal)}</span></div>`);
+        experienceGst = experienceGstFor(experienceTotal).gst;
+        // The add-on carries its own guest service fee at checkout
+        // (create-order.js). It used to be left out of this summary, so
+        // the total shown was lower than the amount charged.
+        experienceFee = Math.round(experienceTotal * (GUEST_SERVICE_FEE_RATE / 100));
       }
     }
-    rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>`);
+    const gstShown = stayTax.gst + experienceGst;
+    if(gstShown > 0){
+      const gstLabel = experienceGst > 0 && stayTax.rate !== GST_EXPERIENCE_RATE ? 'GST' : `GST (${stayTax.rate}%)`;
+      rows.push(`<div class="sum-row"><span>${gstLabel}</span><span>${fmtGuest(gstShown)}</span></div>`);
+    }
+    rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee + experienceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
       rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (held 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
     }
 
-    const grandTotalInr = total + (listing.security_deposit ? Number(listing.security_deposit) : 0) + experienceTotal;
+    const grandTotalInr = total + stayTax.gst + (listing.security_deposit ? Number(listing.security_deposit) : 0) + experienceTotal + experienceGst + experienceFee;
     // Payment always actually happens in INR (see the note on fmtGuest) —
     // when showing a converted currency, say so explicitly right here,
     // not just at the final payment button, so there's no surprise later.
@@ -10772,14 +10804,23 @@
     }
     const rows = selected.map(r => {
       const cost = Number(r.price) * r.nights;
-      return `<div class="sum-row"><span>${r.roomName} × ${r.nights} night${r.nights === 1 ? '' : 's'}</span><span>${fmtGuest(cost)}</span></div>`;
+      return `<div class="sum-row"><span>${escapeMessageHtml(r.roomName || '')} × ${r.nights} night${r.nights === 1 ? '' : 's'}</span><span>${fmtGuest(cost)}</span></div>`;
     }).join('');
     const subtotal = selected.reduce((sum, r) => sum + Number(r.price) * r.nights, 0);
     const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
-    const total = subtotal + guestServiceFee;
+    // Each room is its own unit for GST, so rooms at different rates can
+    // fall in different bands.
+    const roomTaxes = selected.map(r => stayGstFor(Number(r.price) * r.nights, r.nights, 0));
+    const gst = roomTaxes.reduce((a, t) => a + t.gst, 0);
+    const rates = [...new Set(roomTaxes.map(t => t.rate))];
+    const gstRow = gst > 0
+      ? `<div class="sum-row"><span>${rates.length === 1 ? `GST (${rates[0]}%)` : 'GST'}</span><span>${fmtGuest(gst)}</span></div>`
+      : '';
+    const total = subtotal + gst + guestServiceFee;
     summaryEl.innerHTML = `
       <div class="listing-modal-section-title">Price Summary</div>
       ${rows}
+      ${gstRow}
       <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
       <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
     `;
@@ -11366,7 +11407,13 @@
 
     const subtotal = expSubtotal + hostingSubtotal;
     const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
-    const total = subtotal + guestServiceFee;
+    const expGst = experienceGstFor(expSubtotal).gst;
+    const hostingGst = hostingSubtotal > 0 ? stayGstFor(hostingSubtotal, days, 0).gst : 0;
+    const gstTotal = expGst + hostingGst;
+    const gstRowHtml = gstTotal > 0
+      ? `<div class="sum-row"><span>${hostingGst > 0 ? 'GST' : `GST (${GST_EXPERIENCE_RATE}%)`}</span><span>${fmtGuest(gstTotal)}</span></div>`
+      : '';
+    const total = subtotal + gstTotal + guestServiceFee;
     const inrNote = currentCurrency !== 'INR'
       ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ${fmt(total)} (Indian Rupees) — shown in ${currentCurrency} at today's rate. Your bank or card network sets the actual exchange rate and may apply its own fees; Aerva is not responsible for any difference between this estimate and what your bank charges.</p>`
       : '';
@@ -11381,6 +11428,7 @@
       <div class="sum-row"><span>${rateLine}</span><span>${fmtGuest(subtotalBeforeDiscount)}</span></div>
       ${discountRowHtml}
       ${hostingRowHtml}
+      ${gstRowHtml}
       <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
       <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
       ${inrNote}
