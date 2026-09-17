@@ -57,11 +57,10 @@ const sql = neon(process.env.DATABASE_URL);
 
 const EXTRA_GUEST_RATE = 1500;
 const BASE_OCCUPANCY = 2;
-// GST is temporarily disabled for testing — set back to the correct rate
-// once ready to introduce it properly per government rules. This is the
-// number that actually determines what guests are charged; aerva.html's
-// copy is display-only and must be kept in sync with this one.
-const GST_RATE = 0;
+// GST: rates and rules live in _gst.js (added on top, kept by Aerva, not
+// charged on the guest service fee or the deposit). index.html's copy is
+// display-only.
+const { stayGst, experienceGst } = require('./_gst');
 // Fixed platform commission rates — replaces the old per-listing
 // commission_rate column, which is no longer read for new bookings (kept
 // in the schema/orders table only for historical orders placed before
@@ -270,6 +269,7 @@ module.exports = async (req, res) => {
     let grandDiscount = 0;
     let grandGuestServiceFee = 0;
     let grandDeposit = 0;
+    let grandGst = 0;
     const stayDetails = [];
     const experienceDetails = [];
     const seenListingIds = new Set();
@@ -489,7 +489,12 @@ module.exports = async (req, res) => {
       // verify-payment.js for how the 7-day hold and release works).
       const depositAmount = listing.security_deposit ? Number(listing.security_deposit) : 0;
 
+      // GST for this stay: rate from the per-night value of the room
+      // itself, applied to the room plus its amenities and pet fees.
+      const stayTax = stayGst({ roomPortion, nights, extras: amenityTotal + petFeeAmount });
+
       grandSubtotal += staySubtotal;
+      grandGst += stayTax.gst;
       grandDiscount += discountAmount;
       grandGuestServiceFee += guestServiceFee;
       grandDeposit += depositAmount;
@@ -512,6 +517,8 @@ module.exports = async (req, res) => {
         amenityCommission,
         guestServiceFee,
         depositAmount,
+        gst: stayTax.gst,
+        gstRate: stayTax.rate,
         amenities: amenityDetails,
       });
     }
@@ -608,7 +615,9 @@ module.exports = async (req, res) => {
       const commissionAmount = Math.round(subtotal * (commissionRate / 100));
       const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
 
+      const expTax = experienceGst(subtotal);
       grandSubtotal += subtotal;
+      grandGst += expTax.gst;
       grandGuestServiceFee += guestServiceFee;
 
       experienceDetails.push({
@@ -622,10 +631,15 @@ module.exports = async (req, res) => {
         commissionRate,
         commissionAmount,
         guestServiceFee,
+        gst: expTax.gst,
+        gstRate: expTax.rate,
       });
     }
 
-    const gst = Math.round(grandSubtotal * GST_RATE);
+    // GST is summed per item above (each stay has its own rate), never
+    // re-derived from a grand total. A coupon, applied next, is a voucher:
+    // it reduces what the guest pays, not the GST on the booking.
+    const gst = grandGst;
     let totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit;
 
     // ---- Coupon redemption ----
@@ -691,6 +705,18 @@ module.exports = async (req, res) => {
       }
     }
 
+    // The stay/experience details travel to verify-payment.js inside the
+    // Razorpay order's notes. They used to be cut with .slice(), which on
+    // an oversized booking produced broken JSON: the guest would pay, and
+    // verify-payment could not read what they had paid for. Refuse before
+    // payment instead. (Two new fields per item, gst and gstRate, add a
+    // little to this size.)
+    const staysNote = JSON.stringify(stayDetails);
+    const experiencesNote = JSON.stringify(experienceDetails);
+    if (staysNote.length > 4000 || experiencesNote.length > 2000) {
+      return res.status(400).json({ error: 'This booking has too many items to process in one payment. Please split it into two bookings.' });
+    }
+
     const order = await razorpay.orders.create({
       amount: razorpayAmount,
       currency: razorpayCurrency,
@@ -710,8 +736,8 @@ module.exports = async (req, res) => {
         // this is the first place to check (may need a shorter encoding,
         // or storing full details in our own DB keyed by a short token
         // instead of putting everything in Razorpay's notes directly).
-        stays: JSON.stringify(stayDetails).slice(0, 4000),
-        experiences: JSON.stringify(experienceDetails).slice(0, 2000),
+        stays: staysNote,
+        experiences: experiencesNote,
       },
     });
 
@@ -739,6 +765,7 @@ module.exports = async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       totalDeposit: grandDeposit,
+      gst,
       couponDiscount: appliedCouponDiscount || 0,
     });
   } catch (err) {

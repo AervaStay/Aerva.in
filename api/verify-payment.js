@@ -52,7 +52,7 @@ const FALLBACK_COMMISSION_RATE = 15;
 // browser sends, same reasoning as the DB inserts below. Returns a
 // Buffer (pdfkit streams to memory here, never touches disk — this is a
 // serverless function with no persistent filesystem to write to).
-function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, chargeCurrency){
+function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, chargeCurrency, couponDiscount = 0){
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const chunks = [];
@@ -70,7 +70,15 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
     doc.moveDown(2);
     doc.fillColor('#000');
 
-    let grandTotal = 0;
+    // Totals by kind, so the summary at the bottom adds up to what the
+    // guest was actually charged. (It used to total the booking amounts
+    // only, leaving out the service fee, deposit and any coupon.)
+    let sumSubtotal = 0, sumGst = 0, sumFee = 0, sumDeposit = 0;
+    const gstLine = (item) => {
+      const g = Math.max(0, Math.round(Number(item.gst) || 0));
+      if (g > 0) doc.font('Helvetica').text(`GST${item.gstRate ? ` (${item.gstRate}%)` : ''}: ${fmt(g)}`);
+      return g;
+    };
 
     stays.forEach((s) => {
       doc.fontSize(15).font('Helvetica-Bold').text(s.suite);
@@ -80,9 +88,12 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
       doc.text(`Check-out: ${fmtDate(s.departure)}`);
       doc.text(`${s.nights} night${s.nights === 1 ? '' : 's'} · ${s.guests} guest${s.guests === 1 ? '' : 's'}`);
       doc.font('Helvetica-Bold').text(`Amount: ${fmt(s.subtotal)}`);
+      sumGst += gstLine(s);
       doc.fillColor('#000');
       doc.moveDown(1.2);
-      grandTotal += Number(s.subtotal) || 0;
+      sumSubtotal += Number(s.subtotal) || 0;
+      sumFee += Number(s.guestServiceFee) || 0;
+      sumDeposit += Number(s.depositAmount) || 0;
     });
 
     experiences.forEach((ex) => {
@@ -98,15 +109,34 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
         doc.text(`${ex.guests} guest${ex.guests === 1 ? '' : 's'}`);
       }
       doc.font('Helvetica-Bold').text(`Amount: ${fmt(ex.subtotal)}`);
+      sumGst += gstLine(ex);
       doc.fillColor('#000');
       doc.moveDown(1.2);
-      grandTotal += Number(ex.subtotal) || 0;
+      sumSubtotal += Number(ex.subtotal) || 0;
+      sumFee += Number(ex.guestServiceFee) || 0;
     });
 
     doc.moveDown(0.5);
     doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#ddd0bc').stroke();
     doc.moveDown(0.8);
-    doc.fontSize(13).font('Helvetica-Bold').text(`Total: ${fmt(grandTotal)}${chargeCurrency && chargeCurrency !== 'INR' ? ' (charged in ' + chargeCurrency + ')' : ''}`, { align: 'right' });
+    const row = (label, amount) => doc.fontSize(10.5).font('Helvetica').text(`${label}: ${amount}`, { align: 'right' });
+    const coupon = Math.max(0, Math.round(Number(couponDiscount) || 0));
+    const beforeCoupon = sumSubtotal + sumGst + sumFee + sumDeposit;
+    const paid = Math.max(0, beforeCoupon - coupon);
+    row('Bookings', fmt(sumSubtotal));
+    if (sumGst > 0) row('GST', fmt(sumGst));
+    if (sumFee > 0) row('Guest service fee', fmt(sumFee));
+    if (sumDeposit > 0) row('Refundable deposit', fmt(sumDeposit));
+    if (coupon > 0) row('Coupon', '- ' + fmt(coupon));
+    doc.moveDown(0.3);
+    doc.fontSize(13).font('Helvetica-Bold').text(`Total paid: ${fmt(paid)}${chargeCurrency && chargeCurrency !== 'INR' ? ' (charged in ' + chargeCurrency + ')' : ''}`, { align: 'right' });
+    // Aerva's GST registration, once set in Vercel. Until then it is left
+    // off rather than printed as a placeholder.
+    if (process.env.AERVA_GSTIN) {
+      doc.moveDown(0.5);
+      doc.fontSize(9).font('Helvetica').fillColor('#555').text(`GSTIN: ${process.env.AERVA_GSTIN}`, { align: 'right' });
+      doc.fillColor('#000');
+    }
 
     doc.moveDown(3);
     doc.fontSize(9).font('Helvetica').fillColor('#888').text('Thank you for booking with Aerva. For any questions, contact hello@aerva.in.', { align: 'center' });
@@ -183,64 +213,67 @@ module.exports = async (req, res) => {
       return res.status(400).json({ verified: false });
     }
 
+    // Declared OUT HERE because the PDF/email step below runs after the
+    // database block has closed. They used to be `const` inside it, so
+    // that step threw "email is not defined" on every successful payment:
+    // the booking was saved, but the guest was told verification failed
+    // and never got their confirmation.
+    let email = null;
+    let stays = [];
+    let experiences = [];
+    let chargeCurrency = 'INR';
+    let couponDiscount = 0;
+
     // Payment is genuine. Pull the trusted stay details back from Razorpay's
     // own order record — this is what create-order.js stored in `notes`
     // when the order was created, server-side, before any payment happened.
     try {
       const order = await razorpay.orders.fetch(razorpay_order_id);
-      const email = order.notes?.email;
+      email = order.notes?.email || null;
       // Only set if the guest was logged in at the time of booking (see
       // create-order.js) — empty string means guest checkout, no account
       // to link. Coerced to a real integer or null, never trusting the
       // string itself as-is going into a numeric column.
       const guestIdRaw = order.notes?.guestId;
       const guestId = guestIdRaw ? parseInt(guestIdRaw, 10) : null;
-      const stays = order.notes?.stays ? JSON.parse(order.notes.stays) : [];
-      const experiences = order.notes?.experiences ? JSON.parse(order.notes.experiences) : [];
+      stays = order.notes?.stays ? JSON.parse(order.notes.stays) : [];
+      experiences = order.notes?.experiences ? JSON.parse(order.notes.experiences) : [];
       // What the guest was ACTUALLY charged in — trusted because it comes
       // from Razorpay's own order record, not anything the browser sent
       // here. 'INR' with no amount is the default/only case until
       // International Payments is enabled (see create-order.js).
-      const chargeCurrency = order.notes?.chargeCurrency || 'INR';
+      chargeCurrency = order.notes?.chargeCurrency || 'INR';
       const chargeAmount = order.notes?.chargeAmount ? Number(order.notes.chargeAmount) : null;
       // Applied at checkout — see create-order.js's coupon validation.
       // Attributed to whichever order row is created FIRST below (a
       // checkout-level discount, not a per-stay one), so it isn't
       // double-counted across multiple stays/experiences in one payment.
       const couponId = order.notes?.couponId ? Number(order.notes.couponId) : null;
-      const couponDiscount = order.notes?.couponDiscount ? Number(order.notes.couponDiscount) : 0;
+      couponDiscount = order.notes?.couponDiscount ? Number(order.notes.couponDiscount) : 0;
       let couponAttributed = false;
 
-      const totalSubtotalAllStays = stays.reduce((sum, s) => sum + s.subtotal, 0);
-      const totalGuestFeeAllStays = stays.reduce((sum, s) => sum + (Number(s.guestServiceFee) || 0), 0);
-      // The deposit total also has to be subtracted out here — order.amount
-      // now includes it too (see create-order.js), and without this the
-      // whole deposit would get miscounted as GST below.
-      const totalDepositAllStays = stays.reduce((sum, s) => sum + (Number(s.depositAmount) || 0), 0);
-      const totalExperienceSubtotal = experiences.reduce((sum, e) => sum + (Number(e.subtotal) || 0), 0);
-      const totalExperienceGuestFee = experiences.reduce((sum, e) => sum + (Number(e.guestServiceFee) || 0), 0);
-
-      // GST (currently 0%, see create-order.js) is shared proportionally
-      // across EVERYTHING in the order — stays and experiences together —
-      // by each item's slice of the combined subtotal. Computed once here
-      // rather than separately per type, so a mixed stay+experience order
-      // splits it consistently.
-      const grandSubtotalAll = totalSubtotalAllStays + totalExperienceSubtotal;
-      const gstPool = order.amount / 100 - grandSubtotalAll - totalGuestFeeAllStays - totalExperienceGuestFee - totalDepositAllStays;
+      // GST is stored per item by create-order.js (each stay has its own
+      // rate). It used to be reconstructed here as "whatever is left of
+      // the payment", which went NEGATIVE whenever a coupon was used: the
+      // order row stored negative GST and the host's payout fell by the
+      // coupon amount, although the host had already paid for that coupon.
+      // Orders created before this change carry no gst field and were
+      // charged 0% GST, so 0 is also the correct fallback.
+      const itemGst = (item) => Math.max(0, Math.round(Number(item && item.gst) || 0));
 
       for (const stay of stays) {
         const guestServiceFee = Number(stay.guestServiceFee) || 0;
         const depositAmount = Number(stay.depositAmount) || 0;
-        const gstShare = grandSubtotalAll > 0 ? Math.round((stay.subtotal / grandSubtotalAll) * gstPool) : 0;
+        const gstShare = itemGst(stay);
 
-        // This is the amount commission/payout are based on — deliberately
-        // EXCLUDING guestServiceFee and depositAmount, since neither is
-        // Aerva or host revenue: the guest fee is Aerva's guest-side
-        // revenue only, and the deposit is held, not earned, by anyone.
-        const hostRelevantTotal = stay.subtotal + gstShare;
-        // What the guest actually paid for this stay, guest fee and
-        // deposit included.
-        const stayTotal = hostRelevantTotal + guestServiceFee + depositAmount;
+        // The amount commission and payout are based on. It EXCLUDES:
+        //   - GST: Aerva collects it and pays it to the government;
+        //   - guestServiceFee: Aerva's guest-side revenue;
+        //   - depositAmount: held, not earned, by anyone.
+        const hostRelevantTotal = stay.subtotal;
+        // What the guest was charged for this stay: GST, guest fee and
+        // deposit included (a coupon, if any, is recorded separately).
+        const stayTotal = stay.subtotal + gstShare + guestServiceFee + depositAmount;
 
         // Prefer the new split commission (base booking vs. amenities,
         // computed server-side in create-order.js). Falls back to the old
@@ -353,9 +386,10 @@ module.exports = async (req, res) => {
       // arrival/departure/nights still works unchanged either way.
       for (const ex of experiences) {
         const guestServiceFee = Number(ex.guestServiceFee) || 0;
-        const gstShare = grandSubtotalAll > 0 ? Math.round((ex.subtotal / grandSubtotalAll) * gstPool) : 0;
-        const hostRelevantTotal = ex.subtotal + gstShare;
-        const total = hostRelevantTotal + guestServiceFee;
+        const gstShare = itemGst(ex);
+        // Same rule as stays: GST is Aerva's to pay over, never the host's.
+        const hostRelevantTotal = ex.subtotal;
+        const total = ex.subtotal + gstShare + guestServiceFee;
         const commissionAmount = Number(ex.commissionAmount) || 0;
         const effectiveRate = ex.commissionRate != null ? Number(ex.commissionRate) : FALLBACK_COMMISSION_RATE;
         const payoutAmount = hostRelevantTotal - commissionAmount;
@@ -410,7 +444,7 @@ module.exports = async (req, res) => {
     // requires one — but this is defensive either way).
     if (email) {
       try {
-        const pdfBuffer = await generateBookingConfirmationPdf(stays, experiences, razorpay_order_id, chargeCurrency);
+        const pdfBuffer = await generateBookingConfirmationPdf(stays, experiences, razorpay_order_id, chargeCurrency, couponDiscount);
         await sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer);
       } catch (emailErr) {
         console.error('Could not send booking confirmation email:', emailErr);
