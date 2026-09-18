@@ -270,6 +270,25 @@
     font-family:Georgia,serif; font-size:16px;
   }
   .profile-avatar-circle img{width:100%; height:100%; object-fit:cover; display:block;}
+  .profile-trigger-cluster{position:relative;}
+  .profile-avatar-ring{position:relative;}
+  .avatar-camera{
+    position:absolute; right:-2px; bottom:-2px; width:18px; height:18px; border-radius:50%;
+    background:#1c1a17; color:#f4ebe3; display:flex; align-items:center; justify-content:center;
+    border:1.5px solid #f4ebe3;
+  }
+  .avatar-camera svg{width:10px; height:10px;}
+  .profile-photo-upload-row .avatar-camera{display:none;}
+  .avatar-menu{
+    position:absolute; top:calc(100% + 8px); right:0; z-index:40; min-width:210px;
+    background:#fff; border:1px solid rgba(28,26,23,0.14); border-radius:10px;
+    box-shadow:0 10px 26px rgba(28,26,23,0.14); padding:6px; text-align:left;
+  }
+  .avatar-menu-item{
+    display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
+    padding:10px 12px; font-family:'Jost', sans-serif; font-size:13.5px; color:#1c1a17; border-radius:6px;
+  }
+  .avatar-menu-item:hover{background:#f4ebe3;}
   .profile-trigger-text{text-align:left;}
   .profile-trigger-name{font-size:13.5px; color:#1c1a17; display:block;}
   .profile-trigger-sub{font-size:11px; opacity:0.55; display:block;}
@@ -302,6 +321,25 @@
     padding:9px 18px; font-size:11.5px; letter-spacing:0.04em; text-transform:uppercase; cursor:pointer; border:none;
   }
   .settings-save-btn{background:#1c1a17; color:#f4ebe3;}
+  /* Action-needed notices. Deliberately the loudest thing on the page:
+     a host has 15 days before the listing is deactivated. */
+  .notice-card{
+    border:1px solid #ddc9a3; background:#fdf6e9; border-radius:10px;
+    padding:16px 18px; margin:0 0 14px;
+  }
+  .notice-card.notice-urgent{border-color:#a3402f; background:#fbeeea;}
+  .notice-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:4px;}
+  .notice-title{font-family:Georgia,serif; font-size:16px; margin:0;}
+  .notice-due{font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; color:#8a6c39;}
+  .notice-card.notice-urgent .notice-due{color:#a3402f; font-weight:600;}
+  .notice-body{font-size:13.5px; line-height:1.6; margin:0 0 10px; opacity:0.85;}
+  .notice-action{
+    display:inline-block; background:#1c1a17; color:#f4ebe3; border:none; cursor:pointer;
+    padding:9px 16px; font-size:11.5px; letter-spacing:0.04em; text-transform:uppercase;
+    font-family:'Jost', sans-serif; border-radius:4px; text-decoration:none;
+  }
+  .notice-summary{font-size:12.5px; opacity:0.7; margin:0 0 10px;}
+
   .feedback-card{max-width:640px; background:#fff; border:1px solid rgba(28,26,23,0.14); border-radius:12px; padding:28px 30px 30px; margin-top:18px;}
   .feedback-title{font-family:'Bodoni Moda', serif; font-size:23px; margin:0 0 6px; line-height:1.25;}
   .feedback-intro{font-size:13.5px; opacity:0.7; margin:0 0 22px; line-height:1.6;}
@@ -384,10 +422,25 @@
     <div>
       <h1>My Collection<span class="host-badge" id="hostBadge" style="display:none;"></span></h1>
     </div>
-    <div class="profile-trigger-cluster">
+    <div class="profile-trigger-cluster" id="profileTriggerCluster">
+      <!-- Tapping the picture used to go straight into the profile modal,
+           where changing it meant finding "Change" under Personal details.
+           This offers the photo first, since that is what someone tapping
+           their own picture is usually after. -->
+      <div class="avatar-menu" id="avatarMenu" style="display:none;">
+        <button type="button" class="avatar-menu-item" id="avatarMenuPhoto">Change profile photo</button>
+        <button type="button" class="avatar-menu-item" id="avatarMenuRemove" style="display:none;">Remove photo</button>
+        <button type="button" class="avatar-menu-item" id="avatarMenuProfile">Profile &amp; settings</button>
+      </div>
       <button type="button" class="profile-avatar-btn" id="hostProfileTrigger">
         <div class="profile-avatar-ring" id="profileAvatarRing">
           <div class="profile-avatar-circle" id="profileAvatarCircle">?</div>
+          <!-- Says the picture can be changed without having to be told. -->
+          <span class="avatar-camera" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M3 8.5h3.2l1.3-2h9l1.3 2H21v11H3z"/><circle cx="12" cy="13.5" r="3.4"/>
+            </svg>
+          </span>
         </div>
         <span class="profile-trigger-text">
           <span class="profile-trigger-name" id="profileTriggerName">Profile</span>
@@ -399,6 +452,11 @@
   </div>
 
   <div id="verificationBanner" style="display:none;"></div>
+
+  <!-- Action needed: outstanding requirements on this host's listings.
+       Sits above everything on every tab, because the consequence of
+       ignoring it is the listing coming off Aerva. -->
+  <div id="complianceNotice" style="display:none;"></div>
 
   <div class="listing-tabs" id="dashboardMainTabs" style="margin-top:8px;">
     <button type="button" class="listing-tab-btn active" data-main-tab="listings" id="mainTabListings">My Collection</button>
@@ -1680,7 +1738,50 @@
     if(e.target.id === 'experienceModalOverlay') closeExperienceModal();
   });
 
-  document.getElementById('hostProfileTrigger').addEventListener('click', () => openProfileModal('personal'));
+  // The avatar opens a small menu rather than the whole modal: photo
+  // first, settings still one tap away.
+  const avatarMenu = document.getElementById('avatarMenu');
+  function closeAvatarMenu(){ avatarMenu.style.display = 'none'; }
+  document.getElementById('hostProfileTrigger').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = avatarMenu.style.display === 'block';
+    // "Remove" is pointless when there is no photo yet.
+    document.getElementById('avatarMenuRemove').style.display =
+      (currentGuestProfile && currentGuestProfile.profilePhotoUrl) ? 'block' : 'none';
+    document.getElementById('avatarMenuPhoto').textContent =
+      (currentGuestProfile && currentGuestProfile.profilePhotoUrl) ? 'Change profile photo' : 'Add a profile photo';
+    avatarMenu.style.display = open ? 'none' : 'block';
+  });
+  document.addEventListener('click', (e) => {
+    if(avatarMenu.style.display === 'block' && !e.target.closest('#profileTriggerCluster')) closeAvatarMenu();
+  });
+  document.addEventListener('keydown', (e) => { if(e.key === 'Escape') closeAvatarMenu(); });
+  document.getElementById('avatarMenuPhoto').addEventListener('click', () => {
+    closeAvatarMenu();
+    document.getElementById('profilePhotoFileInput').click();
+  });
+  document.getElementById('avatarMenuProfile').addEventListener('click', () => {
+    closeAvatarMenu();
+    openProfileModal('personal');
+  });
+  document.getElementById('avatarMenuRemove').addEventListener('click', async () => {
+    closeAvatarMenu();
+    if(!confirm('Remove your profile photo? Your initial is shown instead.')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/guest-profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ profilePhotoUrl: null })
+      });
+      const data = await res.json();
+      if(res.ok){
+        currentGuestProfile = { ...(currentGuestProfile || {}), profilePhotoUrl: data.guest.profile_photo_url || null };
+        updateProfileAvatar();
+      } else {
+        alert(data.error || 'Could not remove your photo. Please try again.');
+      }
+    }catch(err){ alert('Could not remove your photo. Please try again.'); }
+  });
   document.getElementById('profileModalCloseBtn').addEventListener('click', closeProfileModal);
   document.getElementById('profileModalOverlay').addEventListener('click', (e) => {
     if(e.target.id === 'profileModalOverlay') closeProfileModal();
@@ -1703,6 +1804,13 @@
     const file = this.files[0];
     const statusEl = document.getElementById('profilePhotoStatusValue');
     if(!file) return;
+    // Uploading can now start from the avatar menu, with the modal shut,
+    // so the status line there may be out of sight. The avatar itself
+    // shows the progress instead.
+    const circle = document.getElementById('profileAvatarCircle');
+    const previous = circle.innerHTML;
+    circle.textContent = '…';
+    const restore = (ok) => { if(!ok) circle.innerHTML = previous; };
     statusEl.textContent = 'Uploading…';
     statusEl.style.color = '';
     try{
@@ -1721,12 +1829,16 @@
         currentGuestProfile = { ...(currentGuestProfile || {}), profilePhotoUrl: data.guest.profile_photo_url };
         updateProfileAvatar(); // overwrites statusEl back to "Added"
       } else {
+        restore(false);
         statusEl.textContent = data.error || 'Could not update your photo. Please try again.';
         statusEl.style.color = '#a3402f';
+        alert(data.error || 'Could not update your photo. Please try again.');
       }
     } catch(err){
+      restore(false);
       statusEl.textContent = 'Upload failed. Please try again.';
       statusEl.style.color = '#a3402f';
+      alert('Upload failed. Please try again.');
     }
     this.value = '';
   });
@@ -1872,6 +1984,42 @@
     fill('profilePhone', p.phone);
   }
 
+  // ---- Action needed ----
+  // One card per outstanding requirement, newest deadline first, with a
+  // button that opens the listing where it is fixed. A listing already
+  // taken down says so plainly rather than counting down a deadline that
+  // has passed.
+  function renderComplianceNotices(notices){
+    const box = document.getElementById('complianceNotice');
+    if(!box) return;
+    if(!Array.isArray(notices) || !notices.length){
+      box.style.display = 'none';
+      box.innerHTML = '';
+      return;
+    }
+    const esc = (t) => String(t == null ? '' : t)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const dueText = (n) => {
+      if(n.autoBlocked || n.listingStatus === 'blocked') return 'Taken down — fix to restore';
+      if(n.daysLeft <= 0) return 'Due today';
+      if(n.daysLeft === 1) return '1 day left';
+      return n.daysLeft + ' days left';
+    };
+    box.style.display = 'block';
+    box.innerHTML =
+      '<p class="notice-summary">' + notices.length + ' listing' + (notices.length === 1 ? '' : 's') + ' need' + (notices.length === 1 ? 's' : '') + ' your attention. A listing left unfixed for 15 days is taken off Aerva until it is sorted.</p>'
+      + notices.map(n => {
+          const urgent = n.autoBlocked || n.listingStatus === 'blocked' || n.daysLeft <= 3;
+          return '<div class="notice-card' + (urgent ? ' notice-urgent' : '') + '">'
+            + '<div class="notice-head"><h3 class="notice-title">' + esc(n.propertyName) + '</h3>'
+            + '<span class="notice-due">' + esc(dueText(n)) + '</span></div>'
+            + '<p class="notice-body">' + esc(n.message) + '</p>'
+            + '<a class="notice-action" href="manage-listing.html?id=' + Number(n.listingId) + '">Fix this now</a>'
+            + '</div>';
+        }).join('');
+  }
+
   async function loadListings(){
     try{
       const res = await fetch(API_BASE + '/api/host-listings', {
@@ -1885,6 +2033,7 @@
         return;
       }
       const data = await res.json();
+      renderComplianceNotices(data.complianceNotices || []);
       if(data.hostBadge){
         const badgeEl = document.getElementById('hostBadge');
         badgeEl.textContent = data.hostBadge;
