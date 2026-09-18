@@ -53,6 +53,7 @@ const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { openFlagsForHost } = require('./_compliance');
 const { verifyGoogleIdToken } = require('./_social-auth');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { normalizeToE164 } = require('./_phone-validation');
@@ -65,6 +66,9 @@ const RESET_LINK_LIFETIME_MS = 60 * 60 * 1000; // 1 hour — shorter than email 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SITE_BASE = 'https://aerva.in';
+// Same lifetime host-listings.js gives a manage link, so the one in the
+// bell behaves exactly like the one on the dashboard.
+const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
 // A bcrypt hash of a value nobody will ever type, used only so that a
 // login attempt against a non-existent email still runs bcrypt.compare
@@ -346,7 +350,43 @@ module.exports = async (req, res) => {
         console.error('pending review count failed (non-fatal):', err);
       }
 
-      return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing, tier, pendingReviews } });
+      // What the bell in the site header shows. Two kinds today:
+      //   review — a stay they can still review
+      //   action — a listing of theirs with an outstanding requirement
+      // Assembled here so the header needs one call, not three. Wrapped:
+      // the bell must never be why a session check fails.
+      const notifications = [];
+      try {
+        if (pendingReviews > 0) {
+          notifications.push({
+            id: 'reviews:' + pendingReviews,
+            kind: 'review',
+            title: pendingReviews === 1 ? 'A stay to review' : `${pendingReviews} stays to review`,
+            body: 'Your review helps the next guest choose well. The window closes 15 days after checkout.',
+            href: 'index.html?view=my-bookings'
+          });
+        }
+        if (guest.host_id) {
+          const flags = await openFlagsForHost(sql, guest.host_id,
+            (listingId) => `${SITE_BASE}/manage-listing.html?token=${createToken(listingId, 'manage-pricing', TWO_YEARS_MS)}`);
+          flags.forEach(f => {
+            notifications.push({
+              id: 'flag:' + f.id,
+              kind: 'action',
+              title: `${f.propertyName} — ${f.label}`,
+              body: f.message,
+              due: (f.autoBlocked || f.listingStatus === 'blocked')
+                ? 'Taken down — fix to restore'
+                : (f.daysLeft <= 0 ? 'Due today' : `${f.daysLeft} day${f.daysLeft === 1 ? '' : 's'} left`),
+              href: f.manageLink || 'host-dashboard.html'
+            });
+          });
+        }
+      } catch (err) {
+        console.error('notifications failed (non-fatal):', err);
+      }
+
+      return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing, tier, pendingReviews, notifications } });
     } catch (err) {
       console.error('guest-auth (GET) error:', err);
       return res.status(500).json({ error: 'Could not verify your session.' });
