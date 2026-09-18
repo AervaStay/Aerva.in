@@ -172,6 +172,14 @@
 
   // Same notice as host-dashboard.html, kept deliberately short here:
   // what is wrong, on which listing, by when, and where to fix it.
+  // The signed manage link, or the dashboard if one could not be built —
+  // never a link that opens a page unable to do anything.
+  function escapeNoticeUrl(url){
+    return (typeof url === 'string' && url.startsWith('https://') && url.includes('manage-listing.html'))
+      ? url.replace(/"/g, '&quot;')
+      : 'host-dashboard.html';
+  }
+
   function renderComplianceNotices(notices){
     const box = document.getElementById('complianceNotice');
     if(!box) return;
@@ -189,7 +197,7 @@
         + '<div class="notice-head"><h3 class="notice-title">' + esc(n.propertyName) + '</h3>'
         + '<span class="notice-due">' + esc(dueText(n)) + '</span></div>'
         + '<p class="notice-body">' + esc(n.message) + '</p>'
-        + '<a class="notice-action" href="manage-listing.html?id=' + Number(n.listingId) + '">Fix this now</a></div>';
+        + '<a class="notice-action" href="' + escapeNoticeUrl(n.manageLink) + '">Fix this now</a></div>';
     }).join('');
   }
 

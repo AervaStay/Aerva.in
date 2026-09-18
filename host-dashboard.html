@@ -279,6 +279,38 @@
   }
   .avatar-camera svg{width:10px; height:10px;}
   .profile-photo-upload-row .avatar-camera{display:none;}
+  .bell-btn{
+    position:relative; background:none; border:1px solid #ddd0bc; border-radius:50%;
+    width:38px; height:38px; display:flex; align-items:center; justify-content:center;
+    cursor:pointer; color:#1c1a17;
+  }
+  .bell-btn svg{width:17px; height:17px;}
+  .bell-count{
+    position:absolute; top:-4px; right:-4px; min-width:18px; height:18px; padding:0 5px;
+    border-radius:9px; background:#a3402f; color:#fff; font-size:10.5px; line-height:18px;
+    font-family:'Jost', sans-serif; text-align:center;
+  }
+  .notif-panel{
+    position:absolute; top:calc(100% + 8px); right:0; z-index:45; width:320px; max-width:82vw;
+    background:#fff; border:1px solid rgba(28,26,23,0.14); border-radius:10px;
+    box-shadow:0 10px 26px rgba(28,26,23,0.14); overflow:hidden; text-align:left;
+  }
+  .notif-head{
+    padding:10px 14px; font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase;
+    opacity:0.55; border-bottom:1px solid rgba(28,26,23,0.08);
+  }
+  .notif-item{
+    display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
+    padding:12px 14px; border-bottom:1px solid rgba(28,26,23,0.06); font-family:'Jost', sans-serif;
+    color:inherit; text-decoration:none;
+  }
+  .notif-item:hover{background:#faf5ee;}
+  .notif-item.is-unread{background:#fdf6e9;}
+  .notif-item-title{font-size:13.5px; margin-bottom:2px;}
+  .notif-item-body{font-size:12.5px; opacity:0.7; line-height:1.5;}
+  .notif-item-due{font-size:10.5px; letter-spacing:0.06em; text-transform:uppercase; color:#8a6c39; margin-top:4px;}
+  .notif-empty{padding:16px 14px; font-size:13px; opacity:0.6;}
+
   .avatar-menu{
     position:absolute; top:calc(100% + 8px); right:0; z-index:40; min-width:210px;
     background:#fff; border:1px solid rgba(28,26,23,0.14); border-radius:10px;
@@ -323,6 +355,42 @@
   .settings-save-btn{background:#1c1a17; color:#f4ebe3;}
   /* Action-needed notices. Deliberately the loudest thing on the page:
      a host has 15 days before the listing is deactivated. */
+  .photo-editor-overlay{
+    position:fixed; inset:0; z-index:200; background:rgba(28,26,23,0.55);
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .photo-editor{
+    background:#fff; border-radius:14px; padding:22px 24px 24px; max-width:380px; width:100%;
+    box-shadow:0 20px 50px rgba(28,26,23,0.25);
+  }
+  .photo-editor-title{font-family:Georgia,serif; font-size:19px; margin:0 0 4px;}
+  .photo-editor-hint{font-size:12.5px; opacity:0.65; margin:0 0 16px; line-height:1.5;}
+  .photo-editor-stage{
+    position:relative; width:320px; max-width:100%; aspect-ratio:1/1; margin:0 auto 14px;
+    background:#efe6d8; border-radius:10px; overflow:hidden; touch-action:none; cursor:grab;
+  }
+  .photo-editor-stage:active{cursor:grabbing;}
+  #photoEditorCanvas{width:100%; height:100%; display:block;}
+  /* The circle is only a guide — the saved image is the full square, so a
+     square avatar elsewhere still looks right. */
+  .photo-editor-mask{
+    position:absolute; inset:0; pointer-events:none;
+    box-shadow:0 0 0 999px rgba(255,255,255,0.55) inset;
+    -webkit-mask:radial-gradient(circle at 50% 50%, transparent 49%, #000 50%);
+            mask:radial-gradient(circle at 50% 50%, transparent 49%, #000 50%);
+  }
+  .photo-editor-zoom{display:flex; align-items:center; gap:10px; font-size:11.5px; letter-spacing:0.04em; text-transform:uppercase; opacity:0.7; margin-bottom:14px;}
+  .photo-editor-zoom input{flex:1 1 auto;}
+  .photo-editor-filters{display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; margin-bottom:16px;}
+  .photo-filter-btn{
+    flex:0 0 auto; background:none; border:1px solid #ddd0bc; border-radius:8px; cursor:pointer;
+    padding:6px 6px 5px; font-family:'Jost', sans-serif; font-size:10.5px; letter-spacing:0.04em;
+    text-transform:uppercase; color:#1c1a17; opacity:0.85;
+  }
+  .photo-filter-btn canvas{display:block; width:46px; height:46px; border-radius:5px; margin-bottom:4px;}
+  .photo-filter-btn.is-on{border-color:#1c1a17; opacity:1; box-shadow:inset 0 0 0 1px #1c1a17;}
+  .photo-editor-actions{display:flex; gap:10px;}
+
   .notice-card{
     border:1px solid #ddc9a3; background:#fdf6e9; border-radius:10px;
     padding:16px 18px; margin:0 0 14px;
@@ -423,6 +491,20 @@
       <h1>My Collection<span class="host-badge" id="hostBadge" style="display:none;"></span></h1>
     </div>
     <div class="profile-trigger-cluster" id="profileTriggerCluster">
+      <!-- Notifications. Same items as the cards further down the page,
+           but reachable from anywhere on the dashboard and carrying a
+           count, so something needing action is not missed by a host who
+           never scrolls. -->
+      <button type="button" class="bell-btn" id="notifBell" aria-label="Notifications">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M18 8a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6"/><path d="M13.7 20a2 2 0 0 1-3.4 0"/>
+        </svg>
+        <span class="bell-count" id="notifCount" style="display:none;">0</span>
+      </button>
+      <div class="notif-panel" id="notifPanel" style="display:none;">
+        <div class="notif-head">Notifications</div>
+        <div id="notifList"></div>
+      </div>
       <!-- Tapping the picture used to go straight into the profile modal,
            where changing it meant finding "Change" under Personal details.
            This offers the photo first, since that is what someone tapping
@@ -466,6 +548,34 @@
   <!-- One place for a host to tell us something on the site needs fixing
        or changing. Phone and email are both required so we can call and
        actually understand the concern, not guess at it over email. -->
+  <!-- Photo editor. Opens after a file is picked and before anything is
+       uploaded: what leaves the browser is the cropped, filtered square,
+       not the original. -->
+  <div class="photo-editor-overlay" id="photoEditorOverlay" style="display:none;">
+    <div class="photo-editor">
+      <h3 class="photo-editor-title">Your profile photo</h3>
+      <p class="photo-editor-hint">Drag to move, pinch or use the slider to zoom. The circle is what people see.</p>
+
+      <div class="photo-editor-stage" id="photoEditorStage">
+        <canvas id="photoEditorCanvas" width="320" height="320"></canvas>
+        <div class="photo-editor-mask" aria-hidden="true"></div>
+      </div>
+
+      <label class="photo-editor-zoom">
+        <span>Zoom</span>
+        <input type="range" id="photoEditorZoom" min="100" max="300" value="100">
+      </label>
+
+      <div class="photo-editor-filters" id="photoEditorFilters"></div>
+
+      <div class="photo-editor-actions">
+        <button type="button" class="settings-save-btn" id="photoEditorUse">Use photo</button>
+        <button type="button" class="settings-cancel-btn" id="photoEditorCancel">Cancel</button>
+      </div>
+      <p class="profile-save-msg" id="photoEditorMsg"></p>
+    </div>
+  </div>
+
   <div id="feedbackSection" style="display:none;">
     <div class="feedback-card">
       <h2 class="feedback-title">Tell us what needs looking at</h2>
@@ -1800,7 +1910,176 @@
   document.getElementById('profilePhotoUploadBtn').addEventListener('click', () => {
     document.getElementById('profilePhotoFileInput').click();
   });
-  document.getElementById('profilePhotoFileInput').addEventListener('change', async function(){
+  // ---- Photo editor ----
+  // Crop and filter happen here, in the browser, before the upload: the
+  // file that reaches Vercel Blob is already a square of known size, so a
+  // 12MP phone photo never becomes a 12MP avatar.
+  //
+  // Filters are plain canvas filter strings. Names are what someone would
+  // call them, not what they do.
+  const PHOTO_FILTERS = [
+    { id: 'none',   label: 'Original', css: 'none' },
+    { id: 'warm',   label: 'Warm',     css: 'saturate(1.15) sepia(0.18) contrast(1.03)' },
+    { id: 'cool',   label: 'Cool',     css: 'saturate(1.05) hue-rotate(-12deg) brightness(1.03)' },
+    { id: 'bright', label: 'Bright',   css: 'brightness(1.12) contrast(1.05) saturate(1.05)' },
+    { id: 'soft',   label: 'Soft',     css: 'brightness(1.06) saturate(0.9) contrast(0.95)' },
+    { id: 'mono',   label: 'Mono',     css: 'grayscale(1) contrast(1.08)' }
+  ];
+  const PHOTO_OUTPUT_SIZE = 640; // what is saved, regardless of what was picked
+
+  const photoEditor = {
+    img: null, zoom: 1, offsetX: 0, offsetY: 0, filter: 'none',
+    minZoom: 1, dragging: false, lastX: 0, lastY: 0
+  };
+
+  function photoFilterCss(id){
+    const f = PHOTO_FILTERS.find(x => x.id === id);
+    return f ? f.css : 'none';
+  }
+
+  // Draws the image into a square canvas at the current zoom and offset.
+  // Shared by the live preview and the final export, so what is saved is
+  // what was seen.
+  function drawPhoto(ctx, size, filterId){
+    const img = photoEditor.img;
+    ctx.save();
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = '#efe6d8';
+    ctx.fillRect(0, 0, size, size);
+    if(img){
+      // 'cover': the shorter side fills the square, so there is never a
+      // blank edge however the photo is shaped.
+      const base = Math.max(size / img.width, size / img.height);
+      const scale = base * photoEditor.zoom;
+      const w = img.width * scale, h = img.height * scale;
+      const x = (size - w) / 2 + photoEditor.offsetX * (size / 320);
+      const y = (size - h) / 2 + photoEditor.offsetY * (size / 320);
+      ctx.filter = photoFilterCss(filterId === undefined ? photoEditor.filter : filterId);
+      ctx.drawImage(img, x, y, w, h);
+    }
+    ctx.restore();
+  }
+
+  function renderPhotoPreview(){
+    const canvas = document.getElementById('photoEditorCanvas');
+    const ctx = canvas.getContext && canvas.getContext('2d');
+    if(ctx) drawPhoto(ctx, canvas.width);
+  }
+
+  // A thumbnail per filter, drawn from the same photo, so the choice is
+  // made by looking rather than by guessing what "Soft" means.
+  function renderFilterChoices(){
+    const box = document.getElementById('photoEditorFilters');
+    box.innerHTML = '';
+    PHOTO_FILTERS.forEach(f => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'photo-filter-btn' + (photoEditor.filter === f.id ? ' is-on' : '');
+      btn.dataset.filter = f.id;
+      const thumb = document.createElement('canvas');
+      thumb.width = 46; thumb.height = 46;
+      const tctx = thumb.getContext && thumb.getContext('2d');
+      if(tctx) drawPhoto(tctx, 46, f.id);
+      btn.appendChild(thumb);
+      btn.appendChild(document.createTextNode(f.label));
+      btn.addEventListener('click', () => {
+        photoEditor.filter = f.id;
+        renderFilterChoices();
+        renderPhotoPreview();
+      });
+      box.appendChild(btn);
+    });
+  }
+
+  function openPhotoEditor(file){
+    const msg = document.getElementById('photoEditorMsg');
+    msg.textContent = '';
+    if(!/^image\//.test(file.type || '')){
+      alert('Please choose an image file.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        Object.assign(photoEditor, { img, zoom: 1, offsetX: 0, offsetY: 0, filter: 'none' });
+        document.getElementById('photoEditorZoom').value = '100';
+        document.getElementById('photoEditorOverlay').style.display = 'flex';
+        renderFilterChoices();
+        renderPhotoPreview();
+      };
+      img.onerror = () => alert('That image could not be opened. Please try another.');
+      img.src = reader.result;
+    };
+    reader.onerror = () => alert('That image could not be read. Please try another.');
+    reader.readAsDataURL(file);
+  }
+
+  function closePhotoEditor(){
+    document.getElementById('photoEditorOverlay').style.display = 'none';
+    photoEditor.img = null;
+  }
+
+  // Dragging moves the photo inside the square.
+  (function wirePhotoDrag(){
+    const stage = document.getElementById('photoEditorStage');
+    if(!stage) return;
+    const start = (x, y) => { photoEditor.dragging = true; photoEditor.lastX = x; photoEditor.lastY = y; };
+    const move = (x, y) => {
+      if(!photoEditor.dragging) return;
+      photoEditor.offsetX += x - photoEditor.lastX;
+      photoEditor.offsetY += y - photoEditor.lastY;
+      photoEditor.lastX = x; photoEditor.lastY = y;
+      renderPhotoPreview();
+    };
+    const end = () => { photoEditor.dragging = false; };
+    stage.addEventListener('pointerdown', e => { start(e.clientX, e.clientY); stage.setPointerCapture && stage.setPointerCapture(e.pointerId); });
+    stage.addEventListener('pointermove', e => move(e.clientX, e.clientY));
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', end);
+  })();
+
+  document.getElementById('photoEditorZoom').addEventListener('input', function(){
+    photoEditor.zoom = Math.max(1, Number(this.value) / 100);
+    renderPhotoPreview();
+  });
+  document.getElementById('photoEditorCancel').addEventListener('click', () => {
+    closePhotoEditor();
+    document.getElementById('profilePhotoFileInput').value = '';
+  });
+
+  document.getElementById('photoEditorUse').addEventListener('click', function(){
+    const btn = this;
+    const out = document.createElement('canvas');
+    out.width = PHOTO_OUTPUT_SIZE; out.height = PHOTO_OUTPUT_SIZE;
+    const ctx = out.getContext && out.getContext('2d');
+    if(!ctx){ document.getElementById('photoEditorMsg').textContent = 'Could not prepare that image here.'; return; }
+    drawPhoto(ctx, PHOTO_OUTPUT_SIZE);
+    btn.disabled = true; btn.textContent = 'Uploading…';
+    const done = (blob) => {
+      btn.disabled = false; btn.textContent = 'Use photo';
+      if(!blob){ document.getElementById('photoEditorMsg').textContent = 'Could not prepare that image. Please try another.'; return; }
+      closePhotoEditor();
+      uploadProfilePhoto(new File([blob], 'profile.jpg', { type: 'image/jpeg' }));
+      document.getElementById('profilePhotoFileInput').value = '';
+    };
+    if(out.toBlob) out.toBlob(done, 'image/jpeg', 0.9);
+    else done(null);
+  });
+
+  // Picking a file no longer uploads it: it opens the editor, and the
+  // upload happens once the crop and filter are settled.
+  document.getElementById('profilePhotoFileInput').addEventListener('change', function(){
+    const file = this.files && this.files[0];
+    if(file) openPhotoEditor(file);
+  });
+
+  async function uploadProfilePhoto(file){
+    const _self = { files: [file], value: '' };
+    return uploadProfilePhotoFile.call(_self);
+  }
+
+  async function uploadProfilePhotoFile(){
     const file = this.files[0];
     const statusEl = document.getElementById('profilePhotoStatusValue');
     if(!file) return;
@@ -1841,7 +2120,7 @@
       alert('Upload failed. Please try again.');
     }
     this.value = '';
-  });
+  }
 
   // ---- Personal Details save: Name and Phone save independently, each
   // its own row/button, sending only that one field — host-listings.js's
@@ -1989,6 +2268,73 @@
   // button that opens the listing where it is fixed. A listing already
   // taken down says so plainly rather than counting down a deadline that
   // has passed.
+  // The signed manage link, or the dashboard if one could not be built —
+  // never a link that opens a page unable to do anything.
+  function escapeNoticeUrl(url){
+    return (typeof url === 'string' && url.startsWith('https://') && url.includes('manage-listing.html'))
+      ? url.replace(/"/g, '&quot;')
+      : 'host-dashboard.html';
+  }
+
+  // ---- Notifications ----
+  // Fed by the same open compliance flags. "Read" is remembered per flag
+  // in this browser, so the count reflects what this host has actually
+  // looked at; the flag itself stays open until the listing is fixed.
+  let notifItems = [];
+  const NOTIF_READ_KEY = 'aerva_notifications_read';
+  function notifRead(){
+    try{ return JSON.parse(localStorage.getItem(NOTIF_READ_KEY) || '[]'); }catch(e){ return []; }
+  }
+  function markNotifRead(id){
+    try{
+      const seen = notifRead();
+      if(!seen.includes(id)){ seen.push(id); localStorage.setItem(NOTIF_READ_KEY, JSON.stringify(seen.slice(-200))); }
+    }catch(e){}
+  }
+  function renderNotifications(notices){
+    notifItems = Array.isArray(notices) ? notices : [];
+    const seen = notifRead();
+    const unread = notifItems.filter(n => !seen.includes('flag:' + n.id)).length;
+    const countEl = document.getElementById('notifCount');
+    countEl.textContent = unread > 9 ? '9+' : String(unread);
+    countEl.style.display = unread ? 'block' : 'none';
+
+    const list = document.getElementById('notifList');
+    if(!notifItems.length){
+      list.innerHTML = '<p class="notif-empty">Nothing needs your attention right now.</p>';
+      return;
+    }
+    const esc = (t) => String(t == null ? '' : t)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    list.innerHTML = notifItems.map(n => {
+      const isUnread = !seen.includes('flag:' + n.id);
+      const due = (n.autoBlocked || n.listingStatus === 'blocked')
+        ? 'Taken down — fix to restore'
+        : (n.daysLeft <= 0 ? 'Due today' : n.daysLeft + ' day' + (n.daysLeft === 1 ? '' : 's') + ' left');
+      // A link, not a button: it goes somewhere, so it should behave like
+      // a link — openable in a new tab, and with the destination visible
+      // on hover.
+      return '<a class="notif-item' + (isUnread ? ' is-unread' : '') + '" data-flag="' + Number(n.id) + '"'
+        + ' href="' + escapeNoticeUrl(n.manageLink) + '">'
+        + '<div class="notif-item-title"><strong>' + esc(n.propertyName) + '</strong> — ' + esc(n.label) + '</div>'
+        + '<div class="notif-item-body">' + esc(n.message) + '</div>'
+        + '<div class="notif-item-due">' + esc(due) + '</div></a>';
+    }).join('');
+    // Marked read as it is followed; the link itself does the navigating.
+    list.querySelectorAll('.notif-item').forEach(el => {
+      el.addEventListener('click', () => markNotifRead('flag:' + Number(el.dataset.flag)));
+    });
+  }
+  document.getElementById('notifBell').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const panel = document.getElementById('notifPanel');
+    panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+  });
+  document.addEventListener('click', (e) => {
+    const panel = document.getElementById('notifPanel');
+    if(panel.style.display === 'block' && !e.target.closest('#profileTriggerCluster')) panel.style.display = 'none';
+  });
+
   function renderComplianceNotices(notices){
     const box = document.getElementById('complianceNotice');
     if(!box) return;
@@ -2015,7 +2361,7 @@
             + '<div class="notice-head"><h3 class="notice-title">' + esc(n.propertyName) + '</h3>'
             + '<span class="notice-due">' + esc(dueText(n)) + '</span></div>'
             + '<p class="notice-body">' + esc(n.message) + '</p>'
-            + '<a class="notice-action" href="manage-listing.html?id=' + Number(n.listingId) + '">Fix this now</a>'
+            + '<a class="notice-action" href="' + escapeNoticeUrl(n.manageLink) + '">Fix this now</a>'
             + '</div>';
         }).join('');
   }
@@ -2034,6 +2380,7 @@
       }
       const data = await res.json();
       renderComplianceNotices(data.complianceNotices || []);
+      renderNotifications(data.complianceNotices || []);
       if(data.hostBadge){
         const badgeEl = document.getElementById('hostBadge');
         badgeEl.textContent = data.hostBadge;

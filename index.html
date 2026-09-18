@@ -629,6 +629,33 @@
   /* Reviews under the photos (listing page) and in the host's guest profile. */
   /* Reviews are plain text: a line of numbers, then name, date and what
      the guest wrote. No cards, no pills, no rules between them. */
+  .photo-editor-overlay{
+    position:fixed; inset:0; z-index:200; background:rgba(28,26,23,0.55);
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .photo-editor{background:#fff; border-radius:14px; padding:22px 24px 24px; max-width:380px; width:100%; box-shadow:0 20px 50px rgba(28,26,23,0.25);}
+  .photo-editor-title{font-family:'Bodoni Moda', serif; font-size:20px; margin:0 0 4px;}
+  .photo-editor-hint{font-size:12.5px; opacity:0.65; margin:0 0 16px; line-height:1.5;}
+  .photo-editor-stage{position:relative; width:320px; max-width:100%; aspect-ratio:1/1; margin:0 auto 14px; background:var(--cream-deep); border-radius:10px; overflow:hidden; touch-action:none; cursor:grab;}
+  .photo-editor-stage:active{cursor:grabbing;}
+  #photoEditorCanvas{width:100%; height:100%; display:block;}
+  .photo-editor-mask{
+    position:absolute; inset:0; pointer-events:none; box-shadow:0 0 0 999px rgba(255,255,255,0.55) inset;
+    -webkit-mask:radial-gradient(circle at 50% 50%, transparent 49%, #000 50%);
+            mask:radial-gradient(circle at 50% 50%, transparent 49%, #000 50%);
+  }
+  .photo-editor-zoom{display:flex; align-items:center; gap:10px; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px;}
+  .photo-editor-zoom input{flex:1 1 auto;}
+  .photo-editor-filters{display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; margin-bottom:16px;}
+  .photo-filter-btn{
+    flex:0 0 auto; background:none; border:1px solid var(--line-dark); border-radius:8px; cursor:pointer;
+    padding:6px 6px 5px; font-family:'Jost', sans-serif; font-size:10px; letter-spacing:0.06em;
+    text-transform:uppercase; color:var(--ink); opacity:0.85;
+  }
+  .photo-filter-btn canvas{display:block; width:46px; height:46px; border-radius:5px; margin-bottom:4px;}
+  .photo-filter-btn.is-on{border-color:var(--ink); opacity:1; box-shadow:inset 0 0 0 1px var(--ink);}
+  .photo-editor-actions{display:flex; gap:10px;}
+
   #reviewReminderBar{
     position:sticky; top:0; z-index:60; background:var(--ink); color:var(--cream);
   }
@@ -1621,6 +1648,7 @@
           <span id="guestTierBadge" class="nav-tier-badge" style="display:none;"></span>
         </button>
         <div class="nav-account-menu" id="navAccountMenu">
+          <a href="#" id="navChangePhotoLink">Change profile photo</a>
           <a href="index.html?view=my-bookings">My Bookings</a>
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Collection</a>
           <a href="host-status.html" id="statusMenuLink" style="display:none;">Status</a>
@@ -1915,6 +1943,30 @@
 <!-- Review reminder. The email that goes out the morning after checkout
      is easy to miss; this is the same prompt on the site, shown to a
      signed-in guest with a stay still inside its 15-day window. -->
+<!-- Profile photo: picked, cropped and filtered here, then uploaded. The
+     same editor as host-dashboard.html — the two pages share no script,
+     so this is a deliberate second copy; keep them in step. -->
+<input type="file" id="navPhotoInput" accept="image/*" style="display:none;">
+<div class="photo-editor-overlay" id="photoEditorOverlay" style="display:none;">
+  <div class="photo-editor">
+    <h3 class="photo-editor-title">Your profile photo</h3>
+    <p class="photo-editor-hint">Drag to move, use the slider to zoom. The circle is what people see.</p>
+    <div class="photo-editor-stage" id="photoEditorStage">
+      <canvas id="photoEditorCanvas" width="320" height="320"></canvas>
+      <div class="photo-editor-mask" aria-hidden="true"></div>
+    </div>
+    <label class="photo-editor-zoom"><span>Zoom</span>
+      <input type="range" id="photoEditorZoom" min="100" max="300" value="100">
+    </label>
+    <div class="photo-editor-filters" id="photoEditorFilters"></div>
+    <div class="photo-editor-actions">
+      <button type="button" class="filter-clear" id="photoEditorUse">Use photo</button>
+      <button type="button" class="filter-clear" id="photoEditorCancel">Cancel</button>
+    </div>
+    <p class="rv-error" id="photoEditorMsg" style="display:none;"></p>
+  </div>
+</div>
+
 <div id="reviewReminderBar" style="display:none;">
   <div class="rr-inner">
     <span class="rr-text" id="reviewReminderText"></span>
@@ -7904,6 +7956,158 @@
     });
   }
 
+  // ---- Profile photo: crop and filter, then upload ----
+  // A second copy of host-dashboard.html's editor: the two pages share no
+  // script. Same six filters, same 640px square output, so a photo looks
+  // the same whichever page it was set from.
+  const PHOTO_FILTERS = [
+    { id: 'none',   label: 'Original', css: 'none' },
+    { id: 'warm',   label: 'Warm',     css: 'saturate(1.15) sepia(0.18) contrast(1.03)' },
+    { id: 'cool',   label: 'Cool',     css: 'saturate(1.05) hue-rotate(-12deg) brightness(1.03)' },
+    { id: 'bright', label: 'Bright',   css: 'brightness(1.12) contrast(1.05) saturate(1.05)' },
+    { id: 'soft',   label: 'Soft',     css: 'brightness(1.06) saturate(0.9) contrast(0.95)' },
+    { id: 'mono',   label: 'Mono',     css: 'grayscale(1) contrast(1.08)' }
+  ];
+  const PHOTO_OUTPUT_SIZE = 640;
+  const photoEditor = { img: null, zoom: 1, offsetX: 0, offsetY: 0, filter: 'none', dragging: false, lastX: 0, lastY: 0 };
+  function photoFilterCss(id){ const f = PHOTO_FILTERS.find(x => x.id === id); return f ? f.css : 'none'; }
+
+  function drawPhoto(ctx, size, filterId){
+    const img = photoEditor.img;
+    ctx.save();
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = '#ebdecd';
+    ctx.fillRect(0, 0, size, size);
+    if(img){
+      const base = Math.max(size / img.width, size / img.height);
+      const scale = base * photoEditor.zoom;
+      const w = img.width * scale, h = img.height * scale;
+      const x = (size - w) / 2 + photoEditor.offsetX * (size / 320);
+      const y = (size - h) / 2 + photoEditor.offsetY * (size / 320);
+      ctx.filter = photoFilterCss(filterId === undefined ? photoEditor.filter : filterId);
+      ctx.drawImage(img, x, y, w, h);
+    }
+    ctx.restore();
+  }
+  function renderPhotoPreview(){
+    const c = document.getElementById('photoEditorCanvas');
+    const ctx = c && c.getContext && c.getContext('2d');
+    if(ctx) drawPhoto(ctx, c.width);
+  }
+  function renderFilterChoices(){
+    const box = document.getElementById('photoEditorFilters');
+    box.innerHTML = '';
+    PHOTO_FILTERS.forEach(f => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'photo-filter-btn' + (photoEditor.filter === f.id ? ' is-on' : '');
+      btn.dataset.filter = f.id;
+      const thumb = document.createElement('canvas');
+      thumb.width = 46; thumb.height = 46;
+      const tctx = thumb.getContext && thumb.getContext('2d');
+      if(tctx) drawPhoto(tctx, 46, f.id);
+      btn.appendChild(thumb);
+      btn.appendChild(document.createTextNode(f.label));
+      btn.addEventListener('click', () => { photoEditor.filter = f.id; renderFilterChoices(); renderPhotoPreview(); });
+      box.appendChild(btn);
+    });
+  }
+  function openPhotoEditor(file){
+    if(!/^image\//.test(file.type || '')) return alert('Please choose an image file.');
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        Object.assign(photoEditor, { img, zoom: 1, offsetX: 0, offsetY: 0, filter: 'none' });
+        document.getElementById('photoEditorZoom').value = '100';
+        document.getElementById('photoEditorMsg').style.display = 'none';
+        document.getElementById('photoEditorOverlay').style.display = 'flex';
+        renderFilterChoices();
+        renderPhotoPreview();
+      };
+      img.onerror = () => alert('That image could not be opened. Please try another.');
+      img.src = reader.result;
+    };
+    reader.onerror = () => alert('That image could not be read. Please try another.');
+    reader.readAsDataURL(file);
+  }
+  function closePhotoEditor(){
+    document.getElementById('photoEditorOverlay').style.display = 'none';
+    photoEditor.img = null;
+    document.getElementById('navPhotoInput').value = '';
+  }
+  (function wirePhotoEditor(){
+    const stage = document.getElementById('photoEditorStage');
+    if(!stage) return;
+    stage.addEventListener('pointerdown', e => { photoEditor.dragging = true; photoEditor.lastX = e.clientX; photoEditor.lastY = e.clientY; });
+    stage.addEventListener('pointermove', e => {
+      if(!photoEditor.dragging) return;
+      photoEditor.offsetX += e.clientX - photoEditor.lastX;
+      photoEditor.offsetY += e.clientY - photoEditor.lastY;
+      photoEditor.lastX = e.clientX; photoEditor.lastY = e.clientY;
+      renderPhotoPreview();
+    });
+    ['pointerup', 'pointercancel'].forEach(ev => stage.addEventListener(ev, () => { photoEditor.dragging = false; }));
+    document.getElementById('photoEditorZoom').addEventListener('input', function(){
+      photoEditor.zoom = Math.max(1, Number(this.value) / 100);
+      renderPhotoPreview();
+    });
+    document.getElementById('photoEditorCancel').addEventListener('click', closePhotoEditor);
+    document.getElementById('navPhotoInput').addEventListener('change', function(){
+      const f = this.files && this.files[0];
+      if(f) openPhotoEditor(f);
+    });
+    document.getElementById('navChangePhotoLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      document.getElementById('navAccountMenu').classList.remove('open');
+      document.getElementById('navPhotoInput').click();
+    });
+    document.getElementById('photoEditorUse').addEventListener('click', function(){
+      const btn = this;
+      const msg = document.getElementById('photoEditorMsg');
+      const out = document.createElement('canvas');
+      out.width = PHOTO_OUTPUT_SIZE; out.height = PHOTO_OUTPUT_SIZE;
+      const ctx = out.getContext && out.getContext('2d');
+      if(!ctx){ msg.textContent = 'Could not prepare that image here.'; msg.style.display = 'block'; return; }
+      drawPhoto(ctx, PHOTO_OUTPUT_SIZE);
+      btn.disabled = true; btn.textContent = 'Uploading…';
+      const finish = () => { btn.disabled = false; btn.textContent = 'Use photo'; };
+      const done = async (blob) => {
+        if(!blob){ finish(); msg.textContent = 'Could not prepare that image. Please try another.'; msg.style.display = 'block'; return; }
+        // Built before the uploader is fetched, so a network problem
+        // loading the client cannot be confused with a problem preparing
+        // the image.
+        const photoFile = new File([blob], 'profile.jpg', { type: 'image/jpeg' });
+        try{
+          const { upload } = await import('https://esm.sh/@vercel/blob/client');
+          const result = await upload('profile.jpg', photoFile, {
+            access: 'public', handleUploadUrl: SUITES_API_BASE + '/api/blob-upload'
+          });
+          const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+            body: JSON.stringify({ profilePhotoUrl: result.url })
+          });
+          const data = await res.json();
+          if(!res.ok) throw new Error(data.error || 'Could not save that photo.');
+          const inner = `<img src="${escapeMessageHtml(data.guest.profile_photo_url)}" alt="Profile photo">`;
+          ['navAvatarCircle', 'navAvatarCircleMobile'].forEach(id => {
+            const el = document.getElementById(id);
+            if(el) el.innerHTML = inner;
+          });
+          finish();
+          closePhotoEditor();
+        } catch(err){
+          finish();
+          msg.textContent = err.message || 'Upload failed. Please try again.';
+          msg.style.display = 'block';
+        }
+      };
+      if(out.toBlob) out.toBlob(done, 'image/jpeg', 0.9);
+      else done(null);
+    });
+  })();
+
   // Shown once per browser session per number of pending reviews, so
   // dismissing it does not bring it straight back on the next page, but a
   // NEW stay to review does re-raise it.
@@ -7939,8 +8143,8 @@
         <h2>How was it?</h2>
         <div class="loc">${escapeMessageHtml(booking.suite_name || '')}</div>
         <p style="font-size:13px; opacity:0.7; margin-top:10px;">
-          Your review stays hidden until the ${isExp ? 'host' : 'host'} has also reviewed you, or for
-          15 days after checkout \u2014 whichever comes first. Neither of you can read the other\u2019s first.
+          Your review is not published straight away \u2014 it goes live within 15 days of checkout,
+          and nobody can read it before then.
         </p>
         <div class="rv-set">${set.map(starRowHtml).join('')}</div>
         <label class="rv-comment-label" for="reviewComment">Tell other guests about it</label>
@@ -8000,7 +8204,7 @@
       document.getElementById('reviewModalBody').innerHTML = `
         <div class="listing-modal-content">
           <h2>Thank you</h2>
-          <p style="font-size:14px; margin-top:10px;">Your review is saved. It goes live once the host has reviewed you too, or 15 days after checkout.</p>
+          <p style="font-size:14px; margin-top:10px;">Your review is saved. It goes live within 15 days of checkout.</p>
         </div>`;
       loadMyBookings();
     }catch(err){
