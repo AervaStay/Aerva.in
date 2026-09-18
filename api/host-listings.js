@@ -71,6 +71,7 @@ const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { GUEST_FACTORS, reviewScore } = require('./_tiers');
 const { openFlagsForHost } = require('./_compliance');
 const { buildProfile } = require('./_profiles');
+const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
@@ -1920,23 +1921,45 @@ module.exports = async (req, res) => {
     // the 100 most recent and would quietly miss today's arrival for a
     // busy host.
     //
-    // Dates are compared in the database, in its own timezone, so a stay
-    // is "today" by the same clock everywhere rather than by whatever the
-    // host's laptop thinks.
+    // "Today" is the PROPERTY's today. Each listing carries its own
+    // timezone (see _timezones.js), so a stay in Dubai turns over on
+    // Dubai's calendar and one in Pune on India's — not on the database's
+    // UTC clock, which before this showed yesterday to any Indian host
+    // looking before 05:30.
     let today = { arrivals: [], departures: [], staying: [] };
     try {
       const rows = await sql`
         SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights,
                o.guest_email, g.name AS guest_name, g.profile_photo_url,
-               l.check_in_time, l.check_out_time, l.cover_photo_url,
-               (o.arrival = CURRENT_DATE) AS arriving,
-               (o.departure = CURRENT_DATE) AS departing,
-               (o.departure - CURRENT_DATE) AS nights_left
+               l.check_in_time, l.check_out_time,
+               -- Cover photo where the host set one, otherwise the first
+               -- photo the listing actually has. Nothing is picked at
+               -- random: it is that listing's own first exterior shot,
+               -- then interior, then whatever gallery it has. Both stored
+               -- shapes are handled — a bare URL string, and the
+               -- {url, caption} object older listings use.
+               COALESCE(
+                 NULLIF(btrim(l.cover_photo_url), ''),
+                 CASE WHEN jsonb_typeof(l.exterior_photo_urls->0) = 'string'
+                      THEN l.exterior_photo_urls->>0 ELSE l.exterior_photo_urls->0->>'url' END,
+                 CASE WHEN jsonb_typeof(l.interior_photo_urls->0) = 'string'
+                      THEN l.interior_photo_urls->>0 ELSE l.interior_photo_urls->0->>'url' END,
+                 CASE WHEN jsonb_typeof(l.photo_urls->0) = 'string'
+                      THEN l.photo_urls->>0 ELSE l.photo_urls->0->>'url' END,
+                 CASE WHEN jsonb_typeof(l.photos->0) = 'string'
+                      THEN l.photos->>0 ELSE l.photos->0->>'url' END
+               ) AS cover_photo_url,
+               (o.arrival = local.today) AS arriving,
+               (o.departure = local.today) AS departing,
+               (o.departure - local.today) AS nights_left
         FROM orders o
         JOIN listings l ON l.id = o.listing_id
         LEFT JOIN guests g ON g.id = o.guest_id
+        CROSS JOIN LATERAL (
+          SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS today
+        ) local
         WHERE l.host_id = ${guest.host_id} AND o.status = 'paid'
-          AND o.arrival <= CURRENT_DATE AND o.departure >= CURRENT_DATE
+          AND o.arrival <= local.today AND o.departure >= local.today
         ORDER BY o.arrival ASC, o.id ASC
       `;
       const shape = (r) => ({

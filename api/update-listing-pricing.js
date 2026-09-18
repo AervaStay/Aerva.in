@@ -32,6 +32,7 @@
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules');
+const { timezoneForAddress } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { resolveSatisfiedComplianceFlags } = require('./_compliance');
 
@@ -411,6 +412,9 @@ module.exports = async (req, res) => {
         UPDATE listings SET
           nightly_rate = ${rate},
           property_name = COALESCE(${safeName}, property_name),
+          -- Re-derived whenever the address changes: a listing that moves
+          -- country must move clock with it.
+          timezone = COALESCE(${typeof formattedAddress === 'string' && formattedAddress.trim() ? timezoneForAddress(formattedAddress) : null}, timezone),
           city = ${safeCity}, area = ${safeArea},
           bedrooms = ${finalBedrooms},
           discount_type = ${discountType || null},

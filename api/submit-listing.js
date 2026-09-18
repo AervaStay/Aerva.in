@@ -25,6 +25,7 @@ const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules');
+const { timezoneForAddress } = require('./_timezones');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -617,7 +618,7 @@ module.exports = async (req, res) => {
     // the search, so its own name never blocks it.
     if (!isExperience) {
       const clash = await findNameClashInPincode(sql, {
-        propertyName, pincode: safePincode,
+        propertyName, pincode: safePincode, propertyType,
         excludeListingId: existingDraft ? existingDraft.id : null
       });
       if (clash) {
@@ -677,6 +678,7 @@ module.exports = async (req, res) => {
           experience_category = ${safeExperienceCategory}, experience_price_unit = ${safeExperiencePriceUnit},
           experience_duration_hours = ${safeExperienceDuration}, experience_duration_days = ${safeExperienceDurationDays}, experience_type = ${safeExperienceType},
           latitude = ${safeLatitude}, longitude = ${safeLongitude}, formatted_address = ${safeFormattedAddress},
+          timezone = ${timezoneForAddress(safeFormattedAddress)},
           pincode = ${safePincode},
           experience_arranges_travel = ${safeArrangesTravel}, experience_travel_details = ${safeTravelDetails},
           experience_meeting_point_type = ${safeMeetingPointType}, experience_meeting_point_details = ${safeMeetingPointDetails},
@@ -709,6 +711,7 @@ module.exports = async (req, res) => {
           experience_instructions, experience_special_instructions,
           experience_available_from, experience_available_until,
           cover_photo_url,
+          timezone,
           status, photo_hashes
         ) VALUES (
           ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
@@ -727,6 +730,7 @@ module.exports = async (req, res) => {
           ${safeInstructions}, ${safeSpecialInstructions},
           ${safeAvailableFrom}, ${safeAvailableUntil},
           ${safeCoverPhotoUrl},
+          ${timezoneForAddress(safeFormattedAddress)},
           ${newStatus}, ${safePhotoHashesToStore}
         )
         RETURNING *
