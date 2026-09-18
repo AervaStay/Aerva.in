@@ -629,6 +629,80 @@
   /* Reviews under the photos (listing page) and in the host's guest profile. */
   /* Reviews are plain text: a line of numbers, then name, date and what
      the guest wrote. No cards, no pills, no rules between them. */
+  .today-booking{
+    background:#fff; border-radius:14px; padding:26px 28px 28px; max-width:520px; width:100%;
+    max-height:88vh; overflow-y:auto; position:relative;
+  }
+  .tb-head{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px;}
+  .tb-name{font-family:'Bodoni Moda', serif; font-size:23px; margin:0 0 2px;}
+  .tb-listing{font-size:13px; opacity:0.6; margin:0;}
+  .tb-avatar{width:48px; height:48px; border-radius:50%; object-fit:cover; flex:0 0 auto;}
+  .tb-avatar-initial{background:var(--gold-deep); color:var(--cream); display:flex; align-items:center; justify-content:center; font-size:18px;}
+  .tb-facts{display:grid; grid-template-columns:1fr 1fr; gap:10px 18px; margin-bottom:22px;}
+  .tb-facts div{display:flex; flex-direction:column; gap:2px;}
+  .tb-facts span{font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.5;}
+  .tb-facts strong{font-size:14px; font-weight:500;}
+  .tb-section-title{font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.5; margin-bottom:8px;}
+  .tb-thread{
+    max-height:220px; overflow-y:auto; border:1px solid var(--line-dark); border-radius:10px;
+    padding:12px 14px; margin-bottom:10px; display:flex; flex-direction:column; gap:10px;
+  }
+  .tb-msg{display:flex; flex-direction:column; gap:2px; font-size:13.5px;}
+  .tb-msg-who{font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.5;}
+  .tb-msg-text{white-space:pre-line; overflow-wrap:anywhere;}
+  .tb-msg-mine .tb-msg-text{color:var(--gold-deep);}
+  .tb-compose{display:flex; gap:10px; align-items:flex-start;}
+  .tb-compose textarea{
+    flex:1 1 auto; padding:10px 12px; font-family:'Jost', sans-serif; font-size:14px;
+    border:1px solid var(--line-dark); border-radius:8px; resize:vertical;
+  }
+  .tb-muted{font-size:12.5px; opacity:0.6; margin:8px 0 0;}
+  .today-row{width:100%; text-align:left; cursor:pointer; font-family:inherit;}
+
+  .today-heading{font-family:'Bodoni Moda', serif; font-size:32px; margin:0 0 2px;}
+  .today-date{font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:var(--gold-deep); margin:0 0 24px;}
+  .today-split{display:grid; grid-template-columns:1fr 1px 1fr; gap:0 26px; margin-bottom:26px;}
+  .today-split::before{content:''; grid-column:2; background:var(--line-dark);}
+  .today-col{min-width:0;}
+  .today-col:first-child{grid-column:1;}
+  .today-col:last-child{grid-column:3;}
+  .today-col-head{
+    font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.55;
+    margin-bottom:10px; display:flex; align-items:center; gap:8px;
+  }
+  .today-col-count{background:rgba(28,26,23,0.08); border-radius:999px; padding:1px 7px; font-size:10px; letter-spacing:0;}
+  .today-col-empty{font-size:13px; opacity:0.5; margin:0; padding:10px 0;}
+  .today-row{
+    display:flex; align-items:center; gap:16px; background:#fff; border:1px solid var(--line-dark);
+    border-radius:12px; padding:14px 16px; margin-bottom:10px; text-decoration:none; color:inherit;
+  }
+  .today-when{flex:0 0 86px; font-size:13px; opacity:0.65;}
+  .today-main{flex:1 1 auto; min-width:0;}
+  .today-title{font-size:15px; font-weight:500; margin-bottom:2px; display:block;}
+  .today-sub{font-size:13px; opacity:0.6; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .today-thumbs{flex:0 0 auto; display:flex; align-items:center;}
+  .today-thumb{width:38px; height:38px; border-radius:8px; object-fit:cover; border:2px solid #fff;}
+  .today-avatar{
+    width:38px; height:38px; border-radius:50%; object-fit:cover; border:2px solid #fff; margin-right:-10px;
+    background:var(--gold-deep); color:var(--cream); display:flex; align-items:center; justify-content:center; font-size:14px;
+  }
+  .today-group-label{font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.5; margin-bottom:8px;}
+  .today-staying{margin-top:6px; padding-top:22px; border-top:1px solid var(--line-dark);}
+  .today-empty{font-size:14px; opacity:0.6; padding:18px 0;}
+  @media (max-width:760px){
+    .today-split{grid-template-columns:1fr; gap:22px;}
+    .today-split::before{display:none;}
+    .today-col:last-child{grid-column:1; padding-top:20px; border-top:1px solid var(--line-dark);}
+  }
+
+  .nav-avatar-ring{position:relative;}
+  .nav-avatar-camera{
+    position:absolute; right:-3px; bottom:-3px; width:16px; height:16px; border-radius:50%;
+    background:var(--ink); color:var(--cream); display:flex; align-items:center; justify-content:center;
+    border:1.5px solid var(--cream);
+  }
+  .nav-avatar-camera svg{width:9px; height:9px;}
+
   .nav-bell-btn{
     position:relative; background:none; border:none; cursor:pointer; color:var(--ink);
     padding:4px; display:inline-flex; align-items:center; margin-right:2px;
@@ -1638,6 +1712,12 @@
     
     </a>
     <div class="header-category-nav">
+      <!-- Hosts only: who is arriving and leaving today. Shown once the
+           session says this account has a live listing. -->
+      <a href="index.html?view=today" class="category-item" id="catToday" style="display:none;">
+        <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3.5v3M16 3.5v3"/></svg>
+        Today
+      </a>
       <a href="index.html?view=all" class="category-item" id="catAll">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-6-4-9s1.5-6.4 4-9z"/></svg>
         All
@@ -1686,12 +1766,18 @@
         <button type="button" class="nav-account-trigger" id="navAccountTrigger">
           <div class="nav-avatar-ring" id="navAvatarRing">
             <div class="nav-avatar-circle" id="navAvatarCircle">?</div>
+            <!-- Says the picture can be changed, so it is not something
+                 you have to find in a menu first. -->
+            <span class="nav-avatar-camera" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M3 8.5h3.2l1.3-2h9l1.3 2H21v11H3z"/><circle cx="12" cy="13.5" r="3.4"/>
+              </svg>
+            </span>
           </div>
           <span id="guestNameDisplay" class="nav-account-name"></span>
           <span id="guestTierBadge" class="nav-tier-badge" style="display:none;"></span>
         </button>
         <div class="nav-account-menu" id="navAccountMenu">
-          <a href="#" id="navChangePhotoLink">Change profile photo</a>
           <a href="index.html?view=my-bookings">My Bookings</a>
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Collection</a>
           <a href="host-status.html" id="statusMenuLink" style="display:none;">Status</a>
@@ -2036,6 +2122,24 @@
 <!-- Shown instead of the homepage when this tab was opened with
      ?listing=<id> — clicking any suite card opens exactly that in a new
      tab (see the click handler on #suitesContainer). -->
+<!-- Today: a host's day at a glance. Lives here, on the site, rather than
+     on the dashboard — it is a view of what is happening, not a place to
+     manage listings. -->
+<div class="listing-modal-overlay" id="todayBookingOverlay" style="display:none;">
+  <div class="today-booking">
+    <button type="button" class="listing-modal-close" id="todayBookingClose" aria-label="Close">&times;</button>
+    <div id="todayBookingBody"></div>
+  </div>
+</div>
+
+<section class="pad" id="todayView" style="background:var(--band); display:none;">
+  <div class="wrap">
+    <h2 class="today-heading" id="todayHeading">Today</h2>
+    <p class="today-date" id="todayDate"></p>
+    <div id="todayList"><p class="today-empty">Loading…</p></div>
+  </div>
+</section>
+
 <section class="pad" id="listingFullView" style="display:none;">
   <div class="wrap">
     <div class="sticky-back-bar">
@@ -8100,11 +8204,21 @@
       const f = this.files && this.files[0];
       if(f) openPhotoEditor(f);
     });
-    document.getElementById('navChangePhotoLink').addEventListener('click', (e) => {
-      e.preventDefault();
-      document.getElementById('navAccountMenu').classList.remove('open');
-      document.getElementById('navPhotoInput').click();
-    });
+    // The picture is the control: clicking it goes straight to choosing a
+    // photo, rather than putting "Change profile photo" in a menu of
+    // places to navigate to. Clicking the NAME still opens the account
+    // menu, so nothing else moves.
+    const avatarRing = document.getElementById('navAvatarRing');
+    if(avatarRing){
+      avatarRing.style.cursor = 'pointer';
+      avatarRing.title = 'Change your profile photo';
+      avatarRing.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation(); // do not also toggle the account menu
+        document.getElementById('navAccountMenu').classList.remove('open');
+        document.getElementById('navPhotoInput').click();
+      });
+    }
     document.getElementById('photoEditorUse').addEventListener('click', function(){
       const btn = this;
       const msg = document.getElementById('photoEditorMsg');
@@ -12177,6 +12291,187 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
+  // ---- Today (hosts) ----
+  // Who is arriving, who is leaving, who is staying on, at this host's own
+  // properties. Everything comes from host-listings.js, which works it out
+  // on each listing's own clock.
+  function renderTodayView(today){
+    const box = document.getElementById('todayList');
+    if(!box) return;
+    const t = today || { arrivals: [], departures: [], staying: [] };
+    const esc = escapeMessageHtml;
+    const total = t.arrivals.length + t.departures.length + t.staying.length;
+    document.getElementById('todayDate').textContent =
+      new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+    document.getElementById('todayHeading').textContent = total
+      ? (total === 1 ? 'You have 1 reservation' : `You have ${total} reservations`)
+      : 'Nothing booked for today';
+    if(!total){
+      box.innerHTML = '<p class="today-empty">No arrivals, departures or guests staying today.</p>';
+      return;
+    }
+    const row = (r, when, title) => `
+      <button type="button" class="today-row" data-today-order="${Number(r.orderId)}">
+        <span class="today-when">${esc(when)}</span>
+        <span class="today-main">
+          <span class="today-title">${esc(title)}</span>
+          <span class="today-sub">${esc(r.listingName || '')}</span>
+        </span>
+        <span class="today-thumbs">
+          ${r.guestPhotoUrl
+            ? `<img class="today-avatar" src="${esc(r.guestPhotoUrl)}" alt="">`
+            : `<span class="today-avatar">${esc((r.guestName || 'G').trim().charAt(0).toUpperCase())}</span>`}
+          ${r.photoUrl ? `<img class="today-thumb" src="${esc(r.photoUrl)}" alt="">` : ''}
+        </span>
+      </button>`;
+    const people = (r) => `${r.guestName}${r.guests > 1 ? `'s group of ${r.guests}` : ''}`;
+    const column = (label, rows, empty) => `
+      <div class="today-col">
+        <div class="today-col-head">${esc(label)} <span class="today-col-count">${rows.length}</span></div>
+        ${rows.length ? rows.join('') : `<p class="today-col-empty">${esc(empty)}</p>`}
+      </div>`;
+    const staying = t.staying.map(r => row(r, 'All day',
+      `${people(r)} stays for ${r.nightsLeft === 1 ? 'one more day' : r.nightsLeft + ' more days'}`));
+    box.innerHTML =
+      `<div class="today-split">
+        ${column('Checking in', t.arrivals.map(r => row(r, r.checkInTime || '1:00 pm', `${people(r)} checks in`)), 'Nobody arriving today.')}
+        ${column('Checking out', t.departures.map(r => row(r, r.checkOutTime || '10:00 am', `${people(r)} checks out`)), 'Nobody leaving today.')}
+      </div>`
+      + (staying.length
+        ? `<div class="today-staying"><div class="today-group-label">Staying with you</div>${staying.join('')}</div>`
+        : '');
+    // Kept so the panel can show the booking without asking again.
+    todayRowsById = {};
+    [...t.arrivals, ...t.departures, ...t.staying].forEach(r => { todayRowsById[r.orderId] = r; });
+    box.querySelectorAll('[data-today-order]').forEach(el => {
+      el.addEventListener('click', () => openTodayBooking(Number(el.dataset.todayOrder)));
+    });
+  }
+
+  let todayRowsById = {};
+
+  // ---- One booking, opened from Today ----
+  // The stay's own facts, who the guest is, and the thread — so a host can
+  // read what was agreed and reply without leaving the page. Messages go
+  // through the same conversation the guest sees; nothing here exposes an
+  // email or phone number.
+  async function openTodayBooking(orderId){
+    const r = todayRowsById[orderId];
+    if(!r) return;
+    const esc = escapeMessageHtml;
+    const overlay = document.getElementById('todayBookingOverlay');
+    const body = document.getElementById('todayBookingBody');
+    const fmtDay = (d) => d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : '—';
+    overlay.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    body.innerHTML = `
+      <div class="tb-head">
+        <div>
+          <h3 class="tb-name">${esc(r.guestName)}</h3>
+          <p class="tb-listing">${esc(r.listingName || '')}</p>
+        </div>
+        ${r.guestPhotoUrl ? `<img class="tb-avatar" src="${esc(r.guestPhotoUrl)}" alt="">`
+          : `<span class="tb-avatar tb-avatar-initial">${esc((r.guestName || 'G').trim().charAt(0).toUpperCase())}</span>`}
+      </div>
+      <div class="tb-facts">
+        <div><span>Check-in</span><strong>${esc(fmtDay(r.arrival))}${r.checkInTime ? ' · ' + esc(r.checkInTime) : ''}</strong></div>
+        <div><span>Check-out</span><strong>${esc(fmtDay(r.departure))}${r.checkOutTime ? ' · ' + esc(r.checkOutTime) : ''}</strong></div>
+        <div><span>Guests</span><strong>${Number(r.guests) || 1}</strong></div>
+        <div><span>Nights</span><strong>${r.nights || '—'}</strong></div>
+        ${r.payout ? `<div><span>Your payout</span><strong>${fmtGuest(r.payout)}</strong></div>` : ''}
+      </div>
+      <div class="tb-section-title">Message ${esc((r.guestName || 'your guest').split(' ')[0])}</div>
+      <div class="tb-thread" id="tbThread"><p class="tb-muted">Loading messages…</p></div>
+      <div class="tb-compose">
+        <textarea id="tbText" rows="2" placeholder="Write a message…"></textarea>
+        <button type="button" class="filter-clear" id="tbSend">Send</button>
+      </div>
+      <p class="tb-muted" id="tbMsg"></p>`;
+
+    let conversationId = null;
+    const thread = document.getElementById('tbThread');
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${Number(orderId)}`, {
+        headers: { 'Authorization': 'Bearer ' + guestAuthToken() }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not open this conversation.');
+      conversationId = data.conversationId;
+      const msgs = data.messages || [];
+      thread.innerHTML = msgs.length
+        ? msgs.map(m => `
+            <div class="tb-msg ${m.sender_type === 'host' ? 'tb-msg-mine' : ''}">
+              <span class="tb-msg-who">${esc(m.sender_type === 'host' ? 'You' : (m.sender_type === 'system' ? 'Aerva' : r.guestName))}</span>
+              <span class="tb-msg-text">${esc(m.display_text || '')}</span>
+            </div>`).join('')
+        : '<p class="tb-muted">No messages yet. Anything you send here reaches them in their Aerva messages.</p>';
+      thread.scrollTop = thread.scrollHeight;
+    } catch(err){
+      thread.innerHTML = `<p class="tb-muted">${esc(err.message || 'Could not open this conversation.')}</p>`;
+    }
+
+    document.getElementById('tbSend').addEventListener('click', async () => {
+      const btn = document.getElementById('tbSend');
+      const text = document.getElementById('tbText').value.trim();
+      const note = document.getElementById('tbMsg');
+      if(!text) return;
+      if(!conversationId){ note.textContent = 'This conversation could not be opened.'; return; }
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ mode: 'send', conversationId, text, role: 'host' })
+        });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || 'Could not send that.');
+        document.getElementById('tbText').value = '';
+        thread.insertAdjacentHTML('beforeend',
+          `<div class="tb-msg tb-msg-mine"><span class="tb-msg-who">You</span><span class="tb-msg-text">${esc(text)}</span></div>`);
+        thread.scrollTop = thread.scrollHeight;
+        note.textContent = '';
+      } catch(err){
+        note.textContent = err.message || 'Could not send that. Please try again.';
+      }
+      btn.disabled = false; btn.textContent = 'Send';
+    });
+  }
+
+  function closeTodayBooking(){
+    document.getElementById('todayBookingOverlay').style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  const BROWSE_TABS = ['catAll', 'catSuites', 'catExperience'];
+
+  async function showTodayView(){
+    document.body.classList.remove('showing-hero');
+    ['suites', 'listingFullView', 'experienceFullView', 'my-bookings', 'add-listing', 'list-experience'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.style.display = 'none';
+    });
+    document.getElementById('todayView').style.display = 'block';
+    document.title = 'Today — Aerva';
+    BROWSE_TABS.forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.classList.remove('active');
+    });
+    const tab = document.getElementById('catToday');
+    if(tab){ tab.style.display = ''; tab.classList.add('active'); }
+    window.scrollTo({ top: 0 });
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + guestAuthToken() }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not load today.');
+      renderTodayView(data.today);
+    } catch(err){
+      document.getElementById('todayList').innerHTML =
+        '<p class="today-empty">Could not load today just now. Please refresh.</p>';
+    }
+  }
+
   function showFullListingPage(listing){
     trackRecentlyViewed('stay', listing.id);
     document.body.classList.remove('showing-hero');
@@ -12954,6 +13249,8 @@
       setCategoryFilter('experiences');
     } else if(requestedView === 'all'){
       setCategoryFilter('all');
+    } else if(requestedView === 'today'){
+      showTodayView();
     }
   }
 
@@ -12963,6 +13260,16 @@
   // heading/subhead to match, then re-renders from whatever data is
   // already loaded (no re-fetch needed, this is purely a display filter).
   function setCategoryFilter(filter){
+    // Leaving Today: bring the browse grid back.
+    const todaySection = document.getElementById('todayView');
+    if(todaySection && todaySection.style.display === 'block'){
+      todaySection.style.display = 'none';
+      document.getElementById('suites').style.display = 'block';
+      document.body.classList.add('showing-hero');
+      document.title = 'Aerva — Stay Elegant';
+    }
+    const todayTab = document.getElementById('catToday');
+    if(todayTab) todayTab.classList.remove('active');
     currentCategoryFilter = filter;
     document.getElementById('catAll').classList.toggle('active', filter === 'all');
     document.getElementById('catSuites').classList.toggle('active', filter === 'suites');
@@ -12989,6 +13296,19 @@
       subheadEl.textContent = 'Every stay and every experience on Aerva, reviewed and approved individually — browse both at once, or filter to just one.';
     }
     applyFiltersAndRender();
+  }
+
+  const tbClose = document.getElementById('todayBookingClose');
+  if(tbClose) tbClose.addEventListener('click', closeTodayBooking);
+  const tbOverlay = document.getElementById('todayBookingOverlay');
+  if(tbOverlay) tbOverlay.addEventListener('click', (e) => { if(e.target === tbOverlay) closeTodayBooking(); });
+  document.addEventListener('keydown', (e) => {
+    if(e.key === 'Escape' && tbOverlay && tbOverlay.style.display === 'flex') closeTodayBooking();
+  });
+
+  const catTodayEl = document.getElementById('catToday');
+  if(catTodayEl){
+    catTodayEl.addEventListener('click', (e) => { e.preventDefault(); showTodayView(); });
   }
 
   // All three tabs stay real, navigable links (so a direct visit or a
@@ -13209,6 +13529,12 @@
           // "Hosted At" rule in submit-listing.js), so it stays visible
           // to any logged-in account. That is the route by which someone
           // with no listing gets their first one.
+          // Today is a host's view, revealed on the same signal as the
+          // rest of the host navigation.
+          if(data.guest.hasActiveListing === true){
+            const todayTab = document.getElementById('catToday');
+            if(todayTab) todayTab.style.display = '';
+          }
           if(data.guest.hasActiveListing === true){
             // .nav-account-menu a's CSS expects display:block (full-width,
             // stacked, with its own top/bottom padding) — display:inline
