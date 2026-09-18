@@ -629,6 +629,36 @@
   /* Reviews under the photos (listing page) and in the host's guest profile. */
   /* Reviews are plain text: a line of numbers, then name, date and what
      the guest wrote. No cards, no pills, no rules between them. */
+  .nav-bell-btn{
+    position:relative; background:none; border:none; cursor:pointer; color:var(--ink);
+    padding:4px; display:inline-flex; align-items:center; margin-right:2px;
+  }
+  .nav-bell-btn svg{width:19px; height:19px;}
+  .nav-bell-count{
+    position:absolute; top:-2px; right:-3px; min-width:15px; height:15px; padding:0 3px;
+    border-radius:999px; background:#a3402f; color:#fff; font-size:9.5px; line-height:15px;
+    text-align:center; font-family:'Jost', sans-serif;
+  }
+  .nav-notif-panel{
+    position:absolute; top:calc(100% + 10px); right:0; z-index:120; width:320px; max-width:86vw;
+    background:#fff; border:1px solid var(--line-dark); border-radius:10px;
+    box-shadow:0 14px 34px rgba(28,26,23,0.16); overflow:hidden;
+  }
+  .nav-notif-head{
+    font-size:10px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.55;
+    padding:12px 14px 8px;
+  }
+  .nav-notif-item{
+    display:block; padding:11px 14px; border-top:1px solid var(--line-dark);
+    text-decoration:none; color:var(--ink);
+  }
+  .nav-notif-item:hover{background:var(--cream);}
+  .nav-notif-item.is-unread{background:rgba(138,108,57,0.07);}
+  .nav-notif-title{font-size:13.5px; font-weight:500; margin-bottom:2px;}
+  .nav-notif-body{font-size:12.5px; opacity:0.7; line-height:1.5;}
+  .nav-notif-due{font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--gold-deep); margin-top:4px;}
+  .nav-notif-empty{font-size:13px; opacity:0.6; padding:4px 14px 14px;}
+
   .photo-editor-overlay{
     position:fixed; inset:0; z-index:200; background:rgba(28,26,23,0.55);
     display:flex; align-items:center; justify-content:center; padding:20px;
@@ -1640,6 +1670,19 @@
         <span id="hostMessagesUnreadBadge" class="host-messages-badge" style="display:none;"></span>
       </a>
       <span id="guestAccountBox" class="nav-account-wrap" style="display:none;">
+        <!-- Notifications: stays waiting to be reviewed, and for a host,
+             listings with something outstanding. Same items the host
+             dashboard shows, so the two never disagree. -->
+        <button type="button" class="nav-bell-btn" id="navBell" aria-label="Notifications">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M18 8a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6"/><path d="M13.7 20a2 2 0 0 1-3.4 0"/>
+          </svg>
+          <span class="nav-bell-count" id="navBellCount" style="display:none;">0</span>
+        </button>
+        <div class="nav-notif-panel" id="navNotifPanel" style="display:none;">
+          <div class="nav-notif-head">Notifications</div>
+          <div id="navNotifList"></div>
+        </div>
         <button type="button" class="nav-account-trigger" id="navAccountTrigger">
           <div class="nav-avatar-ring" id="navAvatarRing">
             <div class="nav-avatar-circle" id="navAvatarCircle">?</div>
@@ -8108,6 +8151,63 @@
     });
   })();
 
+  // ---- Notifications (header bell) ----
+  // Fed by the session check, which already knows what is outstanding.
+  // Read state is per browser, keyed by item, so the count reflects what
+  // this person has actually looked at.
+  const NAV_NOTIF_READ_KEY = 'aerva_notifications_read';
+  function navNotifRead(){
+    try{ return JSON.parse(safeStorage.get(NAV_NOTIF_READ_KEY) || '[]'); }catch(e){ return []; }
+  }
+  function navMarkRead(id){
+    try{
+      const seen = navNotifRead();
+      if(!seen.includes(id)){ seen.push(id); safeStorage.set(NAV_NOTIF_READ_KEY, JSON.stringify(seen.slice(-200))); }
+    }catch(e){}
+  }
+  function renderNavNotifications(items){
+    const list = document.getElementById('navNotifList');
+    const countEl = document.getElementById('navBellCount');
+    const bell = document.getElementById('navBell');
+    if(!list || !bell) return;
+    const notes = Array.isArray(items) ? items : [];
+    const seen = navNotifRead();
+    const unread = notes.filter(n => !seen.includes(n.id)).length;
+    countEl.textContent = unread > 9 ? '9+' : String(unread);
+    countEl.style.display = unread ? 'block' : 'none';
+    if(!notes.length){
+      list.innerHTML = '<p class="nav-notif-empty">Nothing needs your attention right now.</p>';
+      return;
+    }
+    list.innerHTML = notes.map(n =>
+      `<a class="nav-notif-item${seen.includes(n.id) ? '' : ' is-unread'}" data-notif="${escapeMessageHtml(n.id)}" href="${escapeMessageHtml(n.href || '#')}">
+        <div class="nav-notif-title">${escapeMessageHtml(n.title || '')}</div>
+        <div class="nav-notif-body">${escapeMessageHtml(n.body || '')}</div>
+        ${n.due ? `<div class="nav-notif-due">${escapeMessageHtml(n.due)}</div>` : ''}
+      </a>`).join('');
+    list.querySelectorAll('.nav-notif-item').forEach(el => {
+      el.addEventListener('click', () => navMarkRead(el.dataset.notif));
+    });
+  }
+  (function wireNavBell(){
+    const bell = document.getElementById('navBell');
+    const panel = document.getElementById('navNotifPanel');
+    if(!bell || !panel) return;
+    bell.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+      // Opening the account menu and the bell together would overlap.
+      const accountMenu = document.getElementById('navAccountMenu');
+      if(accountMenu) accountMenu.classList.remove('open');
+    });
+    document.addEventListener('click', (e) => {
+      if(panel.style.display === 'block' && !panel.contains(e.target) && e.target !== bell && !bell.contains(e.target)){
+        panel.style.display = 'none';
+      }
+    });
+    document.addEventListener('keydown', (e) => { if(e.key === 'Escape') panel.style.display = 'none'; });
+  })();
+
   // Shown once per browser session per number of pending reviews, so
   // dismissing it does not bring it straight back on the next page, but a
   // NEW stay to review does re-raise it.
@@ -13081,6 +13181,7 @@
           setRecentlyViewedOwner(data.guest.id);
           renderNavTierBadge(data.guest.tier);
           showReviewReminder(Number(data.guest.pendingReviews) || 0);
+          renderNavNotifications(data.guest.notifications || []);
           const greeting = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
           guestNameDisplay.textContent = greeting;
           guestLoginLink.style.display = 'none';
