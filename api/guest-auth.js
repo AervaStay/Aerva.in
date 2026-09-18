@@ -53,10 +53,12 @@ const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { openFlagsForHost } = require('./_compliance');
 const { verifyGoogleIdToken } = require('./_social-auth');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { normalizeToE164 } = require('./_phone-validation');
+const { sanitizeBody } = require('./_plain-text');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -215,6 +217,9 @@ async function sendPasswordResetEmail(guest, resetTok) {
 }
 
 module.exports = async (req, res) => {
+  // Typed text can never become markup — see _plain-text.js.
+  sanitizeBody(req);
+
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -339,10 +344,13 @@ module.exports = async (req, res) => {
         const pr = await sql`
           SELECT COUNT(*) AS n
           FROM orders o
+          LEFT JOIN listings l ON l.id = o.listing_id
           WHERE o.guest_id = ${guest.id}
             AND o.status = 'paid'
-            AND o.departure <= CURRENT_DATE
-            AND o.departure > CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
+            -- The property's calendar, not the server's: the same window
+            -- the review form and the submit check use.
+            AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date
+            AND o.departure > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - ${REVIEW_WINDOW_DAYS}::int
             AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
         `;
         pendingReviews = Number(pr[0] && pr[0].n) || 0;
@@ -366,8 +374,8 @@ module.exports = async (req, res) => {
             LEFT JOIN listings l ON l.id = o.listing_id
             WHERE o.guest_id = ${guest.id}
               AND o.status = 'paid'
-              AND o.departure <= CURRENT_DATE
-              AND o.departure > CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
+              AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date
+              AND o.departure > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - ${REVIEW_WINDOW_DAYS}::int
               AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
             ORDER BY o.departure DESC
             LIMIT 5

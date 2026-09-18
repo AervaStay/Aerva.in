@@ -78,6 +78,7 @@ const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
+const { sanitizeBody } = require('./_plain-text');
 
 const sql = neon(process.env.DATABASE_URL);
 const razorpay = new Razorpay({
@@ -252,6 +253,9 @@ async function unblockRangeFromRow(sql, rowId, from, to) {
 }
 
 module.exports = async (req, res) => {
+  // Typed text can never become markup — see _plain-text.js.
+  sanitizeBody(req);
+
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -1359,10 +1363,18 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'The 7-day window to raise a concern on this deposit has passed.' });
       }
 
-      await sql`
+      // Guarded on 'held' in the UPDATE itself, not just the check above:
+      // an admin's deposit run may have claimed this order in between,
+      // and flipping a deposit that is mid-refund to 'disputed' would let
+      // it be refunded a second time when the dispute is resolved.
+      const raised = await sql`
         UPDATE orders SET deposit_status = 'disputed', dispute_reason = ${String(reason).trim().slice(0, 1000)}, dispute_raised_at = now()
-        WHERE id = ${orderId}
+        WHERE id = ${orderId} AND deposit_status = 'held'
+        RETURNING id
       `;
+      if (!raised.length) {
+        return res.status(400).json({ error: 'This deposit is no longer open to a concern — it has already been refunded, disputed, or resolved.' });
+      }
       await logAudit(sql, {
         action: 'deposit_dispute_raised', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
         targetType: 'order', targetId: orderId

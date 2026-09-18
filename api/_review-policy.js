@@ -12,6 +12,8 @@
 // NOTHING here is shown to guests or hosts. It is internal reference for
 // resolving disputes.
 
+const { DEFAULT_TIMEZONE, safeZone } = require('./_timezones');
+
 const REVIEW_WINDOW_DAYS = 15;
 
 // ---------------------------------------------------------------------
@@ -30,9 +32,7 @@ const REVIEW_WINDOW_DAYS = 15;
 // The window runs from CHECKOUT, not from when the first review arrived.
 // Anchoring it to the first review would let whoever reviews first choose
 // the deadline for the other.
-function publicationState(review, counterpartReview, checkoutDate, now) {
-  const today = now || new Date();
-  const checkout = checkoutDate ? new Date(checkoutDate) : null;
+function publicationState(review, counterpartReview, checkoutDate, today) {
   if (!review) return { status: 'none', visible: false, reason: 'No review submitted.' };
   if (review.admin_reverted_at) {
     return { status: 'reverted', visible: false, reason: 'Withdrawn by an administrator.' };
@@ -40,30 +40,86 @@ function publicationState(review, counterpartReview, checkoutDate, now) {
   if (counterpartReview && !counterpartReview.admin_reverted_at) {
     return { status: 'published', visible: true, reason: 'Both sides reviewed — published immediately.' };
   }
-  if (!checkout || isNaN(checkout.getTime())) {
+  const age = daysSinceCheckout(checkoutDate, today);
+  if (age === null) {
     // No usable checkout date means no clock can be trusted. Holding is
     // the safe failure: a review published early cannot be unpublished
     // from someone's memory, but a held one can always be released.
     return { status: 'held', visible: false, reason: 'Awaiting a valid checkout date.' };
   }
-  const deadline = new Date(checkout);
-  deadline.setUTCDate(deadline.getUTCDate() + REVIEW_WINDOW_DAYS);
-  if (today >= deadline) {
+  if (age >= REVIEW_WINDOW_DAYS) {
     return { status: 'published', visible: true, reason: `Window closed after ${REVIEW_WINDOW_DAYS} days — published unmatched.` };
   }
-  const daysLeft = Math.ceil((deadline - today) / 86400000);
+  const daysLeft = REVIEW_WINDOW_DAYS - Math.max(0, age);
   return { status: 'held', visible: false, reason: `Held — ${daysLeft} day${daysLeft === 1 ? '' : 's'} left for the other side to review.`, daysLeft };
 }
 
-// Can this review still be submitted at all? Past the window, no.
-function submissionOpen(checkoutDate, now) {
-  const today = now || new Date();
-  const checkout = checkoutDate ? new Date(checkoutDate) : null;
-  if (!checkout || isNaN(checkout.getTime())) return false;
-  if (today < checkout) return false; // the stay has not finished
-  const deadline = new Date(checkout);
-  deadline.setUTCDate(deadline.getUTCDate() + REVIEW_WINDOW_DAYS);
-  return today < deadline;
+// ---------------------------------------------------------------------
+// Whose calendar
+//
+// The window is counted in the PROPERTY's days. A stay that checked out
+// 15 days ago where the property stands is closed, whatever the server's
+// clock says: the database runs in UTC, 5h30m behind India, so for the
+// first five and a half hours of every Indian day the server still thinks
+// it is yesterday. Every function here therefore takes `today` as the
+// property's own calendar date, not an instant in time.
+//
+// Callers get that date from Postgres alongside the booking, with the
+// same expression everywhere (see localTodaySql below), so the endpoint
+// that accepts a review, the page that offers the button, and the sweep
+// that publishes can never disagree about which day it is.
+//
+// `today` may be a 'YYYY-MM-DD' string or a Date as the database driver
+// returns it. Left out, it falls back to today in DEFAULT_TIMEZONE, never
+// to the server's own date.
+
+// A calendar date as 'YYYY-MM-DD', from a 'YYYY-MM-DD…' string or from a
+// Date. A Date from the driver is midnight of that date in the server's
+// local time, so its LOCAL fields are the date that was stored.
+function toDateStr(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return null;
+    const y = value.getFullYear(), m = String(value.getMonth() + 1).padStart(2, '0'), d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+// Today's date where the property stands.
+function localToday(zone, now) {
+  const at = now instanceof Date ? now : new Date();
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: safeZone(zone), year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(at);
+}
+
+// Whole calendar days from checkout to today (0 on the day of checkout,
+// negative before it). null when either date is unusable.
+function daysSinceCheckout(checkoutDate, today) {
+  const c = toDateStr(checkoutDate);
+  const t = toDateStr(today) || localToday(DEFAULT_TIMEZONE);
+  if (!c || !t) return null;
+  const [cy, cm, cd] = c.split('-').map(Number);
+  const [ty, tm, td] = t.split('-').map(Number);
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(cy, cm - 1, cd)) / 86400000);
+}
+
+// Where a booking stands in its review window, on the property's
+// calendar: 'upcoming' (not checked out yet), 'open', or 'closed'.
+function reviewWindowState(checkoutDate, today) {
+  const age = daysSinceCheckout(checkoutDate, today);
+  if (age === null) return 'closed';
+  if (age < 0) return 'upcoming';
+  return age < REVIEW_WINDOW_DAYS ? 'open' : 'closed';
+}
+
+// Can this review still be submitted at all? Open from the day of
+// checkout until the day before the window's 15th day; refused from then
+// on, for guests and hosts alike.
+function submissionOpen(checkoutDate, today) {
+  return reviewWindowState(checkoutDate, today) === 'open';
 }
 
 // ---------------------------------------------------------------------
@@ -114,7 +170,8 @@ const REVIEW_POLICY = {
         `Only one side reviewed: held until ${REVIEW_WINDOW_DAYS} days after checkout, then published unmatched.`,
         `Neither side reviewed within ${REVIEW_WINDOW_DAYS} days of checkout: the opportunity lapses and nothing is published.`,
         'Neither party can read the other\u2019s review before their own is submitted. This is what stops reviews becoming replies.',
-        'The window runs from checkout, never from when the first review arrived — otherwise whoever reviews first sets the other\u2019s deadline.'
+        'The window runs from checkout, never from when the first review arrived — otherwise whoever reviews first sets the other\u2019s deadline.',
+        'Days are counted on the property\u2019s own calendar, not the server\u2019s. A stay that checked out 15 days ago where the property stands is closed: reviews are refused from that day, for guests and hosts alike, and anything unmatched is published.'
       ]
     },
     {
@@ -144,5 +201,6 @@ const REVIEW_POLICY = {
 
 module.exports = {
   REVIEW_WINDOW_DAYS, CONFLICT_CHECKS, REVIEW_POLICY,
-  publicationState, submissionOpen
+  publicationState, submissionOpen, reviewWindowState, daysSinceCheckout,
+  localToday, toDateStr
 };

@@ -24,6 +24,7 @@
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken, secretMatches } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
+const { sanitizeBody } = require('./_plain-text');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -410,6 +411,9 @@ async function applyRoomChangeDecision(roomId, action, reason = null) {
 }
 
 module.exports = async (req, res) => {
+  // Typed text can never become markup — see _plain-text.js.
+  sanitizeBody(req);
+
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');

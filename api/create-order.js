@@ -61,6 +61,7 @@ const BASE_OCCUPANCY = 2;
 // charged on the guest service fee or the deposit). index.html's copy is
 // display-only.
 const { stayGst, experienceGst } = require('./_gst');
+const { sanitizeBody } = require('./_plain-text');
 // Fixed platform commission rates — replaces the old per-listing
 // commission_rate column, which is no longer read for new bookings (kept
 // in the schema/orders table only for historical orders placed before
@@ -240,6 +241,9 @@ function getOptionalGuestId(req) {
 }
 
 module.exports = async (req, res) => {
+  // Typed text can never become markup — see _plain-text.js.
+  sanitizeBody(req);
+
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');

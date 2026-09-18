@@ -88,6 +88,7 @@ const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const { logAudit } = require('./_audit-log');
+const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
 const { createToken, verifyToken, secretMatches } = require('./_approval-token');
 const { REVIEW_POLICY, CONFLICT_CHECKS, REVIEW_WINDOW_DAYS, publicationState } = require('./_review-policy');
@@ -97,6 +98,7 @@ const { describeLadders, guestTier, hostTier, reviewScore, weakestFactor,
         propertyTier, propertyFlag, PROPERTY_TIERS, propertyCutoffs } = require('./_tiers');
 const { tierHistoryFor, requestTierRecompute } = require('./_tier-history');
 const { COMPLIANCE_CHECKS, enforceComplianceDeadlines, runComplianceScan } = require('./_compliance');
+const { sanitizeBody } = require('./_plain-text');
 
 const sql = neon(process.env.DATABASE_URL);
 const razorpay = new Razorpay({
@@ -104,6 +106,18 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 const BACKGROUND_IMAGES_KEY = 'homepage_background_images';
+
+// Razorpay's SDK rejects with { statusCode, error: { code, description } }
+// rather than an Error, so err.message is usually undefined — which is
+// why a failed refund only ever reached the admin as a generic "could not
+// resolve". This pulls out the reason Razorpay actually gave. Admin-only
+// endpoint, so showing it is safe and is what makes a failure fixable.
+function razorpayErrorMessage(err) {
+  const d = err && err.error && (err.error.description || err.error.reason);
+  if (d) return `Razorpay: ${d}`;
+  if (err && err.message) return err.message;
+  return 'Razorpay did not accept the refund.';
+}
 const ADMIN_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — same as guest sessions
 const ADMIN_RESET_LINK_LIFETIME_MS = 60 * 60 * 1000; // 1 hour — same reasoning as guest-auth.js's password reset link
 const BCRYPT_ROUNDS = 12; // matches guest-auth.js exactly
@@ -212,6 +226,9 @@ async function sendListingStatusEmail(listing, action, reason) {
 }
 
 module.exports = async (req, res) => {
+  // Typed text can never become markup — see _plain-text.js.
+  sanitizeBody(req);
+
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -232,6 +249,24 @@ module.exports = async (req, res) => {
       if (!cleanEmail || !password) {
         return res.status(400).json({ error: 'Please enter your email and password.' });
       }
+      // Rate limited like guest login. Without it, this form — the one
+      // that opens the whole admin tool — could be guessed at without
+      // limit. Checked before bcrypt, so a flood costs nothing to refuse.
+      const clientIp = getClientIp(req);
+      const failedForEmail = await countRecentAttempts(sql, {
+        action: 'admin_login', windowMinutes: 15, byActor: cleanEmail, onlyFailures: true
+      });
+      const attemptsFromIp = await countRecentAttempts(sql, {
+        action: 'admin_login', windowMinutes: 15, byIp: clientIp, onlyFailures: false
+      });
+      if (failedForEmail >= 5 || attemptsFromIp >= 20) {
+        await logAudit(sql, {
+          action: 'admin_login_blocked', success: false, actorType: 'admin', actorIdentifier: cleanEmail,
+          metadata: { reason: failedForEmail >= 5 ? 'too_many_failures' : 'ip_rate_limited', ip: clientIp }
+        });
+        return res.status(429).json({ error: 'Too many sign-in attempts. Please wait 15 minutes and try again.' });
+      }
+
       const rows = await sql`SELECT id, email, password_hash, name FROM admins WHERE email = ${cleanEmail}`;
       const admin = rows[0];
       // Same timing-safe pattern as guest-auth.js: always run bcrypt.compare,
@@ -242,14 +277,14 @@ module.exports = async (req, res) => {
       if (!admin || !passwordMatches) {
         await logAudit(sql, {
           action: 'admin_login', success: false, actorType: 'admin', actorIdentifier: cleanEmail,
-          metadata: { reason: !admin ? 'no_such_account' : 'wrong_password' }
+          metadata: { reason: !admin ? 'no_such_account' : 'wrong_password', ip: clientIp }
         });
         return res.status(401).json({ error: 'Incorrect email or password.' });
       }
       const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS);
       await logAudit(sql, {
         action: 'admin_login', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
-        targetType: 'admin', targetId: admin.id
+        targetType: 'admin', targetId: admin.id, metadata: { ip: clientIp }
       });
       return res.status(200).json({ sessionToken, admin: { id: admin.id, email: admin.email, name: admin.name } });
     } catch (err) {
@@ -308,6 +343,20 @@ module.exports = async (req, res) => {
       if (!cleanEmail || !cleanEmail.includes('@')) {
         return res.status(400).json({ error: 'Please enter a valid email address.' });
       }
+      // Each request is logged (whether or not the account exists) so it
+      // can be rate limited; otherwise this sends Aerva-branded email to
+      // any admin address as often as a script likes. Over the limit it
+      // still answers the same generic success, so it reveals nothing.
+      const clientIp = getClientIp(req);
+      const recentFromIp = await countRecentAttempts(sql, {
+        action: 'admin_password_reset_attempt', windowMinutes: 60, byIp: clientIp, onlyFailures: false
+      });
+      await logAudit(sql, {
+        action: 'admin_password_reset_attempt', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
+        metadata: { ip: clientIp }
+      });
+      if (recentFromIp >= 5) return res.status(200).json({ success: true });
+
       const rows = await sql`SELECT id, email FROM admins WHERE email = ${cleanEmail}`;
       const admin = rows[0];
       if (admin) {
@@ -908,7 +957,24 @@ module.exports = async (req, res) => {
 
         const results = [];
         for (const order of eligible) {
+          // Claim the order before any money moves. Two clicks, two admins,
+          // or a host raising a concern at the same moment would otherwise
+          // all see 'held' and each issue a refund. Only the request whose
+          // UPDATE actually flips held -> refunding goes on to refund.
+          const claimed = await sql`
+            UPDATE orders SET deposit_status = 'refunding'
+            WHERE id = ${order.id} AND deposit_status = 'held'
+            RETURNING id
+          `;
+          if (!claimed.length) {
+            results.push({ orderId: order.id, success: false, error: 'Already being processed, or no longer held.' });
+            continue;
+          }
+          let refund = null;
           try {
+            if (!order.razorpay_payment_id) {
+              throw new Error('No Razorpay payment is recorded for this booking, so the deposit cannot be refunded automatically.');
+            }
             // A refund has to be issued in the SAME currency the payment
             // was originally charged in — deposit_amount is always stored
             // in INR, but if this particular order was charged directly
@@ -931,21 +997,31 @@ module.exports = async (req, res) => {
             // (card, UPI, etc.) automatically. This is what satisfies
             // "refunded ... into the same account" — Aerva never asks
             // for or stores separate refund destination details.
-            const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
+            refund = await razorpay.payments.refund(order.razorpay_payment_id, {
               amount: refundAmount,
               speed: 'normal',
             });
+          } catch (refundErr) {
+            // Nothing was refunded: put it back to 'held' so it is picked
+            // up next time, or handled by hand. One failure never blocks
+            // the rest of the batch.
+            console.error(`processDeposits: refund failed for order ${order.id}:`, refundErr);
+            await sql`UPDATE orders SET deposit_status = 'held' WHERE id = ${order.id} AND deposit_status = 'refunding'`;
+            results.push({ orderId: order.id, success: false, error: razorpayErrorMessage(refundErr) });
+            continue;
+          }
+          try {
             await sql`
               UPDATE orders SET deposit_status = 'refunded', deposit_refund_id = ${refund.id}
               WHERE id = ${order.id}
             `;
             results.push({ orderId: order.id, success: true });
-          } catch (refundErr) {
-            // One failed refund (e.g. a payment too old for Razorpay to
-            // refund) shouldn't block the rest — log it and keep going,
-            // leaving that order's status as 'held' for manual follow-up.
-            console.error(`processDeposits: refund failed for order ${order.id}:`, refundErr);
-            results.push({ orderId: order.id, success: false, error: refundErr.message || 'Refund failed' });
+          } catch (saveErr) {
+            // The money HAS moved. The order stays 'refunding', which
+            // nothing will pick up again, so it can never be refunded
+            // twice; it just needs its record finished by hand.
+            console.error(`processDeposits: refund ${refund.id} issued for order ${order.id} but saving failed:`, saveErr);
+            results.push({ orderId: order.id, success: false, error: `Refund ${refund.id} was issued, but saving it failed. The booking is locked as 'refunding' so it cannot be refunded twice; update its record by hand.` });
           }
         }
 
@@ -966,11 +1042,15 @@ module.exports = async (req, res) => {
     // just records the decision so it's visible on the host's dashboard
     // and can be included in their next payout.
     if (req.body && req.body.resolveDispute) {
+      const { orderId, compensationAmount } = req.body.resolveDispute;
+      let claimed = false;
       try {
-        const { orderId, compensationAmount } = req.body.resolveDispute;
         const rows = await sql`SELECT id, razorpay_payment_id, deposit_amount, deposit_status, charge_currency FROM orders WHERE id = ${orderId}`;
         const order = rows[0];
         if (!order) return res.status(404).json({ error: 'Order not found.' });
+        if (order.deposit_status === 'resolving') {
+          return res.status(409).json({ error: 'This dispute is already being resolved. Refresh the page.' });
+        }
         if (order.deposit_status !== 'disputed') {
           return res.status(400).json({ error: 'This deposit is not currently disputed.' });
         }
@@ -978,13 +1058,16 @@ module.exports = async (req, res) => {
         const compensation = Math.max(0, Math.min(Number(compensationAmount) || 0, Number(order.deposit_amount)));
         const guestRefundAmount = Number(order.deposit_amount) - compensation;
 
-        let refundId = null;
+        if (guestRefundAmount > 0 && !order.razorpay_payment_id) {
+          return res.status(400).json({ error: 'No Razorpay payment is recorded for this booking, so the guest\'s share cannot be refunded automatically.' });
+        }
+
+        // Worked out before claiming, so a missing rate never leaves the
+        // dispute locked. Same currency-matching rule as processDeposits:
+        // a refund goes back in whatever currency was actually charged.
+        let refundSubunitAmount = null;
         if (guestRefundAmount > 0) {
-          // Same currency-matching requirement as processDeposits above —
-          // a refund has to be issued in whatever currency the payment
-          // was actually charged in.
           const currency = order.charge_currency || 'INR';
-          let refundSubunitAmount;
           if (currency === 'INR') {
             refundSubunitAmount = Math.round(guestRefundAmount * 100);
           } else {
@@ -993,22 +1076,71 @@ module.exports = async (req, res) => {
               return res.status(502).json({ error: `No cached rate available to refund this ${currency} deposit right now. Please try again shortly.` });
             }
           }
-          const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
-            amount: refundSubunitAmount,
-            speed: 'normal',
-          });
-          refundId = refund.id;
         }
 
-        await sql`
-          UPDATE orders SET
-            deposit_status = 'resolved', deposit_resolution_amount = ${compensation}, deposit_refund_id = ${refundId}
-          WHERE id = ${orderId}
+        // Claim it before any money moves: a double click, or two admins
+        // on the same dispute, would otherwise both pass the check above
+        // and both refund the guest. Only the request that flips
+        // disputed -> resolving carries on.
+        const claim = await sql`
+          UPDATE orders SET deposit_status = 'resolving'
+          WHERE id = ${orderId} AND deposit_status = 'disputed'
+          RETURNING id
         `;
+        if (!claim.length) {
+          return res.status(409).json({ error: 'This dispute is already being resolved. Refresh the page.' });
+        }
+        claimed = true;
 
+        let refundId = null;
+        if (refundSubunitAmount) {
+          try {
+            const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
+              amount: refundSubunitAmount,
+              speed: 'normal',
+            });
+            refundId = refund.id;
+          } catch (refundErr) {
+            // Nothing was refunded, so reopen the dispute for another try.
+            console.error('get-pending-listings (resolveDispute) refund failed:', refundErr);
+            await sql`UPDATE orders SET deposit_status = 'disputed' WHERE id = ${orderId} AND deposit_status = 'resolving'`;
+            claimed = false;
+            await logAudit(sql, {
+              action: 'deposit_dispute_resolved', success: false, actorType: 'admin', actorIdentifier: 'admin',
+              targetType: 'order', targetId: orderId,
+              metadata: { compensation, guestRefundAmount, reason: razorpayErrorMessage(refundErr) }
+            });
+            return res.status(502).json({ error: razorpayErrorMessage(refundErr) });
+          }
+        }
+
+        try {
+          await sql`
+            UPDATE orders SET
+              deposit_status = 'resolved', deposit_resolution_amount = ${compensation}, deposit_refund_id = ${refundId}
+            WHERE id = ${orderId}
+          `;
+        } catch (saveErr) {
+          // The refund has gone through. Leaving the order 'resolving'
+          // means it can never be refunded a second time; it only needs
+          // its record finished by hand.
+          console.error(`resolveDispute: refund ${refundId} issued for order ${orderId} but saving failed:`, saveErr);
+          return res.status(500).json({ error: `Refund ${refundId} was issued, but saving the result failed. The dispute is locked so it cannot be refunded twice; update order ${orderId} by hand.` });
+        }
+
+        await logAudit(sql, {
+          action: 'deposit_dispute_resolved', success: true, actorType: 'admin', actorIdentifier: 'admin',
+          targetType: 'order', targetId: orderId,
+          metadata: { compensation, guestRefundAmount, refundId }
+        });
         return res.status(200).json({ success: true, compensation, guestRefundAmount });
       } catch (err) {
         console.error('get-pending-listings (resolveDispute) error:', err);
+        // Only reached before any refund was attempted (refund and save
+        // failures return above), so reopening is always safe here.
+        if (claimed) {
+          try { await sql`UPDATE orders SET deposit_status = 'disputed' WHERE id = ${orderId} AND deposit_status = 'resolving'`; } catch (_) {}
+        }
         return res.status(500).json({ error: 'Could not resolve this dispute right now.' });
       }
     }

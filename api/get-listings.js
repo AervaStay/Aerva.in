@@ -151,7 +151,7 @@ async function postReviewInviteToThread(sql, order) {
   // about the host's behaviour from the timing alone, which is what the
   // double-blind rule exists to prevent.
   const text = `How was ${order.suite_name || 'your stay'}? Please leave a review from My Bookings — `
-    + `you have ${REVIEW_WINDOW_DAYS} days from checkout. Reviews are published within ${REVIEW_WINDOW_DAYS} days of checkout, never straight away.`;
+    + `you have ${REVIEW_WINDOW_DAYS} days from checkout.`;
   await sql`
     INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
     VALUES (${conversationId}, 'system', ${text}, ${text}, false)`;
@@ -202,7 +202,7 @@ async function sendReviewPromptEmail(order) {
     <div style="font-family:sans-serif; max-width:520px;">
       <h2 style="font-family:Georgia,serif;">How was ${what}?</h2>
       <p>Your review helps the next guest choose well, and tells your host what went right or wrong.</p>
-      <p>It takes a minute. You have ${REVIEW_WINDOW_DAYS} days from checkout. Reviews are published within ${REVIEW_WINDOW_DAYS} days of checkout, never straight away.</p>
+      <p>It takes a minute. You have ${REVIEW_WINDOW_DAYS} days from checkout.</p>
       <p><a href="https://aerva.in/index.html?view=my-bookings" style="display:inline-block; background:#1c1a17; color:#f4ebe3; padding:11px 20px; text-decoration:none; border-radius:4px;">Write your review</a></p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Write to hello@aerva.in.</p>
     </div>`;
@@ -538,8 +538,9 @@ module.exports = async (req, res) => {
         SELECT o.id, o.guest_id, o.guest_email, o.listing_id, o.suite_name, l.host_id
         FROM orders o JOIN listings l ON l.id = o.listing_id
         WHERE o.status = 'paid'
-          AND o.departure < CURRENT_DATE
-          AND o.departure >= CURRENT_DATE - 3
+          -- Checked out on the property's calendar, same as the window.
+          AND o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date
+          AND o.departure >= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - 3
           AND o.review_prompt_sent_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
         LIMIT 200
@@ -1378,16 +1379,22 @@ module.exports = async (req, res) => {
         })
       : afterGuestsFilter;
 
-    // "Number of rooms" is a genuinely different ask from guest count —
-    // wanting to book N SEPARATE rooms within one property. Only a
-    // Resort can ever say yes to this, so using this filter at all
-    // excludes every other property type outright, regardless of how
-    // many people they sleep.
+    // "Number of rooms": at least N rooms in ONE property.
+    //   - A home (villa, apartment, cottage…) is booked whole, so its
+    //     rooms are its bedrooms.
+    //   - A Resort is booked room by room, so it counts its bookable
+    //     rooms — only the ones free for the searched dates, if any.
+    // This used to answer only for Resorts and drop every home, so a
+    // guest asking for 2 rooms lost a 4-bedroom villa from the results.
     const afterRoomsNeededFilter = roomsNeededFilter
       ? afterResortCapacityFilter.filter(l => {
-          if (l.property_type !== 'Resort') return false;
-          const roomCount = datesFilter ? l.resort_available_room_count : l.resort_room_count;
-          return (roomCount || 0) >= roomsNeededFilter;
+          if (l.property_type === 'Resort') {
+            const roomCount = datesFilter ? l.resort_available_room_count : l.resort_room_count;
+            return (roomCount || 0) >= roomsNeededFilter;
+          }
+          // bedrooms is free text on older listings ("3-4"); same
+          // largest-number reading max_guests gets.
+          return (parseMaxGuests(l.bedrooms) || 0) >= roomsNeededFilter;
         })
       : afterResortCapacityFilter;
 

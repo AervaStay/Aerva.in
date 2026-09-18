@@ -190,6 +190,41 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
   }
 }
 
+// Idempotency for verify-payment: see the comment where it is called.
+// payment_confirmations (migration_payment_confirmations.sql) holds one
+// row per Razorpay order that has been recorded; its primary key is what
+// makes the claim atomic. Until that migration has run, falls back to
+// looking for an existing booking — enough for retries arriving a moment
+// apart, though not for two requests in the same instant.
+async function claimPaymentConfirmation(razorpayOrderId) {
+  try {
+    const rows = await sql`
+      INSERT INTO payment_confirmations (razorpay_order_id)
+      VALUES (${razorpayOrderId})
+      ON CONFLICT (razorpay_order_id) DO NOTHING
+      RETURNING razorpay_order_id
+    `;
+    return rows.length ? 'claimed' : 'duplicate';
+  } catch (err) {
+    console.error('payment_confirmations unavailable, falling back to an orders lookup:', err.message);
+    try {
+      const existing = await sql`SELECT 1 FROM orders WHERE razorpay_order_id = ${razorpayOrderId} LIMIT 1`;
+      return existing.length ? 'duplicate' : 'unclaimed';
+    } catch (lookupErr) {
+      console.error('verify-payment duplicate check failed:', lookupErr);
+      return 'unclaimed';
+    }
+  }
+}
+
+async function releasePaymentConfirmation(razorpayOrderId) {
+  try {
+    await sql`DELETE FROM payment_confirmations WHERE razorpay_order_id = ${razorpayOrderId}`;
+  } catch (err) {
+    console.error('releasePaymentConfirmation failed:', err);
+  }
+}
+
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -212,6 +247,19 @@ module.exports = async (req, res) => {
       // Someone sent a forged/tampered response — do not confirm the booking.
       return res.status(400).json({ verified: false });
     }
+
+    // One payment, one booking. Retries happen for ordinary reasons — a
+    // double tap, a flaky connection re-sending, Razorpay's handler firing
+    // twice — and each used to insert the whole booking again: a second
+    // order row, a second confirmation email, a second host payout, and a
+    // second deposit that could later be refunded twice. The claim below
+    // is atomic, so only the first request records the booking; the rest
+    // get the same success answer without touching anything.
+    const claim = await claimPaymentConfirmation(razorpay_order_id);
+    if (claim === 'duplicate') {
+      return res.status(200).json({ verified: true, alreadyConfirmed: true });
+    }
+    let insertedCount = 0;
 
     // Declared OUT HERE because the PDF/email step below runs after the
     // database block has closed. They used to be `const` inside it, so
@@ -324,6 +372,7 @@ module.exports = async (req, res) => {
           )
           RETURNING id
         `;
+        insertedCount++;
 
         if (thisRowCouponId) {
           await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${inserted[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
@@ -416,6 +465,7 @@ module.exports = async (req, res) => {
           )
           RETURNING id
         `;
+        insertedCount++;
 
         if (thisRowCouponId) {
           await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${insertedEx[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
@@ -434,6 +484,15 @@ module.exports = async (req, res) => {
       // (the payment itself is safely recorded in Razorpay's own dashboard).
       // Don't fail the guest's confirmation over a logging problem.
       console.error('Could not write order(s) to database:', dbErr);
+      // Nothing was recorded, so let a retry try again rather than
+      // being turned away as a duplicate. If some rows DID go in, the
+      // claim stays: a retry would duplicate those, and the rest are
+      // recoverable from Razorpay's record of the order.
+      if (claim === 'claimed' && insertedCount === 0) {
+        await releasePaymentConfirmation(razorpay_order_id);
+      } else if (insertedCount > 0) {
+        console.error(`verify-payment: order ${razorpay_order_id} partly recorded (${insertedCount} row(s)) — finish by hand.`);
+      }
     }
 
     // PDF + email confirmation — deliberately its own try/catch, separate

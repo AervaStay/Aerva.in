@@ -34,11 +34,13 @@
 // message-filtering approach and its real, worth-knowing limitations.
 
 const { neon } = require('@neondatabase/serverless');
-const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { submissionOpen, reviewWindowState, REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { buildProfile, sanitizeProfileInput } = require('./_profiles');
 const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
+const { sanitizeBody } = require('./_plain-text');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -154,6 +156,9 @@ function redactContactInfo(text) {
 }
 
 module.exports = async (req, res) => {
+  // Typed text can never become markup — see _plain-text.js.
+  sanitizeBody(req);
+
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, PATCH, POST, OPTIONS');
@@ -434,7 +439,8 @@ module.exports = async (req, res) => {
         SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights,
                o.subtotal, o.discount_amount, o.gst, o.total, o.status, o.created_at,
                COALESCE(l.listing_type, 'stay') AS listing_type,
-               EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id) AS reviewed
+               EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id) AS reviewed,
+               (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
         FROM orders o
         LEFT JOIN listings l ON l.id = o.listing_id
         WHERE o.guest_id = ${guestId}
@@ -452,10 +458,13 @@ module.exports = async (req, res) => {
       bookings.forEach(b => {
         if (b.reviewed) { b.review_state = 'done'; }
         else if (b.status !== 'paid') { b.review_state = null; }
-        else if (submissionOpen(b.departure)) { b.review_state = 'open'; }
-        else if (new Date(b.departure) < new Date()) { b.review_state = 'closed'; }
-        else { b.review_state = null; }
+        else {
+          // On the property's calendar, same as the submit check below.
+          const w = reviewWindowState(b.departure, b.local_today);
+          b.review_state = w === 'upcoming' ? null : w;
+        }
         delete b.reviewed;
+        delete b.local_today;
       });
 
       // Published, non-reverted only — a held review must not move a
@@ -596,14 +605,17 @@ module.exports = async (req, res) => {
 
         const rows = await sql`
           SELECT o.id, o.listing_id, o.room_id, o.departure, o.status, o.order_type,
-                 l.host_id, COALESCE(l.listing_type, 'stay') AS listing_type
+                 l.host_id, COALESCE(l.listing_type, 'stay') AS listing_type,
+                 (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
           FROM orders o JOIN listings l ON l.id = o.listing_id
           WHERE o.id = ${orderId} AND o.guest_id = ${guestId}
         `;
         const order = rows[0];
         if (!order) return res.status(404).json({ error: 'Booking not found.' });
         if (order.status !== 'paid') return res.status(400).json({ error: 'Only completed bookings can be reviewed.' });
-        if (!submissionOpen(order.departure)) {
+        // Judged on the property's calendar, not the server's — the same
+        // rule the host's review of the guest follows.
+        if (!submissionOpen(order.departure, order.local_today)) {
           return res.status(400).json({ error: `Reviews can be left for ${REVIEW_WINDOW_DAYS} days after checkout. This window has closed.` });
         }
 

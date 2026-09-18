@@ -1739,3 +1739,65 @@
 @media (max-width:820px){ .bk-cols{grid-template-columns:1fr;} }
 .bk-map{width:100%; height:280px; border:1px solid var(--line-dark); border-radius:12px; background:var(--cream-deep);}
 .bk-note{font-size:13px; opacity:0.6; line-height:1.6;}
+
+/* ---------- HEADER RESTYLE (Sept 2026) ----------
+   Over a photo the header had nothing of its own to stand on: the logo
+   mark is dark ink on a transparent PNG, the tagline was dark gold, and
+   the bell icon had been left out of the light-text rules, so all three
+   sank into any darker image. Three changes fix it for every photo
+   rather than tuning to one:
+     1. A soft dark scrim behind the bar while it floats over the hero,
+        fading out below the header so there is no visible band.
+     2. The logo mark rendered light over the hero (CSS filter on the same
+        PNG, no second asset), ink everywhere else.
+     3. One type scale for the whole bar. It had 11px, 14px and 14.5px
+        side by side, which is most of why it read as cluttered.
+   The scrolled state (white bar, dark text) is unchanged. */
+
+header{ padding:16px 0; }
+
+/* 1. Scrim. A pseudo-element rather than the header's own background, so
+   it can extend below the bar and fade out; header's z-index already
+   makes it a stacking context, so z-index:-1 stays behind the nav. */
+body.showing-hero header:not(.scrolled)::before{
+  content:''; position:absolute; left:0; right:0; top:0; height:170%;
+  background:linear-gradient(to bottom,
+    rgba(17,14,11,0.58) 0%, rgba(17,14,11,0.30) 55%, rgba(17,14,11,0) 100%);
+  pointer-events:none; z-index:-1;
+}
+
+/* 2. Logo: mark, hairline, then wordmark over tagline. */
+.nav-logo{ gap:14px; }
+.nav-logo img{ height:42px; transition:filter .3s ease; }
+.nav-logo-text{ gap:5px; padding-left:14px; border-left:1px solid var(--line-dark); }
+.nav-wordmark{ font-size:20px; letter-spacing:0.34em; }
+.nav-tagline{ font-size:8.5px; letter-spacing:0.36em; font-weight:500; }
+body.showing-hero header:not(.scrolled) .nav-logo img{
+  filter:brightness(0) invert(1) drop-shadow(0 1px 3px rgba(0,0,0,0.35));
+  opacity:0.96;
+}
+body.showing-hero header:not(.scrolled) .nav-logo-text{ border-left-color:rgba(253,248,242,0.35); }
+body.showing-hero header:not(.scrolled) .nav-tagline{
+  color:#e6cfa2; text-shadow:0 1px 4px rgba(0,0,0,0.4);
+}
+
+/* 3. One type scale: 12px, wide tracking, medium weight. */
+.header-category-nav{ gap:30px; }
+.category-item{ font-size:11.5px; letter-spacing:0.14em; font-weight:500; padding-bottom:5px; }
+.category-item svg{ width:15px; height:15px; }
+.nav-links{ gap:24px; }
+#guestLoginLink{ font-size:12px; letter-spacing:0.14em; font-weight:500; }
+.currency-trigger{ font-size:12px; letter-spacing:0.12em; padding:6px 13px; }
+.nav-account-name{ font-size:12px; letter-spacing:0.12em; font-weight:500; opacity:1; }
+@media (max-width:1100px){
+  .header-category-nav{ gap:18px; }
+  .category-item{ font-size:10.5px; letter-spacing:0.1em; }
+}
+
+/* Over the hero: the pieces the original light-text rules missed. */
+body.showing-hero header:not(.scrolled) .nav-bell-btn{
+  color:#fdf8f2; filter:drop-shadow(0 1px 4px rgba(0,0,0,0.35));
+}
+body.showing-hero header:not(.scrolled) .category-item.active{ border-color:#e6cfa2; }
+body.showing-hero header:not(.scrolled) .currency-trigger{ background:rgba(255,255,255,0.08); }
+body.showing-hero header:not(.scrolled) .nav-avatar-camera{ border-color:#fdf8f2; }
