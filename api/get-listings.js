@@ -444,6 +444,18 @@ async function runTierSnapshot({ asOf, prev, hosts, guests, listings }) {
 }
 
 module.exports = async (req, res) => {
+  // CORS first, before ANY branch can return. The review sweep below used
+  // to run ahead of these headers, so the admin tool's Batch Jobs button
+  // (a browser request carrying an Authorization header) failed twice
+  // over: the preflight never allowed Authorization, and the sweep's own
+  // response had no Allow-Origin. Vercel's cron is server-to-server and
+  // never noticed, which is why the nightly run kept working.
+  const allowedOrigin = 'https://aerva.in';
+  res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
   // ---- Daily review sweep (cron) ----
   // GET ?reviewSweep=1 — runs once a day from vercel.json. Two jobs:
   //
@@ -665,10 +677,6 @@ module.exports = async (req, res) => {
   }
 
 
-  const allowedOrigin = 'https://aerva.in';
-  res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
