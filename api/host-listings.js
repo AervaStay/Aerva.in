@@ -445,7 +445,8 @@ module.exports = async (req, res) => {
       // Scoped through listings.host_id, so a host can only ever review a
       // guest who actually stayed at one of their own properties.
       const rows = await sql`
-        SELECT o.id, o.listing_id, o.guest_id, o.departure, o.status
+        SELECT o.id, o.listing_id, o.guest_id, o.departure, o.status,
+               (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
         FROM orders o JOIN listings l ON l.id = o.listing_id
         WHERE o.id = ${orderId} AND l.host_id = ${me.host_id}
       `;
@@ -453,7 +454,8 @@ module.exports = async (req, res) => {
       if (!order) return res.status(404).json({ error: 'Booking not found.' });
       if (order.status !== 'paid') return res.status(400).json({ error: 'Only completed stays can be reviewed.' });
       if (!order.guest_id) return res.status(400).json({ error: 'This booking has no guest account to review.' });
-      if (!submissionOpen(order.departure)) {
+      // Judged on the property's calendar, not the server's.
+      if (!submissionOpen(order.departure, order.local_today)) {
         return res.status(400).json({ error: `Reviews can be left for ${REVIEW_WINDOW_DAYS} days after checkout. This window has closed.` });
       }
 
@@ -1926,11 +1928,14 @@ module.exports = async (req, res) => {
     // Dubai's calendar and one in Pune on India's — not on the database's
     // UTC clock, which before this showed yesterday to any Indian host
     // looking before 05:30.
-    let today = { arrivals: [], departures: [], staying: [] };
+    let today = { arrivals: [], departures: [], staying: [], experiences: [] };
     try {
       const rows = await sql`
         SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights,
+               o.payout_amount,
                o.guest_email, g.name AS guest_name, g.profile_photo_url,
+               COALESCE(l.listing_type, 'stay') AS listing_type,
+               l.experience_start_time, l.experience_duration_days,
                l.check_in_time, l.check_out_time,
                -- Cover photo where the host set one, otherwise the first
                -- photo the listing actually has. Nothing is picked at
@@ -1966,18 +1971,35 @@ module.exports = async (req, res) => {
         orderId: r.id,
         guestName: String(r.guest_name || '').trim() || (r.guest_email || 'Guest').split('@')[0],
         guests: Number(r.guests) || 1,
+        // Enough for the panel that opens when a host taps the row: the
+        // dates, the stay, and what they paid out. No guest email or
+        // phone — a host messages them through Aerva.
+        arrival: r.arrival,
+        departure: r.departure,
+        nights: Number(r.nights) || null,
+        payout: Number(r.payout_amount) || null,
         listingId: r.listing_id,
         listingName: r.suite_name,
         photoUrl: r.cover_photo_url || null,
         guestPhotoUrl: r.profile_photo_url || null,
         checkInTime: r.check_in_time || null,
         checkOutTime: r.check_out_time || null,
-        nightsLeft: Number(r.nights_left) || 0
+        nightsLeft: Number(r.nights_left) || 0,
+        // An experience is not checked into: it starts, at its own time,
+        // and is over the same day unless it runs longer. Kept separate so
+        // the page can say so rather than calling it a check-in.
+        kind: (r.listing_type === 'experience') ? 'experience' : 'stay',
+        startTime: r.experience_start_time || null
       });
+      const all = rows.map(shape);
+      const stays = all.filter(r => r.kind === 'stay');
       today = {
-        arrivals: rows.filter(r => r.arriving).map(shape),
-        departures: rows.filter(r => r.departing && !r.arriving).map(shape),
-        staying: rows.filter(r => !r.arriving && !r.departing).map(shape)
+        arrivals: stays.filter(r => rows.find(x => x.id === r.orderId).arriving),
+        departures: stays.filter(r => { const o = rows.find(x => x.id === r.orderId); return o.departing && !o.arriving; }),
+        staying: stays.filter(r => { const o = rows.find(x => x.id === r.orderId); return !o.arriving && !o.departing; }),
+        // Everything experience-shaped happening today, whatever day of a
+        // multi-day experience it is.
+        experiences: all.filter(r => r.kind === 'experience')
       };
     } catch (err) {
       console.error('today view failed (non-fatal):', err);
