@@ -1133,6 +1133,62 @@ module.exports = async (req, res) => {
   // ---- Every currently-open compliance flag, for admin visibility —
   // which listings have an outstanding requirement, how much time is
   // left, and whether it's already been auto-enforced.
+  // ---- Traffic ----
+  // GET ?traffic=1 — two questions an admin actually asks: how many
+  // people came, and who started a booking and did not finish it.
+  //
+  // Visits come from the per-day tally get-listings.js keeps. Abandoned
+  // checkouts are derived from what is already logged: an order created
+  // at Razorpay with no confirmed booking behind it. Nothing new is
+  // recorded to answer this.
+  if (req.query.traffic === '1') {
+    try {
+      const vs = await sql`SELECT value FROM site_settings WHERE key = 'visit_counts'`;
+      const counts = (vs[0] && vs[0].value) || {};
+      const visits = Object.keys(counts)
+        .sort().reverse().slice(0, 30)
+        .map(day => ({ day, visits: Number(counts[day]) || 0 }));
+
+      const abandoned = await sql`
+        SELECT a.created_at, a.actor_identifier AS email, a.metadata
+        FROM audit_log a
+        WHERE a.action = 'booking_order_created'
+          AND a.created_at > now() - interval '30 days'
+          AND NOT EXISTS (
+            SELECT 1 FROM orders o
+            WHERE o.razorpay_order_id = a.metadata->>'razorpayOrderId'
+          )
+        ORDER BY a.created_at DESC
+        LIMIT 100
+      `;
+      const totalVisits = visits.reduce((n, v) => n + v.visits, 0);
+      const started = await sql`
+        SELECT COUNT(*) AS n FROM audit_log
+        WHERE action = 'booking_order_created' AND created_at > now() - interval '30 days'
+      `;
+      const startedCount = Number(started[0] && started[0].n) || 0;
+      return res.status(200).json({
+        visits,
+        totalVisits,
+        checkoutsStarted: startedCount,
+        checkoutsAbandoned: abandoned.length,
+        abandoned: abandoned.map(a => ({
+          at: a.created_at,
+          email: a.email || null,
+          amount: Number((a.metadata || {}).totalRupees) || null,
+          currency: (a.metadata || {}).chargeCurrency || 'INR',
+          items: [
+            ...(((a.metadata || {}).stays) || []).map(x => ({ kind: 'stay', listingId: x.listingId, arrival: x.arrival, departure: x.departure, guests: x.guests })),
+            ...(((a.metadata || {}).experiences) || []).map(x => ({ kind: 'experience', listingId: x.listingId, date: x.date, guests: x.guests }))
+          ]
+        }))
+      });
+    } catch (err) {
+      console.error('get-pending-listings (traffic) error:', err);
+      return res.status(500).json({ error: 'Could not load traffic: ' + (err.message || 'unknown error') });
+    }
+  }
+
   if (req.query.complianceFlags === '1') {
     try {
       const flags = await sql`

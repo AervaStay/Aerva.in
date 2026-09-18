@@ -67,6 +67,7 @@ const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIER
         tierByKey, applyDecayCap } = require('./_tiers');
 const { verifyToken, secretMatches } = require('./_approval-token');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
+const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
@@ -490,18 +491,18 @@ module.exports = async (req, res) => {
       // the stay's departure, never to when the review was written.
       const lapsedListing = await sql`
         UPDATE listing_reviews lr SET published_at = now()
-        FROM orders o
+        FROM orders o JOIN listings l ON l.id = o.listing_id
         WHERE o.id = lr.order_id
           AND lr.published_at IS NULL AND lr.admin_reverted_at IS NULL
-          AND o.departure <= CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
+          AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - ${REVIEW_WINDOW_DAYS}::int
         RETURNING lr.id
       `;
       const lapsedGuest = await sql`
         UPDATE guest_reviews gr SET published_at = now()
-        FROM orders o
+        FROM orders o JOIN listings l ON l.id = o.listing_id
         WHERE o.id = gr.order_id
           AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
-          AND o.departure <= CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
+          AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - ${REVIEW_WINDOW_DAYS}::int
         RETURNING gr.id, gr.order_id, gr.comment, gr.rating,
                   gr.cleanliness, gr.communication, gr.respectful, gr.rules
       `;
@@ -671,6 +672,67 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
+    // ---- Visit counter ----
+    // GET ?trackVisit=1 — one per browser per day (the page decides that;
+    // see index.html), counted into a per-day tally in site_settings
+    // rather than a row per visit: the admin wants "how many people came
+    // today", not a log of everyone who scrolled past.
+    //
+    // Sixty days are kept. Nothing about who: no ip, no account, no
+    // fingerprint — a count only.
+    if (req.query.trackVisit === '1') {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        await sql`
+          INSERT INTO site_settings (key, value, updated_at)
+          VALUES ('visit_counts', jsonb_build_object(${today}::text, 1), now())
+          ON CONFLICT (key) DO UPDATE SET
+            value = (
+              SELECT COALESCE(jsonb_object_agg(k, v), '{}'::jsonb)
+              FROM (
+                SELECT k, CASE WHEN k = ${today} THEN v + 1 ELSE v END AS v
+                FROM jsonb_each_text(COALESCE(site_settings.value, '{}'::jsonb)) AS t(k, raw)
+                CROSS JOIN LATERAL (SELECT COALESCE(raw::int, 0) AS v) n
+                WHERE k > to_char(now() - interval '60 days', 'YYYY-MM-DD')
+              ) kept
+            ) || jsonb_build_object(${today}::text,
+                  COALESCE((site_settings.value->>${today})::int, 0) + 1),
+            updated_at = now()
+        `;
+      } catch (err) {
+        // A counter must never be why a page fails to load.
+        console.error('visit tracking failed (non-fatal):', err);
+      }
+      return res.status(200).json({ ok: true });
+    }
+
+    // ---- Public numbers for the site ----
+    // GET ?publicStats=1 — what a visitor may see: how many stays have
+    // actually happened, and how many guests arrived this month. Counts
+    // only completed, paid bookings, so it can never flatter the platform
+    // with bookings that were cancelled or never paid for.
+    if (req.query.publicStats === '1') {
+      try {
+        const rows = await sql`
+          SELECT
+            COUNT(*) FILTER (WHERE o.status = 'paid' AND o.departure <= CURRENT_DATE) AS stays_hosted,
+            COUNT(*) FILTER (WHERE o.status = 'paid' AND o.arrival >= date_trunc('month', CURRENT_DATE)::date
+                                AND o.arrival <= CURRENT_DATE) AS checkins_this_month,
+            COUNT(DISTINCT o.guest_id) FILTER (WHERE o.status = 'paid') AS guests_hosted
+          FROM orders o
+        `;
+        const r = rows[0] || {};
+        return res.status(200).json({
+          staysHosted: Number(r.stays_hosted) || 0,
+          checkinsThisMonth: Number(r.checkins_this_month) || 0,
+          guestsHosted: Number(r.guests_hosted) || 0
+        });
+      } catch (err) {
+        console.error('publicStats failed:', err);
+        return res.status(200).json({ staysHosted: 0, checkinsThisMonth: 0, guestsHosted: 0 });
+      }
+    }
+
     // ---- Published reviews for one listing ----
     // GET ?reviewsFor=<listingId>&offset=<n>
     // Public: shown under the photos on the listing page. Only what a guest
