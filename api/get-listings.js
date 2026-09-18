@@ -130,6 +130,61 @@ function isAdminAuthorized(req) {
 }
 
 
+// The booking's thread, created if the two have never messaged. Shared by
+// the invite and the delivered host review below.
+async function conversationForOrder(sql, order) {
+  const existing = await sql`SELECT id FROM conversations WHERE order_id = ${order.id}`;
+  if (existing[0]) return existing[0].id;
+  const ins = await sql`
+    INSERT INTO conversations (order_id, listing_id, guest_id, guest_email, host_id)
+    VALUES (${order.id}, ${order.listing_id}, ${order.guest_id}, ${order.guest_email}, ${order.host_id})
+    RETURNING id`;
+  return ins[0].id;
+}
+
+// "Please review your stay", in the thread, alongside the email.
+async function postReviewInviteToThread(sql, order) {
+  const conversationId = await conversationForOrder(sql, order);
+  // Says nothing about the host's own review, in either direction. A
+  // guest told "published once your host reviews too" learns something
+  // about the host's behaviour from the timing alone, which is what the
+  // double-blind rule exists to prevent.
+  const text = `How was ${order.suite_name || 'your stay'}? Please leave a review from My Bookings — `
+    + `you have ${REVIEW_WINDOW_DAYS} days from checkout. Reviews are published within ${REVIEW_WINDOW_DAYS} days of checkout, never straight away.`;
+  await sql`
+    INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
+    VALUES (${conversationId}, 'system', ${text}, ${text}, false)`;
+}
+
+// The host's review of the guest, once it is public. Written out in full —
+// the scores and what they wrote — because a guest should not have to go
+// looking for something said about them.
+async function postHostReviewToThread(sql, gr) {
+  const orders = await sql`
+    SELECT o.id, o.guest_id, o.guest_email, o.listing_id, o.suite_name, l.host_id
+    FROM orders o JOIN listings l ON l.id = o.listing_id
+    WHERE o.id = ${gr.order_id}`;
+  const order = orders[0];
+  if (!order) return;
+  const conversationId = await conversationForOrder(sql, order);
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+  const parts = [
+    ['Cleanliness', num(gr.cleanliness)], ['Communication', num(gr.communication)],
+    ['Respectfulness', num(gr.respectful)], ['Rules followed', num(gr.rules)]
+  ].filter(p => p[1] !== null).map(p => `${p[0]} ${p[1].toFixed(1)}`);
+  // Older reviews carry only a single overall rating.
+  if (!parts.length && num(gr.rating)) parts.push(`Overall ${num(gr.rating).toFixed(1)}`);
+  const lines = [`Your host has reviewed your stay at ${order.suite_name || 'this property'}.`];
+  if (parts.length) lines.push(parts.join(' · '));
+  const comment = String(gr.comment || '').trim();
+  if (comment) lines.push(`"${comment}"`);
+  lines.push('This counts towards your guest standing on Aerva.');
+  const text = lines.join('\n');
+  await sql`
+    INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
+    VALUES (${conversationId}, 'system', ${text}, ${text}, false)`;
+}
+
 // The post-checkout review invitation. Plain, short, and it links
 // straight to the guest's bookings, where the review form lives. Never
 // throws: a failed send must not stop the sweep, and is reported so the
@@ -146,7 +201,7 @@ async function sendReviewPromptEmail(order) {
     <div style="font-family:sans-serif; max-width:520px;">
       <h2 style="font-family:Georgia,serif;">How was ${what}?</h2>
       <p>Your review helps the next guest choose well, and tells your host what went right or wrong.</p>
-      <p>It takes a minute. You have ${REVIEW_WINDOW_DAYS} days from checkout, and nothing is published until your host has reviewed too — or the ${REVIEW_WINDOW_DAYS} days are up.</p>
+      <p>It takes a minute. You have ${REVIEW_WINDOW_DAYS} days from checkout. Reviews are published within ${REVIEW_WINDOW_DAYS} days of checkout, never straight away.</p>
       <p><a href="https://aerva.in/index.html?view=my-bookings" style="display:inline-block; background:#1c1a17; color:#f4ebe3; padding:11px 20px; text-decoration:none; border-radius:4px;">Write your review</a></p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Write to hello@aerva.in.</p>
     </div>`;
@@ -428,7 +483,8 @@ module.exports = async (req, res) => {
         WHERE lr.order_id = gr.order_id
           AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
           AND lr.admin_reverted_at IS NULL
-        RETURNING gr.id
+        RETURNING gr.id, gr.order_id, gr.comment, gr.rating,
+                  gr.cleanliness, gr.communication, gr.respectful, gr.rules
       `;
       // Window closed — publish whatever is there, unmatched. Anchored to
       // the stay's departure, never to when the review was written.
@@ -446,8 +502,22 @@ module.exports = async (req, res) => {
         WHERE o.id = gr.order_id
           AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
           AND o.departure <= CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
-        RETURNING gr.id
+        RETURNING gr.id, gr.order_id, gr.comment, gr.rating,
+                  gr.cleanliness, gr.communication, gr.respectful, gr.rules
       `;
+
+      // ---- The host's review of the guest, delivered to the guest ----
+      // Posted into the booking thread at the moment it becomes public,
+      // and only then: while it is held, neither side may read the
+      // other's. Publication sets published_at once, so each review is
+      // delivered exactly once.
+      for (const gr of [...pairsBack, ...lapsedGuest]) {
+        try {
+          await postHostReviewToThread(sql, gr);
+        } catch (err) {
+          console.error('could not deliver host review for order', gr.order_id, err);
+        }
+      }
 
       // Prompt yesterday's checkouts. review_prompt_sent_at is what stops
       // this messaging the same guest every morning until they review.
@@ -461,16 +531,20 @@ module.exports = async (req, res) => {
           AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
         LIMIT 200
       `;
-      // Sent by EMAIL, not into the booking chat. A review prompt posted
-      // as a message put review business inside the thread a guest uses
-      // to talk to their host, and it also created an empty conversation
-      // for every stay where the two had never messaged at all. Email
-      // reaches a guest who has stopped opening the site, which is most
-      // of them by the day after checkout.
+      // Three ways, because one is easy to miss: an email, a message in
+      // the booking thread, and the bar on the site (that one is counted
+      // live from the session, not here). review_prompt_sent_at is what
+      // stops any of it repeating every morning.
       let promptedCount = 0;
       for (const o of toPrompt) {
         try {
           const sent = await sendReviewPromptEmail(o);
+          try {
+            await postReviewInviteToThread(sql, o);
+          } catch (err) {
+            // The email may well have gone; do not lose it over this.
+            console.error('could not post review invite for order', o.id, err);
+          }
           // Marked either way: an address that bounces must not be retried
           // every morning for the rest of the window.
           await sql`UPDATE orders SET review_prompt_sent_at = now() WHERE id = ${o.id}`;

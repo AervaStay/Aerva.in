@@ -35,6 +35,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { buildProfile, sanitizeProfileInput } = require('./_profiles');
 const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
@@ -473,6 +474,43 @@ module.exports = async (req, res) => {
         ? reviews.reduce((sum, r) => sum + Number(r.rating || 0), 0) / reviewCount
         : 0;
 
+      // ---- Their own profile ----
+      // GET ?mode=profile — everything their profile page shows, plus the
+      // questions themselves so the edit form can be built from one
+      // source (see _profiles.js).
+      if (req.query.mode === 'profile') {
+        const rows = await sql`
+          SELECT id, name, created_at, profile_photo_url, host_id,
+                 profile_work, profile_hobbies, profile_about, profile_updated_at
+          FROM guests WHERE id = ${guestId}
+        `;
+        if (!rows[0]) return res.status(404).json({ error: 'Account not found.' });
+        return res.status(200).json({ profile: await buildProfile(sql, rows[0], { own: true }) });
+      }
+
+      // ---- The other person's profile ----
+      // GET ?mode=hostProfile&orderId=<id> — the host of one of this
+      // guest's own bookings. Gated on the booking, so a profile is never
+      // a page a stranger can open, and it carries the same three
+      // sections as their own.
+      if (req.query.mode === 'hostProfile') {
+        const orderId = Number(req.query.orderId);
+        if (!orderId) return res.status(400).json({ error: 'Which booking?' });
+        const rows = await sql`
+          SELECT g.id, g.name, g.created_at, g.profile_photo_url, g.host_id,
+                 g.profile_work, g.profile_hobbies, g.profile_about
+          FROM orders o
+          JOIN listings l ON l.id = o.listing_id
+          JOIN guests g ON g.host_id = l.host_id
+          WHERE o.id = ${orderId} AND o.guest_id = ${guestId}
+            AND o.status IN ('paid', 'cancelled')
+        `;
+        // Same answer for "not yours" and "does not exist", so booking
+        // ids cannot be probed from here.
+        if (!rows[0]) return res.status(404).json({ error: 'Booking not found.' });
+        return res.status(200).json({ profile: await buildProfile(sql, rows[0]) });
+      }
+
       // ---- Guest tier ----
       // Read from the quarterly snapshot (tier_current), the same source as
       // the header badge, so the profile and the header always agree and
@@ -529,6 +567,28 @@ module.exports = async (req, res) => {
       // Nothing is published here. published_at stays NULL and the daily
       // sweep decides — immediately if the host has also reviewed, or
       // after the window closes. See _review-policy.js.
+      // ---- Save their own profile ----
+      // POST { mode: 'saveProfile', work, hobbies, about: { <questionId>: answer } }
+      // Everything is optional: a profile is built up over time, and a
+      // half-filled one is better than an empty one.
+      if (mode === 'saveProfile') {
+        const clean = sanitizeProfileInput(req.body || {});
+        await sql`
+          UPDATE guests SET
+            profile_work = ${clean.work},
+            profile_hobbies = ${clean.hobbies},
+            profile_about = ${JSON.stringify(clean.about)}::jsonb,
+            profile_updated_at = now()
+          WHERE id = ${guestId}
+        `;
+        const rows = await sql`
+          SELECT id, name, created_at, profile_photo_url, host_id,
+                 profile_work, profile_hobbies, profile_about, profile_updated_at
+          FROM guests WHERE id = ${guestId}
+        `;
+        return res.status(200).json({ success: true, profile: await buildProfile(sql, rows[0], { own: true }) });
+      }
+
       if (mode === 'submitReview') {
         const b = req.body || {};
         const orderId = Number(b.orderId);
@@ -776,6 +836,11 @@ module.exports = async (req, res) => {
       const safePhotoUrl = typeof profilePhotoUrl === 'string' && profilePhotoUrl.startsWith('https://')
         ? profilePhotoUrl
         : undefined;
+      // An explicit null means "remove my photo", which COALESCE below
+      // cannot express on its own — without this, clearing it silently
+      // kept the old one. Only an explicit null counts: leaving the field
+      // out still means "don't touch it".
+      const clearPhoto = req.body && Object.prototype.hasOwnProperty.call(req.body, 'profilePhotoUrl') && profilePhotoUrl === null;
       const safeName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : undefined;
       // Whitelisted currency codes only — this is a display preference,
       // not something that should ever accept arbitrary input.
@@ -784,14 +849,15 @@ module.exports = async (req, res) => {
         ? preferredCurrency.toUpperCase()
         : undefined;
 
-      if (safeName === undefined && safePhotoUrl === undefined && safeCurrency === undefined) {
+      if (safeName === undefined && safePhotoUrl === undefined && safeCurrency === undefined && !clearPhoto) {
         return res.status(400).json({ error: 'Nothing to update.' });
       }
 
       const updated = await sql`
         UPDATE guests SET
           name = COALESCE(${safeName ?? null}, name),
-          profile_photo_url = COALESCE(${safePhotoUrl ?? null}, profile_photo_url),
+          profile_photo_url = CASE WHEN ${clearPhoto} THEN NULL
+                                   ELSE COALESCE(${safePhotoUrl ?? null}, profile_photo_url) END,
           preferred_currency = COALESCE(${safeCurrency ?? null}, preferred_currency)
         WHERE id = ${guestId}
         RETURNING id, name, profile_photo_url, preferred_currency

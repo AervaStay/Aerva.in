@@ -69,6 +69,8 @@ const Razorpay = require('razorpay');
 const { verifyToken, createToken } = require('./_approval-token');
 const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { GUEST_FACTORS, reviewScore } = require('./_tiers');
+const { openFlagsForHost } = require('./_compliance');
+const { buildProfile } = require('./_profiles');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
@@ -605,7 +607,8 @@ module.exports = async (req, res) => {
       if (!me || !me.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
 
       const rows = await sql`
-        SELECT o.guest_id, g.name
+        SELECT o.guest_id, g.id, g.name, g.created_at, g.profile_photo_url, g.host_id,
+               g.profile_work, g.profile_hobbies, g.profile_about
         FROM orders o
         JOIN listings l ON l.id = o.listing_id
         JOIN guests g ON g.id = o.guest_id
@@ -645,8 +648,14 @@ module.exports = async (req, res) => {
       const rated = reviews.filter(r => r.cleanliness != null);
       const avg = (k) => rated.reduce((a, r) => a + n(r[k]), 0) / (rated.length || 1);
       const sumF = rated.length ? { cleanliness: avg('cleanliness'), communication: avg('communication'), respectful: avg('respectful'), rules: avg('rules') } : null;
+      // The same three sections a guest sees on a host's profile: who
+      // they are, where they have been with Aerva, and what others have
+      // said. Still no email, phone or spend — see the note above.
+      const profile = await buildProfile(sql, guest);
+
       return res.status(200).json({
-        guest: { name: String(guest.name || '').trim() || 'Guest' },
+        guest: { name: profile.name },
+        profile,
         summary: sumF ? { count: reviews.length, score: reviewScore(sumF, GUEST_FACTORS), factors: pick(sumF) } : { count: reviews.length },
         reviews: out
       });
@@ -1813,7 +1822,7 @@ module.exports = async (req, res) => {
 
     // Never hosted anything yet — an empty dashboard, not an error.
     if (!guest.host_id) {
-      return res.status(200).json({ listings: [], bookings: [], verification: null });
+      return res.status(200).json({ listings: [], bookings: [], verification: null, complianceNotices: [] });
     }
 
     const listings = await sql`
@@ -1904,7 +1913,13 @@ module.exports = async (req, res) => {
       panNumberMasked: h.pan_number || null
     } : null;
 
-    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, verification });
+    // Outstanding requirements on this host's own listings. Shown as a
+    // notice on the dashboard and as a warning on their earnings page —
+    // an email alone is too easy to miss, and the consequence here is the
+    // listing being taken down.
+    const complianceNotices = await openFlagsForHost(sql, guest.host_id);
+
+    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, verification, complianceNotices });
   } catch (err) {
     console.error('host-listings error:', err);
     return res.status(500).json({ error: 'Could not load your listings.' });
