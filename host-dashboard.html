@@ -302,6 +302,13 @@
     padding:9px 18px; font-size:11.5px; letter-spacing:0.04em; text-transform:uppercase; cursor:pointer; border:none;
   }
   .settings-save-btn{background:#1c1a17; color:#f4ebe3;}
+  .feedback-card{max-width:620px; background:#fff; border:1px solid rgba(28,26,23,0.14); border-radius:12px; padding:24px 26px 26px; margin-top:18px;}
+  .feedback-title{font-family:'Bodoni Moda', serif; font-size:22px; margin:0 0 6px;}
+  .feedback-intro{font-size:13.5px; opacity:0.7; margin:0 0 18px; line-height:1.6;}
+  .feedback-contact{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media (max-width:560px){ .feedback-contact{grid-template-columns:1fr;} }
+  .feedback-req{font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; color:#8a6c39; margin-left:6px;}
+  .feedback-note{font-size:12px; opacity:0.6; margin:6px 0 16px;}
   .settings-cancel-btn{background:none; border:1px solid #ccc !important; color:#1c1a17;}
   .profile-modal-close{
     position:absolute; top:10px; right:14px; background:none; border:none;
@@ -372,6 +379,51 @@
 
   <div class="listing-tabs" id="dashboardMainTabs" style="margin-top:8px;">
     <button type="button" class="listing-tab-btn active" data-main-tab="listings" id="mainTabListings">My Collection</button>
+    <button type="button" class="listing-tab-btn" data-main-tab="feedback" id="mainTabFeedback">Feedback</button>
+  </div>
+
+  <!-- One place for a host to tell us something on the site needs fixing
+       or changing. Phone and email are both required so we can call and
+       actually understand the concern, not guess at it over email. -->
+  <div id="feedbackSection" style="display:none;">
+    <div class="feedback-card">
+      <h2 class="feedback-title">Tell us what needs looking at</h2>
+      <p class="feedback-intro">Something broken, confusing, or missing on the site? Send it here and we will come back to you. We read every one.</p>
+
+      <div class="field">
+        <label for="feedbackCategory">What is this about?</label>
+        <select id="feedbackCategory">
+          <option>Something is broken</option>
+          <option>My property listing or pricing</option>
+          <option>My experience listing or pricing</option>
+          <option>Experience dates, duration or meeting point</option>
+          <option>Payments or payouts</option>
+          <option>Bookings, guests or messages</option>
+          <option>A suggestion</option>
+          <option>Something else</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="feedbackMessage">What should we look at?</label>
+        <textarea id="feedbackMessage" rows="6" placeholder="Tell us what happened, and what you expected instead."></textarea>
+      </div>
+
+      <div class="feedback-contact">
+        <div class="field">
+          <label for="feedbackEmail">Email <span class="feedback-req">required</span></label>
+          <input type="email" id="feedbackEmail" placeholder="you@example.com">
+        </div>
+        <div class="field">
+          <label for="feedbackPhone">Phone <span class="feedback-req">required</span></label>
+          <input type="text" id="feedbackPhone" placeholder="+91 98765 43210">
+        </div>
+      </div>
+      <p class="feedback-note">We ask for both so we can call you and understand the problem properly.</p>
+
+      <button type="button" class="settings-save-btn" id="feedbackSubmitBtn">Send to Aerva</button>
+      <p class="profile-save-msg" id="feedbackMsg"></p>
+    </div>
   </div>
 
   <div id="myListingsSection">
@@ -898,8 +950,53 @@
   function switchMainTab(tab){
     currentMainTab = tab;
     document.getElementById('myListingsSection').style.display = tab === 'listings' ? 'block' : 'none';
+    document.getElementById('feedbackSection').style.display = tab === 'feedback' ? 'block' : 'none';
     document.getElementById('mainTabListings').classList.toggle('active', tab === 'listings');
+    document.getElementById('mainTabFeedback').classList.toggle('active', tab === 'feedback');
+    // Prefill from the account each time the tab opens, without ever
+    // overwriting something the host has already typed.
+    if(tab === 'feedback') prefillFeedbackContact();
   }
+
+  function prefillFeedbackContact(){
+    const p = currentGuestProfile || {};
+    const email = document.getElementById('feedbackEmail');
+    const phone = document.getElementById('feedbackPhone');
+    if(email && !email.value) email.value = p.email || localStorage.getItem('aerva_guest_email') || '';
+    if(phone && !phone.value) phone.value = p.phone || '';
+  }
+
+  // Both contact fields are checked here for a clear message, and again
+  // on the server, which is what actually decides (see host-listings.js).
+  async function submitHostFeedback(){
+    const btn = document.getElementById('feedbackSubmitBtn');
+    const msg = document.getElementById('feedbackMsg');
+    const email = document.getElementById('feedbackEmail').value.trim();
+    const phone = document.getElementById('feedbackPhone').value.trim();
+    const message = document.getElementById('feedbackMessage').value.trim();
+    const category = document.getElementById('feedbackCategory').value;
+    const fail = (text) => { msg.textContent = text; msg.style.color = '#8a2b2b'; };
+    if(message.length < 10) return fail('Please tell us a little more about what needs looking at.');
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail('Please enter an email address we can reply to.');
+    if(phone.replace(/[^0-9]/g, '').length < 10) return fail('Please enter a phone number we can call you on, with country code.');
+    btn.disabled = true; btn.textContent = 'Sending…'; msg.textContent = '';
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ hostFeedback: { email, phone, message, category } })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not send that right now.');
+      msg.textContent = data.message || 'Thank you — we have your note.';
+      msg.style.color = '#2f5c2a';
+      document.getElementById('feedbackMessage').value = '';
+    } catch(err){
+      fail(err.message || 'Could not send that right now. Please try again.');
+    }
+    btn.disabled = false; btn.textContent = 'Send to Aerva';
+  }
+  document.getElementById('feedbackSubmitBtn').addEventListener('click', submitHostFeedback);
 
   document.getElementById('dashboardMainTabs').addEventListener('click', (e) => {
     const btn = e.target.closest('.listing-tab-btn');

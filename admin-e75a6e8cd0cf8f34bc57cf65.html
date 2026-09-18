@@ -197,6 +197,7 @@
       <button class="tab-btn" id="tabComplianceBtn" onclick="switchTab('compliance')">Compliance</button>
       <button class="tab-btn" id="tabPolicyBtn" onclick="switchTab('policy')">Review Policy</button>
       <button class="tab-btn" id="tabSimulatorBtn" onclick="switchTab('simulator')">Simulator</button>
+      <button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs</button>
     </div>
     <button type="button" onclick="refreshCurrentView()" style="background:none; border:1px solid #ddd0bc; padding:8px 14px; font-size:12px; cursor:pointer; border-radius:4px;" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </div>
@@ -320,6 +321,49 @@
       <div class="process-results" id="simResults" style="margin-top:12px;"></div>
     </div>
 
+  </div>
+
+  <div id="batchView" style="display:none;">
+    <div class="deposit-section">
+      <h3>What runs on its own</h3>
+      <p>Nothing here needs a person. This is what the platform does by itself, and when — so that when a badge or a review moves, you can tell whether it was a job or a bug.</p>
+
+      <div class="process-results">
+        <div><strong>Daily review sweep — 02:00 UTC (07:30 IST), every day</strong></div>
+        <div style="font-size:13px; opacity:0.8; margin:4px 0 10px;">
+          Two things. <em>Publishes</em> reviews that are due: both sides in, or 15 days past checkout, whichever comes first — neither party ever reads the other's review before writing their own. Then <em>prompts</em> guests who have checked out and not yet reviewed, once each, never repeatedly.
+        </div>
+
+        <div><strong>Quarterly standing review — 1 Jan, 1 Apr, 1 Jul, 1 Oct</strong></div>
+        <div style="font-size:13px; opacity:0.8; margin:4px 0 10px;">
+          Runs inside that same daily sweep, but only on those four days. Re-rates every host, guest and property against a rolling twelve months. Gains are immediate; a loss is capped at one rung per review, so a fall takes as long as the climb did. Badges do not move between these days.
+        </div>
+
+        <div><strong>Admin corrections — within 48 hours</strong></div>
+        <div style="font-size:13px; opacity:0.8; margin:4px 0 10px;">
+          The one exception to the above. When you revert a review, the last quarterly review is re-run for just the affected property, host or guest, with that review left out. Nobody else's badge moves. Picked up by the next daily sweep.
+        </div>
+
+        <div><strong>Currency refresh — 00:00 UTC, every day</strong></div>
+        <div style="font-size:13px; opacity:0.8; margin:4px 0 0;">
+          Refreshes the exchange rates used to display prices in a guest's own currency. Cron-only: it cannot be run from this page.
+        </div>
+      </div>
+    </div>
+
+    <div class="deposit-section">
+      <h3>Run the sweep now</h3>
+      <p>For when you do not want to wait for tonight. Safe to run repeatedly: it only ever publishes what is already due and prompts a guest once, so running it twice in a row does nothing the second time.</p>
+
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:6px;">
+        <button type="button" class="process-btn" id="runSweepBtn" onclick="runBatchSweep(false)">Run sweep</button>
+        <button type="button" class="process-btn" id="runSweepForceBtn" onclick="runBatchSweep(true)">Run sweep and recompute all badges</button>
+      </div>
+      <p style="font-size:12.5px; opacity:0.7; margin:0;">
+        The second button also re-rates every host, guest and property immediately, instead of waiting for the next quarterly date. Use it after a deploy, or when you need a badge visible today — not as a routine.
+      </p>
+      <div class="process-results" id="batchResults"></div>
+    </div>
   </div>
 
   <div id="complianceView" style="display:none;">
@@ -1220,6 +1264,51 @@
     }catch(err){ alert('Could not revert that review.'); }
   }
 
+  // ---- Batch jobs ----
+  // The sweep normally runs itself at 02:00 UTC, authenticated by
+  // CRON_SECRET, which can never be put in this page: anyone opening the
+  // admin tool would be able to read it. The admin's own session
+  // authorises this instead, exactly as it does every other action here
+  // (see isAdminAuthorized in api/get-listings.js).
+  async function runBatchSweep(force){
+    const btn = document.getElementById(force ? 'runSweepForceBtn' : 'runSweepBtn');
+    const other = document.getElementById(force ? 'runSweepBtn' : 'runSweepForceBtn');
+    const out = document.getElementById('batchResults');
+    if(force && !confirm('This re-rates every host, guest and property right now, instead of waiting for the next quarterly review. Continue?')) return;
+    const label = btn.textContent;
+    btn.disabled = true; other.disabled = true; btn.textContent = 'Running…';
+    out.innerHTML = '';
+    try{
+      const res = await fetch(API_BASE + '/api/get-listings?reviewSweep=1' + (force ? '&forceTierSnapshot=1' : ''), {
+        headers: authHeaders()
+      });
+      const d = await res.json().catch(() => ({}));
+      if(res.status === 401){
+        out.innerHTML = '<div class="error">Your session is not accepted for this. Log out and back in; if it persists, api/get-listings.js on the live deployment is older than the version that allows an admin to run this.</div>';
+      } else if(!res.ok){
+        out.innerHTML = '<div class="error">' + escAdmin(d.error || ('Server returned ' + res.status)) + '</div>';
+      } else {
+        const t = d.tierChanges || {};
+        const line = (text) => '<div>' + text + '</div>';
+        out.innerHTML =
+          '<div class="success">Sweep finished ' + escAdmin(new Date().toLocaleString('en-IN')) + '.</div>'
+          + line('Reviews published because both sides reviewed: <strong>' + Number(d.publishedPaired || 0) + '</strong>')
+          + line('Reviews published because the 15-day window closed: <strong>' + Number(d.publishedLapsed || 0) + '</strong>')
+          + line('Guests prompted to review: <strong>' + Number(d.prompted || 0) + '</strong>')
+          + (d.tierChanges
+              ? line('Badges changed — properties <strong>' + Number(t.listing || 0) + '</strong>, hosts <strong>'
+                  + Number(t.host || 0) + '</strong>, guests <strong>' + Number(t.guest || 0) + '</strong>')
+              : d.corrections
+                ? line('Admin corrections applied: <strong>' + escAdmin(typeof d.corrections === 'string' ? d.corrections : (d.corrections.requests + ' request(s)')) + '</strong>')
+                : line('Badges were not recalculated — that happens on the quarterly dates, or with the second button.'))
+          + line('<span style="opacity:0.7;">Next quarterly review: ' + escAdmin(d.nextReview || '—') + '</span>');
+      }
+    }catch(err){
+      out.innerHTML = '<div class="error">Could not reach the server. Please try again.</div>';
+    }
+    btn.disabled = false; other.disabled = false; btn.textContent = label;
+  }
+
   function switchTab(tab){
     document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
     document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
@@ -1228,6 +1317,7 @@
     document.getElementById('tabComplianceBtn').classList.toggle('active', tab === 'compliance');
     document.getElementById('tabPolicyBtn').classList.toggle('active', tab === 'policy');
     document.getElementById('tabSimulatorBtn').classList.toggle('active', tab === 'simulator');
+    document.getElementById('tabBatchBtn').classList.toggle('active', tab === 'batch');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
     document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
@@ -1235,6 +1325,7 @@
     document.getElementById('complianceView').style.display = tab === 'compliance' ? 'block' : 'none';
     document.getElementById('policyView').style.display = tab === 'policy' ? 'block' : 'none';
     document.getElementById('simulatorView').style.display = tab === 'simulator' ? 'block' : 'none';
+    document.getElementById('batchView').style.display = tab === 'batch' ? 'block' : 'none';
     if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();
@@ -1259,6 +1350,9 @@
     else if(document.getElementById('tabComplianceBtn').classList.contains('active')) loadComplianceFlags();
     else if(document.getElementById('tabPolicyBtn').classList.contains('active')) loadReviewPolicy();
     else if(document.getElementById('tabSimulatorBtn').classList.contains('active')) loadReviewPolicy();
+    // The Batch tab fetches nothing on open, so Refresh just clears the
+    // last run's output rather than re-running a job by surprise.
+    else if(document.getElementById('tabBatchBtn').classList.contains('active')) document.getElementById('batchResults').innerHTML = '';
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
