@@ -226,6 +226,7 @@
       <button class="tab-btn" id="tabPolicyBtn" onclick="switchTab('policy')">Review Policy</button>
       <button class="tab-btn" id="tabSimulatorBtn" onclick="switchTab('simulator')">Simulator</button>
       <button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs</button>
+      <button class="tab-btn" id="tabTrafficBtn" onclick="switchTab('traffic')">Traffic</button>
     </div>
     <button type="button" class="admin-refresh-btn" onclick="refreshCurrentView()" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </nav>
@@ -351,6 +352,20 @@
       <div class="process-results" id="simResults" style="margin-top:12px;"></div>
     </div>
 
+  </div>
+
+  <div id="trafficView" style="display:none;">
+    <div class="deposit-section">
+      <h3>Who came</h3>
+      <p>Visits to the site, counted once per browser per day. A count only — no addresses, accounts or tracking of individuals. Sixty days are kept.</p>
+      <div id="trafficVisits"><p class="empty">Loading…</p></div>
+    </div>
+
+    <div class="deposit-section">
+      <h3>Started a booking, did not finish</h3>
+      <p>Someone reached payment and never completed it, in the last 30 days. Worth reading: a run of these on one listing usually means a price, a date, or a photo is putting people off at the last step.</p>
+      <div id="trafficAbandoned"><p class="empty">Loading…</p></div>
+    </div>
   </div>
 
   <div id="batchView" style="display:none;">
@@ -1341,6 +1356,51 @@
     btn.disabled = false; other.disabled = false; btn.textContent = label;
   }
 
+  async function loadTraffic(){
+    const vis = document.getElementById('trafficVisits');
+    const ab = document.getElementById('trafficAbandoned');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?traffic=1', { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || 'Could not load traffic.');
+      const visits = d.visits || [];
+      const peak = Math.max(1, ...visits.map(v => v.visits));
+      vis.innerHTML = visits.length
+        ? '<div class="process-results"><div><strong>' + Number(d.totalVisits) + '</strong> visits across the days below</div></div>'
+          + '<table style="width:100%; border-collapse:collapse; font-size:13px;">'
+          + visits.map(v =>
+              '<tr><td style="padding:4px 6px; border-top:1px solid #eee; width:110px;">' + escAdmin(v.day) + '</td>'
+              + '<td style="padding:4px 6px; border-top:1px solid #eee;">'
+              + '<span style="display:inline-block; height:10px; border-radius:2px; background:#1c1a17; width:' + Math.round((v.visits / peak) * 100) + '%;"></span> '
+              + Number(v.visits) + '</td></tr>').join('')
+          + '</table>'
+        : '<p class="empty">No visits recorded yet. This starts counting once the new site is deployed.</p>';
+
+      const rows = d.abandoned || [];
+      ab.innerHTML =
+        '<div class="process-results"><div><strong>' + Number(d.checkoutsAbandoned) + '</strong> of '
+        + Number(d.checkoutsStarted) + ' checkouts in the last 30 days were never paid for</div></div>'
+        + (rows.length
+          ? '<table style="width:100%; border-collapse:collapse; font-size:13px;">'
+            + '<tr><th style="text-align:left; padding:4px 6px;">When</th><th style="text-align:left; padding:4px 6px;">Who</th>'
+            + '<th style="text-align:left; padding:4px 6px;">Amount</th><th style="text-align:left; padding:4px 6px;">What</th></tr>'
+            + rows.map(r =>
+                '<tr><td style="padding:4px 6px; border-top:1px solid #eee; white-space:nowrap;">' + escAdmin(fmtDate(r.at)) + '</td>'
+                + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(r.email || 'not signed in') + '</td>'
+                + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + (r.amount ? fmt(r.amount) : '—') + '</td>'
+                + '<td style="padding:4px 6px; border-top:1px solid #eee;">'
+                + (r.items || []).map(i => escAdmin(i.kind) + ' #' + Number(i.listingId)
+                    + (i.arrival ? ' · ' + escAdmin(String(i.arrival).slice(0, 10)) : (i.date ? ' · ' + escAdmin(String(i.date).slice(0, 10)) : '')))
+                    .join('<br>')
+                + '</td></tr>').join('')
+            + '</table>'
+          : '<p class="empty">Nobody abandoned a checkout in the last 30 days.</p>');
+    }catch(err){
+      vis.innerHTML = '<p class="error">' + escAdmin(err.message || 'Could not load traffic.') + '</p>';
+      ab.innerHTML = '';
+    }
+  }
+
   function switchTab(tab){
     document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
     document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
@@ -1350,6 +1410,7 @@
     document.getElementById('tabPolicyBtn').classList.toggle('active', tab === 'policy');
     document.getElementById('tabSimulatorBtn').classList.toggle('active', tab === 'simulator');
     document.getElementById('tabBatchBtn').classList.toggle('active', tab === 'batch');
+    document.getElementById('tabTrafficBtn').classList.toggle('active', tab === 'traffic');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
     document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
@@ -1358,11 +1419,13 @@
     document.getElementById('policyView').style.display = tab === 'policy' ? 'block' : 'none';
     document.getElementById('simulatorView').style.display = tab === 'simulator' ? 'block' : 'none';
     document.getElementById('batchView').style.display = tab === 'batch' ? 'block' : 'none';
+    document.getElementById('trafficView').style.display = tab === 'traffic' ? 'block' : 'none';
     if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();
     if(tab === 'compliance') loadComplianceFlags();
     if(tab === 'policy') loadReviewPolicy();
+    if(tab === 'traffic') loadTraffic();
     // The simulator needs the ladders too (for band names in the trace),
     // but only fetches them once — loadReviewPolicy guards on ladderData.
     if(tab === 'simulator'){ if(!ladderData) loadReviewPolicy(); switchSim(simKind); }
@@ -1385,6 +1448,7 @@
     // The Batch tab fetches nothing on open, so Refresh just clears the
     // last run's output rather than re-running a job by surprise.
     else if(document.getElementById('tabBatchBtn').classList.contains('active')) document.getElementById('batchResults').innerHTML = '';
+    else if(document.getElementById('tabTrafficBtn').classList.contains('active')) loadTraffic();
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');

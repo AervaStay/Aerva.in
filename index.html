@@ -695,6 +695,12 @@
     .today-col:last-child{grid-column:1; padding-top:20px; border-top:1px solid var(--line-dark);}
   }
 
+  .live-proof{
+    font-size:12.5px; letter-spacing:0.06em; text-transform:uppercase;
+    color:var(--gold-deep); margin-top:14px;
+  }
+  body.showing-hero header:not(.scrolled) ~ * .live-proof{ color:inherit; }
+
   .nav-avatar-ring{position:relative;}
   .nav-avatar-camera{
     position:absolute; right:-3px; bottom:-3px; width:16px; height:16px; border-radius:50%;
@@ -1855,6 +1861,10 @@
       </div>
       <h2 class="hero-headline reveal" id="browseHeading">Homes, personally <em>chosen</em>.</h2>
       <p class="hero-subhead reveal" id="browseSubhead">Every Aerva home is reviewed and approved individually — never a template, never bulk-listed.</p>
+      <!-- Real numbers, from completed stays only: a visitor should be
+           able to see the place is in use. Hidden entirely until there is
+           something honest to say. -->
+      <p class="live-proof reveal" id="liveProof" style="display:none;"></p>
       <div class="search-bar pill-search reveal" id="searchBar">
       <div class="search-field search-field-where">
         <label for="searchCity">Where</label>
@@ -8151,11 +8161,45 @@
       const w = img.width * scale, h = img.height * scale;
       const x = (size - w) / 2 + photoEditor.offsetX * (size / 320);
       const y = (size - h) / 2 + photoEditor.offsetY * (size / 320);
-      ctx.filter = photoFilterCss(filterId === undefined ? photoEditor.filter : filterId);
       ctx.drawImage(img, x, y, w, h);
     }
     ctx.restore();
+    if(img) applyPhotoFilter(ctx, size, filterId === undefined ? photoEditor.filter : filterId);
   }
+  // Filters are applied to the PIXELS, not through ctx.filter: that
+  // property is unsupported in some browsers (Safari most notably) and
+  // fails silently, which is exactly what "the photo never changes"
+  // looked like. This works everywhere and is what the thumbnails show.
+  function applyPhotoFilter(ctx, size, id){
+    if(!id || id === 'none') return;
+    let img;
+    try{ img = ctx.getImageData(0, 0, size, size); }
+    catch(e){ return; } // tainted or unavailable: leave the photo as it is
+    const d = img.data;
+    const clamp = (v) => v < 0 ? 0 : (v > 255 ? 255 : v);
+    for(let i = 0; i < d.length; i += 4){
+      let r = d[i], g = d[i + 1], b = d[i + 2];
+      if(id === 'warm'){
+        r = r * 1.10 + 12; g = g * 1.02 + 4; b = b * 0.90;
+      } else if(id === 'cool'){
+        r = r * 0.92; g = g * 1.00 + 2; b = b * 1.12 + 8;
+      } else if(id === 'bright'){
+        r = r * 1.10 + 14; g = g * 1.10 + 14; b = b * 1.10 + 14;
+      } else if(id === 'soft'){
+        const grey = 0.299 * r + 0.587 * g + 0.114 * b;
+        // Pull toward grey, then lift: gentler, slightly faded.
+        r = 128 + ((r * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+        g = 128 + ((g * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+        b = 128 + ((b * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+      } else if(id === 'mono'){
+        const grey = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = g = b = 128 + (grey - 128) * 1.08;
+      }
+      d[i] = clamp(r); d[i + 1] = clamp(g); d[i + 2] = clamp(b);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
   function renderPhotoPreview(){
     const c = document.getElementById('photoEditorCanvas');
     const ctx = c && c.getContext && c.getContext('2d');
@@ -8284,6 +8328,36 @@
       else done(null);
     });
   })();
+
+  // ---- Live numbers, and counting this visit ----
+  // The figures are public and come from completed stays. The visit ping
+  // is sent once per browser per day: enough for "how busy were we
+  // yesterday", without following anybody around.
+  async function loadLiveProof(){
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?publicStats=1');
+      if(!res.ok) return;
+      const d = await res.json();
+      const el = document.getElementById('liveProof');
+      if(!el) return;
+      const bits = [];
+      if(d.staysHosted > 0) bits.push(`${d.staysHosted.toLocaleString('en-IN')} stays hosted`);
+      if(d.checkinsThisMonth > 0) bits.push(`${d.checkinsThisMonth.toLocaleString('en-IN')} guests checked in this month`);
+      if(!bits.length) return; // nothing honest to show yet
+      el.textContent = bits.join('  ·  ');
+      el.style.display = 'block';
+    }catch(err){ /* a number is not worth an error */ }
+  }
+
+  function trackVisitOnce(){
+    const key = 'aerva_visit_day';
+    const today = new Date().toISOString().slice(0, 10);
+    try{
+      if(safeStorage.get(key) === today) return;
+      safeStorage.set(key, today);
+    }catch(e){ /* private mode: count it, rather than not at all */ }
+    fetch(SUITES_API_BASE + '/api/get-listings?trackVisit=1').catch(() => {});
+  }
 
   // ---- Notifications (header bell) ----
   // Fed by the session check, which already knows what is outstanding.
@@ -13425,6 +13499,8 @@
   })();
 
   initCurrency();
+  trackVisitOnce();
+  loadLiveProof();
   initSite();
 
   // ---- Mobile nav toggle ----

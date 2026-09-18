@@ -585,8 +585,7 @@
   <div id="complianceNotice" style="display:none;"></div>
 
   <div class="listing-tabs" id="dashboardMainTabs" style="margin-top:8px;">
-    <button type="button" class="listing-tab-btn active" data-main-tab="today" id="mainTabToday">Today</button>
-    <button type="button" class="listing-tab-btn" data-main-tab="listings" id="mainTabListings">My Collection</button>
+    <button type="button" class="listing-tab-btn active" data-main-tab="listings" id="mainTabListings">My Collection</button>
     <button type="button" class="listing-tab-btn" data-main-tab="feedback" id="mainTabFeedback">Feedback</button>
   </div>
 
@@ -662,15 +661,7 @@
     </div>
   </div>
 
-  <!-- What a host needs first: who is arriving, who is leaving, who is
-       still in. This is the dashboard's landing tab. -->
-  <div id="todaySection">
-    <h2 class="today-heading" id="todayHeading">Today</h2>
-    <p class="today-date" id="todayDate"></p>
-    <div id="todayList"><p class="today-empty">Loading…</p></div>
-  </div>
-
-  <div id="myListingsSection" style="display:none;">
+  <div id="myListingsSection">
     <div style="display:flex; gap:12px; flex-wrap:wrap;">
       <a href="index.html?view=list-property" class="add-listing-link">List a New Property</a>
       <a href="index.html?view=list-experience" class="add-listing-link" style="background:none; border:1px solid #1c1a17; color:#1c1a17;">List an Experience</a>
@@ -1189,70 +1180,12 @@
   let currentListings = [];
   let currentExperiences = [];
   let currentListingsTab = 'active';
-  // Today is where a host lands: who is arriving and leaving is the first
-  // thing they need, not their listing inventory.
-  let currentMainTab = 'today';
-
-  // ---- Today ----
-  // Deliberately plain: a line per thing happening, in the order it
-  // happens. Everything here comes from host-listings.js's `today`.
-  function renderToday(today){
-    const box = document.getElementById('todayList');
-    if(!box) return;
-    const t = today || { arrivals: [], departures: [], staying: [] };
-    const esc = (v) => String(v == null ? '' : v)
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-    const total = t.arrivals.length + t.departures.length + t.staying.length;
-    document.getElementById('todayDate').textContent =
-      new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
-    document.getElementById('todayHeading').textContent = total
-      ? (total === 1 ? 'You have 1 reservation' : `You have ${total} reservations`)
-      : 'Nothing booked for today';
-    if(!total){
-      box.innerHTML = '<p class="today-empty">No arrivals, departures or guests staying today. Your upcoming bookings are under My Collection.</p>';
-      return;
-    }
-    const row = (r, when, title) => `
-      <a class="today-row" href="host-dashboard.html#booking-${Number(r.orderId)}">
-        <span class="today-when">${esc(when)}</span>
-        <span class="today-main">
-          <span class="today-title">${esc(title)}</span>
-          <span class="today-sub">${esc(r.listingName || '')}</span>
-        </span>
-        <span class="today-thumbs">
-          ${r.guestPhotoUrl
-            ? `<img class="today-avatar" src="${esc(r.guestPhotoUrl)}" alt="">`
-            : `<span class="today-avatar">${esc((r.guestName || 'G').trim().charAt(0).toUpperCase())}</span>`}
-          ${r.photoUrl ? `<img class="today-thumb" src="${esc(r.photoUrl)}" alt="">` : ''}
-        </span>
-      </a>`;
-    const people = (r) => `${r.guestName}${r.guests > 1 ? `'s group of ${r.guests}` : ''}`;
-    // Side by side, with a rule between them: arrivals on the left,
-    // departures on the right, because a host reads the day as "who is
-    // coming" against "who is going". Each column says so even when it is
-    // empty, which is itself worth knowing at a glance.
-    const column = (label, rows, empty) => `
-      <div class="today-col">
-        <div class="today-col-head">${esc(label)} <span class="today-col-count">${rows.length}</span></div>
-        ${rows.length ? rows.join('') : `<p class="today-col-empty">${esc(empty)}</p>`}
-      </div>`;
-    const staying = t.staying.map(r => row(r, 'All day',
-      `${people(r)} stays for ${r.nightsLeft === 1 ? 'one more day' : r.nightsLeft + ' more days'}`));
-    box.innerHTML =
-      `<div class="today-split">
-        ${column('Checking in', t.arrivals.map(r => row(r, r.checkInTime || '1:00 pm', `${people(r)} checks in`)), 'Nobody arriving today.')}
-        ${column('Checking out', t.departures.map(r => row(r, r.checkOutTime || '10:00 am', `${people(r)} checks out`)), 'Nobody leaving today.')}
-      </div>`
-      + (staying.length
-        ? `<div class="today-group today-staying"><div class="today-group-label">Staying with you</div>${staying.join('')}</div>`
-        : '');
-  }
+  // Today now lives on the main site, beside the other views, not here —
+  // this page is for managing listings.
+  let currentMainTab = 'listings';
 
   function switchMainTab(tab){
     currentMainTab = tab;
-    document.getElementById('todaySection').style.display = tab === 'today' ? 'block' : 'none';
-    document.getElementById('mainTabToday').classList.toggle('active', tab === 'today');
     document.getElementById('myListingsSection').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('feedbackSection').style.display = tab === 'feedback' ? 'block' : 'none';
     document.getElementById('mainTabListings').classList.toggle('active', tab === 'listings');
@@ -2067,10 +2000,44 @@
       const w = img.width * scale, h = img.height * scale;
       const x = (size - w) / 2 + photoEditor.offsetX * (size / 320);
       const y = (size - h) / 2 + photoEditor.offsetY * (size / 320);
-      ctx.filter = photoFilterCss(filterId === undefined ? photoEditor.filter : filterId);
       ctx.drawImage(img, x, y, w, h);
     }
     ctx.restore();
+    if(img) applyPhotoFilter(ctx, size, filterId === undefined ? photoEditor.filter : filterId);
+  }
+
+  // Filters are applied to the PIXELS, not through ctx.filter: that
+  // property is unsupported in some browsers (Safari most notably) and
+  // fails silently, which is exactly what "the photo never changes"
+  // looked like. This works everywhere and is what the thumbnails show.
+  function applyPhotoFilter(ctx, size, id){
+    if(!id || id === 'none') return;
+    let img;
+    try{ img = ctx.getImageData(0, 0, size, size); }
+    catch(e){ return; } // tainted or unavailable: leave the photo as it is
+    const d = img.data;
+    const clamp = (v) => v < 0 ? 0 : (v > 255 ? 255 : v);
+    for(let i = 0; i < d.length; i += 4){
+      let r = d[i], g = d[i + 1], b = d[i + 2];
+      if(id === 'warm'){
+        r = r * 1.10 + 12; g = g * 1.02 + 4; b = b * 0.90;
+      } else if(id === 'cool'){
+        r = r * 0.92; g = g * 1.00 + 2; b = b * 1.12 + 8;
+      } else if(id === 'bright'){
+        r = r * 1.10 + 14; g = g * 1.10 + 14; b = b * 1.10 + 14;
+      } else if(id === 'soft'){
+        const grey = 0.299 * r + 0.587 * g + 0.114 * b;
+        // Pull toward grey, then lift: gentler, slightly faded.
+        r = 128 + ((r * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+        g = 128 + ((g * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+        b = 128 + ((b * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+      } else if(id === 'mono'){
+        const grey = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = g = b = 128 + (grey - 128) * 1.08;
+      }
+      d[i] = clamp(r); d[i + 1] = clamp(g); d[i + 2] = clamp(b);
+    }
+    ctx.putImageData(img, 0, 0);
   }
 
   function renderPhotoPreview(){
@@ -2492,7 +2459,6 @@
         return;
       }
       const data = await res.json();
-      renderToday(data.today);
       renderComplianceNotices(data.complianceNotices || []);
       renderNotifications(data.complianceNotices || []);
       if(data.hostBadge){
