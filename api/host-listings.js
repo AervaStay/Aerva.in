@@ -72,7 +72,7 @@ const { GUEST_FACTORS, reviewScore } = require('./_tiers');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
-const { validatePhoneNumber } = require('./_phone-validation');
+const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
 
@@ -498,6 +498,93 @@ module.exports = async (req, res) => {
       console.error('reviewGuest error:', err);
       return res.status(500).json({ error: 'Could not save your review right now.' });
     }
+  }
+
+  // ---- Host sends feedback about the website ----
+  // POST { hostFeedback: { email, phone, category, message } }
+  // One form for a host to tell Aerva something needs fixing or changing.
+  // Email AND phone are both required: the point is being able to call
+  // them back and understand the problem, and an email address alone has
+  // repeatedly not been enough for that.
+  //
+  // Stored in audit_log rather than a new table, so this needs no
+  // migration; the full message lives in the metadata. Also emailed to
+  // hello@aerva.in so nobody has to remember to go and look.
+  if (req.method === 'POST' && req.body && req.body.hostFeedback) {
+    const fb = req.body.hostFeedback || {};
+    const email = String(fb.email || '').trim().toLowerCase();
+    const phoneRaw = String(fb.phone || '').trim();
+    const message = String(fb.message || '').trim();
+    const category = String(fb.category || 'Other').trim().slice(0, 60);
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return res.status(400).json({ error: 'Please enter an email address we can reply to.' });
+    }
+    // Same normaliser the rest of the platform uses, so a number typed
+    // any of the usual ways is accepted and stored one way.
+    const phone = normalizeToE164(phoneRaw);
+    if (!phone) {
+      return res.status(400).json({ error: 'Please enter a phone number with country code, like +919876543210, so we can call you back.' });
+    }
+    if (message.length < 10) {
+      return res.status(400).json({ error: 'Please tell us a little more about what needs looking at (at least 10 characters).' });
+    }
+    if (message.length > 4000) {
+      return res.status(400).json({ error: 'That message is too long — please keep it under 4000 characters.' });
+    }
+
+    // A host could otherwise paste the same thing repeatedly, by accident
+    // or otherwise, and every one of those is an email to the team.
+    const recent = await countRecentAttempts(sql, {
+      action: 'host_feedback', windowMinutes: 60, byActor: String(guestId), onlyFailures: false
+    });
+    if (recent >= 5) {
+      return res.status(429).json({ error: 'Thanks — we have your messages. Please give us a little time to come back to you before sending more.' });
+    }
+
+    const who = await sql`
+      SELECT g.id, g.name, g.email AS account_email, h.id AS host_id
+      FROM guests g LEFT JOIN hosts h ON h.id = g.host_id
+      WHERE g.id = ${guestId}
+    `;
+    const me = who[0] || {};
+
+    await logAudit(sql, {
+      action: 'host_feedback', success: true, actorType: 'host', actorIdentifier: String(guestId),
+      targetType: 'host', targetId: me.host_id || null,
+      metadata: {
+        category, message, replyEmail: email, replyPhone: phone,
+        accountEmail: me.account_email || null, name: me.name || null, ip: getClientIp(req)
+      }
+    });
+
+    // Emailed for visibility. A send failure must not lose the feedback —
+    // it is already recorded above — so the host still gets a thank you.
+    try {
+      if (process.env.RESEND_API_KEY) {
+        const esc = (t) => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const html = `
+          <div style="font-family:sans-serif; max-width:560px;">
+            <h2 style="font-family:Georgia,serif;">Host feedback: ${esc(category)}</h2>
+            <p><strong>${esc(me.name || 'A host')}</strong> (account ${esc(me.account_email || '—')}, host id ${esc(me.host_id || '—')})</p>
+            <p>Reply to: <strong>${esc(email)}</strong> &middot; <strong>${esc(phone)}</strong></p>
+            <hr>
+            <p style="white-space:pre-wrap;">${esc(message)}</p>
+          </div>`;
+        await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from: 'Aerva <hello@aerva.in>', to: 'hello@aerva.in', reply_to: email,
+            subject: `Host feedback (${category}) from ${me.name || email}`, html
+          })
+        });
+      }
+    } catch (err) {
+      console.error('host feedback email failed (feedback itself is saved):', err);
+    }
+
+    return res.status(200).json({ success: true, message: 'Thank you — we have your note and will be in touch on the number you gave us.' });
   }
 
   // ---- Host views a guest's profile ----
