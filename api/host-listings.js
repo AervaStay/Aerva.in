@@ -1913,6 +1913,53 @@ module.exports = async (req, res) => {
       panNumberMasked: h.pan_number || null
     } : null;
 
+    // ---- Today ----
+    // What is actually happening at this host's properties today: who
+    // arrives, who leaves, and who is staying on. Queried separately
+    // rather than filtered out of `bookings` above, which is capped at
+    // the 100 most recent and would quietly miss today's arrival for a
+    // busy host.
+    //
+    // Dates are compared in the database, in its own timezone, so a stay
+    // is "today" by the same clock everywhere rather than by whatever the
+    // host's laptop thinks.
+    let today = { arrivals: [], departures: [], staying: [] };
+    try {
+      const rows = await sql`
+        SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights,
+               o.guest_email, g.name AS guest_name, g.profile_photo_url,
+               l.check_in_time, l.check_out_time, l.cover_photo_url,
+               (o.arrival = CURRENT_DATE) AS arriving,
+               (o.departure = CURRENT_DATE) AS departing,
+               (o.departure - CURRENT_DATE) AS nights_left
+        FROM orders o
+        JOIN listings l ON l.id = o.listing_id
+        LEFT JOIN guests g ON g.id = o.guest_id
+        WHERE l.host_id = ${guest.host_id} AND o.status = 'paid'
+          AND o.arrival <= CURRENT_DATE AND o.departure >= CURRENT_DATE
+        ORDER BY o.arrival ASC, o.id ASC
+      `;
+      const shape = (r) => ({
+        orderId: r.id,
+        guestName: String(r.guest_name || '').trim() || (r.guest_email || 'Guest').split('@')[0],
+        guests: Number(r.guests) || 1,
+        listingId: r.listing_id,
+        listingName: r.suite_name,
+        photoUrl: r.cover_photo_url || null,
+        guestPhotoUrl: r.profile_photo_url || null,
+        checkInTime: r.check_in_time || null,
+        checkOutTime: r.check_out_time || null,
+        nightsLeft: Number(r.nights_left) || 0
+      });
+      today = {
+        arrivals: rows.filter(r => r.arriving).map(shape),
+        departures: rows.filter(r => r.departing && !r.arriving).map(shape),
+        staying: rows.filter(r => !r.arriving && !r.departing).map(shape)
+      };
+    } catch (err) {
+      console.error('today view failed (non-fatal):', err);
+    }
+
     // Outstanding requirements on this host's own listings. Shown as a
     // notice on the dashboard and as a warning on their earnings page —
     // an email alone is too easy to miss, and the consequence here is the
@@ -1920,7 +1967,7 @@ module.exports = async (req, res) => {
     const complianceNotices = await openFlagsForHost(sql, guest.host_id,
       (listingId) => `${SITE_BASE}/manage-listing.html?token=${createToken(listingId, 'manage-pricing', TWO_YEARS_MS)}`);
 
-    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, verification, complianceNotices });
+    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, verification, complianceNotices, today });
   } catch (err) {
     console.error('host-listings error:', err);
     return res.status(500).json({ error: 'Could not load your listings.' });

@@ -235,7 +235,7 @@ module.exports = async (req, res) => {
         return res.status(200).json({ success: true });
       }
 
-      const { nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
+      const { propertyName, nightlyRate, discountType, discountValue, discountMinNights, discountDescription,
               exteriorPhotoUrls, interiorPhotoUrls, coverPhotoUrl, amenities, services, paidAmenities, blockedDates, blockedDatesLoadedIds, promotions,
               latitude, longitude, formattedAddress, city, area, pincode, maxGuests,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
@@ -258,21 +258,32 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'Please enter the area in English (Latin script) — e.g. "Koregaon Park", not a local-script spelling.' });
       }
 
-      // ---- One property name per pincode ----
-      // A host cannot rename a listing from here, but they CAN change its
-      // pincode — which can move it into a pincode where its name is
-      // already taken. Checked before the save, same rule and same
-      // message as submission (see _listing-rules.js).
+      // ---- Name, and one property name per pincode ----
+      // A host may rename their listing here, and may change its pincode.
+      // Either can collide with another property, so both are checked
+      // against the name that will actually be stored — the same rule and
+      // the same message as submission (see _listing-rules.js).
+      const meRows = await sql`SELECT property_name, pincode, listing_type, property_type FROM listings WHERE id = ${listingId}`;
+      const me = meRows[0];
+      const safeName = typeof propertyName === 'string' && propertyName.trim()
+        ? propertyName.trim().slice(0, 120)
+        : null;
+      if (propertyName !== undefined && !safeName) {
+        return res.status(400).json({ error: 'Please give this listing a name guests will recognise.' });
+      }
       const newPincode = typeof pincode === 'string' && pincode.trim() ? pincode.trim().slice(0, 20) : null;
-      if (newPincode) {
-        const meRows = await sql`SELECT property_name, pincode, listing_type FROM listings WHERE id = ${listingId}`;
-        const me = meRows[0];
-        if (me && (me.listing_type || 'stay') === 'stay' && String(me.pincode || '').trim() !== newPincode) {
+      if (me && (me.listing_type || 'stay') === 'stay') {
+        const finalName = safeName || me.property_name;
+        const finalPincode = newPincode || String(me.pincode || '').trim();
+        const nameChanged = safeName && safeName.toLowerCase() !== String(me.property_name || '').trim().toLowerCase();
+        const pincodeChanged = newPincode && newPincode !== String(me.pincode || '').trim();
+        if (nameChanged || pincodeChanged) {
           const clash = await findNameClashInPincode(sql, {
-            propertyName: me.property_name, pincode: newPincode, excludeListingId: listingId
+            propertyName: finalName, pincode: finalPincode, propertyType: me.property_type,
+            excludeListingId: listingId
           });
           if (clash) {
-            return res.status(409).json({ error: nameClashMessage(me.property_name, newPincode) });
+            return res.status(409).json({ error: nameClashMessage(finalName, finalPincode) });
           }
         }
       }
@@ -399,6 +410,7 @@ module.exports = async (req, res) => {
       const updated = await sql`
         UPDATE listings SET
           nightly_rate = ${rate},
+          property_name = COALESCE(${safeName}, property_name),
           city = ${safeCity}, area = ${safeArea},
           bedrooms = ${finalBedrooms},
           discount_type = ${discountType || null},
