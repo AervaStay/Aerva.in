@@ -65,6 +65,7 @@ const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
         tierByKey, applyDecayCap } = require('./_tiers');
+const { verifyToken, secretMatches } = require('./_approval-token');
 const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
 const sql = neon(process.env.DATABASE_URL);
@@ -109,6 +110,21 @@ function isCronAuthorized(req) {
   const got = Buffer.from(String(req.headers['authorization'] || ''));
   const want = Buffer.from(`Bearer ${secret}`);
   return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
+// A signed-in ADMIN may also run the sweep, from the admin tool's own
+// button. CRON_SECRET can never be put in a browser — it would be visible
+// to anyone who opened the page — so the admin's existing session is what
+// authorises this instead, exactly as it does for every other admin
+// action. Same two ways in as get-pending-listings.js: an admin session
+// token, or the x-admin-secret header.
+function isAdminAuthorized(req) {
+  const header = String(req.headers['authorization'] || '');
+  if (header.startsWith('Bearer ')) {
+    const payload = verifyToken(header.slice(7));
+    if (payload && payload.action === 'admin-session') return true;
+  }
+  return secretMatches(req.headers['x-admin-secret'], process.env.ADMIN_SECRET);
 }
 
 
@@ -354,7 +370,7 @@ module.exports = async (req, res) => {
   //   curl -H "Authorization: Bearer $CRON_SECRET" \
   //     "https://aerva-in.vercel.app/api/get-listings?reviewSweep=1&forceTierSnapshot=1"
   if (req.method === 'GET' && req.query.reviewSweep === '1') {
-    if (!isCronAuthorized(req)) {
+    if (!isCronAuthorized(req) && !isAdminAuthorized(req)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     try {
