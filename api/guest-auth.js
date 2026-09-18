@@ -357,13 +357,32 @@ module.exports = async (req, res) => {
       // the bell must never be why a session check fails.
       const notifications = [];
       try {
+        // One per booking, not one lump: tapping it should open the form
+        // for THAT stay, which needs the booking itself.
         if (pendingReviews > 0) {
-          notifications.push({
-            id: 'reviews:' + pendingReviews,
-            kind: 'review',
-            title: pendingReviews === 1 ? 'A stay to review' : `${pendingReviews} stays to review`,
-            body: 'Your review helps the next guest choose well. The window closes 15 days after checkout.',
-            href: 'index.html?view=my-bookings'
+          const toReview = await sql`
+            SELECT o.id, o.suite_name, COALESCE(l.listing_type, 'stay') AS listing_type
+            FROM orders o
+            LEFT JOIN listings l ON l.id = o.listing_id
+            WHERE o.guest_id = ${guest.id}
+              AND o.status = 'paid'
+              AND o.departure <= CURRENT_DATE
+              AND o.departure > CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
+              AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
+            ORDER BY o.departure DESC
+            LIMIT 5
+          `;
+          toReview.forEach(o => {
+            notifications.push({
+              id: 'review:' + o.id,
+              kind: 'review',
+              orderId: o.id,
+              listingName: o.suite_name,
+              listingType: o.listing_type,
+              title: `Review your ${o.listing_type === 'experience' ? 'experience' : 'stay'} at ${o.suite_name}`,
+              body: 'It takes a minute, and the window closes 15 days after checkout.',
+              href: 'index.html?view=my-bookings'
+            });
           });
         }
         if (guest.host_id) {
