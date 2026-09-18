@@ -250,7 +250,7 @@ module.exports = async (req, res) => {
 
   try {
     const { stays, experiences, email, preferredCurrency, couponCode } = req.body;
-    const safeStays = Array.isArray(stays) ? stays : [];
+    let safeStays = Array.isArray(stays) ? stays : [];
     const safeExperiences = Array.isArray(experiences) ? experiences : [];
 
     if (!email || (safeStays.length === 0 && safeExperiences.length === 0)) {
@@ -264,6 +264,57 @@ module.exports = async (req, res) => {
     }
 
     const guestId = getOptionalGuestId(req);
+
+    // ---- "Includes a Stay" experiences ----
+    // An experience whose type is with_stay is sold together with nights
+    // at the property that hosts it, paid for in ONE payment. The nights
+    // are added here as an ordinary stay so they go through the same
+    // path as any other: availability, blocked dates, max guests,
+    // deposit, commission and GST all behave identically, with no second
+    // copy of those rules to drift.
+    //
+    // The browser never sends this stay and cannot influence it: the
+    // property, its rate and the number of nights all come from the
+    // host's own experience record. The two rows end up sharing one
+    // razorpay_order_id, which is what ties them together afterwards —
+    // for the single review form, and for cancelling them as a pair.
+    for (const ex of safeExperiences) {
+      if (!ex.listingId || !ex.date) continue; // reported by the experience loop below
+      const exRows = await sql`
+        SELECT id, property_name, experience_type, hosting_listing_id, experience_duration_days
+        FROM listings
+        WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
+      `;
+      const e = exRows[0];
+      if (!e || e.experience_type !== 'with_stay') continue;
+      if (!e.hosting_listing_id) {
+        return res.status(400).json({ error: `${e.property_name} includes a stay, but no home is linked to it yet. Please contact us.` });
+      }
+      const hostRows = await sql`SELECT id, status FROM listings WHERE id = ${e.hosting_listing_id}`;
+      if (!hostRows[0] || hostRows[0].status !== 'approved') {
+        return res.status(400).json({ error: `The home that hosts ${e.property_name} is not available to book right now.` });
+      }
+      // Booking that same home separately in the same request would look
+      // like a duplicate further down; say so plainly instead.
+      if (safeStays.some(s => Number(s.listingId) === Number(e.hosting_listing_id))) {
+        return res.status(400).json({ error: `${e.property_name} already includes nights at that home — please remove the separate stay.` });
+      }
+      // One night per day of the experience: a two-day experience is two
+      // nights. Taken from the host's own duration, never the request.
+      const nights = e.experience_duration_days && e.experience_duration_days >= 1 ? e.experience_duration_days : 1;
+      const guestCount = Number(ex.guests) || 1;
+      safeStays = safeStays.concat([{
+        listingId: e.hosting_listing_id,
+        arrival: ex.date,
+        departure: addDaysToDateStr(ex.date, nights),
+        guests: guestCount,
+        adults: guestCount,
+        includedWithExperienceId: e.id
+      }]);
+    }
+    if (safeStays.length > MAX_STAYS) {
+      return res.status(400).json({ error: 'Too many homes in one booking once the stays included with your experiences are counted. Please book them separately.' });
+    }
 
     let grandSubtotal = 0;
     let grandDiscount = 0;
@@ -519,6 +570,8 @@ module.exports = async (req, res) => {
         depositAmount,
         gst: stayTax.gst,
         gstRate: stayTax.rate,
+        // Set when these nights came with a with_stay experience.
+        withExperienceId: s.includedWithExperienceId || null,
         amenities: amenityDetails,
       });
     }

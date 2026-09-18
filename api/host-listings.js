@@ -1290,7 +1290,7 @@ module.exports = async (req, res) => {
     }
     const rows = await sql`
       SELECT o.id, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_id, o.status,
-             o.total, o.deposit_status, o.charge_currency, o.razorpay_payment_id
+             o.total, o.deposit_status, o.charge_currency, o.razorpay_payment_id, o.razorpay_order_id
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
       WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
@@ -1353,6 +1353,54 @@ module.exports = async (req, res) => {
       action: auditAction, success: true, actorType: 'host', actorIdentifier: String(hostId),
       targetType: 'order', targetId: orderId
     });
+
+    // An "Includes a Stay" experience is one purchase written as two rows
+    // sharing a payment: the experience and the nights at the property
+    // hosting it. Cancelling either cancels both — the guest bought one
+    // thing, and leaving them with half of it (nights but no experience,
+    // or the reverse) is never what they want. Refunded separately
+    // against the same payment, which Razorpay allows as long as the
+    // refunds together do not exceed what was captured.
+    //
+    // Never throws: this booking is already cancelled and refunded by the
+    // point we get here, and reporting that as a failure would be wrong.
+    // A failure is logged for a human to finish by hand.
+    if (order.razorpay_order_id) {
+      try {
+        const siblings = await sql`
+          SELECT id, total, charge_currency, deposit_status, razorpay_payment_id
+          FROM orders
+          WHERE razorpay_order_id = ${order.razorpay_order_id} AND id <> ${orderId} AND status = 'paid'
+        `;
+        for (const sib of siblings) {
+          const sibCurrency = sib.charge_currency || 'INR';
+          const sibAmount = sibCurrency === 'INR'
+            ? Math.round(Number(sib.total) * 100)
+            : await convertInrToForeignSubunit(sql, Number(sib.total), sibCurrency);
+          if (!sibAmount) throw new Error(`No cached ${sibCurrency} rate to refund linked booking ${sib.id}`);
+          const sibRefund = await razorpay.payments.refund(sib.razorpay_payment_id, { amount: sibAmount, speed: 'normal' });
+          await sql`
+            UPDATE orders SET
+              status = 'cancelled',
+              cancellation_reason = ${'Cancelled with the linked booking: ' + String(reason).trim().slice(0, 900)},
+              cancelled_at = now(),
+              deposit_status = ${sib.deposit_status === 'held' ? 'refunded' : sib.deposit_status},
+              deposit_refund_id = ${sibRefund.id}
+            WHERE id = ${sib.id}
+          `;
+          await logAudit(sql, {
+            action: 'order_cancelled_with_linked', success: true, actorType: 'host', actorIdentifier: String(hostId),
+            targetType: 'order', targetId: sib.id, metadata: { cancelledWith: orderId }
+          });
+        }
+      } catch (err) {
+        console.error('linked cancellation failed (needs manual follow-up):', orderId, err);
+        await logAudit(sql, {
+          action: 'order_cancelled_with_linked', success: false, actorType: 'host', actorIdentifier: String(hostId),
+          targetType: 'order', targetId: orderId, metadata: { reason: String(err && err.message || err).slice(0, 300) }
+        });
+      }
+    }
 
     await sendCancellationEmail(order);
   }
