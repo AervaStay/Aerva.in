@@ -1838,7 +1838,12 @@
     <div class="browse-row-head">
       <h3>Available Listings</h3>
     </div>
-    <div class="suite-grid reveal" id="suitesContainer">
+    <!-- Deliberately NOT .reveal: the grid used to start at opacity:0 and
+         wait for an IntersectionObserver to fade it in, so any time that
+         observer did not fire the listings were invisible while still
+         being there and clickable. Same failure the cards themselves were
+         taken off .reveal for. -->
+    <div class="suite-grid" id="suitesContainer">
       <div class="suites-loading">Loading homes…</div>
     </div>
   </div>
@@ -7396,6 +7401,10 @@
 
   function applyFiltersAndRender(){
     const container = document.getElementById('suitesContainer');
+    // Guards against a cached copy of this page that still has the old
+    // .reveal class on the grid: without .in it would stay at opacity 0.
+    container.classList.remove('reveal');
+    container.classList.add('in');
     refreshBadgeFilterOptions();
 
     // A place search that resolved to one specific property's own
