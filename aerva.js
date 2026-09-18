@@ -4679,15 +4679,18 @@
   }
 
   // ---- Badge filter ----
-  // Values are "<kind>:<key>": property / flag / host for stays,
-  // experience for experiences. Options are rebuilt from the loaded
+  // Filters on the LISTING's own standing, never its host's: a guest
+  // choosing a badge is choosing a place, and a strong host can still
+  // have a weak property. The host badge is still shown on each card;
+  // it just is not something to filter by.
+  // Values are "<kind>:<key>": property / flag for stays, experience for
+  // experiences. Options are rebuilt from the loaded
   // results, so only badges some live listing actually holds are
   // offered, and the labels always come from the API rather than a
   // second copy of the ladder kept here.
   const BADGE_GROUPS = [
     { kind: 'property',   label: 'Property standing',   from: 'stay',       field: 'property_tier' },
     { kind: 'flag',       label: 'Property highlights', from: 'stay',       field: 'property_flag' },
-    { kind: 'host',       label: 'Host standing',       from: 'stay',       field: 'host_tier' },
     { kind: 'experience', label: 'Experience standing', from: 'experience', field: 'experience_tier' }
   ];
   function selectedBadge(){
@@ -4704,7 +4707,7 @@
     const html = ['<option value="">Any badge</option>'];
     BADGE_GROUPS.forEach(group => {
       // A tab only offers the badges its own cards can carry: Suites shows
-      // property and host badges, Aerva Experience shows experience ones,
+      // property badges, Aerva Experience shows experience ones,
       // All shows both. A choice the new tab cannot offer falls back to
       // "Any badge" below rather than silently emptying the grid.
       if(currentCategoryFilter === 'suites' && group.from !== 'stay') return;
@@ -5538,10 +5541,6 @@
       <div class="listing-modal-content">
         <h2>How was it?</h2>
         <div class="loc">${escapeMessageHtml(booking.suite_name || '')}</div>
-        <p style="font-size:13px; opacity:0.7; margin-top:10px;">
-          Your review is not published straight away \u2014 it goes live within 15 days of checkout,
-          and nobody can read it before then.
-        </p>
         <div class="rv-set">${set.map(starRowHtml).join('')}</div>
         <label class="rv-comment-label" for="reviewComment">Tell other guests about it</label>
         <textarea id="reviewComment" rows="4" placeholder="What stood out? What should someone know before booking?"></textarea>
@@ -5600,7 +5599,7 @@
       document.getElementById('reviewModalBody').innerHTML = `
         <div class="listing-modal-content">
           <h2>Thank you</h2>
-          <p style="font-size:14px; margin-top:10px;">Your review is saved. It goes live within 15 days of checkout.</p>
+          <p style="font-size:14px; margin-top:10px;">Thanks for submitting your review.</p>
         </div>`;
       loadMyBookings();
     }catch(err){
@@ -6822,11 +6821,9 @@
     }
     if(guests) params.set('guests', guests);
     if(arrival && departure){ params.set('arrival', arrival); params.set('departure', departure); }
-    // Optional, and only ever matters for a Resort — a guest asking for
-    // "3 rooms" wants to book 3 separate rooms within ONE property, not
-    // 3 different properties (that's a different concept entirely — see
-    // get-listings.js for how this excludes every non-Resort listing
-    // once it's actually used).
+    // Optional. "At least N rooms" in one property: a home's bedrooms, or
+    // a Resort's bookable rooms (free ones, when dates are set). See
+    // get-listings.js.
     const roomsNeeded = document.getElementById('roomsNeeded').value;
     if(roomsNeeded) params.set('roomsNeeded', roomsNeeded);
 
@@ -6888,7 +6885,7 @@
         }
       }
 
-      const hasFilters = city || guests || (arrival && departure);
+      const hasFilters = city || guests || (arrival && departure) || roomsNeeded;
       if(hasFilters){
         // Only counts whichever type(s) this search actually touched —
         // a suites-only search reporting an experience count that didn't

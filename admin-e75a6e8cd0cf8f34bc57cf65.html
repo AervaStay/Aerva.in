@@ -720,7 +720,7 @@
       const currentPhotos = [r.cover_photo_url, ...(Array.isArray(r.photo_urls) ? r.photo_urls.map(p => p && p.url) : [])].filter(Boolean);
       const roomSummary = (name, occ, rate, active, photos) => `
         <div style="border:1px solid #ddd0bc; padding:10px 12px; margin-top:8px; border-radius:4px;">
-          <strong>${name || 'Untitled room'}</strong>
+          <strong>${escAdmin(name || 'Untitled room')}</strong>
           <span style="opacity:0.7;"> — sleeps up to ${occ || '—'} · ₹${rate || '—'}/night${active === false ? ' · inactive' : ''}</span>
           <div class="photo-row" style="margin-top:6px;">
             ${photos.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Room photo"></a>`).join('')}
@@ -752,8 +752,8 @@
           })();
       return `
         <div class="listing" id="roomChange-${r.room_id}">
-          <h3>${r.property_name}${isNewRoomProposal ? ' <span style="font-size:11px; opacity:0.6; text-transform:uppercase;">— New Room</span>' : ' <span style="font-size:11px; opacity:0.6; text-transform:uppercase;">— Room Edit</span>'}</h3>
-          <div class="meta">${r.area ? r.area + ', ' : ''}${r.city} · ${r.host_name} (${r.host_email}, ${r.host_phone})</div>
+          <h3>${escAdmin(r.property_name)}${isNewRoomProposal ? ' <span style="font-size:11px; opacity:0.6; text-transform:uppercase;">— New Room</span>' : ' <span style="font-size:11px; opacity:0.6; text-transform:uppercase;">— Room Edit</span>'}</h3>
+          <div class="meta">${r.area ? escAdmin(r.area) + ', ' : ''}${escAdmin(r.city)} · ${escAdmin(r.host_name)} (${escAdmin(r.host_email)}, ${escAdmin(r.host_phone)})</div>
           ${comparisonHtml}
           <div class="actions" style="margin-top:16px;">
             <button class="approve-btn" onclick="decideRoomChange(${r.room_id}, 'approve_room')">Approve</button>
@@ -883,9 +883,9 @@
         : '';
       const metaLine = isExperience
         ? `${typeTag}${l.experience_category || 'Uncategorized'} · ₹${l.nightly_rate || '—'}${l.experience_price_unit === 'per_person' ? ' per person' : ' flat'}${l.experience_duration_hours ? ' · ' + l.experience_duration_hours + 'h' : ''} · Hosted at: ${l.hosting_property_name || 'not set'} · ${l.host_name} (${l.host_email}, ${l.host_phone})`
-        : `${l.area ? l.area + ', ' : ''}${l.city} · <strong>${l.property_type || 'Property type not set'}</strong>${l.property_type === 'Resort' ? ` · ${l.bedrooms || 0} rooms declared` : ''} · ₹${l.nightly_rate || '—'}/night · ${l.host_name} (${l.host_email}, ${l.host_phone})`;
+        : `${l.area ? escAdmin(l.area) + ', ' : ''}${escAdmin(l.city)} · <strong>${l.property_type || 'Property type not set'}</strong>${l.property_type === 'Resort' ? ` · ${l.bedrooms || 0} rooms declared` : ''} · ₹${l.nightly_rate || '—'}/night · ${escAdmin(l.host_name)} (${escAdmin(l.host_email)}, ${escAdmin(l.host_phone)})`;
       const addressHtml = (!isExperience && l.formatted_address) ? `
-        <p class="address-line">📍 ${l.formatted_address}${l.pincode ? ` — PIN ${l.pincode}` : ' — <span style="color:#a3402f;">no pincode on file</span>'}${(l.latitude && l.longitude) ? ` — <a href="https://www.google.com/maps?q=${l.latitude},${l.longitude}" target="_blank" rel="noopener">Open in Google Maps</a>` : ''}</p>
+        <p class="address-line">📍 ${escAdmin(l.formatted_address)}${l.pincode ? ` — PIN ${l.pincode}` : ' — <span style="color:#a3402f;">no pincode on file</span>'}${(l.latitude && l.longitude) ? ` — <a href="https://www.google.com/maps?q=${l.latitude},${l.longitude}" target="_blank" rel="noopener">Open in Google Maps</a>` : ''}</p>
         ${(l.latitude && l.longitude) ? `<div class="listing-map-preview" id="listingMap-${l.id}" data-lat="${l.latitude}" data-lng="${l.longitude}"></div>` : ''}
       ` : (!isExperience ? '<p class="address-line" style="color:#a3402f;">⚠ No location was set for this listing — worth checking with the host before approving.</p>' : '');
       const roomsHtml = (!isExperience && l.property_type === 'Resort') ? roomBreakdownHtml(l.pending_room_photos, l.bedrooms) : '';
@@ -904,12 +904,12 @@
       ` : '';
       return `
       <div class="listing" id="listing-${l.id}">
-        <h3>${l.property_name}</h3>
+        <h3>${escAdmin(l.property_name)}</h3>
         ${cloneAlertHtml}
         <div class="meta">${metaLine}</div>
         <div class="meta" style="opacity:0.6;">Submitted ${fmtDate(l.created_at)}</div>
         ${addressHtml}
-        <div class="desc">${l.description}</div>
+        <div class="desc">${escAdmin(l.description)}</div>
         ${tagListHtml('Amenities', l.amenities)}
         ${tagListHtml('Services', l.services)}
         ${photoThumbnailsHtml('Exterior', l.exterior_photo_urls)}
@@ -1514,7 +1514,7 @@
     }
     container.innerHTML = listings.map(l => {
       const statusLabel = { approved: 'Live', blocked: 'Blocked', removed: 'Removed' }[l.status] || l.status;
-      const reasonLine = l.admin_status_reason ? `<p style="opacity:0.7; font-size:13px;">Reason: ${l.admin_status_reason}</p>` : '';
+      const reasonLine = l.admin_status_reason ? `<p style="opacity:0.7; font-size:13px;">Reason: ${escAdmin(l.admin_status_reason)}</p>` : '';
       let actions = '';
       if(l.status === 'approved'){
         actions = `
@@ -1531,8 +1531,8 @@
       }
       return `
         <div class="dispute-card" id="liveListing-${l.id}">
-          <h4>${l.property_name} <span style="opacity:0.6; font-weight:400;">— ${statusLabel}</span></h4>
-          <div class="dispute-meta">${l.city} · ${l.host_name} (${l.host_email})</div>
+          <h4>${escAdmin(l.property_name)} <span style="opacity:0.6; font-weight:400;">— ${statusLabel}</span></h4>
+          <div class="dispute-meta">${escAdmin(l.city)} · ${escAdmin(l.host_name)} (${escAdmin(l.host_email)})</div>
           <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(l.created_at)}</div>
           ${reasonLine}
           <div class="resolve-row">${actions}</div>
@@ -1595,8 +1595,8 @@
     container.innerHTML = verifications.map(v => {
       const aadhaarBlock = v.aadhaar_status === 'pending_review' ? `
         <div class="dispute-card" id="verify-${v.id}-aadhaar">
-          <h4>${v.name || v.email} — Aadhaar</h4>
-          <div class="dispute-meta">${v.email}${v.phone ? ' · ' + v.phone : ''}</div>
+          <h4>${escAdmin(v.name || v.email)} — Aadhaar</h4>
+          <div class="dispute-meta">${escAdmin(v.email)}${v.phone ? ' · ' + escAdmin(v.phone) : ''}</div>
           <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(v.aadhaar_submitted_at)}</div>
           <p><a href="${v.aadhaar_document_url}" target="_blank" rel="noopener">Open the uploaded document ↗</a></p>
           <div class="resolve-row">
@@ -1608,8 +1608,8 @@
       ` : '';
       const bankBlock = v.bank_status === 'pending_review' ? `
         <div class="dispute-card" id="verify-${v.id}-bank">
-          <h4>${v.name || v.email} — Bank Details</h4>
-          <div class="dispute-meta">${v.email}${v.phone ? ' · ' + v.phone : ''}</div>
+          <h4>${escAdmin(v.name || v.email)} — Bank Details</h4>
+          <div class="dispute-meta">${escAdmin(v.email)}${v.phone ? ' · ' + escAdmin(v.phone) : ''}</div>
           <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(v.bank_submitted_at)}</div>
           <p>Account holder: ${v.bank_account_holder_name || '—'}<br>
              Account ending: ••••${v.bank_account_number ? v.bank_account_number.slice(-4) : '—'}<br>
@@ -1680,9 +1680,9 @@
         ' – ' + new Date(d.departure).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' });
       return `
         <div class="dispute-card" id="dispute-${d.id}">
-          <h4>${d.suite_name} — ${fmt(d.deposit_amount)} deposit</h4>
-          <div class="dispute-meta">${dateRange} · Host: ${d.host_name} (${d.host_email}) · Guest: ${d.guest_email}</div>
-          <div class="dispute-reason-box">"${d.dispute_reason}"</div>
+          <h4>${escAdmin(d.suite_name)} — ${fmt(d.deposit_amount)} deposit</h4>
+          <div class="dispute-meta">${dateRange} · Host: ${escAdmin(d.host_name)} (${escAdmin(d.host_email)}) · Guest: ${escAdmin(d.guest_email)}</div>
+          <div class="dispute-reason-box">"${escAdmin(d.dispute_reason)}"</div>
           <div class="resolve-row">
             <label style="font-size:12.5px;">Compensate host ₹</label>
             <input type="number" id="compensation-${d.id}" min="0" max="${d.deposit_amount}" placeholder="0">
@@ -1784,9 +1784,9 @@
         : `Due ${fmtDate(f.deadline)}`;
       return `
         <div class="dispute-card" id="complianceFlag-${f.id}">
-          <h4>${f.property_name} <span style="opacity:0.6; font-weight:400;">— ${f.listing_status}</span></h4>
-          <div class="dispute-meta">${f.host_email} · flagged ${fmtDate(f.created_at)}</div>
-          <p style="font-size:13px; margin:8px 0;">${f.message}</p>
+          <h4>${escAdmin(f.property_name)} <span style="opacity:0.6; font-weight:400;">— ${f.listing_status}</span></h4>
+          <div class="dispute-meta">${escAdmin(f.host_email)} · flagged ${fmtDate(f.created_at)}</div>
+          <p style="font-size:13px; margin:8px 0;">${escAdmin(f.message)}</p>
           <div class="dispute-meta">${statusLabel}</div>
         </div>
       `;
