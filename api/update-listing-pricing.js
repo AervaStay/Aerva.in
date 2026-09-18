@@ -35,6 +35,7 @@ const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules')
 const { timezoneForAddress } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { resolveSatisfiedComplianceFlags } = require('./_compliance');
+const { sanitizeBody } = require('./_plain-text');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -61,6 +62,9 @@ function requireListingId(req) {
 }
 
 module.exports = async (req, res) => {
+  // Typed text can never become markup — see _plain-text.js.
+  sanitizeBody(req);
+
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
