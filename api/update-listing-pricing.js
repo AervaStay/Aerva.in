@@ -31,6 +31,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
+const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules');
 const { logAudit } = require('./_audit-log');
 const { resolveSatisfiedComplianceFlags } = require('./_compliance');
 
@@ -255,6 +256,25 @@ module.exports = async (req, res) => {
       const safeArea = typeof area === 'string' && area.trim() ? area.trim().slice(0, 100) : null;
       if (safeArea && hasNonLatinScript(safeArea)) {
         return res.status(400).json({ error: 'Please enter the area in English (Latin script) — e.g. "Koregaon Park", not a local-script spelling.' });
+      }
+
+      // ---- One property name per pincode ----
+      // A host cannot rename a listing from here, but they CAN change its
+      // pincode — which can move it into a pincode where its name is
+      // already taken. Checked before the save, same rule and same
+      // message as submission (see _listing-rules.js).
+      const newPincode = typeof pincode === 'string' && pincode.trim() ? pincode.trim().slice(0, 20) : null;
+      if (newPincode) {
+        const meRows = await sql`SELECT property_name, pincode, listing_type FROM listings WHERE id = ${listingId}`;
+        const me = meRows[0];
+        if (me && (me.listing_type || 'stay') === 'stay' && String(me.pincode || '').trim() !== newPincode) {
+          const clash = await findNameClashInPincode(sql, {
+            propertyName: me.property_name, pincode: newPincode, excludeListingId: listingId
+          });
+          if (clash) {
+            return res.status(409).json({ error: nameClashMessage(me.property_name, newPincode) });
+          }
+        }
       }
 
       const before = await sql`

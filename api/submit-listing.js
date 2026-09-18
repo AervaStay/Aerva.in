@@ -24,6 +24,7 @@
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
+const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -608,6 +609,21 @@ module.exports = async (req, res) => {
     const safePincode = isExperience
       ? (hostingListing ? hostingListing.pincode : (pincode ? String(pincode).trim().slice(0, 20) : null))
       : (pincode ? String(pincode).trim().slice(0, 20) : null);
+
+    // ---- One property name per pincode ----
+    // Checked here, before anything is written, so a clash is refused
+    // rather than left for an admin to notice at approval. Stays only;
+    // see _listing-rules.js. A draft being resubmitted is excluded from
+    // the search, so its own name never blocks it.
+    if (!isExperience) {
+      const clash = await findNameClashInPincode(sql, {
+        propertyName, pincode: safePincode,
+        excludeListingId: existingDraft ? existingDraft.id : null
+      });
+      if (clash) {
+        return res.status(409).json({ error: nameClashMessage(propertyName, safePincode) });
+      }
+    }
 
     // Logistics fields — experience-only, same "only ever kept for
     // listing_type = 'experience' rows" rule as the other experience

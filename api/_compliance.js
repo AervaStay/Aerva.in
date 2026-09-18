@@ -15,10 +15,16 @@
 // an outstanding flag on their own listing, restoring it if it was
 // auto-blocked).
 
+// 15 days from being flagged. Past that the listing is deactivated
+// automatically by the daily job (see enforceComplianceDeadlines below),
+// not by anybody remembering to press something.
+const COMPLIANCE_DEADLINE_DAYS = 15;
+
 const COMPLIANCE_CHECKS = {
   max_guests_required: {
+    label: 'Max Guests is missing',
     message: 'Please set a valid "Max Guests" value for this listing from Manage Price & Offers — this is now required for every non-Resort stay.',
-    deadlineDays: 14,
+    deadlineDays: COMPLIANCE_DEADLINE_DAYS,
     // Finds every listing across the platform currently failing this
     // requirement — used by the admin-triggered scan.
     findAffectedListingIds: async (sql) => {
@@ -84,4 +90,123 @@ async function resolveSatisfiedComplianceFlags(sql, listingId, updatedListingFie
   }
 }
 
-module.exports = { COMPLIANCE_CHECKS, resolveSatisfiedComplianceFlags };
+// Is this listing already carrying an unresolved flag for this
+// requirement? Checked in code rather than relying on ON CONFLICT DO
+// NOTHING, which quietly does nothing at all unless a matching unique
+// index exists — and where it does not, re-running a scan flags the same
+// listing again and again.
+async function hasOpenFlag(sql, listingId, requirementKey) {
+  const rows = await sql`
+    SELECT id FROM compliance_flags
+    WHERE listing_id = ${listingId} AND requirement_key = ${requirementKey} AND resolved_at IS NULL
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
+// Every unresolved flag on a host's own listings, for the dashboard
+// notice and the warning on their earnings page. Never throws: a notice
+// failing to load must not take a page down with it.
+async function openFlagsForHost(sql, hostId) {
+  try {
+    const rows = await sql`
+      SELECT cf.id, cf.listing_id, cf.requirement_key, cf.message, cf.deadline, cf.auto_blocked,
+             l.property_name, l.status AS listing_status
+      FROM compliance_flags cf
+      JOIN listings l ON l.id = cf.listing_id
+      WHERE l.host_id = ${hostId} AND cf.resolved_at IS NULL
+      ORDER BY cf.deadline ASC
+    `;
+    return rows.map(r => ({
+      id: r.id,
+      listingId: r.listing_id,
+      propertyName: r.property_name,
+      listingStatus: r.listing_status,
+      requirementKey: r.requirement_key,
+      label: (COMPLIANCE_CHECKS[r.requirement_key] || {}).label || 'Action needed',
+      message: r.message,
+      deadline: r.deadline,
+      autoBlocked: !!r.auto_blocked,
+      daysLeft: Math.ceil((new Date(r.deadline).getTime() - Date.now()) / 86400000)
+    }));
+  } catch (err) {
+    console.error('openFlagsForHost failed (non-fatal):', err);
+    return [];
+  }
+}
+
+// One email per newly flagged listing, telling the host what to fix and
+// by when. Never throws: the flag is already recorded, and an email
+// failure must not undo it or fail the scan.
+async function emailHostAboutFlag(listing, check, deadline) {
+  try {
+    if (!process.env.RESEND_API_KEY) {
+      console.error('RESEND_API_KEY not set — host will not be told about this compliance flag.');
+      return false;
+    }
+    if (!listing.host_email) return false;
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const due = new Date(deadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+    const html = `
+      <div style="font-family:sans-serif; max-width:520px;">
+        <h2 style="font-family:Georgia,serif;">Action needed on ${esc(listing.property_name)}</h2>
+        <p>${esc(check.message)}</p>
+        <p><strong>Please do this by ${esc(due)}.</strong> If it is still outstanding after that, the listing is taken off Aerva automatically until it is fixed. Bookings already confirmed are not affected.</p>
+        <p><a href="https://aerva.in/host-dashboard.html" style="color:#8a6c39;">Open your dashboard</a></p>
+        <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Reply to this email or write to hello@aerva.in.</p>
+      </div>`;
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: 'Aerva <hello@aerva.in>', to: listing.host_email,
+        subject: `Action needed on ${listing.property_name} by ${due}`, html
+      })
+    });
+    if (!res.ok) { console.error('compliance email failed:', res.status); return false; }
+    return true;
+  } catch (err) {
+    console.error('compliance email failed (non-fatal):', err);
+    return false;
+  }
+}
+
+// Deactivates every listing whose deadline has passed with the
+// requirement still unmet. Shared by the daily job in get-listings.js and
+// the admin's own button, so a deadline is enforced the same way however
+// it is triggered. Only ever touches a listing that is still live, and
+// records what it was so it can be restored when the host fixes it (see
+// resolveSatisfiedComplianceFlags above).
+async function enforceComplianceDeadlines(sql, logAudit) {
+  const result = { checked: 0, blocked: 0 };
+  const overdue = await sql`
+    SELECT cf.id AS flag_id, cf.listing_id, cf.message, l.status AS current_status, l.property_name, l.host_email
+    FROM compliance_flags cf
+    JOIN listings l ON l.id = cf.listing_id
+    WHERE cf.resolved_at IS NULL AND cf.deadline < now() AND cf.auto_blocked = FALSE
+  `;
+  result.checked = overdue.length;
+  for (const row of overdue) {
+    if (row.current_status === 'approved') {
+      await sql`
+        UPDATE listings SET status = 'blocked', admin_status_reason = ${row.message}, status_before_compliance_block = ${row.current_status}
+        WHERE id = ${row.listing_id}
+      `;
+      result.blocked++;
+    }
+    await sql`UPDATE compliance_flags SET auto_blocked = TRUE WHERE id = ${row.flag_id}`;
+    if (logAudit) {
+      await logAudit(sql, {
+        action: 'compliance_deadline_enforced', success: true, actorType: 'system', actorIdentifier: null,
+        targetType: 'listing', targetId: row.listing_id,
+        metadata: { flagId: row.flag_id, wasBlocked: row.current_status === 'approved' }
+      });
+    }
+  }
+  return result;
+}
+
+module.exports = {
+  COMPLIANCE_CHECKS, COMPLIANCE_DEADLINE_DAYS, resolveSatisfiedComplianceFlags,
+  hasOpenFlag, openFlagsForHost, emailHostAboutFlag, enforceComplianceDeadlines
+};

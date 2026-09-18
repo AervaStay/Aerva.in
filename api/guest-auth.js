@@ -52,6 +52,7 @@ const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
+const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { verifyGoogleIdToken } = require('./_social-auth');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { normalizeToE164 } = require('./_phone-validation');
@@ -324,7 +325,28 @@ module.exports = async (req, res) => {
         console.error('tier lookup failed (non-fatal):', err);
       }
 
-      return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing, tier } });
+      // Stays this guest can still review. Returned on every session
+      // check so the site itself can prompt them, not only the email that
+      // goes out the morning after checkout — an email is easy to miss,
+      // and the window is 15 days. Wrapped: a count must never be the
+      // reason a session check fails.
+      let pendingReviews = 0;
+      try {
+        const pr = await sql`
+          SELECT COUNT(*) AS n
+          FROM orders o
+          WHERE o.guest_id = ${guest.id}
+            AND o.status = 'paid'
+            AND o.departure <= CURRENT_DATE
+            AND o.departure > CURRENT_DATE - ${REVIEW_WINDOW_DAYS}::int
+            AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
+        `;
+        pendingReviews = Number(pr[0] && pr[0].n) || 0;
+      } catch (err) {
+        console.error('pending review count failed (non-fatal):', err);
+      }
+
+      return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing, tier, pendingReviews } });
     } catch (err) {
       console.error('guest-auth (GET) error:', err);
       return res.status(500).json({ error: 'Could not verify your session.' });

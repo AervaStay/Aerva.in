@@ -66,6 +66,8 @@ const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
         tierByKey, applyDecayCap } = require('./_tiers');
 const { verifyToken, secretMatches } = require('./_approval-token');
+const { enforceComplianceDeadlines } = require('./_compliance');
+const { logAudit } = require('./_audit-log');
 const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
 const sql = neon(process.env.DATABASE_URL);
@@ -127,6 +129,43 @@ function isAdminAuthorized(req) {
   return secretMatches(req.headers['x-admin-secret'], process.env.ADMIN_SECRET);
 }
 
+
+// The post-checkout review invitation. Plain, short, and it links
+// straight to the guest's bookings, where the review form lives. Never
+// throws: a failed send must not stop the sweep, and is reported so the
+// count in the admin tool stays honest.
+async function sendReviewPromptEmail(order) {
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set — review prompts cannot be emailed.');
+    return false;
+  }
+  if (!order.guest_email) return false;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const what = esc(order.suite_name || 'your stay');
+  const html = `
+    <div style="font-family:sans-serif; max-width:520px;">
+      <h2 style="font-family:Georgia,serif;">How was ${what}?</h2>
+      <p>Your review helps the next guest choose well, and tells your host what went right or wrong.</p>
+      <p>It takes a minute. You have ${REVIEW_WINDOW_DAYS} days from checkout, and nothing is published until your host has reviewed too — or the ${REVIEW_WINDOW_DAYS} days are up.</p>
+      <p><a href="https://aerva.in/index.html?view=my-bookings" style="display:inline-block; background:#1c1a17; color:#f4ebe3; padding:11px 20px; text-decoration:none; border-radius:4px;">Write your review</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Write to hello@aerva.in.</p>
+    </div>`;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: 'Aerva <hello@aerva.in>', to: order.guest_email,
+        subject: `How was ${order.suite_name || 'your stay'}?`, html
+      })
+    });
+    if (!res.ok) { console.error('review prompt email failed:', res.status); return false; }
+    return true;
+  } catch (err) {
+    console.error('review prompt email failed:', err);
+    return false;
+  }
+}
 
 // Decides standing for hosts, guests and listings AS OF a moment, and
 // records it. Shared by the quarterly review and by admin corrections, so
@@ -422,22 +461,20 @@ module.exports = async (req, res) => {
           AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
         LIMIT 200
       `;
+      // Sent by EMAIL, not into the booking chat. A review prompt posted
+      // as a message put review business inside the thread a guest uses
+      // to talk to their host, and it also created an empty conversation
+      // for every stay where the two had never messaged at all. Email
+      // reaches a guest who has stopped opening the site, which is most
+      // of them by the day after checkout.
+      let promptedCount = 0;
       for (const o of toPrompt) {
         try {
-          let convRows = await sql`SELECT id FROM conversations WHERE order_id = ${o.id}`;
-          let conversationId = convRows[0] && convRows[0].id;
-          if (!conversationId) {
-            const ins = await sql`
-              INSERT INTO conversations (order_id, listing_id, guest_id, guest_email, host_id)
-              VALUES (${o.id}, ${o.listing_id}, ${o.guest_id}, ${o.guest_email}, ${o.host_id})
-              RETURNING id`;
-            conversationId = ins[0].id;
-          }
-          const text = `How was your stay at ${o.suite_name}? Please rate it on hygiene, communication, services, value for money and location — it takes a minute, and you have ${REVIEW_WINDOW_DAYS} days from checkout.`;
-          await sql`
-            INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
-            VALUES (${conversationId}, 'system', ${text}, ${text}, false)`;
+          const sent = await sendReviewPromptEmail(o);
+          // Marked either way: an address that bounces must not be retried
+          // every morning for the rest of the window.
           await sql`UPDATE orders SET review_prompt_sent_at = now() WHERE id = ${o.id}`;
+          if (sent) promptedCount++;
         } catch (err) {
           // One bad order must not stop the sweep for every other guest.
           console.error('review prompt failed for order', o.id, err);
@@ -460,11 +497,24 @@ module.exports = async (req, res) => {
       // ?forceTierSnapshot=1 recomputes off-cycle, for testing and for the
       // first run after deploy, when tier_current is empty and waiting for
       // the next quarter would mean no badges anywhere for months.
+      // Compliance deadlines are enforced here rather than on a cron of
+      // their own: Vercel's Hobby plan allows two cron jobs and both are
+      // taken. A listing 15 days past its flag is deactivated the next
+      // morning without anyone pressing anything. Never fatal — a failure
+      // here must not stop reviews being published.
+      let compliance = null;
+      try {
+        compliance = await enforceComplianceDeadlines(sql, logAudit);
+      } catch (err) {
+        console.error('compliance enforcement failed (non-fatal):', err);
+      }
+
       const forceSnapshot = req.query.forceTierSnapshot === '1';
       const summary = {
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
-        prompted: toPrompt.length,
+        prompted: promptedCount,
+        complianceBlocked: compliance ? compliance.blocked : null,
         nextReview: nextReviewDate(new Date(), 'quarterly')
       };
 

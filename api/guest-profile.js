@@ -430,12 +430,32 @@ module.exports = async (req, res) => {
       // the profile shows; there's no separate payment-methods table since
       // Razorpay handles card/UPI details on their end, never ours.
       const bookings = await sql`
-        SELECT id, suite_name, listing_id, arrival, departure, guests, nights,
-               subtotal, discount_amount, gst, total, status, created_at
-        FROM orders
-        WHERE guest_id = ${guestId}
-        ORDER BY created_at DESC
+        SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights,
+               o.subtotal, o.discount_amount, o.gst, o.total, o.status, o.created_at,
+               COALESCE(l.listing_type, 'stay') AS listing_type,
+               EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id) AS reviewed
+        FROM orders o
+        LEFT JOIN listings l ON l.id = o.listing_id
+        WHERE o.guest_id = ${guestId}
+        ORDER BY o.created_at DESC
       `;
+
+      // What the guest can do about a review on each booking. The page
+      // shows a button only for 'open'; see index.html.
+      //   open   — checked out, inside the 15-day window, not yet reviewed
+      //   done   — already reviewed
+      //   closed — the window has passed and the chance has gone
+      //   null   — not checked out yet, or a booking that was cancelled
+      // submissionOpen is the same rule the submit endpoint enforces, so
+      // the button and the endpoint can never disagree.
+      bookings.forEach(b => {
+        if (b.reviewed) { b.review_state = 'done'; }
+        else if (b.status !== 'paid') { b.review_state = null; }
+        else if (submissionOpen(b.departure)) { b.review_state = 'open'; }
+        else if (new Date(b.departure) < new Date()) { b.review_state = 'closed'; }
+        else { b.review_state = null; }
+        delete b.reviewed;
+      });
 
       // Published, non-reverted only — a held review must not move a
       // guest's standing any more than it shows on a listing.
