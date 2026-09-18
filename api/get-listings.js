@@ -66,7 +66,7 @@ const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
         tierByKey, applyDecayCap } = require('./_tiers');
 const { verifyToken, secretMatches } = require('./_approval-token');
-const { enforceComplianceDeadlines } = require('./_compliance');
+const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { logAudit } = require('./_audit-log');
 const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
@@ -576,11 +576,18 @@ module.exports = async (req, res) => {
       // taken. A listing 15 days past its flag is deactivated the next
       // morning without anyone pressing anything. Never fatal — a failure
       // here must not stop reviews being published.
+      // Scan first, then enforce. Scanning daily is what makes this
+      // automatic: a listing that stops meeting a requirement is found
+      // the next morning and its host told, without an admin running
+      // anything. Enforcing afterwards means a listing flagged 15 days
+      // ago comes down in the same pass.
       let compliance = null;
+      let complianceScan = null;
       try {
+        complianceScan = await runAllComplianceScans(sql);
         compliance = await enforceComplianceDeadlines(sql, logAudit);
       } catch (err) {
-        console.error('compliance enforcement failed (non-fatal):', err);
+        console.error('compliance run failed (non-fatal):', err);
       }
 
       const forceSnapshot = req.query.forceTierSnapshot === '1';
@@ -588,6 +595,7 @@ module.exports = async (req, res) => {
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
         prompted: promptedCount,
+        complianceFlagged: complianceScan ? complianceScan.reduce((a, r) => a + (r.flagged || 0), 0) : null,
         complianceBlocked: compliance ? compliance.blocked : null,
         nextReview: nextReviewDate(new Date(), 'quarterly')
       };

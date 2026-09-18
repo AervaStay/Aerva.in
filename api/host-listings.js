@@ -1917,7 +1917,8 @@ module.exports = async (req, res) => {
     // notice on the dashboard and as a warning on their earnings page —
     // an email alone is too easy to miss, and the consequence here is the
     // listing being taken down.
-    const complianceNotices = await openFlagsForHost(sql, guest.host_id);
+    const complianceNotices = await openFlagsForHost(sql, guest.host_id,
+      (listingId) => `${SITE_BASE}/manage-listing.html?token=${createToken(listingId, 'manage-pricing', TWO_YEARS_MS)}`);
 
     return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, verification, complianceNotices });
   } catch (err) {

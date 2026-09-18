@@ -107,7 +107,7 @@ async function hasOpenFlag(sql, listingId, requirementKey) {
 // Every unresolved flag on a host's own listings, for the dashboard
 // notice and the warning on their earnings page. Never throws: a notice
 // failing to load must not take a page down with it.
-async function openFlagsForHost(sql, hostId) {
+async function openFlagsForHost(sql, hostId, makeManageLink) {
   try {
     const rows = await sql`
       SELECT cf.id, cf.listing_id, cf.requirement_key, cf.message, cf.deadline, cf.auto_blocked,
@@ -120,6 +120,10 @@ async function openFlagsForHost(sql, hostId) {
     return rows.map(r => ({
       id: r.id,
       listingId: r.listing_id,
+      // manage-listing.html authenticates with a signed token, not a
+      // listing id — a link built from the id opens a page that cannot do
+      // anything, which is exactly what "Fix this now" did.
+      manageLink: typeof makeManageLink === 'function' ? makeManageLink(r.listing_id) : null,
       propertyName: r.property_name,
       listingStatus: r.listing_status,
       requirementKey: r.requirement_key,
@@ -171,6 +175,48 @@ async function emailHostAboutFlag(listing, check, deadline) {
   }
 }
 
+// Scans one requirement across every live listing and flags whatever
+// fails it, emailing each host once. Shared by the daily job and the
+// admin's own button, so a scan behaves identically however it starts.
+// Returns { affected, flagged, emailed }.
+async function runComplianceScan(sql, key) {
+  const check = COMPLIANCE_CHECKS[key];
+  if (!check) throw new Error(`Unknown compliance requirement: ${key}`);
+  const result = { key, affected: 0, flagged: 0, emailed: 0 };
+  const affectedIds = await check.findAffectedListingIds(sql);
+  result.affected = affectedIds.length;
+  for (const listingId of affectedIds) {
+    // Already flagged and unresolved: leave it alone. This is what stops
+    // a daily scan raising the same flag, and mailing the same host,
+    // every morning until they fix it.
+    if (await hasOpenFlag(sql, listingId, key)) continue;
+    const inserted = await sql`
+      INSERT INTO compliance_flags (listing_id, requirement_key, message, deadline)
+      VALUES (${listingId}, ${key}, ${check.message}, now() + (${check.deadlineDays}::int || ' days')::interval)
+      RETURNING id, deadline
+    `;
+    if (!inserted[0]) continue;
+    result.flagged++;
+    const lr = await sql`SELECT property_name, host_email FROM listings WHERE id = ${listingId}`;
+    if (lr[0] && await emailHostAboutFlag(lr[0], check, inserted[0].deadline)) result.emailed++;
+  }
+  return result;
+}
+
+// Every requirement, scanned in turn. What the daily job runs.
+async function runAllComplianceScans(sql) {
+  const out = [];
+  for (const key of Object.keys(COMPLIANCE_CHECKS)) {
+    try {
+      out.push(await runComplianceScan(sql, key));
+    } catch (err) {
+      console.error('compliance scan failed for', key, err);
+      out.push({ key, error: true });
+    }
+  }
+  return out;
+}
+
 // Deactivates every listing whose deadline has passed with the
 // requirement still unmet. Shared by the daily job in get-listings.js and
 // the admin's own button, so a deadline is enforced the same way however
@@ -208,5 +254,6 @@ async function enforceComplianceDeadlines(sql, logAudit) {
 
 module.exports = {
   COMPLIANCE_CHECKS, COMPLIANCE_DEADLINE_DAYS, resolveSatisfiedComplianceFlags,
-  hasOpenFlag, openFlagsForHost, emailHostAboutFlag, enforceComplianceDeadlines
+  hasOpenFlag, openFlagsForHost, emailHostAboutFlag, enforceComplianceDeadlines,
+  runComplianceScan, runAllComplianceScans
 };
