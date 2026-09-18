@@ -262,6 +262,13 @@
   //    verification email; complete that first.
   // 3. A stored session token — check it's still valid, auto-login if so.
   // 4. Neither — show the plain login form.
+  // Where a person goes after signing in. A host with something to run —
+  // a stay or an experience — lands on their dashboard, which opens on
+  // Today. Everyone else lands on the site itself.
+  function landingPageFor(guest){
+    return (guest && (guest.hasActiveListing === true || guest.host_id)) ? 'host-dashboard.html' : 'index.html';
+  }
+
   async function checkExistingSession(){
     const params = new URLSearchParams(window.location.search);
     const verifyToken = params.get('verify');
@@ -281,7 +288,7 @@
         const data = await res.json();
         if(res.ok){
           storeSession(data.sessionToken, data.guest);
-          window.location.href = 'index.html';
+          window.location.href = landingPageFor(data.guest);
         } else {
           showOnly(loginState);
           document.getElementById('loginError').textContent = data.error || 'This verification link is invalid or has expired.';
@@ -325,8 +332,10 @@
         headers: { 'Authorization': 'Bearer ' + existingToken }
       });
       if(res.ok){
-        // Session still valid — already logged in, send straight through.
-        window.location.href = 'index.html';
+        // Session still valid — already logged in, send straight through,
+        // to the dashboard for a host.
+        const me = await res.json().catch(() => null);
+        window.location.href = landingPageFor(me && me.guest);
         return;
       }
       // Token expired or invalid — clear it and fall through to login.
@@ -377,7 +386,7 @@
       const data = await res.json();
       if(res.ok){
         storeSession(data.sessionToken, data.guest);
-        window.location.href = 'index.html';
+        window.location.href = landingPageFor(data.guest);
       } else {
         loginError.textContent = data.error || 'Something went wrong. Please try again.';
         loginError.style.display = 'block';
@@ -601,7 +610,7 @@
       const data = await res.json();
       if(res.ok){
         storeSession(data.sessionToken, data.guest);
-        window.location.href = 'index.html';
+        window.location.href = landingPageFor(data.guest);
       } else {
         phoneVerifyError.textContent = data.error || 'Something went wrong. Please try again.';
         phoneVerifyError.style.display = 'block';
@@ -702,7 +711,7 @@
         // One click both resets the password AND logs the guest in — same
         // convenience as the email-verification link (see guest-auth.js).
         storeSession(data.sessionToken, data.guest);
-        window.location.href = 'index.html';
+        window.location.href = landingPageFor(data.guest);
       } else if(res.status === 400 && /invalid or has expired/i.test(data.error || '')){
         document.getElementById('resetExpiredMsg').textContent = data.error;
         showOnly(resetExpiredState);
@@ -753,7 +762,7 @@
       const data = await res.json();
       if(res.ok){
         storeSession(data.sessionToken, data.guest);
-        window.location.href = 'index.html';
+        window.location.href = landingPageFor(data.guest);
       } else {
         socialError.textContent = data.error || 'Could not sign in with Google. Please try again.';
         socialError.style.display = 'block';

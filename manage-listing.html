@@ -288,6 +288,14 @@
         <p id="listPincodeHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">Filled in automatically once you pick an address above. It's for reference only and doesn't affect the property's actual location — use the address search or map pin for that.</p>
       </div>
 
+      <!-- Renaming was not possible anywhere before this: a host who had
+           two similarly named listings had no way to tell them apart. -->
+      <div class="field">
+        <label for="listingPropertyName">Property Name <span style="color:#a3402f;">*</span></label>
+        <input id="listingPropertyName" type="text" maxlength="120" placeholder="e.g. The Manor — Garden Wing" required>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">What guests see. Two properties in the same PIN code cannot share a name, so add the building, wing or floor if yours is one of several.</p>
+      </div>
+
       <div class="field">
         <label for="listingCity">City <span style="color:#a3402f;">*</span></label>
         <input id="listingCity" type="text" placeholder="e.g. Pune" required>
@@ -1645,6 +1653,7 @@
       }
 
       document.getElementById('propertyNameHeading').textContent = l.property_name;
+      document.getElementById('listingPropertyName').value = l.property_name || '';
       document.getElementById('listingCity').value = l.city || '';
       document.getElementById('listingArea').value = l.area || '';
       document.getElementById('listPincode').value = l.pincode || '';
@@ -1862,6 +1871,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token,
+          propertyName: document.getElementById('listingPropertyName').value,
           nightlyRate: toInr(document.getElementById('nightlyRate').value),
           maxGuests: document.getElementById('maxGuests').value,
           city: document.getElementById('listingCity').value,
