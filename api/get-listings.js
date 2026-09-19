@@ -68,7 +68,7 @@ const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIER
 const { verifyToken, secretMatches } = require('./_approval-token');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
-const { answeredQuestions, placesWithAerva, reviewsAboutPerson } = require('./_profiles');
+const { answeredQuestions, placesWithAerva } = require('./_profiles');
 const { logAudit } = require('./_audit-log');
 const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
@@ -780,10 +780,72 @@ module.exports = async (req, res) => {
         `;
         const a = rows[0];
         if (!a) return res.status(404).json({ error: 'This host profile is not available.' });
-        const [places, reviews] = await Promise.all([
-          a.host_id ? placesWithAerva(sql, { guestId: a.account_id || null, hostId: a.host_id }) : { hosting: [] },
-          a.host_id ? reviewsAboutPerson(sql, { guestId: a.account_id || null, hostId: a.host_id, limit: 12 }) : { asHost: [] }
-        ]);
+        // Reviews come in pages, the same steps as a listing's own reviews:
+        // 5 first, then 15, 20, and 100 at a time (the page asks for each
+        // batch; capped here at 100 per request). The rating covers ALL of
+        // the host's published stay reviews, not only the page shown.
+        const offset = Math.max(0, Math.min(10000, Math.floor(Number(req.query.offset)) || 0));
+        const askedLimit = Math.floor(Number(req.query.limit));
+        const PAGE = Number.isFinite(askedLimit) && askedLimit >= 1 ? Math.min(100, askedLimit) : 5;
+        const reviewPage = a.host_id ? await sql`
+          SELECT r.published_at, r.comment, r.hygiene, r.communication, r.services, r.value_rating, r.location,
+                 l.property_name
+          FROM listing_reviews r JOIN listings l ON l.id = r.listing_id
+          WHERE l.host_id = ${a.host_id} AND l.status = 'approved'
+            AND COALESCE(l.listing_type, 'stay') = 'stay'
+            AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL AND r.hygiene IS NOT NULL
+          ORDER BY r.published_at DESC, r.id DESC
+          OFFSET ${offset} LIMIT ${PAGE + 1}
+        ` : [];
+        const n = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0; };
+        const pageReviews = reviewPage.slice(0, PAGE).map(r => ({
+          month: r.published_at ? new Date(r.published_at).toISOString().slice(0, 7) : null,
+          property: r.property_name,
+          score: reviewScore({ hygiene: n(r.hygiene), communication: n(r.communication), services: n(r.services), value: n(r.value_rating), location: n(r.location) }, REVIEW_FACTORS),
+          comment: String(r.comment || '')
+        }));
+        const hasMoreReviews = reviewPage.length > PAGE;
+        // Asked for a further page only: send just that.
+        if (req.query.reviewsOnly === '1') {
+          return res.status(200).json({ reviews: pageReviews, hasMoreReviews });
+        }
+        let rating = null;
+        if (a.host_id) {
+          const agg = await sql`
+            SELECT COUNT(*)::int AS n, AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
+                   AVG(r.services) AS services, AVG(r.value_rating) AS value, AVG(r.location) AS location
+            FROM listing_reviews r JOIN listings l ON l.id = r.listing_id
+            WHERE l.host_id = ${a.host_id} AND l.status = 'approved'
+              AND COALESCE(l.listing_type, 'stay') = 'stay'
+              AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL AND r.hygiene IS NOT NULL
+          `;
+          const g = agg[0] || {};
+          if (Number(g.n) > 0) {
+            rating = {
+              count: Number(g.n),
+              score: Math.round(reviewScore({ hygiene: n(g.hygiene), communication: n(g.communication), services: n(g.services), value: n(g.value), location: n(g.location) }, REVIEW_FACTORS) * 100) / 100
+            };
+          }
+        }
+        const places = a.host_id ? await placesWithAerva(sql, { guestId: a.account_id || null, hostId: a.host_id }) : { hosting: [] };
+        // Everything this host runs that a guest can book right now:
+        // live stays and experiences, newest first, with just what a small
+        // card needs (photo, name, place, price). Up to 24.
+        const hostListings = a.host_id ? await sql`
+          SELECT id, property_name, city, area, COALESCE(listing_type, 'stay') AS listing_type, property_type,
+                 nightly_rate, experience_price_unit,
+                 COALESCE(
+                   NULLIF(btrim(cover_photo_url), ''),
+                   CASE WHEN jsonb_typeof(exterior_photo_urls->0) = 'string'
+                        THEN exterior_photo_urls->>0 ELSE exterior_photo_urls->0->>'url' END,
+                   CASE WHEN jsonb_typeof(interior_photo_urls->0) = 'string'
+                        THEN interior_photo_urls->>0 ELSE interior_photo_urls->0->>'url' END
+                 ) AS photo_url
+          FROM listings
+          WHERE host_id = ${a.host_id} AND status = 'approved'
+          ORDER BY (COALESCE(listing_type, 'stay') = 'stay') DESC, created_at DESC NULLS LAST, id DESC
+          LIMIT 24
+        ` : [];
         const joined = a.account_created_at || a.host_created_at;
         return res.status(200).json({
           profile: {
@@ -794,7 +856,19 @@ module.exports = async (req, res) => {
             hobbies: a.profile_hobbies || null,
             answers: answeredQuestions(a.profile_about),
             hostingIn: places.hosting || [],
-            reviews: reviews.asHost || []
+            listings: hostListings.map(l => ({
+              id: l.id,
+              name: l.property_name,
+              place: [l.area, l.city].filter(Boolean).join(', '),
+              type: l.listing_type === 'experience' ? 'experience' : 'stay',
+              propertyType: l.property_type || null,
+              price: Number(l.nightly_rate) || null,
+              priceUnit: l.experience_price_unit || null,
+              photoUrl: l.photo_url || null
+            })),
+            rating,
+            reviews: pageReviews,
+            hasMoreReviews
           }
         });
       } catch (err) {
