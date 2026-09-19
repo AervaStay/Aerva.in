@@ -314,6 +314,17 @@ module.exports = async (req, res) => {
       // the little badge on the Messages icon should show at all. Counts
       // unread messages from the OTHER party in either direction — as
       // host waiting on a guest reply, or as guest waiting on a host reply.
+      // Which listings this account has liked — so hearts render filled.
+      if (mode === 'myLikes') {
+        try {
+          const rows = await sql`SELECT listing_id FROM listing_likes WHERE guest_id = ${guestId}`;
+          return res.status(200).json({ listingIds: rows.map(r => r.listing_id) });
+        } catch (err) {
+          console.error('myLikes failed (table missing before migration?):', err.message);
+          return res.status(200).json({ listingIds: [] });
+        }
+      }
+
       if (mode === 'unreadMessageCount') {
         const rows = await sql`
           SELECT COUNT(*) AS count
@@ -565,6 +576,38 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     const { mode } = req.body || {};
     try {
+      // ---- Like / unlike a listing ----
+      // POST { mode: 'toggleLike', listingId } -> { liked, likeCount }
+      //
+      // Likes only; there is no dislike. One per account per listing (the
+      // table's primary key), so a double tap can never count twice. Any
+      // live stay or experience can be liked, a host's own included.
+      if (mode === 'toggleLike') {
+        const listingId = Number((req.body || {}).listingId);
+        if (!Number.isInteger(listingId) || listingId <= 0) {
+          return res.status(400).json({ error: 'Missing listing.' });
+        }
+        const live = await sql`SELECT id FROM listings WHERE id = ${listingId} AND status = 'approved'`;
+        if (!live.length) return res.status(404).json({ error: 'This listing is not available.' });
+
+        // Insert first: if it goes in, this is a like. If it was already
+        // there, the same tap means unlike. Either way one statement
+        // decides, so two quick taps land as like-then-unlike, never as
+        // two likes.
+        const added = await sql`
+          INSERT INTO listing_likes (guest_id, listing_id) VALUES (${guestId}, ${listingId})
+          ON CONFLICT (listing_id, guest_id) DO NOTHING
+          RETURNING listing_id
+        `;
+        let liked = true;
+        if (!added.length) {
+          await sql`DELETE FROM listing_likes WHERE guest_id = ${guestId} AND listing_id = ${listingId}`;
+          liked = false;
+        }
+        const countRows = await sql`SELECT COUNT(*)::int AS n FROM listing_likes WHERE listing_id = ${listingId}`;
+        return res.status(200).json({ liked, likeCount: Number(countRows[0]?.n || 0) });
+      }
+
       // ---- Guest reviews a property ----
       // POST { mode: 'submitReview', orderId, hygiene, communication,
       // services, value, location, comment }
