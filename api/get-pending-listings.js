@@ -87,7 +87,7 @@
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
-const { logAudit } = require('./_audit-log');
+const { logAudit, adminActor } = require('./_audit-log');
 const { encryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens } = require('./_secure-fields');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
@@ -467,6 +467,50 @@ module.exports = async (req, res) => {
   const hasValidSecret = secretMatches(adminSecret, process.env.ADMIN_SECRET);
   if (!hasValidSession && !hasValidSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+  // Named on every admin action below (the signed-in admin's email).
+  const ADMIN_ACTOR = await adminActor(sql, sessionPayload, hasValidSecret);
+
+  // ---- Audit history (admin only) ----
+  // GET ?auditLog=1 [&who=admin|host|guest|cohost|system] [&q=text]
+  //     [&from=YYYY-MM-DD] [&to=YYYY-MM-DD] [&before=<id>]
+  // Newest first, 100 at a time; pass the last id as `before` for the
+  // next page. Read-only: nothing here can change or delete an entry, and
+  // no endpoint anywhere deletes audit rows (DPDP Rules: keep processing
+  // logs at least one year — Aerva keeps them indefinitely).
+  if (req.method === 'GET' && req.query.auditLog === '1') {
+    try {
+      const WHO = ['admin', 'host', 'guest', 'cohost', 'system'];
+      const who = WHO.includes(req.query.who) ? req.query.who : null;
+      const q = typeof req.query.q === 'string' && req.query.q.trim() ? '%' + req.query.q.trim().slice(0, 80).replace(/[%_\\]/g, m => '\\' + m) + '%' : null;
+      const day = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+      const from = day(req.query.from);
+      const to = day(req.query.to);
+      const before = Number(req.query.before) > 0 ? Number(req.query.before) : null;
+      const rows = await sql`
+        SELECT id, created_at, action, success, actor_type, actor_identifier, target_type, target_id, metadata
+        FROM audit_log
+        WHERE (${who}::text IS NULL OR actor_type = ${who})
+          AND (${q}::text IS NULL OR action ILIKE ${q} OR actor_identifier ILIKE ${q} OR target_type ILIKE ${q} OR metadata::text ILIKE ${q})
+          AND (${from}::date IS NULL OR created_at >= ${from}::date)
+          AND (${to}::date IS NULL OR created_at < (${to}::date + 1))
+          AND (${before}::int IS NULL OR id < ${before})
+        ORDER BY id DESC
+        LIMIT 101
+      `;
+      return res.status(200).json({
+        entries: rows.slice(0, 100).map(r => ({
+          id: r.id, at: r.created_at, action: r.action, success: r.success !== false,
+          who: r.actor_type || 'system', by: r.actor_identifier || null,
+          target: r.target_type ? `${r.target_type}${r.target_id != null ? ' #' + r.target_id : ''}` : null,
+          details: r.metadata || null
+        })),
+        hasMore: rows.length > 100
+      });
+    } catch (err) {
+      console.error('auditLog view failed:', err);
+      return res.status(500).json({ error: 'Could not load the audit history right now.' });
+    }
   }
 
   // ---- Review policy + conflicts (admin only) ----
@@ -862,7 +906,7 @@ module.exports = async (req, res) => {
       if (!rows.length) return res.status(404).json({ error: 'Review not found, or already reverted.' });
 
       await logAudit(sql, {
-        action: 'review_reverted', success: true, actorType: 'admin', actorIdentifier: String(adminId || 'secret'),
+        action: 'review_reverted', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
         targetType: kind === 'listing' ? 'listing_review' : 'guest_review', targetId: reviewId,
         metadata: { orderId: rows[0].order_id, reason: why }
       });
@@ -910,7 +954,7 @@ module.exports = async (req, res) => {
         // run and the automatic one can never behave differently.
         const r = await runComplianceScan(sql, key);
         await logAudit(sql, {
-          action: 'compliance_check_run', success: true, actorType: 'admin', actorIdentifier: null,
+          action: 'compliance_check_run', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
           targetType: 'compliance', targetId: null,
           metadata: { key, affectedCount: r.affected, newlyFlagged: r.flagged, emailed: r.emailed }
         });
@@ -975,7 +1019,7 @@ module.exports = async (req, res) => {
         `;
 
         await logAudit(sql, {
-          action: 'listing_status_changed', success: true, actorType: 'admin', actorIdentifier: null,
+          action: 'listing_status_changed', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
           targetType: 'listing', targetId: id,
           metadata: { action, fromStatus: listing.status, toStatus: newStatus, reason: safeReason }
         });
@@ -1153,7 +1197,7 @@ module.exports = async (req, res) => {
             await sql`UPDATE orders SET deposit_status = 'disputed' WHERE id = ${orderId} AND deposit_status = 'resolving'`;
             claimed = false;
             await logAudit(sql, {
-              action: 'deposit_dispute_resolved', success: false, actorType: 'admin', actorIdentifier: 'admin',
+              action: 'deposit_dispute_resolved', success: false, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
               targetType: 'order', targetId: orderId,
               metadata: { compensation, guestRefundAmount, reason: razorpayErrorMessage(refundErr) }
             });
@@ -1176,7 +1220,7 @@ module.exports = async (req, res) => {
         }
 
         await logAudit(sql, {
-          action: 'deposit_dispute_resolved', success: true, actorType: 'admin', actorIdentifier: 'admin',
+          action: 'deposit_dispute_resolved', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
           targetType: 'order', targetId: orderId,
           metadata: { compensation, guestRefundAmount, refundId }
         });
@@ -1214,7 +1258,7 @@ module.exports = async (req, res) => {
         if (!upd.length) return res.status(404).json({ error: 'Nothing is waiting for review for this co-host.' });
         await logAudit(sql, {
           action: approve ? 'cohost_payout_profile_approved' : 'cohost_payout_profile_rejected', success: true,
-          actorType: 'admin', actorIdentifier: 'admin', targetType: 'guest', targetId: gid, metadata: { reason: why || null }
+          actorType: 'admin', actorIdentifier: ADMIN_ACTOR, targetType: 'guest', targetId: gid, metadata: { reason: why || null }
         });
         return res.status(200).json({ success: true });
       } catch (err) {
@@ -1245,7 +1289,7 @@ module.exports = async (req, res) => {
         } else {
           await sql`UPDATE hosts SET pan_status = 'not_submitted', pan_rejection_reason = NULL, pan_number = NULL WHERE id = ${hid} AND pan_status = 'rejected'`;
         }
-        await logAudit(sql, { action: `host_${field}_reopened`, success: true, actorType: 'admin', actorIdentifier: 'admin', targetType: 'host', targetId: hid });
+        await logAudit(sql, { action: `host_${field}_reopened`, success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR, targetType: 'host', targetId: hid });
         return res.status(200).json({ success: true });
       } catch (err) {
         console.error('resetIdVerification failed:', err);
@@ -1319,7 +1363,7 @@ module.exports = async (req, res) => {
             out.encrypted++;
           }
         } catch (err) { /* co-host table not created yet */ }
-        await logAudit(sql, { action: 'id_documents_purged', success: true, actorType: 'admin', actorIdentifier: 'admin', metadata: out });
+        await logAudit(sql, { action: 'id_documents_purged', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR, metadata: out });
         return res.status(200).json({ success: true, ...out });
       } catch (err) {
         console.error('purgeReviewedIdDocuments failed:', err);
@@ -1365,7 +1409,7 @@ module.exports = async (req, res) => {
         }
 
         await logAudit(sql, {
-          action: `host_${field}_${action}d`, success: true, actorType: 'admin', actorIdentifier: 'admin',
+          action: `host_${field}_${action}d`, success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
           targetType: 'host', targetId: hostId, metadata: erased === null ? {} : { documentErased: erased }
         });
 

@@ -23,7 +23,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken, secretMatches } = require('./_approval-token');
-const { logAudit } = require('./_audit-log');
+const { logAudit, adminActor } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -227,7 +227,7 @@ async function sendHostRejectionEmail(listing) {
   });
 }
 
-async function applyDecision(listingId, action, reason = null) {
+async function applyDecision(listingId, action, reason = null, actor = 'email approval link') {
   if (action !== 'approve' && action !== 'reject') {
     throw new Error('Invalid action');
   }
@@ -243,7 +243,7 @@ async function applyDecision(listingId, action, reason = null) {
   if (listing) {
     await logAudit(sql, {
       action: action === 'approve' ? 'listing_approved' : 'listing_rejected',
-      success: true, actorType: 'admin', actorIdentifier: null,
+      success: true, actorType: 'admin', actorIdentifier: actor,
       targetType: listing.listing_type === 'experience' ? 'experience' : 'listing', targetId: listing.id,
       metadata: { propertyType: listing.property_type, rejectionReason: action === 'reject' ? reason : undefined }
     });
@@ -341,7 +341,7 @@ async function applyDecision(listingId, action, reason = null) {
 // listing) — a room-level decision, separate from approving the
 // listing itself, since this only ever runs on an already-approved,
 // already-live listing's individual room.
-async function applyRoomChangeDecision(roomId, action, reason = null) {
+async function applyRoomChangeDecision(roomId, action, reason = null, actor = 'email approval link') {
   const rows = await sql`
     SELECT lr.id, lr.listing_id, lr.pending_changes, l.host_email, l.property_name
     FROM listing_rooms lr JOIN listings l ON l.id = lr.listing_id
@@ -403,7 +403,7 @@ async function applyRoomChangeDecision(roomId, action, reason = null) {
 
   await logAudit(sql, {
     action: action === 'approve_room' ? 'room_change_approved' : 'room_change_rejected',
-    success: true, actorType: 'admin', actorIdentifier: null,
+    success: true, actorType: 'admin', actorIdentifier: actor,
     targetType: 'listing_room', targetId: room.id,
     metadata: { listingId: room.listing_id, isNewRoom: isNewRoomProposal, reason: reason || null }
   });
@@ -504,9 +504,10 @@ module.exports = async (req, res) => {
 
     try {
       const { listingId, roomId, action, reason } = req.body;
+      const actor = await adminActor(sql, sessionPayload, hasValidSecret);
       const result = (action === 'approve_room' || action === 'reject_room')
-        ? await applyRoomChangeDecision(roomId, action, reason || null)
-        : await applyDecision(listingId, action, reason || null);
+        ? await applyRoomChangeDecision(roomId, action, reason || null, actor)
+        : await applyDecision(listingId, action, reason || null, actor);
       if (!result) return res.status(404).json({ error: 'Listing or room not found' });
       return res.status(200).json({ success: true, listing: result });
     } catch (err) {

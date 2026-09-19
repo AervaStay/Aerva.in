@@ -20,4 +20,20 @@ async function logAudit(sql, { action, success, actorType, actorIdentifier = nul
   }
 }
 
-module.exports = { logAudit };
+
+// Who an admin request came from, for the audit log: the signed-in
+// admin's email, or the shared ADMIN_SECRET fallback. Every admin action
+// is recorded against a named person, never just "admin". Never throws.
+async function adminActor(sql, sessionPayload, hasValidSecret) {
+  try {
+    if (sessionPayload && sessionPayload.action === 'admin-session') {
+      const rows = await sql`SELECT email FROM admins WHERE id = ${Number(sessionPayload.listingId) || 0}`;
+      return rows[0] && rows[0].email ? String(rows[0].email) : `admin #${sessionPayload.listingId}`;
+    }
+    return hasValidSecret ? 'admin (shared secret)' : 'unknown';
+  } catch (err) {
+    return sessionPayload ? `admin #${sessionPayload.listingId}` : 'unknown';
+  }
+}
+
+module.exports = { logAudit, adminActor };
