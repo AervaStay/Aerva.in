@@ -20,7 +20,7 @@
        are TEXT on dark chips, and --cream-deep also paints photo
        placeholders and small controls that should stay warm. */
     --page:#ffffff;
-    --band:#f3f0eb;
+    --band:#ffffff; /* white everywhere (Sept 2026); cards keep their border and shadow */
     --card:#ffffff;
   }
   *{margin:0;padding:0;box-sizing:border-box;}
@@ -2021,3 +2021,14 @@ body.hp-open{ overflow:hidden; }
   .hp-facts{ grid-template-columns:1fr; }
 }
 .ts-host-link .ts-host-avatar{ width:46px; height:46px; font-family:'Bodoni Moda', serif; font-size:19px; }
+
+/* ---------- ALL-WHITE SITE (Sept 2026) ----------
+   Every page surface is white. What stays warm is deliberate and small:
+   hover tints, chips and badges, photo placeholders — accents, not
+   backgrounds. Cards, panels and inputs separate from the page by their
+   border and shadow instead of by a tinted ground. */
+.pill-search, .search-bar, .filter-bar{ background:#fff; }
+.sticky-back-bar{ background:rgba(255,255,255,0.94); }
+.mobile-nav-panel{ background:#fff; }
+.nav-account-menu, .category-item-submenu, .currency-menu, .nav-notif-panel{ background:#fff; }
+.inbox-chat-pane, .inbox-templates-row{ background:#fff; }
