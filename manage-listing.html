@@ -215,6 +215,22 @@
     font-size:8px; padding:0 4px; background:rgba(255,255,255,0.55); line-height:1.4;
   }
   .listing-map-preview .leaflet-control-attribution img{height:8px; vertical-align:middle;}
+
+  /* ---- Calendar sync ---- */
+  #calSyncSection{ margin:44px 0 20px; padding:24px 26px; border:1px solid #e6dccd; border-radius:14px; background:#fff; }
+  #calSyncSection h2{ font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:0 0 6px; }
+  #calSyncSection h3{ font-size:12px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.6; margin:22px 0 10px; font-weight:500; }
+  .cs-step{ font-size:14.5px; line-height:1.6; margin:4px 0; }
+  .cs-row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .cs-link{ flex:1; min-width:220px; font-size:13px; padding:9px 11px; border:1px solid #e6dccd; border-radius:8px; background:#faf8f5; font-family:ui-monospace, Menlo, monospace; }
+  .cs-btn{ background:#fff; border:1px solid #d9cfc2; border-radius:999px; padding:8px 16px; font-family:'Jost', sans-serif; font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; }
+  .cs-btn.primary{ background:#1c1a17; color:#fff; border-color:#1c1a17; }
+  .cs-feed{ display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center; padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px; }
+  .cs-feed .ok{ color:#3d5a3a; } .cs-feed .err{ color:#a3402f; }
+  .cs-form{ display:grid; grid-template-columns:1fr 2fr auto; gap:10px; margin-top:10px; }
+  .cs-form input, .cs-form select{ padding:10px 12px; border:1px solid #d9cfc2; border-radius:8px; font-family:'Jost', sans-serif; font-size:14.5px; }
+  .cs-msg{ font-size:14px; margin-top:10px; }
+  @media (max-width:640px){ .cs-form{ grid-template-columns:1fr; } }
 </style>
 <!--
   Testing OpenStreetMap via Leaflet.js here ONLY (manage-listing.html) —
@@ -2076,6 +2092,101 @@
     };
     if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', lock); else lock();
   }catch(e){}
+})();
+</script>
+<script>
+// ---- Calendar sync: export this listing's Aerva calendar, and import
+// calendars from Airbnb, Agoda, Booking.com, Vrbo and others. Server side:
+// update-listing-pricing.js (calendarSync) and _calendar-sync.js.
+(function(){
+  const API = 'https://aerva-in.vercel.app/api/update-listing-pricing';
+  const token = new URLSearchParams(window.location.search).get('token');
+  if(!token) return;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  const when = (t) => { try{ return t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'Not yet'; }catch(e){ return 'Not yet'; } };
+  let section;
+
+  function render(state, msg){
+    const rooms = state.rooms || [];
+    section.innerHTML = `
+      <h2>Calendar sync</h2>
+      <h3>1. Send your Aerva calendar to other sites</h3>
+      <p class="cs-step">Copy the link. Paste it into the other site’s “Import calendar” (Airbnb: Availability → Connect calendars. Agoda: Calendar → Calendar connections).</p>
+      ${(state.exportLinks || []).map(l => `
+        <div class="cs-row">
+          ${state.exportLinks.length > 1 ? `<span style="min-width:120px;">${esc(l.label)}</span>` : ''}
+          <input class="cs-link" readonly value="${esc(l.url)}" onclick="this.select()">
+          <button type="button" class="cs-btn" data-copy="${esc(l.url)}">Copy</button>
+          <button type="button" class="cs-btn" data-newlink="${l.roomId || ''}">New link</button>
+        </div>`).join('')}
+      <h3>2. Bring in calendars from other sites</h3>
+      <p class="cs-step">On the other site, copy its “Export calendar” link. Paste it below. Dates booked there are blocked on Aerva.</p>
+      ${(state.feeds || []).length ? state.feeds.map(f => `
+        <div class="cs-feed">
+          <div><strong>${esc(f.name)}</strong>${f.room ? ' · ' + esc(f.room) : ''} <span style="opacity:0.6;">(${esc(f.site || '')})</span><br>
+            <span class="${f.status === 'ok' ? 'ok' : f.status === 'error' ? 'err' : ''}">${f.status === 'ok' ? `Synced ${esc(when(f.lastSyncedAt))} · ${Number(f.dates) || 0} booked period${Number(f.dates) === 1 ? '' : 's'}` : f.status === 'error' ? esc(f.error || 'Sync failed') : 'Waiting for first sync'}</span></div>
+          <button type="button" class="cs-btn" data-remove="${Number(f.id)}">Remove</button>
+        </div>`).join('') : '<p class="cs-step" style="opacity:0.6;">No calendars linked yet.</p>'}
+      <div class="cs-form">
+        <input type="text" id="csName" maxlength="40" placeholder="Name, e.g. Airbnb">
+        <input type="url" id="csUrl" placeholder="https://… calendar link (.ics)">
+        ${rooms.length ? `<select id="csRoom"><option value="">Whole property</option>${rooms.map(r => `<option value="${Number(r.id)}">${esc(r.name)}</option>`).join('')}</select>` : '<span></span>'}
+      </div>
+      <div class="cs-row" style="margin-top:12px;">
+        <button type="button" class="cs-btn primary" id="csAdd">Add calendar</button>
+        ${(state.feeds || []).length ? '<button type="button" class="cs-btn" id="csSync">Sync now</button>' : ''}
+      </div>
+      <p class="cs-step" style="opacity:0.65; margin-top:12px;">Linked calendars sync every day and before every Aerva booking.</p>
+      <div class="cs-msg" id="csMsg">${msg ? esc(msg) : ''}</div>`;
+
+    section.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', async () => {
+      try{ await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; }catch(e){ b.textContent = 'Select and copy'; }
+    }));
+    section.querySelectorAll('[data-newlink]').forEach(b => b.addEventListener('click', async () => {
+      if(!confirm('Replace this link? Sites using the old link stop receiving your Aerva calendar until you paste the new one there.')) return;
+      await act({ action: 'newLink', roomId: b.dataset.newlink || null }, 'New link created. Paste it into the other sites.');
+    }));
+    section.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', async () => {
+      if(!confirm('Remove this calendar? Its dates will no longer be blocked on Aerva.')) return;
+      await act({ action: 'remove', feedId: Number(b.dataset.remove) }, 'Calendar removed.');
+    }));
+    const add = section.querySelector('#csAdd');
+    add.addEventListener('click', async () => {
+      add.disabled = true; add.textContent = 'Adding…';
+      const roomSel = section.querySelector('#csRoom');
+      const r = await act({ action: 'add', name: section.querySelector('#csName').value, url: section.querySelector('#csUrl').value, roomId: roomSel && roomSel.value ? Number(roomSel.value) : null });
+      if(r && r.result) render(r, r.result.ok ? `Calendar added. ${r.result.events} booked period${r.result.events === 1 ? '' : 's'} blocked.` : `Calendar added, but the first sync failed: ${r.result.error}`);
+      else { add.disabled = false; add.textContent = 'Add calendar'; }
+    });
+    const sync = section.querySelector('#csSync');
+    if(sync) sync.addEventListener('click', async () => { sync.disabled = true; sync.textContent = 'Syncing…'; await act({ action: 'syncNow' }, 'Synced.'); });
+  }
+
+  async function act(payload, okMsg){
+    try{
+      const res = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, calendarSync: payload }) });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){ const m = section.querySelector('#csMsg'); if(m) m.textContent = data.error || 'Something went wrong. Try again.'; return null; }
+      if(okMsg) render(data, okMsg);
+      return data;
+    }catch(e){ const m = section.querySelector('#csMsg'); if(m) m.textContent = 'Could not reach Aerva. Try again.'; return null; }
+  }
+
+  async function mount(){
+    const wrap = document.querySelector('.wrap');
+    if(!wrap || document.getElementById('calSyncSection')) return;
+    section = document.createElement('section');
+    section.id = 'calSyncSection';
+    section.innerHTML = '<p class="cs-step" style="opacity:0.6;">Loading calendar sync…</p>';
+    wrap.appendChild(section);
+    try{
+      const res = await fetch(API + '?token=' + encodeURIComponent(token) + '&calendarSync=1');
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || '');
+      render(data);
+    }catch(e){ section.innerHTML = '<h2>Calendar sync</h2><p class="cs-step">Calendar sync is unavailable right now.</p>'; }
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
 })();
 </script>
 <script src="aerva-header.js" defer></script>
