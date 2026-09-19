@@ -4256,6 +4256,52 @@
   }
   function hostProfileEscape(e){ if(e.key === 'Escape') closeHostProfile(); }
 
+  function hostReviewItemHtml(r){
+    const esc = escapeMessageHtml;
+    return `
+      <div class="hp-review">
+        <div class="hp-review-head">
+          <span class="hp-review-prop">${esc(r.property || '')}</span>
+          <span class="hp-review-meta">${r.score ? '★ ' + Number(r.score).toFixed(1) : ''}${r.score && r.month ? ' · ' : ''}${esc(formatReviewMonth(r.month))}</span>
+        </div>
+        ${r.comment ? `<p>${esc(r.comment)}</p>` : ''}
+      </div>`;
+  }
+
+  // "Show more reviews": the same batches as a listing's reviews —
+  // 5 to start, then 15, then 20, then 100 at a time.
+  function wireHostReviewPaging(body, listingId, shown){
+    const btn = body.querySelector('.hp-more');
+    const list = body.querySelector('.hp-review-list');
+    if(!btn || !list) return;
+    let offset = shown;
+    let step = 1;
+    btn.addEventListener('click', async () => {
+      const limit = REVIEW_PAGE_STEPS[step] || REVIEW_PAGE_REST;
+      btn.disabled = true;
+      btn.textContent = 'Loading\u2026';
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId)
+          + '&reviewsOnly=1&offset=' + offset + '&limit=' + limit);
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || 'Failed');
+        const batch = Array.isArray(data.reviews) ? data.reviews : [];
+        list.insertAdjacentHTML('beforeend', batch.map(hostReviewItemHtml).join(''));
+        offset += batch.length;
+        step++;
+        if(data.hasMoreReviews && batch.length){
+          btn.disabled = false;
+          btn.textContent = 'Show more reviews';
+        } else {
+          btn.remove();
+        }
+      }catch(err){
+        btn.disabled = false;
+        btn.textContent = 'Could not load more \u2014 try again';
+      }
+    });
+  }
+
   function renderHostProfile(p, badgeHtml){
     const esc = escapeMessageHtml;
     const initial = esc((p.name || '?').trim().charAt(0).toUpperCase());
@@ -4269,14 +4315,32 @@
     const answers = (p.answers || []).map(a =>
       `<div class="hp-answer"><div class="hp-q">${esc(a.label)}</div><p>${esc(a.answer)}</p></div>`).join('');
     const cities = (p.hostingIn || []).map(c => `<span class="hp-chip">${esc(c.city)}</span>`).join('');
-    const reviews = (p.reviews || []).map(r => `
-      <div class="hp-review">
-        <div class="hp-review-head">
-          <span class="hp-review-prop">${esc(r.property || '')}</span>
-          <span class="hp-review-meta">${r.score ? '★ ' + Number(r.score).toFixed(1) : ''}${r.score && r.month ? ' · ' : ''}${esc(formatReviewMonth(r.month))}</span>
-        </div>
-        ${r.comment ? `<p>${esc(r.comment)}</p>` : ''}
-      </div>`).join('');
+    // What this host runs: small cards that open the listing itself.
+    const listingCards = (p.listings || []).map(l => {
+      const isExp = l.type === 'experience';
+      const href = isExp ? `index.html?experience=${Number(l.id)}` : `index.html?listing=${Number(l.id)}`;
+      const unit = isExp ? (l.priceUnit ? ` / ${esc(String(l.priceUnit).replace(/^per_?/, ''))}` : '') : '/night';
+      const price = l.price ? `${isExp ? '' : 'From '}${fmtGuest(Number(l.price))}${unit}` : '';
+      return `
+        <a class="hp-listing" href="${href}" data-hp-open="${isExp ? 'experience' : 'stay'}" data-hp-id="${Number(l.id)}">
+          ${l.photoUrl ? `<img src="${esc(l.photoUrl)}" alt="" loading="lazy">` : '<span class="hp-listing-ph"></span>'}
+          <span class="hp-listing-body">
+            <span class="hp-listing-type">${isExp ? 'Experience' : esc(l.propertyType || 'Stay')}</span>
+            <span class="hp-listing-name">${esc(l.name)}</span>
+            ${l.place ? `<span class="hp-listing-place">${esc(l.place)}</span>` : ''}
+            ${price ? `<span class="hp-listing-price">${price}</span>` : ''}
+          </span>
+        </a>`;
+    }).join('');
+    const reviews = (p.reviews || []).map(hostReviewItemHtml).join('');
+    // Overall rating across ALL of this host's published stay reviews.
+    const rating = p.rating && p.rating.count > 0 ? p.rating : null;
+    const ratingHtml = rating ? `
+      <div class="hp-rating">
+        <span class="hp-rating-score">${Number(rating.score).toFixed(2)}</span>
+        <span class="hp-rating-stars" aria-hidden="true">${[1,2,3,4,5].map(i => `<span class="${i <= Math.round(rating.score) ? 'on' : ''}">★</span>`).join('')}</span>
+        <span class="hp-rating-count">${rating.count} review${rating.count === 1 ? '' : 's'}</span>
+      </div>` : '';
     const nothingMore = !facts && !answers && !cities && !reviews;
     return `
       <div class="hp-head">
@@ -4286,12 +4350,17 @@
           <h2 class="hp-name">${esc(p.name)}</h2>
           <div class="hp-meta">Host${p.memberSince ? ' · on Aerva since ' + esc(p.memberSince) : ''}</div>
           ${badgeHtml ? `<div class="hp-badge">${badgeHtml}</div>` : ''}
+          ${ratingHtml}
         </div>
       </div>
       ${facts ? `<div class="hp-section"><div class="hp-facts">${facts}</div></div>` : ''}
       ${answers ? `<div class="hp-section"><h3 class="hp-title">Get to know ${esc((p.name || '').split(' ')[0] || 'them')}</h3>${answers}</div>` : ''}
+      ${listingCards ? `<div class="hp-section"><h3 class="hp-title">${esc((p.name || '').split(' ')[0] || 'Their')}\u2019s homes & experiences</h3><div class="hp-listings">${listingCards}</div></div>` : ''}
       ${cities ? `<div class="hp-section"><h3 class="hp-title">Hosting in</h3><div class="hp-chips">${cities}</div></div>` : ''}
-      ${reviews ? `<div class="hp-section"><h3 class="hp-title">What guests say about their homes</h3>${reviews}</div>` : ''}
+      ${reviews ? `<div class="hp-section"><h3 class="hp-title">What guests say about their homes</h3>
+        <div class="hp-review-list">${reviews}</div>
+        ${p.hasMoreReviews ? '<button type="button" class="hp-more">Show more reviews</button>' : ''}
+      </div>` : ''}
       ${p.partial
         ? '<p class="hp-empty">The rest of this profile could not be loaded just now. Please try again in a moment.</p>'
         : (nothingMore ? '<p class="hp-empty">This host hasn\u2019t added more to their profile yet.</p>' : '')}`;
@@ -4316,10 +4385,11 @@
     document.addEventListener('keydown', hostProfileEscape);
     const body = ov.querySelector('.hp-body');
     try{
-      const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId));
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId) + '&limit=' + REVIEW_PAGE_STEPS[0]);
       const data = await res.json().catch(() => ({}));
       if(!res.ok || !data.profile) throw new Error(data.error || 'Could not load this profile right now.');
       body.innerHTML = renderHostProfile(data.profile, badgeHtml);
+      wireHostReviewPaging(body, listingId, (data.profile.reviews || []).length);
     }catch(err){
       // Never a dead end: if the full profile cannot be fetched (the
       // server is mid-deploy, a network blip, an older backend), show the
@@ -4329,6 +4399,20 @@
       body.innerHTML = renderHostProfile({ name: knownName || 'Your host', answers: [], hostingIn: [], reviews: [], partial: true }, badgeHtml);
     }
   }
+
+  // A listing card inside a host profile: open it right here if the page
+  // already has it loaded, otherwise follow its link (?listing= / ?experience=).
+  document.addEventListener('click', function(e){
+    const card = e.target.closest && e.target.closest('[data-hp-open]');
+    if(!card) return;
+    const id = Number(card.getAttribute('data-hp-id'));
+    const isExp = card.getAttribute('data-hp-open') === 'experience';
+    const loaded = isExp ? experiencesById[id] : listingsById[id];
+    if(!loaded) return; // the href takes over
+    e.preventDefault();
+    closeHostProfile();
+    if(isExp) openExperienceDetail(id); else openListingDetail(id);
+  });
 
   // One listener for every "Hosted by" button, wherever the listing is shown.
   document.addEventListener('click', function(e){

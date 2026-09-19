@@ -2047,3 +2047,32 @@ body.hp-open{ overflow:hidden; }
 .place-suggestions, .bedroom-tab, .rr-action{
   background-color:#fff;
 }
+
+/* Host profile: overall rating under the name, and "Show more reviews". */
+.hp-rating{ display:flex; align-items:baseline; gap:10px; margin-top:14px; flex-wrap:wrap; }
+.hp-rating-score{ font-family:'Bodoni Moda', serif; font-size:28px; line-height:1; }
+.hp-rating-stars span{ color:var(--line-dark); font-size:14px; letter-spacing:1px; }
+.hp-rating-stars span.on{ color:#c9a227; }
+.hp-rating-count{ font-size:11px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.6; }
+.hp-more{
+  margin-top:18px; background:#fff; border:1px solid var(--line-dark); border-radius:999px;
+  padding:10px 20px; font-family:'Jost', sans-serif; font-size:11.5px; letter-spacing:0.12em;
+  text-transform:uppercase; cursor:pointer; color:var(--ink);
+}
+.hp-more:hover{ border-color:var(--gold-deep); }
+.hp-more:disabled{ opacity:0.6; cursor:progress; }
+
+/* Host profile: the host's live homes and experiences as small cards. */
+.hp-listings{ display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:16px; }
+.hp-listing{
+  display:flex; flex-direction:column; border:1px solid var(--line-dark); border-radius:12px; overflow:hidden;
+  background:#fff; color:inherit; text-decoration:none; transition:box-shadow .2s ease, border-color .2s ease, transform .2s ease;
+}
+.hp-listing:hover{ border-color:var(--gold); box-shadow:0 8px 22px rgba(28,26,23,0.10); transform:translateY(-2px); }
+.hp-listing img, .hp-listing-ph{ width:100%; aspect-ratio:4/3; object-fit:cover; display:block; background:var(--cream-deep); }
+.hp-listing-body{ display:flex; flex-direction:column; gap:3px; padding:12px 14px 14px; }
+.hp-listing-type{ font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold-deep); }
+.hp-listing-name{ font-family:'Bodoni Moda', serif; font-size:17px; line-height:1.25; }
+.hp-listing-place{ font-size:12.5px; opacity:0.6; }
+.hp-listing-price{ font-size:13.5px; margin-top:4px; }
+@media (max-width:640px){ .hp-listings{ grid-template-columns:1fr 1fr; gap:12px; } .hp-listing-name{ font-size:15px; } }
