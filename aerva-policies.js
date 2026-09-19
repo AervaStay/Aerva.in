@@ -49,12 +49,13 @@ window.AERVA_POLICIES = {
       'Stay within the listing’s pet limit and allowed pet types.',
       'Choose a type for each pet when you book. You may change the type later, but not the number of pets.',
       'The listing’s pet fee is charged per pet, per stay.',
-      'A young litter counts as one pet. A pet older than 1 year counts separately. Carry proof of age if the host asks.',
+      'Add young ones (under 1 year) to the pet they travel with. They are not counted or charged. A pet older than 1 year is added as its own pet. Carry proof of age if the host asks.',
       'Keep vaccinations current. Clean up after your pet.',
       'Do not leave pets alone unless the host allows it.',
       'You are responsible for any damage or injury your pet causes.'
     ]},
     { id: 'service-animals', title: 'Service and support animals', points: [
+      'When you add a pet, answer whether it is a service or support animal.',
       'One service or support animal per booking is free.',
       'Each additional one is charged at the listing’s pet fee.',
       'Service and support animals do not count toward the pet limit.',

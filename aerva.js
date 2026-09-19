@@ -4287,7 +4287,7 @@
       btn.textContent = 'Loading\u2026';
       try{
         const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId)
-          + '&reviewsOnly=1&offset=' + offset + '&limit=' + limit);
+          + '&reviewsOnly=1&offset=' + offset + '&limit=' + limit, { headers: { 'Authorization': 'Bearer ' + (guestAuthToken() || '') } });
         const data = await res.json();
         if(!res.ok) throw new Error(data.error || 'Failed');
         const batch = Array.isArray(data.reviews) ? data.reviews : [];
@@ -4397,7 +4397,7 @@
     document.addEventListener('keydown', hostProfileEscape);
     const body = ov.querySelector('.hp-body');
     try{
-      const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId) + '&limit=' + REVIEW_PAGE_STEPS[0]);
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId) + '&limit=' + REVIEW_PAGE_STEPS[0], { headers: { 'Authorization': 'Bearer ' + (guestAuthToken() || '') } });
       const data = await res.json().catch(() => ({}));
       if(!res.ok || !data.profile) throw new Error(data.error || 'Could not load this profile right now.');
       body.innerHTML = renderHostProfile(data.profile, badgeHtml);
@@ -4429,6 +4429,7 @@
   // One listener for every "Hosted by" button, wherever the listing is shown.
   document.addEventListener('click', function(e){
     const btn = e.target.closest && e.target.closest('[data-host-profile]');
+    if(btn && !guestAuthToken()) return; // logged out: not clickable
     if(!btn) return;
     e.preventDefault();
     const badges = btn.querySelector('.ts-host-badges');
@@ -4682,7 +4683,9 @@
     const initial = hostName ? escapeMessageHtml(hostName.trim().charAt(0).toUpperCase()) : '';
     // Tapping the host opens their public profile (openHostProfile below).
     // It is looked up through this listing, so it only needs its id.
-    const profileId = Number(listing.id) || 0;
+    // Host profiles are for signed-in users: logged out, "Hosted by" is plain
+    // text — no button, no "View profile".
+    const profileId = !guestAuthToken() ? null : (Number(listing.id) || 0);
     const hostInner = `
         ${initial ? `<span class="ts-host-avatar">${initial}</span>` : ''}
         <span class="ts-host-text">
@@ -7852,58 +7855,14 @@
                 <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? fmt(Number(listing.pet_fee)) + ' per pet, per stay' : 'No pet fee'}</div>
               </div>
               <div class="guest-stepper">
-                <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="dec" aria-label="Decrease pets">−</button>
-                <span class="guest-count" id="lgCountPets">0</span>
-                <button type="button" class="guest-step-btn" data-lg-type="pets" data-lg-action="inc" aria-label="Increase pets">+</button>
+                <button type="button" class="guest-step-btn" data-lg-type="animals" data-lg-action="dec" aria-label="Decrease pets">−</button>
+                <span class="guest-count" id="lgCountAnimals">0</span>
+                <button type="button" class="guest-step-btn" data-lg-type="animals" data-lg-action="inc" aria-label="Increase pets">+</button>
               </div>
             </div>
-            <div id="lgPetTypesPicker" style="display:none; padding:10px 0 4px;">
-              <p style="font-size:11.5px; opacity:0.7; margin-bottom:8px;">What kind of pet is each one? <span style="color:#a3402f;">*</span></p>
-              <div id="lgPetTypeSlots" style="display:flex; flex-direction:column; gap:6px;"></div>
-              <p id="lgPetTypesError" style="font-size:11.5px; color:#a3402f; margin-top:6px; display:none;">Please choose a type for each pet.</p>
-            </div>
-            <div class="guest-row-divider"></div>
-            <div class="guest-row" style="align-items:flex-start;">
-              <div class="guest-row-text">
-                <div class="guest-row-title">Service or support animal?</div>
-                <div class="guest-row-sub guest-row-sub-muted" style="line-height:1.5;">Not counted toward your pet count or fee — for a guest's own physical or emotional disability only. No documents needed; the host may only ask whether it's required because of a disability, at check-in.</div>
-              </div>
-              <label style="display:flex; align-items:center; padding-top:2px; cursor:pointer;">
-                <input type="checkbox" id="lgServiceAnimalToggle">
-              </label>
-            </div>
-            <div id="lgServiceAnimalPicker" style="display:none; padding:6px 0 4px;">
-              <div class="guest-row" style="border:none; padding:6px 0;">
-                <div class="guest-row-text"><div class="guest-row-sub">How many?</div></div>
-                <div class="guest-stepper">
-                  <button type="button" class="guest-step-btn" data-lg-type="serviceAnimals" data-lg-action="dec" aria-label="Decrease service animals">−</button>
-                  <span class="guest-count" id="lgCountServiceAnimals">1</span>
-                  <button type="button" class="guest-step-btn" data-lg-type="serviceAnimals" data-lg-action="inc" aria-label="Increase service animals">+</button>
-                </div>
-              </div>
-              <div id="lgServiceAnimalSlots" style="display:flex; flex-direction:column; gap:6px;"></div>
-              <p id="lgServiceAnimalError" style="font-size:11.5px; color:#a3402f; margin-top:6px; display:none;">Please choose a type for each service or support animal.</p>
-            </div>
-            <div class="guest-row-divider"></div>
-            <div class="guest-row" style="align-items:flex-start;">
-              <div class="guest-row-text">
-                <div class="guest-row-title">Traveling with a young litter?</div>
-                <div class="guest-row-sub guest-row-sub-muted" style="line-height:1.5;">Young pets (under 1 year) traveling with an adult pet you've already added above aren't counted or charged. The host may ask for proof if there's any doubt — it's a mutual understanding between you and your host.</div>
-              </div>
-              <label style="display:flex; align-items:center; padding-top:2px; cursor:pointer;">
-                <input type="checkbox" id="lgYoungLitterToggle" disabled>
-              </label>
-            </div>
-            <div id="lgYoungLitterPicker" style="display:none; padding:6px 0 4px;">
-              <div class="guest-row" style="border:none; padding:6px 0;">
-                <div class="guest-row-text"><div class="guest-row-sub">How many young pets?</div></div>
-                <div class="guest-stepper">
-                  <button type="button" class="guest-step-btn" data-lg-type="youngLitter" data-lg-action="dec" aria-label="Decrease young litter pets">−</button>
-                  <span class="guest-count" id="lgCountYoungLitter">1</span>
-                  <button type="button" class="guest-step-btn" data-lg-type="youngLitter" data-lg-action="inc" aria-label="Increase young litter pets">+</button>
-                </div>
-              </div>
-            </div>` : ''}
+            <div id="lgPetList" class="lg-pet-list" style="display:none;"></div>
+            <p id="lgPetNote" class="lg-pet-note" style="display:none;"></p>
+            <p id="lgPetTypesError" class="lg-pet-error" style="display:none;"></p>` : ''}
             <div id="listingAmenitiesPicker"></div>
             <div id="listingExperiencesPicker"></div>
             <div id="listingPriceSummary" style="display:none;"></div>
@@ -8375,115 +8334,108 @@
       if(countEl) countEl.textContent = lgCounts[type];
     });
 
-    // One dropdown PER billable pet — never a free-floating multi-select
-    // of "kinds," since that let a guest check three types while the
-    // stepper said "1 pet," with nothing tying the two together. Changing
-    // a pet's type is just changing its own dropdown; the total is always
-    // capped by the stepper count.
+    // ---- Pets: one card per animal ----
+    // Each animal gets: its type, "Service or support animal?" (Yes / No),
+    // and — for a pet — how many young (under 1 year) travel with it.
+    // Everything the rest of the booking reads is derived from this one
+    // list, in the same shape as before:
+    //   lgCounts.pets           pets that count toward the limit and fee
+    //   lgCounts.serviceAnimals service / support animals (1st free per
+    //                           booking, each further one at the pet fee)
+    //   lgCounts.youngLitter    young ones travelling with those pets
+    //   _lgPetTypeSelections / _lgServiceAnimalSelections  their types
     renderAvailabilityCalendar._lgPetTypeSelections = renderAvailabilityCalendar._lgPetTypeSelections || {};
+    renderAvailabilityCalendar._lgServiceAnimalSelections = renderAvailabilityCalendar._lgServiceAnimalSelections || {};
+    renderAvailabilityCalendar._lgAnimals = renderAvailabilityCalendar._lgAnimals || {};
     const petTypeOptions = (Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length)
       ? listing.allowed_pet_types : ['Dog', 'Cat'];
-    function renderPetTypeSlots(count){
-      const slotsEl = container.parentElement.querySelector('#lgPetTypeSlots');
-      if(!slotsEl) return;
-      const prev = renderAvailabilityCalendar._lgPetTypeSelections[listingId] || [];
-      const next = Array.from({ length: count }, (_, i) => prev[i] && petTypeOptions.includes(prev[i]) ? prev[i] : petTypeOptions[0]);
-      renderAvailabilityCalendar._lgPetTypeSelections[listingId] = next;
-      slotsEl.innerHTML = next.map((val, i) => `
-        <div style="display:flex; align-items:center; gap:8px;">
-          <span style="font-size:12.5px; opacity:0.65; width:44px;">Pet ${i + 1}</span>
-          <select class="lg-pet-type-select" data-pet-index="${i}" style="flex:1; padding:6px 8px; border:1px solid var(--line-dark); background:#fff; font-family:inherit; font-size:13px;">
-            ${petTypeOptions.map(t => `<option value="${t}" ${t === val ? 'selected' : ''}>${petTypeLabel(t)}</option>`).join('')}
-          </select>
-        </div>
-      `).join('');
-      slotsEl.querySelectorAll('.lg-pet-type-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-          const idx = Number(sel.dataset.petIndex);
-          renderAvailabilityCalendar._lgPetTypeSelections[listingId][idx] = sel.value;
-        });
-      });
-    }
-    const petTypesPickerEl = container.parentElement.querySelector('#lgPetTypesPicker');
-    if(lgCounts.pets > 0){
-      if(petTypesPickerEl) petTypesPickerEl.style.display = 'block';
-      renderPetTypeSlots(lgCounts.pets);
-    }
+    const MAX_SERVICE_ANIMALS = 5;
+    const petListEl = container.parentElement.querySelector('#lgPetList');
+    const petNoteEl = container.parentElement.querySelector('#lgPetNote');
+    const petErrorEl = container.parentElement.querySelector('#lgPetTypesError');
+    let animals = renderAvailabilityCalendar._lgAnimals[listingId]
+      || Array.from({ length: lgCounts.pets || 0 }, () => ({ type: petTypeOptions[0], service: false, litter: 0 }));
+    renderAvailabilityCalendar._lgAnimals[listingId] = animals;
 
-    // Service/support animals — its own small type-per-slot picker, same
-    // pattern as billable pets, but this NEVER touches lgCounts.pets and
-    // is only offered at all on listings that are pet-friendly (this
-    // whole section lives inside that same conditional in the markup).
-    renderAvailabilityCalendar._lgServiceAnimalSelections = renderAvailabilityCalendar._lgServiceAnimalSelections || {};
-    const serviceAnimalToggle = container.parentElement.querySelector('#lgServiceAnimalToggle');
-    const serviceAnimalPicker = container.parentElement.querySelector('#lgServiceAnimalPicker');
-    function renderServiceAnimalSlots(count){
-      const slotsEl = container.parentElement.querySelector('#lgServiceAnimalSlots');
-      if(!slotsEl) return;
-      const prev = renderAvailabilityCalendar._lgServiceAnimalSelections[listingId] || [];
-      const next = Array.from({ length: count }, (_, i) => prev[i] && petTypeOptions.includes(prev[i]) ? prev[i] : petTypeOptions[0]);
-      renderAvailabilityCalendar._lgServiceAnimalSelections[listingId] = next;
-      slotsEl.innerHTML = next.map((val, i) => `
-        <div style="display:flex; align-items:center; gap:8px;">
-          <span style="font-size:12.5px; opacity:0.65; width:44px;">#${i + 1}</span>
-          <select class="lg-service-animal-select" data-animal-index="${i}" style="flex:1; padding:6px 8px; border:1px solid var(--line-dark); background:#fff; font-family:inherit; font-size:13px;">
-            ${petTypeOptions.map(t => `<option value="${t}" ${t === val ? 'selected' : ''}>${petTypeLabel(t)}</option>`).join('')}
-          </select>
-        </div>
-      `).join('');
-      slotsEl.querySelectorAll('.lg-service-animal-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-          const idx = Number(sel.dataset.animalIndex);
-          renderAvailabilityCalendar._lgServiceAnimalSelections[listingId][idx] = sel.value;
-        });
-      });
-    }
-    if(serviceAnimalToggle){
-      serviceAnimalToggle.addEventListener('change', () => {
-        if(serviceAnimalToggle.checked){
-          lgCounts.serviceAnimals = lgCounts.serviceAnimals || 1;
-          document.getElementById('lgCountServiceAnimals').textContent = lgCounts.serviceAnimals;
-          if(serviceAnimalPicker) serviceAnimalPicker.style.display = 'block';
-          renderServiceAnimalSlots(lgCounts.serviceAnimals);
-        } else {
-          lgCounts.serviceAnimals = 0;
-          if(serviceAnimalPicker) serviceAnimalPicker.style.display = 'none';
-          const errEl = container.parentElement.querySelector('#lgServiceAnimalError');
-          if(errEl) errEl.style.display = 'none';
-        }
-      });
-    }
-
-    // Young litter pets — a plain count, no type picker (they travel
-    // WITH an already-typed adult pet above), only enabled once there's
-    // at least one billable pet to travel with.
-    const youngLitterToggle = container.parentElement.querySelector('#lgYoungLitterToggle');
-    const youngLitterPicker = container.parentElement.querySelector('#lgYoungLitterPicker');
-    function syncYoungLitterAvailability(){
-      if(!youngLitterToggle) return;
-      const canOffer = lgCounts.pets > 0;
-      youngLitterToggle.disabled = !canOffer;
-      if(!canOffer && youngLitterToggle.checked){
-        youngLitterToggle.checked = false;
-        lgCounts.youngLitter = 0;
-        if(youngLitterPicker) youngLitterPicker.style.display = 'none';
+    function syncAnimalCounts(){
+      const pets = animals.filter(x => !x.service);
+      const service = animals.filter(x => x.service);
+      lgCounts.animals = animals.length;
+      lgCounts.pets = pets.length;
+      lgCounts.serviceAnimals = service.length;
+      lgCounts.youngLitter = pets.reduce((sum, x) => sum + (Number(x.litter) || 0), 0);
+      renderAvailabilityCalendar._lgPetTypeSelections[listingId] = pets.map(x => x.type);
+      renderAvailabilityCalendar._lgServiceAnimalSelections[listingId] = service.map(x => x.type);
+      const countEl = document.getElementById('lgCountAnimals');
+      if(countEl) countEl.textContent = animals.length;
+      // Instructions only.
+      if(petNoteEl){
+        const notes = [];
+        if(service.length) notes.push('First service or support animal is free. Each additional one is charged the pet fee.');
+        petNoteEl.textContent = notes.join(' ');
+        petNoteEl.style.display = notes.length ? 'block' : 'none';
+      }
+      if(petErrorEl){
+        let msg = '';
+        if(pets.length > maxBillablePets) msg = `This home allows up to ${maxBillablePets} pet${maxBillablePets === 1 ? '' : 's'}. Service or support animals are not counted.`;
+        else if(service.length > MAX_SERVICE_ANIMALS) msg = `Up to ${MAX_SERVICE_ANIMALS} service or support animals.`;
+        petErrorEl.textContent = msg;
+        petErrorEl.style.display = msg ? 'block' : 'none';
       }
     }
-    syncYoungLitterAvailability();
-    if(youngLitterToggle){
-      youngLitterToggle.addEventListener('change', () => {
-        if(youngLitterToggle.checked){
-          lgCounts.youngLitter = lgCounts.youngLitter || 1;
-          document.getElementById('lgCountYoungLitter').textContent = lgCounts.youngLitter;
-          if(youngLitterPicker) youngLitterPicker.style.display = 'block';
-        } else {
-          lgCounts.youngLitter = 0;
-          if(youngLitterPicker) youngLitterPicker.style.display = 'none';
-        }
-      });
-    }
 
-    const LG_MAX = { adults: 16, children: 12, infants: 5, pets: maxBillablePets, serviceAnimals: 5, youngLitter: 10 };
+    function renderAnimalList(){
+      if(!petListEl) return;
+      petListEl.style.display = animals.length ? 'flex' : 'none';
+      petListEl.innerHTML = animals.map((x, i) => `
+        <div class="lg-pet-card" data-animal="${i}">
+          <div class="lg-pet-head">Pet ${i + 1}</div>
+          <label class="lg-pet-field">Type
+            <select class="lg-pet-type" data-animal="${i}">
+              ${petTypeOptions.map(t => `<option value="${escapeMessageHtml(t)}" ${t === x.type ? 'selected' : ''}>${escapeMessageHtml(petTypeLabel(t))}</option>`).join('')}
+            </select>
+          </label>
+          <div class="lg-pet-field">Service or support animal?
+            <div class="lg-pet-yesno" role="group">
+              <button type="button" class="lg-yn ${x.service ? '' : 'on'}" data-animal="${i}" data-service="no">No</button>
+              <button type="button" class="lg-yn ${x.service ? 'on' : ''}" data-animal="${i}" data-service="yes">Yes</button>
+            </div>
+          </div>
+          ${x.service ? '' : `
+          <label class="lg-pet-field">Young ones with this pet (under 1 year)
+            <select class="lg-pet-litter" data-animal="${i}">
+              ${Array.from({ length: 11 }, (_, n) => `<option value="${n}" ${n === (Number(x.litter) || 0) ? 'selected' : ''}>${n === 0 ? 'None' : n}</option>`).join('')}
+            </select>
+          </label>`}
+        </div>`).join('');
+      petListEl.querySelectorAll('.lg-pet-type').forEach(sel => sel.addEventListener('change', () => {
+        animals[Number(sel.dataset.animal)].type = sel.value;
+        syncAnimalCounts();
+      }));
+      petListEl.querySelectorAll('.lg-yn').forEach(btn => btn.addEventListener('click', () => {
+        const a = animals[Number(btn.dataset.animal)];
+        a.service = btn.dataset.service === 'yes';
+        if(a.service) a.litter = 0;
+        syncAnimalCounts();
+        renderAnimalList();
+        updateListingPriceSummary(listing, lgArrival, lgDeparture);
+      }));
+      petListEl.querySelectorAll('.lg-pet-litter').forEach(sel => sel.addEventListener('change', () => {
+        animals[Number(sel.dataset.animal)].litter = Number(sel.value) || 0;
+        syncAnimalCounts();
+        updateListingPriceSummary(listing, lgArrival, lgDeparture);
+      }));
+    }
+    function setAnimalCount(n){
+      while(animals.length < n) animals.push({ type: petTypeOptions[0], service: false, litter: 0 });
+      while(animals.length > n) animals.pop();
+      syncAnimalCounts();
+      renderAnimalList();
+    }
+    syncAnimalCounts();
+    renderAnimalList();
+
+    const LG_MAX = { adults: 16, children: 12, infants: 5, animals: maxBillablePets + MAX_SERVICE_ANIMALS };
     // A stay is one physical unit with a real ceiling on how many people
     // can fit — capped here in real time as the stepper moves, not just
     // caught later at checkout (see create-order.js, which still
@@ -8501,7 +8453,14 @@
         // serviceAnimals/youngLitter have their own floor of 1 while
         // their toggle is on — going to 0 via the stepper doesn't make
         // sense, unchecking the toggle is how you remove them entirely.
-        const min = type === 'adults' ? 1 : (type === 'serviceAnimals' || type === 'youngLitter') ? 1 : 0;
+        const min = type === 'adults' ? 1 : 0;
+        if(type === 'animals'){
+          const n = animals.length + delta;
+          if(n < 0 || n > LG_MAX.animals) return;
+          setAnimalCount(n);
+          updateListingPriceSummary(listing, lgArrival, lgDeparture);
+          return;
+        }
         if(next < min || next > LG_MAX[type]) return;
         if(delta > 0 && (type === 'adults' || type === 'children') && listingMaxGuests > 0){
           const otherType = type === 'adults' ? 'children' : 'adults';
@@ -8522,17 +8481,6 @@
         if(capNoteEl) capNoteEl.style.display = 'none';
         const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
         if(countEl) countEl.textContent = next;
-        if(type === 'pets'){
-          if(petTypesPickerEl) petTypesPickerEl.style.display = next > 0 ? 'block' : 'none';
-          if(next === 0){
-            const errorEl = container.parentElement.querySelector('#lgPetTypesError');
-            if(errorEl) errorEl.style.display = 'none';
-          } else {
-            renderPetTypeSlots(next);
-          }
-          syncYoungLitterAvailability();
-        }
-        if(type === 'serviceAnimals') renderServiceAnimalSlots(next);
         updateListingPriceSummary(listing, lgArrival, lgDeparture);
       });
     });
@@ -8834,6 +8782,12 @@
     // Bringing a pet requires saying what kind — one dropdown per pet
     // slot (see renderPetTypeSlots), so this is always exactly one type
     // per billable pet, never a looser "at least one kind checked."
+    const petCap = listing.max_pets_allowed ? Math.min(5, Number(listing.max_pets_allowed)) : 5;
+    if(counts.pets > petCap){
+      errorEl.textContent = `This home allows up to ${petCap} pet${petCap === 1 ? '' : 's'}. Service or support animals are not counted.`;
+      errorEl.style.display = 'block';
+      return;
+    }
     let petTypes = [];
     if(counts.pets > 0){
       const modalRoot = document.getElementById('listingModalBody');

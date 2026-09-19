@@ -2162,3 +2162,15 @@ footer .foot-bottom{
 .policy-note a{ color:var(--gold-deep); }
 .foot-policies{ color:inherit; text-decoration:underline; text-underline-offset:3px; }
 @media (max-width:640px){ .policies-title{ font-size:34px; } .policy-section li{ font-size:15.5px; } }
+
+/* Booking picker: one card per pet (type, service animal Yes/No, young ones). */
+.lg-pet-list{ flex-direction:column; gap:10px; margin:6px 0 10px; }
+.lg-pet-card{ border:1px solid var(--line-dark); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:10px; background:#fff; }
+.lg-pet-head{ font-size:12px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold-deep); }
+.lg-pet-field{ display:flex; flex-direction:column; gap:6px; font-size:14px; }
+.lg-pet-field select{ padding:8px 10px; border:1px solid var(--line-dark); border-radius:8px; background:#fff; font-family:inherit; font-size:14px; }
+.lg-pet-yesno{ display:flex; gap:6px; }
+.lg-yn{ flex:1; padding:8px 10px; border:1px solid var(--line-dark); border-radius:999px; background:#fff; font-family:inherit; font-size:13.5px; cursor:pointer; }
+.lg-yn.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.lg-pet-note{ font-size:13.5px; margin:0 0 8px; opacity:0.8; }
+.lg-pet-error{ font-size:13.5px; color:#a3402f; margin:0 0 8px; }
