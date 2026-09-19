@@ -62,6 +62,8 @@ const BASE_OCCUPANCY = 2;
 // display-only.
 const { stayGst, experienceGst } = require('./_gst');
 const { sanitizeBody } = require('./_plain-text');
+const { AGREEMENT_VERSION } = require('./_agreements');
+const { requestContext } = require('./_audit-log');
 // Fixed platform commission rates — replaces the old per-listing
 // commission_rate column, which is no longer read for new bookings (kept
 // in the schema/orders table only for historical orders placed before
@@ -254,6 +256,15 @@ module.exports = async (req, res) => {
 
   try {
     const { stays, experiences, email, preferredCurrency, couponCode } = req.body;
+
+    // The booking agreement must be accepted, in its current wording, before
+    // any payment is created (aerva-policies.js → agreements.guest). What was
+    // accepted, when and from where travels with the payment and is saved on
+    // every booking row (verify-payment.js).
+    if (req.body.agreementVersion !== AGREEMENT_VERSION) {
+      return res.status(400).json({ error: 'Please read and accept the booking agreement to continue.', agreementVersion: AGREEMENT_VERSION });
+    }
+    const agreementNote = [AGREEMENT_VERSION, new Date().toISOString(), requestContext(req).ip || ''].join('|').slice(0, 200);
     let safeStays = Array.isArray(stays) ? stays : [];
     const safeExperiences = Array.isArray(experiences) ? experiences : [];
 
@@ -840,6 +851,7 @@ module.exports = async (req, res) => {
         chargeAmount: chargeAmount || '',
         couponId: appliedCouponId || '',
         couponDiscount: appliedCouponDiscount || '',
+        agreement: agreementNote,
         // Razorpay notes have a size limit we haven't hit in practice yet,
         // but amenities make this payload meaningfully bigger than before
         // — if bookings with several amenities/dates start failing here,

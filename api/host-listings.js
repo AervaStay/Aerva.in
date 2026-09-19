@@ -79,6 +79,8 @@ const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
 const { sanitizeBody } = require('./_plain-text');
+const { AGREEMENT_VERSION } = require('./_agreements');
+const { requestContext } = require('./_audit-log');
 const { encryptField, maskPan, maskAccount, maskGstin, encryptionReady } = require('./_secure-fields');
 const { COHOST_PERMISSIONS, FULL_ONLY, ALWAYS_LABEL, cleanPermissions, cleanEmail, resolveActingHost, cohostCan,
         cohostHasListing, describeAccess, inviteToken, readInviteToken, emailCohostInvite,
@@ -705,6 +707,40 @@ module.exports = async (req, res) => {
   let guestId = requireGuestId(req);
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
   const accountId = guestId; // the person actually signed in, always
+
+  // ---- Host agreement: one-time acceptance for hosts who listed before
+  // it existed (new hosts accept it when submitting a listing) ----
+  // GET ?hostAgreement=1 → { isHost, accepted, version }
+  if (req.method === 'GET' && (req.query || {}).hostAgreement === '1' && (req.query || {}).actingHost === undefined) {
+    try {
+      const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      if (!g[0] || !g[0].host_id) return res.status(200).json({ isHost: false, accepted: false, version: AGREEMENT_VERSION });
+      let v = null;
+      try { v = (await sql`SELECT host_agreement_version FROM hosts WHERE id = ${g[0].host_id}`)[0]?.host_agreement_version || null; }
+      catch (err) { console.error('host agreement status unavailable:', err.message); }
+      return res.status(200).json({ isHost: true, accepted: v === AGREEMENT_VERSION, version: AGREEMENT_VERSION });
+    } catch (err) {
+      return res.status(500).json({ error: 'Could not check the host agreement right now.' });
+    }
+  }
+  // POST { acceptHostAgreement: { version } }
+  if (req.method === 'POST' && req.body && req.body.acceptHostAgreement && (req.query || {}).actingHost === undefined) {
+    try {
+      const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      if (!g[0] || !g[0].host_id) return res.status(403).json({ error: 'Only hosts accept the host agreement.' });
+      if ((req.body.acceptHostAgreement || {}).version !== AGREEMENT_VERSION) {
+        return res.status(400).json({ error: 'Please accept the current host agreement.', agreementVersion: AGREEMENT_VERSION });
+      }
+      const ctx = requestContext(req);
+      await sql`UPDATE hosts SET host_agreement_version = ${AGREEMENT_VERSION}, host_agreement_accepted_at = now(), host_agreement_ip = ${ctx.ip} WHERE id = ${g[0].host_id}`;
+      await logAudit(sql, { action: 'host_agreement_accepted', success: true, actorType: 'host', actorIdentifier: String(g[0].host_id),
+        targetType: 'host', targetId: g[0].host_id, metadata: { version: AGREEMENT_VERSION, ip: ctx.ip, via: 'dashboard' } });
+      return res.status(200).json({ success: true, version: AGREEMENT_VERSION });
+    } catch (err) {
+      console.error('acceptHostAgreement failed:', err);
+      return res.status(500).json({ error: 'Could not save your acceptance right now. Please try again.' });
+    }
+  }
 
   // ---- Co-hosts: managing them, and being one ----
   const handledCohost = await handleCohostModes(req, res, accountId);
@@ -2389,6 +2425,13 @@ module.exports = async (req, res) => {
       FROM hosts WHERE id = ${guest.host_id}
     `;
     const h = hostRows[0];
+    // Separate and fail-safe: before migration_agreements.sql runs, this
+    // column does not exist, and My Collection must still load.
+    let hostAgreementVersion = null;
+    try {
+      const a = await sql`SELECT host_agreement_version FROM hosts WHERE id = ${guest.host_id}`;
+      hostAgreementVersion = a[0] ? a[0].host_agreement_version : null;
+    } catch (err) { console.error('host agreement status unavailable:', err.message); }
     const verification = h ? {
       hostName: h.name,
       hostPhone: h.phone,
@@ -2407,7 +2450,9 @@ module.exports = async (req, res) => {
       // payment credential the way an account number is, and a host
       // benefits from being able to confirm exactly what's on file.
       // Kept (encrypted) for TDS; shown to the host masked.
-      panNumberMasked: maskPan(h.pan_number)
+      panNumberMasked: maskPan(h.pan_number),
+      hostAgreementAccepted: hostAgreementVersion === AGREEMENT_VERSION,
+      hostAgreementVersion: AGREEMENT_VERSION
     } : null;
 
     // ---- Today ----

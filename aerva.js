@@ -10010,6 +10010,84 @@
   const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
     'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'policiesView'];
 
+  // ---- Agreements shown before payment and before listing ----
+  // The guest booking agreement sits directly above every Book button; the
+  // host agreement above every "Submit for review" button. Nothing is sent
+  // until its box is ticked: the booking/listing request itself is checked
+  // on its way out (below), and the server refuses it without the current
+  // version too (create-order.js, submit-listing.js). Text and version come
+  // from aerva-policies.js, the same source as the Policies page.
+  const BOOKING_BUTTONS = '#listingBookNowBtn, #resortBookNowBtn, #expBookNowBtn, #reserveSubmitBtn';
+  const LISTING_BUTTONS = '#listingSubmitBtn, #expSubmitBtn';
+  function agreementBoxHtml(kind){
+    const A = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements;
+    if(!A || !A[kind]) return '';
+    const a = A[kind];
+    const esc = escapeMessageHtml;
+    return `<div class="agreement-box" data-agreement="${kind}">
+      <div class="agreement-title">${esc(a.title)}</div>
+      <ul>${a.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+      <label class="agreement-accept"><input type="checkbox" class="agreement-check"> <span>${esc(a.accept)}</span></label>
+      <a class="agreement-link" href="index.html?view=policies${kind === 'host' ? '&tab=host' : ''}" target="_blank" rel="noopener">Read Aerva’s Policies</a>
+    </div>`;
+  }
+  function mountAgreements(root){
+    (root || document).querySelectorAll(BOOKING_BUTTONS + ', ' + LISTING_BUTTONS).forEach(btn => {
+      const prev = btn.previousElementSibling;
+      if(prev && prev.classList && prev.classList.contains('agreement-box')) return;
+      const kind = btn.matches(LISTING_BUTTONS) ? 'host' : 'guest';
+      const html = agreementBoxHtml(kind);
+      if(html) btn.insertAdjacentHTML('beforebegin', html);
+    });
+  }
+  mountAgreements();
+  new MutationObserver(() => mountAgreements()).observe(document.body, { childList: true, subtree: true });
+
+  // Which button started this request: its box is the one that must be ticked.
+  let lastAgreementButton = null;
+  document.addEventListener('click', function(e){
+    const b = e.target.closest && e.target.closest(BOOKING_BUTTONS + ', ' + LISTING_BUTTONS);
+    if(b) lastAgreementButton = b;
+  }, true);
+  function agreementTicked(btn){
+    const box = btn && btn.previousElementSibling;
+    const check = box && box.classList && box.classList.contains('agreement-box') ? box.querySelector('.agreement-check') : null;
+    return !!(check && check.checked);
+  }
+  (function guardRequests(){
+    const originalFetch = window.fetch ? window.fetch.bind(window) : null;
+    if(!originalFetch) return;
+    // A plain response-like object (not `new Response`, which some
+    // environments lack) — so a missing tick can never slip through.
+    const refuse = (msg) => {
+      const bodyText = JSON.stringify({ error: msg });
+      const res = { ok: false, status: 400, statusText: 'Bad Request', headers: { get: () => 'application/json' },
+        json: async () => JSON.parse(bodyText), text: async () => bodyText };
+      res.clone = () => res;
+      return Promise.resolve(res);
+    };
+    window.fetch = function(input, init){
+      try{
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const isBooking = url.indexOf('/api/create-order') !== -1;
+        const isListing = url.indexOf('/api/submit-listing') !== -1;
+        if((isBooking || isListing) && init && typeof init.body === 'string'){
+          const body = JSON.parse(init.body);
+          const version = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements && window.AERVA_POLICIES.agreements.version;
+          if(isBooking){
+            if(!agreementTicked(lastAgreementButton)) return refuse('Please tick the booking agreement to continue.');
+            body.agreementVersion = version;
+          } else if(!body.isDraft){
+            if(!agreementTicked(lastAgreementButton)) return refuse('Please tick the host agreement to submit.');
+            body.hostAgreementVersion = version;
+          }
+          init = Object.assign({}, init, { body: JSON.stringify(body) });
+        }
+      }catch(e){ /* anything odd: send it as it was; the server still checks */ }
+      return originalFetch(input, init);
+    };
+  })();
+
   // ---- Policies (index.html?view=policies) ----
   // Rendered from aerva-policies.js — the same file the admin tool shows.
   function renderPolicies(tab){
@@ -10034,7 +10112,9 @@
         </div>`).join('');
       return;
     }
-    body.innerHTML = (tab === 'host' ? P.host : P.guest).map(section).join('')
+    const agr = P.agreements && P.agreements[tab === 'host' ? 'host' : 'guest'];
+    body.innerHTML = (agr ? section({ id: 'agreement', title: agr.title + ' (version ' + P.agreements.version + ')', points: agr.points }) : '')
+      + (tab === 'host' ? P.host : P.guest).map(section).join('')
       + `<p class="policy-note">Questions: <a href="mailto:${esc(P.contact)}">${esc(P.contact)}</a></p>`;
   }
   function showPoliciesView(){
