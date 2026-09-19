@@ -3919,6 +3919,7 @@
   // mark favourites without needing an account. Never sent to the server.
   const FAVORITES_KEY = 'aerva_favorite_listings';
   function getFavoriteIds(){
+    if(storageOwner === 'anon') return []; // logged out: nothing personal is kept or shown
     try {
       return JSON.parse(safeStorage.get(accountKey(FAVORITES_KEY)) || '[]');
     } catch(err){
@@ -3926,6 +3927,9 @@
     }
   }
   function toggleFavoriteId(listingId, btnEl){
+    // Saving a home is personal, so it needs an account — logged out, the
+    // heart asks you to log in instead of quietly saving on this device.
+    if(storageOwner === 'anon'){ window.location.href = 'guest-login.html'; return; }
     const id = String(listingId);
     let favs = getFavoriteIds();
     const isFav = favs.includes(id);
@@ -3945,6 +3949,7 @@
   const MAX_RECENT_SEARCHES = 6;
   function getRecentSearches(){
     try {
+      if(storageOwner === 'anon') return [];
       return JSON.parse(safeStorage.get(accountKey(RECENT_SEARCHES_KEY)) || '[]');
     } catch(err){
       return [];
@@ -3955,7 +3960,7 @@
     if(!trimmed) return;
     let list = getRecentSearches().filter(item => item.text.toLowerCase() !== trimmed.toLowerCase());
     list.unshift({ text: trimmed, lat: lat || '', lng: lng || '' });
-    safeStorage.set(accountKey(RECENT_SEARCHES_KEY), JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
+    if(storageOwner !== 'anon') safeStorage.set(accountKey(RECENT_SEARCHES_KEY), JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
   }
 
   // ---- Aerva Experience: fetched eagerly alongside listings now (see
@@ -4552,7 +4557,7 @@
           <div class="hp-section">
             <h3 class="hp-title">Payout details</h3>
             <p class="hp-meta cohost-commission">${esc(payoutStatus)}</p>
-            ${payout ? `<p class="hp-meta">PAN ${esc(payout.panMasked)}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
+            ${payout ? `<p class="hp-meta">${payout.panMasked ? 'PAN ' + esc(payout.panMasked) : 'PAN checked (Aerva keeps only the result)'}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
             <div class="cohost-payout-form">
               <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCDE1234F" autocomplete="off"></label>
               <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCDE1234F1Z5" autocomplete="off"></label>
@@ -4909,19 +4914,21 @@
     try{ applyFiltersAndRender(); }catch(e){}
   }
 
-  // One-time move of the old unnamespaced key into the anon bucket, so an
-  // existing visitor's list survives this change instead of vanishing.
-  (function migrateLegacyPersonalKeys(){
-    ['aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches'].forEach(base => {
-      try{
-        const legacy = safeStorage.get(base);
-        if(legacy && !safeStorage.get(base + ':anon')) safeStorage.set(base + ':anon', legacy);
-        safeStorage.remove(base);
-      }catch(e){}
+  // Logged out, the site is strictly fresh: nothing a person viewed, saved
+  // or searched is kept or shown — not from an earlier visit, not from the
+  // account that just logged out, not from before the login check finished.
+  // Those lists exist only per signed-in account. This clears anything a
+  // browser still holds from the old shared or logged-out lists.
+  const PERSONAL_KEYS = ['aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches'];
+  function clearLoggedOutPersonalData(){
+    PERSONAL_KEYS.forEach(base => {
+      try{ safeStorage.remove(base); safeStorage.remove(base + ':anon'); }catch(e){}
     });
-  })();
+  }
+  clearLoggedOutPersonalData();
 
   function trackRecentlyViewed(type, id){
+    if(storageOwner === 'anon') return; // logged out: not recorded
     let list = [];
     try{ list = JSON.parse(safeStorage.get(recentlyViewedKey())) || []; } catch(e){ list = []; }
     list = list.filter(entry => !(entry.type === type && String(entry.id) === String(id)));
@@ -4930,6 +4937,7 @@
   }
 
   function getRecentlyViewedEntries(){
+    if(storageOwner === 'anon') return [];
     let list = [];
     try{ list = JSON.parse(safeStorage.get(recentlyViewedKey())) || []; } catch(e){ list = []; }
     // 'suites'/'experiences' narrow to one type; 'all' keeps both, in the
@@ -11397,6 +11405,7 @@
     function clearGuestSession(){
       safeStorage.remove('aerva_guest_session');
       setRecentlyViewedOwner(null);
+      clearLoggedOutPersonalData();
       safeStorage.remove('aerva_guest_email');
       safeStorage.remove('aerva_guest_name');
       try{ renderNavTierBadge(null); }catch(e){}
