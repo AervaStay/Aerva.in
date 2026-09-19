@@ -4295,7 +4295,7 @@
       ${nothingMore ? '<p class="hp-empty">This host hasn\u2019t added more to their profile yet.</p>' : ''}`;
   }
 
-  async function openHostProfile(listingId, badgeHtml){
+  async function openHostProfile(listingId, badgeHtml, knownName){
     let ov = document.getElementById('hostProfileOverlay');
     if(!ov){
       ov = document.createElement('div');
@@ -4319,7 +4319,12 @@
       if(!res.ok || !data.profile) throw new Error(data.error || 'Could not load this profile right now.');
       body.innerHTML = renderHostProfile(data.profile, badgeHtml);
     }catch(err){
-      body.innerHTML = `<p class="hp-empty">${escapeMessageHtml(err.message || 'Could not load this profile right now.')}</p>`;
+      // Never a dead end: if the full profile cannot be fetched (the
+      // server is mid-deploy, a network blip, an older backend), show the
+      // host as the listing already knows them — name and badge — rather
+      // than an error message.
+      console.error('Host profile could not be loaded:', err);
+      body.innerHTML = renderHostProfile({ name: knownName || 'Your host', answers: [], hostingIn: [], reviews: [] }, badgeHtml);
     }
   }
 
@@ -4335,7 +4340,8 @@
       copy.querySelectorAll('.ts-host-view').forEach(v => v.remove());
       badgeHtml = copy.innerHTML;
     }
-    openHostProfile(btn.getAttribute('data-host-profile'), badgeHtml);
+    const nameEl = btn.querySelector('.ts-host-name');
+    openHostProfile(btn.getAttribute('data-host-profile'), badgeHtml, nameEl ? nameEl.textContent.trim() : '');
   });
 
   function listingStandingHtml(listing, opts){
@@ -7429,7 +7435,7 @@
           <span>✓ ${maxPetsLine}</span>
           <span>✓ ${feeLine}</span>
         </div>
-        <p style="font-size:11.5px; opacity:0.6; margin-top:8px; line-height:1.5;">Service and emotional-support animals aren't counted toward the pet limit or fee above. Young pets (under 1 year) traveling with an adult pet aren't counted either.</p>`;
+        <p style="font-size:11.5px; opacity:0.6; margin-top:8px; line-height:1.5;">Service and emotional-support animals aren't counted toward the pet limit. The first one is free; each additional one is charged the pet fee. Young pets (under 1 year) traveling with an adult pet aren't counted either.</p>`;
     } else if(listing.pet_friendly === false){
       petPolicyHtml = `
         <div class="listing-modal-section-title">Pet Policy</div>
@@ -8387,6 +8393,10 @@
     const discount = calculateDiscount(listing, nights, arrival, beforeDiscount);
     const discountAmount = discount.amount;
     const petFeeAmount = counts.pets > 0 && listing.pet_fee ? Number(listing.pet_fee) * counts.pets : 0;
+    // One service/support animal per booking is free; each one after the
+    // first is charged at the pet fee (create-order.js charges the same).
+    const chargeableServiceAnimals = Math.max(0, (counts.serviceAnimals || 0) - 1);
+    const serviceAnimalFee = chargeableServiceAnimals > 0 && listing.pet_fee ? Number(listing.pet_fee) * chargeableServiceAnimals : 0;
 
     // Amenities are priced client-side here only for display — same as
     // updatePricing() — the real, trusted total is recalculated
@@ -8403,9 +8413,9 @@
       }
     });
 
-    const staySubtotal = beforeDiscount - discountAmount + petFeeAmount + amenityTotal;
+    const staySubtotal = beforeDiscount - discountAmount + petFeeAmount + serviceAnimalFee + amenityTotal;
     const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
-    const stayTax = stayGstFor(beforeDiscount - discountAmount, nights, petFeeAmount + amenityTotal);
+    const stayTax = stayGstFor(beforeDiscount - discountAmount, nights, petFeeAmount + serviceAnimalFee + amenityTotal);
     const total = staySubtotal + guestServiceFee;
 
     const rows = [];
@@ -8413,9 +8423,10 @@
     if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmtGuest(extraTotal)}</span></div>`);
     if(discountAmount > 0) rows.push(`<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discountAmount)}</span></div>`);
     if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee (${counts.pets} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
-    // Free by policy — shown so the guest sees they're accounted for
-    // without implying either one adds to the bill.
-    if(counts.serviceAnimals > 0) rows.push(`<div class="sum-row"><span>${counts.serviceAnimals} service/support animal${counts.serviceAnimals === 1 ? '' : 's'}</span><span>No charge</span></div>`);
+    // The first service/support animal is free; any more are charged at
+    // the pet fee, shown as their own line so the guest sees why.
+    if(counts.serviceAnimals > 0) rows.push(`<div class="sum-row"><span>1 service/support animal</span><span>No charge</span></div>`);
+    if(serviceAnimalFee > 0) rows.push(`<div class="sum-row"><span>Additional service/support animal${chargeableServiceAnimals === 1 ? '' : 's'} (${chargeableServiceAnimals} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(serviceAnimalFee)}</span></div>`);
     if(counts.youngLitter > 0) rows.push(`<div class="sum-row"><span>${counts.youngLitter} young litter pet${counts.youngLitter === 1 ? '' : 's'}</span><span>No charge</span></div>`);
     if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmtGuest(amenityTotal)}</span></div>`);
     // Experience add-on is priced and charged as its own separate line
@@ -9873,6 +9884,17 @@
   // Who is arriving, who is leaving, who is staying on, at this host's own
   // properties. Everything comes from host-listings.js, which works it out
   // on each listing's own clock.
+  // "Pets: Dog · Young litter: 2 · Service animal: Dog" — so a host sees
+  // who is coming with four legs on the day, not only on the earnings page.
+  function todayAnimalsLine(r){
+    const bits = [];
+    if(Array.isArray(r.petTypes) && r.petTypes.length) bits.push(`Pets: ${r.petTypes.join(', ')}`);
+    if(Number(r.youngLitter) > 0) bits.push(`Young litter: ${Number(r.youngLitter)}`);
+    const sa = Array.isArray(r.serviceAnimals) ? r.serviceAnimals : [];
+    if(sa.length) bits.push(`Service/support animal${sa.length === 1 ? '' : 's'}: ${sa.join(', ')}`);
+    return bits.length ? '🐾 ' + bits.join(' · ') : '';
+  }
+
   function renderTodayView(today){
     const box = document.getElementById('todayList');
     if(!box) return;
@@ -9894,6 +9916,7 @@
         <span class="today-main">
           <span class="today-title">${esc(title)}</span>
           <span class="today-sub">${esc(r.listingName || '')}</span>
+          ${todayAnimalsLine(r) ? `<span class="today-sub today-animals">${esc(todayAnimalsLine(r))}</span>` : ''}
         </span>
         <span class="today-thumbs">
           ${r.guestPhotoUrl
