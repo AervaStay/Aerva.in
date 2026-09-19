@@ -227,6 +227,7 @@
       <button class="tab-btn" id="tabSimulatorBtn" onclick="switchTab('simulator')">Simulator</button>
       <button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs</button>
       <button class="tab-btn" id="tabTrafficBtn" onclick="switchTab('traffic')">Traffic</button>
+      <button class="tab-btn" id="tabPayoutsBtn" onclick="switchTab('payouts')">Payouts</button>
     </div>
     <button type="button" class="admin-refresh-btn" onclick="refreshCurrentView()" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </nav>
@@ -354,6 +355,14 @@
 
   </div>
 
+  <div id="payoutsView" style="display:none;">
+    <h2 style="font-family:Georgia,serif; font-weight:normal;">Co-host payout details to review</h2>
+    <p style="opacity:0.7; font-size:14px;">PAN, GSTIN and bank account a co-host has entered. A co-host is only paid while these are approved.</p>
+    <div id="payoutProfilesList"><p style="opacity:0.6;">Loading…</p></div>
+    <h2 style="font-family:Georgia,serif; font-weight:normal; margin-top:40px;">Booking payouts</h2>
+    <p style="opacity:0.7; font-size:14px;">The 200 most recent paid bookings: the host payout (after Aerva’s commission), each co-host’s share, and what the host keeps, with where each is paid. “Hold” means that person’s bank details are not approved yet.</p>
+    <div id="payoutsList"><p style="opacity:0.6;">Loading…</p></div>
+  </div>
   <div id="trafficView" style="display:none;">
     <div class="deposit-section">
       <h3>Who came</h3>
@@ -1401,6 +1410,59 @@
     }
   }
 
+
+  // ---- Payouts tab: co-host payout details, and who is owed what ----
+  function payInr(n){ return '₹' + Number(n || 0).toLocaleString('en-IN'); }
+  function payDate(d){ return d ? String(d).slice(0, 10) : '—'; }
+  function payeeLine(p){
+    if(!p || !p.account) return '<span style="color:#a3402f;">No bank details yet — Hold</span>';
+    return escAdmin(p.holder || '') + ' · ' + escAdmin(p.account) + ' · ' + escAdmin(p.ifsc || '')
+      + (p.ready ? ' <span style="color:#3d5a3a;">· Ready</span>' : ' <span style="color:#a3402f;">· Hold (' + escAdmin(p.bankStatus || p.profileStatus || 'not approved') + ')</span>');
+  }
+  async function loadPayouts(){
+    const profilesEl = document.getElementById('payoutProfilesList');
+    const listEl = document.getElementById('payoutsList');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?payouts=1', { headers: authHeaders() });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not load payouts.');
+      const profiles = data.pendingProfiles || [];
+      profilesEl.innerHTML = profiles.length ? profiles.map(p => `
+        <div class="listing" style="padding:16px 18px; margin-bottom:12px;">
+          <strong>${escAdmin(p.name || p.email)}</strong> <span style="opacity:0.6;">${escAdmin(p.email || '')}</span>
+          <div style="font-size:13px; opacity:0.7; margin:4px 0 8px;">Co-hosts for: ${escAdmin(p.cohostsFor || '—')} · submitted ${payDate(p.submittedAt)}</div>
+          <div style="font-size:14px; line-height:1.8;">PAN <strong>${escAdmin(p.pan)}</strong>${p.gstin ? ' · GSTIN <strong>' + escAdmin(p.gstin) + '</strong>' : ' · no GSTIN'}<br>
+            ${escAdmin(p.holder)} · ${escAdmin(p.account)} · ${escAdmin(p.ifsc)}</div>
+          <div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button class="approve-btn" onclick="reviewCohostPayout(${Number(p.guestId)}, true)">Approve</button>
+            <input type="text" id="payoutReject${Number(p.guestId)}" placeholder="Reason, if rejecting" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:240px;">
+            <button class="reject-btn" onclick="reviewCohostPayout(${Number(p.guestId)}, false)">Reject</button>
+          </div>
+        </div>`).join('') : '<p style="opacity:0.6;">Nothing waiting.</p>';
+      const rows = data.payouts || [];
+      listEl.innerHTML = rows.length ? rows.map(o => `
+        <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;">
+          <div><strong>${escAdmin(o.listing || '')}</strong> · ${payDate(o.arrival)} → ${payDate(o.departure)} · booking #${Number(o.orderId)}</div>
+          <div style="opacity:0.75; margin:4px 0;">Guest paid ${payInr(o.total)} · Aerva commission ${payInr(o.commission)} · host payout ${payInr(o.hostPayout)}</div>
+          ${(o.cohosts || []).map(c => `<div>Co-host <strong>${escAdmin(c.name)}</strong> (${Number(c.percent)}%) — <strong>${payInr(c.amount)}</strong> → ${payeeLine(c)}</div>`).join('')}
+          <div>Host <strong>${escAdmin(o.host && o.host.name || '')}</strong> — <strong>${payInr(o.hostNet)}</strong> → ${payeeLine(o.host)}</div>
+        </div>`).join('') : '<p style="opacity:0.6;">No paid bookings yet.</p>';
+    }catch(err){
+      profilesEl.innerHTML = listEl.innerHTML = '<p style="color:#a3402f;">' + escAdmin(err.message) + '</p>';
+    }
+  }
+  async function reviewCohostPayout(guestId, approve){
+    const reasonEl = document.getElementById('payoutReject' + guestId);
+    const reason = reasonEl ? reasonEl.value.trim() : '';
+    if(!approve && !reason){ alert('Please give a reason, so the co-host knows what to fix.'); return; }
+    const res = await fetch(API_BASE + '/api/get-pending-listings', {
+      method: 'POST', headers: authHeaders(true),
+      body: JSON.stringify({ reviewCohostPayout: { guestId, approve, reason } })
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok){ alert(data.error || 'Could not save.'); return; }
+    loadPayouts();
+  }
   function switchTab(tab){
     document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
     document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
@@ -1411,6 +1473,7 @@
     document.getElementById('tabSimulatorBtn').classList.toggle('active', tab === 'simulator');
     document.getElementById('tabBatchBtn').classList.toggle('active', tab === 'batch');
     document.getElementById('tabTrafficBtn').classList.toggle('active', tab === 'traffic');
+    document.getElementById('tabPayoutsBtn').classList.toggle('active', tab === 'payouts');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
     document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
@@ -1420,6 +1483,8 @@
     document.getElementById('simulatorView').style.display = tab === 'simulator' ? 'block' : 'none';
     document.getElementById('batchView').style.display = tab === 'batch' ? 'block' : 'none';
     document.getElementById('trafficView').style.display = tab === 'traffic' ? 'block' : 'none';
+    document.getElementById('payoutsView').style.display = tab === 'payouts' ? 'block' : 'none';
+    if(tab === 'payouts') loadPayouts();
     if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();

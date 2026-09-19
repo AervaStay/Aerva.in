@@ -2076,3 +2076,24 @@ body.hp-open{ overflow:hidden; }
 .hp-listing-place{ font-size:12.5px; opacity:0.6; }
 .hp-listing-price{ font-size:13.5px; margin-top:4px; }
 @media (max-width:640px){ .hp-listings{ grid-template-columns:1fr 1fr; gap:12px; } .hp-listing-name{ font-size:15px; } }
+
+/* Co-hosting page (index.html?view=cohost). */
+.cohost-row{ display:flex; justify-content:space-between; align-items:center; gap:18px; flex-wrap:wrap; padding:18px 0; border-top:1px solid var(--line-dark); }
+.cohost-row:first-child{ border-top:none; padding-top:0; }
+.cohost-host{ font-family:'Bodoni Moda', serif; font-size:21px; margin-bottom:4px; }
+.cohost-actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.cohost-actions .hp-more{ margin-top:0; }
+.hp-more.cohost-primary{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.cohost-on{ font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep); }
+.cohost-notice{ margin:14px 0 0; padding:12px 16px; border:1px solid var(--line-dark); border-left:3px solid var(--gold); border-radius:10px; font-size:14px; }
+body.is-cohosting{ padding-bottom:70px; }
+
+.cohost-commission{ margin-top:4px; color:var(--gold-deep); }
+.cohost-propose{ display:flex; gap:8px; align-items:center; margin-top:10px; }
+.cohost-propose input{ width:90px; padding:9px 12px; border:1px solid var(--line-dark); border-radius:999px; font-family:'Jost', sans-serif; font-size:14px; }
+.cohost-propose .hp-more{ margin-top:0; }
+
+.cohost-payout-form{ display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px 16px; margin:14px 0 16px; }
+.cohost-payout-form label{ display:flex; flex-direction:column; gap:6px; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.85; }
+.cohost-payout-form label span{ text-transform:none; letter-spacing:0; opacity:0.6; }
+.cohost-payout-form input{ padding:10px 12px; border:1px solid var(--line-dark); border-radius:8px; font-family:'Jost', sans-serif; font-size:15px; letter-spacing:0.02em; text-transform:none; }

@@ -4302,21 +4302,11 @@
     });
   }
 
-  function renderHostProfile(p, badgeHtml){
+  // Small listing cards (host profile, and your own profile). Clicking one
+  // opens that listing — see the [data-hp-open] listener.
+  function listingMiniCardsHtml(list){
     const esc = escapeMessageHtml;
-    const initial = esc((p.name || '?').trim().charAt(0).toUpperCase());
-    const photo = p.photoUrl
-      ? `<img class="hp-photo" src="${esc(p.photoUrl)}" alt="">`
-      : `<span class="hp-photo hp-initial">${initial}</span>`;
-    const facts = [
-      p.work ? `<div class="hp-fact"><span class="hp-fact-label">Work</span><span>${esc(p.work)}</span></div>` : '',
-      p.hobbies ? `<div class="hp-fact"><span class="hp-fact-label">Hobbies</span><span>${esc(p.hobbies)}</span></div>` : ''
-    ].join('');
-    const answers = (p.answers || []).map(a =>
-      `<div class="hp-answer"><div class="hp-q">${esc(a.label)}</div><p>${esc(a.answer)}</p></div>`).join('');
-    const cities = (p.hostingIn || []).map(c => `<span class="hp-chip">${esc(c.city)}</span>`).join('');
-    // What this host runs: small cards that open the listing itself.
-    const listingCards = (p.listings || []).map(l => {
+    return (list || []).map(l => {
       const isExp = l.type === 'experience';
       const href = isExp ? `index.html?experience=${Number(l.id)}` : `index.html?listing=${Number(l.id)}`;
       const unit = isExp ? (l.priceUnit ? ` / ${esc(String(l.priceUnit).replace(/^per_?/, ''))}` : '') : '/night';
@@ -4332,6 +4322,23 @@
           </span>
         </a>`;
     }).join('');
+  }
+
+  function renderHostProfile(p, badgeHtml){
+    const esc = escapeMessageHtml;
+    const initial = esc((p.name || '?').trim().charAt(0).toUpperCase());
+    const photo = p.photoUrl
+      ? `<img class="hp-photo" src="${esc(p.photoUrl)}" alt="">`
+      : `<span class="hp-photo hp-initial">${initial}</span>`;
+    const facts = [
+      p.work ? `<div class="hp-fact"><span class="hp-fact-label">Work</span><span>${esc(p.work)}</span></div>` : '',
+      p.hobbies ? `<div class="hp-fact"><span class="hp-fact-label">Hobbies</span><span>${esc(p.hobbies)}</span></div>` : ''
+    ].join('');
+    const answers = (p.answers || []).map(a =>
+      `<div class="hp-answer"><div class="hp-q">${esc(a.label)}</div><p>${esc(a.answer)}</p></div>`).join('');
+    const cities = (p.hostingIn || []).map(c => `<span class="hp-chip">${esc(c.city)}</span>`).join('');
+    // What this host runs: small cards that open the listing itself.
+    const listingCards = listingMiniCardsHtml(p.listings);
     const reviews = (p.reviews || []).map(hostReviewItemHtml).join('');
     // Overall rating across ALL of this host's published stay reviews.
     const rating = p.rating && p.rating.count > 0 ? p.rating : null;
@@ -4429,6 +4436,186 @@
     const nameEl = btn.querySelector('.ts-host-name');
     openHostProfile(btn.getAttribute('data-host-profile'), badgeHtml, nameEl ? nameEl.textContent.trim() : '');
   });
+
+  // ---- Co-hosting (index.html?view=cohost) ----
+  // One full white window, like a host profile: accept or decline an
+  // invitation (the link in the invitation email carries &invite=…), and
+  // see the hosts you co-host for, with a button to start working on each
+  // one's listings. Choosing a host remembers it on this device
+  // (aerva-cohost.js), and every host page then works for that host.
+  const PENDING_INVITE_KEY = 'aerva_pending_cohost_invite';
+  function pendingInvite(){ try{ return localStorage.getItem(PENDING_INVITE_KEY); }catch(e){ return null; } }
+  function setPendingInvite(v){ try{ v ? localStorage.setItem(PENDING_INVITE_KEY, v) : localStorage.removeItem(PENDING_INVITE_KEY); }catch(e){} }
+
+  async function openCohostCenter(){
+    const token = guestAuthToken();
+    const invite = new URLSearchParams(window.location.search).get('invite') || pendingInvite();
+    if(!token){
+      // Sign in (or sign up) first, then come back here.
+      if(invite) setPendingInvite(invite);
+      window.location.href = 'guest-login.html';
+      return;
+    }
+    let ov = document.getElementById('cohostCenter');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'cohostCenter';
+      ov.className = 'hp-overlay';
+      ov.setAttribute('role', 'dialog');
+      ov.setAttribute('aria-modal', 'true');
+      ov.setAttribute('aria-label', 'Co-hosting');
+      document.body.appendChild(ov);
+    }
+    ov.innerHTML = '<button type="button" class="hp-close" aria-label="Close">\u00d7</button><div class="hp-body"><p class="hp-empty">Loading\u2026</p></div>';
+    ov.querySelector('.hp-close').addEventListener('click', () => { ov.classList.remove('is-open'); document.body.classList.remove('hp-open'); });
+    ov.classList.add('is-open');
+    document.body.classList.add('hp-open');
+    const body = ov.querySelector('.hp-body');
+    const esc = escapeMessageHtml;
+    const call = (method, payload, query) => fetch(SUITES_API_BASE + '/api/host-listings' + (query || ''), {
+      method, headers: Object.assign({ 'Authorization': 'Bearer ' + token }, payload ? { 'Content-Type': 'application/json' } : {}),
+      body: payload ? JSON.stringify(payload) : undefined
+    }).then(async r => ({ ok: r.ok, data: await r.json().catch(() => ({})) }));
+
+    async function render(notice){
+      const mine = await call('GET', null, '?myCohosting=1');
+      const list = (mine.ok && mine.data.cohosting) || [];
+      const labels = (mine.data && mine.data.permissionLabels) || [];
+      const current = window.AervaCohost && window.AervaCohost.get();
+      const pending = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      const always = (mine.data && mine.data.alwaysLabel) || '';
+      const accessText = (h) => h.access === 'full'
+        ? 'Full access (everything except renaming, account settings, payouts and bank details)'
+        : ['Limited: ' + always].concat(labels.filter(l => h.permissions.includes(l.key)).map(l => l.label)).join(' \u00b7 ');
+      // Their share of the host's payout: what is approved, what is waiting.
+      const commissionText = (h) => {
+        const bits = [];
+        if(h.commissionPercent != null) bits.push(`You earn ${h.commissionPercent}% of the host\u2019s payout`);
+        if(h.proposalStatus === 'proposed') bits.push(`${h.proposedPercent}% proposed \u2014 waiting for the host`);
+        if(h.proposalStatus === 'declined') bits.push(`Your ${h.proposedPercent}% proposal was declined`);
+        return bits.length ? bits.join(' \u00b7 ') : 'No commission agreed yet';
+      };
+      const earnings = (mine.data && mine.data.earnings) || { total: 0, rows: [] };
+      // Where they are paid: PAN, optional GSTIN, bank account (masked).
+      const payoutRes = list.length ? await call('GET', null, '?myPayoutProfile=1') : { ok: false, data: {} };
+      const payout = (payoutRes.ok && payoutRes.data.profile) || null;
+      const payoutStatus = !payout ? 'Add your payout details to be paid your share.'
+        : payout.status === 'approved' ? 'Approved \u2014 your shares are paid to this account.'
+        : payout.status === 'rejected' ? `Not approved: ${payout.rejectionReason || 'please check and resubmit.'}`
+        : 'Waiting for Aerva to check these. Your shares are held until they are approved.';
+      body.innerHTML = `
+        <div class="hp-eyebrow">Co-hosting</div>
+        <h2 class="hp-name">Hosts you help</h2>
+        ${notice ? `<p class="cohost-notice">${esc(notice)}</p>` : ''}
+        ${pending ? `
+          <div class="hp-section">
+            <h3 class="hp-title">You have an invitation</h3>
+            <p class="hp-meta">A host has invited you to co-host their listings on Aerva.</p>
+            <div class="cohost-actions">
+              <button type="button" class="hp-more cohost-primary" data-cohost-accept>Accept invitation</button>
+              <button type="button" class="hp-more" data-cohost-decline>Decline</button>
+            </div>
+          </div>` : ''}
+        <div class="hp-section">
+          ${list.length ? list.map(h => `
+            <div class="cohost-row">
+              <div>
+                <div class="cohost-host">${esc(h.hostName)}</div>
+                <div class="hp-meta">${esc(accessText(h))} \u00b7 ${h.listingCount} listing${h.listingCount === 1 ? '' : 's'}</div>
+                <div class="hp-meta cohost-commission">${esc(commissionText(h))}</div>
+                <div class="cohost-propose">
+                  <input type="number" min="0.01" max="100" step="0.01" placeholder="%" aria-label="Your share of the host's payout, in percent" data-cohost-pct="${Number(h.hostId)}">
+                  <button type="button" class="hp-more" data-cohost-propose="${Number(h.hostId)}">Propose my share</button>
+                </div>
+              </div>
+              <div class="cohost-actions">
+                ${current && Number(current.hostId) === Number(h.hostId)
+                  ? '<span class="cohost-on">Working now</span>'
+                  : `<button type="button" class="hp-more cohost-primary" data-cohost-open="${Number(h.hostId)}">Open their listings</button>`}
+                <button type="button" class="hp-more" data-cohost-leave="${Number(h.hostId)}">Leave</button>
+              </div>
+            </div>`).join('') : `<p class="hp-empty">You don\u2019t co-host for anyone yet. When a host invites you, the invitation arrives by email.</p>`}
+        </div>
+        ${list.length ? `
+          <div class="hp-section">
+            <h3 class="hp-title">What you have earned</h3>
+            <div class="hp-rating"><span class="hp-rating-score">${fmtGuest(Number(earnings.total) || 0)}</span><span class="hp-rating-count">from paid bookings</span></div>
+            ${(earnings.rows || []).length ? (earnings.rows || []).map(r => `
+              <div class="hp-review">
+                <div class="hp-review-head">
+                  <span class="hp-review-prop">${esc(r.listingName)} \u00b7 ${esc(r.hostName)}</span>
+                  <span class="hp-review-meta">${r.status === 'paid' ? '' : esc(r.status) + ' \u00b7 '}${r.percent}% \u00b7 ${fmtGuest(Number(r.amount) || 0)}</span>
+                </div>
+              </div>`).join('') : '<p class="hp-empty">Nothing yet \u2014 your share is worked out on each booking once your commission is approved.</p>'}
+          </div>` : ''}
+        ${list.length ? `
+          <div class="hp-section">
+            <h3 class="hp-title">Payout details</h3>
+            <p class="hp-meta cohost-commission">${esc(payoutStatus)}</p>
+            ${payout ? `<p class="hp-meta">PAN ${esc(payout.panMasked)}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
+            <div class="cohost-payout-form">
+              <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCDE1234F" autocomplete="off"></label>
+              <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCDE1234F1Z5" autocomplete="off"></label>
+              <label>Account holder name<input type="text" data-po="holder" maxlength="120" placeholder="As on your bank account"></label>
+              <label>Account number<input type="text" data-po="account" inputmode="numeric" maxlength="18" autocomplete="off"></label>
+              <label>IFSC<input type="text" data-po="ifsc" maxlength="11" placeholder="HDFC0001234" autocomplete="off"></label>
+            </div>
+            <button type="button" class="hp-more cohost-primary" data-po-save>${payout ? 'Update payout details' : 'Save payout details'}</button>
+            <p class="hp-meta" style="margin-top:8px;">Any change is checked again before your next payout.</p>
+          </div>` : ''}
+        ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
+
+      const inviteNow = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      const accept = body.querySelector('[data-cohost-accept]');
+      if(accept) accept.addEventListener('click', async () => {
+        accept.disabled = true;
+        const r = await call('POST', { acceptCohostInvite: { token: inviteNow } });
+        setPendingInvite(null);
+        history.replaceState(null, '', 'index.html?view=cohost');
+        render(r.ok ? `You are now a co-host for ${r.data.hostName}.` : (r.data.error || 'Could not accept the invitation.'));
+      });
+      const decline = body.querySelector('[data-cohost-decline]');
+      if(decline) decline.addEventListener('click', async () => {
+        const r = await call('POST', { declineCohostInvite: { token: inviteNow } });
+        setPendingInvite(null);
+        history.replaceState(null, '', 'index.html?view=cohost');
+        render(r.ok ? 'Invitation declined.' : (r.data.error || 'Could not decline the invitation.'));
+      });
+      body.querySelectorAll('[data-cohost-open]').forEach(b => b.addEventListener('click', () => {
+        const h = list.find(x => Number(x.hostId) === Number(b.getAttribute('data-cohost-open')));
+        if(!h) return;
+        window.AervaCohost.start({ hostId: h.hostId, hostName: h.hostName, access: h.access, permissions: h.permissions });
+        window.location.href = h.access === 'full' || h.permissions.includes('bookings') ? 'host-dashboard.html'
+          : (h.permissions.includes('calendar') ? 'host-status.html'
+          : (h.permissions.includes('analytics') ? 'host-earnings.html' : 'index.html?view=messages'));
+      }));
+      body.querySelectorAll('[data-cohost-leave]').forEach(b => b.addEventListener('click', async () => {
+        if(!confirm('Stop co-hosting for this host? They would need to invite you again.')) return;
+        const hostId = Number(b.getAttribute('data-cohost-leave'));
+        await call('POST', { leaveCohost: { hostId } });
+        const cur = window.AervaCohost.get();
+        if(cur && Number(cur.hostId) === hostId) window.AervaCohost.stop();
+        render('You have left.');
+      }));
+      body.querySelectorAll('[data-cohost-propose]').forEach(b => b.addEventListener('click', async () => {
+        const hostId = Number(b.getAttribute('data-cohost-propose'));
+        const pct = Number(body.querySelector(`[data-cohost-pct="${hostId}"]`).value);
+        const r = await call('POST', { proposeCommission: { hostId, percent: pct } });
+        render(r.ok ? `Proposed ${pct}% \u2014 the host will approve or decline it.` : (r.data.error || 'Could not send the proposal.'));
+      }));
+      const poSave = body.querySelector('[data-po-save]');
+      if(poSave) poSave.addEventListener('click', async () => {
+        const v = (k) => (body.querySelector(`[data-po="${k}"]`) || {}).value || '';
+        poSave.disabled = true;
+        const r = await call('POST', { savePayoutProfile: { pan: v('pan'), gstin: v('gstin'), accountHolderName: v('holder'), accountNumber: v('account'), ifsc: v('ifsc') } });
+        poSave.disabled = false;
+        render(r.ok ? 'Payout details saved \u2014 Aerva will check them before your next payout.' : (r.data.error || 'Could not save your payout details.'));
+      });
+      const stop = body.querySelector('[data-cohost-stop]');
+      if(stop) stop.addEventListener('click', () => { window.AervaCohost.stop(); window.location.href = 'index.html?view=cohost'; });
+    }
+    render();
+  }
 
   function listingStandingHtml(listing, opts){
     const n = Number(listing.review_count) || 0;
@@ -9916,10 +10103,20 @@
         </div>`).join('');
 
     // Where they have been, and where they host.
+    // Your homes and experiences, as the same cards guests see on your
+    // public profile — then the places you have travelled to — then, last,
+    // what others have said.
+    const cards = listingMiniCardsHtml(p.listings);
+    document.getElementById('profileListingsSection').style.display = cards ? 'block' : 'none';
+    document.getElementById('profileListings').innerHTML = cards ? `<div class="hp-listings">${cards}</div>` : '';
     const places = p.places || { stayed: [], hosting: [] };
-    const placeBits = []
-      .concat((places.hosting || []).map(x => `<span class="profile-place">Hosts in ${esc(x.city)}</span>`))
-      .concat((places.stayed || []).map(x => `<span class="profile-place">${esc(x.city)}${x.visits > 1 ? ` · ${x.visits} stays` : ''}</span>`));
+    // Stays and experiences you have booked here, per city.
+    const placeBits = (places.stayed || []).map(x => {
+      const parts = [];
+      if(x.visits > 0) parts.push(`${x.visits} stay${x.visits === 1 ? '' : 's'}`);
+      if(x.experiences > 0) parts.push(`${x.experiences} experience${x.experiences === 1 ? '' : 's'}`);
+      return `<span class="profile-place">${esc(x.city)}${parts.length ? ' · ' + parts.join(' · ') : ''}</span>`;
+    });
     document.getElementById('profilePlacesSection').style.display = placeBits.length ? 'block' : 'none';
     document.getElementById('profilePlaces').innerHTML = `<div class="profile-places">${placeBits.join('')}</div>`;
 
@@ -10935,6 +11132,8 @@
     // 'suites' or 'experiences' here just sets the initial filter state
     // rather than swapping to a different section.
     const requestedView = new URLSearchParams(window.location.search).get('view');
+    // Came back from signing in with a co-host invitation still to answer.
+    if(!requestedView && pendingInvite() && guestAuthToken()) openCohostCenter();
     if(requestedView === 'list-property'){
       document.body.classList.remove('showing-hero');
       document.getElementById('suites').style.display = 'none';
@@ -10960,6 +11159,8 @@
       showTodayView();
     } else if(requestedView === 'profile'){
       showProfileView();
+    } else if(requestedView === 'cohost'){
+      openCohostCenter();
     } else if(requestedView === 'messages'){
       // The Messages icon on every other page links here (see
       // aerva-header.js): the inbox lives on this page.
