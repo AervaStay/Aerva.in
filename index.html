@@ -485,6 +485,19 @@
   </div>
 </section>
 
+<section id="policiesView" class="pad" style="display:none;">
+  <div class="wrap policies-wrap">
+    <h1 class="policies-title">Policies</h1>
+    <p class="policies-updated" id="policiesUpdated"></p>
+    <div class="policies-tabs" role="tablist">
+      <button type="button" class="policies-tab active" data-pol-tab="guest">Guests</button>
+      <button type="button" class="policies-tab" data-pol-tab="host">Hosts</button>
+      <button type="button" class="policies-tab" data-pol-tab="laws">Local laws</button>
+    </div>
+    <div id="policiesBody"></div>
+  </div>
+</section>
+
 <section class="pad" id="profileView" style="background:var(--band); display:none;">
   <div class="wrap profile-wrap">
     <div class="profile-top">
@@ -572,14 +585,14 @@
       Back to all homes
     </a>
     <div class="section-head center-head reveal">
-      <div class="eyebrow">For Property Owners</div>
-      <h2>List your home with Aerva.</h2>
-      <p style="margin-left:auto; margin-right:auto;">We're a small, curated collection — not a marketplace of thousands. If your place fits that spirit, tell us about it below and our team will review it personally.</p>
+      <div class="eyebrow">Host with Aerva</div>
+      <h2>Your home, among India’s finest stays.</h2>
+      <p style="margin-left:auto; margin-right:auto;">Reach travellers looking for something exceptional. List your property, set your prices, and start earning.</p>
     </div>
   </div>
   <div class="wrap" style="max-width:760px;">
     <div id="loggedOutGate" style="display:none; text-align:center; padding:20px 0 40px;">
-      <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">Log in to list a property — the same account you use to book stays.</p>
+      <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">Log in or create an account to start listing.</p>
       <a href="guest-login.html" class="btn solid">Log In</a>
     </div>
     <form class="reserve-form reveal" id="listingForm" autocomplete="off">
@@ -823,14 +836,14 @@
       Back to all homes
     </a>
     <div class="section-head center-head reveal">
-      <div class="eyebrow">For Property Owners</div>
-      <h2>List an Experience with Aerva.</h2>
-      <p style="margin-left:auto; margin-right:auto;">A cooking class, a guided hike, a local tour — runs alongside a property. Tell us about it below and our team will review it personally.</p>
+      <div class="eyebrow">Host an experience</div>
+      <h2>Share what you love with travellers.</h2>
+      <p style="margin-left:auto; margin-right:auto;">Cooking classes, guided hikes, local tours and more. List your experience, set your price, and start hosting.</p>
     </div>
   </div>
   <div class="wrap" style="max-width:760px;">
     <div id="expLoggedOutGate" style="display:none; text-align:center; padding:20px 0 40px;">
-      <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">Log in to list an experience — the same account you use to book stays.</p>
+      <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">Log in or create an account to start listing.</p>
       <a href="guest-login.html" class="btn solid">Log In</a>
     </div>
     <form class="reserve-form reveal" id="experienceForm" autocomplete="off">
@@ -1314,12 +1327,13 @@
   </div>
   <div class="wrap foot-bottom">
     <span>&copy; <span id="footYear">2026</span> Aerva. All rights reserved.</span>
-    <span class="foot-bottom-right">Stay Elegant</span>
+    <span class="foot-bottom-right"><a href="index.html?view=policies" class="foot-policies">Policies</a> · Stay Elegant</span>
   </div>
 </footer>
 
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
+<script src="aerva-policies.js" defer></script>
 <script src="aerva.js" defer></script>
 
 </body>
