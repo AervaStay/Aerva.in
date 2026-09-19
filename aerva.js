@@ -5503,12 +5503,16 @@
       const d = await res.json();
       const el = document.getElementById('liveProof');
       if(!el) return;
-      const bits = [];
-      if(d.staysHosted > 0) bits.push(`${d.staysHosted.toLocaleString('en-IN')} stays hosted`);
-      if(d.checkinsThisMonth > 0) bits.push(`${d.checkinsThisMonth.toLocaleString('en-IN')} guests checked in this month`);
-      if(!bits.length) return; // nothing honest to show yet
-      el.textContent = bits.join('  ·  ');
-      el.style.display = 'block';
+      const stats = [];
+      if(d.staysHosted > 0) stats.push([d.staysHosted, 'stays hosted']);
+      if(d.checkinsThisMonth > 0) stats.push([d.checkinsThisMonth, 'guests checked in this month']);
+      if(!stats.length) return; // nothing honest to show yet
+      // Number first, set large in the headline's gold; label small
+      // beneath. Numbers go through Number(), labels are fixed text.
+      el.innerHTML = stats.map(([n, label]) =>
+        `<span class="lp-stat"><span class="lp-num">${Number(n).toLocaleString('en-IN')}</span><span class="lp-label">${label}</span></span>`
+      ).join('<span class="lp-sep" aria-hidden="true"></span>');
+      el.style.display = 'flex';
     }catch(err){ /* a number is not worth an error */ }
   }
 

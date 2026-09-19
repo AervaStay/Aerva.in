@@ -742,13 +742,36 @@ module.exports = async (req, res) => {
     // with bookings that were cancelled or never paid for.
     if (req.query.publicStats === '1') {
       try {
+        // Public numbers, so every one of them has to be literally true.
+        // Counted from real bookings only:
+        //   - paid, and a stay (experiences are not "stays hosted");
+        //   - paid through Razorpay for real: Razorpay payment ids start
+        //     "pay_", so seed or test rows (dummy_pay_…) never count;
+        //   - one booking once, even if its row was written twice, and a
+        //     multi-room resort booking as one stay;
+        //   - dates on each property's own calendar, not the server's.
+        // "Guests checked in this month" adds up the guests on bookings
+        // that have arrived this month — people, not bookings.
         const rows = await sql`
+          WITH real_stays AS (
+            SELECT DISTINCT ON (o.razorpay_order_id, o.listing_id, o.room_id, o.arrival)
+                   o.razorpay_order_id, o.listing_id, o.guest_id, o.guests, o.arrival, o.departure,
+                   (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
+            FROM orders o
+            LEFT JOIN listings l ON l.id = o.listing_id
+            WHERE o.status = 'paid'
+              AND COALESCE(o.order_type, 'stay') = 'stay'
+              AND o.razorpay_payment_id LIKE 'pay!_%' ESCAPE '!'
+            ORDER BY o.razorpay_order_id, o.listing_id, o.room_id, o.arrival, o.id
+          )
           SELECT
-            COUNT(*) FILTER (WHERE o.status = 'paid' AND o.departure <= CURRENT_DATE) AS stays_hosted,
-            COUNT(*) FILTER (WHERE o.status = 'paid' AND o.arrival >= date_trunc('month', CURRENT_DATE)::date
-                                AND o.arrival <= CURRENT_DATE) AS checkins_this_month,
-            COUNT(DISTINCT o.guest_id) FILTER (WHERE o.status = 'paid') AS guests_hosted
-          FROM orders o
+            -- A resort booking of two rooms is still one stay.
+            COUNT(DISTINCT (razorpay_order_id, listing_id, arrival)) FILTER (WHERE departure <= local_today) AS stays_hosted,
+            COALESCE(SUM(guests) FILTER (
+              WHERE arrival >= date_trunc('month', local_today)::date AND arrival <= local_today
+            ), 0) AS checkins_this_month,
+            COUNT(DISTINCT guest_id) AS guests_hosted
+          FROM real_stays
         `;
         const r = rows[0] || {};
         return res.status(200).json({
