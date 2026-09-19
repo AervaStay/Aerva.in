@@ -269,6 +269,36 @@ module.exports = async (req, res) => {
 
     const guestId = getOptionalGuestId(req);
 
+    // Hosts and co-hosts cannot book listings they run: a self-booking pays
+    // the booker's own payout, inflates ratings and blocks real guests'
+    // dates. Checked on the server for every stay and experience in the cart.
+    if (guestId) {
+      const ids = [...new Set([]
+        .concat((Array.isArray(stays) ? stays : []).map(x => Number(x && x.listingId)))
+        .concat((Array.isArray(experiences) ? experiences : []).map(x => Number(x && x.listingId))))]
+        .filter(n => Number.isInteger(n) && n > 0);
+      if (ids.length) {
+        let own = [];
+        try {
+          own = await sql`
+            SELECT l.id, l.property_name FROM listings l
+            WHERE l.id = ANY(${ids}) AND (
+              l.host_id = (SELECT host_id FROM guests WHERE id = ${guestId})
+              OR EXISTS (SELECT 1 FROM cohosts c WHERE c.host_id = l.host_id AND c.cohost_guest_id = ${guestId}
+                         AND c.status = 'active' AND l.id = ANY(c.listing_ids))
+            )
+          `;
+        } catch (err) {
+          // Before migration_cohosts.sql the co-host part cannot run; the
+          // host check alone still applies.
+          own = await sql`SELECT l.id, l.property_name FROM listings l WHERE l.id = ANY(${ids}) AND l.host_id = (SELECT host_id FROM guests WHERE id = ${guestId})`;
+        }
+        if (own.length) {
+          return res.status(400).json({ error: `You can't book ${own[0].property_name} — hosts and co-hosts can't book listings they run.` });
+        }
+      }
+    }
+
     // ---- "Includes a Stay" experiences ----
     // An experience whose type is with_stay is sold together with nights
     // at the property that hosts it, paid for in ONE payment. The nights
@@ -523,8 +553,28 @@ module.exports = async (req, res) => {
       }
       const petFeeAmount = requestedPets > 0 ? Math.round(Number(listing.pet_fee || 0) * requestedPets) : 0;
 
+      // Service / support animals and young litter: never counted or
+      // charged, but the host needs to know before the guest arrives, so
+      // they travel with the booking (see verify-payment.js). Each service
+      // animal is its type as chosen on the booking page; young litter is
+      // a count, and only means something alongside a pet.
+      const requestedServiceAnimals = (Array.isArray(s.serviceAnimals) ? s.serviceAnimals : [])
+        .map(a => (a && typeof a === 'object') ? a.type : a)
+        .filter(t => typeof t === 'string' && t.trim())
+        .map(t => t.trim().slice(0, 30))
+        .slice(0, 5);
+      const requestedYoungLitter = requestedPets > 0
+        ? Math.max(0, Math.min(10, Math.floor(Number(s.youngLitterCount)) || 0))
+        : 0;
+      // One service / support animal per booking is free. Each one after
+      // the first is charged at the listing's pet fee, the same way a pet
+      // is — it is not counted toward the pet limit, only charged.
+      const chargeableServiceAnimals = Math.max(0, requestedServiceAnimals.length - 1);
+      const serviceAnimalFee = Math.round(Number(listing.pet_fee || 0) * chargeableServiceAnimals);
+      const animalFees = petFeeAmount + serviceAnimalFee;
+
       const roomPortion = beforeDiscount - discountAmount; // room + extra guests, after discount, never includes amenities
-      const staySubtotal = roomPortion + amenityTotal + petFeeAmount;
+      const staySubtotal = roomPortion + amenityTotal + animalFees;
       const baseCommission = Math.round(roomPortion * (BASE_COMMISSION_RATE / 100));
       // Pet fee is commissioned at the same rate as paid amenities — both
       // are optional, host-set extras layered on top of the room rate,
@@ -532,7 +582,7 @@ module.exports = async (req, res) => {
       // (rather than a new field) so verify-payment.js's existing
       // commissionAmount = baseCommission + amenityCommission logic picks
       // it up automatically, with no changes needed there.
-      const amenityCommission = Math.round((amenityTotal + petFeeAmount) * (AMENITY_COMMISSION_RATE / 100));
+      const amenityCommission = Math.round((amenityTotal + animalFees) * (AMENITY_COMMISSION_RATE / 100));
       // Flat rate on the whole stay subtotal — added on top of what the
       // guest pays, never subtracted from what the host receives.
       const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
@@ -546,7 +596,7 @@ module.exports = async (req, res) => {
 
       // GST for this stay: rate from the per-night value of the room
       // itself, applied to the room plus its amenities and pet fees.
-      const stayTax = stayGst({ roomPortion, nights, extras: amenityTotal + petFeeAmount });
+      const stayTax = stayGst({ roomPortion, nights, extras: amenityTotal + animalFees });
 
       grandSubtotal += staySubtotal;
       grandGst += stayTax.gst;
@@ -566,7 +616,10 @@ module.exports = async (req, res) => {
         discountAmount,
         extraGuestCharge: extraTotal, // broken out for the guest-facing summary
         petFeeAmount, // broken out for the guest-facing summary
+        serviceAnimalFee,
         petTypes: requestedPetTypes, // trusted server-side validated list, not re-trusted from the browser at verify time
+        serviceAnimals: requestedServiceAnimals,
+        youngLitterCount: requestedYoungLitter,
         roomPortion,
         baseCommission,
         amenityCommission,

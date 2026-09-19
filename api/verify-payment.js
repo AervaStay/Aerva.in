@@ -39,6 +39,7 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 const sql = neon(process.env.DATABASE_URL);
+const { recordCohostShares } = require('./_cohosts');
 
 // Fixed platform commission rates, matching create-order.js exactly — see
 // that file for the reasoning. Kept here only as a fallback for orders
@@ -361,18 +362,22 @@ module.exports = async (req, res) => {
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
             charge_currency, charge_amount, coupon_id, coupon_discount,
-            razorpay_order_id, razorpay_payment_id, status, order_type, pet_types
+            razorpay_order_id, razorpay_payment_id, status, order_type, pet_types,
+            service_animal_types, young_litter_count
           ) VALUES (
             ${stay.suite}, ${stay.listingId || null}, ${stay.roomId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             ${depositAmount}, ${depositStatus}, ${depositReleaseAt},
             ${chargeCurrency}, ${chargeAmount}, ${thisRowCouponId}, ${thisRowCouponDiscount},
-            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay', ${JSON.stringify(Array.isArray(stay.petTypes) ? stay.petTypes : [])}
+            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay', ${JSON.stringify(Array.isArray(stay.petTypes) ? stay.petTypes : [])},
+            ${JSON.stringify(Array.isArray(stay.serviceAnimals) ? stay.serviceAnimals : [])}, ${Number(stay.youngLitterCount) || 0}
           )
           RETURNING id
         `;
         insertedCount++;
+        // Each co-host's share of the host payout, at their approved %.
+        await recordCohostShares(sql, inserted[0].id, stay.listingId, payoutAmount);
 
         if (thisRowCouponId) {
           await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${inserted[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
@@ -466,6 +471,8 @@ module.exports = async (req, res) => {
           RETURNING id
         `;
         insertedCount++;
+        // Each co-host's share of the host payout, at their approved %.
+        await recordCohostShares(sql, insertedEx[0].id, ex.listingId, payoutAmount);
 
         if (thisRowCouponId) {
           await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${insertedEx[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;

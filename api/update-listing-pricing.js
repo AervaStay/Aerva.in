@@ -31,6 +31,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
+const { readCohostManageToken } = require('./_cohosts');
 const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules');
 const { timezoneForAddress } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
@@ -54,11 +55,20 @@ function hasNonLatinScript(str) {
   return /[^\u0000-\u024F\s]/.test(str);
 }
 
-function requireListingId(req) {
+// Two kinds of Manage link: the host's own ('manage-pricing'), and a
+// co-host's ('manage-cohost', see _cohosts.js), which is checked against
+// the cohosts table on every use — so it stops working the moment the
+// co-host is removed or loses that listing — and can never rename it.
+async function resolveManageAccess(req) {
   const token = req.method === 'GET' ? req.query.token : (req.body || {}).token;
   const payload = token ? verifyToken(token) : null;
-  if (!payload || payload.action !== 'manage-pricing') return null;
-  return payload.listingId;
+  if (!payload) return null;
+  if (payload.action === 'manage-pricing') return { listingId: payload.listingId, isCohost: false };
+  if (payload.action === 'manage-cohost') {
+    const c = await readCohostManageToken(sql, payload);
+    return c ? { listingId: c.listingId, isCohost: true, cohostId: c.cohostId } : null;
+  }
+  return null;
 }
 
 module.exports = async (req, res) => {
@@ -72,7 +82,8 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const listingId = requireListingId(req);
+  const access = await resolveManageAccess(req);
+  const listingId = access ? access.listingId : null;
   if (!listingId) {
     return res.status(400).json({ error: 'This link is no longer valid. Contact hello@aerva.in if you need a new one.' });
   }
@@ -270,10 +281,12 @@ module.exports = async (req, res) => {
       // the same message as submission (see _listing-rules.js).
       const meRows = await sql`SELECT property_name, pincode, listing_type, property_type FROM listings WHERE id = ${listingId}`;
       const me = meRows[0];
-      const safeName = typeof propertyName === 'string' && propertyName.trim()
+      // Only the host renames a listing. A co-host's save keeps the
+      // current name whatever the form sent.
+      const safeName = !access.isCohost && typeof propertyName === 'string' && propertyName.trim()
         ? propertyName.trim().slice(0, 120)
         : null;
-      if (propertyName !== undefined && !safeName) {
+      if (!access.isCohost && propertyName !== undefined && !safeName) {
         return res.status(400).json({ error: 'Please give this listing a name guests will recognise.' });
       }
       const newPincode = typeof pincode === 'string' && pincode.trim() ? pincode.trim().slice(0, 20) : null;
