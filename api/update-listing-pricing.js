@@ -37,6 +37,8 @@ const { timezoneForAddress } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { resolveSatisfiedComplianceFlags } = require('./_compliance');
 const { sanitizeBody } = require('./_plain-text');
+const { assertSafeUrl, syncFeed, newToken } = require('./_calendar-sync');
+const { encryptField, decryptField, encryptionReady } = require('./_secure-fields');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -86,6 +88,84 @@ module.exports = async (req, res) => {
   const listingId = access ? access.listingId : null;
   if (!listingId) {
     return res.status(400).json({ error: 'This link is no longer valid. Contact hello@aerva.in if you need a new one.' });
+  }
+
+  // ---- Calendar sync (Manage page → Calendar sync) ----
+  // GET  ?token&calendarSync=1                 → export links + linked calendars
+  // POST { token, calendarSync: { action } }  → add | remove | syncNow | newLink
+  // Hosts and co-hosts (their Manage link) alike. See _calendar-sync.js.
+  const calMode = (req.method === 'GET' && req.query.calendarSync === '1') || (req.method === 'POST' && req.body && req.body.calendarSync);
+  if (calMode) {
+    const actor = access.isCohost ? { actorType: 'cohost', actorIdentifier: `cohost #${access.cohostId}` } : { actorType: 'host', actorIdentifier: `listing #${listingId}` };
+    try {
+      const listingRow = (await sql`SELECT id, property_name, property_type FROM listings WHERE id = ${listingId}`)[0];
+      if (!listingRow) return res.status(404).json({ error: 'Listing not found.' });
+      const rooms = await sql`SELECT id, room_name FROM listing_rooms WHERE listing_id = ${listingId} AND is_active = true ORDER BY sort_order, id`;
+      const exportBase = 'https://aerva-in.vercel.app/api/get-listings?ical=';
+      const loadState = async () => {
+        await sql`UPDATE listings SET ical_token = ${newToken()} WHERE id = ${listingId} AND ical_token IS NULL`;
+        for (const r of rooms) await sql`UPDATE listing_rooms SET ical_token = ${newToken()} WHERE id = ${r.id} AND ical_token IS NULL`;
+        const lt = (await sql`SELECT ical_token FROM listings WHERE id = ${listingId}`)[0].ical_token;
+        const rt = rooms.length ? await sql`SELECT id, ical_token FROM listing_rooms WHERE id = ANY(${rooms.map(r => r.id)})` : [];
+        const feeds = await sql`SELECT f.id, f.name, f.room_id, f.url_host, f.last_synced_at, f.last_status, f.last_error, f.event_count, r.room_name
+                                FROM calendar_feeds f LEFT JOIN listing_rooms r ON r.id = f.room_id WHERE f.listing_id = ${listingId} ORDER BY f.id`;
+        return {
+          exportLinks: [{ roomId: null, label: rooms.length ? 'Whole property' : listingRow.property_name, url: exportBase + lt }]
+            .concat(rooms.map(r => ({ roomId: r.id, label: r.room_name, url: exportBase + (rt.find(x => x.id === r.id) || {}).ical_token }))),
+          rooms: rooms.map(r => ({ id: r.id, name: r.room_name })),
+          feeds: feeds.map(f => ({ id: f.id, name: f.name, room: f.room_name || null, site: f.url_host, lastSyncedAt: f.last_synced_at,
+                                   status: f.last_status || 'pending', error: f.last_error || null, dates: f.event_count }))
+        };
+      };
+      if (req.method === 'GET') return res.status(200).json(await loadState());
+
+      const c = req.body.calendarSync || {};
+      if (c.action === 'add') {
+        if (!encryptionReady()) return res.status(503).json({ error: 'Calendar links cannot be saved right now. Please try again later.' });
+        const name = String(c.name || '').trim().slice(0, 40);
+        if (!name) return res.status(400).json({ error: 'Name the calendar, e.g. Airbnb.' });
+        let u;
+        try { u = await assertSafeUrl(c.url); } catch (e) { return res.status(400).json({ error: e.message }); }
+        const roomId = c.roomId ? Number(c.roomId) : null;
+        if (roomId && !rooms.some(r => r.id === roomId)) return res.status(400).json({ error: 'Choose one of this property’s rooms.' });
+        const count = (await sql`SELECT count(*)::int AS n FROM calendar_feeds WHERE listing_id = ${listingId}`)[0].n;
+        if (count >= 10) return res.status(400).json({ error: 'Up to 10 linked calendars per listing.' });
+        const feed = (await sql`INSERT INTO calendar_feeds (listing_id, room_id, name, url_enc, url_host)
+                                VALUES (${listingId}, ${roomId}, ${name}, ${encryptField(u.toString())}, ${u.hostname}) RETURNING *`)[0];
+        const result = await syncFeed(sql, feed, decryptField);
+        await logAudit(sql, { action: 'calendar_feed_added', success: true, ...actor, targetType: 'listing', targetId: listingId, metadata: { feedId: feed.id, site: u.hostname, firstSync: result.ok ? 'ok' : 'error' } });
+        return res.status(200).json({ ...(await loadState()), result });
+      }
+      if (c.action === 'remove') {
+        const del = await sql`DELETE FROM calendar_feeds WHERE id = ${Number(c.feedId) || 0} AND listing_id = ${listingId} RETURNING id`;
+        if (!del.length) return res.status(404).json({ error: 'Calendar not found.' });
+        await logAudit(sql, { action: 'calendar_feed_removed', success: true, ...actor, targetType: 'listing', targetId: listingId, metadata: { feedId: del[0].id } });
+        return res.status(200).json(await loadState());
+      }
+      if (c.action === 'syncNow') {
+        const feeds = await sql`SELECT * FROM calendar_feeds WHERE listing_id = ${listingId}`;
+        const results = await Promise.race([
+          Promise.all(feeds.map(f => syncFeed(sql, f, decryptField))),
+          new Promise(r => setTimeout(() => r(null), 8000))
+        ]);
+        return res.status(200).json({ ...(await loadState()), synced: results ? results.filter(x => x.ok).length : null, total: feeds.length });
+      }
+      if (c.action === 'newLink') {
+        const roomId = c.roomId ? Number(c.roomId) : null;
+        if (roomId) {
+          if (!rooms.some(r => r.id === roomId)) return res.status(400).json({ error: 'Choose one of this property’s rooms.' });
+          await sql`UPDATE listing_rooms SET ical_token = ${newToken()} WHERE id = ${roomId}`;
+        } else {
+          await sql`UPDATE listings SET ical_token = ${newToken()} WHERE id = ${listingId}`;
+        }
+        await logAudit(sql, { action: 'calendar_export_link_replaced', success: true, ...actor, targetType: 'listing', targetId: listingId, metadata: { roomId } });
+        return res.status(200).json(await loadState());
+      }
+      return res.status(400).json({ error: 'Unknown calendar action.' });
+    } catch (err) {
+      console.error('calendar sync mode failed:', err);
+      return res.status(500).json({ error: 'Calendar sync is unavailable right now. Please try again.' });
+    }
   }
 
   // ---- Load current pricing for the form ----
