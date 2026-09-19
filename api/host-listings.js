@@ -79,6 +79,9 @@ const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
 const { sanitizeBody } = require('./_plain-text');
+const { COHOST_PERMISSIONS, FULL_ONLY, ALWAYS_LABEL, cleanPermissions, cleanEmail, resolveActingHost, cohostCan,
+        cohostHasListing, describeAccess, inviteToken, readInviteToken, emailCohostInvite,
+        cohostManageToken } = require('./_cohosts');
 
 const sql = neon(process.env.DATABASE_URL);
 const razorpay = new Razorpay({
@@ -252,6 +255,420 @@ async function unblockRangeFromRow(sql, rowId, from, to) {
   }
 }
 
+
+// ======================================================================
+// Co-hosts
+// ======================================================================
+
+// Every action a co-host may ever take on a host's side, what it needs,
+// and how to find the listing it touches. Anything not listed here is
+// refused to a co-host outright — that is what keeps bank details,
+// payouts, verification, coupons and co-host management out of reach.
+const COHOST_ACTIONS = {
+  // POST body keys
+  bulkBlockRange:     { perm: 'rates', listingFrom: b => b.listingId },
+  unblockRange:       { perm: 'rates', listingFrom: b => b.listingId },
+  toggleBlockedDate:  { perm: 'rates', listingFrom: b => b.listingId },
+  addPromotion:       { perm: 'rates', listingFrom: b => b.listingId },
+  removePromotionRun: { perm: 'rates', listingFrom: b => b.listingId },
+  removePromotion:    { perm: 'rates', promotionFrom: b => b.promotionId },
+  removePromotionDay: { perm: 'rates', promotionFrom: b => b.promotionId },
+  cancelBooking:      { perm: 'cancel', orderFrom: b => b.orderId },
+  cancelWithCoupon:   { perm: 'cancel', orderFrom: b => b.orderId },
+  raiseDispute:       { perm: FULL_ONLY, orderFrom: b => b.orderId },
+  reviewGuest:        { perm: FULL_ONLY, orderFrom: b => b.orderId }
+};
+
+function cohostDenied(res, msg) {
+  res.status(403).json({ error: msg || 'Your co-host access does not include this.' });
+  return null;
+}
+
+// Decides a co-host request before any host code runs: who they are
+// helping, whether this action is allowed at all, whether their access
+// covers it, and whether the listing is one of theirs. Then trims
+// everything the response would otherwise show to what they may see.
+async function cohostGate(req, res, accountId) {
+  const ctx = await resolveActingHost(sql, accountId, req.query.actingHost);
+  if (!ctx) return cohostDenied(res, 'You are not a co-host for this host, or your access has ended.');
+
+  let perm = null;
+  let listingId = null;
+  let mode = null;
+  if (req.method === 'GET') {
+    const q = req.query || {};
+    if (q.analytics === '1') { perm = 'analytics'; mode = 'analytics'; }
+    else if (q.statusCalendar === '1') { perm = 'calendar'; mode = 'statusCalendar'; }
+    else if (q.guestProfileForOrder !== undefined) {
+      perm = 'bookings'; mode = 'guestProfile';
+      const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(q.guestProfileForOrder) || 0}`;
+      listingId = o[0] ? o[0].listing_id : -1;
+    }
+    else if (Object.keys(q).every(k => k === 'actingHost')) { mode = 'dashboard'; }
+    else return cohostDenied(res);
+  } else if (req.method === 'POST') {
+    const body = req.body || {};
+    const key = Object.keys(COHOST_ACTIONS).find(k => body[k]);
+    if (!key || Object.keys(body).length !== 1) return cohostDenied(res);
+    const rule = COHOST_ACTIONS[key];
+    const payload = body[key] || {};
+    perm = rule.perm; mode = key;
+    if (rule.listingFrom) listingId = Number(rule.listingFrom(payload)) || -1;
+    if (rule.orderFrom) {
+      const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(rule.orderFrom(payload)) || 0}`;
+      listingId = o[0] ? o[0].listing_id : -1;
+    }
+    if (rule.promotionFrom) {
+      const pr = await sql`SELECT listing_id FROM listing_promotions WHERE id = ${Number(rule.promotionFrom(payload)) || 0}`;
+      listingId = pr[0] ? pr[0].listing_id : -1;
+    }
+  } else {
+    return cohostDenied(res);
+  }
+
+  if (perm && !cohostCan(ctx, perm)) return cohostDenied(res);
+  if (listingId !== null && !cohostHasListing(ctx, listingId)) {
+    return cohostDenied(res, 'That listing is not one you co-host.');
+  }
+
+  if (req.method === 'POST') {
+    await logAudit(sql, {
+      action: 'cohost_action', success: true, actorType: 'cohost', actorIdentifier: String(accountId),
+      targetType: 'host', targetId: ctx.hostId, metadata: { mode, listingId, cohostId: ctx.cohostId }
+    });
+  }
+
+  // Trim the answer to what this co-host may see.
+  const originalJson = res.json.bind(res);
+  res.json = (body) => originalJson(trimForCohost(ctx, mode, body));
+  return { ctx };
+}
+
+function cohostManageLink(listingId, cohostRowId) {
+  return `${SITE_BASE}/manage-listing.html?token=${cohostManageToken(listingId, cohostRowId)}`;
+}
+
+function trimForCohost(ctx, mode, body) {
+  if (!body || typeof body !== 'object' || body.error) return body;
+  const inScope = (id) => cohostHasListing(ctx, id);
+  if (mode === 'dashboard') {
+    const seesBookings = cohostCan(ctx, 'bookings');
+    const out = {
+      // Every co-host gets the Manage page, through their own link: it
+      // stops working when they are removed and cannot rename the listing.
+      listings: (body.listings || []).filter(l => inScope(l.id)).map(l => ({ ...l, manageLink: cohostManageLink(l.id, ctx.cohostId) })),
+      hostBadge: body.hostBadge || null,
+      bookings: seesBookings ? (body.bookings || []).filter(b => inScope(b.listing_id)) : [],
+      verification: null, // never shown to a co-host
+      complianceNotices: (body.complianceNotices || []).filter(n => inScope(n.listingId))
+        .map(n => ({ ...n, manageLink: cohostManageLink(n.listingId, ctx.cohostId) })),
+      today: { arrivals: [], departures: [], staying: [], experiences: [] },
+      cohost: describeAccess(ctx)
+    };
+    if (seesBookings && body.today) {
+      for (const k of Object.keys(out.today)) out.today[k] = (body.today[k] || []).filter(r => inScope(r.listingId));
+    }
+    return out;
+  }
+  if (mode === 'analytics') {
+    return { ...body,
+      rows: (body.rows || []).filter(r => inScope(r.listingId)),
+      listings: Array.isArray(body.listings) ? body.listings.filter(l => inScope(l.id)) : body.listings };
+  }
+  if (mode === 'statusCalendar') {
+    return { ...body, rows: (body.rows || []).filter(r => inScope(r.listingId)) };
+  }
+  return body;
+}
+
+// Inviting, changing and removing co-hosts (the host), and seeing,
+// accepting, declining or leaving co-hosting (the co-host). Returns true
+// when it has answered the request. Never runs for ?actingHost requests:
+// a co-host can never manage co-hosts.
+async function handleCohostModes(req, res, accountId) {
+  const q = req.query || {};
+  const b = (req.method === 'POST' && req.body) || {};
+  const isMode = (req.method === 'GET' && (q.cohosts === '1' || q.myCohosting === '1'))
+    || (req.method === 'POST' && (b.inviteCohost || b.updateCohost || b.removeCohost || b.acceptCohostInvite || b.declineCohostInvite || b.leaveCohost
+        || b.proposeCommission || b.decideCommission || b.savePayoutProfile))
+    || (req.method === 'GET' && q.myPayoutProfile === '1');
+  if (!isMode) return false;
+  if (q.actingHost !== undefined) { cohostDenied(res, 'Co-hosts cannot manage co-hosts.'); return true; }
+
+  try {
+    const meRows = await sql`SELECT id, host_id, email, name FROM guests WHERE id = ${accountId}`;
+    const me = meRows[0];
+    if (!me) { res.status(401).json({ error: 'Please log in again.' }); return true; }
+
+    // ---- The co-host's side ----
+    if (req.method === 'GET' && q.myCohosting === '1') {
+      const active = await sql`
+        SELECT c.id, c.host_id, c.access, c.permissions, c.listing_ids, h.name AS host_name,
+               c.commission_percent, c.proposed_percent, c.proposal_status
+        FROM cohosts c JOIN hosts h ON h.id = c.host_id
+        WHERE c.cohost_guest_id = ${me.id} AND c.status = 'active'
+        ORDER BY c.accepted_at DESC
+      `;
+      // What this person has earned as a co-host: every recorded share,
+      // newest first (the last 50), and the total.
+      let earnings = { total: 0, rows: [] };
+      try {
+        const er = await sql`
+          SELECT s.amount, s.percent, o.arrival, o.departure, o.status, l.property_name, h.name AS host_name
+          FROM order_cohost_shares s
+          JOIN orders o ON o.id = s.order_id
+          JOIN listings l ON l.id = o.listing_id
+          JOIN hosts h ON h.id = l.host_id
+          WHERE s.cohost_guest_id = ${me.id}
+          ORDER BY o.arrival DESC NULLS LAST LIMIT 50
+        `;
+        const tot = await sql`SELECT COALESCE(SUM(s.amount), 0)::int AS t FROM order_cohost_shares s JOIN orders o ON o.id = s.order_id WHERE s.cohost_guest_id = ${me.id} AND o.status = 'paid'`;
+        earnings = {
+          total: Number(tot[0] && tot[0].t) || 0,
+          rows: er.map(r => ({ amount: Number(r.amount), percent: Number(r.percent), arrival: r.arrival, departure: r.departure,
+                               status: r.status, listingName: r.property_name, hostName: r.host_name }))
+        };
+      } catch (err) { console.error('co-host earnings failed:', err.message); }
+      res.status(200).json({
+        cohosting: active.map(r => ({
+          hostId: r.host_id, hostName: r.host_name || 'Host', access: r.access,
+          permissions: r.access === 'full' ? COHOST_PERMISSIONS.map(p => p.key) : cleanPermissions(r.permissions),
+          listingCount: (r.listing_ids || []).length,
+          commissionPercent: r.commission_percent == null ? null : Number(r.commission_percent),
+          proposedPercent: r.proposed_percent == null ? null : Number(r.proposed_percent),
+          proposalStatus: r.proposal_status || null
+        })),
+        earnings,
+        permissionLabels: COHOST_PERMISSIONS,
+        alwaysLabel: ALWAYS_LABEL
+      });
+      return true;
+    }
+    // ---- A co-host's payout details: PAN, optional GSTIN, bank account ----
+    // Shown back to them masked; only the admin payout view sees them in
+    // full. Any change needs an admin's approval again before payouts.
+    if (req.method === 'GET' && q.myPayoutProfile === '1') {
+      let p = null;
+      try { p = (await sql`SELECT * FROM cohost_payout_profiles WHERE guest_id = ${me.id}`)[0] || null; }
+      catch (err) { console.error('payout profile unavailable:', err.message); }
+      res.status(200).json({ profile: p ? {
+        panMasked: 'XXXXX' + String(p.pan_number).slice(5, 9) + 'X',
+        gstin: p.gstin || null,
+        accountHolderName: p.account_holder_name,
+        accountMasked: '\u2022\u2022\u2022\u2022 ' + String(p.bank_account_number).slice(-4),
+        ifsc: p.bank_ifsc,
+        status: p.status,
+        rejectionReason: p.status === 'rejected' ? (p.rejection_reason || null) : null
+      } : null });
+      return true;
+    }
+    if (b.savePayoutProfile) {
+      const x = b.savePayoutProfile;
+      const pan = String(x.pan || '').trim().toUpperCase();
+      const gstin = String(x.gstin || '').trim().toUpperCase();
+      const holder = String(x.accountHolderName || '').trim().slice(0, 120);
+      const account = String(x.accountNumber || '').replace(/\s+/g, '');
+      const ifsc = String(x.ifsc || '').trim().toUpperCase();
+      if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) { res.status(400).json({ error: 'Please enter a valid PAN, like ABCDE1234F.' }); return true; }
+      if (gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCDE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
+      if (gstin && gstin.slice(2, 12) !== pan) { res.status(400).json({ error: 'Your GSTIN should contain your PAN (characters 3 to 12).' }); return true; }
+      if (holder.length < 2) { res.status(400).json({ error: 'Please enter the account holder\'s name as the bank has it.' }); return true; }
+      if (!/^[0-9]{9,18}$/.test(account)) { res.status(400).json({ error: 'Bank account numbers are 9 to 18 digits.' }); return true; }
+      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) { res.status(400).json({ error: 'Please enter a valid IFSC, like HDFC0001234.' }); return true; }
+      const isCohost = await sql`SELECT 1 FROM cohosts WHERE cohost_guest_id = ${me.id} AND status = 'active' LIMIT 1`;
+      if (!isCohost.length) { res.status(403).json({ error: 'Payout details are for active co-hosts.' }); return true; }
+      await sql`
+        INSERT INTO cohost_payout_profiles (guest_id, pan_number, gstin, account_holder_name, bank_account_number, bank_ifsc, status, rejection_reason, submitted_at, reviewed_at)
+        VALUES (${me.id}, ${pan}, ${gstin || null}, ${holder}, ${account}, ${ifsc}, 'pending_review', NULL, now(), NULL)
+        ON CONFLICT (guest_id) DO UPDATE SET
+          pan_number = EXCLUDED.pan_number, gstin = EXCLUDED.gstin, account_holder_name = EXCLUDED.account_holder_name,
+          bank_account_number = EXCLUDED.bank_account_number, bank_ifsc = EXCLUDED.bank_ifsc,
+          status = 'pending_review', rejection_reason = NULL, submitted_at = now(), reviewed_at = NULL
+      `;
+      await logAudit(sql, { action: 'cohost_payout_profile_submitted', success: true, actorType: 'guest', actorIdentifier: String(me.id), targetType: 'guest', targetId: me.id });
+      res.status(200).json({ success: true, status: 'pending_review' });
+      return true;
+    }
+
+    // A co-host proposes their share of the host's payout; the host decides.
+    if (b.proposeCommission) {
+      const pct = Math.round(Number(b.proposeCommission.percent) * 100) / 100;
+      if (!(pct > 0 && pct <= 100)) { res.status(400).json({ error: 'Enter a percentage between 0.01 and 100.' }); return true; }
+      const upd = await sql`
+        UPDATE cohosts SET proposed_percent = ${pct}, proposal_status = 'proposed', proposed_at = now()
+        WHERE cohost_guest_id = ${me.id} AND host_id = ${Number(b.proposeCommission.hostId) || 0} AND status = 'active'
+        RETURNING id
+      `;
+      if (!upd.length) { res.status(404).json({ error: 'You are not an active co-host for this host.' }); return true; }
+      await logAudit(sql, { action: 'cohost_commission_proposed', success: true, actorType: 'guest', actorIdentifier: String(me.id), targetType: 'cohost', targetId: upd[0].id, metadata: { percent: pct } });
+      res.status(200).json({ success: true });
+      return true;
+    }
+    if (b.acceptCohostInvite || b.declineCohostInvite) {
+      const token = (b.acceptCohostInvite || b.declineCohostInvite).token;
+      const rowId = readInviteToken(token);
+      if (!rowId) { res.status(400).json({ error: 'This invitation link is not valid or has expired. Ask the host to send it again.' }); return true; }
+      const rows = await sql`SELECT c.*, h.name AS host_name FROM cohosts c JOIN hosts h ON h.id = c.host_id WHERE c.id = ${rowId}`;
+      const inv = rows[0];
+      if (!inv || inv.status !== 'invited') { res.status(410).json({ error: 'This invitation is no longer open.' }); return true; }
+      if (!me.email || String(me.email).trim().toLowerCase() !== String(inv.invited_email).toLowerCase()) {
+        res.status(403).json({ error: `This invitation was sent to ${inv.invited_email}. Sign in with that email to accept it.` });
+        return true;
+      }
+      if (me.host_id && Number(me.host_id) === Number(inv.host_id)) {
+        res.status(400).json({ error: 'You cannot co-host your own listings.' });
+        return true;
+      }
+      if (b.declineCohostInvite) {
+        await sql`UPDATE cohosts SET status = 'declined' WHERE id = ${inv.id} AND status = 'invited'`;
+        res.status(200).json({ success: true, declined: true });
+        return true;
+      }
+      const upd = await sql`
+        UPDATE cohosts SET status = 'active', cohost_guest_id = ${me.id}, accepted_at = now()
+        WHERE id = ${inv.id} AND status = 'invited' RETURNING id
+      `;
+      if (!upd.length) { res.status(410).json({ error: 'This invitation is no longer open.' }); return true; }
+      await logAudit(sql, { action: 'cohost_accepted', success: true, actorType: 'guest', actorIdentifier: String(me.id), targetType: 'host', targetId: inv.host_id, metadata: { cohostId: inv.id } });
+      res.status(200).json({ success: true, hostId: inv.host_id, hostName: inv.host_name || 'Host' });
+      return true;
+    }
+    if (b.leaveCohost) {
+      await sql`UPDATE cohosts SET status = 'removed', removed_at = now()
+                WHERE cohost_guest_id = ${me.id} AND host_id = ${Number(b.leaveCohost.hostId) || 0} AND status = 'active'`;
+      res.status(200).json({ success: true });
+      return true;
+    }
+
+    // ---- The host's side: only the listing owner ----
+    if (!me.host_id) { res.status(403).json({ error: 'Only hosts can add co-hosts.' }); return true; }
+    const ownListings = await sql`
+      SELECT id, property_name, COALESCE(listing_type, 'stay') AS listing_type, status FROM listings
+      WHERE host_id = ${me.host_id} AND status NOT IN ('removed', 'rejected')
+      ORDER BY property_name ASC
+    `;
+    const ownIds = new Set(ownListings.map(l => Number(l.id)));
+    const pickListings = (ids) => [...new Set((Array.isArray(ids) ? ids : []).map(Number))].filter(id => ownIds.has(id));
+
+    if (req.method === 'GET' && q.cohosts === '1') {
+      const rows = await sql`
+        SELECT c.id, c.invited_email, c.access, c.permissions, c.listing_ids, c.status, c.invited_at, c.accepted_at,
+               c.commission_percent, c.proposed_percent, c.proposal_status,
+               g.name AS cohost_name
+        FROM cohosts c LEFT JOIN guests g ON g.id = c.cohost_guest_id
+        WHERE c.host_id = ${me.host_id} AND c.status IN ('invited', 'active')
+        ORDER BY c.invited_at DESC
+      `;
+      res.status(200).json({
+        cohosts: rows.map(r => ({
+          id: r.id, email: r.invited_email, name: r.cohost_name || null, access: r.access,
+          permissions: cleanPermissions(r.permissions), listingIds: (r.listing_ids || []).map(Number),
+          status: r.status, invitedAt: r.invited_at, acceptedAt: r.accepted_at,
+          commissionPercent: r.commission_percent == null ? null : Number(r.commission_percent),
+          proposedPercent: r.proposed_percent == null ? null : Number(r.proposed_percent),
+          proposalStatus: r.proposal_status || null
+        })),
+        listings: ownListings.map(l => ({ id: l.id, name: l.property_name, type: l.listing_type })),
+        permissionLabels: COHOST_PERMISSIONS,
+        alwaysLabel: ALWAYS_LABEL
+      });
+      return true;
+    }
+
+    // The host approves or declines a co-host's proposed share. Approved
+    // shares on any one listing can never add up to more than 100% of the
+    // host's payout.
+    if (b.decideCommission) {
+      const id = Number(b.decideCommission.id) || 0;
+      const rows = await sql`SELECT id, proposed_percent, proposal_status, listing_ids FROM cohosts WHERE id = ${id} AND host_id = ${me.host_id} AND status = 'active'`;
+      const c = rows[0];
+      if (!c || c.proposal_status !== 'proposed' || c.proposed_percent == null) { res.status(404).json({ error: 'There is no proposal waiting for this co-host.' }); return true; }
+      if (!b.decideCommission.approve) {
+        await sql`UPDATE cohosts SET proposal_status = 'declined' WHERE id = ${id}`;
+        await logAudit(sql, { action: 'cohost_commission_declined', success: true, actorType: 'host', actorIdentifier: String(me.host_id), targetType: 'cohost', targetId: id });
+        res.status(200).json({ success: true, approved: false });
+        return true;
+      }
+      const pct = Number(c.proposed_percent);
+      const others = await sql`
+        SELECT l AS listing_id, COALESCE(SUM(o.commission_percent), 0) AS used
+        FROM unnest(${c.listing_ids}::int[]) AS l
+        LEFT JOIN cohosts o ON o.host_id = ${me.host_id} AND o.status = 'active' AND o.id <> ${id}
+             AND o.commission_percent IS NOT NULL AND l = ANY(o.listing_ids)
+        GROUP BY l
+      `;
+      const over = others.find(r => Number(r.used) + pct > 100);
+      if (over) { res.status(400).json({ error: `Approving this would give co-hosts more than 100% of your payout on one listing (${Number(over.used)}% is already shared there).` }); return true; }
+      await sql`UPDATE cohosts SET commission_percent = ${pct}, proposal_status = 'approved' WHERE id = ${id}`;
+      await logAudit(sql, { action: 'cohost_commission_approved', success: true, actorType: 'host', actorIdentifier: String(me.host_id), targetType: 'cohost', targetId: id, metadata: { percent: pct } });
+      res.status(200).json({ success: true, approved: true, percent: pct });
+      return true;
+    }
+
+    const readAccess = (x) => {
+      const access = x.access === 'full' ? 'full' : 'limited';
+      const permissions = access === 'full' ? [] : cleanPermissions(x.permissions);
+      const listingIds = pickListings(x.listingIds);
+      return { access, permissions, listingIds };
+    };
+
+    if (b.inviteCohost) {
+      const email = cleanEmail(b.inviteCohost.email);
+      if (!email) { res.status(400).json({ error: 'Please enter a valid email address.' }); return true; }
+      if (me.email && email === String(me.email).trim().toLowerCase()) { res.status(400).json({ error: 'That is your own email.' }); return true; }
+      const a = readAccess(b.inviteCohost);
+      if (!a.listingIds.length) { res.status(400).json({ error: 'Choose at least one listing for this co-host.' }); return true; }
+      if (a.access === 'limited' && !a.permissions.length) { res.status(400).json({ error: 'Choose at least one thing this co-host can do.' }); return true; }
+      const existing = await sql`SELECT id, status FROM cohosts WHERE host_id = ${me.host_id} AND lower(invited_email) = ${email} AND status IN ('invited', 'active')`;
+      if (existing.length) { res.status(409).json({ error: existing[0].status === 'active' ? 'This person is already your co-host.' : 'You have already invited this email.' }); return true; }
+      const ins = await sql`
+        INSERT INTO cohosts (host_id, invited_email, access, permissions, listing_ids)
+        VALUES (${me.host_id}, ${email}, ${a.access}, ${JSON.stringify(a.permissions)}::jsonb, ${a.listingIds})
+        RETURNING id
+      `;
+      const token = inviteToken(ins[0].id);
+      const names = ownListings.filter(l => a.listingIds.includes(Number(l.id))).map(l => l.property_name);
+      const emailed = await emailCohostInvite({ to: email, hostName: me.name || 'Your host', access: a.access, permissions: a.permissions, listingNames: names, token });
+      await logAudit(sql, { action: 'cohost_invited', success: true, actorType: 'host', actorIdentifier: String(me.host_id), targetType: 'cohost', targetId: ins[0].id, metadata: { email, access: a.access } });
+      // The link is returned too, so the host can pass it on themselves
+      // if the email does not arrive. It only works for that email.
+      res.status(200).json({ success: true, id: ins[0].id, emailed, inviteLink: `https://aerva.in/index.html?view=cohost&invite=${encodeURIComponent(token)}` });
+      return true;
+    }
+    if (b.updateCohost) {
+      const a = readAccess(b.updateCohost);
+      if (!a.listingIds.length) { res.status(400).json({ error: 'Choose at least one listing for this co-host.' }); return true; }
+      if (a.access === 'limited' && !a.permissions.length) { res.status(400).json({ error: 'Choose at least one thing this co-host can do.' }); return true; }
+      const upd = await sql`
+        UPDATE cohosts SET access = ${a.access}, permissions = ${JSON.stringify(a.permissions)}::jsonb, listing_ids = ${a.listingIds}
+        WHERE id = ${Number(b.updateCohost.id) || 0} AND host_id = ${me.host_id} AND status IN ('invited', 'active')
+        RETURNING id
+      `;
+      if (!upd.length) { res.status(404).json({ error: 'Co-host not found.' }); return true; }
+      await logAudit(sql, { action: 'cohost_updated', success: true, actorType: 'host', actorIdentifier: String(me.host_id), targetType: 'cohost', targetId: upd[0].id, metadata: a });
+      res.status(200).json({ success: true });
+      return true;
+    }
+    if (b.removeCohost) {
+      const upd = await sql`
+        UPDATE cohosts SET status = 'removed', removed_at = now()
+        WHERE id = ${Number(b.removeCohost.id) || 0} AND host_id = ${me.host_id} AND status IN ('invited', 'active')
+        RETURNING id
+      `;
+      if (!upd.length) { res.status(404).json({ error: 'Co-host not found.' }); return true; }
+      await logAudit(sql, { action: 'cohost_removed', success: true, actorType: 'host', actorIdentifier: String(me.host_id), targetType: 'cohost', targetId: upd[0].id });
+      res.status(200).json({ success: true });
+      return true;
+    }
+    res.status(400).json({ error: 'Unknown co-host request.' });
+    return true;
+  } catch (err) {
+    console.error('co-host request failed:', err);
+    res.status(500).json({ error: 'Could not complete that co-host request right now.' });
+    return true;
+  }
+}
+
 module.exports = async (req, res) => {
   // Typed text can never become markup — see _plain-text.js.
   sanitizeBody(req);
@@ -263,8 +680,22 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const guestId = requireGuestId(req);
+  // `let`, not `const`: a co-host request continues below AS the host it
+  // is working for, once cohostGate() has checked what it may do.
+  let guestId = requireGuestId(req);
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
+  const accountId = guestId; // the person actually signed in, always
+
+  // ---- Co-hosts: managing them, and being one ----
+  const handledCohost = await handleCohostModes(req, res, accountId);
+  if (handledCohost) return;
+
+  // ---- A co-host working on a host's listings (?actingHost=<hostId>) ----
+  if (req.query && req.query.actingHost !== undefined) {
+    const gate = await cohostGate(req, res, accountId);
+    if (!gate) return; // already answered with 403 / 400
+    guestId = gate.ctx.ownerGuestId;
+  }
 
   // ---- Send an OTP to verify a host's phone number ----
   // Country-aware format validation (length + digits-only) happens
@@ -1887,7 +2318,7 @@ module.exports = async (req, res) => {
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
-             o.status, o.created_at, o.pet_types,
+             o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
              o.guest_email, g.name AS guest_name
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
@@ -1896,6 +2327,21 @@ module.exports = async (req, res) => {
       ORDER BY o.created_at DESC
       LIMIT 100
     `;
+    // Each booking's co-host shares, so the host sees what is theirs after
+    // co-hosts. Separate and fail-safe: before migration_cohost_commission.sql
+    // has run there is no shares table, and bookings must still load.
+    try {
+      const ids = bookings.map(b => b.id);
+      if (ids.length) {
+        const sh = await sql`SELECT order_id, COALESCE(SUM(amount), 0)::int AS amt FROM order_cohost_shares WHERE order_id = ANY(${ids}) GROUP BY order_id`;
+        const byOrder = {};
+        sh.forEach(r => { byOrder[r.order_id] = Number(r.amt) || 0; });
+        bookings.forEach(b => { b.cohost_share = byOrder[b.id] || 0; });
+      }
+    } catch (err) {
+      console.error('co-host shares unavailable (non-fatal):', err.message);
+    }
+
 
     // Verification status for the checklist. Bank account number is
     // masked to its last 4 digits — even the host's own dashboard never
@@ -1966,6 +2412,7 @@ module.exports = async (req, res) => {
                  CASE WHEN jsonb_typeof(l.photos->0) = 'string'
                       THEN l.photos->>0 ELSE l.photos->0->>'url' END
                ) AS cover_photo_url,
+               o.pet_types, o.service_animal_types, o.young_litter_count,
                (o.arrival = local.today) AS arriving,
                (o.departure = local.today) AS departing,
                (o.departure - local.today) AS nights_left
@@ -2001,7 +2448,14 @@ module.exports = async (req, res) => {
         // and is over the same day unless it runs longer. Kept separate so
         // the page can say so rather than calling it a check-in.
         kind: (r.listing_type === 'experience') ? 'experience' : 'stay',
-        startTime: r.experience_start_time || null
+        startTime: r.experience_start_time || null,
+        // What animals are coming, so the host can prepare: billable pets,
+        // any young litter travelling with them, and service / support
+        // animals (never charged, never questioned — see the booking page).
+        petTypes: Array.isArray(r.pet_types) ? r.pet_types : [],
+        serviceAnimals: (Array.isArray(r.service_animal_types) ? r.service_animal_types : [])
+          .map(a => (a && typeof a === 'object') ? a.type : a).filter(Boolean),
+        youngLitter: Number(r.young_litter_count) || 0
       });
       const all = rows.map(shape);
       const stays = all.filter(r => r.kind === 'stay');

@@ -1150,6 +1150,32 @@ module.exports = async (req, res) => {
     // an admin looking at the uploaded document (or the bank details)
     // and deciding whether it's genuine, rather than the old behavior
     // of trusting any upload automatically.
+    // ---- Approve or reject a co-host's payout details ----
+    // POST { reviewCohostPayout: { guestId, approve, reason } }
+    if (req.body && req.body.reviewCohostPayout) {
+      try {
+        const { guestId, approve, reason } = req.body.reviewCohostPayout;
+        const gid = Number(guestId) || 0;
+        const why = typeof reason === 'string' ? reason.trim().slice(0, 500) : '';
+        if (!approve && !why) return res.status(400).json({ error: 'Please give a reason, so the co-host knows what to fix.' });
+        const upd = await sql`
+          UPDATE cohost_payout_profiles
+          SET status = ${approve ? 'approved' : 'rejected'}, rejection_reason = ${approve ? null : why}, reviewed_at = now()
+          WHERE guest_id = ${gid} AND status = 'pending_review'
+          RETURNING guest_id
+        `;
+        if (!upd.length) return res.status(404).json({ error: 'Nothing is waiting for review for this co-host.' });
+        await logAudit(sql, {
+          action: approve ? 'cohost_payout_profile_approved' : 'cohost_payout_profile_rejected', success: true,
+          actorType: 'admin', actorIdentifier: 'admin', targetType: 'guest', targetId: gid, metadata: { reason: why || null }
+        });
+        return res.status(200).json({ success: true });
+      } catch (err) {
+        console.error('reviewCohostPayout failed:', err);
+        return res.status(500).json({ error: 'Could not save that review right now.' });
+      }
+    }
+
     if (req.body && req.body.verifyDocument) {
       try {
         const { hostId, field, action, reason } = req.body.verifyDocument;
@@ -1216,6 +1242,78 @@ module.exports = async (req, res) => {
   // Same pattern as disputes above — pending_review Aadhaar/bank
   // submissions, which now actually require a human look before
   // becoming 'verified' (see host-listings.js for why this changed).
+  // ---- Payouts: co-host payout details, and who is owed what ----
+  // GET ?payouts=1 — the 200 most recent paid bookings with the host's
+  // payout split between host and co-hosts, and each payee's bank details
+  // and approval, so payouts can be made by hand until Razorpay Route
+  // automates them. Also every co-host payout profile waiting for review.
+  if (req.query.payouts === '1') {
+    try {
+      let pendingProfiles = [];
+      try {
+        pendingProfiles = await sql`
+          SELECT p.guest_id, g.name, g.email, p.pan_number, p.gstin, p.account_holder_name, p.bank_account_number,
+                 p.bank_ifsc, p.status, p.submitted_at,
+                 (SELECT string_agg(DISTINCT h.name, ', ') FROM cohosts c JOIN hosts h ON h.id = c.host_id
+                   WHERE c.cohost_guest_id = p.guest_id AND c.status = 'active') AS cohosts_for
+          FROM cohost_payout_profiles p JOIN guests g ON g.id = p.guest_id
+          WHERE p.status = 'pending_review'
+          ORDER BY p.submitted_at ASC
+        `;
+      } catch (err) { console.error('payout profiles unavailable:', err.message); }
+      const orders = await sql`
+        SELECT o.id, o.suite_name, o.arrival, o.departure, o.status, o.total, o.commission_amount, o.payout_amount,
+               h.id AS host_id, h.name AS host_name, h.bank_account_holder_name AS host_holder,
+               h.bank_account_number AS host_account, h.bank_ifsc AS host_ifsc, h.bank_status AS host_bank_status
+        FROM orders o JOIN listings l ON l.id = o.listing_id JOIN hosts h ON h.id = l.host_id
+        WHERE o.status = 'paid'
+        ORDER BY o.arrival DESC NULLS LAST, o.id DESC
+        LIMIT 200
+      `;
+      let shares = [];
+      try {
+        const ids = orders.map(o => o.id);
+        if (ids.length) shares = await sql`
+          SELECT s.order_id, s.percent, s.amount, g.name, g.email,
+                 p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status AS profile_status
+          FROM order_cohost_shares s
+          LEFT JOIN guests g ON g.id = s.cohost_guest_id
+          LEFT JOIN cohost_payout_profiles p ON p.guest_id = s.cohost_guest_id
+          WHERE s.order_id = ANY(${ids})
+        `;
+      } catch (err) { console.error('co-host shares unavailable:', err.message); }
+      const byOrder = {};
+      shares.forEach(x => { (byOrder[x.order_id] = byOrder[x.order_id] || []).push(x); });
+      return res.status(200).json({
+        pendingProfiles: pendingProfiles.map(p => ({
+          guestId: p.guest_id, name: p.name, email: p.email, pan: p.pan_number, gstin: p.gstin,
+          holder: p.account_holder_name, account: p.bank_account_number, ifsc: p.bank_ifsc,
+          submittedAt: p.submitted_at, cohostsFor: p.cohosts_for || ''
+        })),
+        payouts: orders.map(o => {
+          const cs = (byOrder[o.id] || []).map(x => ({
+            name: x.name || x.email || 'Co-host', percent: Number(x.percent), amount: Number(x.amount),
+            holder: x.account_holder_name || null, account: x.bank_account_number || null, ifsc: x.bank_ifsc || null,
+            // Paid only once their payout details are approved.
+            ready: x.profile_status === 'approved', profileStatus: x.profile_status || 'missing'
+          }));
+          const coTotal = cs.reduce((a, x) => a + x.amount, 0);
+          return {
+            orderId: o.id, listing: o.suite_name, arrival: o.arrival, departure: o.departure,
+            total: Number(o.total) || 0, commission: Number(o.commission_amount) || 0,
+            hostPayout: Number(o.payout_amount) || 0, hostNet: (Number(o.payout_amount) || 0) - coTotal,
+            host: { name: o.host_name, holder: o.host_holder, account: o.host_account, ifsc: o.host_ifsc,
+                    ready: o.host_bank_status === 'verified' || o.host_bank_status === 'approved', bankStatus: o.host_bank_status || 'missing' },
+            cohosts: cs
+          };
+        })
+      });
+    } catch (err) {
+      console.error('payouts view failed:', err);
+      return res.status(500).json({ error: 'Could not load payouts right now.' });
+    }
+  }
+
   if (req.query.verifications === '1') {
     try {
       // No dedicated "submitted at" column exists on hosts itself —
