@@ -63,6 +63,8 @@ const BASE_OCCUPANCY = 2;
 const { stayGst, experienceGst } = require('./_gst');
 const { sanitizeBody } = require('./_plain-text');
 const { AGREEMENT_VERSION } = require('./_agreements');
+const { syncStaleFeeds } = require('./_calendar-sync');
+const { decryptField } = require('./_secure-fields');
 const { requestContext } = require('./_audit-log');
 // Fixed platform commission rates — replaces the old per-listing
 // commission_rate column, which is no longer read for new bookings (kept
@@ -265,6 +267,13 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Please read and accept the booking agreement to continue.', agreementVersion: AGREEMENT_VERSION });
     }
     const agreementNote = [AGREEMENT_VERSION, new Date().toISOString(), requestContext(req).ip || ''].join('|').slice(0, 200);
+
+    // Dates sold on Airbnb / Agoda / Booking.com… must be closed here before
+    // this booking is checked: refresh these listings' imported calendars if
+    // older than 15 minutes (6-second budget; a calendar that is down keeps
+    // its previous dates blocked). See _calendar-sync.js.
+    const stayListingIds = [...new Set((Array.isArray(stays) ? stays : []).map(x => Number(x && x.listingId)).filter(n => n > 0))];
+    if (stayListingIds.length) await syncStaleFeeds(sql, decryptField, { listingIds: stayListingIds, maxAgeMinutes: 15, deadlineMs: 6000 });
     let safeStays = Array.isArray(stays) ? stays : [];
     const safeExperiences = Array.isArray(experiences) ? experiences : [];
 

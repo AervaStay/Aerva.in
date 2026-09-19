@@ -66,6 +66,8 @@ const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
         tierByKey, applyDecayCap } = require('./_tiers');
 const { verifyToken, secretMatches } = require('./_approval-token');
+const { buildIcs, syncStaleFeeds } = require('./_calendar-sync');
+const { decryptField } = require('./_secure-fields');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { answeredQuestions, placesWithAerva } = require('./_profiles');
@@ -477,6 +479,49 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  // ---- Calendar export: GET ?ical=<secret token> ----
+  // A listing's (or resort room's) calendar for Airbnb, Agoda, Booking.com,
+  // Vrbo…: dates booked on Aerva and dates the host blocked. Dates imported
+  // FROM those platforms are left out, so calendars never echo each other.
+  // The token is the only key: unknown or replaced tokens get 404.
+  if (req.method === 'GET' && typeof req.query.ical === 'string') {
+    try {
+      const token = req.query.ical.trim();
+      if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return res.status(404).send('Not found');
+      let listing = (await sql`SELECT id, property_name FROM listings WHERE ical_token = ${token} AND status = 'approved'`)[0] || null;
+      let room = null;
+      if (!listing) {
+        room = (await sql`SELECT r.id, r.room_name, r.listing_id, l.property_name FROM listing_rooms r JOIN listings l ON l.id = r.listing_id
+                          WHERE r.ical_token = ${token} AND l.status = 'approved'`)[0] || null;
+        if (!room) return res.status(404).send('Not found');
+      }
+      const listingId = listing ? listing.id : room.listing_id;
+      const roomId = room ? room.id : null;
+      const orders = await sql`
+        SELECT id, arrival::text AS a, departure::text AS d FROM orders
+        WHERE listing_id = ${listingId} AND status = 'paid' AND COALESCE(order_type, 'stay') = 'stay'
+          AND departure >= CURRENT_DATE - 1
+          AND (${roomId}::int IS NULL OR room_id = ${roomId})
+      `;
+      const blocks = await sql`
+        SELECT id, start_date::text AS s, end_date::text AS e FROM listing_blocked_dates
+        WHERE listing_id = ${listingId} AND source_feed_id IS NULL AND end_date >= CURRENT_DATE - 1
+          AND (room_id IS NULL OR ${roomId}::int IS NULL OR room_id = ${roomId})
+      `;
+      const ranges = [
+        ...orders.map(o => ({ uid: `order-${o.id}`, start: o.a, end: o.d, summary: 'Booked on Aerva' })),
+        ...blocks.map(b => ({ uid: `block-${b.id}`, start: b.s, end: b.e, summary: 'Not available' }))
+      ].filter(r => r.start && r.end && r.end > r.start);
+      const name = 'Aerva — ' + (listing ? listing.property_name : `${room.property_name} · ${room.room_name}`);
+      res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      return res.status(200).send(buildIcs(name, ranges));
+    } catch (err) {
+      console.error('ical export failed:', err);
+      return res.status(500).send('Calendar unavailable');
+    }
+  }
+
   // ---- Daily review sweep (cron) ----
   // GET ?reviewSweep=1 — runs once a day from vercel.json. Two jobs:
   //
@@ -501,6 +546,10 @@ module.exports = async (req, res) => {
     if (!isCronAuthorized(req) && !isAdminAuthorized(req)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
+    // Daily calendar sync rides on this job (the Hobby plan runs cron once a
+    // day). Feeds not synced in 20 hours; 7-second budget. Anything not
+    // reached is still synced before any booking of that listing.
+    const calendarSync = await syncStaleFeeds(sql, decryptField, { maxAgeMinutes: 20 * 60, deadlineMs: 7000, limit: 300 });
     try {
       // Both sides in — release the pair together.
       const pairs = await sql`
@@ -627,6 +676,7 @@ module.exports = async (req, res) => {
 
       const forceSnapshot = req.query.forceTierSnapshot === '1';
       const summary = {
+        calendarSync,
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
         prompted: promptedCount,
@@ -754,6 +804,10 @@ module.exports = async (req, res) => {
     // other hosts wrote about them as a guest — those stay behind a
     // shared booking, as before.
     if (req.query.hostProfile !== undefined) {
+      // Signed-in users only (guest session token).
+      const auth = String(req.headers['authorization'] || '');
+      const who = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
+      if (!who || who.action !== 'guest-session') return res.status(401).json({ error: 'Please log in to view host profiles.' });
       const listingId = Number(req.query.hostProfile);
       if (!Number.isInteger(listingId) || listingId <= 0) return res.status(400).json({ error: 'Which listing?' });
       try {
