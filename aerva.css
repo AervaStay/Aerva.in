@@ -2032,3 +2032,18 @@ body.hp-open{ overflow:hidden; }
 .mobile-nav-panel{ background:#fff; }
 .nav-account-menu, .category-item-submenu, .currency-menu, .nav-notif-panel{ background:#fff; }
 .inbox-chat-pane, .inbox-templates-row{ background:#fff; }
+
+/* ---------- ALL-WHITE, PART 2 (Sept 2026) ----------
+   The date pickers and the drop-down panels still painted their own
+   cream (#f4ebe3 written straight into each rule), so the booking
+   calendar on a listing stayed beige. All of them are white now; the
+   selected dates, the range between them and hover tints keep their
+   colours (those rules are more specific and still win). */
+.calendar-dropdown, .calendar-dropdown-close,
+.calendar-months, .calendar-month-panel, .calendar-month-header,
+.cal-nav, .calendar-weekdays, .calendar-grid,
+.calendar-day, .calendar-day.empty,
+.guests-dropdown, .more-filters-dropdown, .currency-dropdown,
+.place-suggestions, .bedroom-tab, .rr-action{
+  background-color:#fff;
+}
