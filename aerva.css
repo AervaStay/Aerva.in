@@ -1801,3 +1801,129 @@ body.showing-hero header:not(.scrolled) .nav-bell-btn{
 body.showing-hero header:not(.scrolled) .category-item.active{ border-color:#e6cfa2; }
 body.showing-hero header:not(.scrolled) .currency-trigger{ background:rgba(255,255,255,0.08); }
 body.showing-hero header:not(.scrolled) .nav-avatar-camera{ border-color:#fdf8f2; }
+
+/* ---------- HEADER ON PHONES (Sept 2026) ----------
+   Below 900px the category nav was display:none and the hamburger panel
+   only held account links, so on a phone there was no way to reach
+   Suites, Aerva Experience or Host With Aerva at all. The categories now
+   stay visible as a second row: one line, swiped sideways when it does
+   not fit. touch-action:pan-x as on every horizontal scroller here. */
+.category-mobile-only{ display:none; }
+@media (max-width:900px){
+  header{ padding:12px 0; }
+  nav.wrap{ flex-wrap:wrap; row-gap:10px; }
+  .header-category-nav{
+    display:flex; order:3; width:100%; gap:22px;
+    overflow-x:auto; touch-action:pan-x; -webkit-overflow-scrolling:touch;
+    scrollbar-width:none; padding-bottom:2px;
+  }
+  .header-category-nav::-webkit-scrollbar{ display:none; }
+  .category-item{ flex:0 0 auto; font-size:10.5px; letter-spacing:0.1em; }
+  .category-item-dropdown{ display:none; }
+  .category-mobile-only{ display:flex; }
+  /* The header is a row taller now; keep the hero text clear of it. */
+  .filter-bg-wrap{ padding-top:150px; }
+}
+
+/* ---------- FOOTER RESTYLE (Sept 2026) ----------
+   Brand block on the left (mark, wordmark, one line about Aerva), three
+   short link columns, a quiet bottom line. Same charcoal ground. */
+footer{ padding:72px 0 30px; }
+footer .foot-grid{ grid-template-columns:1.6fr 1fr 1fr 1fr; gap:48px; align-items:start; }
+.foot-logo{ display:inline-flex; align-items:center; gap:14px; margin-bottom:22px; color:var(--cream); }
+.foot-logo img{ height:44px; width:auto; filter:brightness(0) invert(1); opacity:0.92; }
+.foot-logo-text{ display:flex; flex-direction:column; gap:6px; padding-left:14px; border-left:1px solid var(--line-light); line-height:1; }
+.foot-wordmark{ font-family:'Bodoni Moda', serif; font-size:20px; letter-spacing:0.34em; font-weight:500; text-transform:uppercase; }
+.foot-tagline{ font-size:8.5px; letter-spacing:0.36em; font-weight:500; text-transform:uppercase; color:var(--gold); }
+.foot-brand p{ font-size:13.5px; line-height:1.8; opacity:0.6; max-width:320px; margin:0; }
+footer h4{ font-size:10.5px; letter-spacing:0.18em; font-weight:500; margin-bottom:20px; }
+footer ul{ gap:12px; padding:0; margin:0; }
+footer ul a{ font-size:13.5px; opacity:0.7; }
+footer ul a:hover{ opacity:1; color:#fff; }
+footer .foot-bottom{ margin-top:60px; padding-top:22px; font-size:11px; letter-spacing:0.08em; opacity:0.45; }
+@media (max-width:900px){
+  footer .foot-grid{ grid-template-columns:1fr 1fr; gap:36px 28px; }
+  .foot-brand{ grid-column:1 / -1; }
+}
+@media (max-width:520px){
+  footer{ padding:56px 0 26px; }
+  footer .foot-grid{ grid-template-columns:1fr; }
+  footer .foot-bottom{ flex-direction:column; gap:6px; }
+}
+
+/* ---------- MESSAGES RESTYLE (Sept 2026) ----------
+   Calmer and closer to a modern chat: a white list with rounded rows and
+   a gold marker on the open conversation, a soft backdrop behind the
+   thread so bubbles stand out, bubbles with a tail corner, template
+   chips that swipe, and a rounded composer with a round send button.
+   Layout, IDs and behaviour are unchanged. */
+.inbox-panel{ background:#fff; border-radius:18px; border:1px solid var(--line-dark); }
+.inbox-list-header{ padding:24px 22px 14px; }
+.inbox-list-header h2{ font-size:28px; font-weight:500; }
+.inbox-icon-btn{ background:#fff; }
+.inbox-search-row input{ border-radius:999px; padding:10px 16px; background:#f7f3ee; border-color:transparent; }
+.inbox-search-row input:focus{ outline:none; border-color:var(--gold-deep); background:#fff; }
+.inbox-filter-pill, .guest-info-tab-btn{ padding:7px 14px; font-size:11px; letter-spacing:0.1em; text-transform:uppercase; }
+.inbox-conversation-list{ border-top:none; padding:4px 10px 12px; }
+.inbox-conv-card{ border-bottom:none; border-radius:12px; padding:12px 12px; margin-bottom:2px; position:relative; }
+.inbox-conv-card:hover{ background:#f7f3ee; }
+.inbox-conv-card.active{ background:#f3ece2; }
+.inbox-conv-card.active::before{
+  content:''; position:absolute; left:0; top:12px; bottom:12px; width:3px; border-radius:3px; background:var(--gold);
+}
+.inbox-conv-thumb{ width:48px; height:48px; }
+.inbox-conv-name{ font-weight:600; font-size:14.5px; }
+.inbox-status-tag{ border-radius:999px; }
+.inbox-conv-unread-dot{ background:var(--gold); box-shadow:0 0 0 3px rgba(169,136,79,0.18); }
+
+.inbox-chat-pane{ background:#faf8f5; }
+.inbox-chat-header{ background:#fff; padding:16px 24px; }
+.inbox-chat-name{ font-weight:500; }
+.inbox-messages{ padding:24px 28px; gap:14px; }
+.inbox-message-row{ max-width:72%; }
+.inbox-message-bubble{ border-radius:18px; padding:11px 16px; box-shadow:0 1px 1px rgba(28,26,23,0.04); }
+.inbox-message-row:not(.mine) .inbox-message-bubble{ background:#fff; border:1px solid var(--line-dark); border-bottom-left-radius:6px; }
+.inbox-message-row.mine .inbox-message-bubble{ border-bottom-right-radius:6px; }
+.inbox-message-meta{ font-size:11px; letter-spacing:0.02em; }
+
+.inbox-templates-row{
+  padding:10px 24px 6px; touch-action:pan-x; scrollbar-width:none; background:#faf8f5;
+}
+.inbox-templates-row::-webkit-scrollbar{ display:none; }
+.inbox-templates-row .filter-clear{
+  flex:0 0 auto; border-radius:999px; background:#fff; border:1px solid var(--line-dark);
+  padding:7px 14px; font-size:12px; white-space:nowrap;
+}
+.inbox-templates-row .filter-clear:hover{ border-color:var(--gold-deep); }
+.inbox-input-row{ background:#fff; padding:12px 20px 16px; }
+.inbox-input-row textarea{
+  border-radius:22px; background:#f7f3ee; border-color:transparent; padding:12px 18px; line-height:1.4;
+}
+.inbox-input-row textarea:focus{ outline:none; background:#fff; border-color:var(--gold-deep); }
+#inboxChatSendBtn{ border-radius:50%; }
+.inbox-details-pane{ background:#fff; }
+@media (max-width:760px){
+  .inbox-panel{ border-radius:0; border:none; }
+  .inbox-messages{ padding:18px 16px; }
+  .inbox-message-row{ max-width:86%; }
+  .inbox-templates-row{ padding:8px 16px 4px; }
+  .inbox-input-row{ padding:10px 12px 14px; }
+}
+
+/* ---------- LIKES (Sept 2026) ----------
+   Thumbs-up with a count, bottom-left of every card photo. Same dark
+   glass as the save heart (top-right) so the two read as a pair; gold
+   when liked. The count is left out while it is 0. */
+.like-btn{
+  position:absolute; left:12px; bottom:12px; z-index:7;
+  display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 11px;
+  border:none; border-radius:999px; background:rgba(20,17,14,0.62); color:#fff; cursor:pointer;
+  font-family:'Jost', sans-serif; font-size:12.5px; letter-spacing:0.02em;
+  transition:transform .15s ease, background .15s ease;
+}
+.like-btn:hover{ transform:scale(1.05); }
+.like-btn:disabled{ cursor:progress; }
+.like-btn svg{ width:16px; height:16px; fill:none; stroke:#fff; stroke-width:1.7; stroke-linejoin:round; transition:fill .15s ease, stroke .15s ease; }
+.like-btn .like-count:empty{ display:none; }
+.like-btn.is-liked svg{ fill:var(--gold); stroke:var(--gold); }
+.like-btn.is-liked{ color:var(--gold); }

@@ -68,6 +68,11 @@
           <a href="index.html?view=list-experience" target="_blank" rel="noopener">List Experience</a>
         </div>
       </span>
+      <!-- Phones: a hover menu cannot open on touch, and would be clipped
+           by the scrolling strip anyway, so its two links sit in the strip
+           directly. Hidden on desktop, where the menu above is used. -->
+      <a href="index.html?view=list-property" class="category-item category-mobile-only" target="_blank" rel="noopener">List Property</a>
+      <a href="index.html?view=list-experience" class="category-item category-mobile-only" target="_blank" rel="noopener">List Experience</a>
     </div>
     <div class="nav-links">
       <div class="currency-picker-wrap">
@@ -1256,37 +1261,39 @@
 
 <!-- ================= FOOTER ================= -->
 <footer>
-  <div class="wrap foot-top">
-    <div class="wordmark">Aerva</div>
-    <div class="starline center" aria-hidden="true">
-      <span class="rule"></span>
-      <svg class="star" viewBox="0 0 20 20" fill="var(--gold)"><path d="M10 0 C10.5 6.5 13.5 9.5 20 10 C13.5 10.5 10.5 13.5 10 20 C9.5 13.5 6.5 10.5 0 10 C6.5 9.5 9.5 6.5 10 0 Z"/></svg>
-      <span class="rule"></span>
-    </div>
-    <div class="tagline">Stay Elegant</div>
-  </div>
+  <!-- Restyled Sept 2026. The placeholder phone number (+91 12345 67890)
+       and the Instagram / Journal links that pointed nowhere ("#") are
+       out until real ones exist; nothing here leads to a dead end. -->
   <div class="wrap foot-grid">
-    <div class="foot-col">
+    <div class="foot-brand">
+      <a href="index.html" class="foot-logo" aria-label="Aerva home">
+        <img src="aerva-logo.png" alt="">
+        <span class="foot-logo-text">
+          <span class="foot-wordmark">Aerva</span>
+          <span class="foot-tagline">Stay Elegant</span>
+        </span>
+      </a>
       <p>A curated collection of personally reviewed homes across Pune and Himachal Pradesh — never a template, never bulk-listed.</p>
     </div>
     <div class="foot-col">
       <h4>Explore</h4>
       <ul>
-        <li><a href="#suites">Suites</a></li>
+        <li><a href="index.html?view=suites">Suites</a></li>
+        <li><a href="index.html?view=experiences">Aerva Experience</a></li>
+      </ul>
+    </div>
+    <div class="foot-col">
+      <h4>Host With Aerva</h4>
+      <ul>
+        <li><a href="index.html?view=list-property" target="_blank" rel="noopener">List Property</a></li>
+        <li><a href="index.html?view=list-experience" target="_blank" rel="noopener">List Experience</a></li>
       </ul>
     </div>
     <div class="foot-col">
       <h4>Reach Us</h4>
       <ul>
         <li><a href="mailto:hello@aerva.in">hello@aerva.in</a></li>
-        <li><a href="tel:+911234567890">+91 12345 67890</a></li>
-      </ul>
-    </div>
-    <div class="foot-col">
-      <h4>Follow</h4>
-      <ul>
-        <li><a href="#">Instagram</a></li>
-        <li><a href="#">Journal</a></li>
+        <li><a href="index.html?view=my-bookings">My Bookings</a></li>
       </ul>
     </div>
   </div>
