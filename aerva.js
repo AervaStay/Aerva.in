@@ -5503,10 +5503,15 @@
       const d = await res.json();
       const el = document.getElementById('liveProof');
       if(!el) return;
-      const stats = [];
-      if(d.staysHosted > 0) stats.push([d.staysHosted, 'stays hosted']);
-      if(d.checkinsThisMonth > 0) stats.push([d.checkinsThisMonth, 'guests checked in this month']);
-      if(!stats.length) return; // nothing honest to show yet
+      // Always shown once the server has answered, 0 included: these are
+      // the real counts (real bookings only — see publicStats in
+      // get-listings.js). If the count could not be fetched, nothing is
+      // shown rather than a 0 that was never counted.
+      if(typeof d.staysHosted !== 'number' || typeof d.checkinsThisMonth !== 'number') return;
+      const stats = [
+        [d.staysHosted, d.staysHosted === 1 ? 'stay hosted' : 'stays hosted'],
+        [d.checkinsThisMonth, d.checkinsThisMonth === 1 ? 'guest checked in this month' : 'guests checked in this month']
+      ];
       // Number first, set large in the headline's gold; label small
       // beneath. Numbers go through Number(), labels are fixed text.
       el.innerHTML = stats.map(([n, label]) =>
