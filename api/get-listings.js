@@ -781,7 +781,9 @@ module.exports = async (req, res) => {
         });
       } catch (err) {
         console.error('publicStats failed:', err);
-        return res.status(200).json({ staysHosted: 0, checkinsThisMonth: 0, guestsHosted: 0 });
+        // An error, not zeros: the page shows 0 when 0 is the true count,
+        // so a failed count must never pass itself off as one.
+        return res.status(500).json({ error: 'Stats unavailable' });
       }
     }
 
