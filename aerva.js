@@ -4496,6 +4496,13 @@
         return bits.length ? bits.join(' \u00b7 ') : 'No commission agreed yet';
       };
       const earnings = (mine.data && mine.data.earnings) || { total: 0, rows: [] };
+      // Where they are paid: PAN, optional GSTIN, bank account (masked).
+      const payoutRes = list.length ? await call('GET', null, '?myPayoutProfile=1') : { ok: false, data: {} };
+      const payout = (payoutRes.ok && payoutRes.data.profile) || null;
+      const payoutStatus = !payout ? 'Add your payout details to be paid your share.'
+        : payout.status === 'approved' ? 'Approved \u2014 your shares are paid to this account.'
+        : payout.status === 'rejected' ? `Not approved: ${payout.rejectionReason || 'please check and resubmit.'}`
+        : 'Waiting for Aerva to check these. Your shares are held until they are approved.';
       body.innerHTML = `
         <div class="hp-eyebrow">Co-hosting</div>
         <h2 class="hp-name">Hosts you help</h2>
