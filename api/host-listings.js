@@ -79,6 +79,7 @@ const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
 const { sanitizeBody } = require('./_plain-text');
+const { encryptField, maskPan, maskAccount, maskGstin, encryptionReady } = require('./_secure-fields');
 const { COHOST_PERMISSIONS, FULL_ONLY, ALWAYS_LABEL, cleanPermissions, cleanEmail, resolveActingHost, cohostCan,
         cohostHasListing, describeAccess, inviteToken, readInviteToken, emailCohostInvite,
         cohostManageToken } = require('./_cohosts');
@@ -452,10 +453,11 @@ async function handleCohostModes(req, res, accountId) {
       try { p = (await sql`SELECT * FROM cohost_payout_profiles WHERE guest_id = ${me.id}`)[0] || null; }
       catch (err) { console.error('payout profile unavailable:', err.message); }
       res.status(200).json({ profile: p ? {
-        panMasked: 'XXXXX' + String(p.pan_number).slice(5, 9) + 'X',
-        gstin: p.gstin || null,
+        // Stored encrypted; the co-host only ever sees it masked.
+        panMasked: maskPan(p.pan_number),
+        gstin: maskGstin(p.gstin),
         accountHolderName: p.account_holder_name,
-        accountMasked: '\u2022\u2022\u2022\u2022 ' + String(p.bank_account_number).slice(-4),
+        accountMasked: maskAccount(p.bank_account_number),
         ifsc: p.bank_ifsc,
         status: p.status,
         rejectionReason: p.status === 'rejected' ? (p.rejection_reason || null) : null
@@ -477,9 +479,18 @@ async function handleCohostModes(req, res, accountId) {
       if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) { res.status(400).json({ error: 'Please enter a valid IFSC, like HDFC0001234.' }); return true; }
       const isCohost = await sql`SELECT 1 FROM cohosts WHERE cohost_guest_id = ${me.id} AND status = 'active' LIMIT 1`;
       if (!isCohost.length) { res.status(403).json({ error: 'Payout details are for active co-hosts.' }); return true; }
+      // PAN, GSTIN (which contains the PAN) and account number are stored
+      // encrypted (see _secure-fields.js) — or not at all.
+      if (!encryptionReady()) {
+        console.error('DATA_ENCRYPTION_KEY missing or invalid — refused to save co-host payout details.');
+        res.status(503).json({ error: ENCRYPTION_UNAVAILABLE }); return true;
+      }
+      const encPan = encryptField(pan);
+      const encAccount = encryptField(account);
+      const encGstin = gstin ? encryptField(gstin) : null;
       await sql`
         INSERT INTO cohost_payout_profiles (guest_id, pan_number, gstin, account_holder_name, bank_account_number, bank_ifsc, status, rejection_reason, submitted_at, reviewed_at)
-        VALUES (${me.id}, ${pan}, ${gstin || null}, ${holder}, ${account}, ${ifsc}, 'pending_review', NULL, now(), NULL)
+        VALUES (${me.id}, ${encPan}, ${encGstin}, ${holder}, ${encAccount}, ${ifsc}, 'pending_review', NULL, now(), NULL)
         ON CONFLICT (guest_id) DO UPDATE SET
           pan_number = EXCLUDED.pan_number, gstin = EXCLUDED.gstin, account_holder_name = EXCLUDED.account_holder_name,
           bank_account_number = EXCLUDED.bank_account_number, bank_ifsc = EXCLUDED.bank_ifsc,
@@ -668,6 +679,15 @@ async function handleCohostModes(req, res, accountId) {
     return true;
   }
 }
+
+// An identity document must be a file uploaded to Aerva's own Blob store
+// (blob-upload.js) — never any web address a request happens to carry. It
+// is also what lets the admin delete it after review: a file anywhere else
+// could not be deleted by us at all.
+function isAervaBlobUrl(url) {
+  return typeof url === 'string' && /^https:\/\/[a-z0-9]+\.public\.blob\.vercel-storage\.com\/[^\s]+$/i.test(url);
+}
+const ENCRYPTION_UNAVAILABLE = 'Bank and PAN details cannot be saved right now. Please try again later, or write to hello@aerva.in.';
 
 module.exports = async (req, res) => {
   // Typed text can never become markup — see _plain-text.js.
@@ -2141,6 +2161,19 @@ module.exports = async (req, res) => {
       }
 
       const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName, panNumber, panDocumentUrl, hostName, hostPhone } = req.body || {};
+      // Uploaded documents: only Aerva's own storage (see isAervaBlobUrl).
+      for (const u of [aadhaarDocumentUrl, panDocumentUrl]) {
+        if (typeof u === 'string' && u && !isAervaBlobUrl(u)) {
+          return res.status(400).json({ error: 'Please upload the document again from this page.' });
+        }
+      }
+      // PAN and bank numbers are only ever stored encrypted: with no key
+      // configured, refuse before writing anything rather than store them readable.
+      const writesSecret = (typeof panDocumentUrl === 'string' && panDocumentUrl) || (bankAccountNumber && bankIfsc && bankAccountHolderName);
+      if (writesSecret && !encryptionReady()) {
+        console.error('DATA_ENCRYPTION_KEY missing or invalid — refused to save PAN / bank details.');
+        return res.status(503).json({ error: ENCRYPTION_UNAVAILABLE });
+      }
       const current = await sql`
         SELECT aadhaar_status, aadhaar_document_url, aadhaar_rejection_reason,
                bank_status, pan_status, pan_document_url, pan_rejection_reason
@@ -2151,7 +2184,9 @@ module.exports = async (req, res) => {
 
       // ---- PAN: submit once, then permanently locked ----
       if (typeof panDocumentUrl === 'string' && panDocumentUrl.startsWith('https://')) {
-        if (host.pan_document_url) {
+        // Decided by the status, not by a stored document: after review the
+        // document and number are erased, and only the outcome is kept.
+        if (host.pan_status && host.pan_status !== 'not_submitted') {
           return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
         }
         const cleanPan = typeof panNumber === 'string' ? panNumber.trim().toUpperCase() : '';
@@ -2159,7 +2194,7 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: 'Please enter a valid 10-character PAN, e.g. ABCDE1234F.' });
         }
         await sql`
-          UPDATE hosts SET pan_number = ${cleanPan}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
+          UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
           WHERE id = ${guest.host_id}
         `;
         await logAudit(sql, {
@@ -2172,7 +2207,7 @@ module.exports = async (req, res) => {
       // ---- Aadhaar: submit once, then permanently locked (same policy
       // as PAN above — no more resubmitting after a rejection either) ----
       if (typeof aadhaarDocumentUrl === 'string' && aadhaarDocumentUrl.startsWith('https://')) {
-        if (host.aadhaar_document_url) {
+        if (host.aadhaar_status && host.aadhaar_status !== 'not_submitted') {
           return res.status(400).json({ error: 'Your Aadhaar has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
         }
         // Uploading a file only confirms a file was uploaded — it says
@@ -2214,7 +2249,7 @@ module.exports = async (req, res) => {
         const rePanReason = panSubmitted ? null : host.pan_rejection_reason;
         await sql`
           UPDATE hosts SET
-            bank_account_number = ${cleanAccountNumber}, bank_ifsc = ${cleanIfsc},
+            bank_account_number = ${encryptField(cleanAccountNumber)}, bank_ifsc = ${cleanIfsc},
             bank_account_holder_name = ${String(bankAccountHolderName).trim().slice(0, 100)},
             bank_status = 'pending_review', bank_rejection_reason = NULL,
             aadhaar_status = ${reAadhaarStatus}, aadhaar_rejection_reason = ${reAadhaarReason},
@@ -2359,19 +2394,20 @@ module.exports = async (req, res) => {
       hostPhone: h.phone,
       aadhaarStatus: h.aadhaar_status,
       aadhaarRejectionReason: h.aadhaar_rejection_reason,
-      aadhaarSubmitted: !!h.aadhaar_document_url,
+      aadhaarSubmitted: !!h.aadhaar_status && h.aadhaar_status !== 'not_submitted',
       bankStatus: h.bank_status,
       bankRejectionReason: h.bank_rejection_reason,
-      bankAccountNumberMasked: h.bank_account_number ? '••••' + h.bank_account_number.slice(-4) : null,
+      bankAccountNumberMasked: maskAccount(h.bank_account_number),
       bankAccountHolderName: h.bank_account_holder_name,
       bankIfsc: h.bank_ifsc,
       panStatus: h.pan_status,
       panRejectionReason: h.pan_rejection_reason,
-      panSubmitted: !!h.pan_document_url,
+      panSubmitted: !!h.pan_status && h.pan_status !== 'not_submitted',
       // PAN is shown, unlike the bank account number — it's not a
       // payment credential the way an account number is, and a host
       // benefits from being able to confirm exactly what's on file.
-      panNumberMasked: h.pan_number || null
+      // Kept (encrypted) for TDS; shown to the host masked.
+      panNumberMasked: maskPan(h.pan_number)
     } : null;
 
     // ---- Today ----

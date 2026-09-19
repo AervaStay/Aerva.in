@@ -31,6 +31,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva.css">
+<script src="aerva-cohost.js"></script>
 </head>
 <body class="showing-hero">
 
@@ -118,6 +119,7 @@
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Collection</a>
           <a href="host-status.html" id="statusMenuLink" style="display:none;">Status</a>
           <a href="host-earnings.html" id="earningsMenuLink" style="display:none;">My Earnings</a>
+          <a href="index.html?view=cohost">Co-hosting</a>
           <a href="host-dashboard.html?openProfile=1">Account Settings</a>
           <div class="menu-divider"></div>
           <a href="#" id="guestLogoutLink">Log Out</a>
@@ -509,8 +511,12 @@
       <p class="profile-msg" id="profileMsg"></p>
     </div>
 
+    <div class="profile-section" id="profileListingsSection" style="display:none;">
+      <div class="profile-section-title">My homes &amp; experiences</div>
+      <div id="profileListings"></div>
+    </div>
     <div class="profile-section" id="profilePlacesSection" style="display:none;">
-      <div class="profile-section-title">Where I have been with Aerva</div>
+      <div class="profile-section-title">Places I've travelled</div>
       <div id="profilePlaces"></div>
     </div>
 
@@ -1215,7 +1221,7 @@
 
       <div id="bookingEmailStepView">
         <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Log In to Book</h3>
-        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">Please log in or create an account to complete your booking — this keeps your reservation tied to your own account.</p>
+        <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">Please log in or create an account to complete your booking.</p>
         <div class="field">
           <label for="bookingEmailStepInput">Email</label>
           <input type="email" id="bookingEmailStepInput" autocomplete="email">
@@ -1261,10 +1267,10 @@
 
 <!-- ================= FOOTER ================= -->
 <footer>
-  <!-- Restyled Sept 2026. The placeholder phone number (+91 12345 67890)
-       and the Instagram / Journal links that pointed nowhere ("#") are
-       out until real ones exist; nothing here leads to a dead end. -->
-  <div class="wrap foot-grid">
+  <!-- Footer (restyled Sept 2026). Social links: put the real page
+       addresses in the two href="" below. A link with an empty href is
+       hidden (see aerva.css), so the footer never shows a dead link. -->
+  <div class="wrap foot-top">
     <div class="foot-brand">
       <a href="index.html" class="foot-logo" aria-label="Aerva home">
         <img src="aerva-logo.png" alt="">
@@ -1275,31 +1281,40 @@
       </a>
       <p>A curated collection of personally reviewed homes across Pune and Himachal Pradesh — never a template, never bulk-listed.</p>
     </div>
-    <div class="foot-col">
-      <h4>Explore</h4>
-      <ul>
-        <li><a href="index.html?view=suites">Suites</a></li>
-        <li><a href="index.html?view=experiences">Aerva Experience</a></li>
-      </ul>
-    </div>
-    <div class="foot-col">
-      <h4>Host With Aerva</h4>
-      <ul>
-        <li><a href="index.html?view=list-property" target="_blank" rel="noopener">List Property</a></li>
-        <li><a href="index.html?view=list-experience" target="_blank" rel="noopener">List Experience</a></li>
-      </ul>
-    </div>
-    <div class="foot-col">
-      <h4>Reach Us</h4>
-      <ul>
-        <li><a href="mailto:hello@aerva.in">hello@aerva.in</a></li>
-        <li><a href="index.html?view=my-bookings">My Bookings</a></li>
-      </ul>
-    </div>
+    <nav class="foot-cols" aria-label="Footer">
+      <div class="foot-col">
+        <h4>Explore</h4>
+        <ul>
+          <li><a href="index.html?view=suites">Suites</a></li>
+          <li><a href="index.html?view=experiences">Aerva Experience</a></li>
+        </ul>
+      </div>
+      <div class="foot-col">
+        <h4>Host With Aerva</h4>
+        <ul>
+          <li><a href="index.html?view=list-property" target="_blank" rel="noopener">List Property</a></li>
+          <li><a href="index.html?view=list-experience" target="_blank" rel="noopener">List Experience</a></li>
+        </ul>
+      </div>
+      <div class="foot-col">
+        <h4>Reach Us</h4>
+        <ul>
+          <li><a href="mailto:hello@aerva.in" class="foot-mail">hello@aerva.in</a></li>
+        </ul>
+        <div class="foot-social">
+          <a href="" class="foot-social-link" target="_blank" rel="noopener" aria-label="Aerva on Instagram">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="0.9" class="dot"/></svg>
+          </a>
+          <a href="" class="foot-social-link" target="_blank" rel="noopener" aria-label="Aerva on Facebook">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 8.5h2.5V5.2H14c-2.2 0-3.8 1.7-3.8 3.9v2H8v3.2h2.2V21h3.3v-6.7h2.6l.5-3.2h-3.1V9.3c0-.5.3-.8.8-.8z"/></svg>
+          </a>
+        </div>
+      </div>
+    </nav>
   </div>
   <div class="wrap foot-bottom">
-    <span>© 2026 Aerva. All rights reserved.</span>
-    <span>aerva.in</span>
+    <span>&copy; <span id="footYear">2026</span> Aerva. All rights reserved.</span>
+    <span class="foot-bottom-right">Stay Elegant</span>
   </div>
 </footer>
 

@@ -1638,7 +1638,34 @@
   }
 
   // ---- ID Verifications tab ----
+  // Aerva keeps only the outcome of an Aadhaar / PAN check: approving or
+  // rejecting erases the document and number. This button clears anything
+  // reviewed before that rule existed (and retries any failed deletion).
+  function ensureIdPurgePanel(){
+    if(document.getElementById('idPurgePanel')) return;
+    const container = document.getElementById('verificationsContainer');
+    const panel = document.createElement('div');
+    panel.id = 'idPurgePanel';
+    panel.style.cssText = 'margin:0 0 20px; padding:14px 16px; border:1px solid #e6dccd; border-left:3px solid #a9884f; border-radius:10px; font-size:14px;';
+    panel.innerHTML = 'Aadhaar documents and PAN card images are erased as soon as you approve or reject them. PAN and bank account numbers are kept, encrypted. '
+      + '<button type="button" class="approve-btn" id="idPurgeBtn" style="margin-left:8px;">Erase reviewed documents &amp; encrypt stored numbers</button> <span id="idPurgeResult"></span>';
+    container.parentNode.insertBefore(panel, container);
+    document.getElementById('idPurgeBtn').addEventListener('click', async () => {
+      if(!confirm('Permanently delete every Aadhaar document and PAN card image that has already been reviewed, and encrypt any PAN or bank number still stored readable? Statuses are kept.')) return;
+      const out = document.getElementById('idPurgeResult');
+      out.textContent = 'Erasing…';
+      try{
+        const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ purgeReviewedIdDocuments: true }) });
+        const d = await res.json();
+        if(!res.ok) throw new Error(d.error || 'Failed');
+        out.textContent = `Erased ${d.aadhaar} Aadhaar document(s) and ${d.pan} PAN card image(s); encrypted ${d.encrypted} record(s)`
+          + (d.failed ? ` — ${d.failed} file(s) could not be deleted yet: ` + (d.failures || []).map(f => `host #${f.hostId} ${f.field} (${f.reason})`).join('; ') + '. Try again later.' : '.');
+      }catch(err){ out.textContent = err.message; }
+    });
+  }
+
   async function loadVerifications(){
+    ensureIdPurgePanel();
     const container = document.getElementById('verificationsContainer');
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings?verifications=1', {
@@ -1646,6 +1673,7 @@
       });
       const data = await res.json();
       renderVerifications(data.verifications || []);
+      renderRejectedIds(data.rejected || []);
     } catch(err){
       container.innerHTML = '<p class="error">Could not load verifications. Please refresh.</p>';
     }
@@ -1686,7 +1714,20 @@
           <span id="verifyError-${v.id}-bank" class="error"></span>
         </div>
       ` : '';
-      return aadhaarBlock + bankBlock;
+      const panBlock = v.pan_status === 'pending_review' ? `
+        <div class="dispute-card" id="verify-${v.id}-pan">
+          <h4>${escAdmin(v.name || v.email)} — PAN</h4>
+          <div class="dispute-meta">${escAdmin(v.email)}${v.phone ? ' · ' + escAdmin(v.phone) : ''}</div>
+          <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(v.pan_submitted_at)}</div>
+          <p>PAN: <strong>${escAdmin(v.pan_number || '—')}</strong>${v.pan_document_url ? ` · <a href="${escAdmin(v.pan_document_url)}" target="_blank" rel="noopener">Open the uploaded card ↗</a>` : ''}</p>
+          <div class="resolve-row">
+            <button type="button" class="approve-btn" onclick="decideVerification(${v.id}, 'pan', 'approve')">Approve</button>
+            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${v.id}, 'pan')">Reject</button>
+          </div>
+          <span id="verifyError-${v.id}-pan" class="error"></span>
+        </div>
+      ` : '';
+      return aadhaarBlock + panBlock + bankBlock;
     }).join('');
   }
 
@@ -1700,6 +1741,43 @@
     decideVerification(hostId, field, 'reject', reason.trim());
   }
 
+
+  // Rejected Aadhaar / PAN: the file is already erased, and a host cannot
+  // upload again by themselves. "Allow re-upload" reopens it for them.
+  function renderRejectedIds(rows){
+    let box = document.getElementById('rejectedIdsBox');
+    const container = document.getElementById('verificationsContainer');
+    if(!box){
+      box = document.createElement('div');
+      box.id = 'rejectedIdsBox';
+      box.style.cssText = 'margin-top:32px;';
+      container.parentNode.insertBefore(box, container.nextSibling);
+    }
+    const items = [];
+    rows.forEach(h => {
+      if(h.aadhaar_status === 'rejected') items.push({ h, field: 'aadhaar', label: 'Aadhaar', reason: h.aadhaar_rejection_reason });
+      if(h.pan_status === 'rejected') items.push({ h, field: 'pan', label: 'PAN', reason: h.pan_rejection_reason });
+    });
+    box.innerHTML = '<h3 style="font-family:Georgia,serif; font-weight:normal;">Rejected — waiting for a new upload</h3>'
+      + (items.length ? items.map(i => `
+        <div class="dispute-card" id="rejected-${Number(i.h.id)}-${i.field}">
+          <h4>${escAdmin(i.h.name || i.h.email)} — ${i.label}</h4>
+          <div class="dispute-meta">Rejected: ${escAdmin(i.reason || '—')}</div>
+          <div class="resolve-row"><button type="button" class="approve-btn" onclick="reopenIdVerification(${Number(i.h.id)}, '${i.field}')">Allow re-upload</button></div>
+          <span id="rejectedError-${Number(i.h.id)}-${i.field}" class="error"></span>
+        </div>`).join('') : '<p class="empty">None.</p>');
+  }
+  async function reopenIdVerification(hostId, field){
+    const errorEl = document.getElementById(`rejectedError-${hostId}-${field}`);
+    if(!confirm('Let this host upload their ' + (field === 'pan' ? 'PAN' : 'Aadhaar') + ' again?')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ resetIdVerification: { hostId, field } }) });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || 'Could not reopen.');
+      const card = document.getElementById(`rejected-${hostId}-${field}`);
+      if(card) card.remove();
+    }catch(err){ if(errorEl) errorEl.textContent = err.message; }
+  }
   async function decideVerification(hostId, field, action, reason){
     const errorEl = document.getElementById(`verifyError-${hostId}-${field}`);
     if(errorEl) errorEl.textContent = '';
@@ -1713,6 +1791,11 @@
       if(res.ok){
         const card = document.getElementById(`verify-${hostId}-${field}`);
         if(card) card.remove();
+        // The decision is saved either way; if the document file could not
+        // be deleted, say so — it is retried by the erase button.
+        if(data.documentErased === false){
+          alert('Saved. But the document file could not be deleted yet (' + (data.eraseFailedReason || 'storage error') + '). Use “Erase reviewed documents” in this tab to retry.');
+        }
       } else if(errorEl){
         errorEl.textContent = data.error || 'Could not update this verification.';
       }
