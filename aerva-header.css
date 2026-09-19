@@ -1,0 +1,167 @@
+/* aerva-header.css — the site header, shared by every page that is not
+   index.html (My Collection, Status, My Earnings, Manage Listing, Log In).
+   Same options as the header on index.html, styled to match it. All
+   classes are prefixed ah- so nothing here collides with a page's own CSS
+   (.wrap, .nav-links, .logout-btn and friends already mean something on
+   those pages). Injected by aerva-header.js. */
+
+:root{
+  --ah-ink:#1c1a17; --ah-gold:#a9884f; --ah-gold-deep:#8a6c39;
+  --ah-line:rgba(28,26,23,0.12); --ah-cream:#f4ebe3; --ah-cream-deep:#ebdecd;
+}
+
+.ah-header{
+  position:sticky; top:0; z-index:150;
+  background:rgba(255,255,255,0.97); backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--ah-line); box-shadow:0 1px 4px rgba(28,26,23,0.05);
+  font-family:'Jost', sans-serif; color:var(--ah-ink);
+  margin-bottom:34px;
+}
+.ah-inner{
+  max-width:1180px; margin:0 auto; padding:14px 28px;
+  display:flex; align-items:center; justify-content:space-between; gap:24px;
+}
+.ah-header a{ color:inherit; text-decoration:none; }
+
+/* Logo: mark, hairline, wordmark over tagline — as on index.html. */
+.ah-logo{ display:flex; align-items:center; gap:14px; flex:0 0 auto; }
+.ah-logo img{ height:40px; width:auto; display:block; }
+.ah-logo-text{ display:flex; flex-direction:column; gap:5px; padding-left:14px; border-left:1px solid var(--ah-line); line-height:1; }
+.ah-wordmark{ font-family:'Bodoni Moda', Georgia, serif; font-size:19px; letter-spacing:0.34em; font-weight:500; text-transform:uppercase; }
+.ah-tagline{ font-size:8.5px; letter-spacing:0.36em; font-weight:500; text-transform:uppercase; color:var(--ah-gold-deep); }
+
+/* Category nav. */
+.ah-cats{ display:flex; align-items:center; gap:28px; }
+.ah-cat{
+  display:flex; align-items:center; gap:6px; white-space:nowrap; cursor:pointer;
+  font-size:11.5px; letter-spacing:0.14em; font-weight:500; text-transform:uppercase;
+  padding-bottom:5px; border-bottom:2px solid transparent; transition:opacity .2s ease;
+}
+.ah-cat:hover{ opacity:0.7; }
+.ah-cat svg{ width:15px; height:15px; stroke:var(--ah-gold-deep); fill:none; stroke-width:1.4; }
+.ah-dd{ position:relative; }
+.ah-dd-menu{
+  position:absolute; top:100%; left:50%; transform:translateX(-50%); margin-top:14px;
+  background:#fff; border:1px solid var(--ah-line); border-radius:10px; padding:8px 0; min-width:190px;
+  box-shadow:0 12px 30px rgba(20,17,14,0.14); opacity:0; visibility:hidden; transition:opacity .18s ease;
+}
+.ah-dd-menu::before{ content:''; position:absolute; top:-14px; left:0; right:0; height:14px; }
+.ah-dd:hover .ah-dd-menu, .ah-dd:focus-within .ah-dd-menu{ opacity:1; visibility:visible; }
+.ah-dd-menu a{ display:block; padding:10px 20px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; }
+.ah-dd-menu a:hover{ background:var(--ah-cream); }
+
+/* Right-hand cluster. */
+.ah-right{ display:flex; align-items:center; gap:20px; }
+.ah-link{ font-size:12px; letter-spacing:0.14em; font-weight:500; text-transform:uppercase; }
+.ah-currency{ position:relative; }
+.ah-currency-btn{
+  background:none; border:1px solid var(--ah-line); border-radius:999px; padding:6px 13px; cursor:pointer;
+  font-family:inherit; font-size:12px; letter-spacing:0.12em; color:inherit;
+}
+.ah-currency-btn:hover{ border-color:var(--ah-gold-deep); }
+.ah-pop{
+  position:absolute; top:calc(100% + 10px); right:0; z-index:160; background:#fff;
+  border:1px solid var(--ah-line); border-radius:10px; box-shadow:0 14px 34px rgba(28,26,23,0.16);
+  display:none;
+}
+.ah-pop.is-open{ display:block; }
+.ah-currency .ah-pop{ padding:6px 0; min-width:120px; max-height:320px; overflow:auto; }
+.ah-currency .ah-pop button{
+  display:block; width:100%; text-align:left; background:none; border:none; padding:8px 16px; cursor:pointer;
+  font-family:inherit; font-size:13px; letter-spacing:0.06em; color:inherit;
+}
+.ah-currency .ah-pop button:hover, .ah-currency .ah-pop button.is-on{ background:var(--ah-cream); }
+
+.ah-account{ display:flex; align-items:center; gap:18px; }
+.ah-icon-btn{
+  position:relative; display:inline-flex; align-items:center; justify-content:center;
+  background:none; border:none; padding:4px; cursor:pointer; color:inherit;
+}
+.ah-icon-btn svg{ width:20px; height:20px; }
+.ah-count{
+  position:absolute; top:-3px; right:-5px; min-width:15px; height:15px; padding:0 3px; border-radius:999px;
+  background:#a3402f; color:#fff; font-size:9.5px; line-height:15px; text-align:center;
+}
+.ah-bell-wrap, .ah-menu-wrap{ position:relative; }
+.ah-notif{ width:320px; max-width:86vw; overflow:hidden; }
+.ah-notif-head{ font-size:10px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.55; padding:12px 16px 8px; }
+.ah-notif-item{ display:block; padding:11px 16px; border-top:1px solid var(--ah-line); }
+.ah-notif-item:hover{ background:var(--ah-cream); }
+.ah-notif-item.is-unread{ box-shadow:inset 3px 0 0 var(--ah-gold); }
+.ah-notif-title{ font-size:13.5px; font-weight:500; }
+.ah-notif-body{ font-size:12.5px; opacity:0.7; margin-top:2px; line-height:1.45; }
+.ah-notif-due{ font-size:11px; color:var(--ah-gold-deep); margin-top:4px; }
+.ah-notif-empty{ font-size:13px; opacity:0.6; padding:6px 16px 16px; margin:0; }
+
+.ah-trigger{
+  display:flex; align-items:center; gap:10px; background:none; border:none; padding:0; cursor:pointer;
+  font-family:inherit; color:inherit;
+}
+.ah-avatar{
+  width:30px; height:30px; border-radius:50%; padding:2px; border:2px solid var(--ah-gold); box-sizing:border-box; flex:0 0 auto;
+}
+.ah-avatar span{
+  width:100%; height:100%; border-radius:50%; overflow:hidden; background:var(--ah-gold-deep); color:var(--ah-cream);
+  display:flex; align-items:center; justify-content:center; font-family:Georgia, serif; font-size:12px;
+}
+.ah-avatar img{ width:100%; height:100%; object-fit:cover; display:block; }
+.ah-name{ font-size:12px; letter-spacing:0.12em; font-weight:500; text-transform:uppercase; white-space:nowrap; }
+.ah-tier{
+  font-size:9px; letter-spacing:0.08em; text-transform:uppercase; padding:3px 9px; border-radius:999px;
+  background:var(--ah-cream-deep); color:var(--ah-gold-deep); border:1px solid var(--ah-line); white-space:nowrap;
+}
+.ah-menu{ min-width:210px; padding:6px 0; }
+.ah-menu a{ display:block; padding:10px 18px; font-size:13px; letter-spacing:0.04em; }
+.ah-menu a:hover{ background:var(--ah-cream); }
+.ah-menu a.is-here{ color:var(--ah-gold-deep); font-weight:500; }
+.ah-menu hr{ border:none; border-top:1px solid var(--ah-line); margin:6px 0; }
+
+/* Mobile. */
+.ah-toggle{
+  display:none; background:none; border:none; cursor:pointer; padding:6px; flex-direction:column; gap:5px;
+}
+.ah-toggle span{ display:block; width:22px; height:1.5px; background:var(--ah-ink); }
+.ah-panel{
+  display:none; border-top:1px solid var(--ah-line); padding:18px 28px 24px; flex-direction:column; gap:16px;
+}
+.ah-panel.is-open{ display:flex; }
+.ah-panel a{ font-size:13px; letter-spacing:0.1em; text-transform:uppercase; }
+.ah-panel hr{ border:none; border-top:1px solid var(--ah-line); margin:2px 0; width:100%; }
+
+@media (max-width:1100px){
+  .ah-cats{ gap:18px; }
+  .ah-cat{ font-size:10.5px; letter-spacing:0.1em; }
+}
+.ah-mobile-only{ display:none; }
+@media (max-width:900px){
+  /* Categories stay visible on phones as a swipeable second row, the
+     same as index.html; the hamburger holds the account links. */
+  .ah-inner{ padding:12px 20px 10px; flex-wrap:wrap; row-gap:10px; }
+  .ah-right{ display:none; }
+  .ah-toggle{ display:flex; }
+  .ah-cats{
+    order:3; width:100%; gap:22px; overflow-x:auto; touch-action:pan-x;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:2px;
+  }
+  .ah-cats::-webkit-scrollbar{ display:none; }
+  .ah-cat{ flex:0 0 auto; font-size:10.5px; letter-spacing:0.1em; }
+  .ah-dd{ display:none; }
+  .ah-mobile-only{ display:flex; }
+}
+
+/* The pages keep their own body padding for their content; the header
+   runs edge to edge above it (margins set by aerva-header.js), and each
+   page's old "Back to…" link is replaced by the header itself. */
+body.ah-has-header{ padding-top:0 !important; }
+body.ah-has-header .back-home{ display:none !important; }
+
+/* [hidden] must win over the display values above. */
+.ah-header [hidden]{ display:none !important; }
+
+/* Page controls the header now provides, hidden only when it is present:
+   My Collection's own bell / avatar / log out cluster, and Status's
+   separate Log Out button. The elements stay in the page (their scripts
+   still find them); Account Settings in the header opens the same
+   profile panel the avatar did. */
+body.ah-has-header #profileTriggerCluster{ display:none !important; }
+body.ah-has-header .top-row > .logout-btn{ display:none !important; }

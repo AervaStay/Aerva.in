@@ -522,9 +522,100 @@
     background:#1c1a17; color:#f4eadc; border:none; padding:8px 16px; font-size:11.5px;
     letter-spacing:0.04em; text-transform:uppercase; cursor:pointer; white-space:nowrap;
   }
+
+  /* ================= RESTYLE (Sept 2026) =================
+     The page grew one feature at a time and it showed: Georgia headings
+     beside a Bodoni site, square boxes next to rounded ones, four button
+     shapes, and Jost named but never loaded. This block brings it in
+     line with the main site — one type pair, one radius family, pill
+     buttons, soft card borders — without touching any markup or script.
+     Everything above still applies; this only overrides looks. */
+  body{ background:#faf8f5; font-family:'Jost', sans-serif; }
+  .wrap{ max-width:1180px; padding:0 8px; }
+
+  h1{ font-family:'Bodoni Moda', Georgia, serif; font-size:34px; font-weight:500; letter-spacing:0.01em; }
+  .top-row{ margin-bottom:22px; align-items:flex-end; }
+  .section-heading, .sidebar-heading, .feedback-title, .today-heading{
+    font-family:'Bodoni Moda', Georgia, serif; font-weight:500;
+  }
+  .section-heading{ font-size:22px; margin:40px 0 16px; }
+  .host-badge{ border-radius:999px; padding:4px 11px; font-size:10px; }
+
+  /* Tabs: one pill row. */
+  .listing-tabs{ gap:8px; margin-bottom:20px; }
+  .listing-tab-btn{
+    border-radius:999px; border-color:#e6dccd; background:#fff; padding:9px 18px;
+    font-family:'Jost', sans-serif; font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase;
+    transition:border-color .15s ease, background .15s ease;
+  }
+  .listing-tab-btn:hover{ border-color:#8a6c39; }
+  .listing-tab-btn.active{ background:#1c1a17; border-color:#1c1a17; }
+
+  /* Buttons: pills everywhere. */
+  .add-listing-link, .sidebar-save-btn, .settings-save-btn, .verify-box .btn-small,
+  .cal-confirm-actions button, .logout-btn, .settings-cancel-btn, .dispute-btn{
+    border-radius:999px;
+  }
+  .add-listing-link{ padding:12px 26px; font-size:11.5px; letter-spacing:0.12em; margin-bottom:26px; }
+  .sidebar-add-btn{ border-radius:10px; }
+  .manage-link{
+    text-decoration:none; border:1px solid #e6dccd; border-radius:999px; padding:7px 14px;
+    font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#8a6c39; background:#fff;
+    transition:border-color .15s ease;
+  }
+  .manage-link:hover{ border-color:#8a6c39; }
+
+  /* Cards. */
+  .listing-card, .booking-row, .an-card, .an-total, .listing-sidebar, .verify-box,
+  .notice-card, .feedback-card, .price-summary-box, .sidebar-list-row, .cal-confirm{
+    border-color:#ece4d8; border-radius:14px;
+  }
+  .listing-card{
+    padding:16px 18px; gap:18px; margin-bottom:12px;
+    box-shadow:0 1px 2px rgba(28,26,23,0.04);
+    transition:border-color .15s ease, box-shadow .15s ease;
+  }
+  .listing-card[data-status="approved"]:hover{ box-shadow:0 6px 20px rgba(28,26,23,0.08); }
+  .listing-card.selected{ box-shadow:0 0 0 1px #8a6c39, 0 6px 20px rgba(28,26,23,0.08); }
+  .listing-thumb, .listing-thumb-placeholder{ width:84px; height:84px; border-radius:10px; }
+  .listing-info h3, .booking-top h4, .an-card h4{ font-family:'Bodoni Moda', Georgia, serif; font-weight:500; }
+  .listing-info h3{ font-size:18px; margin-bottom:5px; }
+  .listing-meta{ font-size:12.5px; }
+  .listing-sidebar{ padding:22px; box-shadow:0 1px 2px rgba(28,26,23,0.04); }
+  .sidebar-section-title{ letter-spacing:0.12em; font-size:10.5px; }
+
+  /* Status labels: small pills, same shape as the main site. */
+  .status-badge, .deposit-status-badge, .verify-status{
+    border-radius:999px; font-size:10px; letter-spacing:0.08em; padding:4px 10px;
+  }
+
+  /* Calendar: softer, rounder, same colours. */
+  .cal-wrap{ border-radius:12px; background:#fff; border-color:#ece4d8; }
+  .cal-day{ border-radius:10px; }
+  .cal-nav-btn{ border-radius:999px; }
+
+  /* Figures. */
+  .an-total .an-value, .booking-figures .figure-value{ font-family:'Bodoni Moda', Georgia, serif; }
+
+  /* Form fields: one shape. */
+  .verify-box input, .cal-confirm input, .cal-confirm select, .dispute-form textarea,
+  .feedback-card input, .feedback-card select, .feedback-card textarea{
+    border-radius:8px;
+  }
+
+  /* Profile panel. */
+  .profile-modal{ background:#fff; border-radius:16px; }
+
+  @media (max-width:880px){
+    h1{ font-size:28px; }
+    .listing-card{ flex-wrap:wrap; }
+  }
 </style>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="aerva-header.css">
 </head>
 <body>
 
@@ -3925,5 +4016,6 @@
   }
 </script>
 
+<script src="aerva-header.js" defer></script>
 </body>
 </html>
