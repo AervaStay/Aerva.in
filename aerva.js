@@ -4557,7 +4557,7 @@
           <div class="hp-section">
             <h3 class="hp-title">Payout details</h3>
             <p class="hp-meta cohost-commission">${esc(payoutStatus)}</p>
-            ${payout ? `<p class="hp-meta">${payout.panMasked ? 'PAN ' + esc(payout.panMasked) : 'PAN checked (Aerva keeps only the result)'}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
+            ${payout ? `<p class="hp-meta">${payout.panMasked ? 'PAN ' + esc(payout.panMasked) : 'PAN on file'}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
             <div class="cohost-payout-form">
               <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCDE1234F" autocomplete="off"></label>
               <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCDE1234F1Z5" autocomplete="off"></label>
@@ -4886,6 +4886,9 @@
   // Logged-out browsing keeps its own ':anon' bucket rather than being
   // discarded: someone browsing before signing up should still see where
   // they have been.
+  // Footer copyright always shows the current year.
+  (function(){ const y = document.getElementById('footYear'); if(y) y.textContent = String(new Date().getFullYear()); })();
+
   const RECENTLY_VIEWED_KEY = 'aerva_recently_viewed';
   const RECENTLY_VIEWED_MAX = 20;
   // ---- Per-account browser storage ----
