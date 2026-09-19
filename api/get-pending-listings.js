@@ -88,6 +88,7 @@ const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const { logAudit } = require('./_audit-log');
+const { encryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens } = require('./_secure-fields');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
 const { createToken, verifyToken, secretMatches } = require('./_approval-token');
@@ -223,6 +224,52 @@ async function sendListingStatusEmail(listing, action, reason) {
     try { detail = await emailRes.json(); } catch { detail = { message: emailRes.statusText }; }
     console.error('Resend send failed (listing status change):', emailRes.status, detail);
   }
+}
+
+// ======================================================================
+// Identity documents: review, then erase
+// ======================================================================
+// Aadhaar: only the OUTCOME is kept. An admin sees the document once,
+// while reviewing; approving or rejecting deletes the file from Blob
+// storage and clears the link. What stays: the status, any rejection
+// reason, and the audit log entry.
+//
+// PAN: the NUMBER is kept, encrypted (_secure-fields.js), because TDS
+// under section 194-O needs it; the uploaded PAN card IMAGE is deleted on
+// review exactly like an Aadhaar document.
+//
+// Returns true only when the file is really gone (or there was none). If
+// Blob deletion fails the URL is kept, so purgeReviewedIdDocuments can try
+// again later — clearing it would leave the file online with nothing
+// pointing at it to delete it by.
+async function deleteUploadedDocument(url) {
+  if (!url) return { ok: true };
+  try {
+    const { del } = require('@vercel/blob');
+    await del(url);
+    return { ok: true };
+  } catch (err) {
+    console.error('Could not delete identity document from Blob (kept for retry):', err.message);
+    return { ok: false, reason: String(err.message || 'Blob deletion failed').slice(0, 200) };
+  }
+}
+
+async function eraseHostIdDocument(hostId, field) {
+  const rows = await sql`SELECT aadhaar_document_url, pan_document_url FROM hosts WHERE id = ${hostId}`;
+  const h = rows[0];
+  if (!h) return { erased: false, reason: 'Host not found' };
+  if (field === 'aadhaar') {
+    const d = await deleteUploadedDocument(h.aadhaar_document_url);
+    if (d.ok) await sql`UPDATE hosts SET aadhaar_document_url = NULL WHERE id = ${hostId}`;
+    return { erased: d.ok, reason: d.reason };
+  }
+  if (field === 'pan') {
+    // The card image goes; the (encrypted) number stays for TDS.
+    const d = await deleteUploadedDocument(h.pan_document_url);
+    if (d.ok) await sql`UPDATE hosts SET pan_document_url = NULL WHERE id = ${hostId}`;
+    return { erased: d.ok, reason: d.reason };
+  }
+  return { erased: true };
 }
 
 module.exports = async (req, res) => {
@@ -1176,10 +1223,114 @@ module.exports = async (req, res) => {
       }
     }
 
+    // ---- Let a host upload a rejected Aadhaar / PAN again ----
+    // POST { resetIdVerification: { hostId, field: 'aadhaar' | 'pan' } }
+    // Only from 'rejected'. Clears the status back to not_submitted, deletes
+    // any file still stored, and — for PAN — the rejected number, since it
+    // was not a valid PAN for this host.
+    if (req.body && req.body.resetIdVerification) {
+      try {
+        const { hostId, field } = req.body.resetIdVerification;
+        const hid = Number(hostId) || 0;
+        if (field !== 'aadhaar' && field !== 'pan') return res.status(400).json({ error: 'Invalid field.' });
+        const rows = await sql`SELECT aadhaar_status, pan_status FROM hosts WHERE id = ${hid}`;
+        if (!rows[0]) return res.status(404).json({ error: 'Host not found.' });
+        if ((field === 'aadhaar' ? rows[0].aadhaar_status : rows[0].pan_status) !== 'rejected') {
+          return res.status(400).json({ error: 'Only a rejected document can be reopened for upload.' });
+        }
+        const e = await eraseHostIdDocument(hid, field);
+        if (!e.erased) return res.status(502).json({ error: `The old file could not be deleted yet (${e.reason || 'storage error'}). Nothing was changed — try again shortly.` });
+        if (field === 'aadhaar') {
+          await sql`UPDATE hosts SET aadhaar_status = 'not_submitted', aadhaar_rejection_reason = NULL WHERE id = ${hid} AND aadhaar_status = 'rejected'`;
+        } else {
+          await sql`UPDATE hosts SET pan_status = 'not_submitted', pan_rejection_reason = NULL, pan_number = NULL WHERE id = ${hid} AND pan_status = 'rejected'`;
+        }
+        await logAudit(sql, { action: `host_${field}_reopened`, success: true, actorType: 'admin', actorIdentifier: 'admin', targetType: 'host', targetId: hid });
+        return res.status(200).json({ success: true });
+      } catch (err) {
+        console.error('resetIdVerification failed:', err);
+        return res.status(500).json({ error: 'Could not reopen this right now.' });
+      }
+    }
+
+    // ---- Erase identity documents that have already been reviewed ----
+    // POST { purgeReviewedIdDocuments: true } — for anything reviewed
+    // before erasing existed, and to retry any Blob deletion that failed.
+    if (req.body && req.body.purgeReviewedIdDocuments) {
+      try {
+        // Checks before touching anything: a key must be configured, and it
+        // must open whatever is already encrypted — otherwise stop, so the
+        // database never ends up holding values under two different keys.
+        if (!encryptionReady()) {
+          return res.status(503).json({ error: 'DATA_ENCRYPTION_KEY is not set (or is not 32 bytes, base64) in Vercel. Nothing was changed.' });
+        }
+        const samples = await sql`
+          SELECT pan_number AS v FROM hosts WHERE pan_number LIKE 'enc:v1:%'
+          UNION ALL SELECT bank_account_number FROM hosts WHERE bank_account_number LIKE 'enc:v1:%'
+          LIMIT 5
+        `;
+        let coSamples = [];
+        try { coSamples = await sql`SELECT pan_number AS v FROM cohost_payout_profiles WHERE pan_number LIKE 'enc:v1:%' LIMIT 5`; } catch (e) { /* table not created yet */ }
+        if (![...samples, ...coSamples].every(r => keyOpens(r.v))) {
+          return res.status(409).json({ error: 'The DATA_ENCRYPTION_KEY in Vercel does not open the data already encrypted. It must be the original key — restore it before doing anything else. Nothing was changed.' });
+        }
+        const out = { aadhaar: 0, pan: 0, encrypted: 0, failed: 0, failures: [] };
+        const hosts = await sql`
+          SELECT id, aadhaar_status, aadhaar_document_url, pan_status, pan_document_url FROM hosts
+          WHERE (aadhaar_status IN ('verified', 'rejected') AND aadhaar_document_url IS NOT NULL)
+             OR (pan_status IN ('verified', 'rejected') AND pan_document_url IS NOT NULL)
+        `;
+        for (const h of hosts) {
+          for (const field of ['aadhaar', 'pan']) {
+            const status = field === 'aadhaar' ? h.aadhaar_status : h.pan_status;
+            const url = field === 'aadhaar' ? h.aadhaar_document_url : h.pan_document_url;
+            if (!['verified', 'rejected'].includes(status) || !url) continue;
+            const e = await eraseHostIdDocument(h.id, field);
+            if (e.erased) out[field]++;
+            else { out.failed++; out.failures.push({ hostId: h.id, field, reason: e.reason || 'unknown' }); }
+          }
+        }
+        // Encrypt any PAN or bank number still stored in the clear (saved
+        // before encryption existed). Values already encrypted are skipped.
+        const plainHosts = await sql`
+          SELECT id, pan_number, bank_account_number FROM hosts
+          WHERE (pan_number IS NOT NULL AND pan_number NOT LIKE 'enc:v1:%')
+             OR (bank_account_number IS NOT NULL AND bank_account_number NOT LIKE 'enc:v1:%')
+        `;
+        for (const h of plainHosts) {
+          await sql`UPDATE hosts SET
+            pan_number = ${h.pan_number && !isEncrypted(h.pan_number) ? encryptField(h.pan_number) : h.pan_number},
+            bank_account_number = ${h.bank_account_number && !isEncrypted(h.bank_account_number) ? encryptField(h.bank_account_number) : h.bank_account_number}
+            WHERE id = ${h.id}`;
+          out.encrypted++;
+        }
+        try {
+          const plainCo = await sql`
+            SELECT guest_id, pan_number, bank_account_number, gstin FROM cohost_payout_profiles
+            WHERE (pan_number IS NOT NULL AND pan_number NOT LIKE 'enc:v1:%')
+               OR (bank_account_number IS NOT NULL AND bank_account_number NOT LIKE 'enc:v1:%')
+               OR (gstin IS NOT NULL AND gstin NOT LIKE 'enc:v1:%')
+          `;
+          const enc = (v) => (v && !isEncrypted(v) ? encryptField(v) : v);
+          for (const c of plainCo) {
+            await sql`UPDATE cohost_payout_profiles SET
+              pan_number = ${enc(c.pan_number)}, bank_account_number = ${enc(c.bank_account_number)}, gstin = ${enc(c.gstin)}
+              WHERE guest_id = ${c.guest_id}`;
+            out.encrypted++;
+          }
+        } catch (err) { /* co-host table not created yet */ }
+        await logAudit(sql, { action: 'id_documents_purged', success: true, actorType: 'admin', actorIdentifier: 'admin', metadata: out });
+        return res.status(200).json({ success: true, ...out });
+      } catch (err) {
+        console.error('purgeReviewedIdDocuments failed:', err);
+        return res.status(500).json({ error: 'Could not erase reviewed documents right now.' });
+      }
+    }
+
     if (req.body && req.body.verifyDocument) {
       try {
         const { hostId, field, action, reason } = req.body.verifyDocument;
-        if (field !== 'aadhaar' && field !== 'bank') {
+        if (field !== 'aadhaar' && field !== 'bank' && field !== 'pan') {
           return res.status(400).json({ error: 'Invalid field.' });
         }
         if (action !== 'approve' && action !== 'reject') {
@@ -1192,11 +1343,20 @@ module.exports = async (req, res) => {
         const newStatus = action === 'approve' ? 'verified' : 'rejected';
         const cleanReason = action === 'reject' ? String(reason).trim().slice(0, 500) : null;
 
+        let erased = null;
+        let eraseReason = null;
         if (field === 'aadhaar') {
-          await sql`
+          const upd = await sql`
             UPDATE hosts SET aadhaar_status = ${newStatus}, aadhaar_rejection_reason = ${cleanReason}
-            WHERE id = ${hostId} AND aadhaar_status = 'pending_review'
+            WHERE id = ${hostId} AND aadhaar_status = 'pending_review' RETURNING id
           `;
+          if (upd.length) { const e = await eraseHostIdDocument(hostId, 'aadhaar'); erased = e.erased; eraseReason = e.reason || null; }
+        } else if (field === 'pan') {
+          const upd = await sql`
+            UPDATE hosts SET pan_status = ${newStatus}, pan_rejection_reason = ${cleanReason}
+            WHERE id = ${hostId} AND pan_status = 'pending_review' RETURNING id
+          `;
+          if (upd.length) { const e = await eraseHostIdDocument(hostId, 'pan'); erased = e.erased; eraseReason = e.reason || null; }
         } else {
           await sql`
             UPDATE hosts SET bank_status = ${newStatus}, bank_rejection_reason = ${cleanReason}
@@ -1206,10 +1366,10 @@ module.exports = async (req, res) => {
 
         await logAudit(sql, {
           action: `host_${field}_${action}d`, success: true, actorType: 'admin', actorIdentifier: 'admin',
-          targetType: 'host', targetId: hostId
+          targetType: 'host', targetId: hostId, metadata: erased === null ? {} : { documentErased: erased }
         });
 
-        return res.status(200).json({ success: true });
+        return res.status(200).json({ success: true, documentErased: erased, eraseFailedReason: eraseReason });
       } catch (err) {
         console.error('get-pending-listings (verifyDocument) error:', err);
         return res.status(500).json({ error: 'Could not update this verification right now.' });
@@ -1286,14 +1446,14 @@ module.exports = async (req, res) => {
       shares.forEach(x => { (byOrder[x.order_id] = byOrder[x.order_id] || []).push(x); });
       return res.status(200).json({
         pendingProfiles: pendingProfiles.map(p => ({
-          guestId: p.guest_id, name: p.name, email: p.email, pan: p.pan_number, gstin: p.gstin,
-          holder: p.account_holder_name, account: p.bank_account_number, ifsc: p.bank_ifsc,
+          guestId: p.guest_id, name: p.name, email: p.email, pan: readableForAdmin(p.pan_number), gstin: readableForAdmin(p.gstin),
+          holder: p.account_holder_name, account: readableForAdmin(p.bank_account_number), ifsc: p.bank_ifsc,
           submittedAt: p.submitted_at, cohostsFor: p.cohosts_for || ''
         })),
         payouts: orders.map(o => {
           const cs = (byOrder[o.id] || []).map(x => ({
             name: x.name || x.email || 'Co-host', percent: Number(x.percent), amount: Number(x.amount),
-            holder: x.account_holder_name || null, account: x.bank_account_number || null, ifsc: x.bank_ifsc || null,
+            holder: x.account_holder_name || null, account: readableForAdmin(x.bank_account_number), ifsc: x.bank_ifsc || null,
             // Paid only once their payout details are approved.
             ready: x.profile_status === 'approved', profileStatus: x.profile_status || 'missing'
           }));
@@ -1302,7 +1462,7 @@ module.exports = async (req, res) => {
             orderId: o.id, listing: o.suite_name, arrival: o.arrival, departure: o.departure,
             total: Number(o.total) || 0, commission: Number(o.commission_amount) || 0,
             hostPayout: Number(o.payout_amount) || 0, hostNet: (Number(o.payout_amount) || 0) - coTotal,
-            host: { name: o.host_name, holder: o.host_holder, account: o.host_account, ifsc: o.host_ifsc,
+            host: { name: o.host_name, holder: o.host_holder, account: readableForAdmin(o.host_account), ifsc: o.host_ifsc,
                     ready: o.host_bank_status === 'verified' || o.host_bank_status === 'approved', bankStatus: o.host_bank_status || 'missing' },
             cohosts: cs
           };
@@ -1323,15 +1483,28 @@ module.exports = async (req, res) => {
       // timestamp that's effectively already being recorded.
       const verifications = await sql`
         SELECT h.id, h.guest_id, h.email, h.name, h.phone,
-               h.aadhaar_document_url, h.aadhaar_status,
+               h.aadhaar_document_url, h.aadhaar_status, h.pan_number, h.pan_document_url, h.pan_status,
+               (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_pan_submitted' AND actor_identifier = h.id::text) AS pan_submitted_at,
                h.bank_account_number, h.bank_ifsc, h.bank_account_holder_name, h.bank_status,
                (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_aadhaar_submitted' AND actor_identifier = h.id::text) AS aadhaar_submitted_at,
                (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_bank_details_submitted' AND actor_identifier = h.id::text) AS bank_submitted_at
         FROM hosts h
-        WHERE h.aadhaar_status = 'pending_review' OR h.bank_status = 'pending_review'
+        WHERE h.aadhaar_status = 'pending_review' OR h.bank_status = 'pending_review' OR h.pan_status = 'pending_review'
         ORDER BY h.id ASC
       `;
-      return res.status(200).json({ verifications });
+      // Numbers are stored encrypted; the admin reviewing sees them readable.
+      verifications.forEach(v => {
+        v.pan_number = readableForAdmin(v.pan_number);
+        v.bank_account_number = readableForAdmin(v.bank_account_number);
+      });
+      // Rejected Aadhaar / PAN: the document is already erased, and the
+      // host cannot upload again by themselves, so the admin can reopen it.
+      const rejected = await sql`
+        SELECT id, name, email, aadhaar_status, aadhaar_rejection_reason, pan_status, pan_rejection_reason
+        FROM hosts WHERE aadhaar_status = 'rejected' OR pan_status = 'rejected'
+        ORDER BY id DESC LIMIT 100
+      `;
+      return res.status(200).json({ verifications, rejected });
     } catch (err) {
       console.error('get-pending-listings (verifications) error:', err);
       return res.status(500).json({ error: 'Could not fetch verifications' });
