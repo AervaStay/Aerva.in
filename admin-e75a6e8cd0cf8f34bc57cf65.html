@@ -143,12 +143,30 @@
     font-family:'Jost', sans-serif; font-size:9.5px; letter-spacing:0.22em;
     font-weight:400; text-transform:uppercase; color:var(--gold-deep);
   }
+
+  .audit-filters{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:14px 0 18px; font-size:14px; }
+  .audit-filters select, .audit-filters input{ padding:9px 11px; border:1px solid #d9cfc2; border-radius:8px; font-size:14px; font-family:inherit; }
+  .audit-filters #auditQ{ min-width:260px; }
+  .audit-table-wrap{ overflow-x:auto; }
+  .audit-table{ width:100%; border-collapse:collapse; font-size:14px; }
+  .audit-table th{ text-align:left; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.6; padding:8px 10px; border-bottom:1px solid #e6dccd; }
+  .audit-table td{ padding:10px; border-bottom:1px solid #f0e9df; vertical-align:top; line-height:1.5; }
+  .audit-table .audit-who{ text-transform:capitalize; font-weight:600; }
+  .audit-table .audit-details{ font-family:ui-monospace, Menlo, monospace; font-size:12.5px; opacity:0.75; word-break:break-word; max-width:420px; }
+  .audit-table tr.audit-failed td{ background:#fbf1ef; }
+  .pol-h{ font-family:Georgia,serif; font-weight:normal; margin:34px 0 8px; }
+  .pol-sec{ padding:14px 18px; border:1px solid #e6dccd; border-radius:10px; margin:10px 0; }
+  .pol-sec h3{ margin:0 0 8px; font-size:17px; }
+  .pol-sec ul{ margin:0; padding-left:20px; }
+  .pol-sec li{ font-size:15px; line-height:1.65; margin:4px 0; }
+  .pol-open{ border-left:3px solid #a3402f; }
 </style>
 <!-- Free OpenStreetMap/Leaflet embed, no API key or billing needed — same
      approach already used on manage-listing.html — so an admin can see
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="aerva-policies.js"></script>
 </head>
 <body>
 
@@ -228,6 +246,8 @@
       <button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs</button>
       <button class="tab-btn" id="tabTrafficBtn" onclick="switchTab('traffic')">Traffic</button>
       <button class="tab-btn" id="tabPayoutsBtn" onclick="switchTab('payouts')">Payouts</button>
+      <button class="tab-btn" id="tabAuditBtn" onclick="switchTab('audit')">Audit Log</button>
+      <button class="tab-btn" id="tabPoliciesBtn" onclick="switchTab('policies')">Policies</button>
     </div>
     <button type="button" class="admin-refresh-btn" onclick="refreshCurrentView()" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </nav>
@@ -363,6 +383,23 @@
     <p style="opacity:0.7; font-size:14px;">The 200 most recent paid bookings: the host payout (after Aerva’s commission), each co-host’s share, and what the host keeps, with where each is paid. “Hold” means that person’s bank details are not approved yet.</p>
     <div id="payoutsList"><p style="opacity:0.6;">Loading…</p></div>
   </div>
+  <div id="auditView" style="display:none;">
+    <h2 style="font-family:Georgia,serif; font-weight:normal;">Audit log</h2>
+    <div class="audit-filters">
+      <select id="auditWho">
+        <option value="">Everyone</option><option value="admin">Admins</option><option value="host">Hosts</option>
+        <option value="cohost">Co-hosts</option><option value="guest">Guests</option><option value="system">System</option>
+      </select>
+      <input type="text" id="auditQ" placeholder="Search action, person or detail">
+      <label>From <input type="date" id="auditFrom"></label>
+      <label>To <input type="date" id="auditTo"></label>
+      <button type="button" class="approve-btn" onclick="loadAudit(true)">Search</button>
+      <button type="button" class="reject-btn" onclick="exportAudit()">Export CSV</button>
+    </div>
+    <div id="auditList"></div>
+    <button type="button" class="approve-btn" id="auditMore" style="display:none; margin-top:14px;" onclick="loadAudit(false)">Load more</button>
+  </div>
+  <div id="policiesAdminView" style="display:none;"><div id="policiesAdminBody"></div></div>
   <div id="trafficView" style="display:none;">
     <div class="deposit-section">
       <h3>Who came</h3>
@@ -1463,6 +1500,82 @@
     if(!res.ok){ alert(data.error || 'Could not save.'); return; }
     loadPayouts();
   }
+
+  // ---- Audit Log tab ----
+  // Every recorded action — admins (by email), hosts, co-hosts, guests and
+  // the system — newest first, 100 at a time. Read-only.
+  let auditRows = [];
+  let auditBefore = null;
+  function auditQuery(){
+    const p = new URLSearchParams({ auditLog: '1' });
+    const who = document.getElementById('auditWho').value;
+    const q = document.getElementById('auditQ').value.trim();
+    const from = document.getElementById('auditFrom').value;
+    const to = document.getElementById('auditTo').value;
+    if(who) p.set('who', who);
+    if(q) p.set('q', q);
+    if(from) p.set('from', from);
+    if(to) p.set('to', to);
+    if(auditBefore) p.set('before', auditBefore);
+    return p.toString();
+  }
+  async function loadAudit(fresh){
+    const list = document.getElementById('auditList');
+    if(fresh){ auditRows = []; auditBefore = null; list.innerHTML = '<p style="opacity:0.6;">Loading…</p>'; }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?' + auditQuery(), { headers: authHeaders() });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not load the audit log.');
+      auditRows = auditRows.concat(data.entries || []);
+      auditBefore = auditRows.length ? auditRows[auditRows.length - 1].id : null;
+      renderAudit();
+      document.getElementById('auditMore').style.display = data.hasMore ? 'inline-block' : 'none';
+    }catch(err){ list.innerHTML = '<p class="error">' + escAdmin(err.message) + '</p>'; }
+  }
+  function auditWhen(t){ try{ return new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }); }catch(e){ return String(t); } }
+  function renderAudit(){
+    const list = document.getElementById('auditList');
+    if(!auditRows.length){ list.innerHTML = '<p class="empty">No entries.</p>'; return; }
+    list.innerHTML = '<div class="audit-table-wrap"><table class="audit-table"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>On</th><th>Details</th></tr></thead><tbody>'
+      + auditRows.map(r => `<tr class="${r.success ? '' : 'audit-failed'}">
+          <td>${escAdmin(auditWhen(r.at))}</td>
+          <td><span class="audit-who">${escAdmin(r.who)}</span>${r.by ? '<br>' + escAdmin(r.by) : ''}</td>
+          <td>${escAdmin(r.action)}${r.success ? '' : ' <strong>(failed)</strong>'}</td>
+          <td>${escAdmin(r.target || '—')}</td>
+          <td class="audit-details">${r.details ? escAdmin(JSON.stringify(r.details)) : ''}</td>
+        </tr>`).join('')
+      + '</tbody></table></div>';
+  }
+  function exportAudit(){
+    if(!auditRows.length){ alert('Search first, then export.'); return; }
+    const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['id', 'when', 'who', 'by', 'action', 'success', 'on', 'details'].join(',')]
+      .concat(auditRows.map(r => [r.id, r.at, r.who, r.by, r.action, r.success, r.target, r.details ? JSON.stringify(r.details) : ''].map(cell).join(',')));
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+    a.download = 'aerva-audit-log-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  // ---- Policies tab ----
+  // The same document guests and hosts read (aerva-policies.js), plus the
+  // admin-only notes and the open items still to close.
+  function renderAdminPolicies(){
+    const P = window.AERVA_POLICIES;
+    const body = document.getElementById('policiesAdminBody');
+    if(!P){ body.innerHTML = '<p class="error">aerva-policies.js did not load. Deploy it with this page.</p>'; return; }
+    const list = (pts) => '<ul>' + pts.map(p => '<li>' + escAdmin(p) + '</li>').join('') + '</ul>';
+    const block = (title, secs) => '<h2 class="pol-h">' + escAdmin(title) + '</h2>'
+      + secs.map(sec => '<div class="pol-sec"><h3>' + escAdmin(sec.title) + '</h3>' + list(sec.points) + '</div>').join('');
+    body.innerHTML = '<p style="opacity:0.7;">Version ' + escAdmin(P.version) + ' · updated ' + escAdmin(P.updated) + ' · public at <a href="index.html?view=policies" target="_blank" rel="noopener">index.html?view=policies</a></p>'
+      + '<div class="pol-sec pol-open"><h3>Open items</h3>' + list(P.openItems) + '</div>'
+      + block('Admin notes', P.adminNotes)
+      + block('Guest policy', P.guest)
+      + block('Host policy', P.host)
+      + '<h2 class="pol-h">Local laws</h2><p style="opacity:0.7;">' + escAdmin(P.localLaws.note) + '</p>'
+      + P.localLaws.countries.map(c => '<div class="pol-sec"><h3>' + escAdmin(c.country) + '</h3>' + list(c.points)
+          + (c.states ? list(c.states.map(st => st.state + ': ' + st.text)) : '') + '</div>').join('');
+  }
   function switchTab(tab){
     document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
     document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
@@ -1474,6 +1587,8 @@
     document.getElementById('tabBatchBtn').classList.toggle('active', tab === 'batch');
     document.getElementById('tabTrafficBtn').classList.toggle('active', tab === 'traffic');
     document.getElementById('tabPayoutsBtn').classList.toggle('active', tab === 'payouts');
+    document.getElementById('tabAuditBtn').classList.toggle('active', tab === 'audit');
+    document.getElementById('tabPoliciesBtn').classList.toggle('active', tab === 'policies');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
     document.getElementById('verificationsView').style.display = tab === 'verifications' ? 'block' : 'none';
@@ -1485,6 +1600,10 @@
     document.getElementById('trafficView').style.display = tab === 'traffic' ? 'block' : 'none';
     document.getElementById('payoutsView').style.display = tab === 'payouts' ? 'block' : 'none';
     if(tab === 'payouts') loadPayouts();
+    document.getElementById('auditView').style.display = tab === 'audit' ? 'block' : 'none';
+    document.getElementById('policiesAdminView').style.display = tab === 'policies' ? 'block' : 'none';
+    if(tab === 'audit' && !auditRows.length) loadAudit(true);
+    if(tab === 'policies') renderAdminPolicies();
     if(tab === 'live') loadLiveListings();
     if(tab === 'verifications') loadVerifications();
     if(tab === 'deposits') loadDisputes();

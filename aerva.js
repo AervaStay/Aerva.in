@@ -10054,7 +10054,48 @@
   // Today's had left out the profile, so Today "did nothing" when clicked
   // from the profile (it opened underneath it, out of sight).
   const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
-    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings'];
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'policiesView'];
+
+  // ---- Policies (index.html?view=policies) ----
+  // Rendered from aerva-policies.js — the same file the admin tool shows.
+  function renderPolicies(tab){
+    const P = window.AERVA_POLICIES;
+    const body = document.getElementById('policiesBody');
+    if(!P || !body) return;
+    const esc = escapeMessageHtml;
+    document.getElementById('policiesUpdated').textContent = 'Last updated ' + P.updated;
+    document.querySelectorAll('[data-pol-tab]').forEach(b => b.classList.toggle('active', b.getAttribute('data-pol-tab') === tab));
+    const section = (sec) => `
+      <div class="policy-section" id="policy-${esc(sec.id || '')}">
+        <h2>${esc(sec.title)}</h2>
+        <ul>${sec.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+      </div>`;
+    if(tab === 'laws'){
+      const L = P.localLaws;
+      body.innerHTML = `<p class="policy-note">${esc(L.note)}</p>` + L.countries.map(c => `
+        <div class="policy-section">
+          <h2>${esc(c.country)}</h2>
+          <ul>${c.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+          ${c.states ? `<div class="policy-states">${c.states.map(st => `<div class="policy-state"><strong>${esc(st.state)}</strong><span>${esc(st.text)}</span></div>`).join('')}</div>` : ''}
+        </div>`).join('');
+      return;
+    }
+    body.innerHTML = (tab === 'host' ? P.host : P.guest).map(section).join('')
+      + `<p class="policy-note">Questions: <a href="mailto:${esc(P.contact)}">${esc(P.contact)}</a></p>`;
+  }
+  function showPoliciesView(){
+    hideMainViews();
+    document.getElementById('policiesView').style.display = 'block';
+    document.body.classList.remove('showing-hero');
+    document.title = 'Policies — Aerva';
+    const want = new URLSearchParams(window.location.search).get('tab');
+    renderPolicies(['guest', 'host', 'laws'].includes(want) ? want : 'guest');
+    window.scrollTo(0, 0);
+  }
+  document.addEventListener('click', function(e){
+    const b = e.target.closest && e.target.closest('[data-pol-tab]');
+    if(b) renderPolicies(b.getAttribute('data-pol-tab'));
+  });
   function hideMainViews(){
     MAIN_VIEW_IDS.forEach(id => {
       const el = document.getElementById(id);
@@ -11170,6 +11211,8 @@
       showTodayView();
     } else if(requestedView === 'profile'){
       showProfileView();
+    } else if(requestedView === 'policies'){
+      showPoliciesView();
     } else if(requestedView === 'cohost'){
       openCohostCenter();
     } else if(requestedView === 'messages'){
