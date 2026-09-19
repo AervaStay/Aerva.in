@@ -387,6 +387,7 @@
     <h2 style="font-family:Georgia,serif; font-weight:normal;">Audit log</h2>
     <div class="audit-filters">
       <select id="auditWho">
+        <option value="admin-table">Admin actions (with IP &amp; device)</option>
         <option value="">Everyone</option><option value="admin">Admins</option><option value="host">Hosts</option>
         <option value="cohost">Co-hosts</option><option value="guest">Guests</option><option value="system">System</option>
       </select>
@@ -1512,7 +1513,8 @@
     const q = document.getElementById('auditQ').value.trim();
     const from = document.getElementById('auditFrom').value;
     const to = document.getElementById('auditTo').value;
-    if(who) p.set('who', who);
+    if(who === 'admin-table') p.set('source', 'admin');
+    else if(who) p.set('who', who);
     if(q) p.set('q', q);
     if(from) p.set('from', from);
     if(to) p.set('to', to);
@@ -1542,15 +1544,15 @@
           <td><span class="audit-who">${escAdmin(r.who)}</span>${r.by ? '<br>' + escAdmin(r.by) : ''}</td>
           <td>${escAdmin(r.action)}${r.success ? '' : ' <strong>(failed)</strong>'}</td>
           <td>${escAdmin(r.target || '—')}</td>
-          <td class="audit-details">${r.details ? escAdmin(JSON.stringify(r.details)) : ''}</td>
+          <td class="audit-details">${r.ip ? 'IP ' + escAdmin(r.ip) + '<br>' : ''}${r.device ? escAdmin(r.device) + '<br>' : ''}${r.details ? escAdmin(JSON.stringify(r.details)) : ''}</td>
         </tr>`).join('')
       + '</tbody></table></div>';
   }
   function exportAudit(){
     if(!auditRows.length){ alert('Search first, then export.'); return; }
     const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const lines = [['id', 'when', 'who', 'by', 'action', 'success', 'on', 'details'].join(',')]
-      .concat(auditRows.map(r => [r.id, r.at, r.who, r.by, r.action, r.success, r.target, r.details ? JSON.stringify(r.details) : ''].map(cell).join(',')));
+    const lines = [['id', 'when', 'who', 'by', 'action', 'success', 'on', 'ip', 'device', 'details'].join(',')]
+      .concat(auditRows.map(r => [r.id, r.at, r.who, r.by, r.action, r.success, r.target, r.ip || '', r.device || '', r.details ? JSON.stringify(r.details) : ''].map(cell).join(',')));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
     a.download = 'aerva-audit-log-' + new Date().toISOString().slice(0, 10) + '.csv';
