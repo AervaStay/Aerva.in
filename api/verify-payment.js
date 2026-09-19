@@ -149,7 +149,52 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
 // Same Resend pattern used everywhere else on the site (see guest-auth.js)
 // — attachments are just base64-encoded content plus a filename, no
 // special handling needed beyond what fetch/JSON already do.
-async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer){
+// The host's side of a confirmed booking: what was booked, and what the
+// host must do. One email per host per payment. Never throws.
+async function sendHostBookingEmails(sql, stays, experiences, agreementVersion) {
+  if (!process.env.RESEND_API_KEY) return;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const items = [
+    ...stays.map(s => ({ listingId: s.listingId, name: s.suite, when: `${s.arrival} → ${s.departure}`, guests: s.guests,
+                         pets: (s.petTypes || []).length, service: (s.serviceAnimals || []).length })),
+    ...experiences.map(e => ({ listingId: e.listingId, name: e.suite, when: e.date, guests: e.guests, pets: 0, service: 0 }))
+  ].filter(i => i.listingId);
+  if (!items.length) return;
+  let rows = [];
+  try {
+    rows = await sql`SELECT id, host_email FROM listings WHERE id = ANY(${items.map(i => Number(i.listingId))})`;
+  } catch (err) { console.error('host booking email lookup failed:', err.message); return; }
+  const byHost = {};
+  items.forEach(i => {
+    const r = rows.find(x => Number(x.id) === Number(i.listingId));
+    if (r && r.host_email) (byHost[r.host_email] = byHost[r.host_email] || []).push(i);
+  });
+  for (const [to, list] of Object.entries(byHost)) {
+    try {
+      const html = `
+        <div style="font-family:sans-serif; max-width:520px;">
+          <h2 style="font-family:Georgia,serif;">New confirmed booking</h2>
+          <ul>${list.map(i => `<li><strong>${esc(i.name)}</strong> — ${esc(i.when)} — ${Number(i.guests) || 0} guest(s)${i.pets ? `, ${i.pets} pet(s)` : ''}${i.service ? `, ${i.service} service/support animal(s)` : ''}</li>`).join('')}</ul>
+          <p><strong>Your responsibilities for this booking:</strong></p>
+          <ul>
+            <li>Provide the home or experience as listed, safe and clean.</li>
+            <li>Check a government photo ID for every adult guest.</li>
+            <li>Foreign guests: file Form III at indianfrro.gov.in within 24 hours of arrival and of departure.</li>
+            <li>Share check-in details in Aerva Messages before arrival.</li>
+            <li>Keep all communication and payments on Aerva.</li>
+          </ul>
+          <p style="font-size:13px; opacity:0.8;">This booking is covered by the host agreement you accepted and the guest’s booking agreement${agreementVersion ? ` (version ${esc(agreementVersion)})` : ''}. Read Aerva’s Policies at <a href="https://aerva.in/index.html?view=policies&tab=host">aerva.in/policies</a>.</p>
+        </div>`;
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to, subject: 'New confirmed booking on Aerva', html })
+      });
+    } catch (err) { console.error('host booking email failed:', err.message); }
+  }
+}
+
+async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreementVersion = null){
   if (!process.env.RESEND_API_KEY) {
     console.error('RESEND_API_KEY not set — booking confirmation email not sent.');
     return;
@@ -163,6 +208,7 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
       <p>Thank you for booking with Aerva:</p>
       <ul>${itemsListHtml}</ul>
       <p>Your full booking details — dates, amounts, and everything else — are attached as a PDF to this email.</p>
+      ${agreementVersion ? `<p style="font-size:13px; opacity:0.8;">You accepted Aerva’s booking agreement (version ${agreementVersion}) before paying. Read it and Aerva’s Policies at <a href="https://aerva.in/index.html?view=policies">aerva.in/policies</a>.</p>` : ''}
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Reply to this email or write to hello@aerva.in.</p>
     </div>
   `;
@@ -268,6 +314,8 @@ module.exports = async (req, res) => {
     // the booking was saved, but the guest was told verification failed
     // and never got their confirmation.
     let email = null;
+    // The booking agreement the guest accepted before paying (create-order.js).
+    let agreement = { version: null, acceptedAt: null, ip: null };
     let stays = [];
     let experiences = [];
     let chargeCurrency = 'INR';
@@ -292,6 +340,11 @@ module.exports = async (req, res) => {
       // here. 'INR' with no amount is the default/only case until
       // International Payments is enabled (see create-order.js).
       chargeCurrency = order.notes?.chargeCurrency || 'INR';
+      if (order.notes?.agreement) {
+        const [v, at, ip] = String(order.notes.agreement).split('|');
+        const when = at && !isNaN(Date.parse(at)) ? new Date(at).toISOString() : null;
+        agreement = { version: v || null, acceptedAt: when, ip: ip || null };
+      }
       const chargeAmount = order.notes?.chargeAmount ? Number(order.notes.chargeAmount) : null;
       // Applied at checkout — see create-order.js's coupon validation.
       // Attributed to whichever order row is created FIRST below (a
@@ -363,7 +416,8 @@ module.exports = async (req, res) => {
             deposit_amount, deposit_status, deposit_release_at,
             charge_currency, charge_amount, coupon_id, coupon_discount,
             razorpay_order_id, razorpay_payment_id, status, order_type, pet_types,
-            service_animal_types, young_litter_count
+            service_animal_types, young_litter_count,
+            agreement_version, agreement_accepted_at, agreement_ip
           ) VALUES (
             ${stay.suite}, ${stay.listingId || null}, ${stay.roomId || null}, ${guestId}, ${email}, ${stay.arrival}, ${stay.departure}, ${stay.guests}, ${stay.nights},
             ${stay.subtotal}, ${stay.discountAmount || 0}, ${gstShare}, ${guestServiceFee}, ${stayTotal},
@@ -371,7 +425,8 @@ module.exports = async (req, res) => {
             ${depositAmount}, ${depositStatus}, ${depositReleaseAt},
             ${chargeCurrency}, ${chargeAmount}, ${thisRowCouponId}, ${thisRowCouponDiscount},
             ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'stay', ${JSON.stringify(Array.isArray(stay.petTypes) ? stay.petTypes : [])},
-            ${JSON.stringify(Array.isArray(stay.serviceAnimals) ? stay.serviceAnimals : [])}, ${Number(stay.youngLitterCount) || 0}
+            ${JSON.stringify(Array.isArray(stay.serviceAnimals) ? stay.serviceAnimals : [])}, ${Number(stay.youngLitterCount) || 0},
+            ${agreement.version}, ${agreement.acceptedAt}, ${agreement.ip}
           )
           RETURNING id
         `;
@@ -459,14 +514,16 @@ module.exports = async (req, res) => {
             commission_rate, commission_amount, payout_amount,
             deposit_amount, deposit_status, deposit_release_at,
             charge_currency, charge_amount, coupon_id, coupon_discount,
-            razorpay_order_id, razorpay_payment_id, status, order_type
+            razorpay_order_id, razorpay_payment_id, status, order_type,
+            agreement_version, agreement_accepted_at, agreement_ip
           ) VALUES (
             ${ex.suite}, ${ex.listingId || null}, ${guestId}, ${email}, ${ex.date}, ${ex.endDate || ex.date}, ${ex.guests}, ${ex.durationDays || 1},
             ${ex.subtotal}, 0, ${gstShare}, ${guestServiceFee}, ${total},
             ${effectiveRate}, ${commissionAmount}, ${payoutAmount},
             0, 'none', null,
             ${chargeCurrency}, ${chargeAmount}, ${thisRowCouponId}, ${thisRowCouponDiscount},
-            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'experience'
+            ${razorpay_order_id}, ${razorpay_payment_id}, 'paid', 'experience',
+            ${agreement.version}, ${agreement.acceptedAt}, ${agreement.ip}
           )
           RETURNING id
         `;
@@ -511,11 +568,16 @@ module.exports = async (req, res) => {
     if (email) {
       try {
         const pdfBuffer = await generateBookingConfirmationPdf(stays, experiences, razorpay_order_id, chargeCurrency, couponDiscount);
-        await sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer);
+        await sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreement.version);
       } catch (emailErr) {
         console.error('Could not send booking confirmation email:', emailErr);
       }
     }
+
+    // Tell each host what was booked and what they must do. Separate and
+    // never fatal: the booking is already confirmed.
+    try { await sendHostBookingEmails(sql, stays, experiences, agreement.version); }
+    catch (err) { console.error('host booking emails failed:', err.message); }
 
     return res.status(200).json({ verified: true });
   } catch (err) {
