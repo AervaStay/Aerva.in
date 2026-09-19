@@ -2174,3 +2174,12 @@ footer .foot-bottom{
 .lg-yn.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
 .lg-pet-note{ font-size:13.5px; margin:0 0 8px; opacity:0.8; }
 .lg-pet-error{ font-size:13.5px; color:#a3402f; margin:0 0 8px; }
+
+/* Agreements above Book / Submit buttons. */
+.agreement-box{ border:1px solid var(--line-dark); border-radius:10px; padding:14px 16px; margin:14px 0 12px; background:#fff; text-align:left; }
+.agreement-title{ font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold-deep); margin-bottom:8px; }
+.agreement-box ul{ margin:0 0 12px; padding-left:18px; max-height:180px; overflow:auto; }
+.agreement-box li{ font-size:13.5px; line-height:1.6; margin:4px 0; }
+.agreement-accept{ display:flex; gap:10px; align-items:flex-start; font-size:14px; line-height:1.5; cursor:pointer; }
+.agreement-accept input{ margin-top:3px; width:18px; height:18px; flex:0 0 auto; }
+.agreement-link{ display:inline-block; margin-top:8px; font-size:13px; color:var(--gold-deep); }

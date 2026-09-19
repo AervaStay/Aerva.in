@@ -14,6 +14,38 @@ window.AERVA_POLICIES = {
   updated: 'September 2026',
   contact: 'hello@aerva.in',
 
+  // Shown before payment (guest) and before listing (host). The version is
+  // saved with every booking and every host acceptance; it must match
+  // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
+  agreements: {
+    version: '2026-09',
+    guest: {
+      title: 'Booking agreement',
+      points: [
+        'Your booking is an agreement between you and the host. Aerva is the platform that connects you and takes payment.',
+        'You: give true details of every guest and pet, carry ID, follow the house rules and the law, and pay for any damage you or your guests cause.',
+        'The host: provides the home or experience as described, keeps it safe and clean, and follows local laws.',
+        'Aerva: takes your payment, handles refunds and complaints under Aerva’s Policies, and keeps your booking records.',
+        'Aerva does not own, run or inspect properties or experiences, and does not control what hosts or guests do. To the extent the law allows, Aerva is not responsible for the acts or omissions of any host or guest.',
+        'Cancellations, refunds, deposits, pets and safety follow Aerva’s Policies.'
+      ],
+      accept: 'I agree to this booking agreement and Aerva’s Policies.'
+    },
+    host: {
+      title: 'Host agreement',
+      points: [
+        'Each booking is an agreement between you and the guest. Aerva is the platform that connects you and takes payment.',
+        'You: list accurately, keep your property safe, clean and legal, hold every registration your area requires, report foreign guests on Form III within 24 hours, and honour every confirmed booking.',
+        'The guest: follows your house rules and the law, and pays for damage they cause.',
+        'Aerva: takes payment, pays you your share after Aerva’s fees and taxes, and handles refunds and complaints under Aerva’s Policies.',
+        'You are responsible for your own taxes, insurance and legal compliance.',
+        'Aerva does not own, run or inspect your property, and does not control what guests do. To the extent the law allows, Aerva is not responsible for the acts or omissions of any guest or host.',
+        'Aerva’s Policies apply to every booking.'
+      ],
+      accept: 'I agree to the host agreement and Aerva’s Policies.'
+    }
+  },
+
   guest: [
     { id: 'booking', title: 'Booking and payment', points: [
       'Book and pay only on Aerva.',

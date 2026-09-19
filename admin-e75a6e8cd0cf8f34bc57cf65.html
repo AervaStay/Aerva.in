@@ -1572,6 +1572,7 @@
     body.innerHTML = '<p style="opacity:0.7;">Version ' + escAdmin(P.version) + ' · updated ' + escAdmin(P.updated) + ' · public at <a href="index.html?view=policies" target="_blank" rel="noopener">index.html?view=policies</a></p>'
       + '<div class="pol-sec pol-open"><h3>Open items</h3>' + list(P.openItems) + '</div>'
       + block('Admin notes', P.adminNotes)
+      + (P.agreements ? block('Agreements (version ' + P.agreements.version + ')', [P.agreements.guest, P.agreements.host]) : '')
       + block('Guest policy', P.guest)
       + block('Host policy', P.host)
       + '<h2 class="pol-h">Local laws</h2><p style="opacity:0.7;">' + escAdmin(P.localLaws.note) + '</p>'

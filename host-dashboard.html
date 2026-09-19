@@ -662,6 +662,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css">
 <script src="aerva-cohost.js"></script>
+<script src="aerva-policies.js"></script>
 </head>
 <body>
 
@@ -4200,6 +4201,45 @@
     load(section);
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
+})();
+</script>
+<script>
+// ---- Host agreement: one-time acceptance for hosts who listed before it
+// existed. Shown at the top of My Collection until accepted. Not shown in
+// co-host mode. Text from aerva-policies.js; saved by host-listings.js.
+(function(){
+  if(window.AervaCohost && window.AervaCohost.get()) return;
+  const A = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements;
+  let token = null;
+  try{ token = localStorage.getItem('aerva_guest_session'); }catch(e){}
+  if(!A || !token) return;
+  const API = 'https://aerva-in.vercel.app/api/host-listings';
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  fetch(API + '?hostAgreement=1', { headers: { 'Authorization': 'Bearer ' + token } })
+    .then(r => r.json()).then(d => {
+      if(!d || !d.isHost || d.accepted) return;
+      const wrap = document.querySelector('.wrap');
+      if(!wrap || document.getElementById('hostAgreementBanner')) return;
+      const box = document.createElement('div');
+      box.id = 'hostAgreementBanner';
+      box.className = 'notice-card';
+      box.style.cssText = 'margin:0 0 28px; padding:18px 20px;';
+      box.innerHTML = '<strong style="font-size:16px;">' + esc(A.host.title) + '</strong>'
+        + '<ul style="margin:10px 0 12px; padding-left:18px;">' + A.host.points.map(p => '<li style="font-size:14px; line-height:1.6; margin:4px 0;">' + esc(p) + '</li>').join('') + '</ul>'
+        + '<label style="display:flex; gap:10px; align-items:flex-start; font-size:14.5px; cursor:pointer;"><input type="checkbox" id="hostAgreeCheck" style="margin-top:3px; width:18px; height:18px;"> <span>' + esc(A.host.accept) + '</span></label>'
+        + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" id="hostAgreeBtn">Accept</button>'
+        + '<a href="index.html?view=policies&tab=host" target="_blank" rel="noopener" style="font-size:13.5px;">Read Aerva’s Policies</a>'
+        + '<span id="hostAgreeMsg" style="font-size:13.5px;"></span></div>';
+      wrap.insertBefore(box, wrap.firstChild);
+      document.getElementById('hostAgreeBtn').addEventListener('click', async () => {
+        const msg = document.getElementById('hostAgreeMsg');
+        if(!document.getElementById('hostAgreeCheck').checked){ msg.textContent = 'Tick the box to accept.'; return; }
+        const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ acceptHostAgreement: { version: A.version } }) });
+        const j = await r.json().catch(() => ({}));
+        if(r.ok) box.remove(); else msg.textContent = j.error || 'Could not save. Try again.';
+      });
+    }).catch(() => {});
 })();
 </script>
 <script src="aerva-header.js" defer></script>
