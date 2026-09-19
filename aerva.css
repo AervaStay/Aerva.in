@@ -1927,3 +1927,30 @@ footer .foot-bottom{ margin-top:60px; padding-top:22px; font-size:11px; letter-s
 .like-btn .like-count:empty{ display:none; }
 .like-btn.is-liked svg{ fill:var(--gold); stroke:var(--gold); }
 .like-btn.is-liked{ color:var(--gold); }
+
+/* ---------- LIVE COUNTER IN THE HERO (Sept 2026) ----------
+   The counter sat right on top of the search bar in dark gold on a dark
+   photo, so it could barely be read, with a large empty gap above it.
+   It now belongs to the hero text: straight under the subhead, number
+   large in the headline's gold (Bodoni), label small in cream beneath,
+   a hairline between the two figures, and clear space before the search
+   bar. */
+.live-proof{
+  align-items:center; gap:22px; flex-wrap:wrap;
+  margin:-14px 0 30px; color:#f4ebe0; text-transform:none; letter-spacing:0;
+}
+.live-proof .lp-stat{ display:flex; flex-direction:column; gap:4px; }
+.live-proof .lp-num{
+  font-family:'Bodoni Moda', serif; font-size:26px; line-height:1; color:#f0c98a;
+  text-shadow:0 2px 14px rgba(0,0,0,0.35);
+}
+.live-proof .lp-label{
+  font-family:'Jost', sans-serif; font-size:10.5px; letter-spacing:0.16em; text-transform:uppercase;
+  color:#f4ebe0; opacity:0.9; text-shadow:0 1px 8px rgba(0,0,0,0.45);
+}
+.live-proof .lp-sep{ width:1px; height:30px; background:rgba(240,220,195,0.45); }
+@media (max-width:640px){
+  .live-proof{ gap:16px; margin:-18px 0 24px; }
+  .live-proof .lp-num{ font-size:22px; }
+  .live-proof .lp-label{ font-size:9.5px; letter-spacing:0.12em; }
+}
