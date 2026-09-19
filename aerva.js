@@ -4292,7 +4292,9 @@
       ${answers ? `<div class="hp-section"><h3 class="hp-title">Get to know ${esc((p.name || '').split(' ')[0] || 'them')}</h3>${answers}</div>` : ''}
       ${cities ? `<div class="hp-section"><h3 class="hp-title">Hosting in</h3><div class="hp-chips">${cities}</div></div>` : ''}
       ${reviews ? `<div class="hp-section"><h3 class="hp-title">What guests say about their homes</h3>${reviews}</div>` : ''}
-      ${nothingMore ? '<p class="hp-empty">This host hasn\u2019t added more to their profile yet.</p>' : ''}`;
+      ${p.partial
+        ? '<p class="hp-empty">The rest of this profile could not be loaded just now. Please try again in a moment.</p>'
+        : (nothingMore ? '<p class="hp-empty">This host hasn\u2019t added more to their profile yet.</p>' : '')}`;
   }
 
   async function openHostProfile(listingId, badgeHtml, knownName){
@@ -4324,7 +4326,7 @@
       // host as the listing already knows them — name and badge — rather
       // than an error message.
       console.error('Host profile could not be loaded:', err);
-      body.innerHTML = renderHostProfile({ name: knownName || 'Your host', answers: [], hostingIn: [], reviews: [] }, badgeHtml);
+      body.innerHTML = renderHostProfile({ name: knownName || 'Your host', answers: [], hostingIn: [], reviews: [], partial: true }, badgeHtml);
     }
   }
 
