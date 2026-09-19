@@ -4238,6 +4238,100 @@
   // It renders nothing at all when there is nothing to say. An empty
   // frame with "no reviews yet" would actively discourage a booking,
   // which is the opposite of the point.
+  // ---- Host's public profile ----
+  // A full white window over everything, opened from "Hosted by" on any
+  // listing. Shows only what the host chose to share and reviews of their
+  // homes (see ?hostProfile in get-listings.js); contact details never.
+  function formatReviewMonth(ym){
+    const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ''));
+    if(!m) return '';
+    return new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+  }
+
+  function closeHostProfile(){
+    const ov = document.getElementById('hostProfileOverlay');
+    if(ov) ov.classList.remove('is-open');
+    document.body.classList.remove('hp-open');
+    document.removeEventListener('keydown', hostProfileEscape);
+  }
+  function hostProfileEscape(e){ if(e.key === 'Escape') closeHostProfile(); }
+
+  function renderHostProfile(p, badgeHtml){
+    const esc = escapeMessageHtml;
+    const initial = esc((p.name || '?').trim().charAt(0).toUpperCase());
+    const photo = p.photoUrl
+      ? `<img class="hp-photo" src="${esc(p.photoUrl)}" alt="">`
+      : `<span class="hp-photo hp-initial">${initial}</span>`;
+    const facts = [
+      p.work ? `<div class="hp-fact"><span class="hp-fact-label">Work</span><span>${esc(p.work)}</span></div>` : '',
+      p.hobbies ? `<div class="hp-fact"><span class="hp-fact-label">Hobbies</span><span>${esc(p.hobbies)}</span></div>` : ''
+    ].join('');
+    const answers = (p.answers || []).map(a =>
+      `<div class="hp-answer"><div class="hp-q">${esc(a.label)}</div><p>${esc(a.answer)}</p></div>`).join('');
+    const cities = (p.hostingIn || []).map(c => `<span class="hp-chip">${esc(c.city)}</span>`).join('');
+    const reviews = (p.reviews || []).map(r => `
+      <div class="hp-review">
+        <div class="hp-review-head">
+          <span class="hp-review-prop">${esc(r.property || '')}</span>
+          <span class="hp-review-meta">${r.score ? '★ ' + Number(r.score).toFixed(1) : ''}${r.score && r.month ? ' · ' : ''}${esc(formatReviewMonth(r.month))}</span>
+        </div>
+        ${r.comment ? `<p>${esc(r.comment)}</p>` : ''}
+      </div>`).join('');
+    const nothingMore = !facts && !answers && !cities && !reviews;
+    return `
+      <div class="hp-head">
+        ${photo}
+        <div>
+          <div class="hp-eyebrow">Your host</div>
+          <h2 class="hp-name">${esc(p.name)}</h2>
+          <div class="hp-meta">Host${p.memberSince ? ' · on Aerva since ' + esc(p.memberSince) : ''}</div>
+          ${badgeHtml ? `<div class="hp-badge">${badgeHtml}</div>` : ''}
+        </div>
+      </div>
+      ${facts ? `<div class="hp-section"><div class="hp-facts">${facts}</div></div>` : ''}
+      ${answers ? `<div class="hp-section"><h3 class="hp-title">Get to know ${esc((p.name || '').split(' ')[0] || 'them')}</h3>${answers}</div>` : ''}
+      ${cities ? `<div class="hp-section"><h3 class="hp-title">Hosting in</h3><div class="hp-chips">${cities}</div></div>` : ''}
+      ${reviews ? `<div class="hp-section"><h3 class="hp-title">What guests say about their homes</h3>${reviews}</div>` : ''}
+      ${nothingMore ? '<p class="hp-empty">This host hasn\u2019t added more to their profile yet.</p>' : ''}`;
+  }
+
+  async function openHostProfile(listingId, badgeHtml){
+    let ov = document.getElementById('hostProfileOverlay');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'hostProfileOverlay';
+      ov.className = 'hp-overlay';
+      ov.setAttribute('role', 'dialog');
+      ov.setAttribute('aria-modal', 'true');
+      ov.setAttribute('aria-label', 'Host profile');
+      document.body.appendChild(ov);
+    }
+    ov.innerHTML = '<button type="button" class="hp-close" aria-label="Close">\u00d7</button><div class="hp-body"><p class="hp-empty">Loading profile\u2026</p></div>';
+    ov.querySelector('.hp-close').addEventListener('click', closeHostProfile);
+    ov.classList.add('is-open');
+    ov.scrollTop = 0;
+    document.body.classList.add('hp-open');
+    document.addEventListener('keydown', hostProfileEscape);
+    const body = ov.querySelector('.hp-body');
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId));
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || !data.profile) throw new Error(data.error || 'Could not load this profile right now.');
+      body.innerHTML = renderHostProfile(data.profile, badgeHtml);
+    }catch(err){
+      body.innerHTML = `<p class="hp-empty">${escapeMessageHtml(err.message || 'Could not load this profile right now.')}</p>`;
+    }
+  }
+
+  // One listener for every "Hosted by" button, wherever the listing is shown.
+  document.addEventListener('click', function(e){
+    const btn = e.target.closest && e.target.closest('[data-host-profile]');
+    if(!btn) return;
+    e.preventDefault();
+    const badges = btn.querySelector('.ts-host-badges');
+    openHostProfile(btn.getAttribute('data-host-profile'), badges ? badges.innerHTML : '');
+  });
+
   function listingStandingHtml(listing, opts){
     const n = Number(listing.review_count) || 0;
     const rated = n > 0 && listing.rating != null;
@@ -4296,14 +4390,21 @@
     // The initial stands in for a photo. A named person with a mark
     // reads as accountable in a way "Hosted by X" as plain text does not.
     const initial = hostName ? escapeMessageHtml(hostName.trim().charAt(0).toUpperCase()) : '';
-    const hostBlock = (host || hostName) ? `
-      <div class="ts-host">
+    // Tapping the host opens their public profile (openHostProfile below).
+    // It is looked up through this listing, so it only needs its id.
+    const profileId = Number(listing.id) || 0;
+    const hostInner = `
         ${initial ? `<span class="ts-host-avatar">${initial}</span>` : ''}
         <span class="ts-host-text">
           ${hostName ? `<span class="ts-host-label">Hosted by</span><span class="ts-host-name">${escapeMessageHtml(hostName)}</span>` : ''}
           ${host ? `<span class="ts-host-badges">${hostTierBadgeHtml(host)}</span>` : ''}
-        </span>
-      </div>` : '';
+          ${profileId ? '<span class="ts-host-view">View profile ›</span>' : ''}
+        </span>`;
+    const hostBlock = (host || hostName)
+      ? (profileId
+          ? `<button type="button" class="ts-host ts-host-link" data-host-profile="${profileId}" aria-label="View host profile">${hostInner}</button>`
+          : `<div class="ts-host">${hostInner}</div>`)
+      : '';
 
     const middle = placeBlock + badgeBlock;
     return `<div class="trust-strip">
@@ -10599,25 +10700,35 @@
       console.error('Could not load admin background images, falling back to listing photos:', err);
     }
 
-    if(photos.length === 0){
-      const coverPhotos = approvedListings.map(l => l.cover_photo_url).filter(Boolean);
-      if(coverPhotos.length >= 3){
-        photos = coverPhotos;
-      } else {
-        photos = approvedListings
-          .map(l => {
-            const exterior = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
-            const interior = Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : [];
-            return l.cover_photo_url || interior[0] || exterior[0] || null;
-          })
-          .filter(Boolean);
-      }
+    // Ten slides, filled in order of preference: the admin's chosen
+    // photos, then hosts' cover photos, then other listing photos. It used
+    // to switch to cover photos ONLY as soon as three listings had one —
+    // which is why the hero dropped from 7–8 slides to 3. The rest are
+    // taken one photo per home per pass, so ten slides are spread across
+    // homes rather than all coming from the first listing.
+    const SLIDE_TARGET = 10;
+    const picked = [];
+    const seen = new Set();
+    const add = (u) => {
+      if(typeof u !== 'string' || !u || seen.has(u) || picked.length >= SLIDE_TARGET) return;
+      seen.add(u);
+      picked.push(u);
+    };
+    photos.forEach(add);
+    approvedListings.forEach(l => add(l.cover_photo_url));
+    const pools = approvedListings.map(l => [
+      ...(Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : []),
+      ...(Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [])
+    ]);
+    for(let round = 0; picked.length < SLIDE_TARGET && pools.some(p => round < p.length); round++){
+      pools.forEach(p => add(p[round]));
     }
+    photos = picked;
 
     if(photos.length === 0) return;
 
     slidesEl.innerHTML = photos.map((url, i) =>
-      `<img src="${url}" alt="" loading="lazy" class="${i === 0 ? 'is-active' : ''}">`
+      `<img src="${escapeMessageHtml(url)}" alt="" loading="lazy" class="${i === 0 ? 'is-active' : ''}">`
     ).join('');
 
     const dotsEl = document.getElementById('filterBgDots');
