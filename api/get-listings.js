@@ -443,6 +443,26 @@ async function runTierSnapshot({ asOf, prev, hosts, guests, listings }) {
   return changes;
 }
 
+// Likes per listing (stays and experiences share listing_likes). Never
+// throws: before migration_listing_likes.sql has run, or if the query
+// fails, every count is simply 0 — likes are decoration, never a reason
+// for the listings themselves not to load.
+async function attachLikeCounts(rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  const counts = {};
+  try {
+    const ids = rows.map(r => r.id);
+    const found = await sql`
+      SELECT listing_id, COUNT(*)::int AS n FROM listing_likes
+      WHERE listing_id = ANY(${ids}) GROUP BY listing_id
+    `;
+    found.forEach(r => { counts[r.listing_id] = Number(r.n) || 0; });
+  } catch (err) {
+    console.error('like counts failed (non-fatal):', err.message);
+  }
+  rows.forEach(r => { r.like_count = counts[r.id] || 0; });
+}
+
 module.exports = async (req, res) => {
   // CORS first, before ANY branch can return. The review sweep below used
   // to run ahead of these headers, so the admin tool's Batch Jobs button
@@ -1192,6 +1212,7 @@ module.exports = async (req, res) => {
         console.error('experience standing failed (non-fatal):', err);
       }
 
+      await attachLikeCounts(filteredExperiences);
       return res.status(200).json({ experiences: filteredExperiences });
     }
 
@@ -1221,6 +1242,7 @@ module.exports = async (req, res) => {
         WHERE status = 'approved' AND listing_type = 'experience' AND hosting_listing_id = ${hostingId}
         ORDER BY created_at DESC
       `;
+      await attachLikeCounts(experiencesFor);
       return res.status(200).json({ experiences: experiencesFor });
     }
 
@@ -1656,6 +1678,7 @@ module.exports = async (req, res) => {
     // host_id is internal — never send it to a browser.
     filtered.forEach(l => { delete l.host_id; });
 
+    await attachLikeCounts(filtered);
     return res.status(200).json({ listings: filtered });
   } catch (err) {
     console.error('get-listings error:', err);
