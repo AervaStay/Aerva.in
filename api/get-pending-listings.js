@@ -87,7 +87,7 @@
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
-const { logAudit, adminActor } = require('./_audit-log');
+const { logAudit, adminContext, requestContext } = require('./_audit-log');
 const { encryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens } = require('./_secure-fields');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
@@ -308,7 +308,7 @@ module.exports = async (req, res) => {
       });
       if (failedForEmail >= 5 || attemptsFromIp >= 20) {
         await logAudit(sql, {
-          action: 'admin_login_blocked', success: false, actorType: 'admin', actorIdentifier: cleanEmail,
+          action: 'admin_login_blocked', success: false, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
           metadata: { reason: failedForEmail >= 5 ? 'too_many_failures' : 'ip_rate_limited', ip: clientIp }
         });
         return res.status(429).json({ error: 'Too many sign-in attempts. Please wait 15 minutes and try again.' });
@@ -320,17 +320,17 @@ module.exports = async (req, res) => {
       // even against a dummy hash for a non-existent account, so a wrong
       // email can't be distinguished from a wrong password by response time.
       const DUMMY_HASH = '$2a$12$CwTycUXWue0Thq9StjUM0uJ8yqxbwmkQ.6qhg0OSyMH0RfaOOKKae';
-      const passwordMatches = await bcrypt.compare(password, admin ? admin.password_hash : DUMMY_HASH);
+      const passwordMatches = await bcrypt.compare(password, admin && admin.password_hash ? admin.password_hash : DUMMY_HASH);
       if (!admin || !passwordMatches) {
         await logAudit(sql, {
-          action: 'admin_login', success: false, actorType: 'admin', actorIdentifier: cleanEmail,
+          action: 'admin_login', success: false, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
           metadata: { reason: !admin ? 'no_such_account' : 'wrong_password', ip: clientIp }
         });
         return res.status(401).json({ error: 'Incorrect email or password.' });
       }
       const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS);
       await logAudit(sql, {
-        action: 'admin_login', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
+        action: 'admin_login', success: true, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
         targetType: 'admin', targetId: admin.id, metadata: { ip: clientIp }
       });
       return res.status(200).json({ sessionToken, admin: { id: admin.id, email: admin.email, name: admin.name } });
@@ -370,7 +370,7 @@ module.exports = async (req, res) => {
         RETURNING id, email, name
       `;
       await logAudit(sql, {
-        action: 'admin_account_created', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
+        action: 'admin_account_created', success: true, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
         targetType: 'admin', targetId: inserted[0].id
       });
       return res.status(200).json({ success: true, admin: inserted[0] });
@@ -399,7 +399,7 @@ module.exports = async (req, res) => {
         action: 'admin_password_reset_attempt', windowMinutes: 60, byIp: clientIp, onlyFailures: false
       });
       await logAudit(sql, {
-        action: 'admin_password_reset_attempt', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
+        action: 'admin_password_reset_attempt', success: true, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
         metadata: { ip: clientIp }
       });
       if (recentFromIp >= 5) return res.status(200).json({ success: true });
@@ -410,7 +410,7 @@ module.exports = async (req, res) => {
         const resetTok = createToken(admin.id, 'admin-password-reset', ADMIN_RESET_LINK_LIFETIME_MS);
         await sendAdminPasswordResetEmail(admin, resetTok);
         await logAudit(sql, {
-          action: 'admin_password_reset_requested', success: true, actorType: 'admin', actorIdentifier: cleanEmail,
+          action: 'admin_password_reset_requested', success: true, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
           targetType: 'admin', targetId: admin.id
         });
       }
@@ -447,7 +447,7 @@ module.exports = async (req, res) => {
       // resets the password and logs the admin straight in.
       const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS);
       await logAudit(sql, {
-        action: 'admin_password_reset_completed', success: true, actorType: 'admin', actorIdentifier: admin.email,
+        action: 'admin_password_reset_completed', success: true, actorType: 'admin', actorIdentifier: admin.email, ...requestContext(req),
         targetType: 'admin', targetId: admin.id
       });
       return res.status(200).json({ sessionToken, admin: { id: admin.id, email: admin.email, name: admin.name } });
@@ -468,8 +468,10 @@ module.exports = async (req, res) => {
   if (!hasValidSession && !hasValidSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  // Named on every admin action below (the signed-in admin's email).
-  const ADMIN_ACTOR = await adminActor(sql, sessionPayload, hasValidSecret);
+  // Named on every admin action below: the signed-in admin's email and id,
+  // plus the IP and device the request came from (see _audit-log.js).
+  const ADMIN_AUDIT = await adminContext(sql, req, sessionPayload, hasValidSecret);
+  const ADMIN_ACTOR = ADMIN_AUDIT.actorIdentifier;
 
   // ---- Audit history (admin only) ----
   // GET ?auditLog=1 [&who=admin|host|guest|cohost|system] [&q=text]
@@ -479,6 +481,39 @@ module.exports = async (req, res) => {
   // no endpoint anywhere deletes audit rows (DPDP Rules: keep processing
   // logs at least one year — Aerva keeps them indefinitely).
   if (req.method === 'GET' && req.query.auditLog === '1') {
+    // ?source=admin — the dedicated, append-only admin_audit_log, with the
+    // admin's id, IP and device (see migration_admin_audit_log.sql).
+    if (req.query.source === 'admin') {
+      try {
+        const q = typeof req.query.q === 'string' && req.query.q.trim() ? '%' + req.query.q.trim().slice(0, 80).replace(/[%_\\]/g, m => '\\' + m) + '%' : null;
+        const day = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+        const from = day(req.query.from);
+        const to = day(req.query.to);
+        const before = Number(req.query.before) > 0 ? Number(req.query.before) : null;
+        const rows = await sql`
+          SELECT id, at, admin_id, admin_email, action, success, target_type, target_id, details, ip, user_agent
+          FROM admin_audit_log
+          WHERE (${q}::text IS NULL OR action ILIKE ${q} OR admin_email ILIKE ${q} OR ip ILIKE ${q} OR details::text ILIKE ${q})
+            AND (${from}::date IS NULL OR at >= ${from}::date)
+            AND (${to}::date IS NULL OR at < (${to}::date + 1))
+            AND (${before}::bigint IS NULL OR id < ${before})
+          ORDER BY id DESC
+          LIMIT 101
+        `;
+        return res.status(200).json({
+          entries: rows.slice(0, 100).map(r => ({
+            id: Number(r.id), at: r.at, action: r.action, success: r.success !== false,
+            who: 'admin', by: r.admin_email || (r.admin_id ? `admin #${r.admin_id}` : null),
+            target: r.target_type ? `${r.target_type}${r.target_id != null ? ' #' + r.target_id : ''}` : null,
+            details: r.details || null, ip: r.ip || null, device: r.user_agent || null
+          })),
+          hasMore: rows.length > 100
+        });
+      } catch (err) {
+        console.error('admin audit view failed:', err);
+        return res.status(500).json({ error: 'Could not load admin actions. Has migration_admin_audit_log.sql been run?' });
+      }
+    }
     try {
       const WHO = ['admin', 'host', 'guest', 'cohost', 'system'];
       const who = WHO.includes(req.query.who) ? req.query.who : null;
@@ -906,7 +941,7 @@ module.exports = async (req, res) => {
       if (!rows.length) return res.status(404).json({ error: 'Review not found, or already reverted.' });
 
       await logAudit(sql, {
-        action: 'review_reverted', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
+        action: 'review_reverted', success: true, actorType: 'admin', ...ADMIN_AUDIT,
         targetType: kind === 'listing' ? 'listing_review' : 'guest_review', targetId: reviewId,
         metadata: { orderId: rows[0].order_id, reason: why }
       });
@@ -954,7 +989,7 @@ module.exports = async (req, res) => {
         // run and the automatic one can never behave differently.
         const r = await runComplianceScan(sql, key);
         await logAudit(sql, {
-          action: 'compliance_check_run', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
+          action: 'compliance_check_run', success: true, actorType: 'admin', ...ADMIN_AUDIT,
           targetType: 'compliance', targetId: null,
           metadata: { key, affectedCount: r.affected, newlyFlagged: r.flagged, emailed: r.emailed }
         });
@@ -1019,7 +1054,7 @@ module.exports = async (req, res) => {
         `;
 
         await logAudit(sql, {
-          action: 'listing_status_changed', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
+          action: 'listing_status_changed', success: true, actorType: 'admin', ...ADMIN_AUDIT,
           targetType: 'listing', targetId: id,
           metadata: { action, fromStatus: listing.status, toStatus: newStatus, reason: safeReason }
         });
@@ -1197,7 +1232,7 @@ module.exports = async (req, res) => {
             await sql`UPDATE orders SET deposit_status = 'disputed' WHERE id = ${orderId} AND deposit_status = 'resolving'`;
             claimed = false;
             await logAudit(sql, {
-              action: 'deposit_dispute_resolved', success: false, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
+              action: 'deposit_dispute_resolved', success: false, actorType: 'admin', ...ADMIN_AUDIT,
               targetType: 'order', targetId: orderId,
               metadata: { compensation, guestRefundAmount, reason: razorpayErrorMessage(refundErr) }
             });
@@ -1220,7 +1255,7 @@ module.exports = async (req, res) => {
         }
 
         await logAudit(sql, {
-          action: 'deposit_dispute_resolved', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
+          action: 'deposit_dispute_resolved', success: true, actorType: 'admin', ...ADMIN_AUDIT,
           targetType: 'order', targetId: orderId,
           metadata: { compensation, guestRefundAmount, refundId }
         });
@@ -1258,7 +1293,7 @@ module.exports = async (req, res) => {
         if (!upd.length) return res.status(404).json({ error: 'Nothing is waiting for review for this co-host.' });
         await logAudit(sql, {
           action: approve ? 'cohost_payout_profile_approved' : 'cohost_payout_profile_rejected', success: true,
-          actorType: 'admin', actorIdentifier: ADMIN_ACTOR, targetType: 'guest', targetId: gid, metadata: { reason: why || null }
+          actorType: 'admin', ...ADMIN_AUDIT, targetType: 'guest', targetId: gid, metadata: { reason: why || null }
         });
         return res.status(200).json({ success: true });
       } catch (err) {
@@ -1289,7 +1324,7 @@ module.exports = async (req, res) => {
         } else {
           await sql`UPDATE hosts SET pan_status = 'not_submitted', pan_rejection_reason = NULL, pan_number = NULL WHERE id = ${hid} AND pan_status = 'rejected'`;
         }
-        await logAudit(sql, { action: `host_${field}_reopened`, success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR, targetType: 'host', targetId: hid });
+        await logAudit(sql, { action: `host_${field}_reopened`, success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'host', targetId: hid });
         return res.status(200).json({ success: true });
       } catch (err) {
         console.error('resetIdVerification failed:', err);
@@ -1363,7 +1398,7 @@ module.exports = async (req, res) => {
             out.encrypted++;
           }
         } catch (err) { /* co-host table not created yet */ }
-        await logAudit(sql, { action: 'id_documents_purged', success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR, metadata: out });
+        await logAudit(sql, { action: 'id_documents_purged', success: true, actorType: 'admin', ...ADMIN_AUDIT, metadata: out });
         return res.status(200).json({ success: true, ...out });
       } catch (err) {
         console.error('purgeReviewedIdDocuments failed:', err);
@@ -1409,7 +1444,7 @@ module.exports = async (req, res) => {
         }
 
         await logAudit(sql, {
-          action: `host_${field}_${action}d`, success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR,
+          action: `host_${field}_${action}d`, success: true, actorType: 'admin', ...ADMIN_AUDIT,
           targetType: 'host', targetId: hostId, metadata: erased === null ? {} : { documentErased: erased }
         });
 
@@ -1488,6 +1523,8 @@ module.exports = async (req, res) => {
       } catch (err) { console.error('co-host shares unavailable:', err.message); }
       const byOrder = {};
       shares.forEach(x => { (byOrder[x.order_id] = byOrder[x.order_id] || []).push(x); });
+      await logAudit(sql, { action: 'admin_viewed_payouts', success: true, actorType: 'admin', ...ADMIN_AUDIT,
+        metadata: { bookings: orders.length, pendingProfiles: pendingProfiles.length } });
       return res.status(200).json({
         pendingProfiles: pendingProfiles.map(p => ({
           guestId: p.guest_id, name: p.name, email: p.email, pan: readableForAdmin(p.pan_number), gstin: readableForAdmin(p.gstin),
@@ -1548,6 +1585,9 @@ module.exports = async (req, res) => {
         FROM hosts WHERE aadhaar_status = 'rejected' OR pan_status = 'rejected'
         ORDER BY id DESC LIMIT 100
       `;
+      // Viewing PAN and bank numbers is itself recorded.
+      await logAudit(sql, { action: 'admin_viewed_id_verifications', success: true, actorType: 'admin', ...ADMIN_AUDIT,
+        metadata: { pending: verifications.length, rejected: rejected.length } });
       return res.status(200).json({ verifications, rejected });
     } catch (err) {
       console.error('get-pending-listings (verifications) error:', err);

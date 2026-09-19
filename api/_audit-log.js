@@ -9,7 +9,8 @@
 // instead, so it's still visible in Vercel's logs if the audit table has
 // an issue of its own.
 
-async function logAudit(sql, { action, success, actorType, actorIdentifier = null, targetType = null, targetId = null, metadata = {} }) {
+async function logAudit(sql, { action, success, actorType, actorIdentifier = null, targetType = null, targetId = null, metadata = {},
+                                adminId = null, ip = null, userAgent = null }) {
   try {
     await sql`
       INSERT INTO audit_log (action, success, actor_type, actor_identifier, target_type, target_id, metadata)
@@ -18,6 +19,40 @@ async function logAudit(sql, { action, success, actorType, actorIdentifier = nul
   } catch (err) {
     console.error('audit_log write failed:', action, err);
   }
+  // Every admin action is ALSO written to admin_audit_log: append-only at
+  // the database level (see migration_admin_audit_log.sql — updates and
+  // deletes are refused by a trigger), with the admin's id, IP and device.
+  // Separate try: a problem here never blocks the action or the main log.
+  if (actorType === 'admin') {
+    try {
+      const m = metadata || {};
+      await sql`
+        INSERT INTO admin_audit_log (admin_id, admin_email, action, success, target_type, target_id, details, ip, user_agent)
+        VALUES (${adminId == null ? null : Number(adminId) || null}, ${actorIdentifier}, ${action}, ${success !== false},
+                ${targetType}, ${targetId == null ? null : Number(targetId) || null}, ${JSON.stringify(m)},
+                ${ip || m.ip || m.clientIp || null}, ${userAgent ? String(userAgent).slice(0, 300) : null})
+      `;
+    } catch (err) {
+      console.error('admin_audit_log write failed:', action, err.message);
+    }
+  }
+}
+
+// Where a request came from: IP (first address Vercel forwards) and device.
+function requestContext(req) {
+  const h = (req && req.headers) || {};
+  const fwd = String(h['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = fwd || String(h['x-real-ip'] || '') || (req && req.socket && req.socket.remoteAddress) || null;
+  const ua = h['user-agent'] ? String(h['user-agent']).slice(0, 300) : null;
+  return { ip: ip || null, userAgent: ua };
+}
+
+// Everything an admin log entry needs, worked out once per request:
+// { actorIdentifier (email), adminId, ip, userAgent }.
+async function adminContext(sql, req, sessionPayload, hasValidSecret) {
+  const actorIdentifier = await adminActor(sql, sessionPayload, hasValidSecret);
+  const adminId = sessionPayload && sessionPayload.action === 'admin-session' ? Number(sessionPayload.listingId) || null : null;
+  return { actorIdentifier, adminId, ...requestContext(req) };
 }
 
 
@@ -36,4 +71,4 @@ async function adminActor(sql, sessionPayload, hasValidSecret) {
   }
 }
 
-module.exports = { logAudit, adminActor };
+module.exports = { logAudit, adminActor, adminContext, requestContext };

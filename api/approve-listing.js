@@ -23,7 +23,7 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken, secretMatches } = require('./_approval-token');
-const { logAudit, adminActor } = require('./_audit-log');
+const { logAudit, adminContext, requestContext } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -227,7 +227,7 @@ async function sendHostRejectionEmail(listing) {
   });
 }
 
-async function applyDecision(listingId, action, reason = null, actor = 'email approval link') {
+async function applyDecision(listingId, action, reason = null, actor = { actorIdentifier: 'email approval link' }) {
   if (action !== 'approve' && action !== 'reject') {
     throw new Error('Invalid action');
   }
@@ -243,7 +243,7 @@ async function applyDecision(listingId, action, reason = null, actor = 'email ap
   if (listing) {
     await logAudit(sql, {
       action: action === 'approve' ? 'listing_approved' : 'listing_rejected',
-      success: true, actorType: 'admin', actorIdentifier: actor,
+      success: true, actorType: 'admin', ...actor,
       targetType: listing.listing_type === 'experience' ? 'experience' : 'listing', targetId: listing.id,
       metadata: { propertyType: listing.property_type, rejectionReason: action === 'reject' ? reason : undefined }
     });
@@ -341,7 +341,7 @@ async function applyDecision(listingId, action, reason = null, actor = 'email ap
 // listing) — a room-level decision, separate from approving the
 // listing itself, since this only ever runs on an already-approved,
 // already-live listing's individual room.
-async function applyRoomChangeDecision(roomId, action, reason = null, actor = 'email approval link') {
+async function applyRoomChangeDecision(roomId, action, reason = null, actor = { actorIdentifier: 'email approval link' }) {
   const rows = await sql`
     SELECT lr.id, lr.listing_id, lr.pending_changes, l.host_email, l.property_name
     FROM listing_rooms lr JOIN listings l ON l.id = lr.listing_id
@@ -403,7 +403,7 @@ async function applyRoomChangeDecision(roomId, action, reason = null, actor = 'e
 
   await logAudit(sql, {
     action: action === 'approve_room' ? 'room_change_approved' : 'room_change_rejected',
-    success: true, actorType: 'admin', actorIdentifier: actor,
+    success: true, actorType: 'admin', ...actor,
     targetType: 'listing_room', targetId: room.id,
     metadata: { listingId: room.listing_id, isNewRoom: isNewRoomProposal, reason: reason || null }
   });
@@ -438,7 +438,7 @@ module.exports = async (req, res) => {
     try {
       // Approve is still instant — only reject needs a reason first.
       if (payload.action === 'approve') {
-        const listing = await applyDecision(payload.listingId, 'approve');
+        const listing = await applyDecision(payload.listingId, 'approve', null, { actorIdentifier: 'email approval link', ...requestContext(req) });
         if (!listing) {
           return res.status(404).send(htmlPage('Listing not found', 'This listing may have already been removed.', true));
         }
@@ -478,7 +478,7 @@ module.exports = async (req, res) => {
       if (!cleanReason) {
         return res.status(400).json({ error: 'Please enter a reason before rejecting — the host needs to know what to fix.' });
       }
-      const listing = await applyDecision(payload.listingId, 'reject', cleanReason);
+      const listing = await applyDecision(payload.listingId, 'reject', cleanReason, { actorIdentifier: 'email approval link', ...requestContext(req) });
       if (!listing) return res.status(404).json({ error: 'Listing not found' });
       return res.status(200).json({ success: true, listing });
     } catch (err) {
@@ -504,7 +504,7 @@ module.exports = async (req, res) => {
 
     try {
       const { listingId, roomId, action, reason } = req.body;
-      const actor = await adminActor(sql, sessionPayload, hasValidSecret);
+      const actor = await adminContext(sql, req, sessionPayload, hasValidSecret);
       const result = (action === 'approve_room' || action === 'reject_room')
         ? await applyRoomChangeDecision(roomId, action, reason || null, actor)
         : await applyDecision(listingId, action, reason || null, actor);

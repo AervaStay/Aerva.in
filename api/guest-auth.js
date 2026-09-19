@@ -764,7 +764,7 @@ module.exports = async (req, res) => {
       // Always run bcrypt.compare, even for a non-existent account — see
       // DUMMY_HASH above for why. This keeps response timing consistent
       // whether the email exists or not.
-      const passwordMatches = await bcrypt.compare(password, guest ? guest.password_hash : DUMMY_HASH);
+      const passwordMatches = await bcrypt.compare(password, guest && guest.password_hash ? guest.password_hash : DUMMY_HASH);
 
       if (!guest || !passwordMatches) {
         await logAudit(sql, {
