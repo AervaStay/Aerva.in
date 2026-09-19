@@ -68,6 +68,7 @@ const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIER
 const { verifyToken, secretMatches } = require('./_approval-token');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
+const { answeredQuestions, placesWithAerva, reviewsAboutPerson } = require('./_profiles');
 const { logAudit } = require('./_audit-log');
 const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
@@ -740,6 +741,68 @@ module.exports = async (req, res) => {
     // actually happened, and how many guests arrived this month. Counts
     // only completed, paid bookings, so it can never flatter the platform
     // with bookings that were cancelled or never paid for.
+    // ---- A host's public profile ----
+    // GET ?hostProfile=<listingId>
+    // Opened from "Hosted by" on a listing, by anyone browsing. Looked up
+    // through a LIVE listing rather than a host id, so it cannot be used to
+    // walk through every account on Aerva.
+    //
+    // Only the host side of the person, and only what they chose to share:
+    // name, photo, year joined, work, hobbies, their answers, the cities
+    // they host in, and published reviews of their properties. Never an
+    // email, phone, address, where they have stayed as a guest, or what
+    // other hosts wrote about them as a guest — those stay behind a
+    // shared booking, as before.
+    if (req.query.hostProfile !== undefined) {
+      const listingId = Number(req.query.hostProfile);
+      if (!Number.isInteger(listingId) || listingId <= 0) return res.status(400).json({ error: 'Which listing?' });
+      try {
+        // The host's account can be linked either way round (guests.host_id,
+        // or the older hosts.guest_id), and some hosts have no account row
+        // at all yet. None of that should break the page: the profile falls
+        // back to the host record and the listing's own host name, and
+        // simply shows less.
+        const rows = await sql`
+          SELECT l.host_id, l.host_name AS listing_host_name,
+                 h.name AS host_record_name, h.created_at AS host_created_at,
+                 g.id AS account_id, g.name AS account_name, g.profile_photo_url, g.created_at AS account_created_at,
+                 g.profile_work, g.profile_hobbies, g.profile_about
+          FROM listings l
+          LEFT JOIN hosts h ON h.id = l.host_id
+          LEFT JOIN LATERAL (
+            SELECT * FROM guests gg
+            WHERE (l.host_id IS NOT NULL AND gg.host_id = l.host_id)
+               OR (h.guest_id IS NOT NULL AND gg.id = h.guest_id)
+            ORDER BY (gg.host_id = l.host_id) DESC NULLS LAST, gg.id
+            LIMIT 1
+          ) g ON true
+          WHERE l.id = ${listingId} AND l.status = 'approved'
+        `;
+        const a = rows[0];
+        if (!a) return res.status(404).json({ error: 'This host profile is not available.' });
+        const [places, reviews] = await Promise.all([
+          a.host_id ? placesWithAerva(sql, { guestId: a.account_id || null, hostId: a.host_id }) : { hosting: [] },
+          a.host_id ? reviewsAboutPerson(sql, { guestId: a.account_id || null, hostId: a.host_id, limit: 12 }) : { asHost: [] }
+        ]);
+        const joined = a.account_created_at || a.host_created_at;
+        return res.status(200).json({
+          profile: {
+            name: String(a.account_name || a.host_record_name || a.listing_host_name || '').trim() || 'Aerva host',
+            photoUrl: a.profile_photo_url || null,
+            memberSince: joined ? String(new Date(joined).getFullYear()) : null,
+            work: a.profile_work || null,
+            hobbies: a.profile_hobbies || null,
+            answers: answeredQuestions(a.profile_about),
+            hostingIn: places.hosting || [],
+            reviews: reviews.asHost || []
+          }
+        });
+      } catch (err) {
+        console.error('hostProfile failed:', err);
+        return res.status(500).json({ error: 'Could not load this profile right now.' });
+      }
+    }
+
     if (req.query.publicStats === '1') {
       try {
         // Public numbers, so every one of them has to be literally true.
