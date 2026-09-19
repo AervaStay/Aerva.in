@@ -269,6 +269,36 @@ module.exports = async (req, res) => {
 
     const guestId = getOptionalGuestId(req);
 
+    // Hosts and co-hosts cannot book listings they run: a self-booking pays
+    // the booker's own payout, inflates ratings and blocks real guests'
+    // dates. Checked on the server for every stay and experience in the cart.
+    if (guestId) {
+      const ids = [...new Set([]
+        .concat((Array.isArray(stays) ? stays : []).map(x => Number(x && x.listingId)))
+        .concat((Array.isArray(experiences) ? experiences : []).map(x => Number(x && x.listingId))))]
+        .filter(n => Number.isInteger(n) && n > 0);
+      if (ids.length) {
+        let own = [];
+        try {
+          own = await sql`
+            SELECT l.id, l.property_name FROM listings l
+            WHERE l.id = ANY(${ids}) AND (
+              l.host_id = (SELECT host_id FROM guests WHERE id = ${guestId})
+              OR EXISTS (SELECT 1 FROM cohosts c WHERE c.host_id = l.host_id AND c.cohost_guest_id = ${guestId}
+                         AND c.status = 'active' AND l.id = ANY(c.listing_ids))
+            )
+          `;
+        } catch (err) {
+          // Before migration_cohosts.sql the co-host part cannot run; the
+          // host check alone still applies.
+          own = await sql`SELECT l.id, l.property_name FROM listings l WHERE l.id = ANY(${ids}) AND l.host_id = (SELECT host_id FROM guests WHERE id = ${guestId})`;
+        }
+        if (own.length) {
+          return res.status(400).json({ error: `You can't book ${own[0].property_name} — hosts and co-hosts can't book listings they run.` });
+        }
+      }
+    }
+
     // ---- "Includes a Stay" experiences ----
     // An experience whose type is with_stay is sold together with nights
     // at the property that hosts it, paid for in ONE payment. The nights

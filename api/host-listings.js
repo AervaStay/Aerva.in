@@ -390,6 +390,7 @@ async function handleCohostModes(req, res, accountId) {
   const b = (req.method === 'POST' && req.body) || {};
   const isMode = (req.method === 'GET' && (q.cohosts === '1' || q.myCohosting === '1'))
     || (req.method === 'POST' && (b.inviteCohost || b.updateCohost || b.removeCohost || b.acceptCohostInvite || b.declineCohostInvite || b.leaveCohost
+        || b.proposeCommission || b.decideCommission));
         || b.proposeCommission || b.decideCommission || b.savePayoutProfile))
     || (req.method === 'GET' && q.myPayoutProfile === '1');
   if (!isMode) return false;
@@ -444,7 +445,7 @@ async function handleCohostModes(req, res, accountId) {
       });
       return true;
     }
-    // ---- A co-host's payout details: PAN, optional GSTIN, bank account ----
+  // ---- A co-host's payout details: PAN, optional GSTIN, bank account ----
     // Shown back to them masked; only the admin payout view sees them in
     // full. Any change needs an admin's approval again before payouts.
     if (req.method === 'GET' && q.myPayoutProfile === '1') {

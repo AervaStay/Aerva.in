@@ -130,6 +130,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css">
+<script src="aerva-cohost.js"></script>
 </head>
 <body>
 
@@ -336,8 +337,17 @@
       // Real pet species, not just a headcount — see create-order.js's
       // validation and the guest-facing picker in index.html that
       // collects this. Only shown when the guest actually declared any.
-      const petTypesHtml = (Array.isArray(b.pet_types) && b.pet_types.length)
-        ? `<div class="booking-dates" style="opacity:0.75;">🐾 ${b.pet_types.join(', ')}</div>`
+      // Also service / support animals and young litter — never charged,
+      // but the host needs to know they are coming.
+      const escA = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+      const animalBits = [];
+      if(Array.isArray(b.pet_types) && b.pet_types.length) animalBits.push('Pets: ' + b.pet_types.map(escA).join(', '));
+      if(Number(b.young_litter_count) > 0) animalBits.push('Young litter: ' + Number(b.young_litter_count));
+      const serviceAnimals = (Array.isArray(b.service_animal_types) ? b.service_animal_types : [])
+        .map(a => (a && typeof a === 'object') ? a.type : a).filter(Boolean);
+      if(serviceAnimals.length) animalBits.push('Service/support animal' + (serviceAnimals.length === 1 ? '' : 's') + ': ' + serviceAnimals.map(escA).join(', '));
+      const petTypesHtml = animalBits.length
+        ? `<div class="booking-dates" style="opacity:0.75;">🐾 ${animalBits.join(' · ')}</div>`
         : '';
 
       return `
@@ -351,7 +361,10 @@
           <div class="booking-figures">
             <div><span class="figure-label">Guest Paid (Stay)</span><span class="figure-value">${fmt(guestPaidForStay)}</span></div>
             <div><span class="figure-label">Commission (${b.commission_rate}%)</span><span class="figure-value">− ${fmt(b.commission_amount)}</span></div>
-            <div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(b.payout_amount)}</span></div>
+            ${Number(b.cohost_share) > 0
+              ? `<div><span class="figure-label">Co-host share</span><span class="figure-value">− ${fmt(b.cohost_share)}</span></div>
+                 <div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(Number(b.payout_amount) - Number(b.cohost_share))}</span></div>`
+              : `<div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(b.payout_amount)}</span></div>`}
           </div>
           ${depositHtml}
           ${cancellationHtml}
