@@ -4541,6 +4541,21 @@
                 </div>
               </div>`).join('') : '<p class="hp-empty">Nothing yet \u2014 your share is worked out on each booking once your commission is approved.</p>'}
           </div>` : ''}
+        ${list.length ? `
+          <div class="hp-section">
+            <h3 class="hp-title">Payout details</h3>
+            <p class="hp-meta cohost-commission">${esc(payoutStatus)}</p>
+            ${payout ? `<p class="hp-meta">PAN ${esc(payout.panMasked)}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
+            <div class="cohost-payout-form">
+              <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCDE1234F" autocomplete="off"></label>
+              <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCDE1234F1Z5" autocomplete="off"></label>
+              <label>Account holder name<input type="text" data-po="holder" maxlength="120" placeholder="As on your bank account"></label>
+              <label>Account number<input type="text" data-po="account" inputmode="numeric" maxlength="18" autocomplete="off"></label>
+              <label>IFSC<input type="text" data-po="ifsc" maxlength="11" placeholder="HDFC0001234" autocomplete="off"></label>
+            </div>
+            <button type="button" class="hp-more cohost-primary" data-po-save>${payout ? 'Update payout details' : 'Save payout details'}</button>
+            <p class="hp-meta" style="margin-top:8px;">Any change is checked again before your next payout.</p>
+          </div>` : ''}
         ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
 
       const inviteNow = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
@@ -4581,6 +4596,14 @@
         const r = await call('POST', { proposeCommission: { hostId, percent: pct } });
         render(r.ok ? `Proposed ${pct}% \u2014 the host will approve or decline it.` : (r.data.error || 'Could not send the proposal.'));
       }));
+      const poSave = body.querySelector('[data-po-save]');
+      if(poSave) poSave.addEventListener('click', async () => {
+        const v = (k) => (body.querySelector(`[data-po="${k}"]`) || {}).value || '';
+        poSave.disabled = true;
+        const r = await call('POST', { savePayoutProfile: { pan: v('pan'), gstin: v('gstin'), accountHolderName: v('holder'), accountNumber: v('account'), ifsc: v('ifsc') } });
+        poSave.disabled = false;
+        render(r.ok ? 'Payout details saved \u2014 Aerva will check them before your next payout.' : (r.data.error || 'Could not save your payout details.'));
+      });
       const stop = body.querySelector('[data-cohost-stop]');
       if(stop) stop.addEventListener('click', () => { window.AervaCohost.stop(); window.location.href = 'index.html?view=cohost'; });
     }

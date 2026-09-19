@@ -391,6 +391,8 @@ async function handleCohostModes(req, res, accountId) {
   const isMode = (req.method === 'GET' && (q.cohosts === '1' || q.myCohosting === '1'))
     || (req.method === 'POST' && (b.inviteCohost || b.updateCohost || b.removeCohost || b.acceptCohostInvite || b.declineCohostInvite || b.leaveCohost
         || b.proposeCommission || b.decideCommission));
+        || b.proposeCommission || b.decideCommission || b.savePayoutProfile))
+    || (req.method === 'GET' && q.myPayoutProfile === '1');
   if (!isMode) return false;
   if (q.actingHost !== undefined) { cohostDenied(res, 'Co-hosts cannot manage co-hosts.'); return true; }
 
@@ -443,6 +445,52 @@ async function handleCohostModes(req, res, accountId) {
       });
       return true;
     }
+  // ---- A co-host's payout details: PAN, optional GSTIN, bank account ----
+    // Shown back to them masked; only the admin payout view sees them in
+    // full. Any change needs an admin's approval again before payouts.
+    if (req.method === 'GET' && q.myPayoutProfile === '1') {
+      let p = null;
+      try { p = (await sql`SELECT * FROM cohost_payout_profiles WHERE guest_id = ${me.id}`)[0] || null; }
+      catch (err) { console.error('payout profile unavailable:', err.message); }
+      res.status(200).json({ profile: p ? {
+        panMasked: 'XXXXX' + String(p.pan_number).slice(5, 9) + 'X',
+        gstin: p.gstin || null,
+        accountHolderName: p.account_holder_name,
+        accountMasked: '\u2022\u2022\u2022\u2022 ' + String(p.bank_account_number).slice(-4),
+        ifsc: p.bank_ifsc,
+        status: p.status,
+        rejectionReason: p.status === 'rejected' ? (p.rejection_reason || null) : null
+      } : null });
+      return true;
+    }
+    if (b.savePayoutProfile) {
+      const x = b.savePayoutProfile;
+      const pan = String(x.pan || '').trim().toUpperCase();
+      const gstin = String(x.gstin || '').trim().toUpperCase();
+      const holder = String(x.accountHolderName || '').trim().slice(0, 120);
+      const account = String(x.accountNumber || '').replace(/\s+/g, '');
+      const ifsc = String(x.ifsc || '').trim().toUpperCase();
+      if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) { res.status(400).json({ error: 'Please enter a valid PAN, like ABCDE1234F.' }); return true; }
+      if (gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCDE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
+      if (gstin && gstin.slice(2, 12) !== pan) { res.status(400).json({ error: 'Your GSTIN should contain your PAN (characters 3 to 12).' }); return true; }
+      if (holder.length < 2) { res.status(400).json({ error: 'Please enter the account holder\'s name as the bank has it.' }); return true; }
+      if (!/^[0-9]{9,18}$/.test(account)) { res.status(400).json({ error: 'Bank account numbers are 9 to 18 digits.' }); return true; }
+      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) { res.status(400).json({ error: 'Please enter a valid IFSC, like HDFC0001234.' }); return true; }
+      const isCohost = await sql`SELECT 1 FROM cohosts WHERE cohost_guest_id = ${me.id} AND status = 'active' LIMIT 1`;
+      if (!isCohost.length) { res.status(403).json({ error: 'Payout details are for active co-hosts.' }); return true; }
+      await sql`
+        INSERT INTO cohost_payout_profiles (guest_id, pan_number, gstin, account_holder_name, bank_account_number, bank_ifsc, status, rejection_reason, submitted_at, reviewed_at)
+        VALUES (${me.id}, ${pan}, ${gstin || null}, ${holder}, ${account}, ${ifsc}, 'pending_review', NULL, now(), NULL)
+        ON CONFLICT (guest_id) DO UPDATE SET
+          pan_number = EXCLUDED.pan_number, gstin = EXCLUDED.gstin, account_holder_name = EXCLUDED.account_holder_name,
+          bank_account_number = EXCLUDED.bank_account_number, bank_ifsc = EXCLUDED.bank_ifsc,
+          status = 'pending_review', rejection_reason = NULL, submitted_at = now(), reviewed_at = NULL
+      `;
+      await logAudit(sql, { action: 'cohost_payout_profile_submitted', success: true, actorType: 'guest', actorIdentifier: String(me.id), targetType: 'guest', targetId: me.id });
+      res.status(200).json({ success: true, status: 'pending_review' });
+      return true;
+    }
+
     // A co-host proposes their share of the host's payout; the host decides.
     if (b.proposeCommission) {
       const pct = Math.round(Number(b.proposeCommission.percent) * 100) / 100;

@@ -68,6 +68,11 @@
           <a href="index.html?view=list-experience" target="_blank" rel="noopener">List Experience</a>
         </div>
       </span>
+      <!-- Phones: a hover menu cannot open on touch, and would be clipped
+           by the scrolling strip anyway, so its two links sit in the strip
+           directly. Hidden on desktop, where the menu above is used. -->
+      <a href="index.html?view=list-property" class="category-item category-mobile-only" target="_blank" rel="noopener">List Property</a>
+      <a href="index.html?view=list-experience" class="category-item category-mobile-only" target="_blank" rel="noopener">List Experience</a>
     </div>
     <div class="nav-links">
       <div class="currency-picker-wrap">
@@ -788,7 +793,7 @@
       <p style="font-size:12.5px; opacity:0.65;">Set these after your listing is approved — from your <a href="host-dashboard.html" style="color:var(--gold-deep);">Collection</a>, click into this listing's calendar. Managing offers there, in one place, means there's never a question of which discount actually applies for a given date.</p>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Commission</div>
-      <p style="font-size:13px; line-height:1.7; opacity:0.75; border:1px solid var(--line-dark); padding:14px 16px; background:var(--cream);">
+      <p style="font-size:13px; line-height:1.7; opacity:0.75; border:1px solid var(--line-dark); padding:14px 16px; background:#fff;">
         Aerva charges <strong>10% commission</strong> on your base booking and <strong>5%</strong> on paid amenities.
       </p>
 
@@ -1098,7 +1103,7 @@
 
         <div id="inboxTemplatesTab" style="padding:16px 22px; overflow-y:auto; flex:1 1 auto;">
           <p style="font-size:12.5px; opacity:0.6; margin-bottom:14px;">Guests see these as tappable questions inside the chat window — write the ones you get asked most often (check-in time, WiFi, parking, etc.).</p>
-          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code> <code>@guidance</code> <code>@checkininfo</code>. <code>@checkininfo</code> inserts everything at once — check-in/checkout, WiFi, access code, and any custom fields you've added. Set these for each property from its "Manage" link in My Collection.</p>
+          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:#fff; border:1px solid var(--line-dark);">Use these in your template text — they'll be filled in with the real guest and booking details when you send: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code> <code>@guidance</code> <code>@checkininfo</code>. <code>@checkininfo</code> inserts everything at once — check-in/checkout, WiFi, access code, and any custom fields you've added. Set these for each property from its "Manage" link in My Collection.</p>
           <div id="inboxTemplateListContainer"></div>
           <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line-dark);">
             <input type="text" id="inboxTemplateTitleInput" placeholder="Title, e.g. Check-In Info" style="padding:9px 10px; border:1px solid var(--line-dark); font-size:13px; font-family:'Jost', sans-serif;">
@@ -1110,7 +1115,7 @@
               <input type="checkbox" id="inboxTemplateScheduleToggle">
               Send this automatically once a guest confirms a booking
             </label>
-            <div id="inboxTemplateScheduleOptions" style="display:none; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark); flex-direction:column; gap:8px;">
+            <div id="inboxTemplateScheduleOptions" style="display:none; padding:10px 12px; background:#fff; border:1px solid var(--line-dark); flex-direction:column; gap:8px;">
               <p style="font-size:11.5px; opacity:0.6; margin:0;">For which properties? Leave all unchecked to apply to every property you host.</p>
               <div id="inboxTemplateScheduleListings" style="display:flex; flex-direction:column; gap:6px;">
                 <p style="font-size:12px; opacity:0.5; margin:0;">Loading your properties…</p>
@@ -1127,7 +1132,7 @@
              reply. Available as @guidance in template text too. -->
         <div id="inboxDescriptionTab" style="display:none; padding:16px 22px; overflow-y:auto; flex:1 1 auto; flex-direction:column;">
           <p style="font-size:12.5px; opacity:0.6; margin-bottom:14px;">Longer guidance for guests at a specific property — house rules, parking, quiet hours, local recommendations, anything that doesn't fit a short tappable template. Available as <code>@guidance</code> in your templates too.</p>
-          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:var(--cream); border:1px solid var(--line-dark);">You can also use these keywords right here in your description, and they'll fill in with this property's real details: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code>. E.g. "Check-in is @checkin, checkout is @checkout. WiFi: @wifiname / @wifipassword."</p>
+          <p style="font-size:12px; opacity:0.7; margin-bottom:14px; padding:10px 12px; background:#fff; border:1px solid var(--line-dark);">You can also use these keywords right here in your description, and they'll fill in with this property's real details: <code>@guestname</code> <code>@checkin</code> <code>@checkout</code> <code>@wifiname</code> <code>@wifipassword</code> <code>@accesscode</code> <code>@location</code>. E.g. "Check-in is @checkin, checkout is @checkout. WiFi: @wifiname / @wifipassword."</p>
           <div class="field">
             <label>Property</label>
             <select id="inboxGuidanceListingSelect" style="width:100%; padding:9px 10px; border:1px solid var(--line-dark); background:#fff; font-family:'Jost', sans-serif; font-size:13px;">
@@ -1256,37 +1261,39 @@
 
 <!-- ================= FOOTER ================= -->
 <footer>
-  <div class="wrap foot-top">
-    <div class="wordmark">Aerva</div>
-    <div class="starline center" aria-hidden="true">
-      <span class="rule"></span>
-      <svg class="star" viewBox="0 0 20 20" fill="var(--gold)"><path d="M10 0 C10.5 6.5 13.5 9.5 20 10 C13.5 10.5 10.5 13.5 10 20 C9.5 13.5 6.5 10.5 0 10 C6.5 9.5 9.5 6.5 10 0 Z"/></svg>
-      <span class="rule"></span>
-    </div>
-    <div class="tagline">Stay Elegant</div>
-  </div>
+  <!-- Restyled Sept 2026. The placeholder phone number (+91 12345 67890)
+       and the Instagram / Journal links that pointed nowhere ("#") are
+       out until real ones exist; nothing here leads to a dead end. -->
   <div class="wrap foot-grid">
-    <div class="foot-col">
+    <div class="foot-brand">
+      <a href="index.html" class="foot-logo" aria-label="Aerva home">
+        <img src="aerva-logo.png" alt="">
+        <span class="foot-logo-text">
+          <span class="foot-wordmark">Aerva</span>
+          <span class="foot-tagline">Stay Elegant</span>
+        </span>
+      </a>
       <p>A curated collection of personally reviewed homes across Pune and Himachal Pradesh — never a template, never bulk-listed.</p>
     </div>
     <div class="foot-col">
       <h4>Explore</h4>
       <ul>
-        <li><a href="#suites">Suites</a></li>
+        <li><a href="index.html?view=suites">Suites</a></li>
+        <li><a href="index.html?view=experiences">Aerva Experience</a></li>
+      </ul>
+    </div>
+    <div class="foot-col">
+      <h4>Host With Aerva</h4>
+      <ul>
+        <li><a href="index.html?view=list-property" target="_blank" rel="noopener">List Property</a></li>
+        <li><a href="index.html?view=list-experience" target="_blank" rel="noopener">List Experience</a></li>
       </ul>
     </div>
     <div class="foot-col">
       <h4>Reach Us</h4>
       <ul>
         <li><a href="mailto:hello@aerva.in">hello@aerva.in</a></li>
-        <li><a href="tel:+911234567890">+91 12345 67890</a></li>
-      </ul>
-    </div>
-    <div class="foot-col">
-      <h4>Follow</h4>
-      <ul>
-        <li><a href="#">Instagram</a></li>
-        <li><a href="#">Journal</a></li>
+        <li><a href="index.html?view=my-bookings">My Bookings</a></li>
       </ul>
     </div>
   </div>

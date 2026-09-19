@@ -68,6 +68,7 @@ const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIER
 const { verifyToken, secretMatches } = require('./_approval-token');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
+const { answeredQuestions, placesWithAerva } = require('./_profiles');
 const { logAudit } = require('./_audit-log');
 const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
@@ -740,6 +741,142 @@ module.exports = async (req, res) => {
     // actually happened, and how many guests arrived this month. Counts
     // only completed, paid bookings, so it can never flatter the platform
     // with bookings that were cancelled or never paid for.
+    // ---- A host's public profile ----
+    // GET ?hostProfile=<listingId>
+    // Opened from "Hosted by" on a listing, by anyone browsing. Looked up
+    // through a LIVE listing rather than a host id, so it cannot be used to
+    // walk through every account on Aerva.
+    //
+    // Only the host side of the person, and only what they chose to share:
+    // name, photo, year joined, work, hobbies, their answers, the cities
+    // they host in, and published reviews of their properties. Never an
+    // email, phone, address, where they have stayed as a guest, or what
+    // other hosts wrote about them as a guest — those stay behind a
+    // shared booking, as before.
+    if (req.query.hostProfile !== undefined) {
+      const listingId = Number(req.query.hostProfile);
+      if (!Number.isInteger(listingId) || listingId <= 0) return res.status(400).json({ error: 'Which listing?' });
+      try {
+        // The host's account can be linked either way round (guests.host_id,
+        // or the older hosts.guest_id), and some hosts have no account row
+        // at all yet. None of that should break the page: the profile falls
+        // back to the host record and the listing's own host name, and
+        // simply shows less.
+        const rows = await sql`
+          SELECT l.host_id, l.host_name AS listing_host_name,
+                 h.name AS host_record_name, h.created_at AS host_created_at,
+                 g.id AS account_id, g.name AS account_name, g.profile_photo_url, g.created_at AS account_created_at,
+                 g.profile_work, g.profile_hobbies, g.profile_about
+          FROM listings l
+          LEFT JOIN hosts h ON h.id = l.host_id
+          LEFT JOIN LATERAL (
+            SELECT * FROM guests gg
+            WHERE (l.host_id IS NOT NULL AND gg.host_id = l.host_id)
+               OR (h.guest_id IS NOT NULL AND gg.id = h.guest_id)
+            ORDER BY (gg.host_id = l.host_id) DESC NULLS LAST, gg.id
+            LIMIT 1
+          ) g ON true
+          WHERE l.id = ${listingId} AND l.status = 'approved'
+        `;
+        const a = rows[0];
+        if (!a) return res.status(404).json({ error: 'This host profile is not available.' });
+        // Reviews come in pages, the same steps as a listing's own reviews:
+        // 5 first, then 15, 20, and 100 at a time (the page asks for each
+        // batch; capped here at 100 per request). The rating covers ALL of
+        // the host's published stay reviews, not only the page shown.
+        const offset = Math.max(0, Math.min(10000, Math.floor(Number(req.query.offset)) || 0));
+        const askedLimit = Math.floor(Number(req.query.limit));
+        const PAGE = Number.isFinite(askedLimit) && askedLimit >= 1 ? Math.min(100, askedLimit) : 5;
+        const reviewPage = a.host_id ? await sql`
+          SELECT r.published_at, r.comment, r.hygiene, r.communication, r.services, r.value_rating, r.location,
+                 l.property_name
+          FROM listing_reviews r JOIN listings l ON l.id = r.listing_id
+          WHERE l.host_id = ${a.host_id} AND l.status = 'approved'
+            AND COALESCE(l.listing_type, 'stay') = 'stay'
+            AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL AND r.hygiene IS NOT NULL
+          ORDER BY r.published_at DESC, r.id DESC
+          OFFSET ${offset} LIMIT ${PAGE + 1}
+        ` : [];
+        const n = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0; };
+        const pageReviews = reviewPage.slice(0, PAGE).map(r => ({
+          month: r.published_at ? new Date(r.published_at).toISOString().slice(0, 7) : null,
+          property: r.property_name,
+          score: reviewScore({ hygiene: n(r.hygiene), communication: n(r.communication), services: n(r.services), value: n(r.value_rating), location: n(r.location) }, REVIEW_FACTORS),
+          comment: String(r.comment || '')
+        }));
+        const hasMoreReviews = reviewPage.length > PAGE;
+        // Asked for a further page only: send just that.
+        if (req.query.reviewsOnly === '1') {
+          return res.status(200).json({ reviews: pageReviews, hasMoreReviews });
+        }
+        let rating = null;
+        if (a.host_id) {
+          const agg = await sql`
+            SELECT COUNT(*)::int AS n, AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
+                   AVG(r.services) AS services, AVG(r.value_rating) AS value, AVG(r.location) AS location
+            FROM listing_reviews r JOIN listings l ON l.id = r.listing_id
+            WHERE l.host_id = ${a.host_id} AND l.status = 'approved'
+              AND COALESCE(l.listing_type, 'stay') = 'stay'
+              AND r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL AND r.hygiene IS NOT NULL
+          `;
+          const g = agg[0] || {};
+          if (Number(g.n) > 0) {
+            rating = {
+              count: Number(g.n),
+              score: Math.round(reviewScore({ hygiene: n(g.hygiene), communication: n(g.communication), services: n(g.services), value: n(g.value), location: n(g.location) }, REVIEW_FACTORS) * 100) / 100
+            };
+          }
+        }
+        const places = a.host_id ? await placesWithAerva(sql, { guestId: a.account_id || null, hostId: a.host_id }) : { hosting: [] };
+        // Everything this host runs that a guest can book right now:
+        // live stays and experiences, newest first, with just what a small
+        // card needs (photo, name, place, price). Up to 24.
+        const hostListings = a.host_id ? await sql`
+          SELECT id, property_name, city, area, COALESCE(listing_type, 'stay') AS listing_type, property_type,
+                 nightly_rate, experience_price_unit,
+                 COALESCE(
+                   NULLIF(btrim(cover_photo_url), ''),
+                   CASE WHEN jsonb_typeof(exterior_photo_urls->0) = 'string'
+                        THEN exterior_photo_urls->>0 ELSE exterior_photo_urls->0->>'url' END,
+                   CASE WHEN jsonb_typeof(interior_photo_urls->0) = 'string'
+                        THEN interior_photo_urls->>0 ELSE interior_photo_urls->0->>'url' END
+                 ) AS photo_url
+          FROM listings
+          WHERE host_id = ${a.host_id} AND status = 'approved'
+          ORDER BY (COALESCE(listing_type, 'stay') = 'stay') DESC, created_at DESC NULLS LAST, id DESC
+          LIMIT 24
+        ` : [];
+        const joined = a.account_created_at || a.host_created_at;
+        return res.status(200).json({
+          profile: {
+            name: String(a.account_name || a.host_record_name || a.listing_host_name || '').trim() || 'Aerva host',
+            photoUrl: a.profile_photo_url || null,
+            memberSince: joined ? String(new Date(joined).getFullYear()) : null,
+            work: a.profile_work || null,
+            hobbies: a.profile_hobbies || null,
+            answers: answeredQuestions(a.profile_about),
+            hostingIn: places.hosting || [],
+            listings: hostListings.map(l => ({
+              id: l.id,
+              name: l.property_name,
+              place: [l.area, l.city].filter(Boolean).join(', '),
+              type: l.listing_type === 'experience' ? 'experience' : 'stay',
+              propertyType: l.property_type || null,
+              price: Number(l.nightly_rate) || null,
+              priceUnit: l.experience_price_unit || null,
+              photoUrl: l.photo_url || null
+            })),
+            rating,
+            reviews: pageReviews,
+            hasMoreReviews
+          }
+        });
+      } catch (err) {
+        console.error('hostProfile failed:', err);
+        return res.status(500).json({ error: 'Could not load this profile right now.' });
+      }
+    }
+
     if (req.query.publicStats === '1') {
       try {
         // Public numbers, so every one of them has to be literally true.
@@ -781,7 +918,9 @@ module.exports = async (req, res) => {
         });
       } catch (err) {
         console.error('publicStats failed:', err);
-        return res.status(200).json({ staysHosted: 0, checkinsThisMonth: 0, guestsHosted: 0 });
+        // An error, not zeros: the page shows 0 when 0 is the true count,
+        // so a failed count must never pass itself off as one.
+        return res.status(500).json({ error: 'Stats unavailable' });
       }
     }
 
