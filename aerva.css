@@ -20,7 +20,7 @@
        are TEXT on dark chips, and --cream-deep also paints photo
        placeholders and small controls that should stay warm. */
     --page:#ffffff;
-    --band:#f3f0eb;
+    --band:#ffffff; /* white everywhere (Sept 2026); cards keep their border and shadow */
     --card:#ffffff;
   }
   *{margin:0;padding:0;box-sizing:border-box;}
@@ -1954,3 +1954,141 @@ footer .foot-bottom{ margin-top:60px; padding-top:22px; font-size:11px; letter-s
   .live-proof .lp-num{ font-size:22px; }
   .live-proof .lp-label{ font-size:9.5px; letter-spacing:0.12em; }
 }
+
+/* ---------- HOST PUBLIC PROFILE (Sept 2026) ----------
+   "Hosted by" is now a button; its profile opens as one full white
+   window over everything, with its own close button (Esc works too). */
+/* The whole block is the button, but it must not look like one: no grey
+   box, no shifted margins (those clipped "Hosted by" at the top). Avatar,
+   then label / name / one row with the badge and a small outlined
+   "View profile" pill that darkens on hover. */
+.trust-strip .ts-host-link{
+  -webkit-appearance:none; appearance:none; background:transparent; border:0; margin:0; padding:0;
+  font:inherit; color:inherit; text-align:left; cursor:pointer; gap:12px;
+}
+.trust-strip .ts-host-link:focus-visible{ outline:2px solid var(--gold-deep); outline-offset:4px; border-radius:10px; }
+.ts-host-link .ts-host-avatar{ transition:box-shadow .15s ease; }
+.ts-host-link:hover .ts-host-avatar{ box-shadow:0 0 0 2px #fff, 0 0 0 3px var(--gold); }
+.ts-host-link .ts-host-name{ font-family:'Bodoni Moda', serif; font-size:17px; line-height:1.2; }
+.ts-host-link:hover .ts-host-name{ text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:1px; }
+.ts-host-link .ts-host-label{ margin-bottom:2px; }
+.ts-host-link .ts-host-badges{ margin-top:7px; gap:8px; flex-wrap:wrap; }
+.ts-host-view{
+  display:inline-flex; align-items:center; height:24px; padding:0 11px; border-radius:999px;
+  border:1px solid var(--line-dark); font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+  color:var(--gold-deep); white-space:nowrap; transition:border-color .15s ease, background .15s ease;
+}
+.ts-host-view::after{ content:'\203A'; margin-left:6px; font-size:13px; line-height:1; }
+.ts-host-link:hover .ts-host-view{ border-color:var(--gold-deep); background:#faf6f0; }
+
+body.hp-open{ overflow:hidden; }
+.hp-overlay{ position:fixed; inset:0; z-index:400; background:#fff; overflow-y:auto; display:none; -webkit-overflow-scrolling:touch; }
+.hp-overlay.is-open{ display:block; }
+.hp-close{
+  position:fixed; top:calc(16px + env(safe-area-inset-top, 0px)); right:18px; z-index:2;
+  width:40px; height:40px; border-radius:50%; border:none; cursor:pointer;
+  background:rgba(28,26,23,0.85); color:#fff; font-size:22px; line-height:1;
+}
+.hp-body{ max-width:760px; margin:0 auto; padding:84px 28px 72px; color:var(--ink); }
+.hp-head{ display:flex; align-items:center; gap:26px; padding-bottom:30px; border-bottom:1px solid var(--line-dark); }
+.hp-photo{ width:112px; height:112px; border-radius:50%; object-fit:cover; flex:0 0 auto; border:3px solid #fff; box-shadow:0 0 0 2px var(--gold); }
+.hp-initial{ display:flex; align-items:center; justify-content:center; background:var(--gold-deep); color:#fff; font-family:'Bodoni Moda', serif; font-size:42px; }
+.hp-eyebrow{ font-size:10.5px; letter-spacing:0.18em; text-transform:uppercase; color:var(--gold-deep); margin-bottom:6px; }
+.hp-name{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:36px; line-height:1.1; margin:0; }
+.hp-meta{ font-size:13px; opacity:0.6; margin-top:6px; }
+.hp-badge{ margin-top:12px; }
+.hp-section{ padding:30px 0; border-bottom:1px solid var(--line-dark); }
+.hp-section:last-child{ border-bottom:none; }
+.hp-title{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:22px; margin:0 0 16px; }
+.hp-facts{ display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; }
+.hp-fact{ display:flex; flex-direction:column; gap:4px; font-size:15px; line-height:1.6; }
+.hp-fact-label, .hp-q{ font-size:10.5px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.5; }
+.hp-answer + .hp-answer{ margin-top:18px; }
+.hp-answer p, .hp-review p{ margin:6px 0 0; font-size:15px; line-height:1.7; white-space:pre-wrap; }
+.hp-chips{ display:flex; flex-wrap:wrap; gap:8px; }
+.hp-chip{ padding:7px 14px; border-radius:999px; border:1px solid var(--line-dark); font-size:13px; }
+.hp-review{ padding:16px 0; border-top:1px solid rgba(28,26,23,0.07); }
+.hp-review:first-of-type{ border-top:none; padding-top:0; }
+.hp-review-head{ display:flex; justify-content:space-between; gap:14px; flex-wrap:wrap; font-size:13px; }
+.hp-review-prop{ font-weight:500; }
+.hp-review-meta{ opacity:0.6; }
+.hp-empty{ font-size:15px; opacity:0.6; padding:24px 0; }
+@media (max-width:640px){
+  .hp-body{ padding:76px 20px 56px; }
+  .hp-head{ flex-direction:column; align-items:flex-start; gap:18px; }
+  .hp-photo{ width:92px; height:92px; }
+  .hp-name{ font-size:30px; }
+  .hp-facts{ grid-template-columns:1fr; }
+}
+.ts-host-link .ts-host-avatar{ width:46px; height:46px; font-family:'Bodoni Moda', serif; font-size:19px; }
+
+/* ---------- ALL-WHITE SITE (Sept 2026) ----------
+   Every page surface is white. What stays warm is deliberate and small:
+   hover tints, chips and badges, photo placeholders — accents, not
+   backgrounds. Cards, panels and inputs separate from the page by their
+   border and shadow instead of by a tinted ground. */
+.pill-search, .search-bar, .filter-bar{ background:#fff; }
+.sticky-back-bar{ background:rgba(255,255,255,0.94); }
+.mobile-nav-panel{ background:#fff; }
+.nav-account-menu, .category-item-submenu, .currency-menu, .nav-notif-panel{ background:#fff; }
+.inbox-chat-pane, .inbox-templates-row{ background:#fff; }
+
+/* ---------- ALL-WHITE, PART 2 (Sept 2026) ----------
+   The date pickers and the drop-down panels still painted their own
+   cream (#f4ebe3 written straight into each rule), so the booking
+   calendar on a listing stayed beige. All of them are white now; the
+   selected dates, the range between them and hover tints keep their
+   colours (those rules are more specific and still win). */
+.calendar-dropdown, .calendar-dropdown-close,
+.calendar-months, .calendar-month-panel, .calendar-month-header,
+.cal-nav, .calendar-weekdays, .calendar-grid,
+.calendar-day, .calendar-day.empty,
+.guests-dropdown, .more-filters-dropdown, .currency-dropdown,
+.place-suggestions, .bedroom-tab, .rr-action{
+  background-color:#fff;
+}
+
+/* Host profile: overall rating under the name, and "Show more reviews". */
+.hp-rating{ display:flex; align-items:baseline; gap:10px; margin-top:14px; flex-wrap:wrap; }
+.hp-rating-score{ font-family:'Bodoni Moda', serif; font-size:28px; line-height:1; }
+.hp-rating-stars span{ color:var(--line-dark); font-size:14px; letter-spacing:1px; }
+.hp-rating-stars span.on{ color:#c9a227; }
+.hp-rating-count{ font-size:11px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.6; }
+.hp-more{
+  margin-top:18px; background:#fff; border:1px solid var(--line-dark); border-radius:999px;
+  padding:10px 20px; font-family:'Jost', sans-serif; font-size:11.5px; letter-spacing:0.12em;
+  text-transform:uppercase; cursor:pointer; color:var(--ink);
+}
+.hp-more:hover{ border-color:var(--gold-deep); }
+.hp-more:disabled{ opacity:0.6; cursor:progress; }
+
+/* Host profile: the host's live homes and experiences as small cards. */
+.hp-listings{ display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:16px; }
+.hp-listing{
+  display:flex; flex-direction:column; border:1px solid var(--line-dark); border-radius:12px; overflow:hidden;
+  background:#fff; color:inherit; text-decoration:none; transition:box-shadow .2s ease, border-color .2s ease, transform .2s ease;
+}
+.hp-listing:hover{ border-color:var(--gold); box-shadow:0 8px 22px rgba(28,26,23,0.10); transform:translateY(-2px); }
+.hp-listing img, .hp-listing-ph{ width:100%; aspect-ratio:4/3; object-fit:cover; display:block; background:var(--cream-deep); }
+.hp-listing-body{ display:flex; flex-direction:column; gap:3px; padding:12px 14px 14px; }
+.hp-listing-type{ font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold-deep); }
+.hp-listing-name{ font-family:'Bodoni Moda', serif; font-size:17px; line-height:1.25; }
+.hp-listing-place{ font-size:12.5px; opacity:0.6; }
+.hp-listing-price{ font-size:13.5px; margin-top:4px; }
+@media (max-width:640px){ .hp-listings{ grid-template-columns:1fr 1fr; gap:12px; } .hp-listing-name{ font-size:15px; } }
+
+/* Co-hosting page (index.html?view=cohost). */
+.cohost-row{ display:flex; justify-content:space-between; align-items:center; gap:18px; flex-wrap:wrap; padding:18px 0; border-top:1px solid var(--line-dark); }
+.cohost-row:first-child{ border-top:none; padding-top:0; }
+.cohost-host{ font-family:'Bodoni Moda', serif; font-size:21px; margin-bottom:4px; }
+.cohost-actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.cohost-actions .hp-more{ margin-top:0; }
+.hp-more.cohost-primary{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.cohost-on{ font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep); }
+.cohost-notice{ margin:14px 0 0; padding:12px 16px; border:1px solid var(--line-dark); border-left:3px solid var(--gold); border-radius:10px; font-size:14px; }
+body.is-cohosting{ padding-bottom:70px; }
+
+.cohost-commission{ margin-top:4px; color:var(--gold-deep); }
+.cohost-propose{ display:flex; gap:8px; align-items:center; margin-top:10px; }
+.cohost-propose input{ width:90px; padding:9px 12px; border:1px solid var(--line-dark); border-radius:999px; font-family:'Jost', sans-serif; font-size:14px; }
+.cohost-propose .hp-more{ margin-top:0; }

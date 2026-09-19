@@ -4238,6 +4238,355 @@
   // It renders nothing at all when there is nothing to say. An empty
   // frame with "no reviews yet" would actively discourage a booking,
   // which is the opposite of the point.
+  // ---- Host's public profile ----
+  // A full white window over everything, opened from "Hosted by" on any
+  // listing. Shows only what the host chose to share and reviews of their
+  // homes (see ?hostProfile in get-listings.js); contact details never.
+  function formatReviewMonth(ym){
+    const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ''));
+    if(!m) return '';
+    return new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+  }
+
+  function closeHostProfile(){
+    const ov = document.getElementById('hostProfileOverlay');
+    if(ov) ov.classList.remove('is-open');
+    document.body.classList.remove('hp-open');
+    document.removeEventListener('keydown', hostProfileEscape);
+  }
+  function hostProfileEscape(e){ if(e.key === 'Escape') closeHostProfile(); }
+
+  function hostReviewItemHtml(r){
+    const esc = escapeMessageHtml;
+    return `
+      <div class="hp-review">
+        <div class="hp-review-head">
+          <span class="hp-review-prop">${esc(r.property || '')}</span>
+          <span class="hp-review-meta">${r.score ? '★ ' + Number(r.score).toFixed(1) : ''}${r.score && r.month ? ' · ' : ''}${esc(formatReviewMonth(r.month))}</span>
+        </div>
+        ${r.comment ? `<p>${esc(r.comment)}</p>` : ''}
+      </div>`;
+  }
+
+  // "Show more reviews": the same batches as a listing's reviews —
+  // 5 to start, then 15, then 20, then 100 at a time.
+  function wireHostReviewPaging(body, listingId, shown){
+    const btn = body.querySelector('.hp-more');
+    const list = body.querySelector('.hp-review-list');
+    if(!btn || !list) return;
+    let offset = shown;
+    let step = 1;
+    btn.addEventListener('click', async () => {
+      const limit = REVIEW_PAGE_STEPS[step] || REVIEW_PAGE_REST;
+      btn.disabled = true;
+      btn.textContent = 'Loading\u2026';
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId)
+          + '&reviewsOnly=1&offset=' + offset + '&limit=' + limit);
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || 'Failed');
+        const batch = Array.isArray(data.reviews) ? data.reviews : [];
+        list.insertAdjacentHTML('beforeend', batch.map(hostReviewItemHtml).join(''));
+        offset += batch.length;
+        step++;
+        if(data.hasMoreReviews && batch.length){
+          btn.disabled = false;
+          btn.textContent = 'Show more reviews';
+        } else {
+          btn.remove();
+        }
+      }catch(err){
+        btn.disabled = false;
+        btn.textContent = 'Could not load more \u2014 try again';
+      }
+    });
+  }
+
+  // Small listing cards (host profile, and your own profile). Clicking one
+  // opens that listing — see the [data-hp-open] listener.
+  function listingMiniCardsHtml(list){
+    const esc = escapeMessageHtml;
+    return (list || []).map(l => {
+      const isExp = l.type === 'experience';
+      const href = isExp ? `index.html?experience=${Number(l.id)}` : `index.html?listing=${Number(l.id)}`;
+      const unit = isExp ? (l.priceUnit ? ` / ${esc(String(l.priceUnit).replace(/^per_?/, ''))}` : '') : '/night';
+      const price = l.price ? `${isExp ? '' : 'From '}${fmtGuest(Number(l.price))}${unit}` : '';
+      return `
+        <a class="hp-listing" href="${href}" data-hp-open="${isExp ? 'experience' : 'stay'}" data-hp-id="${Number(l.id)}">
+          ${l.photoUrl ? `<img src="${esc(l.photoUrl)}" alt="" loading="lazy">` : '<span class="hp-listing-ph"></span>'}
+          <span class="hp-listing-body">
+            <span class="hp-listing-type">${isExp ? 'Experience' : esc(l.propertyType || 'Stay')}</span>
+            <span class="hp-listing-name">${esc(l.name)}</span>
+            ${l.place ? `<span class="hp-listing-place">${esc(l.place)}</span>` : ''}
+            ${price ? `<span class="hp-listing-price">${price}</span>` : ''}
+          </span>
+        </a>`;
+    }).join('');
+  }
+
+  function renderHostProfile(p, badgeHtml){
+    const esc = escapeMessageHtml;
+    const initial = esc((p.name || '?').trim().charAt(0).toUpperCase());
+    const photo = p.photoUrl
+      ? `<img class="hp-photo" src="${esc(p.photoUrl)}" alt="">`
+      : `<span class="hp-photo hp-initial">${initial}</span>`;
+    const facts = [
+      p.work ? `<div class="hp-fact"><span class="hp-fact-label">Work</span><span>${esc(p.work)}</span></div>` : '',
+      p.hobbies ? `<div class="hp-fact"><span class="hp-fact-label">Hobbies</span><span>${esc(p.hobbies)}</span></div>` : ''
+    ].join('');
+    const answers = (p.answers || []).map(a =>
+      `<div class="hp-answer"><div class="hp-q">${esc(a.label)}</div><p>${esc(a.answer)}</p></div>`).join('');
+    const cities = (p.hostingIn || []).map(c => `<span class="hp-chip">${esc(c.city)}</span>`).join('');
+    // What this host runs: small cards that open the listing itself.
+    const listingCards = listingMiniCardsHtml(p.listings);
+    const reviews = (p.reviews || []).map(hostReviewItemHtml).join('');
+    // Overall rating across ALL of this host's published stay reviews.
+    const rating = p.rating && p.rating.count > 0 ? p.rating : null;
+    const ratingHtml = rating ? `
+      <div class="hp-rating">
+        <span class="hp-rating-score">${Number(rating.score).toFixed(2)}</span>
+        <span class="hp-rating-stars" aria-hidden="true">${[1,2,3,4,5].map(i => `<span class="${i <= Math.round(rating.score) ? 'on' : ''}">★</span>`).join('')}</span>
+        <span class="hp-rating-count">${rating.count} review${rating.count === 1 ? '' : 's'}</span>
+      </div>` : '';
+    const nothingMore = !facts && !answers && !cities && !reviews;
+    return `
+      <div class="hp-head">
+        ${photo}
+        <div>
+          <div class="hp-eyebrow">Your host</div>
+          <h2 class="hp-name">${esc(p.name)}</h2>
+          <div class="hp-meta">Host${p.memberSince ? ' · on Aerva since ' + esc(p.memberSince) : ''}</div>
+          ${badgeHtml ? `<div class="hp-badge">${badgeHtml}</div>` : ''}
+          ${ratingHtml}
+        </div>
+      </div>
+      ${facts ? `<div class="hp-section"><div class="hp-facts">${facts}</div></div>` : ''}
+      ${answers ? `<div class="hp-section"><h3 class="hp-title">Get to know ${esc((p.name || '').split(' ')[0] || 'them')}</h3>${answers}</div>` : ''}
+      ${listingCards ? `<div class="hp-section"><h3 class="hp-title">${esc((p.name || '').split(' ')[0] || 'Their')}\u2019s homes & experiences</h3><div class="hp-listings">${listingCards}</div></div>` : ''}
+      ${cities ? `<div class="hp-section"><h3 class="hp-title">Hosting in</h3><div class="hp-chips">${cities}</div></div>` : ''}
+      ${reviews ? `<div class="hp-section"><h3 class="hp-title">What guests say about their homes</h3>
+        <div class="hp-review-list">${reviews}</div>
+        ${p.hasMoreReviews ? '<button type="button" class="hp-more">Show more reviews</button>' : ''}
+      </div>` : ''}
+      ${p.partial
+        ? '<p class="hp-empty">The rest of this profile could not be loaded just now. Please try again in a moment.</p>'
+        : (nothingMore ? '<p class="hp-empty">This host hasn\u2019t added more to their profile yet.</p>' : '')}`;
+  }
+
+  async function openHostProfile(listingId, badgeHtml, knownName){
+    let ov = document.getElementById('hostProfileOverlay');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'hostProfileOverlay';
+      ov.className = 'hp-overlay';
+      ov.setAttribute('role', 'dialog');
+      ov.setAttribute('aria-modal', 'true');
+      ov.setAttribute('aria-label', 'Host profile');
+      document.body.appendChild(ov);
+    }
+    ov.innerHTML = '<button type="button" class="hp-close" aria-label="Close">\u00d7</button><div class="hp-body"><p class="hp-empty">Loading profile\u2026</p></div>';
+    ov.querySelector('.hp-close').addEventListener('click', closeHostProfile);
+    ov.classList.add('is-open');
+    ov.scrollTop = 0;
+    document.body.classList.add('hp-open');
+    document.addEventListener('keydown', hostProfileEscape);
+    const body = ov.querySelector('.hp-body');
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId) + '&limit=' + REVIEW_PAGE_STEPS[0]);
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || !data.profile) throw new Error(data.error || 'Could not load this profile right now.');
+      body.innerHTML = renderHostProfile(data.profile, badgeHtml);
+      wireHostReviewPaging(body, listingId, (data.profile.reviews || []).length);
+    }catch(err){
+      // Never a dead end: if the full profile cannot be fetched (the
+      // server is mid-deploy, a network blip, an older backend), show the
+      // host as the listing already knows them — name and badge — rather
+      // than an error message.
+      console.error('Host profile could not be loaded:', err);
+      body.innerHTML = renderHostProfile({ name: knownName || 'Your host', answers: [], hostingIn: [], reviews: [], partial: true }, badgeHtml);
+    }
+  }
+
+  // A listing card inside a host profile: open it right here if the page
+  // already has it loaded, otherwise follow its link (?listing= / ?experience=).
+  document.addEventListener('click', function(e){
+    const card = e.target.closest && e.target.closest('[data-hp-open]');
+    if(!card) return;
+    const id = Number(card.getAttribute('data-hp-id'));
+    const isExp = card.getAttribute('data-hp-open') === 'experience';
+    const loaded = isExp ? experiencesById[id] : listingsById[id];
+    if(!loaded) return; // the href takes over
+    e.preventDefault();
+    closeHostProfile();
+    if(isExp) openExperienceDetail(id); else openListingDetail(id);
+  });
+
+  // One listener for every "Hosted by" button, wherever the listing is shown.
+  document.addEventListener('click', function(e){
+    const btn = e.target.closest && e.target.closest('[data-host-profile]');
+    if(!btn) return;
+    e.preventDefault();
+    const badges = btn.querySelector('.ts-host-badges');
+    let badgeHtml = '';
+    if(badges){
+      const copy = badges.cloneNode(true);
+      copy.querySelectorAll('.ts-host-view').forEach(v => v.remove());
+      badgeHtml = copy.innerHTML;
+    }
+    const nameEl = btn.querySelector('.ts-host-name');
+    openHostProfile(btn.getAttribute('data-host-profile'), badgeHtml, nameEl ? nameEl.textContent.trim() : '');
+  });
+
+  // ---- Co-hosting (index.html?view=cohost) ----
+  // One full white window, like a host profile: accept or decline an
+  // invitation (the link in the invitation email carries &invite=…), and
+  // see the hosts you co-host for, with a button to start working on each
+  // one's listings. Choosing a host remembers it on this device
+  // (aerva-cohost.js), and every host page then works for that host.
+  const PENDING_INVITE_KEY = 'aerva_pending_cohost_invite';
+  function pendingInvite(){ try{ return localStorage.getItem(PENDING_INVITE_KEY); }catch(e){ return null; } }
+  function setPendingInvite(v){ try{ v ? localStorage.setItem(PENDING_INVITE_KEY, v) : localStorage.removeItem(PENDING_INVITE_KEY); }catch(e){} }
+
+  async function openCohostCenter(){
+    const token = guestAuthToken();
+    const invite = new URLSearchParams(window.location.search).get('invite') || pendingInvite();
+    if(!token){
+      // Sign in (or sign up) first, then come back here.
+      if(invite) setPendingInvite(invite);
+      window.location.href = 'guest-login.html';
+      return;
+    }
+    let ov = document.getElementById('cohostCenter');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'cohostCenter';
+      ov.className = 'hp-overlay';
+      ov.setAttribute('role', 'dialog');
+      ov.setAttribute('aria-modal', 'true');
+      ov.setAttribute('aria-label', 'Co-hosting');
+      document.body.appendChild(ov);
+    }
+    ov.innerHTML = '<button type="button" class="hp-close" aria-label="Close">\u00d7</button><div class="hp-body"><p class="hp-empty">Loading\u2026</p></div>';
+    ov.querySelector('.hp-close').addEventListener('click', () => { ov.classList.remove('is-open'); document.body.classList.remove('hp-open'); });
+    ov.classList.add('is-open');
+    document.body.classList.add('hp-open');
+    const body = ov.querySelector('.hp-body');
+    const esc = escapeMessageHtml;
+    const call = (method, payload, query) => fetch(SUITES_API_BASE + '/api/host-listings' + (query || ''), {
+      method, headers: Object.assign({ 'Authorization': 'Bearer ' + token }, payload ? { 'Content-Type': 'application/json' } : {}),
+      body: payload ? JSON.stringify(payload) : undefined
+    }).then(async r => ({ ok: r.ok, data: await r.json().catch(() => ({})) }));
+
+    async function render(notice){
+      const mine = await call('GET', null, '?myCohosting=1');
+      const list = (mine.ok && mine.data.cohosting) || [];
+      const labels = (mine.data && mine.data.permissionLabels) || [];
+      const current = window.AervaCohost && window.AervaCohost.get();
+      const pending = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      const always = (mine.data && mine.data.alwaysLabel) || '';
+      const accessText = (h) => h.access === 'full'
+        ? 'Full access (everything except renaming, account settings, payouts and bank details)'
+        : ['Limited: ' + always].concat(labels.filter(l => h.permissions.includes(l.key)).map(l => l.label)).join(' \u00b7 ');
+      // Their share of the host's payout: what is approved, what is waiting.
+      const commissionText = (h) => {
+        const bits = [];
+        if(h.commissionPercent != null) bits.push(`You earn ${h.commissionPercent}% of the host\u2019s payout`);
+        if(h.proposalStatus === 'proposed') bits.push(`${h.proposedPercent}% proposed \u2014 waiting for the host`);
+        if(h.proposalStatus === 'declined') bits.push(`Your ${h.proposedPercent}% proposal was declined`);
+        return bits.length ? bits.join(' \u00b7 ') : 'No commission agreed yet';
+      };
+      const earnings = (mine.data && mine.data.earnings) || { total: 0, rows: [] };
+      body.innerHTML = `
+        <div class="hp-eyebrow">Co-hosting</div>
+        <h2 class="hp-name">Hosts you help</h2>
+        ${notice ? `<p class="cohost-notice">${esc(notice)}</p>` : ''}
+        ${pending ? `
+          <div class="hp-section">
+            <h3 class="hp-title">You have an invitation</h3>
+            <p class="hp-meta">A host has invited you to co-host their listings on Aerva.</p>
+            <div class="cohost-actions">
+              <button type="button" class="hp-more cohost-primary" data-cohost-accept>Accept invitation</button>
+              <button type="button" class="hp-more" data-cohost-decline>Decline</button>
+            </div>
+          </div>` : ''}
+        <div class="hp-section">
+          ${list.length ? list.map(h => `
+            <div class="cohost-row">
+              <div>
+                <div class="cohost-host">${esc(h.hostName)}</div>
+                <div class="hp-meta">${esc(accessText(h))} \u00b7 ${h.listingCount} listing${h.listingCount === 1 ? '' : 's'}</div>
+                <div class="hp-meta cohost-commission">${esc(commissionText(h))}</div>
+                <div class="cohost-propose">
+                  <input type="number" min="0.01" max="100" step="0.01" placeholder="%" aria-label="Your share of the host's payout, in percent" data-cohost-pct="${Number(h.hostId)}">
+                  <button type="button" class="hp-more" data-cohost-propose="${Number(h.hostId)}">Propose my share</button>
+                </div>
+              </div>
+              <div class="cohost-actions">
+                ${current && Number(current.hostId) === Number(h.hostId)
+                  ? '<span class="cohost-on">Working now</span>'
+                  : `<button type="button" class="hp-more cohost-primary" data-cohost-open="${Number(h.hostId)}">Open their listings</button>`}
+                <button type="button" class="hp-more" data-cohost-leave="${Number(h.hostId)}">Leave</button>
+              </div>
+            </div>`).join('') : `<p class="hp-empty">You don\u2019t co-host for anyone yet. When a host invites you, the invitation arrives by email.</p>`}
+        </div>
+        ${list.length ? `
+          <div class="hp-section">
+            <h3 class="hp-title">What you have earned</h3>
+            <div class="hp-rating"><span class="hp-rating-score">${fmtGuest(Number(earnings.total) || 0)}</span><span class="hp-rating-count">from paid bookings</span></div>
+            ${(earnings.rows || []).length ? (earnings.rows || []).map(r => `
+              <div class="hp-review">
+                <div class="hp-review-head">
+                  <span class="hp-review-prop">${esc(r.listingName)} \u00b7 ${esc(r.hostName)}</span>
+                  <span class="hp-review-meta">${r.status === 'paid' ? '' : esc(r.status) + ' \u00b7 '}${r.percent}% \u00b7 ${fmtGuest(Number(r.amount) || 0)}</span>
+                </div>
+              </div>`).join('') : '<p class="hp-empty">Nothing yet \u2014 your share is worked out on each booking once your commission is approved.</p>'}
+          </div>` : ''}
+        ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
+
+      const inviteNow = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      const accept = body.querySelector('[data-cohost-accept]');
+      if(accept) accept.addEventListener('click', async () => {
+        accept.disabled = true;
+        const r = await call('POST', { acceptCohostInvite: { token: inviteNow } });
+        setPendingInvite(null);
+        history.replaceState(null, '', 'index.html?view=cohost');
+        render(r.ok ? `You are now a co-host for ${r.data.hostName}.` : (r.data.error || 'Could not accept the invitation.'));
+      });
+      const decline = body.querySelector('[data-cohost-decline]');
+      if(decline) decline.addEventListener('click', async () => {
+        const r = await call('POST', { declineCohostInvite: { token: inviteNow } });
+        setPendingInvite(null);
+        history.replaceState(null, '', 'index.html?view=cohost');
+        render(r.ok ? 'Invitation declined.' : (r.data.error || 'Could not decline the invitation.'));
+      });
+      body.querySelectorAll('[data-cohost-open]').forEach(b => b.addEventListener('click', () => {
+        const h = list.find(x => Number(x.hostId) === Number(b.getAttribute('data-cohost-open')));
+        if(!h) return;
+        window.AervaCohost.start({ hostId: h.hostId, hostName: h.hostName, access: h.access, permissions: h.permissions });
+        window.location.href = h.access === 'full' || h.permissions.includes('bookings') ? 'host-dashboard.html'
+          : (h.permissions.includes('calendar') ? 'host-status.html'
+          : (h.permissions.includes('analytics') ? 'host-earnings.html' : 'index.html?view=messages'));
+      }));
+      body.querySelectorAll('[data-cohost-leave]').forEach(b => b.addEventListener('click', async () => {
+        if(!confirm('Stop co-hosting for this host? They would need to invite you again.')) return;
+        const hostId = Number(b.getAttribute('data-cohost-leave'));
+        await call('POST', { leaveCohost: { hostId } });
+        const cur = window.AervaCohost.get();
+        if(cur && Number(cur.hostId) === hostId) window.AervaCohost.stop();
+        render('You have left.');
+      }));
+      body.querySelectorAll('[data-cohost-propose]').forEach(b => b.addEventListener('click', async () => {
+        const hostId = Number(b.getAttribute('data-cohost-propose'));
+        const pct = Number(body.querySelector(`[data-cohost-pct="${hostId}"]`).value);
+        const r = await call('POST', { proposeCommission: { hostId, percent: pct } });
+        render(r.ok ? `Proposed ${pct}% \u2014 the host will approve or decline it.` : (r.data.error || 'Could not send the proposal.'));
+      }));
+      const stop = body.querySelector('[data-cohost-stop]');
+      if(stop) stop.addEventListener('click', () => { window.AervaCohost.stop(); window.location.href = 'index.html?view=cohost'; });
+    }
+    render();
+  }
+
   function listingStandingHtml(listing, opts){
     const n = Number(listing.review_count) || 0;
     const rated = n > 0 && listing.rating != null;
@@ -4296,14 +4645,20 @@
     // The initial stands in for a photo. A named person with a mark
     // reads as accountable in a way "Hosted by X" as plain text does not.
     const initial = hostName ? escapeMessageHtml(hostName.trim().charAt(0).toUpperCase()) : '';
-    const hostBlock = (host || hostName) ? `
-      <div class="ts-host">
+    // Tapping the host opens their public profile (openHostProfile below).
+    // It is looked up through this listing, so it only needs its id.
+    const profileId = Number(listing.id) || 0;
+    const hostInner = `
         ${initial ? `<span class="ts-host-avatar">${initial}</span>` : ''}
         <span class="ts-host-text">
           ${hostName ? `<span class="ts-host-label">Hosted by</span><span class="ts-host-name">${escapeMessageHtml(hostName)}</span>` : ''}
-          ${host ? `<span class="ts-host-badges">${hostTierBadgeHtml(host)}</span>` : ''}
-        </span>
-      </div>` : '';
+          ${(host || profileId) ? `<span class="ts-host-badges">${host ? hostTierBadgeHtml(host) : ''}${profileId ? '<span class="ts-host-view">View profile</span>' : ''}</span>` : ''}
+        </span>`;
+    const hostBlock = (host || hostName)
+      ? (profileId
+          ? `<button type="button" class="ts-host ts-host-link" data-host-profile="${profileId}" aria-label="View host profile">${hostInner}</button>`
+          : `<div class="ts-host">${hostInner}</div>`)
+      : '';
 
     const middle = placeBlock + badgeBlock;
     return `<div class="trust-strip">
@@ -5503,10 +5858,15 @@
       const d = await res.json();
       const el = document.getElementById('liveProof');
       if(!el) return;
-      const stats = [];
-      if(d.staysHosted > 0) stats.push([d.staysHosted, 'stays hosted']);
-      if(d.checkinsThisMonth > 0) stats.push([d.checkinsThisMonth, 'guests checked in this month']);
-      if(!stats.length) return; // nothing honest to show yet
+      // Always shown once the server has answered, 0 included: these are
+      // the real counts (real bookings only — see publicStats in
+      // get-listings.js). If the count could not be fetched, nothing is
+      // shown rather than a 0 that was never counted.
+      if(typeof d.staysHosted !== 'number' || typeof d.checkinsThisMonth !== 'number') return;
+      const stats = [
+        [d.staysHosted, d.staysHosted === 1 ? 'stay hosted' : 'stays hosted'],
+        [d.checkinsThisMonth, d.checkinsThisMonth === 1 ? 'guest checked in this month' : 'guests checked in this month']
+      ];
       // Number first, set large in the headline's gold; label small
       // beneath. Numbers go through Number(), labels are fixed text.
       el.innerHTML = stats.map(([n, label]) =>
@@ -7318,7 +7678,7 @@
           <span>✓ ${maxPetsLine}</span>
           <span>✓ ${feeLine}</span>
         </div>
-        <p style="font-size:11.5px; opacity:0.6; margin-top:8px; line-height:1.5;">Service and emotional-support animals aren't counted toward the pet limit or fee above. Young pets (under 1 year) traveling with an adult pet aren't counted either.</p>`;
+        <p style="font-size:11.5px; opacity:0.6; margin-top:8px; line-height:1.5;">Service and emotional-support animals aren't counted toward the pet limit. The first one is free; each additional one is charged the pet fee. Young pets (under 1 year) traveling with an adult pet aren't counted either.</p>`;
     } else if(listing.pet_friendly === false){
       petPolicyHtml = `
         <div class="listing-modal-section-title">Pet Policy</div>
@@ -8276,6 +8636,10 @@
     const discount = calculateDiscount(listing, nights, arrival, beforeDiscount);
     const discountAmount = discount.amount;
     const petFeeAmount = counts.pets > 0 && listing.pet_fee ? Number(listing.pet_fee) * counts.pets : 0;
+    // One service/support animal per booking is free; each one after the
+    // first is charged at the pet fee (create-order.js charges the same).
+    const chargeableServiceAnimals = Math.max(0, (counts.serviceAnimals || 0) - 1);
+    const serviceAnimalFee = chargeableServiceAnimals > 0 && listing.pet_fee ? Number(listing.pet_fee) * chargeableServiceAnimals : 0;
 
     // Amenities are priced client-side here only for display — same as
     // updatePricing() — the real, trusted total is recalculated
@@ -8292,9 +8656,9 @@
       }
     });
 
-    const staySubtotal = beforeDiscount - discountAmount + petFeeAmount + amenityTotal;
+    const staySubtotal = beforeDiscount - discountAmount + petFeeAmount + serviceAnimalFee + amenityTotal;
     const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
-    const stayTax = stayGstFor(beforeDiscount - discountAmount, nights, petFeeAmount + amenityTotal);
+    const stayTax = stayGstFor(beforeDiscount - discountAmount, nights, petFeeAmount + serviceAnimalFee + amenityTotal);
     const total = staySubtotal + guestServiceFee;
 
     const rows = [];
@@ -8302,9 +8666,10 @@
     if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmtGuest(extraTotal)}</span></div>`);
     if(discountAmount > 0) rows.push(`<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discountAmount)}</span></div>`);
     if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee (${counts.pets} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
-    // Free by policy — shown so the guest sees they're accounted for
-    // without implying either one adds to the bill.
-    if(counts.serviceAnimals > 0) rows.push(`<div class="sum-row"><span>${counts.serviceAnimals} service/support animal${counts.serviceAnimals === 1 ? '' : 's'}</span><span>No charge</span></div>`);
+    // The first service/support animal is free; any more are charged at
+    // the pet fee, shown as their own line so the guest sees why.
+    if(counts.serviceAnimals > 0) rows.push(`<div class="sum-row"><span>1 service/support animal</span><span>No charge</span></div>`);
+    if(serviceAnimalFee > 0) rows.push(`<div class="sum-row"><span>Additional service/support animal${chargeableServiceAnimals === 1 ? '' : 's'} (${chargeableServiceAnimals} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(serviceAnimalFee)}</span></div>`);
     if(counts.youngLitter > 0) rows.push(`<div class="sum-row"><span>${counts.youngLitter} young litter pet${counts.youngLitter === 1 ? '' : 's'}</span><span>No charge</span></div>`);
     if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmtGuest(amenityTotal)}</span></div>`);
     // Experience add-on is priced and charged as its own separate line
@@ -9577,10 +9942,7 @@
   function showBookingPage(b){
     const esc = escapeMessageHtml;
     document.body.classList.remove('showing-hero');
-    ['suites', 'listingFullView', 'experienceFullView', 'my-bookings', 'todayView', 'profileView', 'add-listing', 'list-experience'].forEach(id => {
-      const el = document.getElementById(id);
-      if(el) el.style.display = 'none';
-    });
+    hideMainViews();
     document.getElementById('bookingView').style.display = 'block';
     document.title = (b.suite_name || 'Your booking') + ' — Aerva';
     window.scrollTo({ top: 0 });
@@ -9646,6 +10008,19 @@
   }
 
   // ---- Profile ----
+  // Every full-page view on index.html. Switching views hides ALL of them
+  // first, from this one list — each view used to keep its own list, and
+  // Today's had left out the profile, so Today "did nothing" when clicked
+  // from the profile (it opened underneath it, out of sight).
+  const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings'];
+  function hideMainViews(){
+    MAIN_VIEW_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.style.display = 'none';
+    });
+  }
+
   // Who you are on Aerva: your photo, a few lines about you, where you
   // have been, and what others have said. Everything here is your own;
   // see api/_profiles.js for who else may read it.
@@ -9653,10 +10028,7 @@
 
   async function showProfileView(){
     document.body.classList.remove('showing-hero');
-    ['suites', 'listingFullView', 'experienceFullView', 'my-bookings', 'add-listing', 'list-experience', 'todayView'].forEach(id => {
-      const el = document.getElementById(id);
-      if(el) el.style.display = 'none';
-    });
+    hideMainViews();
     document.getElementById('profileView').style.display = 'block';
     document.title = 'Profile — Aerva';
     BROWSE_TABS.concat(['catToday']).forEach(id => {
@@ -9701,10 +10073,20 @@
         </div>`).join('');
 
     // Where they have been, and where they host.
+    // Your homes and experiences, as the same cards guests see on your
+    // public profile — then the places you have travelled to — then, last,
+    // what others have said.
+    const cards = listingMiniCardsHtml(p.listings);
+    document.getElementById('profileListingsSection').style.display = cards ? 'block' : 'none';
+    document.getElementById('profileListings').innerHTML = cards ? `<div class="hp-listings">${cards}</div>` : '';
     const places = p.places || { stayed: [], hosting: [] };
-    const placeBits = []
-      .concat((places.hosting || []).map(x => `<span class="profile-place">Hosts in ${esc(x.city)}</span>`))
-      .concat((places.stayed || []).map(x => `<span class="profile-place">${esc(x.city)}${x.visits > 1 ? ` · ${x.visits} stays` : ''}</span>`));
+    // Stays and experiences you have booked here, per city.
+    const placeBits = (places.stayed || []).map(x => {
+      const parts = [];
+      if(x.visits > 0) parts.push(`${x.visits} stay${x.visits === 1 ? '' : 's'}`);
+      if(x.experiences > 0) parts.push(`${x.experiences} experience${x.experiences === 1 ? '' : 's'}`);
+      return `<span class="profile-place">${esc(x.city)}${parts.length ? ' · ' + parts.join(' · ') : ''}</span>`;
+    });
     document.getElementById('profilePlacesSection').style.display = placeBits.length ? 'block' : 'none';
     document.getElementById('profilePlaces').innerHTML = `<div class="profile-places">${placeBits.join('')}</div>`;
 
@@ -9755,6 +10137,17 @@
   // Who is arriving, who is leaving, who is staying on, at this host's own
   // properties. Everything comes from host-listings.js, which works it out
   // on each listing's own clock.
+  // "Pets: Dog · Young litter: 2 · Service animal: Dog" — so a host sees
+  // who is coming with four legs on the day, not only on the earnings page.
+  function todayAnimalsLine(r){
+    const bits = [];
+    if(Array.isArray(r.petTypes) && r.petTypes.length) bits.push(`Pets: ${r.petTypes.join(', ')}`);
+    if(Number(r.youngLitter) > 0) bits.push(`Young litter: ${Number(r.youngLitter)}`);
+    const sa = Array.isArray(r.serviceAnimals) ? r.serviceAnimals : [];
+    if(sa.length) bits.push(`Service/support animal${sa.length === 1 ? '' : 's'}: ${sa.join(', ')}`);
+    return bits.length ? '🐾 ' + bits.join(' · ') : '';
+  }
+
   function renderTodayView(today){
     const box = document.getElementById('todayList');
     if(!box) return;
@@ -9776,6 +10169,7 @@
         <span class="today-main">
           <span class="today-title">${esc(title)}</span>
           <span class="today-sub">${esc(r.listingName || '')}</span>
+          ${todayAnimalsLine(r) ? `<span class="today-sub today-animals">${esc(todayAnimalsLine(r))}</span>` : ''}
         </span>
         <span class="today-thumbs">
           ${r.guestPhotoUrl
@@ -9917,10 +10311,7 @@
 
   async function showTodayView(){
     document.body.classList.remove('showing-hero');
-    ['suites', 'listingFullView', 'experienceFullView', 'my-bookings', 'add-listing', 'list-experience'].forEach(id => {
-      const el = document.getElementById(id);
-      if(el) el.style.display = 'none';
-    });
+    hideMainViews();
     document.getElementById('todayView').style.display = 'block';
     document.title = 'Today — Aerva';
     BROWSE_TABS.forEach(id => {
@@ -10594,25 +10985,35 @@
       console.error('Could not load admin background images, falling back to listing photos:', err);
     }
 
-    if(photos.length === 0){
-      const coverPhotos = approvedListings.map(l => l.cover_photo_url).filter(Boolean);
-      if(coverPhotos.length >= 3){
-        photos = coverPhotos;
-      } else {
-        photos = approvedListings
-          .map(l => {
-            const exterior = Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [];
-            const interior = Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : [];
-            return l.cover_photo_url || interior[0] || exterior[0] || null;
-          })
-          .filter(Boolean);
-      }
+    // Ten slides, filled in order of preference: the admin's chosen
+    // photos, then hosts' cover photos, then other listing photos. It used
+    // to switch to cover photos ONLY as soon as three listings had one —
+    // which is why the hero dropped from 7–8 slides to 3. The rest are
+    // taken one photo per home per pass, so ten slides are spread across
+    // homes rather than all coming from the first listing.
+    const SLIDE_TARGET = 10;
+    const picked = [];
+    const seen = new Set();
+    const add = (u) => {
+      if(typeof u !== 'string' || !u || seen.has(u) || picked.length >= SLIDE_TARGET) return;
+      seen.add(u);
+      picked.push(u);
+    };
+    photos.forEach(add);
+    approvedListings.forEach(l => add(l.cover_photo_url));
+    const pools = approvedListings.map(l => [
+      ...(Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : []),
+      ...(Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [])
+    ]);
+    for(let round = 0; picked.length < SLIDE_TARGET && pools.some(p => round < p.length); round++){
+      pools.forEach(p => add(p[round]));
     }
+    photos = picked;
 
     if(photos.length === 0) return;
 
     slidesEl.innerHTML = photos.map((url, i) =>
-      `<img src="${url}" alt="" loading="lazy" class="${i === 0 ? 'is-active' : ''}">`
+      `<img src="${escapeMessageHtml(url)}" alt="" loading="lazy" class="${i === 0 ? 'is-active' : ''}">`
     ).join('');
 
     const dotsEl = document.getElementById('filterBgDots');
@@ -10701,6 +11102,8 @@
     // 'suites' or 'experiences' here just sets the initial filter state
     // rather than swapping to a different section.
     const requestedView = new URLSearchParams(window.location.search).get('view');
+    // Came back from signing in with a co-host invitation still to answer.
+    if(!requestedView && pendingInvite() && guestAuthToken()) openCohostCenter();
     if(requestedView === 'list-property'){
       document.body.classList.remove('showing-hero');
       document.getElementById('suites').style.display = 'none';
@@ -10726,6 +11129,8 @@
       showTodayView();
     } else if(requestedView === 'profile'){
       showProfileView();
+    } else if(requestedView === 'cohost'){
+      openCohostCenter();
     } else if(requestedView === 'messages'){
       // The Messages icon on every other page links here (see
       // aerva-header.js): the inbox lives on this page.
@@ -10750,6 +11155,14 @@
     const todaySection = document.getElementById('todayView');
     if(todaySection && todaySection.style.display === 'block'){
       todaySection.style.display = 'none';
+      document.getElementById('suites').style.display = 'block';
+      document.body.classList.add('showing-hero');
+      document.title = 'Aerva — Stay Elegant';
+    }
+    // Same for a single booking's page, which had been left out here.
+    const bookingSection = document.getElementById('bookingView');
+    if(bookingSection && bookingSection.style.display === 'block'){
+      bookingSection.style.display = 'none';
       document.getElementById('suites').style.display = 'block';
       document.body.classList.add('showing-hero');
       document.title = 'Aerva — Stay Elegant';

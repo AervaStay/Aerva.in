@@ -7,7 +7,7 @@
 <meta name="robots" content="noindex, nofollow">
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <style>
-  body{font-family:'Jost', sans-serif; background:#f4ebe3; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
+  body{font-family:'Jost', sans-serif; background:#ffffff; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
   .wrap{max-width:480px; margin:0 auto;}
   .back-home{
     display:inline-block; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
@@ -229,6 +229,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css">
+<script src="aerva-cohost.js"></script>
 </head>
 <body>
 
@@ -2050,6 +2051,33 @@
   loadListing();
 </script>
 
+<script>
+// A co-host's Manage link ('manage-cohost', see api/_cohosts.js) can do
+// everything here except rename the listing — the server ignores a new
+// name from it. Say so plainly instead of letting the field look editable.
+(function(){
+  try{
+    var t = new URLSearchParams(window.location.search).get('token') || '';
+    var payload = JSON.parse(atob(t.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
+    if(!payload || payload.action !== 'manage-cohost') return;
+    var lock = function(){
+      var input = document.getElementById('listingPropertyName');
+      if(!input){ return setTimeout(lock, 300); }
+      input.readOnly = true;
+      input.style.opacity = '0.6';
+      input.title = 'Only the host can rename this listing';
+      if(!document.getElementById('cohostNameNote')){
+        var note = document.createElement('p');
+        note.id = 'cohostNameNote';
+        note.textContent = 'Only the host can rename this listing.';
+        note.style.cssText = 'font-size:13px; opacity:0.65; margin:6px 0 0;';
+        input.insertAdjacentElement('afterend', note);
+      }
+    };
+    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', lock); else lock();
+  }catch(e){}
+})();
+</script>
 <script src="aerva-header.js" defer></script>
 </body>
 </html>
