@@ -4329,7 +4329,13 @@
     if(!btn) return;
     e.preventDefault();
     const badges = btn.querySelector('.ts-host-badges');
-    openHostProfile(btn.getAttribute('data-host-profile'), badges ? badges.innerHTML : '');
+    let badgeHtml = '';
+    if(badges){
+      const copy = badges.cloneNode(true);
+      copy.querySelectorAll('.ts-host-view').forEach(v => v.remove());
+      badgeHtml = copy.innerHTML;
+    }
+    openHostProfile(btn.getAttribute('data-host-profile'), badgeHtml);
   });
 
   function listingStandingHtml(listing, opts){
@@ -4397,8 +4403,7 @@
         ${initial ? `<span class="ts-host-avatar">${initial}</span>` : ''}
         <span class="ts-host-text">
           ${hostName ? `<span class="ts-host-label">Hosted by</span><span class="ts-host-name">${escapeMessageHtml(hostName)}</span>` : ''}
-          ${host ? `<span class="ts-host-badges">${hostTierBadgeHtml(host)}</span>` : ''}
-          ${profileId ? '<span class="ts-host-view">View profile ›</span>' : ''}
+          ${(host || profileId) ? `<span class="ts-host-badges">${host ? hostTierBadgeHtml(host) : ''}${profileId ? '<span class="ts-host-view">View profile</span>' : ''}</span>` : ''}
         </span>`;
     const hostBlock = (host || hostName)
       ? (profileId

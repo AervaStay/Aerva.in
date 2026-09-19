@@ -1954,3 +1954,70 @@ footer .foot-bottom{ margin-top:60px; padding-top:22px; font-size:11px; letter-s
   .live-proof .lp-num{ font-size:22px; }
   .live-proof .lp-label{ font-size:9.5px; letter-spacing:0.12em; }
 }
+
+/* ---------- HOST PUBLIC PROFILE (Sept 2026) ----------
+   "Hosted by" is now a button; its profile opens as one full white
+   window over everything, with its own close button (Esc works too). */
+/* The whole block is the button, but it must not look like one: no grey
+   box, no shifted margins (those clipped "Hosted by" at the top). Avatar,
+   then label / name / one row with the badge and a small outlined
+   "View profile" pill that darkens on hover. */
+.trust-strip .ts-host-link{
+  -webkit-appearance:none; appearance:none; background:transparent; border:0; margin:0; padding:0;
+  font:inherit; color:inherit; text-align:left; cursor:pointer; gap:12px;
+}
+.trust-strip .ts-host-link:focus-visible{ outline:2px solid var(--gold-deep); outline-offset:4px; border-radius:10px; }
+.ts-host-link .ts-host-avatar{ transition:box-shadow .15s ease; }
+.ts-host-link:hover .ts-host-avatar{ box-shadow:0 0 0 2px #fff, 0 0 0 3px var(--gold); }
+.ts-host-link .ts-host-name{ font-family:'Bodoni Moda', serif; font-size:17px; line-height:1.2; }
+.ts-host-link:hover .ts-host-name{ text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:1px; }
+.ts-host-link .ts-host-label{ margin-bottom:2px; }
+.ts-host-link .ts-host-badges{ margin-top:7px; gap:8px; flex-wrap:wrap; }
+.ts-host-view{
+  display:inline-flex; align-items:center; height:24px; padding:0 11px; border-radius:999px;
+  border:1px solid var(--line-dark); font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+  color:var(--gold-deep); white-space:nowrap; transition:border-color .15s ease, background .15s ease;
+}
+.ts-host-view::after{ content:'\203A'; margin-left:6px; font-size:13px; line-height:1; }
+.ts-host-link:hover .ts-host-view{ border-color:var(--gold-deep); background:#faf6f0; }
+
+body.hp-open{ overflow:hidden; }
+.hp-overlay{ position:fixed; inset:0; z-index:400; background:#fff; overflow-y:auto; display:none; -webkit-overflow-scrolling:touch; }
+.hp-overlay.is-open{ display:block; }
+.hp-close{
+  position:fixed; top:calc(16px + env(safe-area-inset-top, 0px)); right:18px; z-index:2;
+  width:40px; height:40px; border-radius:50%; border:none; cursor:pointer;
+  background:rgba(28,26,23,0.85); color:#fff; font-size:22px; line-height:1;
+}
+.hp-body{ max-width:760px; margin:0 auto; padding:84px 28px 72px; color:var(--ink); }
+.hp-head{ display:flex; align-items:center; gap:26px; padding-bottom:30px; border-bottom:1px solid var(--line-dark); }
+.hp-photo{ width:112px; height:112px; border-radius:50%; object-fit:cover; flex:0 0 auto; border:3px solid #fff; box-shadow:0 0 0 2px var(--gold); }
+.hp-initial{ display:flex; align-items:center; justify-content:center; background:var(--gold-deep); color:#fff; font-family:'Bodoni Moda', serif; font-size:42px; }
+.hp-eyebrow{ font-size:10.5px; letter-spacing:0.18em; text-transform:uppercase; color:var(--gold-deep); margin-bottom:6px; }
+.hp-name{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:36px; line-height:1.1; margin:0; }
+.hp-meta{ font-size:13px; opacity:0.6; margin-top:6px; }
+.hp-badge{ margin-top:12px; }
+.hp-section{ padding:30px 0; border-bottom:1px solid var(--line-dark); }
+.hp-section:last-child{ border-bottom:none; }
+.hp-title{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:22px; margin:0 0 16px; }
+.hp-facts{ display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; }
+.hp-fact{ display:flex; flex-direction:column; gap:4px; font-size:15px; line-height:1.6; }
+.hp-fact-label, .hp-q{ font-size:10.5px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.5; }
+.hp-answer + .hp-answer{ margin-top:18px; }
+.hp-answer p, .hp-review p{ margin:6px 0 0; font-size:15px; line-height:1.7; white-space:pre-wrap; }
+.hp-chips{ display:flex; flex-wrap:wrap; gap:8px; }
+.hp-chip{ padding:7px 14px; border-radius:999px; border:1px solid var(--line-dark); font-size:13px; }
+.hp-review{ padding:16px 0; border-top:1px solid rgba(28,26,23,0.07); }
+.hp-review:first-of-type{ border-top:none; padding-top:0; }
+.hp-review-head{ display:flex; justify-content:space-between; gap:14px; flex-wrap:wrap; font-size:13px; }
+.hp-review-prop{ font-weight:500; }
+.hp-review-meta{ opacity:0.6; }
+.hp-empty{ font-size:15px; opacity:0.6; padding:24px 0; }
+@media (max-width:640px){
+  .hp-body{ padding:76px 20px 56px; }
+  .hp-head{ flex-direction:column; align-items:flex-start; gap:18px; }
+  .hp-photo{ width:92px; height:92px; }
+  .hp-name{ font-size:30px; }
+  .hp-facts{ grid-template-columns:1fr; }
+}
+.ts-host-link .ts-host-avatar{ width:46px; height:46px; font-family:'Bodoni Moda', serif; font-size:19px; }
