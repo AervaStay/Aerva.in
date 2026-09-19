@@ -9683,10 +9683,7 @@
   function showBookingPage(b){
     const esc = escapeMessageHtml;
     document.body.classList.remove('showing-hero');
-    ['suites', 'listingFullView', 'experienceFullView', 'my-bookings', 'todayView', 'profileView', 'add-listing', 'list-experience'].forEach(id => {
-      const el = document.getElementById(id);
-      if(el) el.style.display = 'none';
-    });
+    hideMainViews();
     document.getElementById('bookingView').style.display = 'block';
     document.title = (b.suite_name || 'Your booking') + ' — Aerva';
     window.scrollTo({ top: 0 });
@@ -9752,6 +9749,19 @@
   }
 
   // ---- Profile ----
+  // Every full-page view on index.html. Switching views hides ALL of them
+  // first, from this one list — each view used to keep its own list, and
+  // Today's had left out the profile, so Today "did nothing" when clicked
+  // from the profile (it opened underneath it, out of sight).
+  const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings'];
+  function hideMainViews(){
+    MAIN_VIEW_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.style.display = 'none';
+    });
+  }
+
   // Who you are on Aerva: your photo, a few lines about you, where you
   // have been, and what others have said. Everything here is your own;
   // see api/_profiles.js for who else may read it.
@@ -9759,10 +9769,7 @@
 
   async function showProfileView(){
     document.body.classList.remove('showing-hero');
-    ['suites', 'listingFullView', 'experienceFullView', 'my-bookings', 'add-listing', 'list-experience', 'todayView'].forEach(id => {
-      const el = document.getElementById(id);
-      if(el) el.style.display = 'none';
-    });
+    hideMainViews();
     document.getElementById('profileView').style.display = 'block';
     document.title = 'Profile — Aerva';
     BROWSE_TABS.concat(['catToday']).forEach(id => {
@@ -10023,10 +10030,7 @@
 
   async function showTodayView(){
     document.body.classList.remove('showing-hero');
-    ['suites', 'listingFullView', 'experienceFullView', 'my-bookings', 'add-listing', 'list-experience'].forEach(id => {
-      const el = document.getElementById(id);
-      if(el) el.style.display = 'none';
-    });
+    hideMainViews();
     document.getElementById('todayView').style.display = 'block';
     document.title = 'Today — Aerva';
     BROWSE_TABS.forEach(id => {
@@ -10866,6 +10870,14 @@
     const todaySection = document.getElementById('todayView');
     if(todaySection && todaySection.style.display === 'block'){
       todaySection.style.display = 'none';
+      document.getElementById('suites').style.display = 'block';
+      document.body.classList.add('showing-hero');
+      document.title = 'Aerva — Stay Elegant';
+    }
+    // Same for a single booking's page, which had been left out here.
+    const bookingSection = document.getElementById('bookingView');
+    if(bookingSection && bookingSection.style.display === 'block'){
+      bookingSection.style.display = 'none';
       document.getElementById('suites').style.display = 'block';
       document.body.classList.add('showing-hero');
       document.title = 'Aerva — Stay Elegant';
