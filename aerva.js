@@ -3987,6 +3987,90 @@
     }
   }
 
+  // ---- Likes ----
+  // A thumbs-up on every stay and experience card. Likes only, no
+  // dislike: one per account per listing, counted on the server (see
+  // guest-profile.js toggleLike / myLikes and get-listings.js
+  // attachLikeCounts). A thumbs-up rather than a heart, because the heart
+  // on stay cards already means "save this home" on this device.
+  const likedListingIds = new Set();
+  const LIKE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v11H3.5V10z"/><path d="M7 10l4.2-7.5c1.6 0 2.8 1.3 2.8 2.9V9h5.2a2 2 0 0 1 2 2.3l-1.3 7.9A2 2 0 0 1 17.9 21H7"/></svg>';
+
+  function likeButtonHtml(item){
+    const id = String(item.id);
+    const n = Number(item.like_count) || 0;
+    const on = likedListingIds.has(id);
+    return `<button type="button" class="like-btn${on ? ' is-liked' : ''}" data-like-id="${escapeMessageHtml(id)}" aria-pressed="${on}" aria-label="Like">${LIKE_ICON}<span class="like-count">${n > 0 ? n : ''}</span></button>`;
+  }
+
+  // The same listing can be on screen more than once (main grid, Near You,
+  // Recently Viewed), so every copy of its button changes together.
+  function paintLikeButtons(id, liked, count){
+    document.querySelectorAll('.like-btn[data-like-id="' + String(id).replace(/[^0-9]/g, '') + '"]').forEach(b => {
+      b.classList.toggle('is-liked', liked);
+      b.setAttribute('aria-pressed', String(liked));
+      if(count != null) b.querySelector('.like-count').textContent = count > 0 ? count : '';
+    });
+  }
+
+  async function toggleLike(id, btn){
+    const token = guestAuthToken();
+    if(!token){ window.location.href = 'guest-login.html'; return; }
+    id = String(id);
+    const wasLiked = likedListingIds.has(id);
+    const shownCount = Number(btn.querySelector('.like-count').textContent) || 0;
+    // Show the change straight away; the server's answer then sets the
+    // exact count, or puts everything back if it failed.
+    if(wasLiked) likedListingIds.delete(id); else likedListingIds.add(id);
+    paintLikeButtons(id, !wasLiked, Math.max(0, shownCount + (wasLiked ? -1 : 1)));
+    btn.disabled = true;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ mode: 'toggleLike', listingId: Number(id) })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || 'Like failed');
+      if(data.liked) likedListingIds.add(id); else likedListingIds.delete(id);
+      paintLikeButtons(id, !!data.liked, Number(data.likeCount) || 0);
+    } catch(err){
+      console.error('toggleLike failed:', err);
+      if(wasLiked) likedListingIds.add(id); else likedListingIds.delete(id);
+      paintLikeButtons(id, wasLiked, shownCount);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function wireLikeButton(card){
+    const b = card.querySelector('.like-btn');
+    if(!b) return;
+    b.addEventListener('click', function(e){
+      e.preventDefault();
+      e.stopPropagation(); // a like must not also open the listing
+      toggleLike(b.dataset.likeId, b);
+    });
+  }
+
+  // Which listings this account already likes, so their buttons render
+  // filled. Cards drawn before this answers are repainted when it does.
+  (async function loadMyLikes(){
+    const token = guestAuthToken();
+    if(!token) return;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myLikes', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if(!res.ok) return;
+      const data = await res.json();
+      (Array.isArray(data.listingIds) ? data.listingIds : []).forEach(lid => {
+        likedListingIds.add(String(lid));
+        paintLikeButtons(lid, true, null);
+      });
+    } catch(err){ /* buttons simply start unfilled */ }
+  })();
+
   function buildExperienceCard(exp, index){
     const initial = (exp.property_name || '?').trim().charAt(0).toUpperCase();
     const exteriorPhotos = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
@@ -4050,6 +4134,7 @@
             ? `<span class="suite-badge prop-badge prop-${escapeMessageHtml(exp.experience_tier.key)}">${escapeMessageHtml(exp.experience_tier.label)}</span>`
             : ''}
         </div>
+        ${likeButtonHtml(exp)}
       </div>
       <div class="suite-body">
         <h3>${exp.property_name}</h3>
@@ -4059,6 +4144,7 @@
         <div class="price">${priceLine}</div>
       </div>
     `;
+    wireLikeButton(card);
     return card;
   }
 
@@ -4366,6 +4452,7 @@
         <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
           <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
         </button>
+        ${likeButtonHtml(listing)}
       </div>
       <div class="suite-body">
         <h3>${listing.property_name}</h3>
@@ -4390,6 +4477,7 @@
       e.stopPropagation();
       toggleFavoriteId(listing.id, favBtn);
     });
+    wireLikeButton(card);
     return card;
   }
 
@@ -10634,6 +10722,10 @@
       showTodayView();
     } else if(requestedView === 'profile'){
       showProfileView();
+    } else if(requestedView === 'messages'){
+      // The Messages icon on every other page links here (see
+      // aerva-header.js): the inbox lives on this page.
+      openInboxOverlay();
     }
   }
 
