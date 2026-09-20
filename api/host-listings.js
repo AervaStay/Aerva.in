@@ -70,7 +70,7 @@ const { verifyToken, createToken } = require('./_approval-token');
 const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { GUEST_FACTORS, reviewScore } = require('./_tiers');
 const { openFlagsForHost } = require('./_compliance');
-const { buildProfile } = require('./_profiles');
+const { buildProfile, answeredQuestions } = require('./_profiles');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { isAccountDeleted } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
@@ -597,14 +597,26 @@ async function handleCohostModes(req, res, accountId) {
     const pickListings = (ids) => [...new Set((Array.isArray(ids) ? ids : []).map(Number))].filter(id => ownIds.has(id));
 
     if (req.method === 'GET' && q.cohosts === '1') {
-      const rows = await sql`
-        SELECT c.id, c.invited_email, c.access, c.permissions, c.listing_ids, c.status, c.invited_at, c.accepted_at,
-               c.commission_percent, c.proposed_percent, c.proposal_status,
-               g.name AS cohost_name
-        FROM cohosts c LEFT JOIN guests g ON g.id = c.cohost_guest_id
-        WHERE c.host_id = ${me.host_id} AND c.status IN ('invited', 'active')
-        ORDER BY c.invited_at DESC
-      `;
+      let rows;
+      try {
+        rows = await sql`
+          SELECT c.id, c.invited_email, c.access, c.permissions, c.listing_ids, c.status, c.invited_at, c.accepted_at,
+                 c.commission_percent, c.proposed_percent, c.proposal_status,
+                 g.name AS cohost_name, g.profile_photo_url, g.profile_work, g.profile_hobbies, g.profile_about, g.created_at AS member_since
+          FROM cohosts c LEFT JOIN guests g ON g.id = c.cohost_guest_id
+          WHERE c.host_id = ${me.host_id} AND c.status IN ('invited', 'active')
+          ORDER BY c.invited_at DESC
+        `;
+      } catch (err) {
+        // Profile columns unreadable: still list the co-hosts, without profiles.
+        rows = await sql`
+          SELECT c.id, c.invited_email, c.access, c.permissions, c.listing_ids, c.status, c.invited_at, c.accepted_at,
+                 c.commission_percent, c.proposed_percent, c.proposal_status, g.name AS cohost_name
+          FROM cohosts c LEFT JOIN guests g ON g.id = c.cohost_guest_id
+          WHERE c.host_id = ${me.host_id} AND c.status IN ('invited', 'active')
+          ORDER BY c.invited_at DESC
+        `;
+      }
       res.status(200).json({
         cohosts: rows.map(r => ({
           id: r.id, email: r.invited_email, name: r.cohost_name || null, access: r.access,
@@ -613,8 +625,15 @@ async function handleCohostModes(req, res, accountId) {
           expired: r.status === 'invited' && !!r.invited_at && Date.now() - new Date(r.invited_at).getTime() > 14 * 24 * 3600 * 1000,
           commissionPercent: r.commission_percent == null ? null : Number(r.commission_percent),
           proposedPercent: r.proposed_percent == null ? null : Number(r.proposed_percent),
-          proposalStatus: r.proposal_status || null
+          proposalStatus: r.proposal_status || null,
+          // Their Aerva profile, once they have accepted (a pending
+          // invitation shows only the email it was sent to).
+          profile: r.status === 'active' ? {
+            photo: r.profile_photo_url || null, work: r.profile_work || null, hobbies: r.profile_hobbies || null,
+            answers: answeredQuestions(r.profile_about), memberSince: r.member_since || null
+          } : null
         })),
+        isHost: !!me.host_id,
         listings: ownListings.map(l => ({ id: l.id, name: l.property_name, type: l.listing_type })),
         permissionLabels: COHOST_PERMISSIONS,
         alwaysLabel: ALWAYS_LABEL
@@ -652,6 +671,24 @@ async function handleCohostModes(req, res, accountId) {
       return true;
     }
 
+    // One co-host per listing: a listing held by another co-host (active,
+    // or invited within 14 days) cannot be given to someone else until that
+    // co-host is removed from it. Returns a message, or null if all free.
+    const takenMessage = async (listingIds, exceptId) => {
+      const others = await sql`
+        SELECT c.id, c.invited_email, c.listing_ids, g.name FROM cohosts c LEFT JOIN guests g ON g.id = c.cohost_guest_id
+        WHERE c.host_id = ${me.host_id} AND c.id <> ${exceptId || 0}
+          AND (c.status = 'active' OR (c.status = 'invited' AND c.invited_at > now() - interval '14 days'))
+      `;
+      for (const id of listingIds) {
+        const o = others.find(r => (r.listing_ids || []).map(Number).includes(Number(id)));
+        if (o) {
+          const name = (ownListings.find(l => Number(l.id) === Number(id)) || {}).property_name || 'That listing';
+          return `${name} already has a co-host (${o.name || o.invited_email}). Remove them from that listing first, then add the new co-host.`;
+        }
+      }
+      return null;
+    };
     const readAccess = (x) => {
       const access = x.access === 'full' ? 'full' : 'limited';
       const permissions = access === 'full' ? [] : cleanPermissions(x.permissions);
@@ -665,8 +702,15 @@ async function handleCohostModes(req, res, accountId) {
       if (me.email && email === String(me.email).trim().toLowerCase()) { res.status(400).json({ error: 'That is your own email.' }); return true; }
       const a = readAccess(b.inviteCohost);
       if (!a.listingIds.length) { res.status(400).json({ error: 'Choose at least one listing for this co-host.' }); return true; }
+      const takenI = await takenMessage(a.listingIds, 0);
+      if (takenI) { res.status(409).json({ error: takenI }); return true; }
       if (a.access === 'limited' && !a.permissions.length) { res.status(400).json({ error: 'Choose at least one thing this co-host can do.' }); return true; }
-      const existing = await sql`SELECT id, status FROM cohosts WHERE host_id = ${me.host_id} AND lower(invited_email) = ${email} AND status IN ('invited', 'active')`;
+      let existing = await sql`SELECT id, status, invited_at FROM cohosts WHERE host_id = ${me.host_id} AND lower(invited_email) = ${email} AND status IN ('invited', 'active')`;
+      // An expired invitation is replaced by this new one.
+      for (const x of existing.filter(x => x.status === 'invited' && x.invited_at && Date.now() - new Date(x.invited_at).getTime() > 14 * 24 * 3600 * 1000)) {
+        await sql`UPDATE cohosts SET status = 'removed', removed_at = now() WHERE id = ${x.id} AND status = 'invited'`;
+      }
+      existing = existing.filter(x => !(x.status === 'invited' && x.invited_at && Date.now() - new Date(x.invited_at).getTime() > 14 * 24 * 3600 * 1000));
       if (existing.length) { res.status(409).json({ error: existing[0].status === 'active' ? 'This person is already your co-host.' : 'You have already invited this email.' }); return true; }
       const ins = await sql`
         INSERT INTO cohosts (host_id, invited_email, access, permissions, listing_ids)
@@ -700,6 +744,8 @@ async function handleCohostModes(req, res, accountId) {
     if (b.updateCohost) {
       const a = readAccess(b.updateCohost);
       if (!a.listingIds.length) { res.status(400).json({ error: 'Choose at least one listing for this co-host.' }); return true; }
+      const takenU = await takenMessage(a.listingIds, Number(b.updateCohost.id) || 0);
+      if (takenU) { res.status(409).json({ error: takenU }); return true; }
       if (a.access === 'limited' && !a.permissions.length) { res.status(400).json({ error: 'Choose at least one thing this co-host can do.' }); return true; }
       const upd = await sql`
         UPDATE cohosts SET access = ${a.access}, permissions = ${JSON.stringify(a.permissions)}::jsonb, listing_ids = ${a.listingIds}
