@@ -152,6 +152,7 @@
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Collection</a>
     <a href="host-status.html" id="statusMenuLinkMobile" style="display:none;">Status</a>
     <a href="host-earnings.html" id="earningsMenuLinkMobile" style="display:none;">My Earnings</a>
+    <a href="index.html?view=cohost">Co-hosting</a>
     <a href="host-dashboard.html?openProfile=1">Account Settings</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
     <a href="#" id="guestLogoutLinkMobile">Log Out</a>
@@ -1167,14 +1168,22 @@
             <select id="tplTrigger" class="tpl-input">
               <option value="manual">Only when I tap it in a chat</option>
               <option value="booking_confirmed">When a booking is confirmed</option>
-              <option value="before_checkin">Days before check-in</option>
-              <option value="checkin_day">On check-in day</option>
-              <option value="checkout_day">On check-out day</option>
-              <option value="after_checkout">Days after check-out</option>
+              <option value="before_checkin">Before check-in</option>
+              <option value="after_checkin">After check-in</option>
+              <option value="before_checkout">Before check-out</option>
+              <option value="after_checkout">After check-out</option>
+              <option value="checkin_day">On check-in day (morning)</option>
+              <option value="checkout_day">On check-out day (morning)</option>
             </select>
             <div id="tplDaysWrap" style="display:none;">
-              <label class="tpl-label" for="tplDays">Days</label>
-              <input type="number" id="tplDays" class="tpl-input" min="1" max="14" value="2" inputmode="numeric">
+              <label class="tpl-label" for="tplDays">How long</label>
+              <div style="display:flex; gap:8px;">
+                <input type="number" id="tplDays" class="tpl-input" min="1" max="30" value="2" inputmode="numeric" style="flex:1;">
+                <select id="tplUnit" class="tpl-input" style="flex:1;">
+                  <option value="hours">Hours</option>
+                  <option value="days" selected>Days</option>
+                </select>
+              </div>
             </div>
             <p class="tpl-hint" id="tplTimingNote" style="display:none;"></p>
             <div id="inboxTemplateScheduleOptions" style="display:none;">

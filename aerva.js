@@ -4512,9 +4512,11 @@
     if(arriving){
       const r = await call('POST', { acceptCohostInvite: { token: arriving } });
       if(r.ok && r.data.hostId){
+        // Accepted: the Co-hosting tab comes first, with the details still
+        // needed from the co-host; the host's listings open from here.
         setPendingInvite(null);
-        window.AervaCohost.start({ hostId: r.data.hostId, hostName: r.data.hostName, access: r.data.access, permissions: r.data.permissions || [] });
-        window.location.href = startPageFor(r.data);
+        history.replaceState(null, '', 'index.html?view=cohost');
+        await render(r.data.alreadyAccepted ? `You co-host for ${r.data.hostName}.` : `You are now a co-host for ${r.data.hostName}. Finish your details below to start.`);
         return;
       }
       setPendingInvite(null);
@@ -4537,6 +4539,26 @@
 
     async function render(notice){
       const mine = await call('GET', null, '?myCohosting=1');
+      // ---- Finish your details (co-host): phone, about, proposed commission ----
+      const myDetails = (mine.data && mine.data.myDetails) || {};
+      const missingByHost = (mine.data && mine.data.missingByHost) || {};
+      const hostsNeeding = ((mine.ok && mine.data.cohosting) || []).filter(h => (missingByHost[h.hostId] || []).length);
+      const needs = (key) => hostsNeeding.some(h => missingByHost[h.hostId].includes(key));
+      const detailsHtml = hostsNeeding.length ? `
+        <div class="hp-section cohost-details">
+          <h3 class="hp-title">Finish your details</h3>
+          <p class="hp-meta">Needed before you can work on ${esc(hostsNeeding.map(h => h.hostName).join(', '))}’s listings. Your host sees these.</p>
+          <div class="cohost-invite-form">
+            ${needs('phone') ? `<label>Phone<input type="tel" data-d-phone value="${esc(myDetails.phone || '')}" placeholder="98765 43210, or +44 7911 123456" autocomplete="tel"></label>` : ''}
+            ${needs('about') ? `<label>What you do<input type="text" data-d-work value="${esc(myDetails.work || '')}" maxlength="400" placeholder="e.g. Hospitality manager in Pune"></label>
+              <label>About me<textarea data-d-about rows="3" maxlength="400" placeholder="A few lines: who you are and what you enjoy.">${esc(myDetails.aboutMe || '')}</textarea></label>` : ''}
+            ${hostsNeeding.filter(h => missingByHost[h.hostId].includes('commission')).map(h => `
+              <label>Your proposed commission for ${esc(h.hostName)} (% of their payout, 0 to 100)
+                <input type="number" data-d-comm="${Number(h.hostId)}" min="0" max="100" step="0.5" inputmode="decimal" placeholder="e.g. 10"></label>`).join('')}
+            <button type="button" class="hp-more cohost-primary" data-d-save>Save details</button>
+            <p class="hp-meta" data-d-msg></p>
+          </div>
+        </div>` : '';
       // ---- Your co-hosts (hosts only) ----
       // One co-host per listing. Adding one starts with WHICH LISTINGS (only
       // those without a co-host); listings already co-hosted are summarised
@@ -4670,6 +4692,7 @@
         <div class="hp-eyebrow">Co-hosting</div>
         <h2 class="hp-name">Hosts you help</h2>
         ${notice ? `<p class="cohost-notice">${esc(notice)}</p>` : ''}
+        ${detailsHtml}
         ${invitesHtml}
         ${pending ? `
           <div class="hp-section">
@@ -4688,14 +4711,16 @@
                 <div class="hp-meta">${esc(accessText(h))} \u00b7 ${h.listingCount} listing${h.listingCount === 1 ? '' : 's'}</div>
                 <div class="hp-meta cohost-commission">${esc(commissionText(h))}</div>
                 <div class="cohost-propose">
-                  <input type="number" min="0.01" max="100" step="0.01" placeholder="%" aria-label="Your share of the host's payout, in percent" data-cohost-pct="${Number(h.hostId)}">
+                  <input type="number" min="0" max="100" step="0.01" placeholder="%" aria-label="Your share of the host's payout, in percent" data-cohost-pct="${Number(h.hostId)}">
                   <button type="button" class="hp-more" data-cohost-propose="${Number(h.hostId)}">Propose my share</button>
                 </div>
               </div>
               <div class="cohost-actions">
                 ${current && Number(current.hostId) === Number(h.hostId)
                   ? '<span class="cohost-on">Working now</span>'
-                  : `<button type="button" class="hp-more cohost-primary" data-cohost-open="${Number(h.hostId)}">Open their listings</button>`}
+                  : ((missingByHost[h.hostId] || []).length
+                      ? '<span class="hp-meta">Finish your details above to open their listings.</span>'
+                      : `<button type="button" class="hp-more cohost-primary" data-cohost-open="${Number(h.hostId)}">Open their listings</button>`)}
                 <button type="button" class="hp-more" data-cohost-leave="${Number(h.hostId)}">Leave</button>
               </div>
             </div>`).join('') : `<p class="hp-empty">You don\u2019t co-host for anyone yet. When a host invites you, the invitation appears here and arrives by email.</p>`}
@@ -4731,6 +4756,26 @@
         ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
 
       const inviteNow = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      // Finish your details: save phone / about / commissions together.
+      const dSave = body.querySelector('[data-d-save]');
+      if(dSave) dSave.addEventListener('click', async () => {
+        const msg = body.querySelector('[data-d-msg]');
+        const payload = {};
+        const ph = body.querySelector('[data-d-phone]');
+        if(ph){ if(!ph.value.trim()){ msg.textContent = 'Enter your phone number.'; return; } payload.phone = ph.value.trim(); }
+        const wk = body.querySelector('[data-d-work]'), ab = body.querySelector('[data-d-about]');
+        if(wk){ if(!wk.value.trim() || !ab.value.trim()){ msg.textContent = 'Fill in what you do and a few lines about you.'; return; } payload.work = wk.value.trim(); payload.aboutMe = ab.value.trim(); }
+        const comms = [...body.querySelectorAll('[data-d-comm]')];
+        for(const c of comms){
+          const v = c.value.trim(); const n = Number(v);
+          if(v === '' || isNaN(n) || n < 0 || n > 100){ msg.textContent = 'Enter a commission from 0 to 100%.'; return; }
+        }
+        if(comms.length) payload.commissions = comms.map(c => ({ hostId: Number(c.getAttribute('data-d-comm')), percent: Number(c.value) }));
+        dSave.disabled = true;
+        const r = await call('POST', { saveCohostDetails: payload });
+        if(!r.ok){ dSave.disabled = false; msg.textContent = r.data.error || 'Could not save your details.'; return; }
+        render('Details saved. Your proposed commission goes to the host for approval; you can open their listings now.');
+      });
       // Your co-hosts: add (listings first), update access, remove, resend.
       const readForm = (root, prefix) => {
         const access = root.querySelector(`input[name="${prefix}-access"]:checked`).value;

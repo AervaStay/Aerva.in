@@ -2342,3 +2342,12 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
 .cohost-step > span{ font-size:14px; font-weight:600; color:var(--ink, #1c1a17); letter-spacing:0; }
 .cohost-team-card .cohost-invite-form{ margin-top:14px; }
 @media (max-width:640px){ .cohost-access-head, .cohost-access-row{ grid-template-columns:1fr; gap:2px; } }
+
+/* Co-hosting forms: every field styled alike (email, phone, text, number, textarea) */
+.cohost-invite-form input[type="tel"],
+.cohost-invite-form input[type="text"],
+.cohost-invite-form input[type="number"],
+.cohost-invite-form textarea{ padding:11px 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; font-family:inherit; background:#fff; color:var(--ink, #1c1a17); width:100%; box-sizing:border-box; }
+.cohost-invite-form textarea{ resize:vertical; line-height:1.5; }
+.cohost-invite-form input:focus, .cohost-invite-form textarea:focus{ outline:none; border-color:#A9885A; }
+.cohost-details .hp-meta{ margin:0 0 6px; }

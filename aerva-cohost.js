@@ -37,7 +37,7 @@
   // Must match the co-host allowlists in guest-profile.js.
   var MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'translate', 'conversationTemplates'];
   var TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];
-  var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'resendCohostInvite', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost'];
+  var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'resendCohostInvite', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost', 'saveCohostDetails'];
 
   function bodyJson(init){
     try{ return init && typeof init.body === 'string' ? JSON.parse(init.body) : null; }catch(e){ return null; }
@@ -70,7 +70,16 @@
           }
         }
       }catch(e){ /* anything odd: send the request untouched */ }
-      return originalFetch(input, init);
+      // Details still pending (phone, about, commission): the server refuses
+      // to act for the host; send the co-host to the Co-hosting tab to finish.
+      return originalFetch(input, init).then(function(r){
+        try{
+          if(r && r.status === 403 && read() && window.location.search.indexOf('view=cohost') === -1){
+            r.clone().json().then(function(d){ if(d && d.detailsRequired) window.location.href = 'index.html?view=cohost'; }).catch(function(){});
+          }
+        }catch(e){}
+        return r;
+      });
     };
   }
 

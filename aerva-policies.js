@@ -18,7 +18,7 @@ window.AERVA_POLICIES = {
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-09b',
+    version: '2026-09c',
     guest: {
       title: 'Booking agreement',
       points: [
@@ -30,7 +30,7 @@ window.AERVA_POLICIES = {
         'Any security deposit is refunded under Aerva’s Security Deposit and Damage Policy. Damage above the deposit is between you and the host, under the law.',
         'You are responsible for your own safety and for any physical, mental or emotional harm you or your guests cause or suffer that is beyond Aerva’s control.',
         'Aerva does not own, run or inspect properties or experiences, and does not control what hosts or guests do. To the extent the law allows, Aerva is not responsible for the acts or omissions of any host, guest or third party, including criminal acts, death, injury, self-harm or any life-threatening situation, and pays no claim for them.',
-        'Aerva’s decisions under its policies are final within Aerva. This does not remove any right the law gives you.',
+        'Aerva’s decision on any matter under its policies is full and final.',
         'Cancellations, refunds, deposits, pets and safety follow Aerva’s Policies.'
       ],
       accept: 'I agree to this booking agreement and Aerva’s Policies.'
@@ -47,7 +47,7 @@ window.AERVA_POLICIES = {
         'Damage claims go through Aerva, up to the security deposit. Damage above the deposit is between you and the guest, under the law.',
         'You are responsible for your guests’ safety at your property as the law requires, and for any physical, mental or emotional harm that is beyond Aerva’s control.',
         'Aerva does not own, run or inspect your property, and does not control what guests do. To the extent the law allows, Aerva is not responsible for the acts or omissions of any guest, host or third party, including criminal acts, death, injury, self-harm or any life-threatening situation, and pays no claim for them.',
-        'Aerva’s decisions under its policies are final within Aerva. This does not remove any right the law gives you.',
+        'Aerva’s decision on any matter under its policies is full and final.',
         'Aerva’s Policies apply to every booking.'
       ],
       accept: 'I agree to the host agreement and Aerva’s Policies.'
@@ -103,6 +103,12 @@ window.AERVA_POLICIES = {
         'Take bookings or payments outside Aerva, or try to avoid Aerva’s fees.',
         'Copy, scrape or misuse Aerva, or interfere with its security.'
       ]},
+      { id: 'closing', title: 'Deactivating and deleting', points: [
+        'Hosts may deactivate listings or hosting at any time. Anyone may delete their account once nothing is open, as set out in the Deactivating, Removing and Deleting policy.'
+      ]},
+      { id: 'decisions', title: 'Aerva’s decisions', points: [
+        'Aerva’s decision on any matter under these Terms and its policies is full and final.'
+      ]},
       { id: 'suspension', title: 'Suspension and termination', points: [
         'Aerva may suspend or close any account, or cancel any booking or listing, if these Terms or Aerva’s policies are broken.'
       ]},
@@ -124,17 +130,15 @@ window.AERVA_POLICIES = {
           'To the extent the law allows, you will compensate Aerva for any claim, loss or cost arising from your breach of these Terms or your use of Aerva.'
         ]},
         { id: 'law', title: 'Governing law and disputes', points: [
-          'These Terms are governed by the laws of India. Disputes are subject to the courts of competent jurisdiction in India.',
-          'Complaints are handled under the Consumer Protection (E-Commerce) Rules, 2020. Write to the Grievance Officer at hello@aerva.in.'
+          'These Terms are governed by the laws of India. Disputes are subject to the courts of competent jurisdiction in India.'
         ]}
       ],
       europe: [
         { id: 'adr', title: 'Dispute resolution bodies', points: [
           'Aerva is not committed or obliged to use an alternative dispute resolution entity to resolve disputes with consumers.'
         ]},
-        { id: 'consumer', title: 'Your consumer rights', points: [
-          'Nothing in these Terms removes rights you have under the mandatory consumer laws of your country of residence.',
-          'The right of withdrawal does not apply to bookings of accommodation or leisure activities for specific dates.'
+        { id: 'withdrawal', title: 'Dated bookings', points: [
+          'Bookings of accommodation or experiences for specific dates cannot be withdrawn from once confirmed.'
         ]},
         { id: 'liability', title: 'Liability', points: [
           'Aerva is liable without limit for death or personal injury caused by its negligence, for fraud, for intent and gross negligence, and wherever the law does not allow liability to be limited.',
@@ -144,7 +148,7 @@ window.AERVA_POLICIES = {
           'If you use Aerva as a business, you will compensate Aerva for any claim, loss or cost arising from your breach of these Terms.'
         ]},
         { id: 'law', title: 'Governing law and disputes', points: [
-          'These Terms are governed by the laws of India. As a consumer, you keep the protection of the mandatory laws of your country of residence, and you may bring proceedings in the courts of your country of residence.'
+          'These Terms are governed by the laws of India.'
         ]}
       ],
       other: [
@@ -156,7 +160,7 @@ window.AERVA_POLICIES = {
           'To the extent the law allows, you will compensate Aerva for any claim, loss or cost arising from your breach of these Terms or your use of Aerva.'
         ]},
         { id: 'law', title: 'Governing law and disputes', points: [
-          'These Terms are governed by the laws of India. Disputes are subject to the courts of competent jurisdiction in India, except where the mandatory law of your country of residence provides otherwise.'
+          'These Terms are governed by the laws of India. Disputes are subject to the courts of competent jurisdiction in India.'
         ]}
       ]
     }
@@ -182,11 +186,10 @@ window.AERVA_POLICIES = {
         'Authorities, where the law requires.'
       ]},
       { id: 'keep', title: 'How long', points: [
-        'As long as your account is active, and afterwards as long as the law requires.'
+        'Until you delete your account. Deleting it erases your personal information; booking and payment records are kept without it, as the law requires.'
       ]},
-      { id: 'rights', title: 'Your rights', points: [
-        'To access, correct or delete your information, or withdraw consent, write to hello@aerva.in.',
-        'You may also complain to the Data Protection Board of India.'
+      { id: 'contact', title: 'Contact', points: [
+        'For anything about your information, write to hello@aerva.in. Complaints may also be made to the Data Protection Board of India.'
       ]},
       { id: 'changes', title: 'Changes', points: [
         'Aerva may update this policy at any time. The version on this page applies.'
@@ -215,9 +218,9 @@ window.AERVA_POLICIES = {
         'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown.'
       ]},
       { title: 'Payouts to hosts and co-hosts', points: [
-        'Payouts are made to a verified bank account, after Aerva’s fees and any taxes the law requires.',
+        'Payouts are made automatically to a verified bank account after check-out, after Aerva’s fees and TDS.',
         'Aerva may hold, adjust or withhold a payout for disputes, refunds, damage claims, suspected fraud or legal reasons.',
-        'Aerva pays hosts and co-hosts their own shares only. Any other money between a host and a co-host is for them to settle between themselves.'
+        'Aerva pays hosts and co-hosts their own shares only. Co-host shares are paid in full, without deductions. Any other money between a host and a co-host is for them to settle between themselves.'
       ]}
     ]},
     { id: 'service-fees', title: 'Service Fees Policy', summary: 'How Aerva’s service fees are charged to hosts and guests.', sections: [
@@ -253,7 +256,7 @@ window.AERVA_POLICIES = {
         'Other local taxes may apply to your stay under the law where the property is.'
       ]},
       { title: 'Hosts and co-hosts', points: [
-        'Tax deducted at source (TDS) may be deducted from payouts, as the law requires.',
+        'Tax deducted at source (TDS) is deducted from host and co-host payouts: 0.1% when a PAN is provided, 5% when it is not.',
         'You are responsible for your own income tax, GST registration and any other taxes on your earnings.'
       ]}
     ]},
@@ -274,17 +277,18 @@ window.AERVA_POLICIES = {
     ]},
     { id: 'cancellation-stays', title: 'Cancellation Policy for Stays', summary: 'How cancellations work for stays.', sections: [
       { title: 'Guests', points: [
-        'To cancel, write to hello@aerva.in with your booking ID. Refunds, where due, follow the terms shown when you booked.'
+        'For an environmental hazard, a life-threatening situation or an emergency, request a cancellation from My Bookings. If the host accepts, you are refunded in full.',
+        'For any other cancellation, write to hello@aerva.in with your booking ID. Refunds, where due, follow the terms shown when you booked.'
       ]},
       { title: 'Hosts', points: [
-        'Hosts may cancel only more than 48 hours before check-in.',
+        'Hosts may cancel only more than 48 hours before check-in, and must give a reason. The guest is told the reason.',
         'When a host cancels, the guest is refunded in full at once (booking and security deposit). The refund starts automatically.',
         'The guest also receives an Aerva coupon worth 10% of the booking, valid for 3 months. It is sent automatically 15 minutes after the cancellation.',
         'The host pays for the coupon, either before cancelling or by deduction from their next payout.'
       ]},
       { title: 'Co-hosts', points: [
         'The same rules apply when a co-host cancels on the host’s behalf.',
-        'The co-host pays for the coupon from their own account, either before cancelling or by deduction from their own next co-host payout.',
+        'The co-host pays for the coupon from their own account before cancelling.',
         'Any money between a host and a co-host, including for cancellations, is for them to settle between themselves. Aerva is not involved.'
       ]}
     ]},
@@ -321,7 +325,7 @@ window.AERVA_POLICIES = {
       { title: 'Security deposit', points: [
         'Some listings hold a refundable security deposit, shown before you pay.',
         'It is refunded to the original payment method after check-out, unless the host reports damage through Aerva within 7 days of check-out.',
-        'If damage is reported, Aerva reviews it and decides how much of the deposit, if any, goes to the host. The rest is refunded. Aerva’s decision on the deposit is final within Aerva.'
+        'If damage is reported, Aerva reviews it and decides how much of the deposit, if any, goes to the host. The rest is refunded. Aerva’s decision on the deposit is full and final.'
       ]},
       { title: 'Damage above the deposit', points: [
         'Aerva handles damage claims only up to the security deposit.',
@@ -361,8 +365,27 @@ window.AERVA_POLICIES = {
         'To the extent the law allows, Aerva is not liable for, and pays no claim for, criminal acts, death, injury, self-harm, medical or life-threatening situations, or any act or omission of a host, guest or third party.'
       ]},
       { title: 'Decisions', points: [
-        'Aerva’s decisions under its policies are final within Aerva. This does not remove any right the law gives you.',
+        'Aerva’s decision on any matter under its policies is full and final.',
         'Guests and hosts accept this policy when they accept the Booking Agreement or Host Agreement.'
+      ]}
+    ]},
+    { id: 'accounts', title: 'Deactivating, Removing and Deleting', summary: 'Deactivating listings or hosting, removing co-hosts, and deleting an account.', sections: [
+      { title: 'Deactivating a listing', points: [
+        'A host can deactivate a listing at any time. It is hidden from search and takes no new bookings. Confirmed bookings go ahead.',
+        'A host can reactivate it at any time. Nothing is deleted.'
+      ]},
+      { title: 'Deactivating hosting', points: [
+        'A host can deactivate all hosting at once. Every live listing is deactivated; confirmed bookings go ahead. The account can still be used to book.',
+        'Reactivating hosting restores those listings.'
+      ]},
+      { title: 'Removing a co-host', points: [
+        'A host can remove a co-host, and a co-host can leave, at any time. Access ends at once. Shares already earned are still paid.'
+      ]},
+      { title: 'Deleting an account', points: [
+        'Guests and hosts can delete their account once nothing is open: no upcoming or current stays or bookings, no payouts waiting to be sent, and no cancellation coupons owed.',
+        'Deleting erases personal information: name, contact details, photos, profile, sign-in, verification and bank details, messages, review text and reviews about you, and listings with their photos, address and check-in details. Star ratings stay without your name. Booking and payment records are kept without personal details, as the law requires.',
+        'Personal information is erased only when an account is deleted. Deactivating keeps everything.',
+        'Deletion cannot be undone.'
       ]}
     ]},
     { id: 'content', title: 'Content Policy', summary: 'The rules for anything posted on Aerva.', sections: [
