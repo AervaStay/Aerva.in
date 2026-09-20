@@ -188,7 +188,42 @@ async function emailCohostInvite({ to, hostName, access, permissions, listingNam
   }
 }
 
+// ---- What a co-host still has to give, per host they help ----
+// phone (on their account), about (work + "About me"), and a proposed
+// commission (0–100% of the host's payout; an approved one also counts).
+// Until nothing is missing they cannot act for that host: the gates in
+// host-listings.js and guest-profile.js refuse, and the site sends them
+// to the Co-hosting tab to finish.
+function aboutDone(g) {
+  let a = g && g.profile_about;
+  if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = {}; } }
+  a = a && typeof a === 'object' ? a : {};
+  return !!(String((g && g.profile_work) || '').trim() && String(a.about_me || '').trim());
+}
+function commissionDone(c) {
+  return !!c && (c.commission_percent != null || (c.proposal_status === 'proposed' && c.proposed_percent != null));
+}
+async function cohostDetailsMissing(sql, accountId, hostId) {
+  let g, c;
+  try {
+    g = (await sql`SELECT phone, profile_work, profile_about FROM guests WHERE id = ${accountId}`)[0] || {};
+    c = (await sql`SELECT commission_percent, proposed_percent, proposal_status FROM cohosts
+                   WHERE cohost_guest_id = ${accountId} AND host_id = ${Number(hostId) || 0} AND status = 'active' ORDER BY id DESC LIMIT 1`)[0];
+  } catch (err) {
+    // Onboarding check only: if the details cannot be read, never block work.
+    console.error('cohostDetailsMissing skipped:', err.message);
+    return [];
+  }
+  const missing = [];
+  if (!g.phone) missing.push('phone');
+  if (!aboutDone(g)) missing.push('about');
+  if (!commissionDone(c)) missing.push('commission');
+  return missing;
+}
+const DETAILS_REQUIRED_MESSAGE = 'Finish your co-host details first (phone, about you and your proposed commission) on the Co-hosting page.';
+
 module.exports = {
+  aboutDone, commissionDone, cohostDetailsMissing, DETAILS_REQUIRED_MESSAGE,
   COHOST_PERMISSIONS, PERMISSION_KEYS, FULL_ONLY, ALWAYS_PERMISSIONS, ALWAYS_LABEL,
   cohostManageToken, readCohostManageToken, recordCohostShares,
   cleanPermissions, cleanEmail, resolveActingHost, cohostCan, cohostHasListing,

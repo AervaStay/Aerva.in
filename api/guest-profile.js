@@ -42,7 +42,7 @@ const { verifyToken } = require('./_approval-token');
 const { isAccountDeleted, deletionBlockers, deleteAccount } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
-const { resolveActingHost, cohostCan, cohostHasListing } = require('./_cohosts');
+const { resolveActingHost, cohostCan, cohostHasListing, cohostDetailsMissing, DETAILS_REQUIRED_MESSAGE } = require('./_cohosts');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -219,6 +219,8 @@ module.exports = async (req, res) => {
   if (req.query && req.query.actingHost !== undefined) {
     const ctx = await resolveActingHost(sql, guestId, req.query.actingHost);
     if (!ctx) return res.status(403).json({ error: 'You are not a co-host for this host, or your access has ended.' });
+    const missingDetails = await cohostDetailsMissing(sql, guestId, ctx.hostId);
+    if (missingDetails.length) return res.status(403).json({ error: DETAILS_REQUIRED_MESSAGE, detailsRequired: true, missing: missingDetails });
     const mode = req.method === 'GET' ? req.query.mode : (req.body || {}).mode;
     const MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'translate', 'conversationTemplates'];
     const TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];

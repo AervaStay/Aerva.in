@@ -87,7 +87,7 @@ const { AGREEMENT_VERSION } = require('./_agreements');
 const { requestContext } = require('./_audit-log');
 const { encryptField, maskPan, maskAccount, maskGstin, encryptionReady } = require('./_secure-fields');
 const { COHOST_PERMISSIONS, FULL_ONLY, ALWAYS_LABEL, cleanPermissions, cleanEmail, resolveActingHost, cohostCan,
-        cohostHasListing, describeAccess, inviteToken, readInviteToken, emailCohostInvite,
+        cohostHasListing, describeAccess, inviteToken, readInviteToken, emailCohostInvite, cohostDetailsMissing, DETAILS_REQUIRED_MESSAGE,
         cohostManageToken } = require('./_cohosts');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -290,6 +290,9 @@ function cohostDenied(res, msg) {
 async function cohostGate(req, res, accountId) {
   const ctx = await resolveActingHost(sql, accountId, req.query.actingHost);
   if (!ctx) return cohostDenied(res, 'You are not a co-host for this host, or your access has ended.');
+  // Nothing may be done for the host until the co-host's own details are in.
+  const missing = await cohostDetailsMissing(sql, accountId, ctx.hostId);
+  if (missing.length) { res.status(403).json({ error: DETAILS_REQUIRED_MESSAGE, detailsRequired: true, missing }); return null; }
 
   let perm = null;
   let listingId = null;
@@ -400,7 +403,7 @@ async function handleCohostModes(req, res, accountId) {
   const b = (req.method === 'POST' && req.body) || {};
   const isMode = (req.method === 'GET' && (q.cohosts === '1' || q.myCohosting === '1'))
     || (req.method === 'POST' && (b.inviteCohost || b.updateCohost || b.removeCohost || b.acceptCohostInvite || b.declineCohostInvite || b.leaveCohost
-        || b.proposeCommission || b.decideCommission || b.savePayoutProfile || b.resendCohostInvite))
+        || b.proposeCommission || b.decideCommission || b.savePayoutProfile || b.resendCohostInvite || b.saveCohostDetails))
     || (req.method === 'GET' && q.myPayoutProfile === '1');
   if (!isMode) return false;
   if (q.actingHost !== undefined) { cohostDenied(res, 'Co-hosts cannot manage co-hosts.'); return true; }
@@ -456,7 +459,15 @@ async function handleCohostModes(req, res, accountId) {
                                status: r.status, listingName: r.property_name, hostName: r.host_name }))
         };
       } catch (err) { console.error('co-host earnings failed:', err.message); }
-      res.status(200).json({ invitations,
+      // My details (for the "Finish your details" section) and, per host,
+      // what is still missing before I can work on their listings.
+      let mine = {};
+      try { mine = (await sql`SELECT phone, profile_work, profile_about FROM guests WHERE id = ${me.id}`)[0] || {}; } catch (err) { /* details unreadable: page still loads */ }
+      let aboutObj = mine.profile_about; if (typeof aboutObj === 'string') { try { aboutObj = JSON.parse(aboutObj); } catch (e) { aboutObj = {}; } }
+      const myDetails = { phone: mine.phone || null, work: mine.profile_work || '', aboutMe: (aboutObj && aboutObj.about_me) || '' };
+      const missingByHost = {};
+      for (const r of active) missingByHost[r.host_id] = await cohostDetailsMissing(sql, me.id, r.host_id);
+      res.status(200).json({ invitations, myDetails, missingByHost,
         cohosting: active.map(r => ({
           hostId: r.host_id, hostName: r.host_name || 'Host', access: r.access,
           permissions: r.access === 'full' ? COHOST_PERMISSIONS.map(p => p.key) : cleanPermissions(r.permissions),
@@ -528,9 +539,56 @@ async function handleCohostModes(req, res, accountId) {
     }
 
     // A co-host proposes their share of the host's payout; the host decides.
+    // ---- The co-host's own details: phone, about, proposed commission ----
+    // POST { saveCohostDetails: { phone?, work?, aboutMe?, commissions?: [{ hostId, percent }] } }
+    // Anything sent is checked and saved; what is still missing comes back.
+    if (b.saveCohostDetails) {
+      const d = b.saveCohostDetails;
+      const updates = {};
+      if (d.phone !== undefined) {
+        const e164 = normalizeToE164(String(d.phone || ''));
+        if (!e164) { res.status(400).json({ error: 'Enter a valid phone number (with the country code if it is not an Indian number).' }); return true; }
+        const taken = await sql`SELECT id FROM guests WHERE phone = ${e164} AND id <> ${me.id} LIMIT 1`;
+        if (taken.length) { res.status(409).json({ error: 'That phone number is already used by another Aerva account.' }); return true; }
+        updates.phone = e164;
+      }
+      if (d.work !== undefined || d.aboutMe !== undefined) {
+        const work = String(d.work || '').trim().slice(0, 400);
+        const aboutMe = String(d.aboutMe || '').trim().slice(0, 400);
+        if (!work || !aboutMe) { res.status(400).json({ error: 'Fill in what you do and a few lines about you.' }); return true; }
+        updates.work = work; updates.aboutMe = aboutMe;
+      }
+      const comms = Array.isArray(d.commissions) ? d.commissions : [];
+      for (const c of comms) {
+        const pct = Math.round(Number(c.percent) * 100) / 100;
+        if (c.percent === '' || c.percent == null || !(pct >= 0 && pct <= 100)) { res.status(400).json({ error: 'Enter a commission from 0 to 100%.' }); return true; }
+        c.pct = pct;
+      }
+      if (updates.phone) await sql`UPDATE guests SET phone = ${updates.phone} WHERE id = ${me.id}`;
+      if (updates.work) {
+        const cur = (await sql`SELECT profile_about FROM guests WHERE id = ${me.id}`)[0] || {};
+        let about = cur.profile_about; if (typeof about === 'string') { try { about = JSON.parse(about); } catch (e) { about = {}; } }
+        about = Object.assign({}, about && typeof about === 'object' ? about : {}, { about_me: updates.aboutMe });
+        await sql`UPDATE guests SET profile_work = ${updates.work}, profile_about = ${JSON.stringify(about)}::jsonb, profile_updated_at = now() WHERE id = ${me.id}`;
+      }
+      for (const c of comms) {
+        const upd = await sql`
+          UPDATE cohosts SET proposed_percent = ${c.pct}, proposal_status = 'proposed', proposed_at = now()
+          WHERE cohost_guest_id = ${me.id} AND host_id = ${Number(c.hostId) || 0} AND status = 'active'
+            AND NOT (COALESCE(proposal_status, '') = 'approved' AND COALESCE(commission_percent, -1) = ${c.pct})
+          RETURNING id
+        `;
+        if (upd.length) await logAudit(sql, { action: 'cohost_commission_proposed', success: true, actorType: 'guest', actorIdentifier: String(me.id), targetType: 'cohost', targetId: upd[0].id, metadata: { percent: c.pct } });
+      }
+      const hosts = await sql`SELECT host_id FROM cohosts WHERE cohost_guest_id = ${me.id} AND status = 'active'`;
+      const missingByHost = {};
+      for (const h of hosts) missingByHost[h.host_id] = await cohostDetailsMissing(sql, me.id, h.host_id);
+      res.status(200).json({ success: true, missingByHost });
+      return true;
+    }
     if (b.proposeCommission) {
       const pct = Math.round(Number(b.proposeCommission.percent) * 100) / 100;
-      if (!(pct > 0 && pct <= 100)) { res.status(400).json({ error: 'Enter a percentage between 0.01 and 100.' }); return true; }
+      if (!(pct >= 0 && pct <= 100)) { res.status(400).json({ error: 'Enter a percentage from 0 to 100.' }); return true; }
       const upd = await sql`
         UPDATE cohosts SET proposed_percent = ${pct}, proposal_status = 'proposed', proposed_at = now()
         WHERE cohost_guest_id = ${me.id} AND host_id = ${Number(b.proposeCommission.hostId) || 0} AND status = 'active'

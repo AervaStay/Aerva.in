@@ -18,6 +18,7 @@
 // not a public page.
 
 const { GUEST_FACTORS, REVIEW_FACTORS, reviewScore } = require('./_tiers');
+const { DEFAULT_TIMEZONE } = require('./_timezones');
 
 // Asked of everyone, host or guest. Kept short deliberately: a long form
 // gets abandoned, and four answers is already more than most people write.
@@ -27,7 +28,8 @@ const PROFILE_QUESTIONS = [
   { id: 'travel_style',   label: 'How I like to travel',        placeholder: 'Slow mornings, long drives, one bag…' },
   { id: 'favourite_place',label: 'A place that stayed with me',  placeholder: 'Somewhere you still think about.' },
   { id: 'ideal_weekend',  label: 'My ideal weekend',             placeholder: 'What a good Saturday looks like.' },
-  { id: 'surprising',     label: 'Something people are surprised to learn about me', placeholder: 'One line is plenty.' }
+  { id: 'surprising',     label: 'Something people are surprised to learn about me', placeholder: 'One line is plenty.' },
+  { id: 'about_me',       label: 'About me',                     placeholder: 'A few lines: who you are and what you enjoy.' }  // required for co-hosts (_cohosts.js)
 ];
 
 const FIELD_MAX = 400;
@@ -67,15 +69,30 @@ function answeredQuestions(profileAbout) {
 async function placesWithAerva(sql, { guestId, hostId }) {
   const out = { stayed: [], hosting: [] };
   try {
+    // Only trips actually booked and paid for on Aerva: a real Razorpay
+    // payment ("pay_…", so seed and test rows never count), already done
+    // on the property's own calendar (checked out, or the experience day
+    // has passed). Stays and experiences are counted separately per city;
+    // a booking counts once however many rooms or rows it has.
     const stayed = await sql`
-      SELECT l.city, COUNT(*) AS n, MAX(o.departure) AS last_visit
+      SELECT l.city,
+             COUNT(DISTINCT (o.razorpay_order_id, o.listing_id, o.arrival))
+               FILTER (WHERE COALESCE(o.order_type, 'stay') = 'stay') AS stays,
+             COUNT(DISTINCT (o.razorpay_order_id, o.listing_id, o.arrival))
+               FILTER (WHERE o.order_type = 'experience') AS experiences,
+             MAX(COALESCE(o.departure, o.arrival)) AS last_visit
       FROM orders o JOIN listings l ON l.id = o.listing_id
-      WHERE o.guest_id = ${guestId} AND o.status = 'paid' AND o.departure <= CURRENT_DATE
+      WHERE o.guest_id = ${guestId} AND o.status = 'paid'
+        AND COALESCE(o.order_type, 'stay') IN ('stay', 'experience')
+        AND o.razorpay_payment_id LIKE 'pay!_%' ESCAPE '!'
+        AND COALESCE(o.departure, o.arrival) <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date
         AND l.city IS NOT NULL AND btrim(l.city) <> ''
-      GROUP BY l.city ORDER BY COUNT(*) DESC, MAX(o.departure) DESC
+      GROUP BY l.city ORDER BY MAX(COALESCE(o.departure, o.arrival)) DESC
       LIMIT 12
     `;
-    out.stayed = stayed.map(r => ({ city: r.city, visits: Number(r.n) }));
+    out.stayed = stayed
+      .map(r => ({ city: r.city, visits: Number(r.stays) || 0, experiences: Number(r.experiences) || 0 }))
+      .sort((x, y) => (y.visits + y.experiences) - (x.visits + x.experiences));
   } catch (err) {
     console.error('placesWithAerva (stayed) failed:', err);
   }
@@ -156,13 +173,51 @@ async function reviewsAboutPerson(sql, { guestId, hostId, limit = 20 }) {
   return out;
 }
 
+// Everything this person runs as a host that guests can book now: live
+// stays and experiences, stays first, newest first, as small cards need
+// them. Same rule as the public host profile in get-listings.js.
+async function liveListingsForHost(sql, hostId) {
+  if (!hostId) return [];
+  try {
+    const rows = await sql`
+      SELECT id, property_name, city, area, COALESCE(listing_type, 'stay') AS listing_type, property_type,
+             nightly_rate, experience_price_unit,
+             COALESCE(
+               NULLIF(btrim(cover_photo_url), ''),
+               CASE WHEN jsonb_typeof(exterior_photo_urls->0) = 'string'
+                    THEN exterior_photo_urls->>0 ELSE exterior_photo_urls->0->>'url' END,
+               CASE WHEN jsonb_typeof(interior_photo_urls->0) = 'string'
+                    THEN interior_photo_urls->>0 ELSE interior_photo_urls->0->>'url' END
+             ) AS photo_url
+      FROM listings
+      WHERE host_id = ${hostId} AND status = 'approved'
+      ORDER BY (COALESCE(listing_type, 'stay') = 'stay') DESC, created_at DESC NULLS LAST, id DESC
+      LIMIT 24
+    `;
+    return rows.map(l => ({
+      id: l.id,
+      name: l.property_name,
+      place: [l.area, l.city].filter(Boolean).join(', '),
+      type: l.listing_type === 'experience' ? 'experience' : 'stay',
+      propertyType: l.property_type || null,
+      price: Number(l.nightly_rate) || null,
+      priceUnit: l.experience_price_unit || null,
+      photoUrl: l.photo_url || null
+    }));
+  } catch (err) {
+    console.error('liveListingsForHost failed:', err);
+    return [];
+  }
+}
+
 // Assembles one profile. `own` is true when the person is looking at
 // their own — that version carries the raw fields for the edit form and
 // the unanswered questions, so they can see what else they could add.
 async function buildProfile(sql, account, { own = false } = {}) {
-  const [places, reviews] = await Promise.all([
+  const [places, reviews, listings] = await Promise.all([
     placesWithAerva(sql, { guestId: account.id, hostId: account.host_id }),
-    reviewsAboutPerson(sql, { guestId: account.id, hostId: account.host_id })
+    reviewsAboutPerson(sql, { guestId: account.id, hostId: account.host_id }),
+    liveListingsForHost(sql, account.host_id)
   ]);
   const profile = {
     name: String(account.name || '').trim() || 'Guest',
@@ -173,6 +228,7 @@ async function buildProfile(sql, account, { own = false } = {}) {
     hobbies: account.profile_hobbies || null,
     answers: answeredQuestions(account.profile_about),
     places,
+    listings,
     reviews
   };
   if (own) {
@@ -203,5 +259,5 @@ async function shareABooking(sql, { guestId, hostId }) {
 module.exports = {
   PROFILE_QUESTIONS, FIELD_MAX,
   sanitizeProfileInput, answeredQuestions, placesWithAerva, reviewsAboutPerson,
-  buildProfile, shareABooking
+  buildProfile, shareABooking, liveListingsForHost
 };
