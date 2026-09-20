@@ -2309,3 +2309,23 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
 
 /* My Bookings: cancellation request status */
 .booking-request-note{ display:inline-block; font-size:13px; opacity:0.75; margin-top:8px; }
+
+/* ---------- Co-hosting page: Your co-hosts ---------- */
+.cohost-team-card{ border:1px solid var(--line-dark, #e6dccd); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
+.cohost-team-head{ display:flex; gap:14px; align-items:center; margin-bottom:10px; }
+.cohost-team-photo{ width:52px; height:52px; border-radius:50%; object-fit:cover; flex:0 0 52px; }
+.cohost-team-initial{ display:flex; align-items:center; justify-content:center; background:#f1ede6; color:#8a6c39; font-family:'Bodoni Moda', serif; font-size:22px; }
+.cohost-team-name{ font-size:17px; font-weight:500; }
+.cohost-team-tag{ display:inline-block; font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:#f1ede6; color:#6b6358; margin-left:6px; vertical-align:middle; }
+.cohost-team-tag.is-active{ background:#e6f1e8; color:#3a7d44; }
+.cohost-team-profile{ margin:0 0 8px; font-size:14.5px; }
+.cohost-team-profile p{ margin:3px 0; }
+.cohost-team-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.cohost-team-actions a.hp-more{ text-decoration:none; display:inline-block; }
+.cohost-invite-form{ display:flex; flex-direction:column; gap:12px; margin-top:12px; max-width:520px; }
+.cohost-invite-form[hidden], .cohost-invite-group[hidden]{ display:none; }
+.cohost-invite-form label{ display:flex; gap:8px; align-items:center; font-size:15px; }
+.cohost-invite-form > label{ flex-direction:column; align-items:stretch; gap:6px; }
+.cohost-invite-form input[type="email"]{ padding:11px 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; }
+.cohost-invite-group{ display:flex; flex-direction:column; gap:6px; }
+.cohost-invite-group > span{ font-size:13px; letter-spacing:0.04em; color:#8a6c39; }
