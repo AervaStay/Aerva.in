@@ -3,5 +3,5 @@
 // text guests and hosts actually see). When the wording changes, change
 // both — a booking or listing that sends an older version is refused and
 // the person is shown the new text.
-const AGREEMENT_VERSION = '2026-09b';
+const AGREEMENT_VERSION = '2026-09c';
 module.exports = { AGREEMENT_VERSION };

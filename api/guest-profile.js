@@ -39,6 +39,7 @@ const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { buildProfile, sanitizeProfileInput } = require('./_profiles');
 const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
+const { isAccountDeleted, deletionBlockers, deleteAccount } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
 const { resolveActingHost, cohostCan, cohostHasListing } = require('./_cohosts');
@@ -169,6 +170,28 @@ module.exports = async (req, res) => {
 
   let guestId = requireGuest(req); // `let`: a co-host request continues as the host's side (below)
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
+  if (await isAccountDeleted(sql, guestId)) return res.status(401).json({ error: 'This account has been deleted.' });
+
+  // ---- Delete my account (guest or host) ----
+  // GET ?mode=deletionCheck → what still stops it; POST { mode: 'deleteAccount', confirm: 'DELETE' }.
+  // See _accounts.js: refused while anything is open; otherwise personal
+  // data is erased and the account can never be used again.
+  if (req.method === 'GET' && (req.query || {}).mode === 'deletionCheck') {
+    try { return res.status(200).json({ blockers: await deletionBlockers(sql, guestId) }); }
+    catch (err) { return res.status(500).json({ error: 'Could not check this right now.' }); }
+  }
+  if (req.method === 'POST' && req.body && req.body.mode === 'deleteAccount') {
+    if (req.body.confirm !== 'DELETE') return res.status(400).json({ error: 'Type DELETE to confirm.' });
+    try {
+      const r = await deleteAccount(sql, guestId);
+      if (!r.ok) return res.status(409).json({ error: 'Your account cannot be deleted yet.', blockers: r.blockers });
+      await logAudit(sql, { action: 'account_deleted', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId });
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('deleteAccount failed:', err);
+      return res.status(500).json({ error: 'Could not delete your account right now. Please try again.' });
+    }
+  }
 
   // This account's OWN host_id (if it has a linked hosts row) — needed
   // anywhere this file checks "is this account the host of X." Listings,
@@ -431,6 +454,8 @@ module.exports = async (req, res) => {
           id: t.id, listing_id: t.listing_id, title: t.title || '', body: t.body, sort_order: t.sort_order,
           send_trigger: t.send_trigger || (t.send_on_booking_confirmed ? 'booking_confirmed' : 'manual'),
           send_offset_days: Number(t.send_offset_days) || 0,
+          send_offset_unit: t.send_offset_unit || (Number(t.send_offset_days) > 0 ? 'days' : null),
+          send_offset_value: t.send_offset_minutes ? (t.send_offset_unit === 'hours' ? Math.round(t.send_offset_minutes / 60) : Math.round(t.send_offset_minutes / 1440)) : (Number(t.send_offset_days) || 0),
           send_on_booking_confirmed: !!t.send_on_booking_confirmed,
           auto_send_listing_ids: t.auto_send_listing_ids || []
         })) });
@@ -507,6 +532,15 @@ module.exports = async (req, res) => {
         WHERE o.guest_id = ${guestId}
         ORDER BY o.created_at DESC
       `;
+      // Latest cancellation request per booking (guest's "Request cancellation").
+      try {
+        const ids = bookings.map(b => b.id);
+        if (ids.length) {
+          const reqs = await sql`SELECT DISTINCT ON (order_id) order_id, status FROM cancellation_requests WHERE order_id = ANY(${ids}) ORDER BY order_id, id DESC`;
+          const byOrder = {}; reqs.forEach(r => { byOrder[r.order_id] = r.status; });
+          bookings.forEach(b => { b.cancel_request_status = byOrder[b.id] || null; });
+        }
+      } catch (err) { /* migration_cancellation_requests.sql not run yet */ }
 
       // What the guest can do about a review on each booking. The page
       // shows a button only for 'open'; see index.html.
@@ -870,15 +904,21 @@ module.exports = async (req, res) => {
       }
 
       if (mode === 'saveTemplate') {
-        const { templateId, listingId, body, sendOnBookingConfirmed, autoSendListingIds, title, sendTrigger, sendOffsetDays } = req.body || {};
+        const { templateId, listingId, body, sendOnBookingConfirmed, autoSendListingIds, title, sendTrigger, sendOffsetDays, sendOffsetValue, sendOffsetUnit } = req.body || {};
         const safeBody = typeof body === 'string' ? body.trim().slice(0, 1500) : '';
         if (!safeBody) return res.status(400).json({ error: 'Template text can\'t be empty.' });
         const safeTitle = typeof title === 'string' ? title.trim().slice(0, 80) : '';
         // When it is sent. Older pages send only sendOnBookingConfirmed.
-        const TRIGGERS = ['manual', 'booking_confirmed', 'before_checkin', 'checkin_day', 'checkout_day', 'after_checkout'];
+        const TRIGGERS = ['manual', 'booking_confirmed', 'before_checkin', 'after_checkin', 'before_checkout', 'after_checkout', 'checkin_day', 'checkout_day'];
         const safeTrigger = TRIGGERS.includes(sendTrigger) ? sendTrigger : (sendOnBookingConfirmed === true ? 'booking_confirmed' : 'manual');
-        const needsDays = safeTrigger === 'before_checkin' || safeTrigger === 'after_checkout';
-        const safeOffset = needsDays ? Math.max(1, Math.min(14, Math.floor(Number(sendOffsetDays)) || 1)) : 0;
+        // Before / after check-in or check-out: a number of hours (1–72) or
+        // days (1–30), measured from the listing's check-in / check-out time.
+        const timed = ['before_checkin', 'after_checkin', 'before_checkout', 'after_checkout'].includes(safeTrigger);
+        const safeUnit = sendOffsetUnit === 'hours' ? 'hours' : 'days';
+        const rawValue = Math.floor(Number(sendOffsetValue !== undefined ? sendOffsetValue : sendOffsetDays)) || 1;
+        const safeValue = safeUnit === 'hours' ? Math.max(1, Math.min(72, rawValue)) : Math.max(1, Math.min(30, rawValue));
+        const safeMinutes = timed ? safeValue * (safeUnit === 'hours' ? 60 : 1440) : null;
+        const safeOffset = timed && safeUnit === 'days' ? safeValue : 0; // legacy whole-day column
 
         if (listingId) {
           // listings.host_id is a hosts.id (see myHostId's comment up
@@ -909,6 +949,7 @@ module.exports = async (req, res) => {
             UPDATE message_templates SET body = ${safeBody}, title = ${safeTitle || null}, listing_id = ${listingId || null},
               send_on_booking_confirmed = ${safeSendOnBooking},
               send_trigger = ${safeTrigger}, send_offset_days = ${safeOffset},
+              send_offset_minutes = ${safeMinutes}, send_offset_unit = ${timed ? safeUnit : null},
               auto_send_listing_ids = ${JSON.stringify(safeAutoSendListingIds)}
             WHERE id = ${templateId} AND host_id = ${guestId} RETURNING id
           `;
@@ -916,11 +957,48 @@ module.exports = async (req, res) => {
           return res.status(200).json({ id: updated[0].id });
         }
         const inserted = await sql`
-          INSERT INTO message_templates (host_id, listing_id, title, body, send_on_booking_confirmed, send_trigger, send_offset_days, auto_send_listing_ids)
-          VALUES (${guestId}, ${listingId || null}, ${safeTitle || null}, ${safeBody}, ${safeSendOnBooking}, ${safeTrigger}, ${safeOffset}, ${JSON.stringify(safeAutoSendListingIds)})
+          INSERT INTO message_templates (host_id, listing_id, title, body, send_on_booking_confirmed, send_trigger, send_offset_days, send_offset_minutes, send_offset_unit, auto_send_listing_ids)
+          VALUES (${guestId}, ${listingId || null}, ${safeTitle || null}, ${safeBody}, ${safeSendOnBooking}, ${safeTrigger}, ${safeOffset}, ${safeMinutes}, ${timed ? safeUnit : null}, ${JSON.stringify(safeAutoSendListingIds)})
           RETURNING id
         `;
         return res.status(200).json({ id: inserted[0].id });
+      }
+
+      // ---- Ask the host to accept a cancellation (hazard / life-threatening /
+      // emergency / travel restriction). If accepted: full refund. ----
+      if (mode === 'requestCancellation') {
+        const REASONS = { environmental: 'Environmental hazard (flood, fire, landslide or similar)', life_threatening: 'Life-threatening situation',
+                          emergency: 'Medical or family emergency', travel_restriction: 'Government order or travel restriction' };
+        const { orderId, reasonCode } = req.body || {};
+        const details = String((req.body || {}).details || '').trim().slice(0, 800);
+        if (!REASONS[reasonCode]) return res.status(400).json({ error: 'Choose a reason.' });
+        const o = (await sql`
+          SELECT o.id, o.status, o.suite_name, o.arrival, o.departure, o.guest_id, l.host_id,
+                 (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
+          FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${Number(orderId) || 0}
+        `)[0];
+        if (!o || o.guest_id !== guestId) return res.status(404).json({ error: 'Booking not found.' });
+        if (o.status !== 'paid') return res.status(400).json({ error: 'Only a confirmed booking can be cancelled.' });
+        if (String(o.departure).slice(0, 10) < String(o.local_today instanceof Date ? o.local_today.toISOString() : o.local_today).slice(0, 10)) {
+          return res.status(400).json({ error: 'This stay has already ended.' });
+        }
+        try {
+          await sql`INSERT INTO cancellation_requests (order_id, guest_id, reason_code, details) VALUES (${o.id}, ${guestId}, ${reasonCode}, ${details || null})`;
+        } catch (err) {
+          if (/idx_cancel_requests_open|duplicate key/.test(err.message)) return res.status(409).json({ error: 'You already have a request waiting for the host.' });
+          throw err;
+        }
+        await logAudit(sql, { action: 'guest_cancellation_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: o.id, metadata: { reasonCode } });
+        try {
+          const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
+          if (process.env.RESEND_API_KEY && host && host.email) {
+            const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+            await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: host.email, subject: `Cancellation request for ${o.suite_name}`,
+                html: `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">A guest has asked to cancel</h2><p><strong>${esc(o.suite_name)}</strong> (${o.arrival} — ${o.departure})</p><p><strong>Reason:</strong> ${esc(REASONS[reasonCode])}${details ? ' — ' + esc(details) : ''}</p><p>Accept (the guest is refunded in full; no coupon and no charge to you) or decline in My Earnings.</p><p><a href="https://aerva.in/host-earnings.html" style="color:#8a6c39;">Open My Earnings</a></p></div>` }) });
+          }
+        } catch (err) { console.error('request email failed:', err.message); }
+        return res.status(200).json({ success: true });
       }
 
       if (mode === 'deleteTemplate') {

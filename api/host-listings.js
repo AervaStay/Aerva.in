@@ -72,10 +72,13 @@ const { GUEST_FACTORS, reviewScore } = require('./_tiers');
 const { openFlagsForHost } = require('./_compliance');
 const { buildProfile } = require('./_profiles');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
+const { isAccountDeleted } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const { COUPON_RELEASE_DELAY_MINUTES, sendCouponEmail } = require('./_coupons');
+const { loadPayoutSummary } = require('./_payouts');
+const { safeRefund } = require('./_refunds');
 const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
@@ -98,16 +101,39 @@ const CANCELLATION_CUTOFF_HOURS = 48;
 // guest-auth.js, submit-listing.js, approve-listing.js) — never throws;
 // a failed notification email shouldn't undo a cancellation that's
 // already happened and already been refunded.
-async function sendCancellationEmail(order){
+// Reasons a host may give for cancelling (the guest is told the reason).
+const HOST_CANCEL_REASONS = {
+  property_unavailable: 'Property unavailable (repairs or damage)',
+  double_booking: 'Double booking',
+  safety: 'Safety concern at the property',
+  environmental: 'Environmental hazard (flood, fire, landslide or similar)',
+  emergency: 'Personal or family emergency',
+  government: 'Government order or travel restriction',
+  other: 'Other'
+};
+// Reasons a guest may give when asking the host to accept a cancellation.
+const GUEST_CANCEL_REASONS = {
+  environmental: 'Environmental hazard (flood, fire, landslide or similar)',
+  life_threatening: 'Life-threatening situation',
+  emergency: 'Medical or family emergency',
+  travel_restriction: 'Government order or travel restriction'
+};
+
+async function sendCancellationEmail(order, opts = {}){
   if (!process.env.RESEND_API_KEY) {
     console.error('RESEND_API_KEY not set — guest will not receive a cancellation notice.');
     return;
   }
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const lead = opts.guestRequested
+    ? `Your host has accepted your request to cancel your stay at <strong>${esc(order.suite_name)}</strong> (${order.arrival} — ${order.departure}).`
+    : `Your host has cancelled your stay at <strong>${esc(order.suite_name)}</strong> (${order.arrival} — ${order.departure}).`;
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">Your booking has been cancelled</h2>
-      <p>Your host has cancelled your stay at <strong>${order.suite_name}</strong> (${order.arrival} — ${order.departure}).</p>
-      <p>Your full payment has been refunded to your original payment method — it should appear within 5–7 business days depending on your bank.</p>
+      <p>${lead}</p>
+      ${opts.reasonLabel ? `<p><strong>Reason:</strong> ${esc(opts.reasonLabel)}${opts.details ? ' — ' + esc(opts.details) : ''}</p>` : ''}
+      <p>Your full payment has been refunded to your original payment method. It should appear within 5–7 business days, depending on your bank.</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you have questions about this cancellation, please contact hello@aerva.in.</p>
     </div>
   `;
@@ -246,6 +272,7 @@ const COHOST_ACTIONS = {
   cancelBooking:      { perm: 'cancel', orderFrom: b => b.orderId },
   cancelWithCoupon:   { perm: 'cancel', orderFrom: b => b.orderId },
   buyCouponOrder:     { perm: 'cancel', orderFrom: b => b.bookingId },
+  respondCancellationRequest: { perm: 'cancel', requestFrom: b => b.requestId },
   verifyCouponPayment:{ perm: 'cancel', couponFrom: b => b.couponId },
   raiseDispute:       { perm: FULL_ONLY, orderFrom: b => b.orderId },
   reviewGuest:        { perm: FULL_ONLY, orderFrom: b => b.orderId }
@@ -273,6 +300,7 @@ async function cohostGate(req, res, accountId) {
     else if (q.statusCalendar === '1') { perm = 'calendar'; mode = 'statusCalendar'; }
     // The co-host's own cancellation-coupon deductions (never the host's).
     else if (q.myPenalties === '1') { perm = 'cancel'; mode = 'myPenalties'; }
+    else if (q.cancellationRequests === '1') { perm = 'cancel'; mode = 'cancellationRequests'; }
     else if (q.guestProfileForOrder !== undefined) {
       perm = 'bookings'; mode = 'guestProfile';
       const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(q.guestProfileForOrder) || 0}`;
@@ -291,6 +319,10 @@ async function cohostGate(req, res, accountId) {
     if (rule.orderFrom) {
       const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(rule.orderFrom(payload)) || 0}`;
       listingId = o[0] ? o[0].listing_id : -1;
+    }
+    if (rule.requestFrom) {
+      const rr = await sql`SELECT o.listing_id FROM cancellation_requests r JOIN orders o ON o.id = r.order_id WHERE r.id = ${Number(rule.requestFrom(payload)) || 0}`;
+      listingId = rr[0] ? rr[0].listing_id : -1;
     }
     if (rule.couponFrom) {
       const cr = await sql`SELECT o.listing_id FROM coupons c JOIN orders o ON o.id = c.source_order_id WHERE c.id = ${Number(rule.couponFrom(payload)) || 0}`;
@@ -682,6 +714,7 @@ module.exports = async (req, res) => {
   let guestId = requireGuestId(req);
   let cohostActor = null; // set when a co-host acts for the host (?actingHost=)
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
+  if (await isAccountDeleted(sql, guestId)) return res.status(401).json({ error: 'This account has been deleted.' });
   const accountId = guestId; // the person actually signed in, always
 
   // ---- Host agreement: one-time acceptance for hosts who listed before
@@ -722,12 +755,54 @@ module.exports = async (req, res) => {
   const handledCohost = await handleCohostModes(req, res, accountId);
   if (handledCohost) return;
 
+  // ---- Payouts sent to me (as host, or as a co-host) ----
+  // GET ?myPayouts=1 → list; GET ?payoutDetail=<id> → one summary. Only
+  // ever the signed-in person's own payouts.
+  if (req.method === 'GET' && req.query && (req.query.myPayouts === '1' || req.query.payoutDetail !== undefined) && req.query.actingHost === undefined) {
+    try {
+      const me = (await sql`SELECT host_id FROM guests WHERE id = ${accountId}`)[0] || {};
+      if (req.query.payoutDetail !== undefined) {
+        const sum = await loadPayoutSummary(sql, req.query.payoutDetail);
+        // The host sees every payout on their bookings (theirs and their
+        // co-hosts'); a co-host sees their own and the host's, on listings
+        // they co-host.
+        let allowed = sum && ((me.host_id && sum.hostId === me.host_id) || (sum.payeeType === 'cohost' && sum.payeeGuestId === accountId));
+        if (sum && !allowed) {
+          const shared = await sql`SELECT 1 FROM cohosts c JOIN orders o ON o.id = ${sum.orderId}
+                                   WHERE c.cohost_guest_id = ${accountId} AND c.status = 'active' AND c.host_id = ${sum.hostId}
+                                     AND o.listing_id = ANY(c.listing_ids) LIMIT 1`.catch(() => []);
+          allowed = shared.length > 0;
+        }
+        if (!allowed || sum.status !== 'sent') return res.status(404).json({ error: 'Payout not found.' });
+        return res.status(200).json({ payout: { ...sum, viewerIsPayee: (sum.payeeType === 'host' ? sum.hostId === me.host_id : sum.payeeGuestId === accountId) } });
+      }
+      let rows = [];
+      try {
+        rows = await sql`
+          SELECT p.id, p.net, p.sent_at, p.arriving_by, p.payee_type, p.payee_guest_id, p.host_id, o.suite_name, o.arrival, o.departure,
+                 CASE WHEN p.payee_type = 'host' THEN h.name ELSE pg.name END AS payee_name
+          FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id LEFT JOIN guests pg ON pg.id = p.payee_guest_id
+          WHERE p.status = 'sent' AND (p.host_id = ${me.host_id || 0}
+             OR (p.payee_type = 'cohost' AND p.payee_guest_id = ${accountId})
+             OR EXISTS (SELECT 1 FROM cohosts c WHERE c.cohost_guest_id = ${accountId} AND c.status = 'active' AND c.host_id = p.host_id AND o.listing_id = ANY(c.listing_ids)))
+          ORDER BY p.sent_at DESC LIMIT 200
+        `;
+      } catch (err) { /* migration_payouts.sql not run yet */ }
+      return res.status(200).json({ payouts: rows.map(r => ({ id: r.id, amount: Number(r.net), sentAt: r.sent_at, arrivingBy: r.arriving_by, as: r.payee_type,
+        payeeName: r.payee_name || '', mine: r.payee_type === 'host' ? (me.host_id != null && r.host_id === me.host_id) : r.payee_guest_id === accountId,
+        listing: r.suite_name, arrival: r.arrival, departure: r.departure })) });
+    } catch (err) {
+      console.error('payouts view failed:', err);
+      return res.status(500).json({ error: 'Could not load payouts right now.' });
+    }
+  }
+
   // ---- A co-host working on a host's listings (?actingHost=<hostId>) ----
   if (req.query && req.query.actingHost !== undefined) {
     const gate = await cohostGate(req, res, accountId);
     if (!gate) return; // already answered with 403 / 400
     guestId = gate.ctx.ownerGuestId;
-    cohostActor = { cohostId: gate.ctx.cohostId, guestId: accountId };
+    cohostActor = { cohostId: gate.ctx.cohostId, guestId: accountId, ctx: gate.ctx };
   }
 
   // ---- Send an OTP to verify a host's phone number ----
@@ -1960,7 +2035,7 @@ module.exports = async (req, res) => {
   // host cancellation and a coupon-gated "prioritize a bigger booking"
   // cancellation. Identical money-handling either way; only the gate
   // checks before calling this differ.
-  async function executeCancellationRefund(order, orderId, reason, hostId, auditAction){
+  async function executeCancellationRefund(order, orderId, reason, hostId, auditAction, emailOpts = {}){
     const currency = order.charge_currency || 'INR';
     let refundAmount;
     if (currency === 'INR') {
@@ -1972,10 +2047,8 @@ module.exports = async (req, res) => {
       }
     }
 
-    const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
-      amount: refundAmount,
-      speed: 'normal',
-    });
+    // Guarded: once per booking, checked against Razorpay (_refunds.js).
+    const refund = await safeRefund(sql, razorpay, { orderId, paymentId: order.razorpay_payment_id, amountSubunit: refundAmount, kind: 'cancellation' });
 
     await sql`
       UPDATE orders SET
@@ -2016,7 +2089,7 @@ module.exports = async (req, res) => {
             ? Math.round(Number(sib.total) * 100)
             : await convertInrToForeignSubunit(sql, Number(sib.total), sibCurrency);
           if (!sibAmount) throw new Error(`No cached ${sibCurrency} rate to refund linked booking ${sib.id}`);
-          const sibRefund = await razorpay.payments.refund(sib.razorpay_payment_id, { amount: sibAmount, speed: 'normal' });
+          const sibRefund = await safeRefund(sql, razorpay, { orderId: sib.id, paymentId: sib.razorpay_payment_id, amountSubunit: sibAmount, kind: 'cancellation' });
           await sql`
             UPDATE orders SET
               status = 'cancelled',
@@ -2040,7 +2113,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    await sendCancellationEmail(order);
+    await sendCancellationEmail(order, emailOpts);
   }
 
   // ---- Cancel a booking (host-initiated, no coupon required) ----
@@ -2054,10 +2127,16 @@ module.exports = async (req, res) => {
   // requires a coupon first (see cancelWithCoupon below).
   if (req.method === 'POST' && req.body && req.body.cancelBooking) {
     try {
-      const { orderId, reason } = req.body.cancelBooking;
-      if (!orderId || !reason || !String(reason).trim()) {
-        return res.status(400).json({ error: 'Please explain why you\'re cancelling this booking.' });
+      const { orderId, reasonCode } = req.body.cancelBooking;
+      const details = String(req.body.cancelBooking.details || req.body.cancelBooking.reason || '').trim().slice(0, 800);
+      // A reason from the list is required; the guest is told it.
+      // Older cached pages send free text as "reason" (no list): kept as "Other".
+      const legacyText = !reasonCode && req.body.cancelBooking.reason && String(req.body.cancelBooking.reason).trim();
+      const reasonLabel = HOST_CANCEL_REASONS[reasonCode] || (legacyText ? 'Other' : null);
+      if (!orderId || !reasonLabel || (reasonCode === 'other' && !details)) {
+        return res.status(400).json({ error: 'Choose a reason for cancelling this booking.' });
       }
+      const reason = reasonLabel + (details ? ' — ' + details : '');
       const loaded = await loadCancellableOrder(orderId, true);
       if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
 
@@ -2068,13 +2147,16 @@ module.exports = async (req, res) => {
       // Either way the booking and deposit are refunded in full at once.
       const held = (await sql`SELECT id, amount FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
       const payLater = req.body.cancelBooking.payLater === true;
+      // Co-host shares are paid in full, without deductions, so a co-host
+      // pays for the coupon before cancelling.
+      if (payLater && cohostActor) return res.status(400).json({ error: 'Co-hosts pay for the guest’s coupon before cancelling.', needsCoupon: true });
       if (!held && !payLater) {
         const amount = await cancellationCouponAmount(loaded.order, orderId);
         return res.status(402).json({ error: `Choose how to pay the guest’s cancellation coupon (₹${amount.toLocaleString('en-IN')}).`, needsCoupon: true, amount });
       }
       const amountLater = held ? 0 : await cancellationCouponAmount(loaded.order, orderId);
 
-      await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host');
+      await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host', { reasonLabel, details });
       // Refund done: now the coupon goes to the guest. The host never sees
       // its code (it is only emailed to the guest).
       if (held) {
@@ -2126,6 +2208,122 @@ module.exports = async (req, res) => {
                                     total: Math.round(rows.reduce((t, r) => t + Number(r.amount), 0)) });
     } catch (err) {
       return res.status(500).json({ error: 'Could not load this right now.' });
+    }
+  }
+
+  // ---- Deactivate / reactivate a listing, or all hosting (host only) ----
+  // A deactivated listing is hidden from search and takes no new bookings;
+  // existing bookings go ahead. Reactivating puts it straight back live.
+  // Deactivating hosting does this to every live listing at once and
+  // restores exactly those. Co-hosts cannot (not in COHOST_ACTIONS).
+  if (req.method === 'GET' && (req.query || {}).hostingStatus === '1') {
+    try {
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(200).json({ hostingStatus: null });
+      let st = 'active';
+      try { st = ((await sql`SELECT hosting_status FROM hosts WHERE id = ${g.host_id}`)[0] || {}).hosting_status || 'active'; } catch (e) { /* column not added yet */ }
+      return res.status(200).json({ hostingStatus: st });
+    } catch (err) { return res.status(500).json({ error: 'Could not load this right now.' }); }
+  }
+  if (req.method === 'POST' && req.body && (req.body.setListingActive || req.body.setHostingActive)) {
+    try {
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+      if (req.body.setListingActive) {
+        const { listingId, active } = req.body.setListingActive;
+        const l = (await sql`SELECT id, status, deactivated_by FROM listings WHERE id = ${Number(listingId) || 0} AND host_id = ${g.host_id}`)[0];
+        if (!l) return res.status(404).json({ error: 'Listing not found.' });
+        if (active === false) {
+          if (l.status !== 'approved') return res.status(400).json({ error: 'Only a live listing can be deactivated.' });
+          await sql`UPDATE listings SET status = 'deactivated', deactivated_by = 'host', deactivated_at = now() WHERE id = ${l.id}`;
+        } else {
+          if (l.status !== 'deactivated') return res.status(400).json({ error: 'This listing is not deactivated.' });
+          const h = (await sql`SELECT hosting_status FROM hosts WHERE id = ${g.host_id}`)[0] || {};
+          if (h.hosting_status === 'deactivated') return res.status(400).json({ error: 'Reactivate your hosting first.' });
+          await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL WHERE id = ${l.id}`;
+        }
+        await logAudit(sql, { action: active === false ? 'listing_deactivated_by_host' : 'listing_reactivated_by_host', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'listing', targetId: l.id });
+        return res.status(200).json({ success: true, status: active === false ? 'deactivated' : 'approved' });
+      }
+      const active = req.body.setHostingActive.active !== false;
+      if (!active) {
+        const changed = await sql`UPDATE listings SET status = 'deactivated', deactivated_by = 'hosting', deactivated_at = now()
+                                  WHERE host_id = ${g.host_id} AND status = 'approved' RETURNING id`;
+        await sql`UPDATE hosts SET hosting_status = 'deactivated' WHERE id = ${g.host_id}`;
+        await logAudit(sql, { action: 'hosting_deactivated', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'host', targetId: g.host_id, metadata: { listings: changed.map(r => r.id) } });
+        return res.status(200).json({ success: true, hostingStatus: 'deactivated', listingsDeactivated: changed.length });
+      }
+      const restored = await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL
+                                 WHERE host_id = ${g.host_id} AND status = 'deactivated' AND deactivated_by = 'hosting' RETURNING id`;
+      await sql`UPDATE hosts SET hosting_status = 'active' WHERE id = ${g.host_id}`;
+      await logAudit(sql, { action: 'hosting_reactivated', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'host', targetId: g.host_id, metadata: { listings: restored.map(r => r.id) } });
+      return res.status(200).json({ success: true, hostingStatus: 'active', listingsRestored: restored.length });
+    } catch (err) {
+      console.error('deactivation failed:', err);
+      return res.status(500).json({ error: 'Could not do this right now. Please try again.' });
+    }
+  }
+
+  // ---- Guest cancellation requests (hazard / life-threatening / emergency) ----
+  // GET ?cancellationRequests=1 → open requests on my listings.
+  // POST { respondCancellationRequest: { requestId, accept, note } }
+  //   accept → full refund (booking and deposit), no coupon, no charge to
+  //   the host; decline → the guest is told. Host, or co-host with cancel
+  //   access on that listing.
+  if (req.method === 'GET' && (req.query || {}).cancellationRequests === '1') {
+    try {
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(200).json({ requests: [] });
+      let rows = [];
+      try {
+        rows = await sql`
+          SELECT r.id, r.reason_code, r.details, r.created_at, o.id AS order_id, o.listing_id, o.suite_name, o.arrival, o.departure, o.total,
+                 COALESCE(gu.name, o.guest_email) AS guest_name
+          FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id
+          LEFT JOIN guests gu ON gu.id = o.guest_id
+          WHERE r.status = 'pending' AND o.status = 'paid' AND l.host_id = ${g.host_id}
+          ORDER BY r.created_at
+        `;
+      } catch (err) { /* migration_cancellation_requests.sql not run yet */ }
+      if (cohostActor) rows = rows.filter(r => cohostHasListing(cohostActor.ctx, r.listing_id));
+      return res.status(200).json({ requests: rows.map(r => ({ id: r.id, orderId: r.order_id, listing: r.suite_name, arrival: r.arrival, departure: r.departure,
+        total: Number(r.total), guestName: r.guest_name, reason: GUEST_CANCEL_REASONS[r.reason_code] || r.reason_code, details: r.details || '', createdAt: r.created_at })) });
+    } catch (err) {
+      console.error('cancellationRequests failed:', err);
+      return res.status(500).json({ error: 'Could not load cancellation requests right now.' });
+    }
+  }
+  if (req.method === 'POST' && req.body && req.body.respondCancellationRequest) {
+    try {
+      const { requestId, accept } = req.body.respondCancellationRequest;
+      const note = String(req.body.respondCancellationRequest.note || '').trim().slice(0, 500);
+      const rq = (await sql`SELECT id, order_id, reason_code, details, status FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
+      if (!rq) return res.status(404).json({ error: 'Request not found.' });
+      if (rq.status !== 'pending') return res.status(409).json({ error: 'This request has already been answered.' });
+      const loaded = await loadCancellableOrder(rq.order_id, false); // emergencies: no 48-hour cut-off
+      if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
+      const label = GUEST_CANCEL_REASONS[rq.reason_code] || 'Guest request';
+      if (accept === true) {
+        await executeCancellationRefund(loaded.order, rq.order_id, `Guest request accepted: ${label}${rq.details ? ' — ' + rq.details : ''}`,
+          loaded.guest.host_id, 'booking_cancelled_on_guest_request', { guestRequested: true, reasonLabel: label, details: rq.details });
+        await sql`UPDATE cancellation_requests SET status = 'accepted', host_note = ${note || null}, decided_at = now(), decided_by = ${accountId} WHERE id = ${rq.id}`;
+        return res.status(200).json({ success: true, accepted: true });
+      }
+      await sql`UPDATE cancellation_requests SET status = 'declined', host_note = ${note || null}, decided_at = now(), decided_by = ${accountId} WHERE id = ${rq.id}`;
+      await logAudit(sql, { action: 'guest_cancellation_request_declined', success: true, actorType: cohostActor ? 'cohost' : 'host', actorIdentifier: String(accountId), targetType: 'order', targetId: rq.order_id, metadata: { requestId: rq.id } });
+      try {
+        if (process.env.RESEND_API_KEY && loaded.order.guest_email) {
+          const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+          await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: loaded.order.guest_email, subject: `Your cancellation request for ${loaded.order.suite_name}`,
+              html: `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your cancellation request was declined</h2><p>Your host has declined your request to cancel your stay at <strong>${esc(loaded.order.suite_name)}</strong> (${loaded.order.arrival} — ${loaded.order.departure}). Your booking stands.</p>${note ? `<p><strong>Host’s note:</strong> ${esc(note)}</p>` : ''}<p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Contact hello@aerva.in.</p></div>` }) });
+        }
+      } catch (err) { console.error('decline email failed:', err.message); }
+      return res.status(200).json({ success: true, accepted: false });
+    } catch (err) {
+      console.error('respondCancellationRequest failed:', err);
+      const status = err.isUserFacing ? err.status : 500;
+      return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not answer this request right now.' });
     }
   }
 

@@ -9,15 +9,18 @@
 // When a template is sent (message_templates.send_trigger):
 //   manual            — only when the host taps it
 //   booking_confirmed — the moment payment is confirmed (verify-payment.js)
-//   before_checkin    — N days before arrival      ┐ sent by the daily job
-//                       (booked after that day? sent on confirmation, or
-//                        by the next daily run, until the arrival day)
-//   checkin_day       — on the arrival day         │ (get-listings.js
-//   checkout_day      — on the departure day       │  reviewSweep, 02:00 UTC
-//   after_checkout    — N days after departure     ┘  = 07:30 in India)
-// Days follow each property's own calendar (listings.timezone). Every
-// send is recorded in template_sends, so a template never reaches the
-// same booking twice — whatever retries or re-runs happen.
+//   before_checkin    ┐ a number of hours or days (send_offset_minutes)
+//   after_checkin     │ before / after the listing's check-in or check-out
+//   before_checkout   │ TIME on the booking's dates, in the property's own
+//   after_checkout    ┘ time zone (listings.timezone)
+//   checkin_day       — the morning of the arrival day   ┐ from 07:30
+//   checkout_day      — the morning of the departure day ┘ local time
+// Run by get-listings.js: ?runSchedules=1 (an external every-5-minutes
+// pinger such as cron-job.org), the daily cron, and site traffic. A
+// "before" message missed (late booking, or the job did not run) is still
+// sent until the check-in / check-out time; an "after" message up to 12
+// hours late, never later. Every send is recorded in template_sends, so a
+// template never reaches the same booking twice.
 
 // Same placeholder set index.html's client-side resolver uses (for a
 // host manually clicking a template into the chat box) — kept in sync
@@ -227,7 +230,6 @@ async function sendBookingConfirmedTemplates(sql, order) {
           AND (
                t.send_trigger = 'booking_confirmed'
             OR (t.send_trigger IS NULL AND t.send_on_booking_confirmed = true)
-            OR (t.send_trigger = 'before_checkin' AND b.arrival - COALESCE(t.send_offset_days, 1) <= b.today AND b.arrival >= b.today)
             OR (t.send_trigger = 'checkin_day' AND b.arrival = b.today)
           )
         ORDER BY CASE WHEN t.send_trigger = 'booking_confirmed' THEN 0 ELSE 1 END, t.id`;
@@ -236,7 +238,10 @@ async function sendBookingConfirmedTemplates(sql, order) {
       templates = await sql`SELECT id, body, auto_send_listing_ids FROM message_templates WHERE host_id = ${ctx.ownerAccountId} AND send_on_booking_confirmed = true`;
     }
     const applicable = templates.filter(t => appliesToListing(t, ctx.order.listing_id));
-    if (!applicable.length && !ctx.order.auto_send_checkin_instructions) return;
+    if (!applicable.length && !ctx.order.auto_send_checkin_instructions) {
+      await sendTimedTemplates(sql, { orderId: ctx.order.id, deadlineMs: 4000 }); // late booking: timed messages already due
+      return;
+    }
     const conversationId = await conversationFor(sql, ctx.order);
     for (const t of applicable) {
       if (!(await claimSend(sql, t.id, ctx.order.id))) continue;
@@ -246,17 +251,119 @@ async function sendBookingConfirmedTemplates(sql, order) {
     if (ctx.order.auto_send_checkin_instructions) {
       await postHostMessage(sql, conversationId, buildCheckinInstructionsText(ctx.data));
     }
+    // Booked late: any "before check-in / check-out" message whose time
+    // has already come goes out now, not at the next scheduled run.
+    await sendTimedTemplates(sql, { orderId: ctx.order.id, deadlineMs: 4000 });
   } catch (err) {
     console.error('sendBookingConfirmedTemplates failed:', err);
   }
 }
 
-// The daily job (get-listings.js reviewSweep). Sends every timed template
-// whose day is TODAY on that property's own calendar, once per booking.
-// Paid stays only; cancelled bookings get nothing. Never throws.
-async function sendScheduledTemplates(sql, { deadlineMs = 7000 } = {}) {
+// ---- Timing helpers ----
+const TIMED_TRIGGERS = ['before_checkin', 'after_checkin', 'before_checkout', 'after_checkout'];
+const DEFAULT_CHECKIN = [14, 0], DEFAULT_CHECKOUT = [11, 0];
+// "14:00", "2:00 PM", "2 pm", "11" → [hour, minute]; null if unreadable.
+function parseClock(v) {
+  const m = String(v || '').trim().match(/^(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?$/i);
+  if (!m) return null;
+  let h = Number(m[1]); const min = Number(m[2] || 0);
+  const ap = (m[3] || '').toLowerCase().replace(/\./g, '');
+  if (ap === 'pm' && h < 12) h += 12;
+  if (ap === 'am' && h === 12) h = 0;
+  return h <= 23 && min <= 59 ? [h, min] : null;
+}
+function isoDate(v) { return v instanceof Date ? v.toISOString().slice(0, 10) : String(v || '').slice(0, 10); }
+// A wall-clock time on a date, in an IANA time zone → UTC milliseconds.
+function zonedToUtc(dateIso, h, min, tz) {
+  const [y, mo, d] = dateIso.split('-').map(Number);
+  const guess = Date.UTC(y, mo - 1, d, h, min);
+  const offsetAt = (ms) => {
+    const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      .formatToParts(new Date(ms)).reduce((a, x) => (a[x.type] = x.value, a), {});
+    return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - ms) / 60000;
+  };
+  let ms = guess - offsetAt(guess) * 60000;
+  ms = guess - offsetAt(ms) * 60000; // second pass settles daylight-saving edges
+  return ms;
+}
+// When this template should reach this booking, and until when it may
+// still be sent. null if it does not apply.
+function timedSendWindow(row) {
+  const tz = (row.timezone && String(row.timezone).trim()) || 'Asia/Kolkata';
+  const isCheckin = row.send_trigger === 'before_checkin' || row.send_trigger === 'after_checkin';
+  const clock = parseClock(isCheckin ? row.check_in_time : row.check_out_time) || (isCheckin ? DEFAULT_CHECKIN : DEFAULT_CHECKOUT);
+  const day = isoDate(isCheckin ? row.arrival : row.departure);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const minutes = Number(row.send_offset_minutes) > 0 ? Number(row.send_offset_minutes) : Math.max(1, Number(row.send_offset_days) || 1) * 1440;
+  const anchor = zonedToUtc(day, clock[0], clock[1], tz);
+  const before = row.send_trigger.startsWith('before_');
+  const at = before ? anchor - minutes * 60000 : anchor + minutes * 60000;
+  return { at, until: before ? anchor : at + 12 * 3600000 };
+}
+
+// Hours-/days-based templates that are due now. orderId limits it to one
+// booking (used right after a booking is confirmed). Never throws.
+async function sendTimedTemplates(sql, { orderId = null, deadlineMs = 7000 } = {}) {
   const started = Date.now();
   const out = { sent: 0, failed: 0 };
+  let rows = [];
+  try {
+    const load = (withMinutes) => withMinutes
+      ? sql`SELECT t.id AS template_id, t.body, t.send_trigger, t.send_offset_days, t.send_offset_minutes, t.auto_send_listing_ids,
+                   o.id AS order_id, o.listing_id, o.arrival, o.departure, l.check_in_time, l.check_out_time, l.timezone
+            FROM message_templates t
+            JOIN guests owner ON owner.id = t.host_id AND owner.host_id IS NOT NULL
+            JOIN listings l ON l.host_id = owner.host_id
+            JOIN orders o ON o.listing_id = l.id AND o.status = 'paid' AND COALESCE(o.order_type, 'stay') = 'stay'
+            WHERE t.send_trigger = ANY(${TIMED_TRIGGERS})
+              AND (${orderId}::int IS NULL OR o.id = ${orderId})
+              AND (o.arrival BETWEEN CURRENT_DATE - 32 AND CURRENT_DATE + 32 OR o.departure BETWEEN CURRENT_DATE - 32 AND CURRENT_DATE + 32)
+              AND NOT EXISTS (SELECT 1 FROM template_sends s WHERE s.template_id = t.id AND s.order_id = o.id)
+            LIMIT 2000`
+      : sql`SELECT t.id AS template_id, t.body, t.send_trigger, t.send_offset_days, NULL::int AS send_offset_minutes, t.auto_send_listing_ids,
+                   o.id AS order_id, o.listing_id, o.arrival, o.departure, l.check_in_time, l.check_out_time, l.timezone
+            FROM message_templates t
+            JOIN guests owner ON owner.id = t.host_id AND owner.host_id IS NOT NULL
+            JOIN listings l ON l.host_id = owner.host_id
+            JOIN orders o ON o.listing_id = l.id AND o.status = 'paid' AND COALESCE(o.order_type, 'stay') = 'stay'
+            WHERE t.send_trigger = ANY(${TIMED_TRIGGERS})
+              AND (${orderId}::int IS NULL OR o.id = ${orderId})
+              AND (o.arrival BETWEEN CURRENT_DATE - 32 AND CURRENT_DATE + 32 OR o.departure BETWEEN CURRENT_DATE - 32 AND CURRENT_DATE + 32)
+              AND NOT EXISTS (SELECT 1 FROM template_sends s WHERE s.template_id = t.id AND s.order_id = o.id)
+            LIMIT 2000`;
+    try { rows = await load(true); } catch (err) { rows = await load(false); } // before migration_template_timing.sql
+  } catch (err) {
+    console.error('sendTimedTemplates skipped:', err.message);
+    return { ...out, skipped: true };
+  }
+  const now = Date.now();
+  for (const row of rows) {
+    if (Date.now() - started > deadlineMs) break;
+    if (!appliesToListing(row, row.listing_id)) continue;
+    const w = timedSendWindow(row);
+    if (!w || now < w.at || now > w.until) continue;
+    try {
+      if (!(await claimSend(sql, row.template_id, row.order_id))) continue;
+      const ctx = await loadBookingContext(sql, row.order_id);
+      if (!ctx) continue;
+      const conversationId = await conversationFor(sql, ctx.order);
+      await postHostMessage(sql, conversationId, resolveTemplateText(row.body, ctx.data));
+      out.sent++;
+    } catch (err) {
+      out.failed++;
+      console.error('timed template failed:', row.template_id, row.order_id, err.message);
+    }
+  }
+  return out;
+}
+
+// Everything scheduled: the timed templates above, plus the morning-of
+// messages (check-in day / check-out day), which wait until 07:30 in the
+// property's time zone so frequent runs never send them at midnight.
+async function sendScheduledTemplates(sql, { deadlineMs = 7000 } = {}) {
+  const started = Date.now();
+  const timed = await sendTimedTemplates(sql, { deadlineMs });
+  const out = { sent: timed.sent, failed: timed.failed };
   try {
     const due = await sql`
       SELECT t.id AS template_id, t.body, t.auto_send_listing_ids, o.id AS order_id, o.listing_id
@@ -264,20 +371,12 @@ async function sendScheduledTemplates(sql, { deadlineMs = 7000 } = {}) {
       JOIN guests owner ON owner.id = t.host_id AND owner.host_id IS NOT NULL
       JOIN listings l ON l.host_id = owner.host_id
       JOIN orders o ON o.listing_id = l.id AND o.status = 'paid' AND COALESCE(o.order_type, 'stay') = 'stay'
-      CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date AS today) lt
-      WHERE t.send_trigger IN ('before_checkin', 'checkin_day', 'checkout_day', 'after_checkout')
-        AND (
-             -- Due, or overdue but check-in not passed yet (a late booking,
-             -- or a day the job did not run): the guest still needs it.
-             (t.send_trigger = 'before_checkin' AND o.arrival - COALESCE(t.send_offset_days, 1) <= lt.today AND o.arrival >= lt.today)
-          OR (t.send_trigger = 'checkin_day'    AND o.arrival   = lt.today)
-          OR (t.send_trigger = 'checkout_day'   AND o.departure = lt.today)
-             -- Up to 2 days late if the job missed its day; never older.
-          OR (t.send_trigger = 'after_checkout' AND lt.today BETWEEN o.departure + COALESCE(t.send_offset_days, 1)
-                                                               AND o.departure + COALESCE(t.send_offset_days, 1) + 2)
-        )
+      CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata')) AS local_now) lt
+      WHERE t.send_trigger IN ('checkin_day', 'checkout_day')
+        AND lt.local_now::time >= time '07:30'
+        AND ((t.send_trigger = 'checkin_day' AND o.arrival = lt.local_now::date)
+          OR (t.send_trigger = 'checkout_day' AND o.departure = lt.local_now::date))
         AND NOT EXISTS (SELECT 1 FROM template_sends s WHERE s.template_id = t.id AND s.order_id = o.id)
-      ORDER BY o.arrival
       LIMIT 500
     `;
     for (const row of due) {
@@ -296,10 +395,10 @@ async function sendScheduledTemplates(sql, { deadlineMs = 7000 } = {}) {
       }
     }
   } catch (err) {
-    console.error('sendScheduledTemplates skipped:', err.message);
+    console.error('sendScheduledTemplates (day-of) skipped:', err.message);
     out.skipped = true;
   }
   return out;
 }
 
-module.exports = { resolveTemplateText, buildCheckinInstructionsText, buildCheckinStepsText, sendBookingConfirmedTemplates, sendScheduledTemplates, loadBookingContext };
+module.exports = { resolveTemplateText, buildCheckinInstructionsText, buildCheckinStepsText, sendBookingConfirmedTemplates, sendScheduledTemplates, sendTimedTemplates, timedSendWindow, parseClock, zonedToUtc, loadBookingContext };
