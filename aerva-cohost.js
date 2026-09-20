@@ -37,7 +37,7 @@
   // Must match the co-host allowlists in guest-profile.js.
   var MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'translate', 'conversationTemplates'];
   var TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];
-  var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost'];
+  var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'resendCohostInvite', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost'];
 
   function bodyJson(init){
     try{ return init && typeof init.body === 'string' ? JSON.parse(init.body) : null; }catch(e){ return null; }

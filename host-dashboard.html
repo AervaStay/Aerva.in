@@ -4114,13 +4114,14 @@
     const rows = state.cohosts.map(c => `
       <div class="ch-row">
         <div>
-          <div class="ch-who">${esc(c.name || c.email)}<span class="ch-tag ${c.status === 'active' ? 'active' : ''}">${c.status === 'active' ? 'Active' : 'Invited'}</span></div>
+          <div class="ch-who">${esc(c.name || c.email)}<span class="ch-tag ${c.status === 'active' ? 'active' : ''}">${c.status === 'active' ? 'Active' : (c.expired ? 'Invite expired' : 'Invited')}</span></div>
           <div class="ch-meta">${c.name ? esc(c.email) + ' \u00b7 ' : ''}${esc(accessSummary(c))} \u00b7 ${c.listingIds.length} listing${c.listingIds.length === 1 ? '' : 's'}${c.commissionPercent != null ? ' \u00b7 earns ' + c.commissionPercent + '% of your payout' : ''}</div>
           ${c.proposalStatus === 'proposed' ? `<div class="ch-proposal">Proposes <strong>${c.proposedPercent}%</strong> of your payout (after Aerva\u2019s commission)
             <button type="button" class="ch-btn primary" data-ch-approve="${c.id}">Approve</button>
             <button type="button" class="ch-btn" data-ch-decline="${c.id}">Decline</button></div>` : ''}
         </div>
         <div style="display:flex; gap:8px;">
+          ${c.status === 'invited' ? `<button type="button" class="ch-btn" data-ch-resend="${c.id}">Resend invite</button>` : ''}
           <button type="button" class="ch-btn" data-ch-edit="${c.id}">Edit</button>
           <button type="button" class="ch-btn" data-ch-remove="${c.id}">Remove</button>
         </div>
@@ -4178,6 +4179,14 @@
     }));
     section.querySelector('#chCancel').addEventListener('click', () => { form.classList.remove('open'); editingId = null; });
     section.querySelectorAll('[data-ch-edit]').forEach(b => b.addEventListener('click', () => openForm(state.cohosts.find(c => c.id === Number(b.getAttribute('data-ch-edit'))))));
+    section.querySelectorAll('[data-ch-resend]').forEach(b => b.addEventListener('click', async () => {
+      b.disabled = true;
+      const r = await call('POST', { resendCohostInvite: { id: Number(b.getAttribute('data-ch-resend')) } });
+      if(!r.ok){ b.disabled = false; alert(r.data.error || 'Could not resend the invitation.'); return; }
+      await load(section, (r.data.emailed ? 'Invitation sent again. It is valid for 14 days.' : 'The email could not be sent.')
+        + ' You can also share this link (it only works for the invited email): '
+        + '<input class="ch-link" readonly value="' + esc(r.data.inviteLink) + '" onclick="this.select()">');
+    }));
     section.querySelectorAll('[data-ch-remove]').forEach(b => b.addEventListener('click', async () => {
       if(!confirm('Remove this co-host? Their access ends straight away.')) return;
       const r = await call('POST', { removeCohost: { id: Number(b.getAttribute('data-ch-remove')) } });

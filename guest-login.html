@@ -295,7 +295,31 @@
   // a stay or an experience — lands on their dashboard, which opens on
   // Today. Everyone else lands on the site itself.
   function landingPageFor(guest){
+    // Arrived from a co-host invitation: back to it (it is accepted and the
+    // host's listings open — see openCohostCenter in aerva.js).
+    try{ if(localStorage.getItem('aerva_pending_cohost_invite')) return 'index.html?view=cohost'; }catch(e){}
     return (guest && (guest.hasActiveListing === true || guest.host_id)) ? 'host-dashboard.html' : 'index.html';
+  }
+
+  // Opened from a co-host invitation (index.html sends ?invite=1&mode=…):
+  // sign-up if the invited email has no account yet, log in if it has,
+  // with the email filled in. Inviting never creates an account.
+  function showEntry(){
+    const p = new URLSearchParams(window.location.search);
+    if(p.get('invite') !== '1'){ showOnly(loginState); return; }
+    const email = p.get('email') || '', host = p.get('host') || 'A host';
+    const signup = p.get('mode') === 'signup';
+    const state = signup ? signupState : loginState;
+    showOnly(state);
+    const field = document.getElementById(signup ? 'signupEmail' : 'loginEmail');
+    if(field && email) field.value = email;
+    let note = document.getElementById('inviteNote');
+    if(!note){ note = document.createElement('p'); note.id = 'inviteNote'; note.className = 'subtitle'; note.style.cssText = 'color:#8a6c39; font-weight:500;'; }
+    note.textContent = signup
+      ? `${host} invited you to co-host on Aerva. Create your account with ${email || 'the invited email'} to accept.`
+      : `${host} invited you to co-host on Aerva. Log in with ${email || 'the invited email'} to accept.`;
+    const heading = state.querySelector('h1');
+    if(heading) heading.insertAdjacentElement('afterend', note); else state.prepend(note);
   }
 
   async function checkExistingSession(){
@@ -347,13 +371,13 @@
           switchNote.style.display = 'block';
         }
       }
-      showOnly(loginState);
+      showEntry();
       return;
     }
 
     const existingToken = localStorage.getItem('aerva_guest_session');
     if(!existingToken){
-      showOnly(loginState);
+      showEntry();
       return;
     }
     try{
@@ -371,9 +395,9 @@
       localStorage.removeItem('aerva_guest_session');
       localStorage.removeItem('aerva_guest_email');
       localStorage.removeItem('aerva_guest_name');
-      showOnly(loginState);
+      showEntry();
     } catch(err){
-      showOnly(loginState);
+      showEntry();
     }
   }
 

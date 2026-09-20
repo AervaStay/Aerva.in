@@ -70,6 +70,8 @@ const { buildIcs, syncStaleFeeds } = require('./_calendar-sync');
 const { sendScheduledTemplates } = require('./_template-scheduling');
 const { releaseDueCoupons } = require('./_coupons');
 const { runAutoPayouts } = require('./_payouts');
+const { runScheduled, jobStatus } = require('./_scheduler');
+const { releaseDueDeposits } = require('./_deposits');
 const { decryptField } = require('./_secure-fields');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
@@ -114,9 +116,11 @@ function haversineDistanceKm(lat1, lon1, lat2, lon2) {
 // _approval-token.js.
 const crypto = require('crypto');
 function isCronAuthorized(req) {
-  const secret = process.env.CRON_SECRET;
+  // Spaces or a line break pasted around the secret (in Vercel or in the
+  // pinger's header) are ignored; the secret itself must match exactly.
+  const secret = String(process.env.CRON_SECRET || '').trim();
   if (!secret) return false;
-  const got = Buffer.from(String(req.headers['authorization'] || ''));
+  const got = Buffer.from(String(req.headers['authorization'] || '').trim().replace(/^Bearer\s+/i, 'Bearer '));
   const want = Buffer.from(`Bearer ${secret}`);
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
@@ -470,11 +474,271 @@ async function attachLikeCounts(rows) {
 }
 
 let lastTrafficScheduleRun = 0; // see ?runSchedules below
+
+// ---- Currency display rates (daily job) ----
+// Two free, keyless sources, tried in order. If both fail, the cached
+// rates from the last successful run stay in place.
+async function refreshCurrencyRates(sql) {
+  const sources = [
+    { url: 'https://open.er-api.com/v6/latest/INR', extract: (data) => data && data.rates },
+    { url: 'https://api.exchangerate-api.com/v4/latest/INR', extract: (data) => data && data.rates },
+  ];
+  for (const source of sources) {
+    try {
+      const r = await fetch(source.url);
+      if (!r.ok) continue;
+      const rates = source.extract(await r.json());
+      if (rates && rates.USD && rates.GBP) {
+        await sql`
+          INSERT INTO site_settings (key, value, updated_at)
+          VALUES ('currency_rates', ${JSON.stringify(rates)}, now())
+          ON CONFLICT (key) DO UPDATE SET value = ${JSON.stringify(rates)}, updated_at = now()
+        `;
+        return { success: true, source: source.url };
+      }
+    } catch (fetchErr) {
+      console.error('refreshCurrencyRates: source failed, trying next:', source.url, fetchErr);
+    }
+  }
+  throw new Error('Both currency rate sources failed — cached rates left unchanged.');
+}
+
+// ---- Every scheduled job, in priority order (see _scheduler.js) ----
+// Fast, time-sensitive jobs run every 5–15 minutes; heavy ones hourly or
+// daily. One pinger (?runSchedules=1 every 5 minutes) drives them all.
+const JOBS = [
+  { name: 'coupon_release', label: 'Release cancellation coupons (15 minutes after a cancellation)', everyMinutes: 5,
+    run: (c) => releaseDueCoupons(c.sql, { force: true }) },
+  { name: 'payouts', label: 'Payouts (5 PM on check-out day; retries every 4 hours; payout and refund status)', everyMinutes: 5,
+    run: (c) => runAutoPayouts(c.sql, { deadlineMs: Math.min(4000, c.remainingMs), razorpay: razorpayClient() }) },
+  { name: 'template_messages', label: 'Scheduled message templates', everyMinutes: 5,
+    run: (c) => sendScheduledTemplates(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  { name: 'deposit_refunds', label: 'Refund security deposits whose hold has ended', everyMinutes: 15,
+    run: (c) => releaseDueDeposits(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  { name: 'review_publish', label: 'Publish reviews (both sides in, or window closed)', everyMinutes: 15,
+    run: async (c) => { const r = await runReviewSweep(c.sql, { publishOnly: true }); if (r.status >= 400) throw new Error(r.body.error || 'failed'); return r.body; } },
+  { name: 'calendar_sync', label: 'Sync external calendars (Airbnb, Booking.com, Agoda…)', everyMinutes: 60, heavy: true, lockMinutes: 10,
+    run: (c) => syncStaleFeeds(c.sql, decryptField, { maxAgeMinutes: 55, deadlineMs: Math.min(6000, c.remainingMs), limit: 100 }) },
+  { name: 'daily_reviews_compliance_tiers', label: 'Review prompts, compliance deadlines, host/guest standing', dailyAtHour: 3, heavy: true, lockMinutes: 15,
+    run: async (c) => { const r = await runReviewSweep(c.sql, { forceTierSnapshot: c.forceTierSnapshot }); if (r.status >= 400) throw new Error(r.body.error || 'failed'); return r.body; } },
+  { name: 'currency_rates', label: 'Refresh currency display rates', dailyAtHour: 3, heavy: true,
+    run: (c) => refreshCurrencyRates(c.sql) },
+];
+async function runJobs(sql, opts = {}) {
+  return runScheduled(sql, JOBS, Object.assign({}, opts, { ctx: { sql, forceTierSnapshot: !!opts.forceTierSnapshot } }));
+}
 // Razorpay client for refund status checks (only when keys are set).
 function razorpayClient() {
   if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) return null;
   const Razorpay = require('razorpay');
   return new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
+}
+
+
+// ---- Reviews, prompts, compliance and tiers (the former daily sweep) ----
+// opts.publishOnly: publish what is due (both sides in, or window closed)
+// and deliver host reviews, then stop — run every 15 minutes. The full run
+// (prompts, compliance, standing, corrections) is the daily job.
+async function runReviewSweep(sql, opts = {}) {
+  const reply = (status, body) => ({ status, body });
+  try {
+    // Both sides in — release the pair together.
+    const pairs = await sql`
+      UPDATE listing_reviews lr SET published_at = now()
+      FROM guest_reviews gr
+      WHERE gr.order_id = lr.order_id
+        AND lr.published_at IS NULL AND lr.admin_reverted_at IS NULL
+        AND gr.admin_reverted_at IS NULL
+      RETURNING lr.id
+    `;
+    const pairsBack = await sql`
+      UPDATE guest_reviews gr SET published_at = now()
+      FROM listing_reviews lr
+      WHERE lr.order_id = gr.order_id
+        AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
+        AND lr.admin_reverted_at IS NULL
+      RETURNING gr.id, gr.order_id, gr.comment, gr.rating,
+                gr.cleanliness, gr.communication, gr.respectful, gr.rules
+    `;
+    // Window closed — publish whatever is there, unmatched. Anchored to
+    // the stay's departure, never to when the review was written.
+    const lapsedListing = await sql`
+      UPDATE listing_reviews lr SET published_at = now()
+      FROM orders o JOIN listings l ON l.id = o.listing_id
+      WHERE o.id = lr.order_id
+        AND lr.published_at IS NULL AND lr.admin_reverted_at IS NULL
+        AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - ${REVIEW_WINDOW_DAYS}::int
+      RETURNING lr.id
+    `;
+    const lapsedGuest = await sql`
+      UPDATE guest_reviews gr SET published_at = now()
+      FROM orders o JOIN listings l ON l.id = o.listing_id
+      WHERE o.id = gr.order_id
+        AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
+        AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - ${REVIEW_WINDOW_DAYS}::int
+      RETURNING gr.id, gr.order_id, gr.comment, gr.rating,
+                gr.cleanliness, gr.communication, gr.respectful, gr.rules
+    `;
+
+    // ---- The host's review of the guest, delivered to the guest ----
+    // Posted into the booking thread at the moment it becomes public,
+    // and only then: while it is held, neither side may read the
+    // other's. Publication sets published_at once, so each review is
+    // delivered exactly once.
+    for (const gr of [...pairsBack, ...lapsedGuest]) {
+      try {
+        await postHostReviewToThread(sql, gr);
+      } catch (err) {
+        console.error('could not deliver host review for order', gr.order_id, err);
+      }
+    }
+
+    if (opts.publishOnly) {
+      return reply(200, { publishedPaired: pairs.length + pairsBack.length, publishedLapsed: lapsedListing.length + lapsedGuest.length });
+    }
+    // Prompt yesterday's checkouts. review_prompt_sent_at is what stops
+    // this messaging the same guest every morning until they review.
+    const toPrompt = await sql`
+      SELECT o.id, o.guest_id, o.guest_email, o.listing_id, o.suite_name, l.host_id
+      FROM orders o JOIN listings l ON l.id = o.listing_id
+      WHERE o.status = 'paid'
+        -- Checked out on the property's calendar, same as the window.
+        AND o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date
+        AND o.departure >= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - 3
+        AND o.review_prompt_sent_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
+      LIMIT 200
+    `;
+    // Three ways, because one is easy to miss: an email, a message in
+    // the booking thread, and the bar on the site (that one is counted
+    // live from the session, not here). review_prompt_sent_at is what
+    // stops any of it repeating every morning.
+    let promptedCount = 0;
+    for (const o of toPrompt) {
+      try {
+        const sent = await sendReviewPromptEmail(o);
+        try {
+          await postReviewInviteToThread(sql, o);
+        } catch (err) {
+          // The email may well have gone; do not lose it over this.
+          console.error('could not post review invite for order', o.id, err);
+        }
+        // Marked either way: an address that bounces must not be retried
+        // every morning for the rest of the window.
+        await sql`UPDATE orders SET review_prompt_sent_at = now() WHERE id = ${o.id}`;
+        if (sent) promptedCount++;
+      } catch (err) {
+        // One bad order must not stop the sweep for every other guest.
+        console.error('review prompt failed for order', o.id, err);
+      }
+    }
+
+    // ---- Standing snapshot ----
+    // Runs after publication, so today's newly-visible reviews are
+    // already counted. Records a row only where standing actually
+    // changed; see _tier-history.js for why.
+    //
+    // The cutoffs are snapshotted with every property row. Without that
+    // a historical score is uninterpretable: "4.93" means nothing unless
+    // you also know the top-5% bar was 4.92 that day.
+    // Standing is recomputed only on a REVIEW DAY — 1 Jan, 1 Apr, 1 Jul,
+    // 1 Oct — assessing the quarter just ended, and holds unchanged
+    // between them. Everything above (publishing reviews, prompting
+    // guests) still runs daily; only the badges are frozen.
+    //
+    // ?forceTierSnapshot=1 recomputes off-cycle, for testing and for the
+    // first run after deploy, when tier_current is empty and waiting for
+    // the next quarter would mean no badges anywhere for months.
+    // Compliance deadlines are enforced here rather than on a cron of
+    // their own: Vercel's Hobby plan allows two cron jobs and both are
+    // taken. A listing 15 days past its flag is deactivated the next
+    // morning without anyone pressing anything. Never fatal — a failure
+    // here must not stop reviews being published.
+    // Scan first, then enforce. Scanning daily is what makes this
+    // automatic: a listing that stops meeting a requirement is found
+    // the next morning and its host told, without an admin running
+    // anything. Enforcing afterwards means a listing flagged 15 days
+    // ago comes down in the same pass.
+    let compliance = null;
+    let complianceScan = null;
+    try {
+      complianceScan = await runAllComplianceScans(sql);
+      compliance = await enforceComplianceDeadlines(sql, logAudit);
+    } catch (err) {
+      console.error('compliance run failed (non-fatal):', err);
+    }
+
+    const forceSnapshot = !!opts.forceTierSnapshot;
+    const summary = {
+      publishedPaired: pairs.length + pairsBack.length,
+      publishedLapsed: lapsedListing.length + lapsedGuest.length,
+      prompted: promptedCount,
+      complianceFlagged: complianceScan ? complianceScan.reduce((a, r) => a + (r.flagged || 0), 0) : null,
+      complianceBlocked: compliance ? compliance.blocked : null,
+      nextReview: nextReviewDate(new Date(), 'quarterly')
+    };
+
+    // Full review: every subject, as of right now.
+    if (isReviewDay(new Date(), 'quarterly') || forceSnapshot) {
+      const startedAt = new Date().toISOString();
+      let changes;
+      try {
+        const prevRows = await sql`
+          SELECT subject_type, subject_id, tier_key FROM tier_current
+          WHERE subject_type IN ('host', 'guest')
+        `;
+        const prev = { host: {}, guest: {} };
+        prevRows.forEach(r => { prev[r.subject_type][r.subject_id] = r.tier_key; });
+        changes = await runTierSnapshot({ asOf: startedAt, prev, hosts: null, guests: null, listings: true });
+        await markSnapshotRun(sql, startedAt);
+        // A full review covers every pending admin correction too.
+        await clearTierRecomputes(sql, startedAt);
+      } catch (err) {
+        console.error('tier snapshot failed (non-fatal):', err);
+        changes = { error: true };
+      }
+      return reply(200, { ...summary, tierChanges: changes });
+    }
+
+    // ---- Admin corrections (within 48 hours) ----
+    // Between review days badges stay frozen, EXCEPT where an admin has
+    // reverted a review. Those subjects get the last quarterly review
+    // re-run for them alone, as of the moment it ran, with the reverted
+    // review now excluded. See _tier-history.js.
+    const queue = await pendingTierRecomputes(sql);
+    if (!queue.length) {
+      return reply(200, { ...summary, tierSnapshot: 'skipped — not a review day' });
+    }
+    const takenUpTo = queue.reduce((m, e) => (e.at && e.at > m ? e.at : m), '');
+    const lastRun = await lastSnapshotRun(sql);
+    if (!lastRun) {
+      // No review has ever run, so no badge exists to correct. The first
+      // full review will already leave the reverted review out.
+      await clearTierRecomputes(sql, takenUpTo);
+      return reply(200, { ...summary, corrections: 'none needed — no review has run yet' });
+    }
+    try {
+      const ids = (type) => [...new Set(queue.filter(e => e.type === type && e.id != null).map(e => Number(e.id)))];
+      const prev = {
+        host: await standingBefore(sql, 'host', lastRun),
+        guest: await standingBefore(sql, 'guest', lastRun)
+      };
+      const changes = await runTierSnapshot({
+        asOf: lastRun, prev,
+        hosts: ids('host'), guests: ids('guest'),
+        listings: queue.some(e => e.type === 'listing')
+      });
+      await clearTierRecomputes(sql, takenUpTo);
+      return reply(200, { ...summary, corrections: { requests: queue.length, asOf: lastRun, changes } });
+    } catch (err) {
+      // Queue left in place, so tomorrow's sweep retries.
+      console.error('tier correction failed (will retry tomorrow):', err);
+      return reply(200, { ...summary, corrections: 'failed — will retry at the next sweep' });
+    }
+  } catch (err) {
+    console.error('reviewSweep error:', err);
+    return reply(500, { error: 'Review sweep failed.' });
+  }
 }
 
 module.exports = async (req, res) => {
@@ -490,28 +754,32 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // ---- Cancellation coupons: release any whose 15 minutes are up ----
-  // GET ?releaseCoupons=1 (cron secret) — for an external pinger every few
-  // minutes (e.g. cron-job.org) so coupons go out right on time. Every
-  // other request here also runs the (throttled) check below.
-  // GET ?runSchedules=1 (cron secret) — ONE job for an external pinger
-  // every 5 minutes: cancellation coupons AND scheduled template messages
-  // (before/after check-in or check-out, check-in / check-out day).
+  // ---- The scheduler (see JOBS above and _scheduler.js) ----
+  // GET ?runSchedules=1 (cron secret): ONE external pinger every 5 minutes
+  // (cron-job.org) runs every job that is due. ?releaseCoupons=1 kept for
+  // an older pinger address.
   if (req.method === 'GET' && (req.query.releaseCoupons === '1' || req.query.runSchedules === '1')) {
     if (!isCronAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
-    const coupons = await releaseDueCoupons(sql, { force: true });
-    if (req.query.releaseCoupons === '1') return res.status(200).json(coupons);
-    const messages = await sendScheduledTemplates(sql, { deadlineMs: 5000 });
-    const payouts = await runAutoPayouts(sql, { deadlineMs: 4000, razorpay: razorpayClient() }); // 5 PM on check-out day; 4-hourly retries; refund status
-    return res.status(200).json({ coupons, messages, payouts });
+    return res.status(200).json(await runJobs(sql, { budgetMs: 8000 }));
+  }
+  // GET ?jobStatus=1 (admin): every job, its schedule and how its last run went.
+  // GET ?runJob=<name> (admin): run one job now (for when something went wrong).
+  if (req.method === 'GET' && (req.query.jobStatus === '1' || req.query.runJob)) {
+    if (!isAdminAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    if (req.query.runJob) {
+      if (!JOBS.some(j => j.name === req.query.runJob)) return res.status(404).json({ error: 'No such job.' });
+      const out = await runJobs(sql, { only: String(req.query.runJob), force: true, budgetMs: 20000 });
+      if (!out.ran.length && !out.failed.length) return res.status(409).json({ error: 'This job is running right now. Try again in a few minutes.' });
+      return res.status(out.failed.length ? 502 : 200).json(out);
+    }
+    return res.status(200).json({ jobs: await jobStatus(sql, JOBS) });
   }
   if (req.method === 'GET') {
-    await releaseDueCoupons(sql);
-    // Backstop between pinger runs: at most every 2 minutes per server.
+    // Backstop between pinger runs (site traffic): light jobs only, at most
+    // every 2 minutes per server; the locks stop any double run.
     if (Date.now() - lastTrafficScheduleRun > 120000) {
       lastTrafficScheduleRun = Date.now();
-      await sendScheduledTemplates(sql, { deadlineMs: 2500 });
-      await runAutoPayouts(sql, { deadlineMs: 2500, razorpay: razorpayClient() });
+      await runJobs(sql, { budgetMs: 2500, lightOnly: true });
     }
   }
 
@@ -582,214 +850,12 @@ module.exports = async (req, res) => {
     if (!isCronAuthorized(req) && !isAdminAuthorized(req)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    // Daily calendar sync rides on this job (the Hobby plan runs cron once a
-    // day). Feeds not synced in 20 hours; 7-second budget. Anything not
-    // reached is still synced before any booking of that listing.
-    const calendarSync = await syncStaleFeeds(sql, decryptField, { maxAgeMinutes: 20 * 60, deadlineMs: 7000, limit: 300 });
-    // Timed message templates due today (before check-in, check-in day,
-    // check-out day, after check-out) — see _template-scheduling.js.
-    const scheduledMessages = await sendScheduledTemplates(sql, { deadlineMs: 6000 });
-    const couponRelease = await releaseDueCoupons(sql, { force: true });
-    const autoPayouts = await runAutoPayouts(sql, { deadlineMs: 5000, razorpay: razorpayClient() });
-    try {
-      // Both sides in — release the pair together.
-      const pairs = await sql`
-        UPDATE listing_reviews lr SET published_at = now()
-        FROM guest_reviews gr
-        WHERE gr.order_id = lr.order_id
-          AND lr.published_at IS NULL AND lr.admin_reverted_at IS NULL
-          AND gr.admin_reverted_at IS NULL
-        RETURNING lr.id
-      `;
-      const pairsBack = await sql`
-        UPDATE guest_reviews gr SET published_at = now()
-        FROM listing_reviews lr
-        WHERE lr.order_id = gr.order_id
-          AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
-          AND lr.admin_reverted_at IS NULL
-        RETURNING gr.id, gr.order_id, gr.comment, gr.rating,
-                  gr.cleanliness, gr.communication, gr.respectful, gr.rules
-      `;
-      // Window closed — publish whatever is there, unmatched. Anchored to
-      // the stay's departure, never to when the review was written.
-      const lapsedListing = await sql`
-        UPDATE listing_reviews lr SET published_at = now()
-        FROM orders o JOIN listings l ON l.id = o.listing_id
-        WHERE o.id = lr.order_id
-          AND lr.published_at IS NULL AND lr.admin_reverted_at IS NULL
-          AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - ${REVIEW_WINDOW_DAYS}::int
-        RETURNING lr.id
-      `;
-      const lapsedGuest = await sql`
-        UPDATE guest_reviews gr SET published_at = now()
-        FROM orders o JOIN listings l ON l.id = o.listing_id
-        WHERE o.id = gr.order_id
-          AND gr.published_at IS NULL AND gr.admin_reverted_at IS NULL
-          AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - ${REVIEW_WINDOW_DAYS}::int
-        RETURNING gr.id, gr.order_id, gr.comment, gr.rating,
-                  gr.cleanliness, gr.communication, gr.respectful, gr.rules
-      `;
-
-      // ---- The host's review of the guest, delivered to the guest ----
-      // Posted into the booking thread at the moment it becomes public,
-      // and only then: while it is held, neither side may read the
-      // other's. Publication sets published_at once, so each review is
-      // delivered exactly once.
-      for (const gr of [...pairsBack, ...lapsedGuest]) {
-        try {
-          await postHostReviewToThread(sql, gr);
-        } catch (err) {
-          console.error('could not deliver host review for order', gr.order_id, err);
-        }
-      }
-
-      // Prompt yesterday's checkouts. review_prompt_sent_at is what stops
-      // this messaging the same guest every morning until they review.
-      const toPrompt = await sql`
-        SELECT o.id, o.guest_id, o.guest_email, o.listing_id, o.suite_name, l.host_id
-        FROM orders o JOIN listings l ON l.id = o.listing_id
-        WHERE o.status = 'paid'
-          -- Checked out on the property's calendar, same as the window.
-          AND o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date
-          AND o.departure >= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date - 3
-          AND o.review_prompt_sent_at IS NULL
-          AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
-        LIMIT 200
-      `;
-      // Three ways, because one is easy to miss: an email, a message in
-      // the booking thread, and the bar on the site (that one is counted
-      // live from the session, not here). review_prompt_sent_at is what
-      // stops any of it repeating every morning.
-      let promptedCount = 0;
-      for (const o of toPrompt) {
-        try {
-          const sent = await sendReviewPromptEmail(o);
-          try {
-            await postReviewInviteToThread(sql, o);
-          } catch (err) {
-            // The email may well have gone; do not lose it over this.
-            console.error('could not post review invite for order', o.id, err);
-          }
-          // Marked either way: an address that bounces must not be retried
-          // every morning for the rest of the window.
-          await sql`UPDATE orders SET review_prompt_sent_at = now() WHERE id = ${o.id}`;
-          if (sent) promptedCount++;
-        } catch (err) {
-          // One bad order must not stop the sweep for every other guest.
-          console.error('review prompt failed for order', o.id, err);
-        }
-      }
-
-      // ---- Standing snapshot ----
-      // Runs after publication, so today's newly-visible reviews are
-      // already counted. Records a row only where standing actually
-      // changed; see _tier-history.js for why.
-      //
-      // The cutoffs are snapshotted with every property row. Without that
-      // a historical score is uninterpretable: "4.93" means nothing unless
-      // you also know the top-5% bar was 4.92 that day.
-      // Standing is recomputed only on a REVIEW DAY — 1 Jan, 1 Apr, 1 Jul,
-      // 1 Oct — assessing the quarter just ended, and holds unchanged
-      // between them. Everything above (publishing reviews, prompting
-      // guests) still runs daily; only the badges are frozen.
-      //
-      // ?forceTierSnapshot=1 recomputes off-cycle, for testing and for the
-      // first run after deploy, when tier_current is empty and waiting for
-      // the next quarter would mean no badges anywhere for months.
-      // Compliance deadlines are enforced here rather than on a cron of
-      // their own: Vercel's Hobby plan allows two cron jobs and both are
-      // taken. A listing 15 days past its flag is deactivated the next
-      // morning without anyone pressing anything. Never fatal — a failure
-      // here must not stop reviews being published.
-      // Scan first, then enforce. Scanning daily is what makes this
-      // automatic: a listing that stops meeting a requirement is found
-      // the next morning and its host told, without an admin running
-      // anything. Enforcing afterwards means a listing flagged 15 days
-      // ago comes down in the same pass.
-      let compliance = null;
-      let complianceScan = null;
-      try {
-        complianceScan = await runAllComplianceScans(sql);
-        compliance = await enforceComplianceDeadlines(sql, logAudit);
-      } catch (err) {
-        console.error('compliance run failed (non-fatal):', err);
-      }
-
-      const forceSnapshot = req.query.forceTierSnapshot === '1';
-      const summary = {
-        calendarSync,
-        scheduledMessages,
-        couponRelease,
-        autoPayouts,
-        publishedPaired: pairs.length + pairsBack.length,
-        publishedLapsed: lapsedListing.length + lapsedGuest.length,
-        prompted: promptedCount,
-        complianceFlagged: complianceScan ? complianceScan.reduce((a, r) => a + (r.flagged || 0), 0) : null,
-        complianceBlocked: compliance ? compliance.blocked : null,
-        nextReview: nextReviewDate(new Date(), 'quarterly')
-      };
-
-      // Full review: every subject, as of right now.
-      if (isReviewDay(new Date(), 'quarterly') || forceSnapshot) {
-        const startedAt = new Date().toISOString();
-        let changes;
-        try {
-          const prevRows = await sql`
-            SELECT subject_type, subject_id, tier_key FROM tier_current
-            WHERE subject_type IN ('host', 'guest')
-          `;
-          const prev = { host: {}, guest: {} };
-          prevRows.forEach(r => { prev[r.subject_type][r.subject_id] = r.tier_key; });
-          changes = await runTierSnapshot({ asOf: startedAt, prev, hosts: null, guests: null, listings: true });
-          await markSnapshotRun(sql, startedAt);
-          // A full review covers every pending admin correction too.
-          await clearTierRecomputes(sql, startedAt);
-        } catch (err) {
-          console.error('tier snapshot failed (non-fatal):', err);
-          changes = { error: true };
-        }
-        return res.status(200).json({ ...summary, tierChanges: changes });
-      }
-
-      // ---- Admin corrections (within 48 hours) ----
-      // Between review days badges stay frozen, EXCEPT where an admin has
-      // reverted a review. Those subjects get the last quarterly review
-      // re-run for them alone, as of the moment it ran, with the reverted
-      // review now excluded. See _tier-history.js.
-      const queue = await pendingTierRecomputes(sql);
-      if (!queue.length) {
-        return res.status(200).json({ ...summary, tierSnapshot: 'skipped — not a review day' });
-      }
-      const takenUpTo = queue.reduce((m, e) => (e.at && e.at > m ? e.at : m), '');
-      const lastRun = await lastSnapshotRun(sql);
-      if (!lastRun) {
-        // No review has ever run, so no badge exists to correct. The first
-        // full review will already leave the reverted review out.
-        await clearTierRecomputes(sql, takenUpTo);
-        return res.status(200).json({ ...summary, corrections: 'none needed — no review has run yet' });
-      }
-      try {
-        const ids = (type) => [...new Set(queue.filter(e => e.type === type && e.id != null).map(e => Number(e.id)))];
-        const prev = {
-          host: await standingBefore(sql, 'host', lastRun),
-          guest: await standingBefore(sql, 'guest', lastRun)
-        };
-        const changes = await runTierSnapshot({
-          asOf: lastRun, prev,
-          hosts: ids('host'), guests: ids('guest'),
-          listings: queue.some(e => e.type === 'listing')
-        });
-        await clearTierRecomputes(sql, takenUpTo);
-        return res.status(200).json({ ...summary, corrections: { requests: queue.length, asOf: lastRun, changes } });
-      } catch (err) {
-        // Queue left in place, so tomorrow's sweep retries.
-        console.error('tier correction failed (will retry tomorrow):', err);
-        return res.status(200).json({ ...summary, corrections: 'failed — will retry at the next sweep' });
-      }
-    } catch (err) {
-      console.error('reviewSweep error:', err);
-      return res.status(500).json({ error: 'Review sweep failed.' });
-    }
+    // The daily Vercel cron (a backstop for the 5-minute pinger): runs
+    // whatever is DUE, so daily jobs already run today are not repeated.
+    // ?forceTierSnapshot=1 (admin/testing) forces the daily jobs.
+    const forceTier = req.query.forceTierSnapshot === '1';
+    const out = await runJobs(sql, { forceDaily: forceTier, budgetMs: 25000, forceTierSnapshot: forceTier });
+    return res.status(200).json(out);
   }
 
 
@@ -1213,33 +1279,8 @@ module.exports = async (req, res) => {
       if (!isCronAuthorized(req)) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
-      // Same two free/keyless sources the frontend used to call directly
-      // — tried in order, first one to return a real-looking rate table
-      // wins. If both fail, the cached rates from the last successful
-      // run stay in place rather than being wiped out.
-      const sources = [
-        { url: 'https://open.er-api.com/v6/latest/INR', extract: (data) => data && data.rates },
-        { url: 'https://api.exchangerate-api.com/v4/latest/INR', extract: (data) => data && data.rates },
-      ];
-      for (const source of sources) {
-        try {
-          const res2 = await fetch(source.url);
-          if (!res2.ok) continue;
-          const data = await res2.json();
-          const rates = source.extract(data);
-          if (rates && rates.USD && rates.GBP) {
-            await sql`
-              INSERT INTO site_settings (key, value, updated_at)
-              VALUES ('currency_rates', ${JSON.stringify(rates)}, now())
-              ON CONFLICT (key) DO UPDATE SET value = ${JSON.stringify(rates)}, updated_at = now()
-            `;
-            return res.status(200).json({ success: true, source: source.url });
-          }
-        } catch (fetchErr) {
-          console.error('refreshCurrencyRates: source failed, trying next:', source.url, fetchErr);
-        }
-      }
-      return res.status(502).json({ error: 'Both currency rate sources failed — cached rates left unchanged.' });
+      try { return res.status(200).json(await refreshCurrencyRates(sql)); }
+      catch (err) { return res.status(502).json({ error: err.message }); }
     }
 
     // ---- Aerva Experience browsing ----
