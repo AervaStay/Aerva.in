@@ -659,7 +659,7 @@ async function handleCohostModes(req, res, accountId) {
       try {
         rows = await sql`
           SELECT c.id, c.invited_email, c.access, c.permissions, c.listing_ids, c.status, c.invited_at, c.accepted_at,
-                 c.commission_percent, c.proposed_percent, c.proposal_status,
+                 c.commission_percent, c.proposed_percent, c.proposal_status, c.cohost_guest_id,
                  g.name AS cohost_name, g.profile_photo_url, g.profile_work, g.profile_hobbies, g.profile_about, g.created_at AS member_since
           FROM cohosts c LEFT JOIN guests g ON g.id = c.cohost_guest_id
           WHERE c.host_id = ${me.host_id} AND c.status IN ('invited', 'active')
@@ -669,12 +669,28 @@ async function handleCohostModes(req, res, accountId) {
         // Profile columns unreadable: still list the co-hosts, without profiles.
         rows = await sql`
           SELECT c.id, c.invited_email, c.access, c.permissions, c.listing_ids, c.status, c.invited_at, c.accepted_at,
-                 c.commission_percent, c.proposed_percent, c.proposal_status, g.name AS cohost_name
+                 c.commission_percent, c.proposed_percent, c.proposal_status, c.cohost_guest_id, g.name AS cohost_name
           FROM cohosts c LEFT JOIN guests g ON g.id = c.cohost_guest_id
           WHERE c.host_id = ${me.host_id} AND c.status IN ('invited', 'active')
           ORDER BY c.invited_at DESC
         `;
       }
+      // What each active co-host still has to give (phone, about, commission).
+      const pendingById = {};
+      for (const r of rows) if (r.status === 'active' && r.cohost_guest_id) pendingById[r.id] = await cohostDetailsMissing(sql, r.cohost_guest_id, me.host_id);
+      // Card details for each listing (photo, type, place, price), as the
+      // profile's "homes & experiences" cards show them.
+      let cards = {};
+      try {
+        const cr = await sql`
+          SELECT id, city, area, property_type, nightly_rate, experience_price_unit,
+                 COALESCE(NULLIF(btrim(cover_photo_url), ''),
+                   CASE WHEN jsonb_typeof(exterior_photo_urls->0) = 'string' THEN exterior_photo_urls->>0 ELSE exterior_photo_urls->0->>'url' END,
+                   CASE WHEN jsonb_typeof(interior_photo_urls->0) = 'string' THEN interior_photo_urls->>0 ELSE interior_photo_urls->0->>'url' END) AS photo_url
+          FROM listings WHERE host_id = ${me.host_id}
+        `;
+        cr.forEach(l => { cards[l.id] = l; });
+      } catch (err) { cards = {}; /* card details unreadable: names only */ }
       res.status(200).json({
         cohosts: rows.map(r => ({
           id: r.id, email: r.invited_email, name: r.cohost_name || null, access: r.access,
@@ -684,6 +700,7 @@ async function handleCohostModes(req, res, accountId) {
           commissionPercent: r.commission_percent == null ? null : Number(r.commission_percent),
           proposedPercent: r.proposed_percent == null ? null : Number(r.proposed_percent),
           proposalStatus: r.proposal_status || null,
+          pending: pendingById[r.id] || [],
           // Their Aerva profile, once they have accepted (a pending
           // invitation shows only the email it was sent to).
           profile: r.status === 'active' ? {
@@ -692,7 +709,12 @@ async function handleCohostModes(req, res, accountId) {
           } : null
         })),
         isHost: !!me.host_id,
-        listings: ownListings.map(l => ({ id: l.id, name: l.property_name, type: l.listing_type })),
+        listings: ownListings.map(l => {
+          const c = cards[l.id] || {};
+          return { id: l.id, name: l.property_name, type: l.listing_type === 'experience' ? 'experience' : 'stay',
+                   place: [c.area, c.city].filter(Boolean).join(', '), propertyType: c.property_type || null,
+                   price: Number(c.nightly_rate) || null, priceUnit: c.experience_price_unit || null, photoUrl: c.photo_url || null };
+        }),
         permissionLabels: COHOST_PERMISSIONS,
         alwaysLabel: ALWAYS_LABEL
       });

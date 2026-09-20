@@ -34,7 +34,7 @@
 // message-filtering approach and its real, worth-knowing limitations.
 
 const { neon } = require('@neondatabase/serverless');
-const { submissionOpen, reviewWindowState, REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { daysSinceCheckout, submissionOpen, reviewWindowState, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { buildProfile, sanitizeProfileInput } = require('./_profiles');
 const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
@@ -155,6 +155,35 @@ function redactContactInfo(text) {
   result = result.replace(/\u0000URL(\d+)\u0000/g, (_m, i) => urls[Number(i)]);
 
   return { displayText: result, wasRedacted: redacted };
+}
+
+
+// ---- "How was your stay / your guest?" inside a message thread ----
+// For the person reading the thread: is their review still to be written,
+// for which booking, and how many days are left. null when there is
+// nothing to ask for (not checked out, already written, window closed).
+async function threadReviewPrompt(sql, conversationId, role) {
+  try {
+    const o = (await sql`
+      SELECT o.id, o.suite_name, COALESCE(o.order_type, 'stay') AS order_type, o.departure,
+             COALESCE(g.name, o.guest_email) AS guest_name,
+             (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
+      FROM conversations c JOIN orders o ON o.id = c.order_id
+      JOIN listings l ON l.id = o.listing_id LEFT JOIN guests g ON g.id = o.guest_id
+      WHERE c.id = ${conversationId} AND o.status = 'paid'
+    `)[0];
+    if (!o) return null;
+    if (reviewWindowState(o.departure, o.local_today) !== 'open') return null;
+    const done = role === 'host'
+      ? (await sql`SELECT 1 FROM guest_reviews WHERE order_id = ${o.id} LIMIT 1`).length > 0
+      : (await sql`SELECT 1 FROM listing_reviews WHERE order_id = ${o.id} LIMIT 1`).length > 0;
+    if (done) return null;
+    return { orderId: o.id, role, listingName: o.suite_name || '', listingType: o.order_type === 'experience' ? 'experience' : 'stay',
+             guestName: o.guest_name || 'your guest', daysLeft: Math.max(0, REVIEW_WINDOW_DAYS - daysSinceCheckout(o.departure, o.local_today)) };
+  } catch (err) {
+    console.error('threadReviewPrompt skipped:', err.message);
+    return null;   // never block a conversation over the prompt
+  }
 }
 
 module.exports = async (req, res) => {
@@ -315,7 +344,9 @@ module.exports = async (req, res) => {
         // isHost-first priority meant such an account's own messages,
         // and the host's replies, all rendered identically as "mine,"
         // making it look like nothing was ever received.
-        return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole: isGuest ? 'guest' : 'host', messages });
+        const viewerRole = isGuest ? 'guest' : 'host';
+        return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole, messages,
+          reviewPrompt: await threadReviewPrompt(sql, conversationId, viewerRole) });
       }
 
       // Every conversation this account is part of — as host on some,
@@ -444,7 +475,8 @@ module.exports = async (req, res) => {
             WHERE conversation_id = ${conversationId} AND sender_type = ${otherSenderType} AND read_at IS NULL
           `;
         }
-        return res.status(200).json({ messages, myRole: isHost ? 'host' : 'guest' });
+        const myRole = isHost ? 'host' : 'guest';
+        return res.status(200).json({ messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole) });
       }
 
       if (mode === 'templates') {
