@@ -320,6 +320,7 @@ module.exports = async (req, res) => {
     let experiences = [];
     let chargeCurrency = 'INR';
     let couponDiscount = 0;
+    let couponForfeited = 0;
 
     // Payment is genuine. Pull the trusted stay details back from Razorpay's
     // own order record — this is what create-order.js stored in `notes`
@@ -352,6 +353,7 @@ module.exports = async (req, res) => {
       // double-counted across multiple stays/experiences in one payment.
       const couponId = order.notes?.couponId ? Number(order.notes.couponId) : null;
       couponDiscount = order.notes?.couponDiscount ? Number(order.notes.couponDiscount) : 0;
+      couponForfeited = order.notes?.couponForfeited ? Number(order.notes.couponForfeited) : 0;
       let couponAttributed = false;
 
       // GST is stored per item by create-order.js (each stay has its own
@@ -436,6 +438,11 @@ module.exports = async (req, res) => {
 
         if (thisRowCouponId) {
           await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${inserted[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
+          // The unused part of a coupon worth more than the booking price (see
+          // create-order.js). Separate and fail-safe: the redemption above must
+          // always be saved, even before migration_coupon_forfeit.sql has run.
+          try { if (couponForfeited > 0) await sql`UPDATE coupons SET forfeited_amount = ${couponForfeited} WHERE id = ${thisRowCouponId}`; }
+          catch (e) { console.error('coupon forfeit not recorded:', e.message); }
         }
         const newOrderId = inserted[0].id;
 
@@ -533,6 +540,8 @@ module.exports = async (req, res) => {
 
         if (thisRowCouponId) {
           await sql`UPDATE coupons SET status = 'redeemed', redeemed_order_id = ${insertedEx[0].id}, redeemed_at = now() WHERE id = ${thisRowCouponId}`;
+          try { if (couponForfeited > 0) await sql`UPDATE coupons SET forfeited_amount = ${couponForfeited} WHERE id = ${thisRowCouponId}`; }
+          catch (e) { console.error('coupon forfeit not recorded:', e.message); }
         }
         await logAudit(sql, {
           action: 'booking_confirmed', success: true, actorType: 'guest', actorIdentifier: email || null,
