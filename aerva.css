@@ -2229,3 +2229,60 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
 .tpl-ph-row code{ font-family:ui-monospace, Menlo, monospace; font-size:13px; color:var(--gold-deep); min-width:118px; }
 .tpl-ph-row:hover{ background:#faf8f5; }
 @media (max-width:640px){ .tpl-ph-list{ max-height:none; } .tpl-ph-row{ padding:11px 2px; } }
+
+/* Aerva Privacy page */
+#privacyView{ background:#fff; }
+.privacy-eyebrow{ font-size:13px; letter-spacing:0.08em; opacity:0.6; margin-bottom:6px; }
+.privacy-intro{ font-size:17px; line-height:1.7; margin:10px 0 6px; max-width:720px; }
+
+/* Terms of Service: the bordered notice at the top, and the line under
+   every login / sign-up button. */
+.legal-notice{ border:1px solid var(--line-dark); border-radius:14px; padding:16px 20px; margin:18px 0 22px; font-size:15.5px; line-height:1.65; background:#fff; }
+.terms-note{ font-size:12.5px; line-height:1.6; opacity:0.75; margin:12px 0 0; text-align:center; }
+.terms-note a{ color:inherit; text-decoration:underline; text-underline-offset:2px; }
+
+/* Policy Center list, and the Terms version heading / notice links. */
+.policy-index{ display:flex; flex-direction:column; border-top:1px solid var(--line-dark); }
+.policy-index-item{ display:flex; flex-direction:column; gap:3px; padding:16px 2px; border-bottom:1px solid var(--line-dark); color:inherit; text-decoration:none; }
+.policy-index-item:hover .policy-index-title{ text-decoration:underline; text-underline-offset:3px; }
+.policy-index-title{ font-size:17px; font-weight:500; }
+.policy-index-summary{ font-size:14.5px; opacity:0.7; line-height:1.5; }
+.policy-back{ margin:0 0 8px; font-size:14px; }
+.policy-back a{ color:var(--gold-deep); }
+.legal-notice p{ margin:4px 0; }
+.legal-notice ul{ margin:6px 0 2px; padding-left:22px; }
+.legal-notice li{ margin:4px 0; }
+.legal-notice a{ color:inherit; text-decoration:underline; text-underline-offset:2px; font-weight:500; }
+.legal-notice a[aria-current]{ color:var(--gold-deep); }
+.terms-version{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:26px; margin:22px 0 10px; }
+
+/* ---------- Search card filters on phones (Sept 2026) ----------
+   An earlier phone rule for this panel was overridden by the desktop rule
+   written after it, so on phones the panel kept its desktop left border,
+   refused to shrink, and ran past the card's right edge. This block is
+   last in the file, so it wins. Two equal columns (More Filters, Near
+   Me), Clear filters centred below; edges line up with the search button. */
+@media (max-width:640px){
+  .pill-search .filter-bar{
+    border-left:none; border-top:none;          /* the Who row already draws the line above */
+    padding:16px 20px 4px; margin:0; box-sizing:border-box;
+    width:100%; max-width:100%; flex:0 0 auto; align-self:stretch;
+    display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; align-items:center;
+    background:transparent;
+  }
+  .pill-search .filter-bar .more-filters-wrapper{ grid-column:1; grid-row:1; min-width:0; }
+  .pill-search .filter-bar #showDistanceBtn{ grid-column:2; grid-row:1; }
+  .pill-search .filter-bar .more-filters-btn,
+  .pill-search .filter-bar #showDistanceBtn{
+    width:100%; min-width:0; min-height:46px; margin:0; padding:0 10px; box-sizing:border-box;
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    white-space:nowrap; font-size:14px; letter-spacing:0.02em;
+  }
+  .pill-search .filter-bar .more-filters-btn svg,
+  .pill-search .filter-bar #showDistanceBtn svg{ flex:0 0 auto; }
+  .pill-search .filter-bar #clearFiltersBtn{ grid-column:1 / -1; grid-row:2; justify-self:center; margin:0; padding:6px 0; }
+  .pill-search-submit{ width:auto; align-self:stretch; margin:12px 20px 18px; }
+}
+
+/* Coupon rule under the coupon field at checkout. */
+.coupon-rule{ font-size:12.5px; line-height:1.5; opacity:0.7; margin:6px 0 0; }

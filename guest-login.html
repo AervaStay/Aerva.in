@@ -36,6 +36,8 @@
 
   .social-buttons{display:flex; flex-direction:column; gap:10px; margin-bottom:20px;}
   .divider-below{margin:26px 0 18px;}
+  .terms-note{font-size:12px; line-height:1.6; opacity:0.7; margin:14px 0 0; text-align:center;}
+  .terms-note a{color:inherit; text-decoration:underline; text-underline-offset:2px;}
   /* Google as a square tile, centred under Log In. */
   .social-buttons{align-items:center;}
   .social-tile{width:60px; height:60px; border-radius:14px; border:1px solid #dcdcdc; background:#fff;
@@ -96,6 +98,7 @@
         </svg>
       </button>
     </div>
+    <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
     <p class="switch-mode"><button type="button" id="showForgotPassword">Forgot your password?</button></p>
     <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
     <!-- Phone login is built and working (guest-phone-auth.js + the screens
@@ -171,6 +174,7 @@
         <input id="signupPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" required>
       </div>
       <button type="submit" class="btn" id="signupBtn">Create Account</button>
+      <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
       <p class="error" id="signupError" style="display:none;"></p>
     </form>
     <p class="switch-mode">Already have an account? <button type="button" id="showLogin">Log in</button></p>
@@ -196,6 +200,7 @@
         </div>
       </div>
       <button type="submit" class="btn" id="phoneRequestBtn">Send Code</button>
+      <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
       <p class="error" id="phoneRequestError" style="display:none;"></p>
     </form>
     <p class="switch-mode"><button type="button" id="showLoginFromPhone">Log in with email instead</button></p>

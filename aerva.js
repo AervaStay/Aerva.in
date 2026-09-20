@@ -8011,6 +8011,7 @@
               <div class="field" style="margin-top:12px;">
                 <label for="listingCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
                 <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+                <p class="coupon-rule">Coupons cover the booking price only. Service fee, GST and any deposit are charged in full. Any unused coupon balance is not refunded.</p>
               </div>
               <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
               <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
@@ -8993,7 +8994,8 @@
         // The discount is already baked into what Razorpay will actually
         // charge (see order.amount below) — this is just confirming to
         // the guest that their code worked, before the payment popup opens.
-        confirmEl.textContent = `Coupon applied — ${fmt(order.couponDiscount)} off this booking.`;
+        confirmEl.textContent = `Coupon applied: ${fmt(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
+          + (order.couponForfeited > 0 ? ` ${fmt(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
         confirmEl.style.display = 'block';
       }
     } catch(err){
@@ -9562,6 +9564,7 @@
               <div class="field" style="margin-top:12px;">
                 <label for="expCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
                 <input id="expCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+                <p class="coupon-rule">Coupons cover the booking price only. Service fee, GST and any deposit are charged in full. Any unused coupon balance is not refunded.</p>
               </div>
               <button type="button" class="btn solid" id="expBookNowBtn" style="width:100%; margin-top:6px;">Book Experience</button>
               <p id="expBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
@@ -9900,7 +9903,8 @@
       }
       order = await orderRes.json();
       if(order.couponDiscount > 0){
-        confirmEl.textContent = `Coupon applied — ${fmt(order.couponDiscount)} off this booking.`;
+        confirmEl.textContent = `Coupon applied: ${fmt(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
+          + (order.couponForfeited > 0 ? ` ${fmt(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
         confirmEl.style.display = 'block';
       }
     } catch(err){
@@ -10141,7 +10145,7 @@
   // Today's had left out the profile, so Today "did nothing" when clicked
   // from the profile (it opened underneath it, out of sight).
   const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
-    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'policiesView'];
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'policiesView', 'privacyView', 'termsView'];
 
   // ---- Agreements shown before payment and before listing ----
   // The guest booking agreement sits directly above every Book button; the
@@ -10221,48 +10225,118 @@
     };
   })();
 
-  // ---- Policies (index.html?view=policies) ----
-  // Rendered from aerva-policies.js — the same file the admin tool shows.
-  function renderPolicies(tab){
+  // ---- Policy Center (index.html?view=policies[&doc=<id>]) ----
+  // The list of documents, or one document on its own. Text comes from
+  // aerva-policies.js (the same file the admin tool shows).
+  const POLICY_DOC_LINK = (id) => `index.html?view=policies&doc=${encodeURIComponent(id)}`;
+  function policyDocs(){
+    const P = window.AERVA_POLICIES || {};
+    const A = P.agreements || {};
+    return [
+      { id: 'terms', title: 'Terms of Service', summary: 'The terms that apply to everyone who uses Aerva.', href: 'index.html?view=terms' },
+      { id: 'privacy', title: 'Privacy Policy', summary: 'What information Aerva collects and how it is used.', href: 'index.html?view=privacy' },
+      A.guest ? { id: 'booking-agreement', title: A.guest.title, summary: 'The agreement every guest accepts before paying.', sections: [{ title: A.guest.title + ' (version ' + A.version + ')', points: A.guest.points }] } : null,
+      A.host ? { id: 'host-agreement', title: A.host.title, summary: 'The agreement every host accepts before listing.', sections: [{ title: A.host.title + ' (version ' + A.version + ')', points: A.host.points }] } : null
+    ].filter(Boolean).concat(P.documents || []);
+  }
+  function renderPolicies(docId){
     const P = window.AERVA_POLICIES;
     const body = document.getElementById('policiesBody');
     if(!P || !body) return;
     const esc = escapeMessageHtml;
+    const docs = policyDocs();
+    const doc = docId ? docs.find(d => d.id === docId && d.sections) : null;
     document.getElementById('policiesUpdated').textContent = 'Last updated ' + P.updated;
-    document.querySelectorAll('[data-pol-tab]').forEach(b => b.classList.toggle('active', b.getAttribute('data-pol-tab') === tab));
+    if(doc){
+      document.getElementById('policiesTitle').textContent = doc.title;
+      document.title = doc.title + ' — Aerva';
+      body.innerHTML = `<p class="policy-back"><a href="index.html?view=policies">‹ All policies</a></p>`
+        + doc.sections.map(sec => `
+          <div class="policy-section">
+            <h2>${esc(sec.title)}</h2>
+            <ul>${sec.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+          </div>`).join('')
+        + `<p class="policy-note">Questions: <a href="mailto:${esc(P.contact)}">${esc(P.contact)}</a></p>`;
+      return;
+    }
+    document.getElementById('policiesTitle').textContent = 'Policies';
+    document.title = 'Policies — Aerva';
+    body.innerHTML = `<div class="policy-index">` + docs.map(d => `
+      <a class="policy-index-item" href="${esc(d.href || POLICY_DOC_LINK(d.id))}">
+        <span class="policy-index-title">${esc(d.title)}</span>
+        <span class="policy-index-summary">${esc(d.summary || '')}</span>
+      </a>`).join('') + `</div>`;
+  }
+  // ---- Terms of Service (index.html?view=terms) ----
+  // Accepted by continuing on every login / sign-up screen.
+  function showTermsView(){
+    const P = window.AERVA_POLICIES;
+    hideMainViews();
+    document.getElementById('termsView').style.display = 'block';
+    document.body.classList.remove('showing-hero');
+    if(!P || !P.terms){ window.scrollTo(0, 0); return; }
+    const T = P.terms;
+    const esc = escapeMessageHtml;
+    const want = new URLSearchParams(window.location.search).get('region');
+    const region = T.regions.find(r => r.id === want) || T.regions[0]; // India first
+    document.title = region.label + ' — Aerva';
+    document.getElementById('termsTitle').textContent = T.title;
+    // Which version applies: India first, then Europe, then everyone else.
+    document.getElementById('termsNotice').innerHTML = T.regions.map(r =>
+      `<p>${esc(r.applies).replace(esc(r.label), `<a href="index.html?view=terms&region=${esc(r.id)}"${r.id === region.id ? ' aria-current="true"' : ''}>${esc(r.label)}</a>`)}</p>`).join('');
+    document.getElementById('termsIntro').textContent = T.intro;
+    document.getElementById('termsUpdated').textContent = 'Last updated ' + P.updated;
+    const docs = policyDocs().filter(d => d.id !== 'terms');
     const section = (sec) => `
-      <div class="policy-section" id="policy-${esc(sec.id || '')}">
+      <div class="policy-section" id="terms-${esc(sec.id)}">
         <h2>${esc(sec.title)}</h2>
         <ul>${sec.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
       </div>`;
-    if(tab === 'laws'){
-      const L = P.localLaws;
-      body.innerHTML = `<p class="policy-note">${esc(L.note)}</p>` + L.countries.map(c => `
-        <div class="policy-section">
-          <h2>${esc(c.country)}</h2>
-          <ul>${c.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
-          ${c.states ? `<div class="policy-states">${c.states.map(st => `<div class="policy-state"><strong>${esc(st.state)}</strong><span>${esc(st.text)}</span></div>`).join('')}</div>` : ''}
-        </div>`).join('');
-      return;
-    }
-    const agr = P.agreements && P.agreements[tab === 'host' ? 'host' : 'guest'];
-    body.innerHTML = (agr ? section({ id: 'agreement', title: agr.title + ' (version ' + P.agreements.version + ')', points: agr.points }) : '')
-      + (tab === 'host' ? P.host : P.guest).map(section).join('')
-      + `<p class="policy-note">Questions: <a href="mailto:${esc(P.contact)}">${esc(P.contact)}</a></p>`;
+    document.getElementById('termsBody').innerHTML =
+      `<h2 class="terms-version">${esc(region.label)}</h2>`
+      + `<div class="legal-notice"><p>The documents referred to within these Terms include:</p><ul>`
+      + docs.map(d => `<li><a href="${esc(d.href || POLICY_DOC_LINK(d.id))}">${esc(d.title)}</a>, ${esc(String(d.summary || '').replace(/^./, c => c.toLowerCase()))}</li>`).join('')
+      + `</ul></div>`
+      + T.common.map(section).join('')
+      + (T.specific[region.id] || []).map(section).join('');
+    window.scrollTo(0, 0);
   }
+
+  // ---- Aerva Privacy (index.html?view=privacy) ----
+  // Only what information Aerva collects, why, who gets it, how long it is
+  // kept and your rights. The booking / hosting rules are the separate
+  // Policies page. Text: aerva-policies.js → privacy.
+  function showPrivacyView(){
+    const P = window.AERVA_POLICIES;
+    hideMainViews();
+    document.getElementById('privacyView').style.display = 'block';
+    document.body.classList.remove('showing-hero');
+    document.title = 'Privacy — Aerva';
+    if(P && P.privacy){
+      const esc = escapeMessageHtml;
+      document.getElementById('privacyTitle').textContent = P.privacy.title;
+      document.getElementById('privacyIntro').textContent = P.privacy.intro;
+      document.getElementById('privacyUpdated').textContent = 'Last updated ' + P.updated;
+      document.getElementById('privacyBody').innerHTML = P.privacy.sections.map(sec => `
+        <div class="policy-section" id="privacy-${esc(sec.id)}">
+          <h2>${esc(sec.title)}</h2>
+          <ul>${sec.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+        </div>`).join('')
+        + `<p class="policy-note">Booking and hosting rules: <a href="index.html?view=policies">Aerva Policies</a></p>`;
+    }
+    window.scrollTo(0, 0);
+  }
+
   function showPoliciesView(){
     hideMainViews();
     document.getElementById('policiesView').style.display = 'block';
     document.body.classList.remove('showing-hero');
-    document.title = 'Policies — Aerva';
-    const want = new URLSearchParams(window.location.search).get('tab');
-    renderPolicies(['guest', 'host', 'laws'].includes(want) ? want : 'guest');
+    const q = new URLSearchParams(window.location.search);
+    // Older links: &tab=host → the Host Agreement, &tab=guest → the Booking Agreement.
+    const doc = q.get('doc') || (q.get('tab') === 'host' ? 'host-agreement' : q.get('tab') === 'guest' ? 'booking-agreement' : null);
+    renderPolicies(doc);
     window.scrollTo(0, 0);
   }
-  document.addEventListener('click', function(e){
-    const b = e.target.closest && e.target.closest('[data-pol-tab]');
-    if(b) renderPolicies(b.getAttribute('data-pol-tab'));
-  });
   function hideMainViews(){
     MAIN_VIEW_IDS.forEach(id => {
       const el = document.getElementById(id);
@@ -11380,6 +11454,10 @@
       showProfileView();
     } else if(requestedView === 'policies'){
       showPoliciesView();
+    } else if(requestedView === 'privacy'){
+      showPrivacyView();
+    } else if(requestedView === 'terms'){
+      showTermsView();
     } else if(requestedView === 'cohost'){
       openCohostCenter();
     } else if(requestedView === 'messages'){

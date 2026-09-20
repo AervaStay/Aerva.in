@@ -485,15 +485,31 @@
   </div>
 </section>
 
+<section id="termsView" class="pad" style="display:none;">
+  <div class="wrap policies-wrap">
+    <div class="privacy-eyebrow">Legal terms</div>
+    <h1 class="policies-title" id="termsTitle">Terms of Service</h1>
+    <div class="legal-notice" id="termsNotice"></div>
+    <p class="privacy-intro" id="termsIntro"></p>
+    <p class="policies-updated" id="termsUpdated"></p>
+    <div id="termsBody"></div>
+  </div>
+</section>
+
+<section id="privacyView" class="pad" style="display:none;">
+  <div class="wrap policies-wrap">
+    <div class="privacy-eyebrow">Legal terms</div>
+    <h1 class="policies-title" id="privacyTitle">Aerva Privacy</h1>
+    <p class="privacy-intro" id="privacyIntro"></p>
+    <p class="policies-updated" id="privacyUpdated"></p>
+    <div id="privacyBody"></div>
+  </div>
+</section>
+
 <section id="policiesView" class="pad" style="display:none;">
   <div class="wrap policies-wrap">
-    <h1 class="policies-title">Policies</h1>
+    <h1 class="policies-title" id="policiesTitle">Policies</h1>
     <p class="policies-updated" id="policiesUpdated"></p>
-    <div class="policies-tabs" role="tablist">
-      <button type="button" class="policies-tab active" data-pol-tab="guest">Guests</button>
-      <button type="button" class="policies-tab" data-pol-tab="host">Hosts</button>
-      <button type="button" class="policies-tab" data-pol-tab="laws">Local laws</button>
-    </div>
     <div id="policiesBody"></div>
   </div>
 </section>
@@ -1268,6 +1284,7 @@
           <input type="email" id="bookingEmailStepInput" autocomplete="email">
         </div>
         <button type="button" class="btn" id="bookingEmailStepContinueBtn" style="width:100%; margin-top:18px;">Continue</button>
+        <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
         <p id="bookingEmailStepError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
       </div>
 
@@ -1281,6 +1298,7 @@
           <input type="password" id="bookingLoginPassword" autocomplete="current-password">
         </div>
         <button type="button" class="btn" id="bookingLoginSubmitBtn" style="width:100%; margin-top:18px;">Log In</button>
+        <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
         <p id="bookingLoginError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
       </div>
 
@@ -1299,6 +1317,7 @@
           <input type="password" id="bookingSignupPassword" autocomplete="new-password">
         </div>
         <button type="button" class="btn" id="bookingSignupSubmitBtn" style="width:100%; margin-top:18px;">Create Account</button>
+        <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
         <p id="bookingSignupError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
         <p id="bookingSignupSuccessMsg" style="color:#3a7d44; font-size:12.5px; margin-top:12px; display:none;"></p>
       </div>
@@ -1355,7 +1374,7 @@
   </div>
   <div class="wrap foot-bottom">
     <span>&copy; <span id="footYear">2026</span> Aerva. All rights reserved.</span>
-    <span class="foot-bottom-right"><a href="index.html?view=policies" class="foot-policies">Policies</a> · Stay Elegant</span>
+    <span class="foot-bottom-right"><a href="index.html?view=terms" class="foot-policies">Terms</a> · <a href="index.html?view=policies" class="foot-policies">Policies</a> · <a href="index.html?view=privacy" class="foot-policies">Privacy</a> · Stay Elegant</span>
   </div>
 </footer>
 
