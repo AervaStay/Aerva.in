@@ -336,6 +336,7 @@
   .rv-star{background:none; border:none; cursor:pointer; font-size:20px; line-height:1; padding:0 1px; color:var(--line-dark);}
   .rv-star.is-on{color:#c9a227;}
   .rv-comment-label{display:block; font-size:12px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.6; margin:14px 0 6px;}
+  #guestReviewComment,
   #reviewComment{width:100%; box-sizing:border-box; padding:10px 12px; font-size:14px; font-family:inherit; border:1px solid var(--line-dark); background:white; resize:vertical;}
   .rv-error{color:#a3402f; font-size:13px; margin-top:10px;}
   /* On a white page the old cream gradient card read as a second surface.
@@ -2351,3 +2352,27 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
 .cohost-invite-form textarea{ resize:vertical; line-height:1.5; }
 .cohost-invite-form input:focus, .cohost-invite-form textarea:focus{ outline:none; border-color:#A9885A; }
 .cohost-details .hp-meta{ margin:0 0 6px; }
+
+/* Co-hosting: listings as slides (same cards as a profile's homes & experiences) */
+.hp-section.is-hidden{ display:none; }
+.cohost-pending{ margin:4px 0 10px; font-size:14px; color:#a3402f; }
+.cohost-access-line{ margin:10px 0 12px; font-size:14.5px; line-height:1.5; }
+.cohost-access-line > span{ display:block; font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep, #8a6c39); margin-bottom:2px; }
+.cohost-slides-wrap{ position:relative; margin:0 0 6px; }
+.cohost-slides{ display:grid; grid-auto-flow:column; grid-auto-columns:minmax(220px, 250px); gap:16px; overflow-x:auto; scroll-snap-type:x mandatory; scroll-behavior:smooth; padding:2px 2px 10px; scrollbar-width:thin; }
+.cohost-slides > .hp-listing{ scroll-snap-align:start; }
+.cohost-slide-btn{ display:none; position:absolute; top:34%; transform:translateY(-50%); z-index:2; width:38px; height:38px; border-radius:50%; border:1px solid var(--line-dark, #e6dccd); background:#fff; color:var(--ink, #1c1a17); font-size:22px; line-height:1; cursor:pointer; box-shadow:0 4px 14px rgba(0,0,0,0.12); }
+.cohost-slide-btn[data-slide="-1"]{ left:-14px; }
+.cohost-slide-btn[data-slide="1"]{ right:-14px; }
+.cohost-slides-wrap.can-scroll .cohost-slide-btn{ display:block; }
+@media (max-width:640px){ .cohost-slides{ grid-auto-columns:72%; } .cohost-slides-wrap.can-scroll .cohost-slide-btn{ display:none; } }
+
+/* "How was your stay / your guest?" prompt inside a message thread */
+.review-prompt{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  margin:0 24px 10px; padding:12px 16px; border:1px solid var(--line-dark, #e6dccd); border-radius:12px; background:#faf7f2; }
+.review-prompt-text{ font-size:14.5px; }
+.review-prompt-days{ display:block; font-size:12px; opacity:0.65; }
+.review-prompt-btn{ flex:0 0 auto; border:none; border-radius:999px; background:var(--ink, #1c1a17); color:var(--cream, #fff);
+  padding:9px 18px; font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; }
+.review-prompt-btn:hover{ opacity:0.9; }
+@media (max-width:640px){ .review-prompt{ margin:0 14px 10px; } .review-prompt-btn{ width:100%; } }

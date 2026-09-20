@@ -4622,11 +4622,14 @@
             ${p.hobbies ? `<p><strong>Interests:</strong> ${esc(p.hobbies)}</p>` : ''}
             ${(p.answers || []).slice(0, 3).map(a => `<p><strong>${esc(a.label)}</strong> ${esc(a.answer)}</p>`).join('')}
             ${p.memberSince ? `<p class="hp-meta">On Aerva since ${esc(fmtDay(p.memberSince))}</p>` : ''}
-            ${!p.work && !p.hobbies && !(p.answers || []).length ? '<p class="hp-meta">They have not filled in their profile yet.</p>' : ''}
+            ${!p.work && !p.hobbies && !(p.answers || []).length && !(c.pending || []).length ? '<p class="hp-meta">They have not filled in their profile yet.</p>' : ''}
           </div>` : ''}
-          <div class="cohost-access-table">
-            <div class="cohost-access-head"><span>Listing</span><span>Access</span></div>
-            ${(c.listingIds || []).map(id => `<div class="cohost-access-row"><span>${esc(listingName(id))}</span><span>${esc(levelText(c))}</span></div>`).join('') || '<div class="cohost-access-row"><span>\u2014</span><span></span></div>'}
+          ${(c.pending || []).length ? `<p class="cohost-pending">Waiting for their details: ${esc(c.pending.map(k => ({ phone: 'phone', about: 'about them', commission: 'proposed commission' }[k] || k)).join(', '))}.</p>` : ''}
+          <p class="cohost-access-line"><span>Access on ${(c.listingIds || []).length} listing${(c.listingIds || []).length === 1 ? '' : 's'}</span>${esc(levelText(c))}</p>
+          <div class="cohost-slides-wrap">
+            <button type="button" class="cohost-slide-btn" data-slide="-1" aria-label="Previous listings">\u2039</button>
+            <div class="cohost-slides">${listingMiniCardsHtml(myListings.filter(l => (c.listingIds || []).map(Number).includes(Number(l.id))))}</div>
+            <button type="button" class="cohost-slide-btn" data-slide="1" aria-label="Next listings">\u203a</button>
           </div>
           ${c.commissionPercent != null ? `<p class="hp-meta"><strong>Share:</strong> ${c.commissionPercent}% of your payout</p>` : ''}
           <div class="cohost-team-actions">
@@ -4688,9 +4691,11 @@
               <button type="button" class="hp-more" data-inv-decline="${esc(v.token)}">Decline</button>
             </div></div>`).join('')}
         </div>` : '';
+      // A host who co-hosts for nobody: the page is about their own co-hosts.
+      const hostOnly = !!team.isHost && !list.length && !invites.length && !pending;
       body.innerHTML = `
         <div class="hp-eyebrow">Co-hosting</div>
-        <h2 class="hp-name">Hosts you help</h2>
+        <h2 class="hp-name">${hostOnly ? 'Your co-hosts' : 'Hosts you help'}</h2>
         ${notice ? `<p class="cohost-notice">${esc(notice)}</p>` : ''}
         ${detailsHtml}
         ${invitesHtml}
@@ -4703,7 +4708,7 @@
               <button type="button" class="hp-more" data-cohost-decline>Decline</button>
             </div>
           </div>` : ''}
-        <div class="hp-section">
+        <div class="hp-section${hostOnly ? ' is-hidden' : ''}">
           ${list.length ? list.map(h => `
             <div class="cohost-row">
               <div>
@@ -4725,7 +4730,7 @@
               </div>
             </div>`).join('') : `<p class="hp-empty">You don\u2019t co-host for anyone yet. When a host invites you, the invitation appears here and arrives by email.</p>`}
         </div>
-        ${teamHtml}
+        ${hostOnly ? teamHtml.replace('<h3 class="hp-title">Your co-hosts</h3>', '') : teamHtml}
         ${list.length ? `
           <div class="hp-section">
             <h3 class="hp-title">What you have earned</h3>
@@ -4756,6 +4761,15 @@
         ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
 
       const inviteNow = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      // Listing slides: ‹ › scroll by most of a view; swipe on phones.
+      body.querySelectorAll('.cohost-slides-wrap').forEach(wrap => {
+        const track = wrap.querySelector('.cohost-slides');
+        const sync = () => { wrap.classList.toggle('can-scroll', track.scrollWidth > track.clientWidth + 4); };
+        wrap.querySelectorAll('[data-slide]').forEach(b => b.addEventListener('click', () => {
+          track.scrollBy({ left: Number(b.getAttribute('data-slide')) * Math.max(220, track.clientWidth * 0.8), behavior: 'smooth' });
+        }));
+        sync(); window.addEventListener('resize', sync);
+      });
       // Finish your details: save phone / about / commissions together.
       const dSave = body.querySelector('[data-d-save]');
       if(dSave) dSave.addEventListener('click', async () => {
@@ -6295,6 +6309,71 @@
   function safeSessionGet(k){ try{ return window.sessionStorage.getItem(k); }catch(e){ return null; } }
   function safeSessionSet(k, v){ try{ window.sessionStorage.setItem(k, v); }catch(e){} }
 
+  // ---- "How was your stay / your guest?" in a message thread ----
+  // Shown while the 15-day window is open and this side has not written
+  // their review yet (guest-profile.js decides; see threadReviewPrompt).
+  function showReviewPrompt(elId, p){
+    const box = document.getElementById(elId);
+    if(!box) return;
+    if(!p){ box.style.display = 'none'; box.innerHTML = ''; return; }
+    const isHost = p.role === 'host';
+    const who = isHost ? escapeMessageHtml(p.guestName) : escapeMessageHtml(p.listingName);
+    box.innerHTML = `
+      <span class="review-prompt-text">${isHost ? `How was your guest, ${who}?` : `How was your stay at ${who}?`}
+        <span class="review-prompt-days">${Number(p.daysLeft) === 1 ? '1 day left' : Number(p.daysLeft) + ' days left'}</span></span>
+      <button type="button" class="review-prompt-btn">${isHost ? 'Leave a review' : 'Write a review'}</button>`;
+    box.style.display = 'flex';
+    box.querySelector('.review-prompt-btn').addEventListener('click', () => {
+      if(isHost) openGuestReviewModal(p);
+      else openReviewModal({ id: p.orderId, suite_name: p.listingName, listing_type: p.listingType });
+    });
+  }
+
+  // The host's review of a guest (server: host-listings reviewGuest).
+  const GUEST_REVIEW_FACTORS = [
+    { key: 'cleanliness',   label: 'Left the place clean' },
+    { key: 'communication', label: 'Communication' },
+    { key: 'respectful',    label: 'Respectful of the home' },
+    { key: 'rules',         label: 'Followed the house rules' }
+  ];
+  function openGuestReviewModal(p){
+    const scores = {};
+    const ov = document.createElement('div');
+    ov.className = 'payout-overlay';
+    ov.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Review your guest">
+      <button type="button" class="payout-close" aria-label="Close">\u00d7</button>
+      <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 2px;">How was your guest?</h2>
+      <p class="payout-muted" style="margin:0 0 14px;">${escapeMessageHtml(p.guestName)} \u00b7 ${escapeMessageHtml(p.listingName)}</p>
+      <div class="rv-set">${GUEST_REVIEW_FACTORS.map(starRowHtml).join('')}</div>
+      <label class="rv-comment-label" for="guestReviewComment">A few words for other hosts</label>
+      <textarea id="guestReviewComment" rows="4" maxlength="1000" placeholder="How was it having them stay?"></textarea>
+      <button type="button" class="btn solid" id="guestReviewSend" style="width:100%; margin-top:14px; cursor:pointer;">Submit review</button>
+      <p class="payout-muted" id="guestReviewMsg" style="margin-top:10px;"></p></div>`;
+    const close = () => { ov.remove(); };
+    ov.addEventListener('click', (e) => { if(e.target === ov) close(); });
+    ov.querySelector('.payout-close').addEventListener('click', close);
+    document.body.appendChild(ov);
+    ov.querySelectorAll('.rv-star').forEach(btn => btn.addEventListener('click', () => {
+      const f = btn.getAttribute('data-factor'); scores[f] = Number(btn.getAttribute('data-value'));
+      ov.querySelectorAll(`.rv-star[data-factor="${f}"]`).forEach(b => b.classList.toggle('is-on', Number(b.getAttribute('data-value')) <= scores[f]));
+    }));
+    ov.querySelector('#guestReviewSend').addEventListener('click', async () => {
+      const msg = ov.querySelector('#guestReviewMsg');
+      const missing = GUEST_REVIEW_FACTORS.filter(f => !scores[f.key]);
+      if(missing.length){ msg.textContent = 'Please rate all four.'; return; }
+      const btn = ov.querySelector('#guestReviewSend'); btn.disabled = true;
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/host-listings', { method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ reviewGuest: Object.assign({ orderId: p.orderId, comment: ov.querySelector('#guestReviewComment').value.trim() }, scores) }) });
+        const d = await res.json().catch(() => ({}));
+        if(!res.ok){ btn.disabled = false; msg.textContent = d.error || 'Could not submit this review.'; return; }
+        close();
+        showReviewPrompt('inboxReviewPrompt', null); showReviewPrompt('chatReviewPrompt', null);
+      }catch(err){ btn.disabled = false; msg.textContent = 'Could not submit this review. Try again.'; }
+    });
+  }
+
   function openReviewModal(booking){
     reviewOrderId = booking.id;
     reviewScores = {};
@@ -6500,6 +6579,7 @@
       chatCurrentConversationId = data.conversationId;
       document.getElementById('chatModalTitle').textContent = data.listingName || listingName || 'Chat';
       renderChatMessages(data.messages || [], data.viewerRole);
+      showReviewPrompt('chatReviewPrompt', data.reviewPrompt);
       loadChatTemplates(data.conversationId);
     } catch(err){
       document.getElementById('chatMessagesContainer').innerHTML = '<p class="suites-empty">Could not open this conversation. Please try again.</p>';
@@ -6911,6 +6991,7 @@
       // conversation (myRole) — trusted over the client-side copy from
       // the list, since that's the one place membership is truly checked.
       if(data.myRole) inboxCurrentRole = data.myRole;
+      showReviewPrompt('inboxReviewPrompt', data.reviewPrompt);
       await renderInboxMessages(data.messages || []);
       loadInboxChatTemplates(inboxCurrentConversationId);
       // Read messages update their own unread_count server-side, but the

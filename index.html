@@ -1078,6 +1078,7 @@
       <div class="listing-modal-section-title" style="margin:0;" id="chatModalTitle">Chat</div>
     </div>
     <div id="chatMessagesContainer" style="flex:1 1 auto; overflow-y:auto; padding:18px 24px; display:flex; flex-direction:column; gap:10px;"></div>
+    <div id="chatReviewPrompt" class="review-prompt" style="display:none;"></div>
     <div id="chatTemplatesRow" style="padding:0 24px; display:flex; gap:8px; overflow-x:auto; flex:0 0 auto;"></div>
     <div style="padding:14px 24px 20px; border-top:1px solid var(--line-dark); flex:0 0 auto;">
       <p id="chatWarning" style="display:none; font-size:11.5px; color:#a3402f; margin-bottom:8px;">Phone numbers, emails, and social media handles can't be shared here — Aerva keeps all communication on-platform.</p>
@@ -1241,6 +1242,7 @@
           </div>
         </div>
         <div class="inbox-messages" id="inboxMessages"></div>
+        <div id="inboxReviewPrompt" class="review-prompt" style="display:none;"></div>
         <div class="inbox-templates-row" id="inboxChatTemplatesRow"></div>
         <div class="inbox-input-row" style="position:relative;">
           <!-- Typing @ followed by letters shows matching keywords here
