@@ -2183,3 +2183,49 @@ footer .foot-bottom{
 .agreement-accept{ display:flex; gap:10px; align-items:flex-start; font-size:14px; line-height:1.5; cursor:pointer; }
 .agreement-accept input{ margin-top:3px; width:18px; height:18px; flex:0 0 auto; }
 .agreement-link{ display:inline-block; margin-top:8px; font-size:13px; color:var(--gold-deep); }
+
+/* ---------- Message templates (Guest Info & Templates) ---------- */
+.tpl-h{ font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold-deep); font-weight:500; margin:18px 0 10px; }
+.tpl-hint{ font-size:13.5px; opacity:0.7; margin:6px 0; line-height:1.5; }
+.tpl-lib-item, .tpl-item{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:12px 0; border-bottom:1px solid var(--line-dark); }
+.tpl-lib-text, .tpl-item-text{ display:flex; flex-direction:column; gap:3px; min-width:0; }
+.tpl-lib-text strong, .tpl-item-text strong{ font-size:15px; font-weight:600; }
+.tpl-lib-text span, .tpl-when{ font-size:13px; color:var(--gold-deep); }
+.tpl-body{ font-size:14px; opacity:0.75; white-space:pre-wrap; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.tpl-item-actions{ display:flex; gap:6px; flex:0 0 auto; }
+.tpl-btn{ min-height:40px; padding:8px 14px; border:1px solid var(--line-dark); border-radius:999px; background:#fff; font-family:'Jost', sans-serif; font-size:13px; letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; color:var(--ink); display:inline-flex; align-items:center; justify-content:center; }
+.tpl-btn.primary{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.tpl-btn:disabled{ opacity:0.55; cursor:default; }
+.tpl-form{ margin-top:18px; padding-top:6px; border-top:1px solid var(--line-dark); display:flex; flex-direction:column; gap:6px; }
+.tpl-label{ font-size:13px; font-weight:600; margin-top:8px; }
+.tpl-input{ width:100%; box-sizing:border-box; padding:11px 12px; border:1px solid var(--line-dark); border-radius:8px; font-family:'Jost', sans-serif; font-size:15px; background:#fff; }
+textarea.tpl-input{ resize:vertical; line-height:1.55; }
+.tpl-chips{ display:flex; flex-wrap:wrap; gap:6px; }
+.tpl-chip{ padding:7px 11px; border:1px solid var(--line-dark); border-radius:999px; background:#fff; font-size:13px; font-family:ui-monospace, Menlo, monospace; cursor:pointer; }
+.tpl-props{ display:flex; flex-direction:column; gap:8px; }
+.tpl-check{ display:flex; align-items:center; gap:10px; font-size:14.5px; cursor:pointer; min-height:36px; }
+.tpl-check input{ width:18px; height:18px; }
+.tpl-actions{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+.tpl-msg{ font-size:14px; margin:8px 0 0; }
+/* Phones: the panel takes the whole screen; 16px inputs stop iOS zooming. */
+@media (max-width:640px){
+  #inboxTemplatesPanel{ position:fixed !important; inset:0 !important; z-index:1200 !important; padding-bottom:env(safe-area-inset-bottom, 0px); }
+  #inboxTemplatesTab{ padding:14px 16px 40px !important; }
+  .tpl-input, textarea.tpl-input, select.tpl-input{ font-size:16px; }
+  .tpl-item{ flex-direction:column; }
+  .tpl-item-actions{ width:100%; }
+  .tpl-item-actions .tpl-btn{ flex:1; }
+  .tpl-actions .tpl-btn{ flex:1; min-height:46px; }
+  .tpl-chip{ padding:9px 12px; font-size:14px; }
+}
+
+/* Simple template editor: Create button, list, form with a placeholder list. */
+.tpl-create{ width:100%; min-height:46px; margin:4px 0 8px; }
+.tpl-hint-inline{ font-weight:400; opacity:0.6; margin-left:6px; font-size:12.5px; }
+.tpl-ph{ border:1px solid var(--line-dark); border-radius:10px; padding:10px 12px; margin-top:8px; }
+.tpl-ph-list{ display:flex; flex-direction:column; max-height:220px; overflow:auto; margin-top:6px; }
+.tpl-ph-row{ display:flex; gap:10px; align-items:baseline; text-align:left; background:none; border:none; border-top:1px solid #f0e9df; padding:9px 2px; cursor:pointer; font-family:'Jost', sans-serif; font-size:14px; color:var(--ink); }
+.tpl-ph-row:first-child{ border-top:none; }
+.tpl-ph-row code{ font-family:ui-monospace, Menlo, monospace; font-size:13px; color:var(--gold-deep); min-width:118px; }
+.tpl-ph-row:hover{ background:#faf8f5; }
+@media (max-width:640px){ .tpl-ph-list{ max-height:none; } .tpl-ph-row{ padding:11px 2px; } }
