@@ -4537,7 +4537,11 @@
 
     async function render(notice){
       const mine = await call('GET', null, '?myCohosting=1');
-      // ---- Your co-hosts (hosts only): invite one, or see who helps you ----
+      // ---- Your co-hosts (hosts only) ----
+      // One co-host per listing. Adding one starts with WHICH LISTINGS (only
+      // those without a co-host); listings already co-hosted are summarised
+      // with who and what access. Once added, each co-host is shown with
+      // their profile, every listing and its access level, and Update access.
       const teamRes = await call('GET', null, '?cohosts=1');
       const team = (teamRes.ok && teamRes.data) || {};
       const teamList = team.cohosts || [];
@@ -4545,30 +4549,47 @@
       const permLabels = team.permissionLabels || [];
       const listingName = (id) => (myListings.find(l => Number(l.id) === Number(id)) || {}).name || 'A listing';
       const fmtDay = (v) => v ? new Date(v).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : '';
-      const teamAccess = (c) => c.access === 'full'
-        ? 'Full access (everything except renaming, account settings, payouts and bank details)'
-        : ['Limited: ' + (team.alwaysLabel || '')].concat(permLabels.filter(p => (c.permissions || []).includes(p.key)).map(p => p.label)).join(' \u00b7 ');
-      const inviteFormHtml = `
-        <div class="cohost-invite-form" data-team-form ${teamList.length ? 'hidden' : ''}>
-          <label>Their email<input type="email" data-team-email placeholder="name@example.com" autocomplete="off"></label>
+      const holds = (c) => c.status === 'active' || (c.status === 'invited' && !c.expired);   // same rule as the server
+      const holderOf = (id) => teamList.find(c => holds(c) && (c.listingIds || []).map(Number).includes(Number(id)));
+      const freeListings = myListings.filter(l => !holderOf(l.id));
+      const takenListings = myListings.filter(l => holderOf(l.id));
+      const levelText = (c) => c.access === 'full' ? 'Full access'
+        : 'Limited' + ((c.permissions || []).length ? ': ' + permLabels.filter(p => (c.permissions || []).includes(p.key)).map(p => p.label).join(', ') : '');
+      const accessFields = (prefix, c, listingChoices) => `
           <div class="cohost-invite-group"><span>Access</span>
-            <label><input type="radio" name="teamAccess" value="limited" checked> Limited: choose what they can do</label>
-            <label><input type="radio" name="teamAccess" value="full"> Full access</label>
+            <label><input type="radio" name="${prefix}-access" value="limited" ${!c || c.access !== 'full' ? 'checked' : ''}> Limited: choose what they can do</label>
+            <label><input type="radio" name="${prefix}-access" value="full" ${c && c.access === 'full' ? 'checked' : ''}> Full access</label>
           </div>
-          <div class="cohost-invite-group" data-team-perms><span>They can always ${esc((team.alwaysLabel || 'manage your listings').toLowerCase())}. Also:</span>
-            ${permLabels.map(p => `<label><input type="checkbox" data-team-perm value="${esc(p.key)}"> ${esc(p.label)}</label>`).join('')}
+          <div class="cohost-invite-group" data-perms ${c && c.access === 'full' ? 'hidden' : ''}><span>They can always ${esc((team.alwaysLabel || 'manage your listings').toLowerCase())}. Also:</span>
+            ${permLabels.map(p => `<label><input type="checkbox" data-perm value="${esc(p.key)}" ${c && (c.permissions || []).includes(p.key) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}
           </div>
-          <div class="cohost-invite-group"><span>Listings they can help with</span>
-            ${myListings.map(l => `<label><input type="checkbox" data-team-listing value="${Number(l.id)}"> ${esc(l.name)}</label>`).join('') || '<p class="hp-meta">You have no listings yet.</p>'}
+          <div class="cohost-invite-group"><span>Listings</span>
+            ${listingChoices.map(l => `<label><input type="checkbox" data-listing value="${Number(l.id)}" ${c && (c.listingIds || []).map(Number).includes(Number(l.id)) ? 'checked' : ''}> ${esc(l.name)}</label>`).join('')}
+          </div>`;
+      const takenSummary = takenListings.length ? `
+          <div class="cohost-taken">
+            <span>Already co-hosted</span>
+            ${takenListings.map(l => { const c = holderOf(l.id); return `<div class="cohost-taken-row"><strong>${esc(l.name)}</strong><span>${esc(c.name || c.email)}${c.status === 'invited' ? ' (invited)' : ''} \u00b7 ${esc(levelText(c))}</span></div>`; }).join('')}
+            <p class="hp-meta">A listing has one co-host. To give one of these to someone else, remove its current co-host from it first (Update access or Remove below), then add the new one.</p>
+          </div>` : '';
+      const addFormHtml = freeListings.length ? `
+        <div class="cohost-invite-form" data-team-form ${teamList.length ? 'hidden' : ''}>
+          <div class="cohost-invite-group cohost-step"><span>1. Which listings should they co-host?</span>
+            ${freeListings.map(l => `<label><input type="checkbox" data-listing value="${Number(l.id)}"> ${esc(l.name)}</label>`).join('')}
           </div>
+          ${takenSummary}
+          <label>2. Their email<input type="email" data-team-email placeholder="name@example.com" autocomplete="off"></label>
+          ${accessFields('add', null, []).replace(/<div class="cohost-invite-group"><span>Listings<\/span>[\s\S]*$/, '')}
           <button type="button" class="hp-more cohost-primary" data-team-send>Send invitation</button>
           <p class="hp-meta" data-team-msg></p>
-        </div>`;
+        </div>` : '';
       const teamCard = (c) => {
         const p = c.profile;
         const tag = c.status === 'active' ? 'Active' : (c.expired ? 'Invite expired' : 'Invited');
         const initial = esc(((c.name || c.email || '?').trim()[0] || '?').toUpperCase());
-        return `<div class="cohost-team-card">
+        // Their own listings plus any free ones can be chosen when updating.
+        const choices = myListings.filter(l => (c.listingIds || []).map(Number).includes(Number(l.id)) || !holderOf(l.id));
+        return `<div class="cohost-team-card" data-card="${Number(c.id)}">
           <div class="cohost-team-head">
             ${p && p.photo ? `<img class="cohost-team-photo" src="${esc(p.photo)}" alt="">` : `<span class="cohost-team-photo cohost-team-initial">${initial}</span>`}
             <div><div class="cohost-team-name">${esc(c.name || c.email)} <span class="cohost-team-tag${c.status === 'active' ? ' is-active' : ''}">${tag}</span></div>
@@ -4581,21 +4602,32 @@
             ${p.memberSince ? `<p class="hp-meta">On Aerva since ${esc(fmtDay(p.memberSince))}</p>` : ''}
             ${!p.work && !p.hobbies && !(p.answers || []).length ? '<p class="hp-meta">They have not filled in their profile yet.</p>' : ''}
           </div>` : ''}
-          <p class="hp-meta"><strong>Access:</strong> ${esc(teamAccess(c))}</p>
-          <p class="hp-meta"><strong>Listings:</strong> ${(c.listingIds || []).map(id => esc(listingName(id))).join(', ') || '\u2014'}</p>
+          <div class="cohost-access-table">
+            <div class="cohost-access-head"><span>Listing</span><span>Access</span></div>
+            ${(c.listingIds || []).map(id => `<div class="cohost-access-row"><span>${esc(listingName(id))}</span><span>${esc(levelText(c))}</span></div>`).join('') || '<div class="cohost-access-row"><span>\u2014</span><span></span></div>'}
+          </div>
           ${c.commissionPercent != null ? `<p class="hp-meta"><strong>Share:</strong> ${c.commissionPercent}% of your payout</p>` : ''}
           <div class="cohost-team-actions">
+            <button type="button" class="hp-more" data-edit="${Number(c.id)}">Update access</button>
             ${c.status === 'invited' ? `<button type="button" class="hp-more" data-team-resend="${Number(c.id)}">Resend invite</button>` : ''}
-            <a class="hp-more" href="host-dashboard.html">Change access or remove</a>
+            <button type="button" class="hp-more" data-remove="${Number(c.id)}">Remove co-host</button>
+          </div>
+          <div class="cohost-invite-form" data-editor="${Number(c.id)}" hidden>
+            ${accessFields('ed' + Number(c.id), c, choices)}
+            <div class="cohost-team-actions"><button type="button" class="hp-more cohost-primary" data-save="${Number(c.id)}">Save access</button><button type="button" class="hp-more" data-cancel="${Number(c.id)}">Cancel</button></div>
+            <p class="hp-meta" data-edit-msg></p>
           </div>
         </div>`;
       };
       const teamHtml = team.isHost ? `
         <div class="hp-section cohost-team">
           <h3 class="hp-title">Your co-hosts</h3>
-          ${teamList.length ? teamList.map(teamCard).join('') : '<p class="hp-empty">You have no co-host yet. Invite someone to help run your listings: they create their own Aerva account from the invitation.</p>'}
-          ${teamList.length ? '<button type="button" class="hp-more" data-team-toggle>Invite another co-host</button>' : ''}
-          ${inviteFormHtml}
+          ${teamList.map(teamCard).join('')}
+          ${!teamList.length && freeListings.length ? '<p class="hp-empty">You have no co-host yet. Choose the listings they should help with, then invite them: they create their own Aerva account from the invitation.</p>' : ''}
+          ${teamList.length && freeListings.length ? '<button type="button" class="hp-more" data-team-toggle>Add a co-host</button>' : ''}
+          ${!freeListings.length && myListings.length ? '<p class="hp-meta">Every listing has a co-host. To add someone new, first remove a co-host from a listing.</p>' : ''}
+          ${!myListings.length ? '<p class="hp-meta">Add a listing first; then you can invite a co-host for it.</p>' : ''}
+          ${addFormHtml}
         </div>` : '';
       const list = (mine.ok && mine.data.cohosting) || [];
       const labels = (mine.data && mine.data.permissionLabels) || [];
@@ -4699,28 +4731,57 @@
         ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
 
       const inviteNow = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
-      // Your co-hosts: invite form, resend.
+      // Your co-hosts: add (listings first), update access, remove, resend.
+      const readForm = (root, prefix) => {
+        const access = root.querySelector(`input[name="${prefix}-access"]:checked`).value;
+        return { access, permissions: access === 'full' ? [] : [...root.querySelectorAll('[data-perm]:checked')].map(i => i.value),
+                 listingIds: [...root.querySelectorAll('[data-listing]:checked')].map(i => Number(i.value)) };
+      };
+      const wireAccess = (root, prefix) => {
+        const perms = root.querySelector('[data-perms]');
+        root.querySelectorAll(`input[name="${prefix}-access"]`).forEach(r => r.addEventListener('change', () => {
+          perms.hidden = root.querySelector(`input[name="${prefix}-access"]:checked`).value === 'full';
+        }));
+      };
+      const checkForm = (f) => !f.listingIds.length ? 'Choose at least one listing.'
+        : (f.access === 'limited' && !f.permissions.length ? 'Choose at least one thing they can do, or give full access.' : '');
       const teamForm = body.querySelector('[data-team-form]');
       const toggle = body.querySelector('[data-team-toggle]');
       if(toggle) toggle.addEventListener('click', () => { teamForm.hidden = false; toggle.hidden = true; });
       if(teamForm){
-        const syncPerms = () => { const full = teamForm.querySelector('input[name="teamAccess"]:checked').value === 'full'; teamForm.querySelector('[data-team-perms]').hidden = full; };
-        teamForm.querySelectorAll('input[name="teamAccess"]').forEach(r => r.addEventListener('change', syncPerms));
+        wireAccess(teamForm, 'add');
         teamForm.querySelector('[data-team-send]').addEventListener('click', async () => {
           const msg = teamForm.querySelector('[data-team-msg]');
+          const f = readForm(teamForm, 'add');
           const email = teamForm.querySelector('[data-team-email]').value.trim();
-          const access = teamForm.querySelector('input[name="teamAccess"]:checked').value;
-          const permissions = [...teamForm.querySelectorAll('[data-team-perm]:checked')].map(i => i.value);
-          const listingIds = [...teamForm.querySelectorAll('[data-team-listing]:checked')].map(i => Number(i.value));
-          if(!email){ msg.textContent = 'Enter their email.'; return; }
-          if(!listingIds.length){ msg.textContent = 'Choose at least one listing.'; return; }
+          const problem = checkForm(f) || (!email ? 'Enter their email.' : '');
+          if(problem){ msg.textContent = problem; return; }
           const btn = teamForm.querySelector('[data-team-send]'); btn.disabled = true;
-          const r = await call('POST', { inviteCohost: { email, access, permissions: access === 'full' ? [] : permissions, listingIds } });
+          const r = await call('POST', { inviteCohost: Object.assign({ email }, f) });
           if(!r.ok){ btn.disabled = false; msg.textContent = r.data.error || 'Could not send the invitation.'; return; }
           render(r.data.emailed ? `Invitation sent to ${email}. They will create their Aerva account from it (or log in if they have one).`
                                 : `Invitation created, but the email could not be sent. Share this link with them: ${r.data.inviteLink}`);
         });
       }
+      body.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
+        const id = b.getAttribute('data-edit'); const ed = body.querySelector(`[data-editor="${id}"]`);
+        ed.hidden = false; b.hidden = true; wireAccess(ed, 'ed' + id);
+      }));
+      body.querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => render()));
+      body.querySelectorAll('[data-save]').forEach(b => b.addEventListener('click', async () => {
+        const id = Number(b.getAttribute('data-save')); const ed = body.querySelector(`[data-editor="${id}"]`);
+        const f = readForm(ed, 'ed' + id); const problem = checkForm(f);
+        if(problem){ ed.querySelector('[data-edit-msg]').textContent = problem; return; }
+        b.disabled = true;
+        const r = await call('POST', { updateCohost: Object.assign({ id }, f) });
+        if(!r.ok){ b.disabled = false; ed.querySelector('[data-edit-msg]').textContent = r.data.error || 'Could not update access.'; return; }
+        render('Access updated.');
+      }));
+      body.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', async () => {
+        if(!confirm('Remove this co-host? Their access to your listings ends at once. Shares already earned are still paid.')) return;
+        const r = await call('POST', { removeCohost: { id: Number(b.getAttribute('data-remove')) } });
+        render(r.ok ? 'Co-host removed. Their listings can now be given to someone else.' : (r.data.error || 'Could not remove the co-host.'));
+      }));
       body.querySelectorAll('[data-team-resend]').forEach(b => b.addEventListener('click', async () => {
         b.disabled = true;
         const r = await call('POST', { resendCohostInvite: { id: Number(b.getAttribute('data-team-resend')) } });
