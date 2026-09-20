@@ -47,6 +47,7 @@ const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { getEnabledInternationalCurrencies, convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
+const { isAccountDeleted } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 
 const razorpay = new Razorpay({
@@ -264,6 +265,8 @@ module.exports = async (req, res) => {
     // any payment is created (aerva-policies.js → agreements.guest). What was
     // accepted, when and from where travels with the payment and is saved on
     // every booking row (verify-payment.js).
+    // A deleted account is refused before anything else.
+    { const early = getOptionalGuestId(req); if (early && await isAccountDeleted(sql, early)) return res.status(401).json({ error: 'This account has been deleted.' }); }
     if (req.body.agreementVersion !== AGREEMENT_VERSION) {
       return res.status(400).json({ error: 'Please read and accept the booking agreement to continue.', agreementVersion: AGREEMENT_VERSION });
     }

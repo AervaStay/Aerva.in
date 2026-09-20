@@ -45,6 +45,7 @@
   .listing-meta{font-size:14px; opacity:0.65;}
   .status-badge{font-size:12.5px; padding:3px 9px; border-radius:3px; text-transform:uppercase; letter-spacing:0.04em;}
   .status-approved{background:#e3f0e5; color:#3a7d44;}
+  .status-deactivated{background:#f1ede6; color:#6b6358;}
   .status-pending{background:#f5ecd7; color:#8a6c39;}
   .status-rejected{background:#f5e0da; color:#a3402f;}
   .status-draft{background:#e6e6e6; color:#555;}
@@ -1095,6 +1096,15 @@
         </div>
       </div>
 
+      <div id="accountControls" style="margin-top:28px; padding-top:18px; border-top:1px solid #ece4d8;">
+        <div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:#8a6c39; margin-bottom:10px;">Account</div>
+        <div id="hostingControl"></div>
+        <div style="margin-top:14px;">
+          <button type="button" id="deleteAccountBtn" style="background:none; border:1px solid #a3402f; color:#a3402f; border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;">Delete account</button>
+          <div id="deleteAccountPanel" style="display:none; margin-top:12px; font-size:14px;"></div>
+        </div>
+      </div>
+
       <!-- ---- Payment Options ---- -->
       <div class="profile-tab-panel" id="profilePanelPayment" style="display:none;">
         <div class="profile-warning">Changing your bank details will re-trigger PAN and Aadhaar verification, since a payout account change is exactly the kind of thing worth double-checking. Your PAN and Aadhaar documents themselves stay the same — just reviewed again.</div>
@@ -1313,6 +1323,15 @@
 
   function statusBadgeHtml(status){
     return `<span class="status-badge status-${status}">${status}</span>`;
+  }
+  // Deactivate / reactivate a listing (host only). Existing bookings go ahead.
+  async function setListingActive(listingId, active){
+    if(!confirm(active ? 'Reactivate this listing? It goes live again straight away.' : 'Deactivate this listing? It is hidden from search and takes no new bookings. Existing bookings go ahead.')) return;
+    const res = await fetch(API_BASE + '/api/host-listings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+      body: JSON.stringify({ setListingActive: { listingId, active } }) });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok){ alert(data.error || 'Could not do this right now.'); return; }
+    loadListings();
   }
 
   let currentListings = [];
@@ -1670,6 +1689,8 @@
         <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
           ${actionLink}
           ${cloneLink}
+          ${item.status === 'approved' && !window.AervaCohostActive ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0; color:#a3402f;" onclick="event.stopPropagation(); setListingActive(${Number(item.id)}, false)">Deactivate</button>` : ''}
+          ${item.status === 'deactivated' && !window.AervaCohostActive ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); setListingActive(${Number(item.id)}, true)">Reactivate</button>` : ''}
         </div>
       </div>
     `;
@@ -4240,6 +4261,66 @@
         if(r.ok) box.remove(); else msg.textContent = j.error || 'Could not save. Try again.';
       });
     }).catch(() => {});
+})();
+</script>
+<script>
+// ---- Account: deactivate / reactivate hosting, delete account ----
+(function(){
+  const API = 'https://aerva-in.vercel.app/api';
+  const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
+  window.AervaCohostActive = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
+  if(!token) return;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  async function loadHosting(){
+    const box = document.getElementById('hostingControl');
+    if(!box || window.AervaCohostActive) return;
+    try{
+      const r = await fetch(API + '/host-listings?hostingStatus=1', { headers: { 'Authorization': 'Bearer ' + token } });
+      const d = await r.json();
+      if(!d.hostingStatus){ box.innerHTML = ''; return; }
+      const off = d.hostingStatus === 'deactivated';
+      box.innerHTML = `<p style="font-size:14px; margin:0 0 8px;">${off ? 'Hosting is deactivated. Your listings are hidden and take no new bookings.' : 'Deactivating hosting hides all your listings and stops new bookings. Existing bookings go ahead.'}</p>
+        <button type="button" id="hostingToggle" style="background:none; border:1px solid #d9cfc2; border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;">${off ? 'Reactivate hosting' : 'Deactivate hosting'}</button>`;
+      box.querySelector('#hostingToggle').addEventListener('click', async () => {
+        if(!confirm(off ? 'Reactivate hosting? Your listings go live again.' : 'Deactivate hosting? All your listings are hidden and take no new bookings. Existing bookings go ahead.')) return;
+        const res = await fetch(API + '/host-listings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ setHostingActive: { active: off } }) });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok){ alert(data.error || 'Could not do this right now.'); return; }
+        loadHosting(); if(typeof loadListings === 'function') loadListings();
+      });
+    }catch(e){ /* leave as is */ }
+  }
+  function wireDelete(){
+    const btn = document.getElementById('deleteAccountBtn'), panel = document.getElementById('deleteAccountPanel');
+    if(!btn || window.AervaCohostActive){ if(btn) btn.style.display = 'none'; return; }
+    btn.addEventListener('click', async () => {
+      panel.style.display = 'block';
+      panel.innerHTML = '<p style="opacity:0.7;">Checking…</p>';
+      let blockers = [];
+      try{ const r = await fetch(API + '/guest-profile?mode=deletionCheck', { headers: { 'Authorization': 'Bearer ' + token } }); blockers = (await r.json()).blockers || []; }catch(e){ blockers = ['Could not check right now. Try again.']; }
+      if(blockers.length){
+        panel.innerHTML = '<p style="margin:0 0 6px;"><strong>Your account cannot be deleted yet:</strong></p><ul style="margin:0 0 0 18px;">' + blockers.map(b => `<li>${esc(b)}</li>`).join('') + '</ul>';
+        return;
+      }
+      panel.innerHTML = `<p style="margin:0 0 8px;">Deleting your account removes your name, contact details, photos, profile, sign-in, verification and bank details, messages and listings. Booking and payment records are kept without your details, as the law requires. This cannot be undone.</p>
+        <label style="font-size:13.5px;">Type DELETE to confirm <input id="deleteConfirm" autocomplete="off" style="margin-left:6px; padding:7px 9px; border:1px solid #ccc; border-radius:6px; font-size:16px;"></label>
+        <button type="button" id="deleteGo" style="margin-left:6px; background:#a3402f; color:#fff; border:none; border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;">Delete my account</button>
+        <p id="deleteMsg" style="color:#a3402f; margin-top:8px;"></p>`;
+      panel.querySelector('#deleteGo').addEventListener('click', async () => {
+        const confirmText = panel.querySelector('#deleteConfirm').value.trim();
+        if(confirmText !== 'DELETE'){ panel.querySelector('#deleteMsg').textContent = 'Type DELETE to confirm.'; return; }
+        const r = await fetch(API + '/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ mode: 'deleteAccount', confirm: 'DELETE' }) });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok){ panel.querySelector('#deleteMsg').textContent = (d.blockers && d.blockers.join(' ')) || d.error || 'Could not delete your account.'; return; }
+        ['aerva_guest_session', 'aerva_guest_email', 'aerva_guest_name', 'aerva_acting_host', 'aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches', 'aerva_notifications_read']
+          .forEach(k => { try{ localStorage.removeItem(k); }catch(e){} });
+        alert('Your account has been deleted.');
+        window.location.href = 'index.html';
+      });
+    });
+  }
+  const start = () => { loadHosting(); wireDelete(); };
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
 </script>
 <script src="aerva-header.js" defer></script>

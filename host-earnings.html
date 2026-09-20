@@ -297,7 +297,17 @@
             <button type="button" class="dispute-btn" onclick="toggleCancelForm(${b.id})">Cancel This Booking</button>
             <div class="dispute-form" id="cancelForm-${b.id}">
               <p style="font-size:12.5px; opacity:0.7; margin-bottom:8px;">This refunds the guest in full and cannot be undone. Only available more than 48 hours before check-in.</p>
-              <textarea id="cancelReason-${b.id}" rows="3" placeholder="Why are you cancelling this booking?"></textarea>
+              <select id="cancelReasonCode-${b.id}" style="width:100%; padding:9px; margin-bottom:8px; border:1px solid #d9cfc2; border-radius:6px; font-size:14px;">
+                <option value="">Choose a reason (the guest is told)</option>
+                <option value="property_unavailable">Property unavailable (repairs or damage)</option>
+                <option value="double_booking">Double booking</option>
+                <option value="safety">Safety concern at the property</option>
+                <option value="environmental">Environmental hazard (flood, fire, landslide or similar)</option>
+                <option value="emergency">Personal or family emergency</option>
+                <option value="government">Government order or travel restriction</option>
+                <option value="other">Other</option>
+              </select>
+              <textarea id="cancelReason-${b.id}" rows="3" placeholder="Details (required for Other)"></textarea>
               <button type="button" class="btn-small" onclick="submitCancellation(${b.id})">Confirm Cancellation</button>
               <p class="verify-error" id="cancelError-${b.id}"></p>
             </div>
@@ -398,23 +408,28 @@
     const show = (msg) => { errorEl.textContent = msg; errorEl.style.display = 'block'; };
     errorEl.style.display = 'none';
     const reason = reasonEl.value.trim();
-    if(!reason){ show('Please explain why you\'re cancelling.'); return; }
+    const codeEl = document.getElementById('cancelReasonCode-' + orderId);
+    const reasonCode = codeEl ? codeEl.value : '';
+    if(!reasonCode){ show('Choose a reason for cancelling.'); return; }
+    if(reasonCode === 'other' && !reason){ show('Add details for “Other”.'); return; }
     const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
     const post = (body) => fetch(API_BASE + '/api/host-listings', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken }, body: JSON.stringify(body)
     }).then(async r => ({ ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) }));
     const cancelNow = async (extra) => {
-      const r = await post({ cancelBooking: Object.assign({ orderId, reason }, extra || {}) });
+      const r = await post({ cancelBooking: Object.assign({ orderId, reasonCode, details: reason }, extra || {}) });
       if(r.ok){ loadListings(); if(typeof loadPayoutDeductions === 'function') loadPayoutDeductions(); return true; }
       show(r.data.error || 'Could not cancel this booking. Please try again.');
       return false;
     };
     try{
       // Already paid for the coupon (e.g. a retry)? Then this cancels straight away.
-      const first = await post({ cancelBooking: { orderId, reason } });
+      const first = await post({ cancelBooking: { orderId, reasonCode, details: reason } });
       if(first.ok){ loadListings(); return; }
       if(!(first.status === 402 && first.data.needsCoupon)){ show(first.data.error || 'Could not cancel this booking. Please try again.'); return; }
       const amount = Number(first.data.amount) || 0;
+      // Co-hosts pay the coupon up front: their share is paid in full, without deductions.
+      const isCohostMode = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
       let box = document.getElementById('cancelChoice-' + orderId);
       if(!box){
         box = document.createElement('div');
@@ -427,9 +442,9 @@
         + '<p style="font-size:13.5px; margin:0 0 12px; opacity:0.8;">The guest is refunded in full (booking and deposit) straight away, and gets this coupon by email 15 minutes later. This cannot be undone.</p>'
         + '<div style="display:flex; gap:8px; flex-wrap:wrap;">'
         + '<button type="button" class="btn-small" data-choice="now">Pay ' + inr(amount) + ' now and cancel</button>'
-        + '<button type="button" class="dispute-btn" data-choice="later">Cancel, deduct ' + inr(amount) + ' from my next payout</button>'
+        + (isCohostMode ? '' : '<button type="button" class="dispute-btn" data-choice="later">Cancel, deduct ' + inr(amount) + ' from my next payout</button>')
         + '</div>';
-      box.querySelector('[data-choice="later"]').addEventListener('click', async () => {
+      if(box.querySelector('[data-choice="later"]')) box.querySelector('[data-choice="later"]').addEventListener('click', async () => {
         box.querySelectorAll('button').forEach(b => { b.disabled = true; });
         if(await cancelNow({ payLater: true })) box.remove(); else box.querySelectorAll('button').forEach(b => { b.disabled = false; });
       });
@@ -870,6 +885,83 @@ async function loadPayoutDeductions(){
   }catch(err){ /* leave the page as it is */ }
 }
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadPayoutDeductions); else loadPayoutDeductions();
+</script>
+<script>
+// Payouts sent to this account (as host or co-host). Each opens its
+// summary: index.html?payout=<id>.
+async function loadMyPayouts(){
+  const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
+  if(!token) return;
+  try{
+    const res = await fetch('https://aerva-in.vercel.app/api/host-listings?myPayouts=1', { headers: { 'Authorization': 'Bearer ' + token } });
+    const data = await res.json();
+    const list = (res.ok && data.payouts) || [];
+    let box = document.getElementById('myPayoutsSection');
+    if(!list.length){ if(box) box.remove(); return; }
+    if(!box){
+      box = document.createElement('section');
+      box.id = 'myPayoutsSection';
+      box.style.cssText = 'margin:0 0 28px; background:#fff; border:1px solid #ece4d8; border-radius:12px; padding:16px 18px;';
+      const wrap = document.querySelector('.wrap') || document.body;
+      const note = document.getElementById('payoutDeductionNote');
+      wrap.insertBefore(box, note ? note.nextSibling : wrap.firstChild);
+    }
+    const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 8px;">Payouts</h2>'
+      + list.map(p => `<a href="index.html?payout=${Number(p.id)}" style="display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-top:1px solid #f0e9df; color:inherit; text-decoration:none; font-size:14.5px;">
+          <span><strong>${inr(p.amount)}</strong>${p.mine ? (p.as === 'cohost' ? ' · to you, as co-host' : ' · to you') : ' · to ' + esc(p.payeeName || (p.as === 'cohost' ? 'co-host' : 'host'))}<br><span style="opacity:0.7;">${esc(p.listing || '')} · ${esc(day(p.arrival))} – ${esc(day(p.departure))}</span></span>
+          <span style="opacity:0.7; text-align:right;">Sent ${esc(day(p.sentAt))}${p.arrivingBy ? '<br>Arriving by ' + esc(day(p.arrivingBy)) : ''}</span></a>`).join('');
+  }catch(err){ /* leave the page as it is */ }
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadMyPayouts); else loadMyPayouts();
+</script>
+<script>
+// Guest cancellation requests (hazard, life-threatening, emergency, travel
+// restriction). Accept: full refund, no coupon, no charge to you.
+async function loadCancellationRequests(){
+  const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
+  if(!token) return;
+  const acting = (window.AervaCohost && typeof window.AervaCohost.get === 'function') ? window.AervaCohost.get() : null;
+  const q = acting && acting.hostId ? '&actingHost=' + encodeURIComponent(acting.hostId) : '';
+  try{
+    const res = await fetch('https://aerva-in.vercel.app/api/host-listings?cancellationRequests=1' + q, { headers: { 'Authorization': 'Bearer ' + token } });
+    const data = await res.json();
+    const list = (res.ok && data.requests) || [];
+    let box = document.getElementById('cancelRequestsSection');
+    if(!list.length){ if(box) box.remove(); return; }
+    if(!box){
+      box = document.createElement('section');
+      box.id = 'cancelRequestsSection';
+      box.style.cssText = 'margin:0 0 28px; background:#fff; border:1px solid #ece4d8; border-left:3px solid #a3402f; border-radius:12px; padding:16px 18px;';
+      const wrap = document.querySelector('.wrap') || document.body;
+      wrap.insertBefore(box, wrap.firstChild);
+    }
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
+    box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 6px;">Cancellation requests</h2>'
+      + list.map(r => `<div style="padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px;" data-req="${Number(r.id)}">
+          <strong>${esc(r.guestName)}</strong> · ${esc(r.listing)} · ${esc(day(r.arrival))} – ${esc(day(r.departure))}<br>
+          <span>${esc(r.reason)}</span>${r.details ? `<br><span style="opacity:0.75;">${esc(r.details)}</span>` : ''}
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+            <button type="button" class="btn-small" data-accept="${Number(r.id)}">Accept: refund the guest in full</button>
+            <button type="button" class="dispute-btn" data-decline="${Number(r.id)}">Decline</button>
+          </div></div>`).join('');
+    const answer = async (id, accept) => {
+      if(accept && !confirm('Accept? The booking is cancelled and the guest is refunded in full. No coupon and no charge to you.')) return;
+      if(!accept && !confirm('Decline? The booking stands, and the guest is told.')) return;
+      const r = await fetch('https://aerva-in.vercel.app/api/host-listings' + (q ? '?' + q.slice(1) : ''), { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ respondCancellationRequest: { requestId: id, accept } }) });
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok){ alert(d.error || 'Could not answer this request.'); return; }
+      loadCancellationRequests(); if(typeof loadListings === 'function') loadListings();
+    };
+    box.querySelectorAll('[data-accept]').forEach(b => b.addEventListener('click', () => answer(Number(b.dataset.accept), true)));
+    box.querySelectorAll('[data-decline]').forEach(b => b.addEventListener('click', () => answer(Number(b.dataset.decline), false)));
+  }catch(err){ /* leave the page as it is */ }
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadCancellationRequests); else loadCancellationRequests();
 </script>
 <script src="aerva-header.js" defer></script>
 </body>

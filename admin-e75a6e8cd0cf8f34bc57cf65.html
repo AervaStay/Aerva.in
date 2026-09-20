@@ -379,7 +379,11 @@
     <h2 style="font-family:Georgia,serif; font-weight:normal;">Co-host payout details to review</h2>
     <p style="opacity:0.7; font-size:14px;">PAN, GSTIN and bank account a co-host has entered. A co-host is only paid while these are approved.</p>
     <div id="payoutProfilesList"><p style="opacity:0.6;">Loading…</p></div>
-    <p id="couponForfeitLine" style="margin-top:28px; font-size:14.5px;"></p>
+    <p id="autoPayoutLine" style="margin-top:28px; font-size:14.5px; font-weight:600;"></p>
+    <h2 style="font-family:Georgia,serif; font-weight:normal; margin-top:28px;">Refunds</h2>
+    <p style="opacity:0.7; font-size:14px;">Refunds start automatically and are checked with Razorpay until confirmed. Only failed ones need you: Retry re-checks Razorpay first, so nothing is refunded twice.</p>
+    <div id="refundsList"><p style="opacity:0.6;">Loading…</p></div>
+    <p id="couponForfeitLine" style="margin-top:8px; font-size:14.5px;"></p>
     <h2 style="font-family:Georgia,serif; font-weight:normal; margin-top:40px;">Cancellation coupons to deduct from hosts</h2>
     <p style="opacity:0.7; font-size:14px;">When a host or co-host cancels without paying for the guest’s 10% coupon, the coupon still goes to the guest and whoever cancelled owes the amount: from the host’s next payout, or from the co-host’s own share. Deduct it, then mark it recovered. Over 6 months unrecovered: decide whether to chase it or write it off.</p>
     <div id="penaltiesList"><p style="opacity:0.6;">Loading…</p></div>
@@ -1482,6 +1486,17 @@
           </div>
         </div>`).join('') : '<p style="opacity:0.6;">Nothing waiting.</p>';
       document.getElementById('couponForfeitLine').textContent = 'Unused coupon balances kept by Aerva (coupons worth more than the booking price): ' + payInr(data.couponForfeitTotal || 0);
+      document.getElementById('autoPayoutLine').textContent = data.automaticPayouts
+        ? 'Automatic payouts: ON. Sent through RazorpayX at 5 PM on check-out day (property’s local time); any left behind are retried every 4 hours. You only act on payouts that failed at the bank (Retry).'
+        : 'Automatic payouts: OFF (RazorpayX not set up). At 5 PM on check-out day each payout appears here as Not sent: send it by hand, then Mark paid.';
+      window.__autoPayouts = !!data.automaticPayouts;
+      const rfs = data.refunds || [];
+      document.getElementById('refundsList').innerHTML = rfs.length ? rfs.map(r => `
+        <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;${r.status === 'failed' ? ' border-left:3px solid #a3402f;' : ''}">
+          <strong>${escAdmin(r.listing || '')}</strong> · booking #${Number(r.orderId)} · ${escAdmin(r.kind === 'cancellation' ? 'Cancellation refund' : r.kind === 'deposit' ? 'Deposit refund' : 'Deposit (dispute) refund')} · ${escAdmin(r.currency)} ${Number(r.amount).toLocaleString('en-IN')}
+          <div style="margin-top:4px; ${r.status === 'failed' ? 'color:#a3402f;' : 'opacity:0.75;'}">${r.status === 'failed' ? 'Failed: ' + escAdmin(r.failure || 'not refunded') + ' · attempts ' + Number(r.attempts) : 'In progress: waiting for Razorpay to confirm'}</div>
+          ${r.status === 'failed' ? `<button class="approve-btn" style="margin-top:8px;" onclick="retryRefund(${Number(r.id)})">Retry refund</button>` : ''}
+        </div>`).join('') : '<p style="opacity:0.6;">No refunds waiting. All refunds are confirmed by Razorpay.</p>';
       const pens = data.penalties || [];
       document.getElementById('penaltiesList').innerHTML = pens.length ? pens.map(p => `
         <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;${p.overSixMonths ? ' border-left:3px solid #a3402f;' : ''}">
@@ -1499,13 +1514,72 @@
         <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;">
           <div><strong>${escAdmin(o.listing || '')}</strong> · ${payDate(o.arrival)} → ${payDate(o.departure)} · booking #${Number(o.orderId)}</div>
           <div style="opacity:0.75; margin:4px 0;">Guest paid ${payInr(o.total)} · Aerva commission ${payInr(o.commission)} · host payout ${payInr(o.hostPayout)}</div>
-          ${(o.cohosts || []).map(c => `<div>Co-host <strong>${escAdmin(c.name)}</strong> (${Number(c.percent)}%) — <strong>${payInr(c.amount)}</strong> → ${payeeLine(c)}</div>${c.penaltyToDeduct ? `<div style="color:#a3402f;">Deduct ${payInr(c.penaltyToDeduct)} (cancellation coupons) from this co-host’s share, then mark it recovered above.</div>` : ''}`).join('')}
+          ${(o.cohosts || []).map(c => `<div>Co-host <strong>${escAdmin(c.name)}</strong> (${Number(c.percent)}%) — <strong>${payInr(c.amount)}</strong> → ${payeeLine(c)}</div>${c.penaltyToDeduct && !c.paid ? `<div style="color:#a3402f;">Owes ${payInr(c.penaltyToDeduct)} in cancellation coupons: tick “deduct” when marking this paid.</div>` : ''}${payoutControl(o.orderId, 'cohost', c.guestId, c.paid, c.penaltyToDeduct)}`).join('')}
           <div>Host <strong>${escAdmin(o.host && o.host.name || '')}</strong> — <strong>${payInr(o.hostNet)}</strong> → ${payeeLine(o.host)}</div>
-          ${o.penaltyToDeduct ? `<div style="color:#a3402f;">Deduct ${payInr(o.penaltyToDeduct)} (cancellation coupons) from this payout, then mark it recovered above.</div>` : ''}
+          ${o.penaltyToDeduct && !o.hostPaid ? `<div style="color:#a3402f;">Owes ${payInr(o.penaltyToDeduct)} in cancellation coupons: tick “deduct” when marking this paid.</div>` : ''}
+          ${payoutControl(o.orderId, 'host', null, o.hostPaid, o.penaltyToDeduct)}
         </div>`).join('') : '<p style="opacity:0.6;">No paid bookings yet.</p>';
     }catch(err){
       profilesEl.innerHTML = listEl.innerHTML = '<p style="color:#a3402f;">' + escAdmin(err.message) + '</p>';
     }
+  }
+  // Mark paid: record a payout sent by hand; the host / co-host is emailed
+  // and notified on the website with the payout summary.
+  function payoutControl(orderId, payee, guestId, paid, owed){
+    const tdsNote = paid && paid.tds ? ` · TDS ${payInr(paid.tds)} (${paid.tdsRate}%${paid.panFurnished ? '' : ', no PAN'})` : '';
+    if(paid && paid.status === 'sent') return `<div style="color:#3a7d44; font-size:13.5px;">✓ Paid ${payDate(paid.sentAt)} · ${payInr(paid.net)}${tdsNote} · Ref ${escAdmin(paid.reference || '')}</div>`;
+    if(paid && paid.status === 'processing') return `<div style="color:#8a6c39; font-size:13.5px;">Sending via RazorpayX · ${payInr(paid.net)}${tdsNote}</div>`;
+    const auto = !!window.__autoPayouts;
+    // Retry: the same safe attempt the scheduler makes (RazorpayX checked first).
+    const retry = paid && auto && (paid.status === 'failed' || paid.status === 'due')
+      ? `<button class="approve-btn" onclick="retryPayout(${Number(paid.id)})">Retry payout</button>` : '';
+    const status = paid && paid.status === 'failed' ? `<div style="color:#a3402f; font-size:13.5px;">Failed at the bank: ${escAdmin(paid.failure || 'not received')} · ${payInr(paid.net)}${tdsNote} · attempts ${Number(paid.attempts) || 0}</div>`
+                 : paid && paid.status === 'due' ? `<div style="color:#a3402f; font-size:13.5px;">Not sent yet${paid.failure ? ': ' + escAdmin(paid.failure) : ''} · ${payInr(paid.net)}${tdsNote}${auto && paid.autoEligible ? ' · retried automatically every 4 hours' : ''}</div>` : '';
+    // Paying by hand is only for payouts the system will not send itself.
+    const handOk = !auto || (paid && !paid.autoEligible);
+    if(!handOk) return `${status}<div style="margin:6px 0 10px;">${retry}</div>`;
+    const key = `${orderId}-${payee}-${guestId || 0}`;
+    const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+    const hostOnly = payee === 'host'
+      ? `<label style="font-size:13px;">TDS ₹ <input id="payTds-${key}" type="number" min="0" placeholder="auto" style="width:90px; padding:7px; border:1px solid #ccc; border-radius:6px;"></label>
+         ${owed ? `<label style="font-size:13px;"><input id="payDed-${key}" type="checkbox" checked> Deduct ${payInr(owed)} cancellation coupons</label>` : ''}`
+      : '<span style="font-size:13px; opacity:0.7;">Co-host share: TDS only, no other deductions</span>';
+    return `${status}<div style="margin:6px 0 10px;">${retry}
+      <button class="approve-btn" onclick="document.getElementById('pay-${key}').style.display='flex'">Mark paid (sent by hand)</button>
+      <div id="pay-${key}" style="display:none; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+        <input id="payRef-${key}" placeholder="Bank reference (UTR)" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:200px;">
+        <label style="font-size:13px;">Arriving by <input id="payBy-${key}" type="date" value="${soon}" style="padding:7px; border:1px solid #ccc; border-radius:6px;"></label>
+        ${hostOnly}
+        <button class="approve-btn" onclick="markPayoutPaid(${Number(orderId)}, '${payee}', ${guestId ? Number(guestId) : 'null'}, '${key}')">Confirm, notify ${payee === 'host' ? 'host' : 'co-host'}</button>
+      </div></div>`;
+  }
+  async function retryPayout(id){
+    if(!confirm('Retry this payout? RazorpayX is checked first, so it is never paid twice.')) return;
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ retryPayout: { payoutId: id } }) });
+    const d = await res.json().catch(() => ({}));
+    alert(res.ok ? ({ processing: 'Sent to RazorpayX. It will show as Paid once the bank confirms.', adopted: 'RazorpayX already had this payout, so it was not sent again. Its status is now tracked.', due: 'Not sent: waiting for approved bank details.', busy: 'This payout is already being sent.' }[d.result] || 'Done.') : (d.error || 'Could not retry.'));
+    loadPayouts();
+  }
+  async function retryRefund(id){
+    if(!confirm('Retry this refund? Razorpay is checked first, so it is never refunded twice.')) return;
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ retryRefund: { refundId: id } }) });
+    const d = await res.json().catch(() => ({}));
+    alert(res.ok ? (d.adopted ? 'Razorpay already had this refund, so it was not refunded again. Its status is now tracked.' : 'Refund sent to Razorpay.') : (d.error || 'Could not retry.'));
+    loadPayouts();
+  }
+  async function markPayoutPaid(orderId, payee, guestId, key){
+    const reference = document.getElementById('payRef-' + key).value.trim();
+    if(!reference){ alert('Enter the bank reference (UTR).'); return; }
+    const ded = document.getElementById('payDed-' + key);
+    const body = { markPayoutPaid: { orderId, payee, cohostGuestId: guestId, reference,
+      arrivingBy: document.getElementById('payBy-' + key).value, deductCoupons: !!(ded && ded.checked) } };
+    const tdsEl = document.getElementById('payTds-' + key);
+    if(tdsEl && tdsEl.value !== '') body.markPayoutPaid.tds = Number(tdsEl.value) || 0;
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok){ alert(data.error || 'Could not record this payout.'); return; }
+    alert('Recorded: ' + payInr(data.net) + (data.emailed ? '. The payee has been emailed and notified.' : '. Notified on the website (email could not be sent).'));
+    loadPayouts();
   }
   async function settlePenalty(id, action){
     const noteEl = document.getElementById('penaltyNote' + id);

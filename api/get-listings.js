@@ -69,6 +69,7 @@ const { verifyToken, secretMatches } = require('./_approval-token');
 const { buildIcs, syncStaleFeeds } = require('./_calendar-sync');
 const { sendScheduledTemplates } = require('./_template-scheduling');
 const { releaseDueCoupons } = require('./_coupons');
+const { runAutoPayouts } = require('./_payouts');
 const { decryptField } = require('./_secure-fields');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
@@ -468,6 +469,14 @@ async function attachLikeCounts(rows) {
   rows.forEach(r => { r.like_count = counts[r.id] || 0; });
 }
 
+let lastTrafficScheduleRun = 0; // see ?runSchedules below
+// Razorpay client for refund status checks (only when keys are set).
+function razorpayClient() {
+  if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) return null;
+  const Razorpay = require('razorpay');
+  return new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
+}
+
 module.exports = async (req, res) => {
   // CORS first, before ANY branch can return. The review sweep below used
   // to run ahead of these headers, so the admin tool's Batch Jobs button
@@ -485,11 +494,26 @@ module.exports = async (req, res) => {
   // GET ?releaseCoupons=1 (cron secret) — for an external pinger every few
   // minutes (e.g. cron-job.org) so coupons go out right on time. Every
   // other request here also runs the (throttled) check below.
-  if (req.method === 'GET' && req.query.releaseCoupons === '1') {
+  // GET ?runSchedules=1 (cron secret) — ONE job for an external pinger
+  // every 5 minutes: cancellation coupons AND scheduled template messages
+  // (before/after check-in or check-out, check-in / check-out day).
+  if (req.method === 'GET' && (req.query.releaseCoupons === '1' || req.query.runSchedules === '1')) {
     if (!isCronAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
-    return res.status(200).json(await releaseDueCoupons(sql, { force: true }));
+    const coupons = await releaseDueCoupons(sql, { force: true });
+    if (req.query.releaseCoupons === '1') return res.status(200).json(coupons);
+    const messages = await sendScheduledTemplates(sql, { deadlineMs: 5000 });
+    const payouts = await runAutoPayouts(sql, { deadlineMs: 4000, razorpay: razorpayClient() }); // 5 PM on check-out day; 4-hourly retries; refund status
+    return res.status(200).json({ coupons, messages, payouts });
   }
-  if (req.method === 'GET') await releaseDueCoupons(sql);
+  if (req.method === 'GET') {
+    await releaseDueCoupons(sql);
+    // Backstop between pinger runs: at most every 2 minutes per server.
+    if (Date.now() - lastTrafficScheduleRun > 120000) {
+      lastTrafficScheduleRun = Date.now();
+      await sendScheduledTemplates(sql, { deadlineMs: 2500 });
+      await runAutoPayouts(sql, { deadlineMs: 2500, razorpay: razorpayClient() });
+    }
+  }
 
   // ---- Calendar export: GET ?ical=<secret token> ----
   // A listing's (or resort room's) calendar for Airbnb, Agoda, Booking.com,
@@ -566,6 +590,7 @@ module.exports = async (req, res) => {
     // check-out day, after check-out) — see _template-scheduling.js.
     const scheduledMessages = await sendScheduledTemplates(sql, { deadlineMs: 6000 });
     const couponRelease = await releaseDueCoupons(sql, { force: true });
+    const autoPayouts = await runAutoPayouts(sql, { deadlineMs: 5000, razorpay: razorpayClient() });
     try {
       // Both sides in — release the pair together.
       const pairs = await sql`
@@ -695,6 +720,7 @@ module.exports = async (req, res) => {
         calendarSync,
         scheduledMessages,
         couponRelease,
+        autoPayouts,
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
         prompted: promptedCount,

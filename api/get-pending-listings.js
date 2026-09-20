@@ -88,7 +88,9 @@ const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
-const { encryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens } = require('./_secure-fields');
+const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout } = require('./_payouts');
+const { safeRefund } = require('./_refunds');
+const { encryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens, maskAccount } = require('./_secure-fields');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
 const { createToken, verifyToken, secretMatches } = require('./_approval-token');
@@ -1123,10 +1125,7 @@ module.exports = async (req, res) => {
             // (card, UPI, etc.) automatically. This is what satisfies
             // "refunded ... into the same account" — Aerva never asks
             // for or stores separate refund destination details.
-            refund = await razorpay.payments.refund(order.razorpay_payment_id, {
-              amount: refundAmount,
-              speed: 'normal',
-            });
+            refund = await safeRefund(sql, razorpay, { orderId: order.id, paymentId: order.razorpay_payment_id, amountSubunit: refundAmount, kind: 'deposit' });
           } catch (refundErr) {
             // Nothing was refunded: put it back to 'held' so it is picked
             // up next time, or handled by hand. One failure never blocks
@@ -1221,10 +1220,7 @@ module.exports = async (req, res) => {
         let refundId = null;
         if (refundSubunitAmount) {
           try {
-            const refund = await razorpay.payments.refund(order.razorpay_payment_id, {
-              amount: refundSubunitAmount,
-              speed: 'normal',
-            });
+            const refund = await safeRefund(sql, razorpay, { orderId, paymentId: order.razorpay_payment_id, amountSubunit: refundSubunitAmount, kind: 'deposit_dispute' });
             refundId = refund.id;
           } catch (refundErr) {
             // Nothing was refunded, so reopen the dispute for another try.
@@ -1295,6 +1291,91 @@ module.exports = async (req, res) => {
       } catch (err) {
         console.error('settleHostPenalty failed:', err);
         return res.status(500).json({ error: 'Could not save that right now.' });
+      }
+    }
+
+    // ---- Mark a payout as sent (sent by hand), and tell the host / co-host ----
+    // POST { markPayoutPaid: { orderId, payee: 'host' | 'cohost', cohostGuestId?,
+    //        reference, arrivingBy (YYYY-MM-DD), tds?, deductCoupons? } }
+    // Finishes the booking's payout row (created automatically at 5 PM on
+    // check-out day, or here if not yet): amounts come from the booking.
+    // Co-host shares are paid in full. Refused if already sent, or being
+    // sent by RazorpayX, or if deductions would take it below zero.
+    if (req.body && req.body.markPayoutPaid) {
+      try {
+        const b = req.body.markPayoutPaid;
+        const orderId = Number(b.orderId) || 0;
+        const isCohost = b.payee === 'cohost';
+        const reference = String(b.reference || '').trim().slice(0, 100);
+        if (!reference) return res.status(400).json({ error: 'Enter the bank reference (UTR) for this payout.' });
+        const arrivingBy = /^\d{4}-\d{2}-\d{2}$/.test(String(b.arrivingBy || '')) ? b.arrivingBy : null;
+        const o = (await sql`SELECT id, status FROM orders WHERE id = ${orderId}`)[0];
+        if (!o || o.status !== 'paid') return res.status(404).json({ error: 'That booking is not a paid booking.' });
+        await createPayoutRows(sql, orderId);
+        const payeeGuestId = isCohost ? (Number(b.cohostGuestId) || 0) : null;
+        const row = (await sql`SELECT * FROM payouts WHERE order_id = ${orderId} AND payee_type = ${isCohost ? 'cohost' : 'host'} AND COALESCE(payee_guest_id, 0) = ${payeeGuestId || 0}`)[0];
+        if (!row) return res.status(404).json({ error: isCohost ? 'That co-host has no share in this booking.' : 'No payout found for this booking.' });
+        if (row.status === 'sent') return res.status(409).json({ error: 'This payout is already marked paid.' });
+        if (row.status === 'processing') return res.status(409).json({ error: 'RazorpayX is sending this payout. Wait for it to finish.' });
+        // With automatic payouts on, never pay by hand what the system pays:
+        // use Retry. (Payouts created while they were off can still be
+        // recorded here.)
+        if (razorpayxReady() && row.auto_eligible) return res.status(409).json({ error: 'Automatic payouts are on. Use Retry instead of paying by hand.' });
+        let tds = Number(row.tds), deductions = Number(row.deductions), ids = row.deducted_penalty_ids || [];
+        if (!isCohost) {
+          if (b.tds !== undefined && b.tds !== null && b.tds !== '') tds = Math.max(0, Math.round((Number(b.tds) || 0) * 100) / 100);
+          if (!b.deductCoupons) { deductions = 0; ids = []; }
+        }
+        const net = Math.round((Number(row.gross) - Number(row.commission) - Number(row.cohost_shares) - deductions - tds) * 100) / 100;
+        if (net < 0) return res.status(400).json({ error: `Deductions (₹${(deductions + tds).toLocaleString('en-IN')}) are more than this payout. Leave the coupon deduction for a larger payout.` });
+        // If an admin typed the TDS, the rate shown is the one that amount represents.
+        const tdsBase = Number(row.gross) - Number(row.cohost_shares);
+        const tdsRate = tds === Number(row.tds) ? Number(row.tds_rate || 0) : (tdsBase > 0 ? Math.round(tds / tdsBase * 10000) / 100 : 0);
+        await sql`UPDATE payouts SET tds = ${tds}, tds_rate = ${tdsRate}, deductions = ${deductions}, deducted_penalty_ids = ${ids}, net = ${net} WHERE id = ${row.id}`;
+        const done = await markPayoutSent(sql, row.id, { reference, arrivingBy, by: ADMIN_ACTOR });
+        if (!done) return res.status(409).json({ error: 'This payout could not be marked paid. Refresh and try again.' });
+        await logAudit(sql, { action: 'payout_marked_paid', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'order', targetId: orderId,
+          metadata: { payoutId: row.id, payee: isCohost ? 'cohost' : 'host', payeeGuestId, net, tds, deductions, reference, emailed: done.emailed } });
+        return res.status(200).json({ success: true, payoutId: row.id, net, emailed: done.emailed });
+      } catch (err) {
+        console.error('markPayoutPaid failed:', err);
+        return res.status(500).json({ error: 'Could not record this payout right now.' });
+      }
+    }
+
+    // ---- Retry a payout (failed at the bank, or left behind) ----
+    // POST { retryPayout: { payoutId } } — the same safe attempt the
+    // scheduler uses: RazorpayX is checked first, so nothing is paid twice.
+    if (req.body && req.body.retryPayout) {
+      try {
+        const id = Number(req.body.retryPayout.payoutId) || 0;
+        const row = (await sql`SELECT id, order_id, status FROM payouts WHERE id = ${id}`)[0];
+        if (!row) return res.status(404).json({ error: 'Payout not found.' });
+        if (!['failed', 'due'].includes(row.status)) return res.status(409).json({ error: row.status === 'sent' ? 'This payout has already been sent.' : 'This payout is being sent. Wait for it to finish.' });
+        if (!razorpayxReady()) return res.status(400).json({ error: 'Automatic payouts are off (RazorpayX not set up).' });
+        const result = await attemptPayout(sql, id, { by: ADMIN_ACTOR });
+        await logAudit(sql, { action: 'payout_retried', success: result !== 'busy', actorType: 'admin', ...ADMIN_AUDIT, targetType: 'order', targetId: row.order_id, metadata: { payoutId: id, result } });
+        return res.status(200).json({ success: true, result });
+      } catch (err) {
+        console.error('retryPayout failed:', err);
+        return res.status(500).json({ error: 'Could not retry this payout right now.' });
+      }
+    }
+    // ---- Retry a refund that failed ----
+    // POST { retryRefund: { refundId } } — Razorpay is re-checked first
+    // (_refunds.js), so a refund that did go through is never repeated.
+    if (req.body && req.body.retryRefund) {
+      try {
+        const id = Number(req.body.retryRefund.refundId) || 0;
+        const rf = (await sql`SELECT * FROM refunds WHERE id = ${id}`)[0];
+        if (!rf) return res.status(404).json({ error: 'Refund not found.' });
+        if (rf.status !== 'failed') return res.status(409).json({ error: rf.status === 'processed' ? 'This refund has already been processed.' : 'This refund is in progress.' });
+        const r = await safeRefund(sql, razorpay, { orderId: rf.order_id, paymentId: rf.razorpay_payment_id, amountSubunit: rf.amount, kind: rf.kind });
+        await logAudit(sql, { action: 'refund_retried', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'order', targetId: rf.order_id, metadata: { refundId: id, kind: rf.kind, result: r.adopted ? 'adopted' : 'created' } });
+        return res.status(200).json({ success: true, adopted: !!r.adopted, status: r.status });
+      } catch (err) {
+        console.error('retryRefund failed:', err);
+        return res.status(err.isUserFacing ? err.status : 502).json({ error: err.isUserFacing ? err.message : 'Razorpay could not refund this right now.' });
       }
     }
 
@@ -1569,6 +1650,22 @@ module.exports = async (req, res) => {
       } catch (err) { /* table not created yet */ }
       // Owed by the host (from the host's payout) or by a co-host who
       // cancelled (from that co-host's own share).
+      // Payouts already sent (Mark paid), per booking and payee.
+      let paidRows = [];
+      try {
+        const ids = orders.map(o => o.id);
+        if (ids.length) paidRows = await sql`SELECT id, order_id, payee_type, payee_guest_id, status, net, reference, sent_at, failure_reason, attempts, last_attempt_at, auto_eligible, tds, tds_rate, pan_furnished FROM payouts WHERE order_id = ANY(${ids})`;
+      } catch (err) { /* migration_payouts.sql not run yet */ }
+      const paidKey = (orderId, type, guest) => `${orderId}:${type}:${guest || 0}`;
+      const paidMap = {};
+      paidRows.forEach(p => { paidMap[paidKey(p.order_id, p.payee_type, p.payee_guest_id)] = { id: p.id, status: p.status, net: Number(p.net), reference: p.reference, sentAt: p.sent_at, failure: p.failure_reason,
+        attempts: p.attempts, lastAttemptAt: p.last_attempt_at, autoEligible: p.auto_eligible, tds: Number(p.tds), tdsRate: Number(p.tds_rate), panFurnished: p.pan_furnished }; });
+      // Refunds not yet confirmed (in progress, or failed: admin retries).
+      let openRefunds = [];
+      try {
+        openRefunds = await sql`SELECT r.id, r.order_id, r.kind, r.amount, r.status, r.failure_reason, r.attempts, r.created_at, o.suite_name, o.guest_email, o.charge_currency
+                                FROM refunds r JOIN orders o ON o.id = r.order_id WHERE r.status IN ('new', 'creating', 'pending', 'failed') ORDER BY r.created_at DESC LIMIT 100`;
+      } catch (err) { /* migration_refunds.sql not run yet */ }
       const owedByHost = {};
       const owedByCohost = {};
       penalties.forEach(p => {
@@ -1585,6 +1682,9 @@ module.exports = async (req, res) => {
         metadata: { bookings: orders.length, pendingProfiles: pendingProfiles.length } });
       return res.status(200).json({
         couponForfeitTotal,
+        automaticPayouts: razorpayxReady(),
+        refunds: openRefunds.map(r => ({ id: r.id, orderId: r.order_id, kind: r.kind, amount: Number(r.amount) / 100, currency: r.charge_currency || 'INR', status: r.status,
+          failure: r.failure_reason, attempts: r.attempts, listing: r.suite_name, guestEmail: r.guest_email, createdAt: r.created_at })),
         penalties: penalties.map(p => ({ id: p.id, hostId: p.host_id, hostName: p.host_name, amount: Number(p.amount),
           payer: p.payer_guest_id ? 'cohost' : 'host', payerName: p.payer_guest_id ? (p.payer_name || p.payer_email || 'Co-host') : p.host_name,
           booking: p.suite_name, orderId: p.order_id, createdAt: p.created_at, overSixMonths: !!p.over_six_months })),
@@ -1597,6 +1697,7 @@ module.exports = async (req, res) => {
           const cs = (byOrder[o.id] || []).map(x => ({
             name: x.name || x.email || 'Co-host', percent: Number(x.percent), amount: Number(x.amount),
             penaltyToDeduct: Math.round(owedByCohost[x.cohost_guest_id] || 0),
+            guestId: x.cohost_guest_id, paid: paidMap[paidKey(x.order_id, 'cohost', x.cohost_guest_id)] || null,
             holder: x.account_holder_name || null, account: readableForAdmin(x.bank_account_number), ifsc: x.bank_ifsc || null,
             // Paid only once their payout details are approved.
             ready: x.profile_status === 'approved', profileStatus: x.profile_status || 'missing'
@@ -1604,6 +1705,7 @@ module.exports = async (req, res) => {
           const coTotal = cs.reduce((a, x) => a + x.amount, 0);
           return {
             penaltyToDeduct: Math.round(owedByHost[o.host_id] || 0),
+            hostPaid: paidMap[paidKey(o.id, 'host', null)] || null,
             orderId: o.id, listing: o.suite_name, arrival: o.arrival, departure: o.departure,
             total: Number(o.total) || 0, commission: Number(o.commission_amount) || 0,
             hostPayout: Number(o.payout_amount) || 0, hostNet: (Number(o.payout_amount) || 0) - coTotal,

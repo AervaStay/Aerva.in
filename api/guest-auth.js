@@ -50,12 +50,14 @@
 const bcrypt = require('bcryptjs');
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
+const { isAccountDeleted } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { openFlagsForHost } = require('./_compliance');
 const { verifyGoogleIdToken, verifyGoogleAccessToken } = require('./_social-auth');
+const { recentPayoutNotifications } = require('./_payouts');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { normalizeToE164 } = require('./_phone-validation');
 const { sanitizeBody } = require('./_plain-text');
@@ -264,6 +266,8 @@ module.exports = async (req, res) => {
     if (!payload || payload.action !== 'guest-session') {
       return res.status(401).json({ error: 'Please log in again.' });
     }
+    // A deleted account can never be used again, even from an open browser.
+    if (await isAccountDeleted(sql, payload.listingId)) return res.status(401).json({ error: 'This account has been deleted.', deleted: true });
 
     try {
       // Reuses the generically-named "listingId" field from
@@ -409,6 +413,8 @@ module.exports = async (req, res) => {
             });
           });
         }
+        // Payouts sent in the last 30 days (as host, or as a co-host).
+        (await recentPayoutNotifications(sql, { hostId: guest.host_id, guestId: guest.id })).forEach(n => notifications.push(n));
       } catch (err) {
         console.error('notifications failed (non-fatal):', err);
       }
