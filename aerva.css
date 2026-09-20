@@ -2286,3 +2286,26 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
 
 /* Coupon rule under the coupon field at checkout. */
 .coupon-rule{ font-size:12.5px; line-height:1.5; opacity:0.7; margin:6px 0 0; }
+
+/* ---------- Payout summary (index.html?payout=<id>) ---------- */
+.payout-overlay{ position:fixed; inset:0; z-index:3000; background:rgba(20,18,15,0.45); display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:40px 16px; }
+.payout-sheet{ position:relative; width:100%; max-width:520px; background:#fff; border-radius:18px; padding:28px 22px 24px; box-shadow:0 20px 60px rgba(0,0,0,0.18); }
+.payout-close{ position:absolute; top:12px; right:14px; background:none; border:none; font-size:28px; line-height:1; cursor:pointer; color:var(--ink); }
+.payout-hero{ text-align:center; margin:8px 0 18px; }
+.payout-amount{ font-family:'Bodoni Moda', Georgia, serif; font-size:44px; font-weight:500; }
+.payout-card{ border:1px solid #e6dccd; border-radius:16px; padding:6px 20px 16px; margin-top:14px; }
+.payout-row{ padding:14px 0; border-bottom:1px solid #f0e9df; }
+.payout-row:last-child{ border-bottom:none; }
+.payout-status{ font-size:16px; font-weight:500; display:flex; align-items:center; gap:8px; }
+.payout-dot{ width:9px; height:9px; border-radius:50%; background:#3a7d44; display:inline-block; }
+.payout-label{ font-size:15px; font-weight:600; }
+.payout-muted{ font-size:14.5px; opacity:0.72; margin-top:3px; line-height:1.5; }
+.payout-ref{ word-break:break-all; }
+.payout-guest{ font-family:'Bodoni Moda', Georgia, serif; font-size:24px; text-align:center; margin-top:14px; }
+.payout-center{ text-align:center; }
+.payout-line{ display:flex; justify-content:space-between; gap:12px; font-size:15px; padding:6px 0; }
+.payout-total{ border-top:1px solid #e6dccd; margin-top:8px; padding-top:12px; font-weight:600; }
+@media (max-width:640px){ .payout-overlay{ padding:0; align-items:stretch; } .payout-sheet{ border-radius:0; min-height:100%; padding-top:52px; } }
+
+/* My Bookings: cancellation request status */
+.booking-request-note{ display:inline-block; font-size:13px; opacity:0.75; margin-top:8px; }

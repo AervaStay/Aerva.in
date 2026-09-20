@@ -6146,6 +6146,12 @@
         // Cancelled bookings keep their history: the button reads "View
         // messages" and opens the same thread (guest-profile.js allows it
         // once a conversation exists).
+        const localToday = String(b.local_today || '').slice(0, 10);
+        const upcoming = b.status === 'paid' && (!localToday || String(b.departure).slice(0, 10) >= localToday);
+        const requestHtml = !upcoming ? ''
+          : b.cancel_request_status === 'pending' ? '<span class="booking-request-note">Cancellation requested · waiting for the host</span>'
+          : b.cancel_request_status === 'declined' ? '<span class="booking-request-note">Cancellation request declined by the host</span>'
+          : `<button type="button" class="filter-clear" data-request-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Request cancellation</button>`;
         const chatBtnHtml = (b.status === 'paid' || b.status === 'cancelled')
           ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-top:10px;">${b.status === 'paid' ? 'Message Host' : 'View messages'}</button>`
           : '';
@@ -6166,7 +6172,7 @@
             <div class="listing-info">
               <h3>${escapeMessageHtml(b.suite_name || '')}</h3>
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(b.status)}</div>
-              ${chatBtnHtml}${reviewHtml}
+              ${chatBtnHtml}${reviewHtml}${requestHtml}
             </div>
           </div>
         `;
@@ -6180,6 +6186,11 @@
       });
       container.querySelectorAll('[data-order-id]').forEach(btn => {
         btn.addEventListener('click', (e) => e.stopPropagation()); // the card's own click must not also fire
+      });
+      // Ask the host to accept a cancellation (hazard / life-threatening /
+      // emergency / travel restriction). Accepted: full refund.
+      container.querySelectorAll('[data-request-cancel]').forEach(btn => {
+        btn.addEventListener('click', (e) => { e.stopPropagation(); openCancelRequest(Number(btn.dataset.requestCancel), btn.dataset.listingName || ''); });
       });
       // The card itself opens the booking.
       container.querySelectorAll('.booking-card').forEach(card => {
@@ -7188,26 +7199,29 @@
   const TEMPLATE_LIBRARY = [
     { title: 'Booking confirmed', trigger: 'booking_confirmed', days: 0,
       body: 'Hi @guestname,\n\nThank you for booking @listing for @nights night(s), @arrival to @departure. I look forward to hosting you.\n\nI’ll send check-in details before you arrive. Message me here any time.\n\n@hostname' },
-    { title: 'Check-in details', trigger: 'before_checkin', days: 2,
+    { title: 'Check-in details', trigger: 'before_checkin', days: 2, unit: 'days',
       body: 'Hi @guestname,\n\nYour stay at @listing starts on @arrival.\n\nCheck-in: from @checkin\nCheck-out: by @checkout\nAddress: @location\nMap: @maplink\n\n@checkinsteps\n\nPlease carry a government photo ID for every adult guest.\n\nSee you soon,\n@hostname' },
     { title: 'Welcome on check-in day', trigger: 'checkin_day', days: 0,
       body: 'Welcome, @guestname! Today is check-in day at @listing.\n\nCheck-in: from @checkin\n@wifi\n\nMessage me here if you need anything.' },
     { title: 'Check-out reminder', trigger: 'checkout_day', days: 0,
       body: 'Good morning, @guestname. Check-out is by @checkout today.\n\nBefore you leave: close windows and doors, switch off lights and AC, and leave the keys as agreed.\n\nThank you for staying. Safe travels!' },
-    { title: 'Thank you', trigger: 'after_checkout', days: 1,
+    { title: 'Thank you', trigger: 'after_checkout', days: 1, unit: 'days',
       body: 'Hi @guestname,\n\nThank you for staying at @listing. I hope you had a lovely time.\n\nPlease leave a review on Aerva. It helps other guests and me.\n\nYou’re always welcome back,\n@hostname' },
     { title: 'Directions', trigger: 'manual', days: 0,
       body: 'Here is how to find @listing:\n@location\n@maplink' },
     { title: 'WiFi', trigger: 'manual', days: 0, body: '@wifi' }
   ];
+  const TIMED_TRIGGER_WORDS = { before_checkin: 'before check-in', after_checkin: 'after check-in', before_checkout: 'before check-out', after_checkout: 'after check-out' };
   function templateWhen(t){
-    const n = Number(t.send_offset_days) || 1;
+    if(TIMED_TRIGGER_WORDS[t.send_trigger]){
+      const unit = t.send_offset_unit === 'hours' ? 'hour' : 'day';
+      const n = Number(t.send_offset_value) || Number(t.send_offset_days) || 1;
+      return `Sent ${n} ${unit}${n === 1 ? '' : 's'} ${TIMED_TRIGGER_WORDS[t.send_trigger]}`;
+    }
     switch(t.send_trigger){
       case 'booking_confirmed': return 'Sent when a booking is confirmed';
-      case 'before_checkin': return `Sent ${n} day${n === 1 ? '' : 's'} before check-in`;
-      case 'checkin_day': return 'Sent on check-in day';
-      case 'checkout_day': return 'Sent on check-out day';
-      case 'after_checkout': return `Sent ${n} day${n === 1 ? '' : 's'} after check-out`;
+      case 'checkin_day': return 'Sent on the morning of check-in day';
+      case 'checkout_day': return 'Sent on the morning of check-out day';
       default: return 'Sent when you tap it';
     }
   }
@@ -7216,13 +7230,16 @@
 
   function syncTemplateTriggerFields(){
     const trig = document.getElementById('tplTrigger').value;
-    const needsDays = trig === 'before_checkin' || trig === 'after_checkout';
-    const timed = ['before_checkin', 'checkin_day', 'checkout_day', 'after_checkout'].includes(trig);
+    const needsDays = !!TIMED_TRIGGER_WORDS[trig];
+    const timed = needsDays || trig === 'checkin_day' || trig === 'checkout_day';
     document.getElementById('tplDaysWrap').style.display = needsDays ? 'block' : 'none';
     const note = document.getElementById('tplTimingNote');
-    note.textContent = (trig === 'before_checkin' || trig === 'checkin_day')
-      ? 'Sent about 7:30 am (property’s local date). Booked later than that? Sent as soon as the booking is confirmed.'
-      : timed ? 'Sent about 7:30 am on the day (property’s local date).' : '';
+    note.textContent = needsDays
+      ? ('Counted from the listing’s ' + (trig.endsWith('checkin') ? 'check-in' : 'check-out') + ' time, in the property’s time zone.'
+         + (trig.startsWith('before_') ? ' Booked later than that? Sent as soon as the booking is confirmed.' : ''))
+      : timed ? 'Sent from 7:30 am on the day, in the property’s time zone.' : '';
+    const unitEl = document.getElementById('tplUnit'), daysEl = document.getElementById('tplDays');
+    if(unitEl && daysEl) daysEl.max = unitEl.value === 'hours' ? 72 : 30;
     note.style.display = timed ? 'block' : 'none';
     document.getElementById('inboxTemplateScheduleOptions').style.display = trig === 'manual' ? 'none' : 'block';
     if(trig !== 'manual' && !inboxTemplateScheduleListingsLoaded) return loadInboxTemplateScheduleListings();
@@ -7248,6 +7265,7 @@
     document.getElementById('inboxTemplateBodyInput').value = '';
     document.getElementById('tplTrigger').value = 'manual';
     document.getElementById('tplDays').value = 2;
+    document.getElementById('tplUnit').value = 'days';
     document.querySelectorAll('.inbox-template-schedule-listing').forEach(cb => { cb.checked = false; });
     syncTemplateTriggerFields();
   }
@@ -7260,7 +7278,8 @@
     document.getElementById('inboxTemplateTitleInput').value = t.title || '';
     document.getElementById('inboxTemplateBodyInput').value = t.body || '';
     document.getElementById('tplTrigger').value = t.send_trigger || 'manual';
-    document.getElementById('tplDays').value = Number(t.send_offset_days) || 2;
+    document.getElementById('tplDays').value = Number(t.send_offset_value) || Number(t.send_offset_days) || 2;
+    document.getElementById('tplUnit').value = t.send_offset_unit === 'hours' ? 'hours' : 'days';
     await syncTemplateTriggerFields();
     const ids = (t.auto_send_listing_ids || []).map(Number);
     document.querySelectorAll('.inbox-template-schedule-listing').forEach(cb => { cb.checked = ids.includes(Number(cb.value)); });
@@ -7360,6 +7379,7 @@
       bodyEl.value = t.body;
       document.getElementById('tplTrigger').value = t.trigger;
       document.getElementById('tplDays').value = t.days || 2;
+      document.getElementById('tplUnit').value = t.unit || 'days';
       syncTemplateTriggerFields();
     });
     document.getElementById('tplCreateBtn').addEventListener('click', () => { resetTemplateForm(); openTemplateForm(); });
@@ -7375,6 +7395,7 @@
       try{ bodyEl.setSelectionRange(pos, pos); }catch(e){}
     }));
     document.getElementById('tplTrigger').addEventListener('change', syncTemplateTriggerFields);
+    document.getElementById('tplUnit').addEventListener('change', syncTemplateTriggerFields);
     document.getElementById('tplCancelEdit').addEventListener('click', closeTemplateForm);
     document.getElementById('inboxAddTemplateBtn').addEventListener('click', async () => {
       const title = document.getElementById('inboxTemplateTitleInput').value.trim();
@@ -7382,11 +7403,12 @@
       if(!body){ showTemplateMsg('Write the message first.', false); return; }
       const trigger = document.getElementById('tplTrigger').value;
       const days = Number(document.getElementById('tplDays').value) || 1;
+      const unit = document.getElementById('tplUnit').value === 'hours' ? 'hours' : 'days';
       const ids = trigger === 'manual' ? [] : Array.from(document.querySelectorAll('.inbox-template-schedule-listing:checked')).map(cb => Number(cb.value));
       const btn = document.getElementById('inboxAddTemplateBtn');
       btn.disabled = true;
       try{
-        await saveTemplatePayload({ templateId: templateEditingId || undefined, title, body, sendTrigger: trigger, sendOffsetDays: days, autoSendListingIds: ids });
+        await saveTemplatePayload({ templateId: templateEditingId || undefined, title, body, sendTrigger: trigger, sendOffsetValue: days, sendOffsetUnit: unit, sendOffsetDays: unit === 'days' ? days : undefined, autoSendListingIds: ids });
         const msg = templateEditingId ? 'Changes saved.' : 'Template created.';
         closeTemplateForm();
         showTemplateMsg(msg, true);
@@ -11847,13 +11869,13 @@
     guestLogoutLink.addEventListener('click', function(e){
       e.preventDefault();
       clearGuestSession();
-      window.location.reload();
+      window.location.href = 'index.html'; // always land on the home page, like every other page's Log Out
     });
     if(guestLogoutLinkMobile){
       guestLogoutLinkMobile.addEventListener('click', function(e){
         e.preventDefault();
         clearGuestSession();
-        window.location.reload();
+        window.location.href = 'index.html'; // always land on the home page, like every other page's Log Out
       });
     }
 
@@ -11882,3 +11904,92 @@
 
     checkGuestSession();
   })();
+
+// ---- Payout summary (index.html?payout=<id>) ----
+// Opened from the payout notification or the payout email. Shows the same
+// figures as the email (api/_payouts.js), for the signed-in host or
+// co-host only (host-listings.js ?payoutDetail=<id>).
+(function(){
+  const id = new URLSearchParams(window.location.search).get('payout');
+  if(!id) return;
+  let token = null;
+  try{ token = localStorage.getItem('aerva_guest_session'); }catch(e){}
+  const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const day = (v) => { if(!v) return ''; const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }); };
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const overlay = document.createElement('div');
+  overlay.className = 'payout-overlay';
+  overlay.innerHTML = '<div class="payout-sheet" role="dialog" aria-label="Payout"><button type="button" class="payout-close" aria-label="Close">×</button><div class="payout-body"><p class="payout-muted">Loading…</p></div></div>';
+  const close = () => { overlay.remove(); try{ history.replaceState(null, '', 'index.html'); }catch(e){} };
+  overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
+  overlay.querySelector('.payout-close').addEventListener('click', close);
+  const show = () => document.body.appendChild(overlay);
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show); else show();
+  const body = overlay.querySelector('.payout-body');
+  if(!token){ body.innerHTML = '<p class="payout-muted">Log in to see this payout.</p><p><a href="guest-login.html">Log in</a></p>'; return; }
+  fetch('https://aerva-in.vercel.app/api/host-listings?payoutDetail=' + encodeURIComponent(id), { headers: { 'Authorization': 'Bearer ' + token } })
+    .then(r => r.json().then(d => ({ ok: r.ok, d })))
+    .then(({ ok, d }) => {
+      if(!ok || !d.payout){ body.innerHTML = '<p class="payout-muted">' + esc(d.error || 'This payout could not be found.') + '</p>'; return; }
+      const p = d.payout;
+      body.innerHTML = `
+        <div class="payout-hero"><div class="payout-amount">${inr(p.amount)}</div>${p.viewerIsPayee === false ? `<div class="payout-muted">Paid to ${esc(p.payeeName || (p.payeeType === 'cohost' ? 'co-host' : 'host'))}${p.payeeType === 'cohost' ? ' (co-host)' : ' (host)'}</div>` : ''}</div>
+        <div class="payout-card">
+          <div class="payout-row"><div><div class="payout-status"><span class="payout-dot"></span>Sent ${esc(day(p.sentAt))}</div>${p.arrivingBy ? `<div class="payout-muted">Arriving by ${esc(day(p.arrivingBy))}</div>` : ''}</div></div>
+          <div class="payout-row"><div><div class="payout-label">Bank account</div><div class="payout-muted">${esc(p.bank || '—')}</div></div></div>
+          <div class="payout-row"><div><div class="payout-label">Payout ID</div><div class="payout-muted payout-ref">${esc(p.reference)}</div></div></div>
+        </div>
+        <div class="payout-card">
+          <div class="payout-guest">${esc(p.guestName)}</div>
+          <div class="payout-muted payout-center">${esc(day(p.arrival))} – ${esc(day(p.departure))}<br>${esc(p.listing)}</div>
+          <div class="payout-row"><div><div class="payout-label">Booking</div><div class="payout-muted payout-ref">${esc(p.booking)}</div></div></div>
+          <div class="payout-label" style="margin-top:14px;">Earnings</div>
+          ${p.lines.map(l => `<div class="payout-line"><span>${esc(l.label)}</span><span>${l.value < 0 ? '−' : ''}${inr(Math.abs(l.value))}</span></div>`).join('')}
+          <div class="payout-line payout-total"><span>Total (INR)</span><span>${inr(p.amount)}</span></div>
+        </div>`;
+    })
+    .catch(() => { body.innerHTML = '<p class="payout-muted">Could not load this payout. Try again.</p>'; });
+})();
+
+
+// ---- Guest: request a cancellation the host can accept (full refund) ----
+function openCancelRequest(orderId, listingName){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const overlay = document.createElement('div');
+  overlay.className = 'payout-overlay';
+  overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Request cancellation">
+    <button type="button" class="payout-close" aria-label="Close">×</button>
+    <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Request cancellation</h2>
+    <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}. If your host accepts, you are refunded in full.</p>
+    <label class="payout-label" for="crReason">Reason</label>
+    <select id="crReason" style="width:100%; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;">
+      <option value="">Choose a reason</option>
+      <option value="environmental">Environmental hazard (flood, fire, landslide or similar)</option>
+      <option value="life_threatening">Life-threatening situation</option>
+      <option value="emergency">Medical or family emergency</option>
+      <option value="travel_restriction">Government order or travel restriction</option>
+    </select>
+    <label class="payout-label" for="crDetails">Details for your host</label>
+    <textarea id="crDetails" rows="4" maxlength="800" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;"></textarea>
+    <button type="button" class="btn" id="crSend" style="width:100%;">Send request</button>
+    <p id="crMsg" class="payout-muted" style="margin-top:10px;"></p>
+  </div>`;
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
+  overlay.querySelector('.payout-close').addEventListener('click', close);
+  document.body.appendChild(overlay);
+  overlay.querySelector('#crSend').addEventListener('click', async () => {
+    const reasonCode = overlay.querySelector('#crReason').value;
+    const msg = overlay.querySelector('#crMsg');
+    if(!reasonCode){ msg.textContent = 'Choose a reason.'; return; }
+    const btn = overlay.querySelector('#crSend'); btn.disabled = true;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode, details: overlay.querySelector('#crDetails').value.trim() }) });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){ msg.textContent = data.error || 'Could not send the request.'; btn.disabled = false; return; }
+      close();
+      if(typeof loadMyBookings === 'function') loadMyBookings();
+    }catch(err){ msg.textContent = 'Could not send the request. Try again.'; btn.disabled = false; }
+  });
+}
