@@ -2329,3 +2329,16 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
 .cohost-invite-form input[type="email"]{ padding:11px 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; }
 .cohost-invite-group{ display:flex; flex-direction:column; gap:6px; }
 .cohost-invite-group > span{ font-size:13px; letter-spacing:0.04em; color:#8a6c39; }
+
+/* Your co-hosts: listing-by-listing access, "already co-hosted" summary */
+.cohost-access-table{ border:1px solid var(--line-dark, #e6dccd); border-radius:10px; margin:10px 0; overflow:hidden; font-size:14.5px; }
+.cohost-access-head, .cohost-access-row{ display:grid; grid-template-columns:1fr 1.4fr; gap:12px; padding:9px 12px; }
+.cohost-access-head{ background:#faf7f2; font-size:12px; letter-spacing:0.06em; text-transform:uppercase; color:#8a6c39; }
+.cohost-access-row + .cohost-access-row, .cohost-access-head + .cohost-access-row{ border-top:1px solid #f0e9df; }
+.cohost-taken{ background:#faf7f2; border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; }
+.cohost-taken > span{ font-size:13px; letter-spacing:0.04em; color:#8a6c39; }
+.cohost-taken-row{ display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; font-size:14.5px; }
+.cohost-taken-row > span{ opacity:0.8; }
+.cohost-step > span{ font-size:14px; font-weight:600; color:var(--ink, #1c1a17); letter-spacing:0; }
+.cohost-team-card .cohost-invite-form{ margin-top:14px; }
+@media (max-width:640px){ .cohost-access-head, .cohost-access-row{ grid-template-columns:1fr; gap:2px; } }
