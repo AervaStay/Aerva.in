@@ -35,7 +35,7 @@
   .back-home:hover{opacity:1;}
 
   .social-buttons{display:flex; flex-direction:column; gap:10px; margin-bottom:20px;}
-  #googleSignInBtn{display:flex; justify-content:center;}
+  #googleSignInBtn{display:flex; justify-content:center; width:100%;}
   .divider-below{margin:26px 0 18px;}
   #googleSignInBtn > div{width:100% !important;}
   .social-btn{
@@ -754,12 +754,31 @@
       client_id: GOOGLE_CLIENT_ID,
       callback: handleGoogleCredential
     });
-    google.accounts.id.renderButton(document.getElementById('googleSignInBtn'), {
-      theme: 'outline', size: 'large', shape: 'rectangular', text: 'continue_with', width: 320
-    });
+    renderGoogleButton();
     googleInitialized = true;
     return true;
   }
+
+  // Same width as the Log In button (Google allows 200–400px).
+  function renderGoogleButton(){
+    const holder = document.getElementById('googleSignInBtn');
+    // Measure the always-visible 400px column (.wrap), not the Log In
+    // button: the login form can still be hidden when this first runs,
+    // which made it measure 0 and fall back to a narrower button.
+    const col = document.querySelector('.wrap');
+    const w = Math.round((col && col.getBoundingClientRect().width) || 400);
+    holder.innerHTML = '';
+    google.accounts.id.renderButton(holder, {
+      theme: 'outline', size: 'large', shape: 'rectangular', text: 'continue_with',
+      width: Math.max(200, Math.min(400, w))
+    });
+  }
+  let googleResizeTimer = null;
+  window.addEventListener('resize', () => {
+    if(!googleInitialized) return;
+    clearTimeout(googleResizeTimer);
+    googleResizeTimer = setTimeout(renderGoogleButton, 200);
+  });
 
   async function handleGoogleCredential(response){
     const socialError = document.getElementById('socialError');
