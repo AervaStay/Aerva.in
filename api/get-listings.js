@@ -67,6 +67,7 @@ const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIER
         tierByKey, applyDecayCap } = require('./_tiers');
 const { verifyToken, secretMatches } = require('./_approval-token');
 const { buildIcs, syncStaleFeeds } = require('./_calendar-sync');
+const { sendScheduledTemplates } = require('./_template-scheduling');
 const { decryptField } = require('./_secure-fields');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
@@ -550,6 +551,9 @@ module.exports = async (req, res) => {
     // day). Feeds not synced in 20 hours; 7-second budget. Anything not
     // reached is still synced before any booking of that listing.
     const calendarSync = await syncStaleFeeds(sql, decryptField, { maxAgeMinutes: 20 * 60, deadlineMs: 7000, limit: 300 });
+    // Timed message templates due today (before check-in, check-in day,
+    // check-out day, after check-out) — see _template-scheduling.js.
+    const scheduledMessages = await sendScheduledTemplates(sql, { deadlineMs: 6000 });
     try {
       // Both sides in — release the pair together.
       const pairs = await sql`
@@ -677,6 +681,7 @@ module.exports = async (req, res) => {
       const forceSnapshot = req.query.forceTierSnapshot === '1';
       const summary = {
         calendarSync,
+        scheduledMessages,
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
         prompted: promptedCount,

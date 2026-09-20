@@ -1,0 +1,11806 @@
+// Every localStorage.getItem/setItem/removeItem call in this file goes
+  // through this wrapper instead of calling localStorage directly. The
+  // reason: Safari in Private Browsing mode (and some phones under
+  // stricter privacy settings) makes localStorage EXIST but throws a
+  // SecurityError the moment any method on it is actually called. A
+  // "first visit, on a phone, not logged in" is exactly the situation
+  // where a guest is most likely to be in a fresh/private tab. The very
+  // first unguarded localStorage call anywhere in this script (there
+  // were several, scattered across features added at different times)
+  // would throw uncaught, which halts ALL subsequent script execution
+  // in this block — including initSite() much further down, which is
+  // what actually fetches and renders the listings grid. The visible
+  // symptom was the page stuck forever on "Loading homes…", with no
+  // visible error to the guest at all. Confirmed by reproducing this
+  // exact failure mode in a headless test before writing this fix.
+  const safeStorage = {
+    get(key){ try { return localStorage.getItem(key); } catch(e){ return null; } },
+    set(key, value){ try { localStorage.setItem(key, value); } catch(e){ /* silently no-op — a guest in this situation still gets a fully working site, just without persisted preferences */ } },
+    remove(key){ try { localStorage.removeItem(key); } catch(e){ /* same reasoning as set() */ } },
+  };
+
+  // Builds 'YYYY-MM-DD' from a Date object's LOCAL calendar fields —
+  // deliberately NOT toISOString(), which converts to UTC first. For
+  // anyone in a timezone ahead of UTC (IST, +5:30 — Aerva's whole
+  // market), a Date built at local midnight is still the previous
+  // calendar day in UTC, so toISOString().slice(0,10)/.split('T')[0]
+  // silently rolls the date back by one. Used everywhere a calendar
+  // date needs to become a string FROM a Date object that was built
+  // using local-time semantics (new Date(), new Date(y,m,d), or any
+  // Date that's had setHours/setDate called on it) — as opposed to a
+  // Date parsed FROM an existing UTC-anchored 'YYYY-MM-DD' string
+  // (e.g. new Date(arrival + 'T00:00:00Z')), which stays correct on
+  // its own and doesn't need this.
+  function toLocalDateStr(d){
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  const header = document.getElementById('siteHeader');
+  window.addEventListener('scroll', () => {
+    header.classList.toggle('scrolled', window.scrollY > 40);
+  });
+
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.15 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+  // ---- Reserve form: multiple stays, date validation + live pricing ----
+  const SUITES_API_BASE = 'https://aerva-in.vercel.app';
+  const EXTRA_GUEST_RATE = 1500;
+  const BASE_OCCUPANCY = 2;
+  // GST — DISPLAY ONLY. What a guest is actually charged is decided by
+  // api/_gst.js; keep these numbers identical to it. Added on top of the
+  // price; charged on the stay (room + extra guests after discount),
+  // amenities, pet fees and experiences; never on the guest service fee
+  // or the refundable deposit.
+  const GST_ACCOMMODATION_SLABS = [
+    { upTo: 7500, rate: 5 },
+    { upTo: Infinity, rate: 18 }
+  ];
+  const GST_EXPERIENCE_RATE = 18;
+  // roomPortion: room + extra guests for the whole stay, after discount.
+  // extras: amenities + pet fees. Rate is set by the per-night room value.
+  function stayGstFor(roomPortion, nights, extras){
+    const n = Math.max(1, Number(nights) || 1);
+    const room = Math.max(0, Number(roomPortion) || 0);
+    const perNight = room / n;
+    const band = GST_ACCOMMODATION_SLABS.find(b => perNight <= b.upTo) || GST_ACCOMMODATION_SLABS[GST_ACCOMMODATION_SLABS.length - 1];
+    return { rate: band.rate, gst: Math.round((room + Math.max(0, Number(extras) || 0)) * band.rate / 100) };
+  }
+  function experienceGstFor(subtotal){
+    return { rate: GST_EXPERIENCE_RATE, gst: Math.round(Math.max(0, Number(subtotal) || 0) * GST_EXPERIENCE_RATE / 100) };
+  }
+  // Matches create-order.js exactly — display-only here, purely so the
+  // guest can see how the total breaks down. Never changes what's charged.
+  // Note: host commission rates (10%/5%) are deliberately NOT defined
+  // here — the guest-facing side never computes, displays, or has any
+  // knowledge of what's deducted from the host's payout. That stays
+  // entirely server-side in create-order.js/verify-payment.js.
+  // Added on top of the total, charged directly to the guest — separate
+  // from the two commission rates above, which come out of the host's
+  // side instead. Must match GUEST_SERVICE_FEE_RATE in create-order.js
+  // exactly, since that's what actually determines the real charge.
+  const GUEST_SERVICE_FEE_RATE = 8;
+
+  // Populated once approved listings are fetched (see initSite() near the
+  // bottom of this script) — both the Suites section and the Reserve form's
+  // "Home" dropdown are built from this same real data, not hardcoded names.
+  let approvedListings = [];
+  let listingsById = {};
+
+  const stayRowsEl = document.getElementById('stayRows');
+  const addStayBtn = document.getElementById('addStayBtn');
+  const summaryEl = document.getElementById('priceSummary');
+  const summaryLinesEl = document.getElementById('summaryLines');
+  const paymentEl = document.getElementById('paymentSection');
+  const submitBtn = document.getElementById('reserveSubmitBtn');
+  const MAX_STAYS = 5;
+  let rowCount = 0;
+  let currentBookingTotal = 0;
+
+  const fmt = (n) => '₹' + n.toLocaleString('en-IN');
+
+  // ---- Guest-facing currency display ----
+  // Important distinction: this only changes what price GUESTS SEE while
+  // browsing. The actual charge always happens in INR through Razorpay —
+  // switching real settlement currency is an account-level decision on
+  // Razorpay's side, not something this code can change. Every booking
+  // confirmation still states the real INR amount explicitly (see
+  // handleListingBookNow/handleExperienceBookNow) so nobody is surprised
+  // by what Razorpay's own checkout shows.
+  const SUPPORTED_CURRENCIES = {
+    INR: { symbol: '₹', locale: 'en-IN', decimals: 0 },
+    USD: { symbol: '$', locale: 'en-US', decimals: 2 },
+    GBP: { symbol: '£', locale: 'en-GB', decimals: 2 },
+    EUR: { symbol: '€', locale: 'de-DE', decimals: 2 },
+    AUD: { symbol: 'A$', locale: 'en-AU', decimals: 2 },
+    CAD: { symbol: 'C$', locale: 'en-CA', decimals: 2 },
+    KRW: { symbol: '₩', locale: 'ko-KR', decimals: 0 }, // no minor unit in everyday use
+    JPY: { symbol: '¥', locale: 'ja-JP', decimals: 0 }, // same — Yen has no decimal subunit in practice
+    SGD: { symbol: 'S$', locale: 'en-SG', decimals: 2 },
+    AED: { symbol: 'AED ', locale: 'en-AE', decimals: 2 }, // UAE Dirham — the single most relevant Gulf currency for travel to India; let me know if you want the others (SAR, QAR, KWD, BHD, OMR) added too
+    CHF: { symbol: 'CHF ', locale: 'de-CH', decimals: 2 },
+    RUB: { symbol: '₽', locale: 'ru-RU', decimals: 2 },
+  };
+  // Maps a detected country code to a sensible default currency — only
+  // ever used as a starting guess, never overrides an explicit choice.
+  const COUNTRY_TO_CURRENCY = {
+    GB: 'GBP', US: 'USD', IN: 'INR', AU: 'AUD', CA: 'CAD',
+    DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR', PT: 'EUR',
+    KR: 'KRW', JP: 'JPY', SG: 'SGD', AE: 'AED', CH: 'CHF', RU: 'RUB',
+  };
+  const CURRENCY_STORAGE_KEY = 'aerva_currency';
+
+  let currentCurrency = 'INR';
+  let currencyRates = { INR: 1 };
+  // Only true once a REAL rate table has loaded. This is what fmtGuest()
+  // checks before converting anything — without it, currencyRates[code]
+  // would silently fall back to 1 (no conversion) while the currency
+  // SYMBOL still switched, showing e.g. "£3500" for something that's
+  // actually ₹3500. Better to keep showing correct INR than a wrong
+  // number under the right-looking symbol.
+  let currencyRatesLoaded = false;
+
+  async function fetchCurrencyRates(){
+    // Reads from our own backend now, not a third-party API directly —
+    // get-listings.js's ?currencyRates=1 mode just returns whatever was
+    // last cached by the daily Vercel Cron refresh (see vercel.json and
+    // that mode's ?refreshCurrencyRates=1 counterpart). This removes the
+    // CORS/uptime dependency on a stranger's server from every guest's
+    // page load — if open.er-api.com is slow or down, it no longer
+    // affects anyone browsing, only tomorrow's scheduled refresh.
+    try {
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?currencyRates=1');
+      if(!res.ok) throw new Error('rate fetch failed');
+      const data = await res.json();
+      if(data && data.rates && data.rates.USD && data.rates.GBP){
+        currencyRates = data.rates;
+        currencyRatesLoaded = true;
+        return;
+      }
+      // rates: null means the cron hasn't run successfully yet (e.g. the
+      // very first day after deploying this, before midnight UTC) — not
+      // an error, just "nothing cached yet."
+      console.warn('No cached currency rates yet — showing INR until the next daily refresh.');
+    } catch(err){
+      console.error('Could not load currency rates from our own backend:', err);
+    }
+  }
+
+  async function detectCurrencyFromLocation(){
+    try {
+      const res = await fetch('https://ipapi.co/json/');
+      if(!res.ok) throw new Error('geolocation lookup failed');
+      const data = await res.json();
+      const code = data && data.country_code ? COUNTRY_TO_CURRENCY[data.country_code] : null;
+      return code || 'INR';
+    } catch(err){
+      console.error('Could not detect location for currency default:', err);
+      return 'INR';
+    }
+  }
+
+  async function initCurrency(){
+    // Priority: explicit choice (this browser) > logged-in account's
+    // saved preference (applied later once login state is known, see
+    // checkGuestSession) > detected location > INR.
+    const stored = safeStorage.get(CURRENCY_STORAGE_KEY);
+    if(stored && SUPPORTED_CURRENCIES[stored]){
+      currentCurrency = stored;
+    } else {
+      currentCurrency = await detectCurrencyFromLocation();
+    }
+    await fetchCurrencyRates();
+    updateCurrencyTriggerLabel();
+    applyCurrencyToPage();
+    // The host pricing currency selector (Add Listing form) defaults to
+    // whatever the guest-browsing currency turns out to be — but that's
+    // only known once this async function actually finishes, well after
+    // the form's own synchronous setup ran. Sync it now rather than
+    // leaving it stuck on the pre-detection default.
+    if(typeof syncHostPricingCurrencyDefault === 'function') syncHostPricingCurrencyDefault();
+  }
+
+  async function setCurrency(code, persistToAccount){
+    if(!SUPPORTED_CURRENCIES[code]) return;
+    currentCurrency = code;
+    safeStorage.set(CURRENCY_STORAGE_KEY, code);
+    updateCurrencyTriggerLabel();
+    if(code !== 'INR' && !currencyRatesLoaded){
+      // The initial load never got real rates — try again now rather
+      // than leaving the guest stuck seeing INR for the rest of the
+      // session just because of one earlier network hiccup.
+      await fetchCurrencyRates();
+    }
+    applyCurrencyToPage();
+    if(persistToAccount && hostSessionToken){
+      fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+        body: JSON.stringify({ preferredCurrency: code })
+      }).catch(err => console.error('Could not save currency preference:', err));
+    }
+  }
+
+  // Converts a real INR amount into the guest's chosen display currency
+  // and formats it with the right symbol — this is what every
+  // guest-facing price on the site should route through instead of fmt().
+  // Falls back to plain, correct INR whenever a real conversion isn't
+  // available yet, rather than ever pairing a foreign symbol with an
+  // amount that was never actually converted.
+  // "Area, City" when a listing has an area set, otherwise just "City" —
+  // the one shared place this formatting lives, so every card/detail/
+  // search-suggestion view stays consistent if the convention ever changes.
+  function formatCityArea(listing){
+    return listing.area ? `${listing.area}, ${listing.city}` : (listing.city || '');
+  }
+
+  // Display label for a pet type value — same set hosts pick from when
+  // configuring their listing's pet policy (see the "Pet types allowed"
+  // checkboxes on the submission form / manage-listing.html).
+  function petTypeLabel(value){
+    const labels = {
+      Dog: 'Dogs', Cat: 'Cats', Bird: 'Birds', Rabbit: 'Rabbits', Fish: 'Fish',
+      Hamster: 'Hamsters / Small Rodents', Turtle: 'Turtles / Reptiles', Other: 'Other (non-wild pet)'
+    };
+    return labels[value] || value;
+  }
+
+  function fmtGuest(amountInInr){
+    if(currentCurrency === 'INR' || !currencyRatesLoaded){
+      return SUPPORTED_CURRENCIES.INR.symbol + amountInInr.toLocaleString('en-IN');
+    }
+    const rate = currencyRates[currentCurrency];
+    if(!rate){
+      // This specific currency's rate wasn't in the response for some
+      // reason, even though the table loaded — same fallback logic.
+      return SUPPORTED_CURRENCIES.INR.symbol + amountInInr.toLocaleString('en-IN');
+    }
+    const converted = amountInInr * rate;
+    const info = SUPPORTED_CURRENCIES[currentCurrency];
+    const decimals = info.decimals ?? 2;
+    return info.symbol + converted.toLocaleString(info.locale, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  }
+
+  // Re-renders whatever's currently on screen so a currency switch takes
+  // effect immediately, without a full page reload. applyFiltersAndRender
+  // now covers both suite and experience cards together (see the
+  // combined-grid rewrite), so a single call handles both.
+  function applyCurrencyToPage(){
+    if(typeof applyFiltersAndRender === 'function' && document.getElementById('suitesContainer')) applyFiltersAndRender();
+  }
+
+  function updateCurrencyTriggerLabel(){
+    const btn = document.getElementById('currencyTriggerBtn');
+    if(btn) btn.textContent = currentCurrency;
+    const btnMobile = document.getElementById('currencyTriggerBtnMobile');
+    if(btnMobile) btnMobile.textContent = currentCurrency;
+  }
+
+  // Arrival must be at least tomorrow — no same-day bookings. Departure's
+  // own absolute floor (before any arrival is picked) is one day further
+  // still, since it always has to land after whatever arrival ends up being.
+  const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return toLocalDateStr(d); })();
+  const dayAfterTomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return toLocalDateStr(d); })();
+
+  function buildSuiteOptionsHtml(){
+    if(approvedListings.length === 0){
+      return '<option value="">No stays available right now</option>';
+    }
+    return approvedListings.map(l => `<option value="${l.id}">${l.property_name}</option>`).join('');
+  }
+
+  function buildStayRow(index){
+    const row = document.createElement('div');
+    row.className = 'stay-row';
+    row.dataset.index = index;
+
+    const guestOptions = [1,2,3,4,5,6].map(n =>
+      `<option value="${n}"${n===2?' selected':''}>${n} Guest${n===1?'':'s'}</option>`
+    ).join('');
+
+    row.innerHTML = `
+      <div class="stay-row-head">
+        <div class="eyebrow">Stay ${index + 1}</div>
+        <button type="button" class="removeStayBtn" style="display:none;">Remove</button>
+      </div>
+      <div class="field">
+        <label>Home</label>
+        <select class="stayRow-suite" name="stay_${index}_suite">${buildSuiteOptionsHtml()}</select>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label>Arrival</label>
+          <input type="date" class="stayRow-arrival" name="stay_${index}_arrival" min="${tomorrowStr}" autocomplete="off" required>
+        </div>
+        <div class="field">
+          <label>Departure</label>
+          <input type="date" class="stayRow-departure" name="stay_${index}_departure" min="${dayAfterTomorrowStr}" autocomplete="off" required>
+        </div>
+      </div>
+      <div class="field">
+        <label>Guests</label>
+        <select class="stayRow-guests" name="stay_${index}_guests">${guestOptions}</select>
+      </div>
+      <p class="stayRow-error" style="display:none;"></p>
+      <div class="stayRow-amenities"></div>
+      <div class="stayRow-subtotal"></div>
+    `;
+    return row;
+  }
+
+  function addStayRow(){
+    if(stayRowsEl.children.length >= MAX_STAYS) return;
+    const row = buildStayRow(rowCount);
+    rowCount++;
+    stayRowsEl.appendChild(row);
+    // Defensive: some browsers autofill/remember date values across similar
+    // fields on the same page. Force these blank regardless of that.
+    row.querySelector('.stayRow-arrival').value = '';
+    row.querySelector('.stayRow-departure').value = '';
+    wireRow(row);
+    updateRemoveButtons();
+    refreshSuiteAvailability();
+    updatePricing();
+  }
+
+  function updateRemoveButtons(){
+    const rows = stayRowsEl.querySelectorAll('.stay-row');
+    rows.forEach(r => {
+      const btn = r.querySelector('.removeStayBtn');
+      btn.style.display = rows.length > 1 ? 'inline-block' : 'none';
+    });
+    addStayBtn.style.display = rows.length >= MAX_STAYS ? 'none' : 'block';
+  }
+
+  // Once a property is picked in one stay, it's disabled as an option in every
+  // other stay's dropdown — a guest can't book the same home twice.
+  function refreshSuiteAvailability(){
+    const rows = Array.from(stayRowsEl.querySelectorAll('.stay-row'));
+    const selectEls = rows.map(r => r.querySelector('.stayRow-suite'));
+    const chosen = selectEls.map(sel => sel.value);
+
+    selectEls.forEach((sel, idx) => {
+      Array.from(sel.options).forEach(opt => {
+        if(!opt.value){ opt.disabled = false; return; } // "No stays available" placeholder
+        const chosenElsewhere = chosen.some((val, j) => j !== idx && val === opt.value);
+        opt.disabled = chosenElsewhere;
+      });
+    });
+  }
+
+  function wireRow(row){
+    const arrivalEl = row.querySelector('.stayRow-arrival');
+    const departureEl = row.querySelector('.stayRow-departure');
+    const guestsEl = row.querySelector('.stayRow-guests');
+    const suiteEl = row.querySelector('.stayRow-suite');
+    const removeBtn = row.querySelector('.removeStayBtn');
+
+    function syncDepartureMin(){
+      if(arrivalEl.value){
+        const next = new Date(arrivalEl.value);
+        next.setDate(next.getDate() + 1);
+        const nextStr = next.toISOString().split('T')[0];
+        departureEl.min = nextStr;
+        // Auto-fill departure to the next day so a guest doesn't have to
+        // make a second trip into the calendar — but never overwrite a
+        // departure date they've already deliberately chosen, unless it's
+        // no longer valid against the new arrival date.
+        if(!departureEl.value || departureEl.value <= arrivalEl.value){
+          departureEl.value = nextStr;
+        }
+      } else {
+        departureEl.min = dayAfterTomorrowStr;
+      }
+    }
+
+    ['input','change'].forEach(evt => {
+      arrivalEl.addEventListener(evt, () => { syncDepartureMin(); renderStayAmenities(row); updatePricing(); });
+      departureEl.addEventListener(evt, () => { renderStayAmenities(row); updatePricing(); });
+    });
+    // Note: we deliberately do NOT auto-open the departure calendar here.
+    // Doing so via showPicker() steals keyboard focus away from the arrival
+    // field the moment the browser considers its value "complete enough" —
+    // which can fire mid-keystroke while someone is still typing (e.g. the
+    // year), corrupting what they were entering. Auto-filling departure to
+    // the next day (in syncDepartureMin above) is the safe convenience;
+    // opening the calendar automatically is not.
+    guestsEl.addEventListener('change', updatePricing);
+    suiteEl.addEventListener('change', () => { refreshSuiteAvailability(); renderStayAmenities(row); updatePricing(); });
+
+    removeBtn.addEventListener('click', () => {
+      row.remove();
+      updateRemoveButtons();
+      refreshSuiteAvailability();
+      updatePricing();
+    });
+  }
+
+  function readRow(row){
+    const listingId = row.querySelector('.stayRow-suite').value;
+    const listing = listingsById[listingId] || null;
+    return {
+      row,
+      listingId,
+      listing,
+      suiteName: listing ? listing.property_name : '',
+      arrival: row.querySelector('.stayRow-arrival').value,
+      departure: row.querySelector('.stayRow-departure').value,
+      guests: parseInt(row.querySelector('.stayRow-guests').value, 10),
+      errorEl: row.querySelector('.stayRow-error'),
+      subtotalEl: row.querySelector('.stayRow-subtotal'),
+      selectedAmenities: row.selectedAmenities || {}
+    };
+  }
+
+  // Applies a listing's own discount, if the stay's length qualifies —
+  // this is the "validate against what the owner actually shared" part.
+  // Every night of a stay as 'YYYY-MM-DD' strings — matches the same
+  // convention create-order.js uses server-side, so what the guest sees
+  // and picks here lines up exactly with what gets validated at checkout.
+  function getNightsInRange(arrival, departure){
+    const nights = [];
+    if(!arrival || !departure) return nights;
+    let d = new Date(arrival);
+    const end = new Date(departure);
+    while(d < end){
+      nights.push(d.toISOString().split('T')[0]);
+      d.setDate(d.getDate() + 1);
+    }
+    return nights;
+  }
+
+  // Renders the paid-amenity picker for one stay row, based on its
+  // current listing + date range. Selections live on the row element
+  // itself (row.selectedAmenities, keyed by amenity id → Set of dates) so
+  // they survive re-renders as dates/guests change elsewhere in the form.
+  function renderStayAmenities(row){
+    const s = readRow(row);
+    const container = row.querySelector('.stayRow-amenities');
+    if(!row.selectedAmenities) row.selectedAmenities = {};
+
+    if(!s.listing || !s.arrival || !s.departure){
+      container.innerHTML = '';
+      return;
+    }
+
+    const nights = getNightsInRange(s.arrival, s.departure);
+    const paidAmenities = Array.isArray(s.listing.paid_amenities) ? s.listing.paid_amenities : [];
+
+    // Drop any selections that no longer make sense — the listing changed,
+    // or the stay's dates shrank past a previously-selected night.
+    const validAmenityIds = new Set(paidAmenities.map(a => String(a.id)));
+    Object.keys(row.selectedAmenities).forEach(aid => {
+      if(!validAmenityIds.has(aid)){
+        delete row.selectedAmenities[aid];
+      } else {
+        const kept = new Set([...row.selectedAmenities[aid]].filter(d => nights.includes(d)));
+        if(kept.size === 0) delete row.selectedAmenities[aid];
+        else row.selectedAmenities[aid] = kept;
+      }
+    });
+
+    if(paidAmenities.length === 0 || nights.length === 0){
+      container.innerHTML = '';
+      return;
+    }
+
+    const rows = paidAmenities.map(a => {
+      const excludedWeekdays = Array.isArray(a.excludedWeekdays) ? a.excludedWeekdays : [];
+      const availableNights = nights.filter(n =>
+        (!a.availableFrom || n >= a.availableFrom) &&
+        (!a.availableUntil || n <= a.availableUntil) &&
+        !excludedWeekdays.includes(new Date(n + 'T00:00:00').getDay())
+      );
+      if(availableNights.length === 0) return '';
+
+      const selected = row.selectedAmenities[a.id] || new Set();
+      const chips = availableNights.map(n => {
+        const isChecked = selected.has(n);
+        const label = new Date(n + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
+        return `<label class="amenity-night-chip${isChecked ? ' checked' : ''}"><input type="checkbox" data-amenity-id="${a.id}" data-date="${n}" ${isChecked ? 'checked' : ''}> ${label}</label>`;
+      }).join('');
+
+      const subtotal = selected.size * Number(a.price);
+      const subtotalText = selected.size > 0
+        ? `${selected.size} night${selected.size === 1 ? '' : 's'} selected — ${fmt(subtotal)}`
+        : 'Tap nights to add this';
+
+      return `
+        <div class="stay-amenity-row">
+          <div class="stay-amenity-head"><strong>${a.name}</strong><span>${fmt(Number(a.price))}/night</span></div>
+          <div class="amenity-night-chips">${chips}</div>
+          <div class="stay-amenity-subtotal">${subtotalText}</div>
+        </div>
+      `;
+    }).join('');
+
+    const disclaimer = rows ? `<p style="font-size:11px; opacity:0.55; margin-top:8px; line-height:1.5;">Paid amenities are available on the dates shown only, and are subject to weather, local circumstances, national holidays, and other factors outside the host's control. If a selected amenity can't be fulfilled, the host will provide a refund for that amenity.</p>` : '';
+    container.innerHTML = rows ? `<div class="eyebrow" style="margin-top:16px; margin-bottom:2px;">Paid Amenities</div>${rows}${disclaimer}` : '';
+
+    container.querySelectorAll('input[type="checkbox"][data-amenity-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const aid = cb.dataset.amenityId;
+        const date = cb.dataset.date;
+        if(!row.selectedAmenities[aid]) row.selectedAmenities[aid] = new Set();
+        if(cb.checked) row.selectedAmenities[aid].add(date);
+        else row.selectedAmenities[aid].delete(date);
+        if(row.selectedAmenities[aid].size === 0) delete row.selectedAmenities[aid];
+        renderStayAmenities(row);
+        updatePricing();
+      });
+    });
+  }
+
+  // Mirrors create-order.js's own calculateDiscount exactly — a stay can
+  // be eligible for the listing's single "standing" discount AND/OR any
+  // number of date-scoped promotions (get-listings.js's active_promotions,
+  // camelCase there vs. this file's own snake_case listing fields); rather
+  // than stacking them, the guest gets whichever single one saves the
+  // most. A promotion applies when arrival falls within
+  // [startDate, endDate) and nights meets its own minNights, if set —
+  // same rule the backend actually charges by, so what's shown here
+  // before payment can never be more generous than what create-order.js
+  // recalculates and genuinely charges at checkout.
+  function calculateDiscount(listing, nights, arrival, subtotalBeforeDiscount){
+    const candidates = [];
+
+    if(listing.discount_type && listing.discount_value){
+      if(!listing.discount_min_nights || nights >= listing.discount_min_nights){
+        candidates.push(discountAmountFor(listing.discount_type, listing.discount_value, subtotalBeforeDiscount));
+      }
+    }
+
+    for(const promo of (listing.active_promotions || [])){
+      if(promo.minNights && nights < promo.minNights) continue;
+      if(!arrival || arrival < promo.startDate || arrival >= promo.endDate) continue;
+      candidates.push({ amount: discountAmountFor(promo.discountType, promo.discountValue, subtotalBeforeDiscount), name: promo.name });
+    }
+
+    if(!candidates.length) return { amount: 0, name: null };
+    // Candidates are a mix of plain numbers (the listing's own standing
+    // discount) and {amount, name} objects (promotions) — normalize both
+    // to the same shape before picking the best one.
+    const normalized = candidates.map(c => typeof c === 'number' ? { amount: c, name: null } : c);
+    return normalized.reduce((best, c) => c.amount > best.amount ? c : best, { amount: 0, name: null });
+  }
+
+  function discountAmountFor(discountType, discountValue, subtotalBeforeDiscount){
+    if(discountType === 'percentage') return Math.round(subtotalBeforeDiscount * (Number(discountValue) / 100));
+    if(discountType === 'flat') return Math.min(Number(discountValue), subtotalBeforeDiscount);
+    return 0;
+  }
+
+  function updatePricing(){
+    const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow);
+    let allValid = true;
+    let grandSubtotal = 0;
+    let grandGstDisplay = 0;
+    let grandGuestServiceFee = 0;
+    const lines = [];
+
+    stays.forEach(s => { s.errorEl.style.display = 'none'; s.subtotalEl.textContent = ''; });
+
+    stays.forEach((s, i) => {
+      if(!s.listingId){
+        s.errorEl.textContent = 'Please select a home for this stay.';
+        s.errorEl.style.display = 'block';
+        allValid = false;
+        return;
+      }
+      if(!s.arrival || !s.departure){
+        allValid = false;
+        return;
+      }
+      const nights = Math.round((new Date(s.departure) - new Date(s.arrival)) / (1000*60*60*24));
+      if(nights <= 0){
+        s.errorEl.textContent = 'Departure must be after arrival for this stay.';
+        s.errorEl.style.display = 'block';
+        allValid = false;
+        return;
+      }
+
+      for(let j = 0; j < i; j++){
+        const other = stays[j];
+        if(other.listingId && other.listingId === s.listingId){
+          s.errorEl.textContent = `Stay ${j+1} already selects ${s.suiteName} — pick a different home for this stay.`;
+          s.errorEl.style.display = 'block';
+          allValid = false;
+          return;
+        }
+      }
+
+      const listing = s.listing;
+      const rate = listing && listing.nightly_rate ? Number(listing.nightly_rate) : 0;
+      if(!rate){
+        s.errorEl.textContent = `${s.suiteName} doesn't have a nightly rate set yet — please enquire directly instead.`;
+        s.errorEl.style.display = 'block';
+        allValid = false;
+        return;
+      }
+
+      const roomTotal = rate * nights;
+      const extraGuests = Math.max(s.guests - BASE_OCCUPANCY, 0);
+      const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
+      const beforeDiscount = roomTotal + extraTotal;
+      const discount = calculateDiscount(listing, nights, s.arrival, beforeDiscount);
+      const discountAmount = discount.amount;
+
+      // Amenities are priced client-side here only for display — the real,
+      // trusted total is recalculated server-side in create-order.js from
+      // the same selections, never taken from this number directly.
+      let amenityTotal = 0;
+      let amenityNightCount = 0;
+      const paidAmenities = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
+      Object.entries(s.selectedAmenities).forEach(([aid, datesSet]) => {
+        const amenity = paidAmenities.find(a => String(a.id) === String(aid));
+        if(amenity){
+          amenityTotal += Number(amenity.price) * datesSet.size;
+          amenityNightCount += datesSet.size;
+        }
+      });
+
+      const staySubtotal = beforeDiscount - discountAmount + amenityTotal;
+
+      grandSubtotal += staySubtotal;
+      grandGstDisplay += stayGstFor(beforeDiscount - discountAmount, nights, amenityTotal).gst;
+
+      // This IS shown to the guest — it's their own fee, added to what
+      // they pay. Host commission (a completely separate rate, deducted
+      // from the host's payout) is never computed or shown here — guests
+      // and hosts each see only their own side of this, never the other's.
+      const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
+      grandGuestServiceFee += guestServiceFee;
+
+      const discountNote = discountAmount > 0 ? ` (−${fmt(discountAmount)} ${discount.name ? discount.name.toLowerCase() : 'offer'})` : '';
+      const extraGuestNote = extraGuests > 0 ? ` + ${extraGuests} extra guest${extraGuests===1?'':'s'} (${fmt(extraTotal)})` : '';
+      const amenityNote = amenityNightCount > 0 ? ` + amenities (${fmt(amenityTotal)})` : '';
+      s.subtotalEl.textContent = `${nights} night${nights===1?'':'s'} (${fmt(roomTotal)})${extraGuestNote}${discountNote}${amenityNote} — ${fmt(staySubtotal)}`;
+
+      lines.push(`<div class="sum-row"><span>${s.suiteName} (${nights} night${nights===1?'':'s'})</span><span>${fmt(staySubtotal)}</span></div>`);
+    });
+
+    if(!allValid || stays.length === 0 || grandSubtotal === 0){
+      summaryEl.style.display = 'none';
+      paymentEl.style.display = 'none';
+      submitBtn.disabled = !allValid && stays.some(s => s.arrival && s.departure);
+      currentBookingTotal = 0;
+      return;
+    }
+
+    submitBtn.disabled = false;
+    const gst = grandGstDisplay;
+    const total = grandSubtotal + gst + grandGuestServiceFee;
+
+    summaryLinesEl.innerHTML = lines.join('');
+    document.getElementById('sumGstRow').style.display = gst > 0 ? 'flex' : 'none';
+    document.getElementById('sumGst').textContent = fmt(gst);
+    document.getElementById('sumServiceFeeRow').style.display = grandGuestServiceFee > 0 ? 'flex' : 'none';
+    document.getElementById('sumServiceFee').textContent = fmt(grandGuestServiceFee);
+    document.getElementById('sumTotal').textContent = fmt(total);
+
+    summaryEl.style.display = 'block';
+    paymentEl.style.display = 'block';
+    currentBookingTotal = total;
+  }
+
+  function initReserveForm(){
+    // The old multi-property "Reserve" flow was removed (Resort listings
+    // with independently bookable rooms replace that need) — this whole
+    // function is now a safe no-op rather than being deleted outright,
+    // since several of its neighboring functions (calculateDiscount,
+    // getNightsInRange, fmtGuest, etc.) are genuinely still used
+    // elsewhere in this file and weren't safe to remove alongside it.
+    if(!stayRowsEl) return;
+    if(approvedListings.length === 0){
+      stayRowsEl.innerHTML = '<div class="suites-empty" style="text-align:left; padding:0;">No stays are available to book online right now. Check back shortly.</div>';
+      addStayBtn.style.display = 'none';
+      submitBtn.disabled = true;
+      return;
+    }
+    addStayRow();
+  }
+
+  if(addStayBtn) addStayBtn.addEventListener('click', addStayRow);
+
+  // ---- Razorpay checkout (secure: order created server-side) ----
+  const RAZORPAY_KEY_ID = 'rzp_test_TRBdgq9nPS2wfy'; // public Key ID only — safe to expose
+  const API_BASE = 'https://aerva-in.vercel.app'; // your deployed api/ functions
+
+  document.getElementById('reserveForm') && document.getElementById('reserveForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+
+    if(!currentBookingTotal){
+      updatePricing();
+      return;
+    }
+
+    if(!guestAuthToken()){
+      requireLoginForBooking(() => document.getElementById('reserveForm').requestSubmit());
+      return;
+    }
+
+    const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow).map(s => ({
+      listingId: s.listingId, suite: s.suiteName, arrival: s.arrival, departure: s.departure, guests: s.guests,
+      selectedAmenities: Object.entries(s.selectedAmenities).map(([amenityId, datesSet]) => ({
+        amenityId: Number(amenityId), dates: [...datesSet]
+      }))
+    }));
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Preparing payment…';
+
+    let order;
+    try{
+      const orderRes = await fetch(API_BASE + '/api/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({
+          stays: stays,
+          email: document.getElementById('email').value
+        })
+      });
+      if(!orderRes.ok) throw new Error('Order creation failed');
+      order = await orderRes.json();
+    } catch(err){
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Reserve & Pay';
+      alert('Could not start payment. Please try again in a moment.');
+      return;
+    }
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Reserve & Pay';
+
+    const stayDescription = stays.length === 1
+      ? stays[0].suite
+      : stays.length + ' stays (' + stays.map(s => s.suite).join(', ') + ')';
+
+    const options = {
+      key: RAZORPAY_KEY_ID,
+      order_id: order.orderId,   // amount/currency come from the order itself — cannot be edited client-side
+      amount: order.amount,
+      currency: order.currency,
+      name: 'Aerva',
+      description: stayDescription,
+      prefill: {
+        email: document.getElementById('email').value
+      },
+      theme: { color: '#a9884f' },
+      // Reorders what's already enabled on your Razorpay account — does not
+      // turn on methods that aren't enabled there. UPI first, since it's the
+      // most-used method for Indian guests; everything else keeps its default order.
+      config: {
+        display: {
+          sequence: ['upi', 'card', 'netbanking', 'wallet'],
+          preferences: { show_default_blocks: true }
+        }
+      },
+      handler: async function(response){
+        // Verify server-side before telling the guest they're booked.
+        try{
+          const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(response)
+          });
+          const verifyData = await verifyRes.json();
+          if(verifyData.verified){
+            document.querySelector('.confirm').style.display = 'block';
+            document.querySelector('.confirm').textContent =
+              'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm availability for each stay and follow up by email shortly.';
+          } else {
+            alert('We could not verify this payment. Please contact us before assuming your booking is confirmed.');
+          }
+        } catch(err){
+          alert('Payment went through, but we could not confirm it automatically. Please email us your payment ID.');
+        }
+      },
+      modal: {
+        ondismiss: function(){}
+      }
+    };
+
+    if(typeof Razorpay === 'undefined'){
+      alert('Payment gateway did not load. Please check your connection and try again.');
+      return;
+    }
+    const rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(response){
+      alert('Payment failed: ' + response.error.description);
+    });
+    rzp.open();
+  });
+
+  // ---- List Your Property form ----
+  // Submits via Formspree — a form-to-email service, so photos and the full
+  // submission still land in your inbox for review, same as before.
+  // TODO: replace with your real Formspree endpoint (see README-LISTING-FORM.md).
+  const LISTING_FORM_ENDPOINT = 'https://formspree.io/f/xdenjdyq';
+
+  // Structured fields (everything except photos) also get saved to your Neon
+  // database, so they're queryable and can later power the Suites section directly.
+  // TODO: replace with your deployed Vercel backend URL (same one used for Razorpay).
+  const LISTINGS_API_BASE = 'https://aerva-in.vercel.app';
+
+  const listingForm = document.getElementById('listingForm');
+  const listingSubmitBtn = document.getElementById('listingSubmitBtn');
+
+  // ---- Login gate: a listing must belong to a real, logged-in account ----
+  // (single login now — see guest-auth.js/guest-phone-auth.js — there's
+  // no separate "host account" to sign into anymore)
+  const hostSessionToken = safeStorage.get('aerva_guest_session');
+  const hostSessionEmail = safeStorage.get('aerva_guest_email');
+  if(!hostSessionToken){
+    document.getElementById('loggedOutGate').style.display = 'block';
+    listingForm.style.display = 'none';
+  } else {
+    document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
+  }
+
+  // "not you?" — goes to guest-login.html in "switch account" mode
+  // (?switchAccount=1). The CURRENT session is deliberately left alone
+  // here — guest-login.html only replaces it once a new login actually
+  // succeeds (see storeSession() there, a plain overwrite). Logging out
+  // immediately on just a click would strand the host with no account
+  // at all if they back out or the new login fails.
+  document.getElementById('listSwitchAccountLink').addEventListener('click', function(e){
+    e.preventDefault();
+    window.location.href = 'guest-login.html?switchAccount=1';
+  });
+
+  // ---- Host phone: country-aware format validation, then OTP
+  // verification before the number is accepted. Real SMS delivery isn't
+  // connected to any provider yet ("we'll take services based on
+  // country the host belongs to, later on") — the mechanism itself
+  // (send, hash, expire, verify, rate-limit) is fully real; only
+  // delivery is a placeholder, clearly labeled as such below.
+  //
+  // Kept in sync BY HAND with the identical list in _phone-validation.js
+  // — a browser can't require() that server-side file, so this is a
+  // deliberate duplicate, not an oversight. Same length + digits-only
+  // philosophy: enough to catch an obviously wrong number without a
+  // full phone-number library.
+  const COUNTRY_PHONE_RULES = [
+    { code: 'IN', dialCode: '+91', name: 'India', length: 10 },
+    { code: 'US', dialCode: '+1', name: 'United States', length: 10 },
+    { code: 'CA', dialCode: '+1', name: 'Canada', length: 10 },
+    { code: 'GB', dialCode: '+44', name: 'United Kingdom', length: 10 },
+    { code: 'AE', dialCode: '+971', name: 'United Arab Emirates', length: 9 },
+    { code: 'AU', dialCode: '+61', name: 'Australia', length: 9 },
+    { code: 'SG', dialCode: '+65', name: 'Singapore', length: 8 },
+    { code: 'NP', dialCode: '+977', name: 'Nepal', length: 10 },
+    { code: 'LK', dialCode: '+94', name: 'Sri Lanka', length: 9 },
+    { code: 'BD', dialCode: '+880', name: 'Bangladesh', length: 10 },
+    { code: 'DE', dialCode: '+49', name: 'Germany', length: 11 },
+    { code: 'FR', dialCode: '+33', name: 'France', length: 9 },
+  ];
+
+  (function setupHostPhoneVerification(){
+    const countrySelect = document.getElementById('listHostPhoneCountry');
+    const localInput = document.getElementById('listHostPhoneLocal');
+    const hiddenInput = document.getElementById('listHostPhone');
+    const errorEl = document.getElementById('listHostPhoneError');
+    const sendBtn = document.getElementById('listHostPhoneSendOtpBtn');
+    const otpRow = document.getElementById('listHostPhoneOtpRow');
+    const otpInput = document.getElementById('listHostPhoneOtpInput');
+    const verifyBtn = document.getElementById('listHostPhoneVerifyOtpBtn');
+    const otpMsgEl = document.getElementById('listHostPhoneOtpMsg');
+    const verifiedMsgEl = document.getElementById('listHostPhoneVerifiedMsg');
+    if(!countrySelect) return;
+
+    countrySelect.innerHTML = COUNTRY_PHONE_RULES.map(c =>
+      `<option value="${c.code}">${c.dialCode} ${c.name}</option>`
+    ).join('');
+    countrySelect.value = 'IN'; // this platform is India-first for now
+
+    // Exposed globally so saveListing() (elsewhere in this file) can
+    // check it before allowing submission — a host shouldn't be able to
+    // submit with a phone number that was never actually verified,
+    // which would defeat the entire point of building this.
+    window.hostPhoneVerified = false;
+
+    function currentRule(){
+      return COUNTRY_PHONE_RULES.find(c => c.code === countrySelect.value);
+    }
+
+    function validateAndUpdateUI(){
+      // Any edit to the number invalidates a previous verification —
+      // the verified number and the currently-typed one might no longer
+      // be the same number at all.
+      window.hostPhoneVerified = false;
+      verifiedMsgEl.style.display = 'none';
+      otpRow.style.display = 'none';
+      otpMsgEl.style.display = 'none';
+      otpInput.value = '';
+      hiddenInput.value = '';
+
+      const rule = currentRule();
+      const digits = localInput.value.trim();
+      if(!digits){
+        errorEl.style.display = 'none';
+        sendBtn.style.display = 'none';
+        return false;
+      }
+      if(!/^[0-9]+$/.test(digits)){
+        errorEl.textContent = 'Phone number must contain digits only — no letters, spaces, or symbols.';
+        errorEl.style.display = 'block';
+        sendBtn.style.display = 'none';
+        return false;
+      }
+      if(digits.length !== rule.length){
+        errorEl.textContent = `A ${rule.name} number must be exactly ${rule.length} digits (currently ${digits.length}).`;
+        errorEl.style.display = 'block';
+        sendBtn.style.display = 'none';
+        return false;
+      }
+      errorEl.style.display = 'none';
+      sendBtn.style.display = 'inline-block';
+      // Verification is optional — a correctly-FORMATTED number is
+      // enough to populate the field the form actually submits.
+      // Verifying it (below) is offered, not required; if the host does
+      // verify, hiddenInput gets overwritten with the same value plus
+      // the confirmed checkmark, so nothing is lost either way.
+      hiddenInput.value = `${rule.dialCode} ${digits}`;
+      return true;
+    }
+
+    localInput.addEventListener('input', validateAndUpdateUI);
+    countrySelect.addEventListener('change', validateAndUpdateUI);
+
+    sendBtn.addEventListener('click', async () => {
+      if(!validateAndUpdateUI()) return;
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending…';
+      try{
+        const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+          body: JSON.stringify({ sendHostPhoneOtp: { countryCode: countrySelect.value, localNumber: localInput.value.trim() } })
+        });
+        const data = await res.json();
+        if(!res.ok){
+          errorEl.textContent = data.error || 'Could not send a verification code. Please try again.';
+          errorEl.style.display = 'block';
+        } else {
+          otpRow.style.display = 'flex';
+          otpMsgEl.style.display = 'block';
+          // otpForTesting exists ONLY because no real SMS provider is
+          // connected yet (see the backend comment) — this line is
+          // exactly what needs to be deleted the moment one is, since
+          // showing the code on-screen defeats the purpose of an OTP
+          // the second real delivery exists.
+          otpMsgEl.textContent = data.otpForTesting
+            ? `No SMS provider connected yet — your test code is ${data.otpForTesting}`
+            : 'A verification code has been sent.';
+        }
+      } catch(err){
+        errorEl.textContent = 'Could not reach the server — please try again.';
+        errorEl.style.display = 'block';
+      }
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send Verification Code';
+    });
+
+    verifyBtn.addEventListener('click', async () => {
+      const otp = otpInput.value.trim();
+      if(!/^[0-9]{6}$/.test(otp)){
+        otpMsgEl.textContent = 'Please enter the 6-digit code.';
+        otpMsgEl.style.color = '#a3402f';
+        otpMsgEl.style.display = 'block';
+        return;
+      }
+      verifyBtn.disabled = true;
+      verifyBtn.textContent = 'Verifying…';
+      try{
+        const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+          body: JSON.stringify({ verifyHostPhoneOtp: { otp } })
+        });
+        const data = await res.json();
+        if(!res.ok){
+          otpMsgEl.textContent = data.error || 'Could not verify this code.';
+          otpMsgEl.style.color = '#a3402f';
+          otpMsgEl.style.display = 'block';
+        } else {
+          window.hostPhoneVerified = true;
+          const rule = currentRule();
+          hiddenInput.value = `${rule.dialCode} ${localInput.value.trim()}`;
+          otpRow.style.display = 'none';
+          otpMsgEl.style.display = 'none';
+          verifiedMsgEl.style.display = 'block';
+        }
+      } catch(err){
+        otpMsgEl.textContent = 'Could not reach the server — please try again.';
+        otpMsgEl.style.color = '#a3402f';
+        otpMsgEl.style.display = 'block';
+      }
+      verifyBtn.disabled = false;
+      verifyBtn.textContent = 'Verify';
+    });
+  })();
+
+  // ---- Host pricing currency: lets a host entering prices from another
+  // country think in their own currency instead of INR. This is entirely
+  // separate from the guest-browsing currency picker in the nav — a host
+  // could easily be browsing the site in one currency while wanting to
+  // price their own property in another — but reuses the exact same
+  // SUPPORTED_CURRENCIES/currencyRates machinery, just applied as INPUT
+  // conversion here instead of DISPLAY conversion there. Defaults to
+  // whatever the guest-browsing currency currently is, purely as a
+  // reasonable starting guess.
+  let hostPricingCurrency = currentCurrency;
+  const listPricingCurrencySelect = document.getElementById('listPricingCurrency');
+
+  function populateHostCurrencySelect(){
+    listPricingCurrencySelect.innerHTML = Object.keys(SUPPORTED_CURRENCIES).map(code =>
+      `<option value="${code}"${code === hostPricingCurrency ? ' selected' : ''}>${code} (${SUPPORTED_CURRENCIES[code].symbol.trim()})</option>`
+    ).join('');
+  }
+  populateHostCurrencySelect();
+
+  function updateHostPricingLabels(){
+    const symbol = SUPPORTED_CURRENCIES[hostPricingCurrency].symbol.trim();
+    document.getElementById('listPriceLabel').textContent = `Expected Nightly Rate (${symbol})`;
+    document.getElementById('listSecurityDepositLabel').textContent = `Security Deposit (${symbol})`;
+    document.getElementById('listPetFeeLabel').textContent = `Pet fee (${symbol} per pet, per stay)`;
+  }
+  updateHostPricingLabels();
+
+  listPricingCurrencySelect.addEventListener('change', () => {
+    hostPricingCurrency = listPricingCurrencySelect.value;
+    updateHostPricingLabels();
+  });
+
+  // Discount fields removed from this form entirely — offers are now
+  // only ever set from the calendar (host-dashboard.html), never here,
+  // so there's exactly one place they can be configured and no chance of
+  // a "standing discount" silently competing with a calendar promotion
+  // in a way that's confusing to explain to a guest.
+
+  // Called by initCurrency() once real currency detection/rates have
+  // actually finished — only updates the DEFAULT if the host hasn't
+  // already changed the selector themselves in the meantime.
+  let hostPricingCurrencyTouched = false;
+  listPricingCurrencySelect.addEventListener('change', () => { hostPricingCurrencyTouched = true; });
+  function syncHostPricingCurrencyDefault(){
+    if(hostPricingCurrencyTouched) return;
+    hostPricingCurrency = currentCurrency;
+    populateHostCurrencySelect();
+    updateHostPricingLabels();
+  }
+
+  // Converts a host-entered amount (in hostPricingCurrency) into real INR
+  // for storage — every price column in the database is INR regardless of
+  // what currency a host typed it in. Falls back to treating the input as
+  // already-INR if live rates aren't loaded, same safety rule fmtGuest()
+  // follows on the guest-facing side (never silently apply a fake rate).
+  function hostAmountToInr(value){
+    const num = Number(value);
+    if(!num) return num;
+    if(hostPricingCurrency === 'INR' || !currencyRatesLoaded) return Math.round(num);
+    const rate = currencyRates[hostPricingCurrency];
+    if(!rate) return Math.round(num);
+    return Math.round(num / rate);
+  }
+
+  // ---- Pet policy: the detail fields (max pets, types, fee) only make
+  // sense once the host says the property is pet-friendly at all — kept
+  // hidden until "Yes" is picked, and cleared if they switch back to "No"
+  // so a stray value can't submit alongside a "not pet-friendly" listing.
+  const petPolicyDetails = document.getElementById('petPolicyDetails');
+  const petFriendlyYes = document.getElementById('petFriendlyYes');
+  const petFriendlyNo = document.getElementById('petFriendlyNo');
+  function togglePetPolicyDetails(){
+    const showDetails = petFriendlyYes.checked;
+    petPolicyDetails.style.display = showDetails ? 'block' : 'none';
+    if(!showDetails){
+      document.getElementById('listMaxPets').value = '';
+      document.getElementById('listPetFee').value = '';
+      petPolicyDetails.querySelectorAll('input[name="PetTypes"]').forEach(cb => { cb.checked = false; });
+    }
+  }
+  petFriendlyYes.addEventListener('change', togglePetPolicyDetails);
+  petFriendlyNo.addEventListener('change', togglePetPolicyDetails);
+
+  // ---- Photo selection: add, preview, and remove individual photos ----
+  // One reusable manager, instantiated once per category (exterior/interior)
+  // instead of duplicating this logic twice.
+  const MAX_LISTING_PHOTOS = 20;
+
+  // Called by the Google Maps script once it's loaded (see the script tag
+  // in <head>). Wires up address autocomplete on the listing form's
+  // location field — selecting a suggestion captures lat/lng and a clean
+  // formatted address, and auto-fills the City field so hosts don't have
+  // to type the same thing twice.
+  //
+  // Shared by three different ways of setting a location — Places
+  // autocomplete, a PIN/postal code lookup, and dragging the pin on the
+  // map — so all three fill in the same fields the same way, and none of
+  // them can drift out of sync with each other.
+  let listPinMap = null;
+  let listPinMarker = null;
+
+  // ---- Free geocoding via Nominatim (OpenStreetMap), Google as fallback ----
+  // Used for every address search, autocomplete suggestion, and reverse-
+  // geocode (map pin → address) across the whole site now. Nominatim is
+  // free but has a real usage policy — max ~1 request/second and no
+  // aggressive keystroke-by-keystroke querying — every caller here
+  // debounces before calling these. Google is only reached if Nominatim
+  // fails outright or returns nothing, purely to avoid Google Maps API
+  // costs on the (large majority of) requests Nominatim can serve fine.
+  //
+  // Nominatim's response shape is adapted into the same shape Google's
+  // Geocoder/Places results use (geometry.location, formatted_address,
+  // address_components[]) so every existing call site — applyLocationResult
+  // and friends — keeps working completely unchanged regardless of which
+  // provider actually answered.
+  function nominatimToGoogleShape(nomResult){
+    const addr = nomResult.address || {};
+    const components = [];
+    function addComp(value, types){
+      if(value) components.push({ long_name: String(value), short_name: String(value), types });
+    }
+    // Best-effort mapping to Google's granularity — Nominatim's own
+    // address tagging varies by region/contributor, same caveat that
+    // already applies to Google's data for India (see applyLocationResult).
+    addComp(addr.suburb || addr.city_district || addr.neighbourhood, ['sublocality_level_1', 'sublocality']);
+    addComp(addr.city || addr.town || addr.village, ['locality']);
+    addComp(addr.county, ['administrative_area_level_2']);
+    addComp(addr.state, ['administrative_area_level_1']);
+    addComp(addr.postcode, ['postal_code']);
+    return {
+      formatted_address: nomResult.display_name,
+      geometry: { location: { lat: Number(nomResult.lat), lng: Number(nomResult.lon) } },
+      address_components: components,
+      _nominatimPlaceId: nomResult.place_id
+    };
+  }
+
+  async function freeReverseGeocode(lat, lng){
+    try{
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&addressdetails=1`);
+      if(res.ok){
+        const data = await res.json();
+        if(data && data.display_name) return nominatimToGoogleShape(data);
+      }
+    } catch(err){ /* fall through to Google below */ }
+
+    if(window.google && window.google.maps && window.google.maps.Geocoder){
+      return new Promise((resolve) => {
+        new google.maps.Geocoder().geocode({ location: { lat: Number(lat), lng: Number(lng) } }, (results, status) => {
+          resolve((status === 'OK' && results[0]) ? results[0] : null);
+        });
+      });
+    }
+    return null;
+  }
+
+  // Single best match for free-text typed without picking a suggestion.
+  // Returns a flat {lat, lng} — used where only plain coordinates are
+  // needed (performSearch's free-text fallback), not the full Google-
+  // shaped place object freeSearchSuggestions/nominatimToGoogleShape
+  // produce for the autocomplete dropdowns.
+  async function freeForwardGeocode(query){
+    if(!query) return null;
+    try{
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&addressdetails=1&countrycodes=in&limit=1`);
+      if(res.ok){
+        const data = await res.json();
+        if(Array.isArray(data) && data.length) return { lat: Number(data[0].lat), lng: Number(data[0].lon) };
+      }
+    } catch(err){ /* fall through to Google below */ }
+
+    if(window.google && window.google.maps && window.google.maps.Geocoder){
+      return new Promise((resolve) => {
+        if(!placesGeocoder) placesGeocoder = new google.maps.Geocoder();
+        placesGeocoder.geocode({ address: query, componentRestrictions: { country: 'IN' } }, (results, status) => {
+          resolve((status === 'OK' && results && results[0]) ? { lat: results[0].geometry.location.lat(), lng: results[0].geometry.location.lng() } : null);
+        });
+      });
+    }
+    return null;
+  }
+
+  // Multiple candidates, for a live suggestions dropdown as the guest/host
+  // types. Every call site debounces (~350ms) before calling this.
+  async function freeSearchSuggestions(query){
+    if(!query || query.trim().length < 3) return [];
+    try{
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&addressdetails=1&countrycodes=in&limit=6`);
+      if(res.ok){
+        const data = await res.json();
+        if(Array.isArray(data)) return data.map(nominatimToGoogleShape);
+      }
+    } catch(err){ /* fall through to Google below */ }
+    return null; // null (not []) signals "Nominatim itself failed" so callers know to try Google instead
+  }
+
+  function applyLocationResult(place, options){
+    options = options || {};
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+
+    document.getElementById('listLatitude').value = lat;
+    document.getElementById('listLongitude').value = lng;
+    document.getElementById('listFormattedAddress').value = place.formatted_address || '';
+    if(!options.skipSearchBoxUpdate){
+      document.getElementById('listLocationSearch').value = place.formatted_address || '';
+    }
+
+    const confirmEl = document.getElementById('listLocationConfirm');
+    confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
+
+    // Best-effort auto-fill of City and Area from Google's address
+    // components — a host can still edit either manually afterward.
+    //
+    // City deliberately prefers the DISTRICT-level component
+    // (administrative_area_level_2) over 'locality'. Google's
+    // 'locality' type is inconsistent for Indian addresses — it's
+    // frequently assigned to a smaller named area within a city rather
+    // than the city itself, which is exactly what was showing up in
+    // the City field instead of a proper city name. The district is
+    // far more reliably "the city" in common Indian usage — e.g. "Pune"
+    // as a district reliably matches "Pune" the city, and for Aerva's
+    // Himachal Pradesh listings (Jibhi/Banjar), the district is
+    // "Kullu" — that's the correct City value, not the state name.
+    // Only overwrites City/Area when options.skipCityArea isn't set — a
+    // drag-to-refine on the map shouldn't casually rewrite a city the
+    // host already confirmed over a small pin nudge; only an explicit
+    // search or PIN lookup does.
+    if(!options.skipCityArea){
+      const components = place.address_components || [];
+      function findAddressComponent(types){
+        return components.find(c => types.some(t => c.types.includes(t)));
+      }
+      // Some administrative divisions genuinely only have a local-script
+      // name on file in Google's data — the page-wide language=en
+      // setting (see the script tag in <head>) has nothing to switch to
+      // in that case and the long_name comes back non-Latin regardless.
+      // short_name is often the Latin/English form even then (e.g. a
+      // postal abbreviation), so it's tried as a fallback before giving
+      // up — and if NEITHER is usable, the field is deliberately left
+      // blank rather than silently filled with unreadable text; a host
+      // typing it in themselves (or the PIN/postal lookup finding a
+      // different, usable name) beats a name most guests can't read.
+      const nonLatinPattern = /[^\u0000-\u024F\s]/;
+      function latinNameFor(component){
+        if(!component) return null;
+        if(component.long_name && !nonLatinPattern.test(component.long_name)) return component.long_name;
+        if(component.short_name && !nonLatinPattern.test(component.short_name)) return component.short_name;
+        return null;
+      }
+      const cityComponent = findAddressComponent(['administrative_area_level_2'])
+        || findAddressComponent(['locality'])
+        || findAddressComponent(['administrative_area_level_1']);
+      const cityName = latinNameFor(cityComponent);
+      const cityWarningEl = document.getElementById('listCityAreaWarning');
+      if(cityWarningEl) cityWarningEl.style.display = 'none';
+      if(cityName){
+        document.getElementById('listCity').value = cityName;
+      } else if(cityComponent && cityWarningEl){
+        cityWarningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below.';
+        cityWarningEl.style.display = 'block';
+      }
+      // Area: the most specific named place below the city level. Prefer
+      // an actual neighbourhood/sublocality; if there isn't one, but
+      // 'locality' exists and wasn't already used as the City above (i.e.
+      // a district was found instead), that locality IS effectively the
+      // area — e.g. district "Pune" + locality "Koregaon Park".
+      const areaComponent = findAddressComponent(['sublocality_level_1', 'sublocality', 'neighborhood'])
+        || (() => {
+          const locality = findAddressComponent(['locality']);
+          return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
+        })();
+      const areaName = latinNameFor(areaComponent);
+      if(areaName){
+        document.getElementById('listArea').value = areaName;
+      }
+      // PIN/postal code — populated when the picked address actually has
+      // one on file. Not every address does (rural addresses especially),
+      // so when it's missing this asks the host to fill it in themselves
+      // instead of just leaving the field silently blank with no
+      // explanation for why nothing showed up.
+      const postalComponent = findAddressComponent(['postal_code']);
+      const pincodeInput = document.getElementById('listPincode');
+      const pincodeHint = document.getElementById('listPincodeHint');
+      if(postalComponent && pincodeInput){
+        pincodeInput.value = postalComponent.long_name;
+        if(pincodeHint){
+          pincodeHint.textContent = 'Filled in automatically once you pick an address above. It\'s for reference only and doesn\'t affect the property\'s actual location — use the address search or map pin for that.';
+          pincodeHint.style.color = '';
+        }
+      } else if(pincodeInput && pincodeHint){
+        pincodeInput.value = '';
+        pincodeHint.textContent = 'Your address didn\'t include a PIN/postal code — please enter it yourself.';
+        pincodeHint.style.color = '#a3402f';
+      }
+    }
+
+    updateListPinMap(lat, lng);
+  }
+
+  // Draggable pin map — appears once a location is set by any method, and
+  // lets a host nudge it for a more exact match than the address search
+  // alone gives (a street address can resolve to the wrong end of a long
+  // road; dragging the pin fixes that). Clicking anywhere on the map also
+  // moves the pin there directly, not just dragging the marker itself.
+  function updateListPinMap(lat, lng){
+    const container = document.getElementById('listMapPin');
+    if(!container || !window.L) return;
+    container.style.display = 'block';
+    const position = [Number(lat), Number(lng)];
+
+    if(!listPinMap){
+      listPinMap = L.map(container, { zoomControl: true }).setView(position, 16);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(listPinMap);
+      listPinMarker = L.marker(position, { draggable: true }).addTo(listPinMap);
+      listPinMarker.on('dragend', () => onPinMoved(listPinMarker.getLatLng()));
+      listPinMap.on('click', (e) => {
+        listPinMarker.setLatLng(e.latlng);
+        onPinMoved(e.latlng);
+      });
+    } else {
+      listPinMap.setView(position);
+      listPinMarker.setLatLng(position);
+    }
+  }
+
+  // Reverse-geocodes the new pin position — mainly to refresh the
+  // formatted-address confirmation text, not to silently rewrite
+  // City/Area over what could be a very small, deliberate nudge.
+  async function onPinMoved(latLng){
+    document.getElementById('listLatitude').value = latLng.lat;
+    document.getElementById('listLongitude').value = latLng.lng;
+    const result = await freeReverseGeocode(latLng.lat, latLng.lng);
+    if(result){
+      applyLocationResult(result, { skipCityArea: true });
+    } else {
+      const confirmEl = document.getElementById('listLocationConfirm');
+      confirmEl.textContent = `✓ Location set: ${latLng.lat.toFixed(5)}, ${latLng.lng.toFixed(5)}`;
+      confirmEl.style.display = 'block';
+    }
+  }
+
+  // ---- List Experience page: location picker (same pattern as the
+  // property listing form's own applyLocationResult, just scoped to the
+  // separate expXxx fields so the two forms never interfere) ----
+  let expPinMap = null, expPinMarker = null;
+
+  function applyExpLocationResult(place){
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+    document.getElementById('expLatitude').value = lat;
+    document.getElementById('expLongitude').value = lng;
+    document.getElementById('expFormattedAddress').value = place.formatted_address || '';
+    const confirmEl = document.getElementById('expLocationConfirm');
+    confirmEl.textContent = '✓ Location set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
+    updateExpPinMap(lat, lng);
+
+    // Same district-over-locality City/Area extraction, Latin-script
+    // guard, and postal-code lookup as the property form's own
+    // applyLocationResult — see that function for why each rule exists.
+    const components = place.address_components || [];
+    function findAddressComponent(types){
+      return components.find(c => types.some(t => c.types.includes(t)));
+    }
+    const nonLatinPattern = /[^\u0000-\u024F\s]/;
+    function latinNameFor(component){
+      if(!component) return null;
+      if(component.long_name && !nonLatinPattern.test(component.long_name)) return component.long_name;
+      if(component.short_name && !nonLatinPattern.test(component.short_name)) return component.short_name;
+      return null;
+    }
+    const cityComponent = findAddressComponent(['administrative_area_level_2'])
+      || findAddressComponent(['locality'])
+      || findAddressComponent(['administrative_area_level_1']);
+    const cityName = latinNameFor(cityComponent);
+    const warningEl = document.getElementById('expCityAreaWarning');
+    warningEl.style.display = 'none';
+    if(cityName){
+      document.getElementById('expCity').value = cityName;
+    } else if(cityComponent){
+      warningEl.textContent = 'Couldn\'t auto-fill City/Area in English for this address — please type them in yourself below.';
+      warningEl.style.display = 'block';
+    }
+    const areaComponent = findAddressComponent(['sublocality_level_1', 'sublocality', 'neighborhood'])
+      || (() => {
+        const locality = findAddressComponent(['locality']);
+        return (locality && cityComponent && locality.long_name !== cityComponent.long_name) ? locality : null;
+      })();
+    const areaName = latinNameFor(areaComponent);
+    if(areaName){
+      document.getElementById('expArea').value = areaName;
+    }
+    const postalComponent = findAddressComponent(['postal_code']);
+    const pincodeInput = document.getElementById('expPincode');
+    const pincodeHint = document.getElementById('expPincodeHint');
+    if(postalComponent){
+      pincodeInput.value = postalComponent.long_name;
+      pincodeHint.textContent = 'Filled in automatically once you pick an address above. If your address didn\'t include one, please enter it yourself.';
+      pincodeHint.style.color = '';
+    } else {
+      pincodeInput.value = '';
+      pincodeHint.textContent = 'Your address didn\'t include a PIN/postal code — please enter it yourself.';
+      pincodeHint.style.color = '#a3402f';
+    }
+  }
+
+  function updateExpPinMap(lat, lng){
+    const container = document.getElementById('expMapPin');
+    if(!container || !window.L) return;
+    container.style.display = 'block';
+    const position = [Number(lat), Number(lng)];
+    if(!expPinMap){
+      expPinMap = L.map(container, { zoomControl: true }).setView(position, 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(expPinMap);
+      expPinMarker = L.marker(position, { draggable: true }).addTo(expPinMap);
+      expPinMarker.on('dragend', () => onExpPinMoved(expPinMarker.getLatLng()));
+      expPinMap.on('click', (e) => {
+        expPinMarker.setLatLng(e.latlng);
+        onExpPinMoved(e.latlng);
+      });
+    } else {
+      expPinMap.setView(position);
+      expPinMarker.setLatLng(position);
+    }
+  }
+
+  async function onExpPinMoved(latLng){
+    document.getElementById('expLatitude').value = latLng.lat;
+    document.getElementById('expLongitude').value = latLng.lng;
+    const result = await freeReverseGeocode(latLng.lat, latLng.lng);
+    const confirmEl = document.getElementById('expLocationConfirm');
+    if(result){
+      document.getElementById('expFormattedAddress').value = result.formatted_address || '';
+      confirmEl.textContent = '✓ Location set: ' + (result.formatted_address || `${latLng.lat.toFixed(5)}, ${latLng.lng.toFixed(5)}`);
+    } else {
+      confirmEl.textContent = `✓ Location set: ${latLng.lat.toFixed(5)}, ${latLng.lng.toFixed(5)}`;
+    }
+    confirmEl.style.display = 'block';
+  }
+
+  // Meeting point location — simpler than the experience's own location
+  // picker above: no city/area/pincode extraction needed, just a pin and
+  // a formatted address, since this is purely "where does a guest
+  // actually go," not a full address record.
+  let expMeetingPointMap = null, expMeetingPointMarker = null;
+
+  function applyExpMeetingPointResult(place){
+    if(!place.geometry || !place.geometry.location) return;
+    const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+    const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+    document.getElementById('expMeetingPointLat').value = lat;
+    document.getElementById('expMeetingPointLng').value = lng;
+    document.getElementById('expMeetingPointAddress').value = place.formatted_address || '';
+    const confirmEl = document.getElementById('expMeetingPointConfirm');
+    confirmEl.textContent = '✓ Meeting point set: ' + (place.formatted_address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    confirmEl.style.display = 'block';
+    updateExpMeetingPointMap(lat, lng);
+  }
+
+  function updateExpMeetingPointMap(lat, lng){
+    const container = document.getElementById('expMeetingPointMap');
+    if(!container || !window.L) return;
+    container.style.display = 'block';
+    const position = [Number(lat), Number(lng)];
+    if(!expMeetingPointMap){
+      expMeetingPointMap = L.map(container, { zoomControl: true }).setView(position, 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(expMeetingPointMap);
+      expMeetingPointMarker = L.marker(position, { draggable: true }).addTo(expMeetingPointMap);
+      expMeetingPointMarker.on('dragend', () => onExpMeetingPointMoved(expMeetingPointMarker.getLatLng()));
+      expMeetingPointMap.on('click', (e) => {
+        expMeetingPointMarker.setLatLng(e.latlng);
+        onExpMeetingPointMoved(e.latlng);
+      });
+    } else {
+      expMeetingPointMap.setView(position);
+      expMeetingPointMarker.setLatLng(position);
+    }
+  }
+
+  async function onExpMeetingPointMoved(latLng){
+    document.getElementById('expMeetingPointLat').value = latLng.lat;
+    document.getElementById('expMeetingPointLng').value = latLng.lng;
+    const result = await freeReverseGeocode(latLng.lat, latLng.lng);
+    const confirmEl = document.getElementById('expMeetingPointConfirm');
+    if(result){
+      document.getElementById('expMeetingPointAddress').value = result.formatted_address || '';
+      confirmEl.textContent = '✓ Meeting point set: ' + (result.formatted_address || `${latLng.lat.toFixed(5)}, ${latLng.lng.toFixed(5)}`);
+    } else {
+      confirmEl.textContent = `✓ Meeting point set: ${latLng.lat.toFixed(5)}, ${latLng.lng.toFixed(5)}`;
+    }
+    confirmEl.style.display = 'block';
+  }
+
+  // Shared free-autocomplete dropdown, reused by all three host-form
+  // location fields (property, experience, meeting point) — same
+  // Nominatim-first/Google-fallback pattern as the guest search bar,
+  // just simpler (single result, no "matching listings" merge needed).
+  // Replaces the old per-field google.maps.places.Autocomplete widgets.
+  function wireFreeAddressAutocomplete(inputId, dropdownId, onSelect){
+    const inputEl = document.getElementById(inputId);
+    const dropdownEl = document.getElementById(dropdownId);
+    if(!inputEl || !dropdownEl) return;
+
+    let autocompleteService = null;
+    let placesService = null;
+    let debounceTimer = null;
+    let latestQueryId = 0;
+
+    function closeDropdown(){
+      dropdownEl.innerHTML = '';
+      dropdownEl.style.display = 'none';
+    }
+
+    function renderFreeResults(places){
+      if(!places.length){ closeDropdown(); return; }
+      dropdownEl.innerHTML = places.map((p, i) => `
+        <button type="button" class="place-suggest-item" data-index="${i}">${p.formatted_address}</button>
+      `).join('');
+      dropdownEl.style.display = 'block';
+      dropdownEl.querySelectorAll('.place-suggest-item').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          onSelect(places[Number(btn.dataset.index)]);
+          closeDropdown();
+        });
+      });
+    }
+
+    function renderGooglePredictions(predictions){
+      if(!predictions.length){ closeDropdown(); return; }
+      dropdownEl.innerHTML = predictions.map(p => `
+        <button type="button" class="place-suggest-item" data-place-id="${p.place_id}">${p.description}</button>
+      `).join('');
+      dropdownEl.style.display = 'block';
+      dropdownEl.querySelectorAll('.place-suggest-item').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if(!placesService) return;
+          placesService.getDetails({ placeId: btn.dataset.placeId, fields: ['geometry', 'formatted_address', 'address_components'] }, (result, status) => {
+            if(status === 'OK' && result.geometry && result.geometry.location){
+              onSelect(result);
+            }
+          });
+          closeDropdown();
+        });
+      });
+    }
+
+    inputEl.addEventListener('input', function(){
+      const query = this.value.trim();
+      clearTimeout(debounceTimer);
+      if(!query){ closeDropdown(); return; }
+
+      // Debounced ~350ms — gentle on Nominatim's ~1 request/second usage
+      // policy.
+      debounceTimer = setTimeout(async () => {
+        const thisQueryId = ++latestQueryId;
+        const freeResults = await freeSearchSuggestions(query);
+        if(thisQueryId !== latestQueryId) return; // a newer keystroke superseded this
+
+        if(freeResults !== null){
+          // Nominatim answered (even with zero results) — done, no need
+          // to also spend a Google request on the same query.
+          renderFreeResults(freeResults);
+          return;
+        }
+
+        // Nominatim itself failed — only now does this fall back to Google.
+        if(!window.google || !window.google.maps || !window.google.maps.places){
+          closeDropdown();
+          return;
+        }
+        if(!autocompleteService) autocompleteService = new google.maps.places.AutocompleteService();
+        if(!placesService) placesService = new google.maps.places.PlacesService(document.createElement('div'));
+        autocompleteService.getPlacePredictions({ input: query, types: ['geocode', 'establishment'], componentRestrictions: { country: 'in' } }, (predictions, status) => {
+          if(thisQueryId !== latestQueryId) return;
+          renderGooglePredictions((status === 'OK' && predictions) ? predictions.slice(0, 6) : []);
+        });
+      }, 350);
+    });
+
+    document.addEventListener('click', function(e){
+      if(!dropdownEl.contains(e.target) && e.target !== inputEl){
+        setTimeout(closeDropdown, 150);
+      }
+    });
+  }
+
+  // Wired immediately (not waiting on Google's async callback below) —
+  // Leaflet and Nominatim don't depend on Google being loaded at all, and
+  // the free-first design means these three fields work correctly even
+  // if Google Maps never finishes loading (or is blocked) at all.
+  wireFreeAddressAutocomplete('listLocationSearch', 'listLocationSuggestions', (place) => {
+    applyLocationResult(place, { skipSearchBoxUpdate: true });
+  });
+  wireFreeAddressAutocomplete('expLocationSearch', 'expLocationSuggestions', (place) => {
+    applyExpLocationResult(place);
+  });
+  wireFreeAddressAutocomplete('expMeetingPointSearch', 'expMeetingPointSuggestions', (place) => {
+    applyExpMeetingPointResult(place);
+  });
+
+  // Kept only as a compatibility stub — the Google Maps script tag below
+  // still references this as its callback= target, and would error if it
+  // didn't exist. Everything it used to do now happens above,
+  // unconditionally, the moment this script runs.
+  window.initGoogleMaps = function(){};
+
+  (function wireSearchBarAutocomplete(){
+      // Search bar's "Where" field — real-world LOCATION suggestions
+      // only, as the guest types. This used to also mix in Aerva's own
+      // listings that matched by name (labeled "Your Listings" — a
+      // mismatched, host-dashboard-sounding label that made no sense in
+      // a guest-facing search bar), ahead of the actual place results.
+      // Removed entirely: a guest typing a place name wants places, not
+      // property names competing for the same suggestion slots.
+      //
+      // Uses a CUSTOM dropdown rather than Google's native Autocomplete
+      // widget, so the free Nominatim-first / Google-fallback source
+      // switching below stays possible — the native widget only ever
+      // talks to Google directly.
+      const searchPlaceInput = document.getElementById('searchCity');
+      const placeSuggestionsEl = document.getElementById('placeSuggestions');
+      if(!searchPlaceInput || !placeSuggestionsEl) return;
+
+      // Directly controls the animated hint's visibility via JS, rather
+      // than relying solely on the :placeholder-shown CSS selector — that
+      // selector doesn't reliably fire for an empty placeholder attribute
+      // across every WebKit/Safari version, which was leaving the "Where"
+      // field looking blank (misaligned against "When"/"Who", which
+      // always show real button text) on some phones even though the
+      // CSS itself was never wrong on desktop. This is the belt to that
+      // fix's suspenders — works regardless of that quirk either way.
+      const placeHintEl = document.getElementById('placeHint');
+      function updatePlaceHintVisibility(){
+        if(placeHintEl) placeHintEl.style.opacity = searchPlaceInput.value === '' ? '1' : '0';
+      }
+      updatePlaceHintVisibility();
+      searchPlaceInput.addEventListener('input', updatePlaceHintVisibility);
+
+      // Google's AutocompleteService/PlacesService are only reached now if
+      // Nominatim itself fails (see freeSearchSuggestions) — kept ready as
+      // the fallback path, not the primary one.
+      const autocompleteService = (window.google && window.google.maps && window.google.maps.places) ? new google.maps.places.AutocompleteService() : null;
+      // PlacesService needs a real DOM node to attach to, even though we
+      // never render anything into it — an off-screen div is the
+      // standard, documented way to use it purely for data lookups.
+      const placesService = (window.google && window.google.maps && window.google.maps.places) ? new google.maps.places.PlacesService(document.createElement('div')) : null;
+      let debounceTimer = null;
+      let latestQueryId = 0;
+
+      function closeSuggestions(){
+        placeSuggestionsEl.innerHTML = '';
+        placeSuggestionsEl.style.display = 'none';
+      }
+
+      function selectCoordinates(lat, lng, displayText){
+        searchPlaceInput.value = displayText;
+        // Setting .value directly doesn't fire 'input' — needed here
+        // explicitly, since updatePlaceHintVisibility sets an inline
+        // style that would otherwise keep showing the hint text
+        // overlapping the place name that was just selected.
+        updatePlaceHintVisibility();
+        document.getElementById('searchPlaceLat').value = lat;
+        document.getElementById('searchPlaceLng').value = lng;
+        closeSuggestions();
+        // Chain straight into date selection — no need to make the guest
+        // click "Add dates" separately right after picking a place.
+        openCalendar();
+      }
+
+      // matchingListings: Aerva's own listings that matched by name/city/area.
+      // freePlaces: full results from freeSearchSuggestions (already resolved,
+      // lat/lng included — no second lookup needed to select one).
+      // googlePredictions: only populated when the free path failed
+      // entirely (see the caller below) — needs the old getDetails step.
+      function renderSuggestions(freePlaces, googlePredictions){
+        if(freePlaces.length === 0 && googlePredictions.length === 0){
+          closeSuggestions();
+          return;
+        }
+        let html = '';
+        if(freePlaces.length){
+          html += freePlaces.map((p, i) => `
+            <button type="button" class="place-suggest-item" data-type="free-place" data-index="${i}">
+              ${p.formatted_address}
+            </button>
+          `).join('');
+        } else if(googlePredictions.length){
+          html += googlePredictions.map(p => `
+            <button type="button" class="place-suggest-item" data-type="google-place" data-place-id="${p.place_id}">
+              ${p.description}
+            </button>
+          `).join('');
+        }
+        placeSuggestionsEl.innerHTML = html;
+        placeSuggestionsEl.style.display = 'block';
+
+        placeSuggestionsEl.querySelectorAll('[data-type="free-place"]').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const place = freePlaces[Number(btn.dataset.index)];
+            if(place) selectCoordinates(place.geometry.location.lat, place.geometry.location.lng, place.formatted_address);
+          });
+        });
+        placeSuggestionsEl.querySelectorAll('[data-type="google-place"]').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if(!placesService) return;
+            const placeId = btn.dataset.placeId;
+            placesService.getDetails({ placeId, fields: ['geometry', 'formatted_address'] }, (result, status) => {
+              if(status === 'OK' && result.geometry && result.geometry.location){
+                selectCoordinates(result.geometry.location.lat(), result.geometry.location.lng(), result.formatted_address || btn.textContent.trim());
+              } else {
+                closeSuggestions();
+              }
+            });
+          });
+        });
+      }
+
+      searchPlaceInput.addEventListener('input', function(){
+        document.getElementById('searchPlaceLat').value = '';
+        document.getElementById('searchPlaceLng').value = '';
+
+        const query = this.value.trim();
+        clearTimeout(debounceTimer);
+        if(!query){
+          closeSuggestions();
+          return;
+        }
+
+        // Debounced longer than before (350ms, was 250ms) — gentler on
+        // Nominatim's free usage policy (~1 request/second) than the
+        // previous Google-only version needed to be.
+        debounceTimer = setTimeout(async () => {
+          const thisQueryId = ++latestQueryId;
+
+          const freeResults = await freeSearchSuggestions(query);
+          if(thisQueryId !== latestQueryId) return; // a newer keystroke superseded this
+
+          if(freeResults !== null){
+            // Nominatim answered (even if with zero results) — done, no
+            // need to also spend a Google request on the same query.
+            renderSuggestions(freeResults.slice(0, 5), []);
+            return;
+          }
+
+          // Nominatim itself failed (network error, etc.) — only now
+          // does this fall back to Google.
+          if(!autocompleteService){
+            renderSuggestions([], []);
+            return;
+          }
+          autocompleteService.getPlacePredictions({ input: query, types: ['geocode'], componentRestrictions: { country: 'in' } }, (predictions, status) => {
+            if(thisQueryId !== latestQueryId) return;
+            const validPredictions = (status === 'OK' && predictions) ? predictions.slice(0, 5) : [];
+            renderSuggestions([], validPredictions);
+          });
+        }, 350);
+      });
+
+      // Close the dropdown on an outside click, with a short delay so a
+      // click ON a suggestion button still registers first.
+      document.addEventListener('click', function(e){
+        if(!placeSuggestionsEl.contains(e.target) && e.target !== searchPlaceInput){
+          setTimeout(closeSuggestions, 150);
+        }
+      });
+  })();
+
+  // Which single photo (by id) is the host's chosen cover/lead photo —
+  // shared across both managers since the cover can come from either
+  // category. null means no explicit choice; the site falls back to its
+  // automatic default (interior photos first).
+  let coverPhotoId = null;
+  let nextPhotoId = 1;
+  const allPhotoManagers = [];
+
+  function refreshAllPhotoPreviews(){
+    allPhotoManagers.forEach(m => m.renderPreviews());
+  }
+
+  function createPhotoManager(inputId, previewContainerId){
+    const inputEl = document.getElementById(inputId);
+    const previewContainer = document.getElementById(previewContainerId);
+    // Each entry is either { id, file } for a newly-picked photo still
+    // needing upload, or { id, file: null, url } for one that's already
+    // uploaded and just being carried over (e.g. Clone's "with photos"
+    // option, reusing the original's real Blob URLs directly rather than
+    // forcing a full re-upload of files that already exist).
+    let selectedPhotos = [];
+
+    // Keeps the real <input type="file"> in sync with our own array, so
+    // the upload step (which reads inputEl.files) keeps working. Only
+    // the file-based entries are ever placed into the real input — an
+    // already-uploaded URL entry was never picked from disk and has no
+    // File object to put there. Native "required" validation is
+    // intentionally NOT relied on here — see the note elsewhere about
+    // DataTransfer being unreliable on iOS Safari.
+    function syncInput(){
+      const dt = new DataTransfer();
+      selectedPhotos.forEach(p => { if(p.file) dt.items.add(p.file); });
+      inputEl.files = dt.files;
+    }
+
+    function move(fromIdx, toIdx){
+      if(toIdx < 0 || toIdx >= selectedPhotos.length) return;
+      const [moved] = selectedPhotos.splice(fromIdx, 1);
+      selectedPhotos.splice(toIdx, 0, moved);
+      syncInput();
+      renderPreviews();
+    }
+
+    function renderPreviews(){
+      previewContainer.innerHTML = '';
+      selectedPhotos.forEach((photo, idx) => {
+        const url = photo.url || URL.createObjectURL(photo.file);
+        const isCover = photo.id === coverPhotoId;
+        const item = document.createElement('div');
+        item.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
+        item.innerHTML = `
+          <img src="${url}" alt="${photo.file ? photo.file.name : 'Photo'}">
+          <span class="photo-order-badge">${idx + 1}</span>
+          <button type="button" class="photo-remove-btn" data-action="remove" aria-label="Remove this photo">×</button>
+          <button type="button" class="photo-cover-btn" data-action="cover" aria-label="Set as cover photo" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
+          <div class="photo-reorder-btns">
+            <button type="button" data-action="left" aria-label="Move earlier" ${idx === 0 ? 'disabled' : ''}>‹</button>
+            <button type="button" data-action="right" aria-label="Move later" ${idx === selectedPhotos.length - 1 ? 'disabled' : ''}>›</button>
+          </div>
+        `;
+
+        item.querySelector('[data-action="remove"]').addEventListener('click', () => {
+          const removedId = selectedPhotos[idx].id;
+          selectedPhotos.splice(idx, 1);
+          if(coverPhotoId === removedId) coverPhotoId = null;
+          syncInput();
+          renderPreviews();
+        });
+        item.querySelector('[data-action="cover"]').addEventListener('click', () => {
+          coverPhotoId = isCover ? null : photo.id;
+          refreshAllPhotoPreviews();
+        });
+        item.querySelector('[data-action="left"]').addEventListener('click', () => move(idx, idx - 1));
+        item.querySelector('[data-action="right"]').addEventListener('click', () => move(idx, idx + 1));
+
+        previewContainer.appendChild(item);
+      });
+    }
+
+    inputEl.addEventListener('change', () => {
+      const newFiles = Array.from(inputEl.files);
+      for(const f of newFiles){
+        if(selectedPhotos.length >= MAX_LISTING_PHOTOS) break;
+        const alreadyAdded = selectedPhotos.some(p => p.file && p.file.name === f.name && p.file.size === f.size);
+        if(!alreadyAdded) selectedPhotos.push({ id: 'photo_' + (nextPhotoId++), file: f });
+      }
+      syncInput();
+      renderPreviews();
+    });
+
+    const manager = {
+      getFiles: () => selectedPhotos.filter(p => p.file).map(p => p.file),
+      getOrderedIds: () => selectedPhotos.map(p => p.id),
+      // The full ordered list, marking which entries already have a real
+      // URL versus which still need one from an upload — this is what
+      // lets the submission step rebuild the final URL array in the
+      // exact order shown here, even though uploads themselves only
+      // return results for the file-based subset.
+      getOrderedEntries: () => selectedPhotos.map(p => ({ id: p.id, url: p.url || null })),
+      // Adds already-uploaded photos directly by URL — no file, no
+      // upload needed, since these already exist in Blob storage from
+      // wherever they were first uploaded.
+      addExistingUrls: (urls) => {
+        urls.forEach(url => {
+          if(selectedPhotos.length >= MAX_LISTING_PHOTOS) return;
+          selectedPhotos.push({ id: 'photo_' + (nextPhotoId++), file: null, url });
+        });
+        renderPreviews();
+      },
+      renderPreviews,
+      clear: () => {
+        const remainingIds = selectedPhotos.map(p => p.id);
+        selectedPhotos = [];
+        if(remainingIds.includes(coverPhotoId)) coverPhotoId = null;
+        syncInput();
+        renderPreviews();
+      }
+    };
+    allPhotoManagers.push(manager);
+    return manager;
+  }
+
+  const exteriorPhotoManager = createPhotoManager('listPhotosExterior', 'photoPreviewContainerExterior');
+
+  // ---- Rooms & Spaces — named spaces, each with its own small photo
+  // gallery, replacing the old flat "Interior Photos" bulk uploader.
+  // Same labeled-row visual language as the search bar's own "Who"
+  // dropdown (.guest-row/.guest-row-text/.guest-row-title/.guest-row-
+  // sub) — a deliberate reuse, so this reads as the same kind of "one
+  // clear row per thing" list a host already recognizes from using the
+  // site as a guest.
+  //
+  // A bedroom/room isn't split into separately-labeled Washroom/Balcony
+  // photos anymore — it's just a single photo gallery per room, the same
+  // way "Interior Photos" used to work, just scoped to one room instead
+  // of the whole property. A host can put whatever mix of shots (the
+  // room itself, its washroom, its balcony, anything) into that one
+  // gallery without the form insisting on a specific label for each.
+  //
+  // A Resort has NO shared common spaces to document here at all — its
+  // one common space is the exterior (grounds, building, pool area,
+  // etc.), already covered by the Exterior Photos section above this.
+  // Kitchen/Washroom/Living Room/Garden as separate listing-level
+  // entries only make sense for a villa/home, which genuinely has ONE
+  // shared instance of each worth documenting once for the whole
+  // property.
+  const FIXED_ROOM_SPACES_STAY = [
+    { key: 'kitchen', name: 'Kitchen', mandatory: true },
+    { key: 'washroom', name: 'Washroom', mandatory: true },
+    { key: 'living_room', name: 'Living Room', mandatory: true },
+    { key: 'garden', name: 'Garden', mandatory: false },
+    { key: 'balcony', name: 'Balcony', mandatory: false }
+  ];
+  function currentFixedRoomSpaces(){
+    // Resort has none — see the comment above.
+    return document.getElementById('listType').value === 'Resort' ? [] : FIXED_ROOM_SPACES_STAY;
+  }
+  let roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, file: null, url: null }));
+
+  // Bedroom/Room rows are dynamic, driven by the "Bedrooms"/"Number of
+  // Rooms" count field — regenerated on every change, but preserving
+  // whatever's already named/photographed in the rows that still exist
+  // after a count change (only the tail is added or trimmed). Default
+  // naming differs too — "Bedroom" fits a villa; a Resort's units are
+  // usually called "Room," "Suite," "Deluxe," etc., so this defaults to
+  // a plain "Room N" a host can freely rename to whatever category fits
+  // (Suite 1, Deluxe 1, ...) rather than assuming villa vocabulary.
+  // "photos" holds this room's whole gallery — { file, url } per photo,
+  // in the order they were added.
+  function syncBedroomRowCount(){
+    const declared = Math.max(1, Number(document.getElementById('listBedrooms').value) || 0);
+    const isResort = document.getElementById('listType').value === 'Resort';
+    const existingBedrooms = roomSpaceRows.filter(r => r.isBedroom);
+    const fixedRows = roomSpaceRows.filter(r => !r.isBedroom);
+    const newBedrooms = [];
+    for(let i = 0; i < declared; i++){
+      newBedrooms.push(existingBedrooms[i] || {
+        key: 'bedroom_' + i, name: isResort ? `Room ${i + 1}` : `Bedroom ${i + 1}`,
+        mandatory: true, isBedroom: true,
+        // "photos" is the default bucket every upload lands in. The
+        // other three are optional, purely organizational — a photo
+        // moved into one still belongs to this same room, it's just
+        // labeled for a clearer gallery later. Nothing requires using
+        // them at all; a room with everything left in "photos" is just
+        // as valid as one that's been sorted.
+        photos: [], washroomPhotos: [], livingRoomPhotos: [], balconyPhotos: [],
+        maxOccupancy: '', price: ''
+      });
+    }
+    roomSpaceRows = [...newBedrooms, ...fixedRows];
+    if(activeBedroomTabKey === null && newBedrooms.length) activeBedroomTabKey = newBedrooms[0].key;
+    renderRoomSpaces();
+  }
+  // Which numbered bedroom tab (1, 2, 3...) is currently open — only one
+  // bedroom's full editor is shown at a time once there's more than one,
+  // rather than a long stacked list of every room's whole gallery.
+  let activeBedroomTabKey = null;
+  // Tracks a photo picked up for a tap-to-move action: {bucketKey,
+  // photoIndex} identifying exactly where it currently lives. Real HTML5
+  // drag-and-drop is layered on top as a bonus for desktop/mouse users,
+  // but tap-to-move is the primary, reliable interaction — native drag-
+  // and-drop has effectively no support on iOS Safari's touch interface,
+  // which is where this site gets tested most.
+  let pickedUpPhoto = null;
+
+  // Reusable small photo-pick box for a SINGLE-photo slot (the fixed
+  // spaces — Kitchen, Washroom, Living Room, Garden, Balcony — still
+  // work this way, since each is one shared space for the whole
+  // property, not a per-room gallery).
+  function wireRoomPhotoPick(el, getFile, setFile, onPicked){
+    el.addEventListener('click', () => {
+      // Attached to the DOM (hidden) and removed after use — a
+      // dynamically created <input type="file"> left detached from the
+      // page can become unreliable on repeated use in iOS Safari
+      // specifically (works the first time, silently doesn't fire
+      // afterward).
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.addEventListener('change', () => {
+        if(input.files[0]){
+          setFile(input.files[0]);
+          onPicked();
+        }
+        input.remove();
+      });
+      input.click();
+    });
+  }
+
+  // Small helper so a single-photo slot gets the same optional remove
+  // button without repeating this markup. The remove button sits
+  // outside the box's own overflow:hidden (as a sibling in a relatively-
+  // positioned wrapper), poking slightly past its corner — otherwise the
+  // box's own overflow:hidden (needed to crop the photo itself) would
+  // clip the button too.
+  function roomPhotoBoxHtml(src, placeholder, pickAttr, removeAttr, extraClass){
+    return `
+      <div style="position:relative; display:inline-block;">
+        <div class="room-space-photo-box ${extraClass || ''}" ${pickAttr}>
+          ${src ? `<img src="${src}" alt="">` : `<span>${placeholder}</span>`}
+        </div>
+        ${src ? `<button type="button" class="room-photo-remove-btn" ${removeAttr} aria-label="Remove this photo">×</button>` : ''}
+      </div>
+    `;
+  }
+
+  // A bedroom's photos live across four buckets — "photos" is the
+  // default, general bucket every upload lands in; the other three are
+  // optional, purely organizational sub-groups a host can sort photos
+  // into afterward. All four combine to satisfy "this room needs at
+  // least one photo" — nothing requires actually sorting anything.
+  const OPTIONAL_ROOM_BUCKETS = ['washroomPhotos', 'livingRoomPhotos', 'balconyPhotos'];
+  function allRoomPhotos(room){
+    return [...room.photos, ...room.washroomPhotos, ...room.livingRoomPhotos, ...room.balconyPhotos];
+  }
+
+  // Moves one photo between two buckets — used by both the tap-to-move
+  // flow (primary, works everywhere) and real drag-and-drop (bonus for
+  // desktop/mouse users, wired further below). Native HTML5 drag-and-
+  // drop has effectively no support on iOS Safari's touch interface,
+  // which is where this site gets tested most, so tap-to-move can't be
+  // an afterthought here — it has to fully stand on its own.
+  function movePhoto(roomIdx, srcBucketKey, srcPhotoIndex, targetBucketKey){
+    const room = roomSpaceRows[roomIdx];
+    if(!room || srcBucketKey === targetBucketKey) return;
+    const [photo] = room[srcBucketKey].splice(srcPhotoIndex, 1);
+    if(!photo) return;
+    room[targetBucketKey].push(photo);
+    pickedUpPhoto = null;
+    renderRoomSpaces();
+  }
+
+  function roomBucketHtml(room, roomIdx, bucketKey, label, isOptional){
+    const photos = room[bucketKey];
+    const isDropTarget = pickedUpPhoto !== null && pickedUpPhoto.roomIdx === roomIdx && pickedUpPhoto.bucketKey !== bucketKey;
+    const thumbs = photos.map((photo, photoIdx) => {
+      const src = photo.file ? URL.createObjectURL(photo.file) : photo.url;
+      const isPickedUp = pickedUpPhoto && pickedUpPhoto.roomIdx === roomIdx && pickedUpPhoto.bucketKey === bucketKey && pickedUpPhoto.photoIndex === photoIdx;
+      return `
+        <div style="position:relative; display:inline-block;" draggable="true" data-drag-source="${bucketKey}:${photoIdx}">
+          <div class="room-space-photo-box">
+            <img src="${src}" alt="">
+          </div>
+          <button type="button" class="room-photo-remove-btn" data-gallery-remove="${bucketKey}:${photoIdx}" aria-label="Remove this photo">×</button>
+          ${OPTIONAL_ROOM_BUCKETS.length ? `<button type="button" class="room-photo-move-btn${isPickedUp ? ' picked-up' : ''}" data-gallery-move="${bucketKey}:${photoIdx}" aria-label="Move to another section" title="Move to Washroom, Living Room, or Balcony">⇄</button>` : ''}
+        </div>
+      `;
+    }).join('');
+    return `
+      <div class="room-bucket">
+        <div class="room-bucket-label">${label} ${isOptional ? '<span class="optional-mark">(optional)</span>' : '<span class="required-mark">*</span>'}</div>
+        <div class="room-bucket-grid${isDropTarget ? ' drop-target' : ''}" data-drop-zone="${bucketKey}">
+          ${thumbs}
+          <div class="room-space-photo-box" data-gallery-add="${bucketKey}">
+            <span>+ Add</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function wireGalleryAdd(el, room, bucketKey){
+    el.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.multiple = true;
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.addEventListener('change', () => {
+        Array.from(input.files).forEach(file => room[bucketKey].push({ file, url: null }));
+        renderRoomSpaces();
+        input.remove();
+      });
+      input.click();
+    });
+  }
+
+  function renderRoomSpaces(){
+    const container = document.getElementById('roomSpacesList');
+    const isResort = document.getElementById('listType').value === 'Resort';
+    const bedroomRows = roomSpaceRows.filter(r => r.isBedroom);
+    const fixedRows = roomSpaceRows.filter(r => !r.isBedroom);
+
+    if(bedroomRows.length && !bedroomRows.some(r => r.key === activeBedroomTabKey)){
+      activeBedroomTabKey = bedroomRows[0].key;
+    }
+    const activeRoom = bedroomRows.find(r => r.key === activeBedroomTabKey);
+    const activeIdx = activeRoom ? roomSpaceRows.indexOf(activeRoom) : -1;
+    const otherBedrooms = bedroomRows.filter(r => r !== activeRoom);
+
+    // A numbered tab per bedroom (1, 2, 3...) once there's more than
+    // one — only the selected room's full editor (name, price,
+    // occupancy, and all four photo buckets) is shown at a time, rather
+    // than every room's whole gallery stacked in one long scroll.
+    const tabBarHtml = bedroomRows.length > 1 ? `
+      <div class="bedroom-tab-bar">
+        ${bedroomRows.map((room, i) => {
+          const isComplete = allRoomPhotos(room).some(p => p.file || p.url);
+          return `<div class="bedroom-tab${room.key === activeBedroomTabKey ? ' active' : ''}" data-tab-key="${room.key}">${i + 1}<span class="bedroom-tab-dot${isComplete ? ' complete' : ''}" title="${isComplete ? 'Has a photo' : 'Needs a photo'}"></span></div>`;
+        }).join('')}
+      </div>
+    ` : '';
+
+    let bedroomEditorHtml = '';
+    if(activeRoom){
+      const totalPhotos = allRoomPhotos(activeRoom).length;
+      bedroomEditorHtml = `
+        <div style="width:100%;">
+          ${tabBarHtml}
+          <input type="text" data-room-name-input style="border:none; background:none; padding:0; width:100%; font-size:16.5px; font-weight:600; color:var(--ink); font-family:'Jost', sans-serif;" value="${activeRoom.name}" maxlength="40">
+          <div class="guest-row-sub">Required — at least one photo, anywhere below. Tap the name above to rename it, e.g. Suite, Deluxe, Standard.</div>
+          ${isResort ? `
+            <div style="display:flex; gap:10px; margin-top:10px;">
+              <input type="number" min="1" placeholder="Max guests" data-room-occupancy-input value="${activeRoom.maxOccupancy || ''}" style="width:110px; padding:8px 10px; font-size:13px;">
+              <input type="number" min="1" placeholder="₹ / night" data-room-price-input value="${activeRoom.price || ''}" style="width:110px; padding:8px 10px; font-size:13px;">
+            </div>
+            <p style="font-size:11px; opacity:0.55; margin-top:4px;">You can update this price anytime later from the Rooms tab after approval.</p>
+          ` : ''}
+          ${roomBucketHtml(activeRoom, activeIdx, 'photos', activeRoom.name, false)}
+          ${roomBucketHtml(activeRoom, activeIdx, 'washroomPhotos', 'Washroom', true)}
+          ${roomBucketHtml(activeRoom, activeIdx, 'livingRoomPhotos', 'Living Room', true)}
+          ${roomBucketHtml(activeRoom, activeIdx, 'balconyPhotos', 'Balcony', true)}
+          <p style="font-size:11px; opacity:0.5; margin-top:8px;">Tap the ⇄ on a photo, then tap Washroom/Living Room/Balcony below to move it there — or drag it, if you're on a computer.</p>
+          ${totalPhotos && otherBedrooms.length ? `
+            <button type="button" class="filter-clear" data-clone-open style="font-size:11.5px; margin-top:10px;">Clone this room's ${totalPhotos} photo${totalPhotos === 1 ? '' : 's'} to other ${isResort ? 'rooms' : 'bedrooms'}</button>
+            <div data-clone-panel style="display:none; background:var(--cream-deep); border:1px solid var(--line-dark); padding:12px 14px; width:100%; box-sizing:border-box; margin-top:8px;">
+              <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Copies this room's whole set of photos (including anything already sorted into Washroom/Living Room/Balcony) onto whichever rooms you check below, replacing anything already there for that room.</p>
+              ${otherBedrooms.map(other => `
+                <label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; cursor:pointer;">
+                  <input type="checkbox" data-clone-target="${roomSpaceRows.indexOf(other)}" style="width:auto;"> ${other.name}
+                </label>
+              `).join('')}
+              <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Clone Now</button>
+            </div>
+          ` : ''}
+        </div>
+        <div class="guest-row-divider"></div>
+      `;
+    }
+
+    const fixedHtml = fixedRows.map((room) => {
+      const idx = roomSpaceRows.indexOf(room);
+      const previewSrc = room.file ? URL.createObjectURL(room.file) : room.url;
+      const isLast = idx === roomSpaceRows.length - 1;
+      return `
+        <div class="guest-row" data-room-idx="${idx}" style="align-items:flex-start;">
+          <div class="guest-row-text" style="flex:1; min-width:0; margin-right:12px;">
+            <div class="guest-row-title">${room.name}</div>
+            <div class="guest-row-sub">${room.mandatory ? 'Required' : 'Optional'}</div>
+          </div>
+          ${roomPhotoBoxHtml(previewSrc, '+ Photo', 'data-room-photo-pick', 'data-room-photo-remove')}
+        </div>
+        ${!isLast ? '<div class="guest-row-divider"></div>' : ''}
+      `;
+    }).join('');
+
+    container.innerHTML = bedroomEditorHtml + fixedHtml;
+
+    // ---- Tab switching ----
+    container.querySelectorAll('[data-tab-key]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        activeBedroomTabKey = tab.dataset.tabKey;
+        pickedUpPhoto = null;
+        renderRoomSpaces();
+      });
+    });
+
+    // ---- Active bedroom's fields and buckets ----
+    if(activeRoom){
+      const nameInput = container.querySelector('[data-room-name-input]');
+      if(nameInput) nameInput.addEventListener('input', () => { activeRoom.name = nameInput.value; });
+      const occupancyInput = container.querySelector('[data-room-occupancy-input]');
+      if(occupancyInput) occupancyInput.addEventListener('input', () => { activeRoom.maxOccupancy = occupancyInput.value; });
+      const priceInput = container.querySelector('[data-room-price-input]');
+      if(priceInput) priceInput.addEventListener('input', () => { activeRoom.price = priceInput.value; });
+
+      container.querySelectorAll('[data-gallery-add]').forEach(el => wireGalleryAdd(el, activeRoom, el.dataset.galleryAdd));
+      container.querySelectorAll('[data-gallery-remove]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const [bucketKey, photoIdx] = btn.dataset.galleryRemove.split(':');
+          activeRoom[bucketKey].splice(Number(photoIdx), 1);
+          renderRoomSpaces();
+        });
+      });
+
+      // Tap-to-move: tap a photo's ⇄ to pick it up (tapping the same one
+      // again cancels), then tap any OTHER bucket to drop it there.
+      container.querySelectorAll('[data-gallery-move]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const [bucketKey, photoIdx] = btn.dataset.galleryMove.split(':');
+          const isSame = pickedUpPhoto && pickedUpPhoto.roomIdx === activeIdx && pickedUpPhoto.bucketKey === bucketKey && pickedUpPhoto.photoIndex === Number(photoIdx);
+          pickedUpPhoto = isSame ? null : { roomIdx: activeIdx, bucketKey, photoIndex: Number(photoIdx) };
+          renderRoomSpaces();
+        });
+      });
+      container.querySelectorAll('[data-drop-zone]').forEach(zone => {
+        zone.addEventListener('click', (e) => {
+          if(!pickedUpPhoto || pickedUpPhoto.roomIdx !== activeIdx) return;
+          // Only a click on the zone's own empty space counts as a
+          // "drop here" — a click on a photo's own remove/move button,
+          // or the add-photos tile, is handled by their own listeners
+          // above and shouldn't also trigger a move.
+          if(e.target.closest('[data-gallery-move]') || e.target.closest('[data-gallery-remove]') || e.target.closest('[data-gallery-add]')) return;
+          movePhoto(activeIdx, pickedUpPhoto.bucketKey, pickedUpPhoto.photoIndex, zone.dataset.dropZone);
+        });
+        // Real drag-and-drop, layered on as a bonus for desktop/mouse
+        // users — tap-to-move above is what actually has to work
+        // everywhere, since this has no real support on iOS Safari's
+        // touch interface.
+        zone.addEventListener('dragover', (e) => e.preventDefault());
+        zone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const source = e.dataTransfer.getData('text/plain');
+          if(!source) return;
+          const [srcBucketKey, srcPhotoIndex] = source.split(':');
+          movePhoto(activeIdx, srcBucketKey, Number(srcPhotoIndex), zone.dataset.dropZone);
+        });
+      });
+      container.querySelectorAll('[data-drag-source]').forEach(el => {
+        el.addEventListener('dragstart', (e) => {
+          e.dataTransfer.setData('text/plain', el.dataset.dragSource);
+        });
+      });
+
+      const cloneOpenBtn = container.querySelector('[data-clone-open]');
+      const clonePanel = container.querySelector('[data-clone-panel]');
+      if(cloneOpenBtn && clonePanel){
+        cloneOpenBtn.addEventListener('click', () => {
+          clonePanel.style.display = clonePanel.style.display === 'none' ? 'block' : 'none';
+        });
+      }
+      const cloneApplyBtn = container.querySelector('[data-clone-apply]');
+      if(cloneApplyBtn){
+        cloneApplyBtn.addEventListener('click', () => {
+          const targets = Array.from(container.querySelectorAll('[data-clone-target]:checked')).map(cb => Number(cb.dataset.cloneTarget));
+          if(!targets.length) return;
+          // Same File/URL references are reused across the clone
+          // targets, not re-picked from disk — uploadPhotoCategory below
+          // deduplicates by File identity, so an identical photo cloned
+          // onto 3 rooms is only actually uploaded once, not three times.
+          const clonePhotos = arr => arr.map(p => ({ file: p.file, url: p.url }));
+          targets.forEach(targetIdx => {
+            const target = roomSpaceRows[targetIdx];
+            target.photos = clonePhotos(activeRoom.photos);
+            target.washroomPhotos = clonePhotos(activeRoom.washroomPhotos);
+            target.livingRoomPhotos = clonePhotos(activeRoom.livingRoomPhotos);
+            target.balconyPhotos = clonePhotos(activeRoom.balconyPhotos);
+          });
+          renderRoomSpaces();
+        });
+      }
+    }
+
+    // ---- Fixed spaces (Kitchen/Washroom/Living Room/Garden/Balcony) —
+    // unchanged simple single-photo layout, each one shared space for
+    // the whole property, not something that needs a gallery.
+    container.querySelectorAll('[data-room-idx]').forEach(rowEl => {
+      const idx = Number(rowEl.dataset.roomIdx);
+      const room = roomSpaceRows[idx];
+      const mainPick = rowEl.querySelector('[data-room-photo-pick]');
+      if(mainPick) wireRoomPhotoPick(mainPick, () => room.file, f => { room.file = f; room.url = null; }, renderRoomSpaces);
+      const mainRemove = rowEl.querySelector('[data-room-photo-remove]');
+      if(mainRemove) mainRemove.addEventListener('click', () => { room.file = null; room.url = null; renderRoomSpaces(); });
+    });
+  }
+  renderRoomSpaces();
+  document.getElementById('listBedrooms').addEventListener('input', syncBedroomRowCount);
+  syncBedroomRowCount(); // establishes the initial bedroom row(s) from whatever's already in the field
+
+  document.getElementById('listType').addEventListener('change', function(){
+    const label = document.getElementById('listBedroomsLabel');
+    const hint = document.getElementById('listBedroomsHint');
+    const input = document.getElementById('listBedrooms');
+    const priceRow = document.getElementById('listPriceRow');
+    const priceInput = document.getElementById('listPrice');
+    const priceResortNote = document.getElementById('listPriceResortNote');
+    const guestsRow = document.getElementById('listGuestsRow');
+    const guestsSelect = document.getElementById('listGuests');
+    const guestsResortNote = document.getElementById('listGuestsResortNote');
+    if(this.value === 'Resort'){
+      label.textContent = 'Number of Rooms';
+      input.placeholder = 'e.g. 10';
+      hint.textContent = "You'll need at least this many interior photos below — one per room. Each room's own price, capacity, and photo are set separately after approval.";
+      // A Resort's real pricing lives per-room, set individually below —
+      // asking for ALSO a listing-level "expected rate" here was
+      // redundant now that real per-room prices are collected in the
+      // same form. The price guests actually see is computed
+      // automatically from the lowest room price submitted (see
+      // submit-listing.js) — removed from view entirely, same treatment
+      // as Max Guests, rather than kept as a vague "rough figure" a host
+      // has to fill in and reconcile against their real room prices.
+      priceRow.style.display = 'none';
+      priceInput.required = false;
+      priceResortNote.style.display = 'block';
+      // Max Guests is per-room only for a Resort (see submit-listing.js,
+      // which already doesn't require this field there) — removed from
+      // view entirely rather than just made optional. A field a host
+      // can see but is told "not used" is still a field they have to
+      // stop and read about; not showing it at all is the more honest,
+      // less cluttered version of the same fix.
+      guestsRow.style.display = 'none';
+      guestsSelect.required = false;
+      guestsResortNote.style.display = 'block';
+    } else {
+      label.textContent = 'Bedrooms';
+      input.placeholder = 'e.g. 4 — enter 0 for a studio';
+      hint.textContent = "You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.";
+      priceRow.style.display = '';
+      priceInput.required = true;
+      priceResortNote.style.display = 'none';
+      guestsRow.style.display = '';
+      guestsSelect.required = true;
+      guestsResortNote.style.display = 'none';
+    }
+    // Fixed categories genuinely differ by property type (see
+    // currentFixedRoomSpaces above) — rebuilt here so switching between
+    // Resort and any other type mid-form swaps Kitchen/Living Room for
+    // Washroom/Balcony (or back), rather than leaving stale categories
+    // that don't apply to whatever's now selected. Bedroom/Room rows are
+    // preserved as-is; only their default naming going forward changes
+    // (syncBedroomRowCount decides that per row, not this).
+    const newFixedKeys = new Set(currentFixedRoomSpaces().map(s => s.key));
+    const oldFixedRows = roomSpaceRows.filter(r => !r.isBedroom);
+    const preservedFixedRows = oldFixedRows.filter(r => newFixedKeys.has(r.key));
+    const preservedKeys = new Set(preservedFixedRows.map(r => r.key));
+    const newFixedRows = currentFixedRoomSpaces()
+      .filter(s => !preservedKeys.has(s.key))
+      .map(s => ({ ...s, isBedroom: false, file: null, url: null }));
+    roomSpaceRows = [...roomSpaceRows.filter(r => r.isBedroom), ...preservedFixedRows, ...newFixedRows];
+    renderRoomSpaces(); // toggles the bedroom price/occupancy fields on or off to match
+  });
+
+  function collectCheckedValues(name){
+    return Array.from(listingForm.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value);
+  }
+
+  // ---- Retry-safe submission state ----
+  // Tracks what's already succeeded so a retry after a failure doesn't
+  // re-upload photos or create a duplicate database row — it just picks up
+  // from wherever it actually stopped.
+  let listingSubmissionState = {
+    currentListingId: null, // set once Neon save succeeds (draft or full) — reused so retries UPDATE instead of INSERT again
+    exteriorUrls: null,     // cached once photo upload succeeds
+    exteriorHashes: null    // SHA-256 content hashes, cached alongside the URLs — used server-side for duplicate-listing detection
+    // Room-space photos track their own upload state per row instead
+    // (roomSpaceRows[i].file/.url/.hash) — no separate tracking needed
+    // here the way the old flat interior uploader required.
+  };
+
+  const listingDraftBtn = document.getElementById('listingDraftBtn');
+
+  // Real content fingerprint of a file, computed entirely in the browser
+  // via the Web Crypto API — no upload, no server round-trip needed just
+  // to hash it. This is what makes duplicate-listing detection possible
+  // at all: two uploads of the exact same photo always get different
+  // Blob URLs (a fresh random one every time), so comparing URLs alone
+  // can never catch a re-uploaded duplicate — only comparing the actual
+  // image bytes can.
+  async function computeFileHash(file){
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // A modern phone camera photo is routinely 5-15MB — uploading that raw,
+  // for potentially 20-40+ photos on a full Resort listing, is the real
+  // reason this feels slow, far more than anything about the form itself.
+  // Resized to a sensible max dimension and re-encoded as JPEG before
+  // upload, typically cutting file size by 10-20x with no visible
+  // quality loss for web display (nothing on the site ever shows a photo
+  // anywhere near full camera resolution anyway). Never blocks the
+  // actual upload if anything goes wrong — a compression failure (an
+  // unsupported format, a corrupt file, etc.) just falls back to
+  // uploading the original file untouched.
+  async function compressImage(file, maxDimension = 1920, quality = 0.82){
+    if(!file.type || !file.type.startsWith('image/')) return file;
+    // HEIC/HEIF (the default format on many iPhones) generally can't be
+    // decoded via createImageBitmap in most browsers — attempting it
+    // would just fail and fall through to the catch below anyway, but
+    // skipping straight to the original avoids a pointless decode
+    // attempt on every single HEIC photo.
+    if(file.type === 'image/heic' || file.type === 'image/heif') return file;
+    try{
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+      // Already small (a screenshot, an already-compressed photo, etc.)
+      // — re-encoding it wouldn't help and could even make it bigger.
+      if(scale >= 1 && file.size < 1.5 * 1024 * 1024){
+        bitmap.close();
+        return file;
+      }
+      const targetWidth = Math.max(1, Math.round(bitmap.width * scale));
+      const targetHeight = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+      bitmap.close();
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if(!blob || blob.size >= file.size) return file; // didn't actually help — keep the original
+      return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+    } catch(err){
+      console.warn('Image compression skipped, uploading original:', file.name, err);
+      return file;
+    }
+  }
+
+  async function uploadPhotoCategory(files){
+    if(files.length === 0) return { urls: [], hashes: [] };
+    const { upload } = await import('https://esm.sh/@vercel/blob/client');
+
+    // Limited concurrency, with one automatic retry per file, rather
+    // than uploading everything at once via a single Promise.all. A host
+    // filling in every Rooms & Spaces slot (several bedrooms plus
+    // Kitchen/Washroom/Living Room) can easily have 6-10+ photos
+    // uploading in the same instant now, all requesting a token from
+    // /api/blob-upload simultaneously — uploading that many at once
+    // seemed to intermittently trip a transient Vercel Blob error ("The
+    // object can not be found here") under that load. This spreads the
+    // requests out and gives a genuinely transient failure a second
+    // chance before it actually fails the whole submission.
+    const CONCURRENCY = 3;
+    async function uploadOne(file){
+      async function attempt(){
+        const compressed = await compressImage(file);
+        const [uploaded, hash] = await Promise.all([
+          upload(compressed.name, compressed, { access: 'public', handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload' }),
+          computeFileHash(compressed)
+        ]);
+        return { url: uploaded.url, hash };
+      }
+      try{
+        return await attempt();
+      } catch(err){
+        console.warn('Photo upload failed once, retrying:', file.name, err);
+        await new Promise(r => setTimeout(r, 800));
+        try{
+          return await attempt();
+        } catch(err2){
+          // A genuinely persistent failure on ONE file used to throw
+          // here, which rejected the entire Promise.all for its batch —
+          // discarding every other photo that had already uploaded
+          // successfully in the same call, not just this one. That's
+          // how a single stubborn photo could make an unrelated
+          // bedroom's already-successful photos disappear. Returned as
+          // null instead, so the caller can tell exactly which photo
+          // didn't make it and leave everything else intact.
+          console.error('Photo upload failed permanently:', file.name, err2);
+          return null;
+        }
+      }
+    }
+
+    // The same File object can legitimately appear more than once here —
+    // cloning a bedroom's photos onto other rooms (see the Rooms &
+    // Spaces clone feature) reuses the exact same File references rather
+    // than re-picking from disk, so uploading each occurrence
+    // independently would upload identical bytes several times for no
+    // reason. Deduplicated by File identity (object reference, not
+    // content — sufficient here, since a clone is always the same
+    // reference) so a photo cloned onto 3 rooms is uploaded once, and
+    // every occurrence ends up with the same URL.
+    const uniqueFiles = [...new Set(files)];
+    const cache = new Map();
+    for(let i = 0; i < uniqueFiles.length; i += CONCURRENCY){
+      const batch = uniqueFiles.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(batch.map(uploadOne));
+      batch.forEach((file, j) => cache.set(file, batchResults[j]));
+    }
+    const results = files.map(file => cache.get(file));
+    // null entries (a persistent per-file failure) come through as null
+    // url/hash rather than throwing — the caller checks for these and
+    // leaves that specific photo's file in place for a retry, instead of
+    // silently treating a failed upload as a successful, empty one.
+    return { urls: results.map(r => r ? r.url : null), hashes: results.map(r => r ? r.hash : null) };
+  }
+
+  async function saveListing(isDraft){
+    const confirmEl = listingForm.querySelector('.listing-confirm');
+    const draftConfirmEl = listingForm.querySelector('.listing-draft-confirm');
+    const errorEl = listingForm.querySelector('.listing-error');
+    confirmEl.style.display = 'none';
+    draftConfirmEl.style.display = 'none';
+    errorEl.style.display = 'none';
+    // Reappears at the top of every fresh save attempt (including a
+    // retry after an error) — only hidden for good once a full
+    // submission actually succeeds, see below.
+    document.getElementById('draftHintText').style.display = 'block';
+
+    const activeBtn = isDraft ? listingDraftBtn : listingSubmitBtn;
+    const otherBtn = isDraft ? listingSubmitBtn : listingDraftBtn;
+
+    if(!document.getElementById('listPropertyName').value.trim()){
+      errorEl.textContent = 'Please give your property a name.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    if(!isDraft){
+      // A full submission needs everything — a draft only needs a name.
+      // Checked in the same top-to-bottom order as the form itself, so
+      // whichever error shows is the first thing the host actually needs
+      // to fix, not just an arbitrary one.
+      const isResortSubmission = document.getElementById('listType').value === 'Resort';
+      const requiredChecks = [
+        { value: document.getElementById('listLatitude').value, message: 'Please select your property\'s location from the address suggestions.' },
+        { value: document.getElementById('listCity').value.trim(), message: 'Please enter the city.' },
+        { value: document.getElementById('listArea').value.trim(), message: 'Please enter the area.' },
+        { value: document.getElementById('listPincode').value.trim(), message: 'Please enter the PIN/postal code.' },
+        // Skipped for a Resort — that field is hidden entirely there
+        // (see the listType change handler), since its price is
+        // computed automatically from room prices instead of typed in
+        // here. This check used to run unconditionally regardless of
+        // property type, which blocked every Resort submission outright
+        // the moment the field was hidden — an empty, hidden field can
+        // never satisfy a check that doesn't know to skip it.
+        ...(isResortSubmission ? [] : [{ value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' }]),
+        { value: document.getElementById('listDescription').value.trim(), message: 'Please tell us a bit about the property.' }
+      ];
+      for(const check of requiredChecks){
+        if(!check.value){
+          errorEl.textContent = check.message;
+          errorEl.style.display = 'block';
+          return;
+        }
+      }
+      // City/area need to be in English (Latin script) — see
+      // submit-listing.js for why; this is just the faster, earlier
+      // version of the same check the server enforces regardless.
+      const nonLatinPattern = /[^\u0000-\u024F\s]/;
+      const cityValue = document.getElementById('listCity').value.trim();
+      const areaValue = document.getElementById('listArea').value.trim();
+      if(nonLatinPattern.test(cityValue) || nonLatinPattern.test(areaValue)){
+        errorEl.textContent = 'Please enter the city and area in English (Latin script) — e.g. "Pune", not a local-script spelling.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      if(exteriorPhotoManager.getOrderedIds().length === 0 && !(listingSubmissionState.exteriorUrls && listingSubmissionState.exteriorUrls.length)){
+        errorEl.textContent = 'Please attach at least 1 exterior photo.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      // Every mandatory room/space (all declared bedrooms, plus Kitchen,
+      // Washroom, and Living Room) needs its own photo — replacing the
+      // old flat "at least N interior photos total" count with an actual
+      // per-space requirement, so a host can't submit 4 photos of the
+      // same living room and call it 4 bedrooms. A bedroom/room counts
+      // as having its photo requirement met once its gallery has at
+      // least one photo — no specific label (washroom, balcony, etc.)
+      // required within it.
+      const missingMandatorySpaces = roomSpaceRows.filter(r => r.mandatory && (r.isBedroom ? allRoomPhotos(r).length === 0 : !r.file && !r.url));
+      if(missingMandatorySpaces.length){
+        errorEl.textContent = `Please add a photo for: ${missingMandatorySpaces.map(r => r.name || 'an unnamed bedroom').join(', ')}.`;
+        errorEl.style.display = 'block';
+        return;
+      }
+      // For a Resort specifically, each room is also a real,
+      // independently priced room from the start — collected here so the
+      // host doesn't have to revisit every room individually after
+      // approval just to make it bookable.
+      if(document.getElementById('listType').value === 'Resort'){
+        const incompleteBedrooms = roomSpaceRows.filter(r => r.isBedroom && (!Number(r.maxOccupancy) || Number(r.maxOccupancy) < 1 || !Number(r.price) || Number(r.price) <= 0));
+        if(incompleteBedrooms.length){
+          errorEl.textContent = `Please set a max guests and price for: ${incompleteBedrooms.map(r => r.name || 'an unnamed room').join(', ')}.`;
+          errorEl.style.display = 'block';
+          return;
+        }
+      }
+      if(!document.getElementById('listHostName').value.trim()){
+        errorEl.textContent = 'Please enter your name.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      if(!document.getElementById('listHostPhone').value.trim()){
+        errorEl.textContent = 'Please enter a valid phone number.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      if(!petFriendlyYes.checked && !petFriendlyNo.checked){
+        errorEl.textContent = 'Please tell us whether pets are allowed at this property.';
+        errorEl.style.display = 'block';
+        return;
+      }
+    }
+
+    activeBtn.disabled = true;
+    otherBtn.disabled = true;
+
+    // Reuse already-uploaded exterior URLs from a prior attempt if we
+    // have them — no need to re-upload the same files again on a retry.
+    let exteriorPhotoUrls = listingSubmissionState.exteriorUrls;
+    let exteriorPhotoHashes = listingSubmissionState.exteriorHashes;
+    const exteriorIdsAtUpload = exteriorPhotoManager.getOrderedIds();
+
+    // Every photo still needing upload — a fixed space's single file/url
+    // pair, or one entry from any of a bedroom's four photo buckets — is
+    // collected as the SAME shape (an object with .file/.url/.hash) so
+    // the result can be written back identically regardless of which
+    // kind it came from. A retry naturally only re-uploads whichever
+    // haven't succeeded yet.
+    const uploadTasks = [];
+    roomSpaceRows.forEach(room => {
+      if(room.isBedroom){
+        allRoomPhotos(room).forEach(photo => { if(photo.file && !photo.url) uploadTasks.push(photo); });
+      } else if(room.file && !room.url){
+        uploadTasks.push(room);
+      }
+    });
+
+    if(exteriorPhotoUrls === null || uploadTasks.length){
+      activeBtn.textContent = 'Uploading photos…';
+      try{
+        const [exteriorResult, roomResult] = await Promise.all([
+          exteriorPhotoUrls === null ? uploadPhotoCategory(exteriorPhotoManager.getFiles()) : Promise.resolve({ urls: exteriorPhotoUrls, hashes: exteriorPhotoHashes || [] }),
+          uploadPhotoCategory(uploadTasks.map(t => t.file))
+        ]);
+        exteriorPhotoUrls = exteriorResult.urls;
+        exteriorPhotoHashes = exteriorResult.hashes;
+        // exteriorResult only has entries for the FILE-based photos
+        // (getFiles() never sees already-uploaded URL entries, e.g. ones
+        // carried over via Clone's "with photos" option) — rebuilt here
+        // into the manager's actual visual order, weaving the two kinds
+        // back together, rather than ending up with newly-uploaded
+        // photos silently appended after already-existing ones
+        // regardless of how the host actually arranged them.
+        if(exteriorPhotoManager.getOrderedEntries().some(e => e.url)){
+          const orderedEntries = exteriorPhotoManager.getOrderedEntries();
+          let uploadedIdx = 0;
+          const mergedUrls = [];
+          const mergedHashes = [];
+          orderedEntries.forEach(entry => {
+            if(entry.url){
+              mergedUrls.push(entry.url);
+              mergedHashes.push(null); // already uploaded elsewhere previously — nothing new to hash here
+            } else {
+              mergedUrls.push(exteriorPhotoUrls[uploadedIdx]);
+              mergedHashes.push(exteriorPhotoHashes[uploadedIdx]);
+              uploadedIdx++;
+            }
+          });
+          exteriorPhotoUrls = mergedUrls;
+          exteriorPhotoHashes = mergedHashes;
+        }
+        listingSubmissionState.exteriorUrls = exteriorPhotoUrls;
+        listingSubmissionState.exteriorHashes = exteriorPhotoHashes;
+        // Only write back a result that actually succeeded — a null
+        // entry (see uploadPhotoCategory) means this specific photo's
+        // upload failed for real after a retry. Leaving its .file in
+        // place (not clearing it) is what makes it show up as a
+        // candidate for upload again on the next submit attempt,
+        // instead of silently vanishing.
+        uploadTasks.forEach((target, i) => {
+          if(roomResult.urls[i]){
+            target.url = roomResult.urls[i];
+            target.file = null;
+            target.hash = roomResult.hashes[i];
+          }
+        });
+      } catch(uploadErr){
+        console.warn('Photo upload failed:', uploadErr);
+        exteriorPhotoUrls = exteriorPhotoUrls || [];
+        exteriorPhotoHashes = exteriorPhotoHashes || [];
+        const stillMissingMandatory = roomSpaceRows.some(r =>
+          r.mandatory && (r.isBedroom ? allRoomPhotos(r).every(p => !p.url) : (!r.file && !r.url))
+        );
+        if(!isDraft && (exteriorPhotoUrls.length === 0 || stillMissingMandatory)){
+          const detail = uploadErr && uploadErr.message ? ` (${uploadErr.message})` : '';
+          errorEl.textContent = `Photo upload failed${detail} — please try again, or email us directly at hello@aerva.in if this keeps happening.`;
+          errorEl.style.display = 'block';
+          activeBtn.disabled = false;
+          otherBtn.disabled = false;
+          activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+          return;
+        }
+      }
+    }
+
+    // A photo can fail to upload without the whole call throwing now
+    // (see uploadPhotoCategory) — a failed one shows up as a null entry
+    // rather than being silently treated as success. Filtered out here
+    // unconditionally (a draft save shouldn't send nulls to the backend
+    // either), with the actual blocking checks only applying to a real
+    // submission, right before building the payload — a stubborn single
+    // photo gets a clear, specific message naming which room needs
+    // attention rather than falling through to the server's more
+    // generic "N more room photo(s)" rejection. Every OTHER photo that
+    // did succeed is kept — only whatever's still stuck needs
+    // re-attempting.
+    exteriorPhotoUrls = (exteriorPhotoUrls || []).filter(Boolean);
+    exteriorPhotoHashes = (exteriorPhotoHashes || []).filter(Boolean);
+    if(!isDraft){
+      if(exteriorPhotoUrls.length === 0){
+        errorEl.textContent = 'Every exterior photo failed to upload — please try again, or email us directly at hello@aerva.in if this keeps happening.';
+        errorEl.style.display = 'block';
+        activeBtn.disabled = false;
+        otherBtn.disabled = false;
+        activeBtn.textContent = 'Submit Listing for Review';
+        return;
+      }
+      const roomsStillMissingPhotos = roomSpaceRows.filter(r =>
+        r.mandatory && (r.isBedroom ? allRoomPhotos(r).every(p => !p.url) : (!r.file && !r.url))
+      );
+      if(roomsStillMissingPhotos.length){
+        errorEl.textContent = `Please add a photo for: ${roomsStillMissingPhotos.map(r => r.name || 'an unnamed bedroom').join(', ')} — one of the earlier uploads didn't go through, please try again.`;
+        errorEl.style.display = 'block';
+        activeBtn.disabled = false;
+        otherBtn.disabled = false;
+        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+        return;
+      }
+    }
+
+    activeBtn.textContent = isDraft ? 'Saving draft…' : 'Sending…';
+
+    // Flat array kept for backward compatibility (the general property-
+    // wide gallery guests browse) — every fixed space's photo plus every
+    // photo across every bedroom's four buckets.
+    const interiorPhotoUrls = [
+      ...roomSpaceRows.filter(r => !r.isBedroom && r.url).map(r => r.url),
+      ...roomSpaceRows.filter(r => r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.url).map(p => p.url))
+    ];
+    // The NEW named mapping submit-listing.js uses to create properly
+    // labeled listing_rooms records ("Suite 1," "Deluxe 1," etc.)
+    // instead of the generic "Room 1, Room 2..." placeholders it used to
+    // fall back to. A bedroom carries its WHOLE combined gallery
+    // (default bucket plus anything sorted into Washroom/Living Room/
+    // Balcony) as one flat "urls" list — the bucket organization is a
+    // host-side editing convenience only, not something the backend
+    // needs to track — while a fixed space (Kitchen, Garden, etc.) still
+    // carries just its one "url", since those never become listing_rooms
+    // records regardless (see submit-listing.js).
+    const roomPhotos = roomSpaceRows
+      .filter(r => r.isBedroom ? allRoomPhotos(r).some(p => p.url) : r.url)
+      .map(r => r.isBedroom
+        ? {
+            roomName: r.name, isBedroom: true,
+            urls: allRoomPhotos(r).filter(p => p.url).map(p => p.url),
+            // Only meaningful for a Resort submission — undefined for
+            // everything else, which submit-listing.js treats the same
+            // as "not provided" (see its own room-photo sanitization).
+            maxOccupancy: Number(r.maxOccupancy) || undefined,
+            price: Number(r.price) || undefined
+          }
+        : { roomName: r.name, url: r.url, isBedroom: false }
+      );
+    const roomPhotoHashes = [
+      ...roomSpaceRows.filter(r => !r.isBedroom && r.hash).map(r => r.hash),
+      ...roomSpaceRows.filter(r => r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.hash).map(p => p.hash))
+    ];
+
+    // Cover photo can only come from an explicit exterior star now — the
+    // old flat interior gallery's own star-selection went away along
+    // with it (there's no single interior list to browse and star
+    // anymore). Leaving this null when nothing was explicitly chosen is
+    // fine — submit-listing.js already has its own sensible default
+    // (first interior/room photo, then first exterior) for exactly that case.
+    let coverPhotoUrl = null;
+    if(coverPhotoId){
+      const exteriorIdx = exteriorIdsAtUpload.indexOf(coverPhotoId);
+      if(exteriorIdx !== -1 && exteriorPhotoUrls[exteriorIdx]) coverPhotoUrl = exteriorPhotoUrls[exteriorIdx];
+    }
+
+    try{
+      const res = await fetch(LISTINGS_API_BASE + '/api/submit-listing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+        body: JSON.stringify({
+          listingId: listingSubmissionState.currentListingId,
+          isDraft: isDraft,
+          propertyName: document.getElementById('listPropertyName').value,
+          city: document.getElementById('listCity').value,
+          area: document.getElementById('listArea').value,
+          propertyType: document.getElementById('listType').value,
+          bedrooms: document.getElementById('listBedrooms').value,
+          maxGuests: document.getElementById('listGuests').value,
+          nightlyRate: hostAmountToInr(document.getElementById('listPrice').value),
+          description: document.getElementById('listDescription').value,
+          amenities: collectCheckedValues('Amenities'),
+          services: collectCheckedValues('Services'),
+          petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
+          maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('listMaxPets').value : '',
+          allowedPetTypes: petFriendlyYes.checked ? collectCheckedValues('PetTypes') : [],
+          petFee: petFriendlyYes.checked ? hostAmountToInr(document.getElementById('listPetFee').value) : '',
+          securityDeposit: hostAmountToInr(document.getElementById('listSecurityDeposit').value),
+          hostName: document.getElementById('listHostName').value,
+          hostPhone: document.getElementById('listHostPhone').value,
+          latitude: document.getElementById('listLatitude').value,
+          longitude: document.getElementById('listLongitude').value,
+          formattedAddress: document.getElementById('listFormattedAddress').value,
+          pincode: document.getElementById('listPincode').value,
+          exteriorPhotoUrls: exteriorPhotoUrls,
+          interiorPhotoUrls: interiorPhotoUrls,
+          roomPhotos: roomPhotos,
+          coverPhotoUrl: coverPhotoUrl,
+          clonedFromListingId: clonedFromListingId,
+          // Content hashes, not URLs — a re-upload of the exact same photo
+          // always gets a brand-new Blob URL, so only comparing actual
+          // image bytes can catch a genuine duplicate. See submit-listing.js
+          // for how this is used to block near-identical resubmissions.
+          photoHashes: [...(exteriorPhotoHashes || []), ...(roomPhotoHashes || [])]
+        })
+      });
+      const data = await res.json();
+
+      if(!res.ok){
+        // A real failure — data and cached uploads are preserved exactly as
+        // they are, so clicking again just retries from here, not from scratch.
+        errorEl.textContent = data.error || 'Could not save your listing. Please try again.';
+        errorEl.style.display = 'block';
+        activeBtn.disabled = false;
+        otherBtn.disabled = false;
+        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+        return;
+      }
+
+      // Saved successfully — remember the id so any further save (draft or
+      // retry) updates this same row instead of creating a duplicate.
+      listingSubmissionState.currentListingId = data.id;
+
+      if(isDraft){
+        draftConfirmEl.style.display = 'block';
+        // A long form means this message can render below the fold even
+        // though it's right under the button — scrolled into view so a
+        // host clicking Save doesn't have to go looking for confirmation
+        // that anything actually happened.
+        draftConfirmEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        activeBtn.disabled = false;
+        otherBtn.disabled = false;
+        activeBtn.textContent = 'Save as Draft';
+        return;
+      }
+
+      // Full submission succeeded — now try the (best-effort) email notice.
+      try{
+        const formData = new FormData();
+        formData.append('Property Name', document.getElementById('listPropertyName').value);
+        formData.append('City', document.getElementById('listCity').value);
+        formData.append('Area', document.getElementById('listArea').value);
+        formData.append('Property Type', document.getElementById('listType').value);
+        formData.append('Bedrooms', document.getElementById('listBedrooms').value);
+        formData.append('Max Guests', document.getElementById('listGuests').value);
+        formData.append('Expected Nightly Rate', document.getElementById('listPrice').value);
+        formData.append('Description', document.getElementById('listDescription').value);
+        collectCheckedValues('Amenities').forEach(v => formData.append('Amenities', v));
+        collectCheckedValues('Services').forEach(v => formData.append('Services', v));
+        formData.append('Pet Friendly', petFriendlyYes.checked ? 'Yes' : 'No');
+        if(petFriendlyYes.checked){
+          formData.append('Max Pets Allowed', document.getElementById('listMaxPets').value);
+          collectCheckedValues('PetTypes').forEach(v => formData.append('Pet Types', v));
+          formData.append('Pet Fee', document.getElementById('listPetFee').value);
+        }
+        formData.append('Host Name', document.getElementById('listHostName').value);
+        formData.append('Phone', document.getElementById('listHostPhone').value);
+        formData.append('Host Email', hostSessionEmail || '');
+        formData.append('Photos', 'See admin notification email or database — not attached here (Formspree free plan doesn\'t support file uploads).');
+
+        await fetch(LISTING_FORM_ENDPOINT, { method: 'POST', body: formData, headers: { 'Accept': 'application/json' } });
+      } catch(notifyErr){
+        console.warn('Formspree notification failed (non-fatal — listing is already saved):', notifyErr);
+      }
+
+      // Fully done — now it's safe to reset everything for a fresh listing.
+      confirmEl.style.display = 'block';
+      confirmEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('draftHintText').style.display = 'none';
+      listingForm.reset();
+      exteriorPhotoManager.clear();
+      roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, file: null, url: null }));
+      activeBedroomTabKey = null;
+      pickedUpPhoto = null;
+      syncBedroomRowCount();
+      listingSubmissionState = { currentListingId: null, exteriorUrls: null };
+      document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
+      activeBtn.disabled = false;
+      otherBtn.disabled = false;
+      // Closes the form itself once submitted — briefly shows the "thank
+      // you" confirmation, then leaves the listing view, rather than
+      // sitting on an empty, just-reset form with nothing left to do.
+      setTimeout(() => { window.location.href = 'index.html'; }, 2000);
+      activeBtn.textContent = 'Submitted';
+    } catch(err){
+      console.error('Listing submission failed:', err);
+      const detail = err && err.message ? ` (${err.message})` : '';
+      errorEl.textContent = `Something went wrong sending your listing${detail} — please try again, or email us directly at hello@aerva.in.`;
+      errorEl.style.display = 'block';
+      activeBtn.disabled = false;
+      otherBtn.disabled = false;
+      activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+    }
+  }
+
+  listingForm.addEventListener('submit', function(e){
+    e.preventDefault();
+    saveListing(false);
+  });
+  listingDraftBtn.addEventListener('click', function(){
+    saveListing(true);
+  });
+
+  // ---- Resuming a draft via ?edit=<id> in the URL ----
+  (async function resumeDraftIfLinked(){
+    const params = new URLSearchParams(window.location.search);
+    const editId = params.get('edit');
+    if(!editId || !hostSessionToken) return;
+
+    try{
+      const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + hostSessionToken }
+      });
+      const data = await res.json();
+      const editableListing = (data.listings || []).find(l => String(l.id) === String(editId) && (l.status === 'draft' || l.status === 'rejected'));
+      if(!editableListing) return;
+      const draft = editableListing; // kept as "draft" below — same pre-fill logic serves both cases
+
+      listingSubmissionState.currentListingId = draft.id;
+      // Stored draft values are always real INR — reset the pricing
+      // currency selector to INR rather than leaving it on whatever it
+      // last was, since there's no record of what currency the host
+      // originally typed these numbers in.
+      hostPricingCurrency = 'INR';
+      hostPricingCurrencyTouched = true; // don't let the async detection default overwrite this reset
+      populateHostCurrencySelect();
+      updateHostPricingLabels();
+      document.getElementById('listPropertyName').value = draft.property_name || '';
+      document.getElementById('listCity').value = draft.city || '';
+      document.getElementById('listArea').value = draft.area || '';
+      document.getElementById('listPincode').value = draft.pincode || '';
+      if(draft.latitude && draft.longitude){
+        document.getElementById('listLatitude').value = draft.latitude;
+        document.getElementById('listLongitude').value = draft.longitude;
+        document.getElementById('listFormattedAddress').value = draft.formatted_address || '';
+        document.getElementById('listLocationSearch').value = draft.formatted_address || '';
+        const confirmEl = document.getElementById('listLocationConfirm');
+        confirmEl.textContent = '✓ Location set: ' + (draft.formatted_address || '');
+        confirmEl.style.display = 'block';
+        updateListPinMap(draft.latitude, draft.longitude);
+      }
+      if(draft.property_type){
+        document.getElementById('listType').value = draft.property_type;
+        // Setting .value directly doesn't fire 'change' on its own — the
+        // whole Resort-vs-everything-else UI adaptation (hiding Max
+        // Guests, relabeling Bedrooms, swapping fixed room categories)
+        // lives entirely in that handler, so a Resort draft would
+        // otherwise reload looking like a regular property.
+        document.getElementById('listType').dispatchEvent(new Event('change'));
+      }
+      if(draft.bedrooms){
+        document.getElementById('listBedrooms').value = draft.bedrooms;
+        // Same issue as property_type above — setting .value directly
+        // doesn't fire 'input', which is what actually builds the
+        // correct number of bedroom/room rows. Without this, a draft
+        // saved with 4 bedrooms would reload showing just the default 1.
+        syncBedroomRowCount();
+      }
+      // Restores each bedroom's photos, price, and occupancy from
+      // whatever was staged the last time this draft was saved (see
+      // submit-listing.js) — matched by position, since that's the same
+      // order they were in when saved. This used to not exist at all: a
+      // Resort draft with every room fully filled in would reload
+      // completely empty, since nothing about per-room data survived a
+      // draft save before now.
+      if(Array.isArray(draft.pending_room_photos) && draft.pending_room_photos.length){
+        const bedroomRows = roomSpaceRows.filter(r => r.isBedroom);
+        draft.pending_room_photos.forEach((saved, i) => {
+          const room = bedroomRows[i];
+          if(!room || !saved) return;
+          if(saved.roomName) room.name = saved.roomName;
+          if(Array.isArray(saved.urls)) room.photos = saved.urls.map(url => ({ url, file: null }));
+          if(saved.maxOccupancy) room.maxOccupancy = saved.maxOccupancy;
+          if(saved.price) room.price = saved.price;
+        });
+        renderRoomSpaces();
+      }
+      if(draft.max_guests) document.getElementById('listGuests').value = draft.max_guests;
+      document.getElementById('listPrice').value = draft.nightly_rate || '';
+      document.getElementById('listDescription').value = draft.description || '';
+      document.getElementById('listHostName').value = draft.host_name || '';
+      document.getElementById('listHostPhone').value = draft.host_phone || '';
+      (draft.amenities || []).forEach(v => {
+        const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
+        if(box) box.checked = true;
+      });
+      (draft.services || []).forEach(v => {
+        const box = listingForm.querySelector(`input[name="Services"][value="${v}"]`);
+        if(box) box.checked = true;
+      });
+      document.getElementById('listSecurityDeposit').value = draft.security_deposit || '';
+      if(draft.pet_friendly){
+        petFriendlyYes.checked = true;
+        document.getElementById('listMaxPets').value = draft.max_pets_allowed || '';
+        document.getElementById('listPetFee').value = draft.pet_fee || '';
+        (draft.allowed_pet_types || []).forEach(v => {
+          const box = listingForm.querySelector(`input[name="PetTypes"][value="${v}"]`);
+          if(box) box.checked = true;
+        });
+        togglePetPolicyDetails();
+      } else if(draft.pet_friendly === false){
+        petFriendlyNo.checked = true;
+      }
+
+      const errorEl = listingForm.querySelector('.listing-error');
+      errorEl.style.color = 'var(--gold-deep)';
+      errorEl.textContent = draft.status === 'rejected'
+        ? `Editing your rejected listing. Reason given: "${draft.rejection_reason || 'not specified'}" — make the needed changes below, then submit to send it back for review. You'll need to re-attach your photos (browsers don't allow us to pre-load previously uploaded files for security reasons).`
+        : 'Resuming your draft — your text details are filled in, but you\'ll need to re-attach your photos (browsers don\'t allow us to pre-load previously uploaded files for security reasons).';
+      errorEl.style.display = 'block';
+
+      window.scrollTo({ top: listingForm.offsetTop - 100, behavior: 'smooth' });
+    } catch(err){
+      console.warn('Could not load draft to resume:', err);
+    }
+  })();
+
+  // ================= LIST EXPERIENCE PAGE JS =================
+  const experienceForm = document.getElementById('experienceForm');
+  if(!hostSessionToken){
+    const gate = document.getElementById('expLoggedOutGate');
+    if(gate) gate.style.display = 'block';
+    if(experienceForm) experienceForm.style.display = 'none';
+  }
+
+  let expPhotoUrls = [];
+  // Explicit host choice — null means "no explicit choice yet," in which
+  // case the first photo is treated as the cover, same fallback
+  // submit-listing.js itself uses if this is never set.
+  let expCoverPhotoUrl = null;
+
+  function renderExpPhotoCount(){
+    const el = document.getElementById('expPhotoCount');
+    if(el){
+      el.textContent = expPhotoUrls.length > 0
+        ? `${expPhotoUrls.length} photo${expPhotoUrls.length === 1 ? '' : 's'} uploaded.`
+        : 'At least 1 photo is required.';
+      el.style.color = expPhotoUrls.length > 0 ? '#3a7d44' : '';
+    }
+    renderExpPhotoPreviews();
+  }
+
+  // Visible thumbnail grid for the experience's photos — same
+  // reorder/remove/cover-choice controls and CSS classes the property
+  // listing form's own photo manager uses (see
+  // createPhotoManager/manage-listing.html), just simpler: experiences
+  // upload each photo to a real URL immediately on selection (see the
+  // 'change' handler below) rather than staging local files until
+  // submit, so every entry in expPhotoUrls is already a real, directly-
+  // displayable URL — existing ones from editing and newly-added ones
+  // render identically, no separate "existing vs new" bookkeeping needed
+  // the way manage-listing needs it for not-yet-uploaded files.
+  function renderExpPhotoPreviews(){
+    const grid = document.getElementById('expPhotoPreviewGrid');
+    if(!grid) return;
+    // If the current cover choice got removed (or none was ever made),
+    // the first photo is the effective cover — matches the backend's own
+    // fallback exactly, so the star shown here never lies about what
+    // will actually be saved.
+    const effectiveCover = (expCoverPhotoUrl && expPhotoUrls.includes(expCoverPhotoUrl)) ? expCoverPhotoUrl : expPhotoUrls[0];
+    grid.innerHTML = '';
+    expPhotoUrls.forEach((url, idx) => {
+      const isCover = url === effectiveCover;
+      const item = document.createElement('div');
+      item.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
+      item.innerHTML = `
+        <img src="${url}" alt="">
+        <span class="photo-order-badge">${idx + 1}</span>
+        <button type="button" data-action="remove" class="photo-remove-btn" aria-label="Remove this photo">×</button>
+        <button type="button" data-action="cover" class="photo-cover-btn" aria-label="Set as cover photo" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
+        <div class="photo-reorder-btns">
+          <button type="button" data-action="left" aria-label="Move earlier" ${idx === 0 ? 'disabled' : ''}>‹</button>
+          <button type="button" data-action="right" aria-label="Move later" ${idx === expPhotoUrls.length - 1 ? 'disabled' : ''}>›</button>
+        </div>
+      `;
+      item.querySelector('[data-action="remove"]').addEventListener('click', () => {
+        if(expCoverPhotoUrl === url) expCoverPhotoUrl = null;
+        expPhotoUrls.splice(idx, 1);
+        renderExpPhotoCount();
+      });
+      item.querySelector('[data-action="cover"]').addEventListener('click', () => {
+        expCoverPhotoUrl = url;
+        renderExpPhotoPreviews();
+      });
+      item.querySelector('[data-action="left"]').addEventListener('click', () => {
+        if(idx === 0) return;
+        [expPhotoUrls[idx - 1], expPhotoUrls[idx]] = [expPhotoUrls[idx], expPhotoUrls[idx - 1]];
+        renderExpPhotoPreviews();
+      });
+      item.querySelector('[data-action="right"]').addEventListener('click', () => {
+        if(idx === expPhotoUrls.length - 1) return;
+        [expPhotoUrls[idx + 1], expPhotoUrls[idx]] = [expPhotoUrls[idx], expPhotoUrls[idx + 1]];
+        renderExpPhotoPreviews();
+      });
+      grid.appendChild(item);
+    });
+  }
+
+  // Only an approved, live listing makes sense to offer as an
+  // experience's hosting property.
+  async function populateExperienceHostingDropdown(){
+    const select = document.getElementById('expHostingListing');
+    if(!select || !hostSessionToken) return;
+    try{
+      const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + hostSessionToken }
+      });
+      const data = await res.json();
+      // listing_type check guards against an experience listing itself
+      // showing up as a "hosting property" option — only a real stay can
+      // host an experience's included stay. Also defensively treats a
+      // missing listing_type as 'stay' (older rows saved before this
+      // column existed).
+      const approved = (data.listings || []).filter(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay'));
+      select.innerHTML = '<option value="">— Select one of your live listings —</option>' +
+        approved.map(l => `<option value="${l.id}">${l.property_name}${l.city ? ' (' + l.city + ')' : ''}</option>`).join('');
+      const noteEl = document.getElementById('expHostingListingNote');
+      if(noteEl){
+        if(approved.length === 0){
+          noteEl.textContent = 'You don\'t have any approved listings yet — list a property first, or choose "No" above for a without-stay experience instead.';
+          noteEl.style.color = '#a3402f';
+        } else {
+          noteEl.textContent = 'Only your approved, live listings can host a stay.';
+          noteEl.style.color = '';
+        }
+      }
+    } catch(err){
+      // Non-fatal — the dropdown just stays on its placeholder.
+    }
+  }
+  if(experienceForm) populateExperienceHostingDropdown();
+
+  // ---- Resuming an existing experience via ?edit=<id> in the URL ----
+  // Unlike the property form, an experience's photos ARE pre-filled here
+  // (as URLs, not re-uploaded files) — expPhotoUrls is just a flat array
+  // of URLs sent to the backend, not tied to actual File objects the way
+  // the property form's retry-safe upload cache is, so there's no
+  // "browsers can't pre-load files" limitation to work around here.
+  let editingExperienceId = null;
+  (async function resumeExperienceEditIfLinked(){
+    const params = new URLSearchParams(window.location.search);
+    const editId = params.get('edit');
+    if(!editId || !hostSessionToken || !experienceForm) return;
+
+    try{
+      const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + hostSessionToken }
+      });
+      const data = await res.json();
+      const existing = (data.listings || []).find(l => String(l.id) === String(editId) && l.listing_type === 'experience');
+      if(!existing) return;
+      // A pending experience used to load fully into this form — a host
+      // could change anything and only find out it was rejected once
+      // they tried to save (see submit-listing.js, which now blocks
+      // editing mid-review). Caught here instead, before any of that
+      // effort happens, with a clear reason rather than a silently blank
+      // form.
+      if(existing.status === 'pending'){
+        alert('This experience is still awaiting its first review and can\'t be edited until that\'s complete.');
+        window.location.href = 'host-dashboard.html';
+        return;
+      }
+
+      editingExperienceId = existing.id;
+      document.getElementById('expName').value = existing.property_name || '';
+      document.getElementById('expDescription').value = existing.description || '';
+      document.getElementById('expCategory').value = existing.experience_category || '';
+      document.getElementById('expHostName').value = existing.host_name || '';
+      document.getElementById('expHostPhone').value = existing.host_phone || '';
+      document.getElementById('expPrice').value = existing.nightly_rate || '';
+      document.getElementById('expPriceUnit').value = existing.experience_price_unit || 'per_person';
+      document.getElementById('expDuration').value = existing.experience_duration_hours || '';
+      document.getElementById('expDurationDays').value = existing.experience_duration_days || 1;
+      document.getElementById('expStartTime').value = existing.experience_start_time || '';
+
+      if(existing.experience_type === 'with_stay'){
+        document.getElementById('expTypeWithStay').checked = true;
+        document.getElementById('expHostingListingField').style.display = 'block';
+        // The dropdown is populated async (see populateExperienceHostingDropdown
+        // above) — wait for it before trying to select a value in it.
+        const trySelectHosting = () => {
+          const select = document.getElementById('expHostingListing');
+          if(existing.hosting_listing_id && select.querySelector(`option[value="${existing.hosting_listing_id}"]`)){
+            select.value = existing.hosting_listing_id;
+          } else {
+            setTimeout(trySelectHosting, 200);
+          }
+        };
+        trySelectHosting();
+      } else if(existing.experience_type === 'without_stay'){
+        document.getElementById('expTypeWithoutStay').checked = true;
+        document.getElementById('expLocationField').style.display = 'block';
+        document.getElementById('expCityAreaField').style.display = 'block';
+        document.getElementById('expPincodeField').style.display = 'block';
+        if(existing.latitude && existing.longitude){
+          document.getElementById('expLatitude').value = existing.latitude;
+          document.getElementById('expLongitude').value = existing.longitude;
+          document.getElementById('expFormattedAddress').value = existing.formatted_address || '';
+          document.getElementById('expLocationSearch').value = existing.formatted_address || '';
+          const confirmEl = document.getElementById('expLocationConfirm');
+          confirmEl.textContent = '✓ Location set: ' + (existing.formatted_address || '');
+          confirmEl.style.display = 'block';
+          updateExpPinMap(existing.latitude, existing.longitude);
+        }
+        document.getElementById('expCity').value = existing.city || '';
+        document.getElementById('expArea').value = existing.area || '';
+        document.getElementById('expPincode').value = existing.pincode || '';
+      }
+
+      if(existing.experience_arranges_travel){
+        document.getElementById('expArrangesTravelYes').checked = true;
+        document.getElementById('expTravelDetailsField').style.display = 'block';
+        document.getElementById('expTravelDetails').value = existing.experience_travel_details || '';
+      } else {
+        document.getElementById('expArrangesTravelNo').checked = true;
+      }
+      if(existing.experience_meeting_point_type === 'common_point'){
+        document.getElementById('expMeetingPointCommon').checked = true;
+        document.getElementById('expMeetingPointDetailsField').style.display = 'block';
+        document.getElementById('expMeetingPointDetails').value = existing.experience_meeting_point_details || '';
+        if(existing.experience_meeting_point_lat && existing.experience_meeting_point_lng){
+          document.getElementById('expMeetingPointLat').value = existing.experience_meeting_point_lat;
+          document.getElementById('expMeetingPointLng').value = existing.experience_meeting_point_lng;
+          document.getElementById('expMeetingPointAddress').value = existing.experience_meeting_point_address || '';
+          document.getElementById('expMeetingPointSearch').value = existing.experience_meeting_point_address || '';
+          const mpConfirmEl = document.getElementById('expMeetingPointConfirm');
+          mpConfirmEl.textContent = '✓ Meeting point set: ' + (existing.experience_meeting_point_address || '');
+          mpConfirmEl.style.display = 'block';
+          updateExpMeetingPointMap(existing.experience_meeting_point_lat, existing.experience_meeting_point_lng);
+        }
+      } else if(existing.experience_meeting_point_type === 'hotel'){
+        document.getElementById('expMeetingPointHotel').checked = true;
+      }
+      document.getElementById('expRefundPolicy').value = existing.experience_refund_policy || '';
+      document.getElementById('expInstructions').value = existing.experience_instructions || '';
+      document.getElementById('expSpecialInstructions').value = existing.experience_special_instructions || '';
+      if(existing.experience_available_from) document.getElementById('expAvailableFrom').value = String(existing.experience_available_from).slice(0, 10);
+      if(existing.experience_available_until) document.getElementById('expAvailableUntil').value = String(existing.experience_available_until).slice(0, 10);
+
+      // Existing photos carry over and now show as real thumbnails (see
+      // renderExpPhotoPreviews) — a host can remove any of them, reorder
+      // them, choose a different cover, or add new ones on top, same as
+      // the property listing form.
+      const existingPhotos = [...(existing.exterior_photo_urls || []), ...(existing.interior_photo_urls || [])];
+      if(existingPhotos.length){
+        expPhotoUrls = existingPhotos;
+        // Pre-fills the star on whichever photo was already chosen as
+        // cover — without this, editing would silently reset the cover
+        // back to "first photo" the moment the form re-renders, even if
+        // the host had deliberately picked a different one before.
+        expCoverPhotoUrl = existing.cover_photo_url && existingPhotos.includes(existing.cover_photo_url)
+          ? existing.cover_photo_url
+          : null;
+        renderExpPhotoCount();
+      }
+
+      document.querySelector('#list-experience h2').textContent = 'Edit Your Experience';
+      document.getElementById('expSubmitBtn').textContent = 'Save Changes';
+      window.scrollTo({ top: experienceForm.offsetTop - 100, behavior: 'smooth' });
+    } catch(err){
+      console.warn('Could not load experience to edit:', err);
+    }
+  })();
+
+  if(document.getElementById('expTypeWithStay')){
+    document.querySelectorAll('input[name="expType"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const withStay = document.getElementById('expTypeWithStay').checked;
+        document.getElementById('expHostingListingField').style.display = withStay ? 'block' : 'none';
+        if(!withStay) document.getElementById('expHostingListing').value = '';
+        document.getElementById('expLocationField').style.display = withStay ? 'none' : 'block';
+        document.getElementById('expCityAreaField').style.display = withStay ? 'none' : 'block';
+        document.getElementById('expPincodeField').style.display = withStay ? 'none' : 'block';
+        if(withStay){
+          document.getElementById('expLocationSearch').value = '';
+          document.getElementById('expLatitude').value = '';
+          document.getElementById('expLongitude').value = '';
+          document.getElementById('expFormattedAddress').value = '';
+          document.getElementById('expLocationConfirm').style.display = 'none';
+          document.getElementById('expCity').value = '';
+          document.getElementById('expArea').value = '';
+          document.getElementById('expCityAreaWarning').style.display = 'none';
+          document.getElementById('expPincode').value = '';
+        }
+      });
+    });
+    document.querySelectorAll('input[name="expArrangesTravel"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const showDetails = document.getElementById('expArrangesTravelYes').checked;
+        document.getElementById('expTravelDetailsField').style.display = showDetails ? 'block' : 'none';
+        if(!showDetails) document.getElementById('expTravelDetails').value = '';
+      });
+    });
+    document.querySelectorAll('input[name="expMeetingPointType"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const showDetails = document.getElementById('expMeetingPointCommon').checked;
+        document.getElementById('expMeetingPointDetailsField').style.display = showDetails ? 'block' : 'none';
+        if(!showDetails){
+          document.getElementById('expMeetingPointDetails').value = '';
+          document.getElementById('expMeetingPointSearch').value = '';
+          document.getElementById('expMeetingPointLat').value = '';
+          document.getElementById('expMeetingPointLng').value = '';
+          document.getElementById('expMeetingPointAddress').value = '';
+          document.getElementById('expMeetingPointConfirm').style.display = 'none';
+        }
+      });
+    });
+
+    document.getElementById('expPhotos').addEventListener('change', async function(){
+      const files = Array.from(this.files || []);
+      if(!files.length) return;
+      const countEl = document.getElementById('expPhotoCount');
+      countEl.textContent = 'Uploading…';
+      countEl.style.color = '';
+      try{
+        const { upload } = await import('https://esm.sh/@vercel/blob/client');
+        for(const file of files){
+          const result = await upload(file.name, file, {
+            access: 'public',
+            handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload'
+          });
+          expPhotoUrls.push(result.url);
+        }
+      } catch(err){
+        countEl.textContent = 'Some photos failed to upload — please try again.';
+        countEl.style.color = '#a3402f';
+      }
+      renderExpPhotoCount();
+      this.value = '';
+    });
+
+    document.getElementById('expSubmitBtn').addEventListener('click', async function(){
+      const errorEl = document.getElementById('expErrorMsg');
+      const confirmEl = document.getElementById('expConfirmMsg');
+      errorEl.style.display = 'none';
+      confirmEl.style.display = 'none';
+
+      const name = document.getElementById('expName').value.trim();
+      const description = document.getElementById('expDescription').value.trim();
+      const hostingListingId = document.getElementById('expHostingListing').value;
+      const category = document.getElementById('expCategory').value;
+      const hostName = document.getElementById('expHostName').value.trim();
+      const hostPhone = document.getElementById('expHostPhone').value.trim();
+      const expTypeInput = document.querySelector('input[name="expType"]:checked');
+      const price = document.getElementById('expPrice').value;
+      const priceUnit = document.getElementById('expPriceUnit').value;
+      const duration = document.getElementById('expDuration').value;
+      const durationDays = document.getElementById('expDurationDays').value;
+      const startTime = document.getElementById('expStartTime').value;
+      const latitude = document.getElementById('expLatitude').value;
+      const longitude = document.getElementById('expLongitude').value;
+      const formattedAddress = document.getElementById('expFormattedAddress').value;
+      const city = document.getElementById('expCity').value.trim();
+      const area = document.getElementById('expArea').value.trim();
+      const pincode = document.getElementById('expPincode').value.trim();
+      const arrangesTravelInput = document.querySelector('input[name="expArrangesTravel"]:checked');
+      const travelDetails = document.getElementById('expTravelDetails').value.trim();
+      const meetingPointTypeInput = document.querySelector('input[name="expMeetingPointType"]:checked');
+      const meetingPointDetails = document.getElementById('expMeetingPointDetails').value.trim();
+      const meetingPointLat = document.getElementById('expMeetingPointLat').value;
+      const meetingPointLng = document.getElementById('expMeetingPointLng').value;
+      const meetingPointAddress = document.getElementById('expMeetingPointAddress').value;
+      const refundPolicy = document.getElementById('expRefundPolicy').value.trim();
+      const instructions = document.getElementById('expInstructions').value.trim();
+      const specialInstructions = document.getElementById('expSpecialInstructions').value.trim();
+      const availableFrom = document.getElementById('expAvailableFrom').value;
+      const availableUntil = document.getElementById('expAvailableUntil').value;
+
+      // Same checks the backend enforces (see submit-listing.js).
+      if(!name){ errorEl.textContent = 'Please give your experience a name.'; errorEl.style.display = 'block'; return; }
+      if(!description){ errorEl.textContent = 'Please add a description.'; errorEl.style.display = 'block'; return; }
+      if(!hostName){ errorEl.textContent = 'Please enter your name.'; errorEl.style.display = 'block'; return; }
+      if(!hostPhone){ errorEl.textContent = 'Please enter your phone number.'; errorEl.style.display = 'block'; return; }
+      if(!expTypeInput){ errorEl.textContent = 'Please say whether this experience includes a stay.'; errorEl.style.display = 'block'; return; }
+      if(expTypeInput.value === 'with_stay' && !hostingListingId){
+        errorEl.textContent = 'Please choose which of your properties hosts the included stay — or choose "No" above if this experience doesn\'t include one.';
+        errorEl.style.display = 'block'; return;
+      }
+      if(expTypeInput.value === 'without_stay'){
+        if(!latitude || !longitude){ errorEl.textContent = 'Please select this experience\'s location from the address suggestions.'; errorEl.style.display = 'block'; return; }
+        if(!city){ errorEl.textContent = 'Please enter the city.'; errorEl.style.display = 'block'; return; }
+        if(!area){ errorEl.textContent = 'Please enter the area.'; errorEl.style.display = 'block'; return; }
+        if(!pincode){ errorEl.textContent = 'Please enter the PIN/postal code.'; errorEl.style.display = 'block'; return; }
+      }
+      if(!category){ errorEl.textContent = 'Please choose a category.'; errorEl.style.display = 'block'; return; }
+      if(!price || Number(price) <= 0){ errorEl.textContent = 'Please set a price.'; errorEl.style.display = 'block'; return; }
+      if(!startTime){ errorEl.textContent = 'Please set a start time.'; errorEl.style.display = 'block'; return; }
+      if(!arrangesTravelInput){ errorEl.textContent = 'Please say whether you arrange travel/transport for guests.'; errorEl.style.display = 'block'; return; }
+      if(arrangesTravelInput.value === 'yes' && !travelDetails){ errorEl.textContent = 'Please describe the travel/transport arrangement.'; errorEl.style.display = 'block'; return; }
+      if(!meetingPointTypeInput){ errorEl.textContent = 'Please choose a meeting point option.'; errorEl.style.display = 'block'; return; }
+      if(meetingPointTypeInput.value === 'common_point' && !meetingPointDetails){ errorEl.textContent = 'Please describe the meeting point.'; errorEl.style.display = 'block'; return; }
+      if(meetingPointTypeInput.value === 'common_point' && (!meetingPointLat || !meetingPointLng)){
+        errorEl.textContent = 'Please select the meeting point location from the address suggestions.'; errorEl.style.display = 'block'; return;
+      }
+      if(!refundPolicy){ errorEl.textContent = 'Please describe your refund policy if a guest doesn\'t reach the meeting point.'; errorEl.style.display = 'block'; return; }
+      if(!instructions){ errorEl.textContent = 'Please add instructions for this experience.'; errorEl.style.display = 'block'; return; }
+      if(availableFrom && availableUntil && availableUntil < availableFrom){
+        errorEl.textContent = 'The "available until" date must be after the "available from" date.'; errorEl.style.display = 'block'; return;
+      }
+      if(!expPhotoUrls.length){ errorEl.textContent = 'Please add at least 1 photo.'; errorEl.style.display = 'block'; return; }
+
+      this.disabled = true;
+      this.textContent = 'Submitting…';
+      try{
+        const res = await fetch(LISTINGS_API_BASE + '/api/submit-listing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+          body: JSON.stringify({
+            isDraft: false,
+            listingId: editingExperienceId,
+            listingType: 'experience',
+            propertyName: name,
+            description: description,
+            hostingListingId: hostingListingId ? Number(hostingListingId) : null,
+            experienceCategory: category,
+            experienceType: expTypeInput.value,
+            nightlyRate: Number(price),
+            experiencePriceUnit: priceUnit,
+            experienceDurationHours: duration ? Number(duration) : null,
+            experienceDurationDays: durationDays ? Number(durationDays) : 1,
+            latitude: latitude || null,
+            longitude: longitude || null,
+            formattedAddress: formattedAddress || null,
+            city: city || null,
+            area: area || null,
+            pincode: pincode || null,
+            experienceStartTime: startTime,
+            experienceArrangesTravel: arrangesTravelInput.value === 'yes',
+            experienceTravelDetails: arrangesTravelInput.value === 'yes' ? travelDetails : null,
+            experienceMeetingPointType: meetingPointTypeInput.value,
+            experienceMeetingPointDetails: meetingPointTypeInput.value === 'common_point' ? meetingPointDetails : null,
+            experienceRefundPolicy: refundPolicy,
+            experienceMeetingPointLat: meetingPointTypeInput.value === 'common_point' ? meetingPointLat : null,
+            experienceMeetingPointLng: meetingPointTypeInput.value === 'common_point' ? meetingPointLng : null,
+            experienceMeetingPointAddress: meetingPointTypeInput.value === 'common_point' ? meetingPointAddress : null,
+            experienceInstructions: instructions,
+            experienceSpecialInstructions: specialInstructions || null,
+            experienceAvailableFrom: availableFrom || null,
+            experienceAvailableUntil: availableUntil || null,
+            hostName: hostName,
+            hostPhone: hostPhone,
+            exteriorPhotoUrls: expPhotoUrls,
+            interiorPhotoUrls: [],
+            coverPhotoUrl: (expCoverPhotoUrl && expPhotoUrls.includes(expCoverPhotoUrl)) ? expCoverPhotoUrl : (expPhotoUrls[0] || null)
+          })
+        });
+        const data = await res.json();
+        if(res.ok){
+          confirmEl.textContent = editingExperienceId
+            ? (data.status === 'approved'
+                ? 'Changes saved — already live under Aerva Experience.'
+                : 'Changes saved — we\'ll review it again and it\'ll go back live once approved.')
+            : 'Thank you — we\'ve received your experience. Our team reviews every submission personally and will follow up by email within a few days.';
+          confirmEl.style.display = 'block';
+          confirmEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Closes the form itself once submitted — briefly shows the
+          // "thank you" confirmation, then leaves, same as the property
+          // listing form does after a successful submit.
+          setTimeout(() => { window.location.href = 'host-dashboard.html'; }, 2000);
+        } else {
+          errorEl.textContent = data.error || 'Something went wrong. Please try again.';
+          errorEl.style.display = 'block';
+          this.disabled = false;
+          this.textContent = 'Submit Experience for Review';
+        }
+      } catch(err){
+        errorEl.textContent = 'Something went wrong. Please try again.';
+        errorEl.style.display = 'block';
+        this.disabled = false;
+        this.textContent = 'Submit Experience for Review';
+      }
+    });
+  }
+
+
+  // (that page already has the full listing data loaded — no need for a
+  // second fetch). Read once, then cleared immediately, so refreshing
+  // this page or navigating back to it doesn't silently reapply stale
+  // clone data days later.
+  let clonedFromListingId = null;
+  (function cloneListingIfLinked(){
+    const params = new URLSearchParams(window.location.search);
+    if(params.get('clone') !== '1') return;
+
+    const raw = safeStorage.get('aerva_clone_listing');
+    safeStorage.remove('aerva_clone_listing');
+    if(!raw) return;
+    const cloneWithPhotos = safeStorage.get('aerva_clone_with_photos') === '1';
+    safeStorage.remove('aerva_clone_with_photos');
+
+    let source;
+    try { source = JSON.parse(raw); } catch(err) { return; }
+    // Captured for the actual submission later — see submit-listing.js,
+    // which checks whether THIS id's listing was rejected, so an admin
+    // reviewing this new submission knows it's effectively a
+    // resubmission of something already turned down, not a genuinely
+    // new property.
+    clonedFromListingId = source.id || null;
+
+    // Deliberately NOT set — this must submit as a brand new listing,
+    // never overwrite the original being cloned from.
+    // listingSubmissionState.currentListingId stays whatever it already was (unset).
+
+    hostPricingCurrency = 'INR';
+    hostPricingCurrencyTouched = true;
+    populateHostCurrencySelect();
+    updateHostPricingLabels();
+
+    // Property name deliberately left BLANK rather than copied — if this
+    // is, say, a 3BHK being cloned into a 2BHK configuration of the same
+    // physical property, an identical name would be actively confusing
+    // for guests browsing both. Everything else is genuinely worth
+    // reusing as a starting point.
+    document.getElementById('listCity').value = source.city || '';
+    document.getElementById('listArea').value = source.area || '';
+    document.getElementById('listPincode').value = source.pincode || '';
+    if(source.latitude && source.longitude){
+      document.getElementById('listLatitude').value = source.latitude;
+      document.getElementById('listLongitude').value = source.longitude;
+      document.getElementById('listFormattedAddress').value = source.formatted_address || '';
+      document.getElementById('listLocationSearch').value = source.formatted_address || '';
+      const confirmEl = document.getElementById('listLocationConfirm');
+      confirmEl.textContent = '✓ Location set: ' + (source.formatted_address || '');
+      confirmEl.style.display = 'block';
+      updateListPinMap(source.latitude, source.longitude);
+    }
+    if(source.property_type){
+      document.getElementById('listType').value = source.property_type;
+      document.getElementById('listType').dispatchEvent(new Event('change'));
+    }
+    if(source.bedrooms){
+      document.getElementById('listBedrooms').value = source.bedrooms;
+      syncBedroomRowCount();
+    }
+    if(source.max_guests) document.getElementById('listGuests').value = source.max_guests;
+    document.getElementById('listPrice').value = source.nightly_rate || '';
+    document.getElementById('listDescription').value = source.description || '';
+    document.getElementById('listHostName').value = source.host_name || '';
+    document.getElementById('listHostPhone').value = source.host_phone || '';
+    (source.amenities || []).forEach(v => {
+      const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
+      if(box) box.checked = true;
+    });
+    (source.services || []).forEach(v => {
+      const box = listingForm.querySelector(`input[name="Services"][value="${v}"]`);
+      if(box) box.checked = true;
+    });
+    document.getElementById('listSecurityDeposit').value = source.security_deposit || '';
+    if(source.pet_friendly){
+      petFriendlyYes.checked = true;
+      document.getElementById('listMaxPets').value = source.max_pets_allowed || '';
+      document.getElementById('listPetFee').value = source.pet_fee || '';
+      (source.allowed_pet_types || []).forEach(v => {
+        const box = listingForm.querySelector(`input[name="PetTypes"][value="${v}"]`);
+        if(box) box.checked = true;
+      });
+      togglePetPolicyDetails();
+    } else if(source.pet_friendly === false){
+      petFriendlyNo.checked = true;
+    }
+
+    // Exterior photos are real, already-uploaded Blob URLs — when the
+    // host chose "with photos" (see host-dashboard.html's cloneListing),
+    // these are added directly into the actual gallery via
+    // addExistingUrls, not just shown as inert reference thumbnails.
+    // They're fully editable from there: reorderable, removable, and a
+    // new cover can be set, exactly like any other exterior photo.
+    // Interior/room photos still require re-uploading regardless of this
+    // choice — those live in a separate, more complex per-room gallery
+    // system that reusing existing URLs for isn't built out for yet.
+    if(cloneWithPhotos && Array.isArray(source.exterior_photo_urls) && source.exterior_photo_urls.length){
+      exteriorPhotoManager.addExistingUrls(source.exterior_photo_urls);
+    }
+    const referencePhotos = cloneWithPhotos ? (source.interior_photo_urls || []) : [...(source.exterior_photo_urls || []), ...(source.interior_photo_urls || [])];
+    const referenceHtml = referencePhotos.length
+      ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">${referencePhotos.slice(0, 8).map(url => `<img src="${url}" style="width:64px; height:64px; object-fit:cover; border-radius:4px;">`).join('')}</div>`
+      : '';
+
+    const cloneErrorEl = listingForm.querySelector('.listing-error');
+    cloneErrorEl.style.color = 'var(--gold-deep)';
+    cloneErrorEl.innerHTML = cloneWithPhotos
+      ? `Cloned from "${source.property_name}" — give this configuration its own name below. Exterior photos were carried over and are already in the gallery below (feel free to change them). Interior/room photos still need re-uploading (shown here for reference).${referenceHtml}`
+      : `Cloned from "${source.property_name}" — give this configuration its own name below, and re-upload photos (shown here for reference only; browsers don't allow carrying over previously uploaded files).${referenceHtml}`;
+    cloneErrorEl.style.display = 'block';
+
+    document.getElementById('listPropertyName').focus();
+    window.scrollTo({ top: listingForm.offsetTop - 100, behavior: 'smooth' });
+  })();
+
+  // ---- Suites section: render from the same approved-listings data ----
+  // used by the Reserve form (fetched once — see initSite() below).
+
+  // Every discount is now shown in BOTH units, regardless of which one
+  // the host actually set — converted using the minimum qualifying stay
+  // (nightly_rate × discount_min_nights, or just one night if no minimum
+  // is set) as the baseline "whole" that a flat ₹ amount is a percentage
+  // of, and vice versa. This is a real conversion, not a guess: it's the
+  // same baseline a guest would actually see once they've picked dates
+  // that qualify for the discount.
+  function formatOffer(listing){
+    if(!listing.discount_type || !listing.discount_value || !listing.nightly_rate) return '';
+    const rate = Number(listing.nightly_rate);
+    const value = Number(listing.discount_value);
+    const baselineNights = listing.discount_min_nights ? Number(listing.discount_min_nights) : 1;
+    const baselineTotal = rate * baselineNights;
+    if(!baselineTotal) return '';
+
+    let rupees, percent;
+    if(listing.discount_type === 'percentage'){
+      percent = value;
+      rupees = Math.round(baselineTotal * (value / 100));
+    } else if(listing.discount_type === 'flat'){
+      rupees = value;
+      percent = Math.round((value / baselineTotal) * 100);
+    } else {
+      return '';
+    }
+
+    const minNightsNote = listing.discount_min_nights ? ` on stays of ${listing.discount_min_nights}+ nights` : '';
+    return `${fmtGuest(rupees)} (${percent}%) off${minNightsNote}`;
+  }
+
+  // Picks whichever currently-running promotion (see get-listings.js's
+  // active_promotions, already filtered to is_active + not-yet-ended)
+  // saves the most on a single night — just for display purposes, since
+  // no dates are chosen yet at the card-browsing stage. This is a teaser
+  // only; create-order.js recalculates the real discount against the
+  // guest's actual selected dates/nights at checkout, the same "picks
+  // whichever discount saves the most, standing or promo" logic as
+  // there, just evaluated here without a specific stay to check against.
+  // The guest's searched stay, if any. A promotion only ever applies to
+  // specific nights, so a card can't truthfully promise "20% OFF" until
+  // the guest has said which nights they want.
+  function searchedStay(){
+    const a = (typeof searchArrivalDate !== 'undefined' && searchArrivalDate) || '';
+    const d = (typeof searchDepartureDate !== 'undefined' && searchDepartureDate) || '';
+    if(!a || !d || d <= a) return null;
+    const nights = Math.round((new Date(d + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
+    return { arrival: a, departure: d, nights };
+  }
+
+  // Does this promotion cover any night of the searched stay, and is the
+  // stay long enough for it? endDate is exclusive, same as everywhere.
+  function promoAppliesToStay(p, stay){
+    if(!p.startDate || !p.endDate) return false;
+    const overlaps = p.startDate < stay.departure && p.endDate > stay.arrival;
+    const minOk = !p.minNights || stay.nights >= Number(p.minNights);
+    return overlaps && minOk;
+  }
+
+  function bestActivePromotion(listing){
+    let promos = Array.isArray(listing.active_promotions) ? listing.active_promotions : [];
+    // Stays use nightly_rate; get-listings.js aliases an experience's own
+    // price column to .price instead — without this fallback, this always
+    // silently returned null for every experience, since .nightly_rate
+    // simply doesn't exist on that object.
+    const rate = Number(listing.nightly_rate || listing.price);
+    // No dates searched → no specific promotion is "active" for this
+    // guest yet. The card shows a soft hint instead (see
+    // formatPromotionBadge); the real figure appears once dates are in.
+    const stay = searchedStay();
+    if(!stay) return null;
+    promos = promos.filter(p => promoAppliesToStay(p, stay));
+    if(!promos.length || !rate) return null;
+    let best = null, bestSavings = -1;
+    for(const p of promos){
+      const value = Number(p.discountValue);
+      const savings = p.discountType === 'percentage' ? rate * (value / 100) : Math.min(value, rate);
+      if(savings > bestSavings){ bestSavings = savings; best = p; }
+    }
+    return best;
+  }
+
+  function formatPromotionBadge(listing){
+    const promo = bestActivePromotion(listing);
+    if(!promo){
+      // Dates not searched yet, but the listing does run promotions —
+      // say so without committing to a number that may not apply to
+      // the nights the guest eventually picks.
+      const any = Array.isArray(listing.active_promotions) && listing.active_promotions.length > 0;
+      // Kept to one word so it fits on a single line on a phone. The
+      // explanation lives in the detail view (formatPromotionHint).
+      return (any && !searchedStay()) ? 'Offer' : '';
+    }
+    // The figure only. The promotion's name and its conditions are shown in
+    // the detail view and under the price, where there is room for them.
+    return promo.discountType === 'percentage' ? `${Number(promo.discountValue)}% off` : `${fmtGuest(Number(promo.discountValue))} off`;
+  }
+
+  // Detail-view counterpart of the "Offer" card badge: the listing runs
+  // promotions, but no dates are picked yet, so no figure can be promised.
+  // Without this, a guest who clicked a card showing "Offer" found nothing
+  // about it inside.
+  function formatPromotionHint(listing){
+    const any = Array.isArray(listing.active_promotions) && listing.active_promotions.length > 0;
+    if(!any || searchedStay() || bestActivePromotion(listing)) return '';
+    return 'Offers apply on some dates. Choose your dates to see your price.';
+  }
+
+  // Full sentence for the promotion, shown alongside (not instead of) the
+  // listing's standing-discount sentence — a guest browsing cards should
+  // be able to see both if a listing happens to have each.
+  function formatPromotionOffer(listing){
+    const promo = bestActivePromotion(listing);
+    const rate = Number(listing.nightly_rate || listing.price);
+    if(!promo || !rate) return '';
+    const value = Number(promo.discountValue);
+    let rupees, percent;
+    if(promo.discountType === 'percentage'){
+      percent = value;
+      rupees = Math.round(rate * (value / 100));
+    } else {
+      rupees = value;
+      percent = Math.round((value / rate) * 100);
+    }
+    const minNightsNote = promo.minNights ? ` on stays of ${promo.minNights}+ nights` : '';
+    return `${promo.name}: ${fmtGuest(rupees)} (${percent}%) off${minNightsNote}, through ${promo.endDate}`;
+  }
+
+  // Straight-line ("as the crow flies") distance in km between two
+  // coordinates — the Haversine formula. Deliberately computed client-side
+  // rather than via Google's Distance Matrix API: it's free, instant, and
+  // accurate enough for "X km away" — actual driving distance isn't worth
+  // the extra API cost and latency for this.
+  function haversineDistanceKm(lat1, lon1, lat2, lon2){
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // Populated once the guest grants location access (see the "Near Me"
+  // button below) — null until then, so cards simply omit the distance
+  // line, and the listing order is left alone, rather than showing or
+  // sorting by anything guessed.
+  let guestLocation = null;
+
+  function setNearMeLabel(btn, text){
+    // Only the text node changes — the location-pin <svg> stays put.
+    const svg = btn.querySelector('svg');
+    btn.innerHTML = '';
+    if(svg) btn.appendChild(svg);
+    btn.appendChild(document.createTextNode(' ' + text));
+  }
+
+  // ---- Auto location prompt, once per browser, right after login ----
+  // The manual "Near Me" button below only ever SORTS by distance —
+  // everything stays visible, just reordered. This is different: right
+  // after a guest is confirmed logged in, it asks for location once, and
+  // if granted, actually FILTERS the grid down to what's within 200km,
+  // same radius/mechanism as typing a place into the search bar — not
+  // just a reorder. Gated by a localStorage flag so a returning guest
+  // isn't re-prompted on every single page load, only the first time
+  // this browser sees them logged in.
+  const LOCATION_PROMPTED_KEY = 'aerva_location_prompted';
+
+  async function promptLocationOnceForGuest(){
+    if(safeStorage.get(LOCATION_PROMPTED_KEY)) return;
+    if(!navigator.geolocation){
+      safeStorage.set(LOCATION_PROMPTED_KEY, '1');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      async function(position){
+        safeStorage.set(LOCATION_PROMPTED_KEY, '1');
+        guestLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
+        const nearMeBtn = document.getElementById('showDistanceBtn');
+        if(nearMeBtn) setNearMeLabel(nearMeBtn, 'Showing nearest first');
+
+        // Real 200km filter, not just a sort — same lat/lng/radiusKm
+        // params and the same two endpoints performSearch() already uses,
+        // just fed the device's own coordinates directly instead of
+        // geocoding a typed place name.
+        const container = document.getElementById('suitesContainer');
+        try{
+          const listingsRes = await fetch(SUITES_API_BASE + `/api/get-listings?lat=${guestLocation.lat}&lng=${guestLocation.lng}&radiusKm=200`);
+          if(listingsRes.ok){
+            const listingsData = await listingsRes.json();
+            approvedListings = listingsData.listings || [];
+            listingsById = {};
+            approvedListings.forEach(l => { listingsById[l.id] = l; });
+          }
+        } catch(err){
+          // Non-fatal — whatever was already loaded stays showing.
+        }
+        try{
+          const expRes = await fetch(SUITES_API_BASE + `/api/get-listings?experiences=1&lat=${guestLocation.lat}&lng=${guestLocation.lng}&radiusKm=200`);
+          if(expRes.ok){
+            const expData = await expRes.json();
+            approvedExperiences = expData.experiences || [];
+            experiencesById = {};
+            approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
+            experiencesLoaded = true;
+          }
+        } catch(err){
+          // Non-fatal — same reasoning as above.
+        }
+
+        const statusEl = document.getElementById('searchStatus');
+        if(statusEl){
+          const total = approvedListings.length + approvedExperiences.length;
+          statusEl.textContent = total
+            ? `Showing ${total} result${total === 1 ? '' : 's'} near you.`
+            : 'Nothing within 200km of you yet — showing everything instead.';
+          statusEl.style.display = 'block';
+        }
+        // Nothing at all nearby is more useful shown as "everything" than
+        // an empty grid the guest never asked to be shown — falls back to
+        // a normal unfiltered reload rather than leaving it blank.
+        if(approvedListings.length === 0 && approvedExperiences.length === 0){
+          guestLocation = null;
+          initSite();
+          return;
+        }
+        applyFiltersAndRender();
+      },
+      function(err){
+        // Denied or failed — just remember we asked, so this never nags
+        // a guest who said no (or whose browser/device can't provide it)
+        // on every subsequent page load. Browsing continues completely
+        // normally, unfiltered, same as before this feature existed.
+        safeStorage.set(LOCATION_PROMPTED_KEY, '1');
+      },
+      { timeout: 10000 }
+    );
+  }
+
+  document.getElementById('showDistanceBtn').addEventListener('click', function(){
+    if(!navigator.geolocation){
+      alert('Your browser doesn\'t support location access.');
+      return;
+    }
+    const btn = this;
+    btn.disabled = true;
+    setNearMeLabel(btn, 'Locating…');
+    navigator.geolocation.getCurrentPosition(
+      function(position){
+        guestLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
+        setNearMeLabel(btn, 'Showing nearest first');
+        // A guest who already chose an explicit price sort keeps that
+        // choice — Near Me only takes over ordering when sort is still on
+        // "Recommended" (see applyFiltersAndRender).
+        applyFiltersAndRender();
+      },
+      function(err){
+        btn.disabled = false;
+        setNearMeLabel(btn, 'Near Me');
+        // err.code: 1 = permission denied, 2 = position unavailable
+        // (e.g. no GPS/network signal), 3 = timed out. Distinguishing
+        // these means the message actually points at the real fix
+        // instead of always suggesting a permission check.
+        let message;
+        if(err.code === 1){
+          message = 'Location access was denied. Please allow location for this site in your browser settings, then try again.';
+        } else if(err.code === 2){
+          message = 'Your location couldn\'t be determined right now — this can happen with a weak GPS/network signal. Please try again in a moment.';
+        } else if(err.code === 3){
+          message = 'Getting your location took too long. Please try again.';
+        } else {
+          message = 'Could not access your location. Please check your browser\'s location permission for this site.';
+        }
+        alert(message);
+      },
+      { timeout: 10000 }
+    );
+  });
+
+  // Saved-homes hearts — purely client-side (localStorage), so a guest can
+  // mark favourites without needing an account. Never sent to the server.
+  const FAVORITES_KEY = 'aerva_favorite_listings';
+  function getFavoriteIds(){
+    if(storageOwner === 'anon') return []; // logged out: nothing personal is kept or shown
+    try {
+      return JSON.parse(safeStorage.get(accountKey(FAVORITES_KEY)) || '[]');
+    } catch(err){
+      return [];
+    }
+  }
+  function toggleFavoriteId(listingId, btnEl){
+    // Saving a home is personal, so it needs an account — logged out, the
+    // heart asks you to log in instead of quietly saving on this device.
+    if(storageOwner === 'anon'){ window.location.href = 'guest-login.html'; return; }
+    const id = String(listingId);
+    let favs = getFavoriteIds();
+    const isFav = favs.includes(id);
+    favs = isFav ? favs.filter(f => f !== id) : [...favs, id];
+    safeStorage.set(accountKey(FAVORITES_KEY), JSON.stringify(favs));
+    if(btnEl){
+      btnEl.classList.toggle('is-fav', !isFav);
+      btnEl.setAttribute('aria-pressed', String(!isFav));
+    }
+  }
+
+  // Recent-search history — also purely client-side (localStorage). Every
+  // place a guest actually searches gets remembered, most recent first, so
+  // it can be offered back as a one-tap suggestion the next time they open
+  // the "Where" field with nothing typed yet.
+  const RECENT_SEARCHES_KEY = 'aerva_recent_searches';
+  const MAX_RECENT_SEARCHES = 6;
+  function getRecentSearches(){
+    try {
+      if(storageOwner === 'anon') return [];
+      return JSON.parse(safeStorage.get(accountKey(RECENT_SEARCHES_KEY)) || '[]');
+    } catch(err){
+      return [];
+    }
+  }
+  function saveRecentSearch(text, lat, lng){
+    const trimmed = (text || '').trim();
+    if(!trimmed) return;
+    let list = getRecentSearches().filter(item => item.text.toLowerCase() !== trimmed.toLowerCase());
+    list.unshift({ text: trimmed, lat: lat || '', lng: lng || '' });
+    if(storageOwner !== 'anon') safeStorage.set(accountKey(RECENT_SEARCHES_KEY), JSON.stringify(list.slice(0, MAX_RECENT_SEARCHES)));
+  }
+
+  // ---- Aerva Experience: fetched eagerly alongside listings now (see
+  // initSite), since the combined "All" view needs both immediately —
+  // no longer lazy-loaded only when the Experience filter is opened. ----
+  let approvedExperiences = [];
+  let experiencesById = {};
+  let experiencesLoaded = false;
+  // Suites is what the site opens on: homes are what most guests come
+  // for, and All mixes experiences into that first screen. The other two
+  // tabs are one click away, and ?view=all still opens the combined grid.
+  let currentCategoryFilter = 'suites'; // 'all' | 'suites' | 'experiences'
+
+  async function loadExperiences(){
+    if(experiencesLoaded) return;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?experiences=1');
+      if(!res.ok) throw new Error('Failed to load experiences');
+      const data = await res.json();
+      approvedExperiences = data.experiences || [];
+      experiencesById = {};
+      approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
+      experiencesLoaded = true;
+      applyFiltersAndRender();
+    } catch(err){
+      // Non-fatal — the combined grid still shows suites correctly even
+      // if experiences specifically failed to load; applyFiltersAndRender
+      // just treats approvedExperiences as empty in that case.
+    }
+  }
+
+  // ---- Likes ----
+  // A thumbs-up on every stay and experience card. Likes only, no
+  // dislike: one per account per listing, counted on the server (see
+  // guest-profile.js toggleLike / myLikes and get-listings.js
+  // attachLikeCounts). A thumbs-up rather than a heart, because the heart
+  // on stay cards already means "save this home" on this device.
+  const likedListingIds = new Set();
+  const LIKE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v11H3.5V10z"/><path d="M7 10l4.2-7.5c1.6 0 2.8 1.3 2.8 2.9V9h5.2a2 2 0 0 1 2 2.3l-1.3 7.9A2 2 0 0 1 17.9 21H7"/></svg>';
+
+  function likeButtonHtml(item){
+    const id = String(item.id);
+    const n = Number(item.like_count) || 0;
+    const on = likedListingIds.has(id);
+    return `<button type="button" class="like-btn${on ? ' is-liked' : ''}" data-like-id="${escapeMessageHtml(id)}" aria-pressed="${on}" aria-label="Like">${LIKE_ICON}<span class="like-count">${n > 0 ? n : ''}</span></button>`;
+  }
+
+  // The same listing can be on screen more than once (main grid, Near You,
+  // Recently Viewed), so every copy of its button changes together.
+  function paintLikeButtons(id, liked, count){
+    document.querySelectorAll('.like-btn[data-like-id="' + String(id).replace(/[^0-9]/g, '') + '"]').forEach(b => {
+      b.classList.toggle('is-liked', liked);
+      b.setAttribute('aria-pressed', String(liked));
+      if(count != null) b.querySelector('.like-count').textContent = count > 0 ? count : '';
+    });
+  }
+
+  async function toggleLike(id, btn){
+    const token = guestAuthToken();
+    if(!token){ window.location.href = 'guest-login.html'; return; }
+    id = String(id);
+    const wasLiked = likedListingIds.has(id);
+    const shownCount = Number(btn.querySelector('.like-count').textContent) || 0;
+    // Show the change straight away; the server's answer then sets the
+    // exact count, or puts everything back if it failed.
+    if(wasLiked) likedListingIds.delete(id); else likedListingIds.add(id);
+    paintLikeButtons(id, !wasLiked, Math.max(0, shownCount + (wasLiked ? -1 : 1)));
+    btn.disabled = true;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ mode: 'toggleLike', listingId: Number(id) })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || 'Like failed');
+      if(data.liked) likedListingIds.add(id); else likedListingIds.delete(id);
+      paintLikeButtons(id, !!data.liked, Number(data.likeCount) || 0);
+    } catch(err){
+      console.error('toggleLike failed:', err);
+      if(wasLiked) likedListingIds.add(id); else likedListingIds.delete(id);
+      paintLikeButtons(id, wasLiked, shownCount);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function wireLikeButton(card){
+    const b = card.querySelector('.like-btn');
+    if(!b) return;
+    b.addEventListener('click', function(e){
+      e.preventDefault();
+      e.stopPropagation(); // a like must not also open the listing
+      toggleLike(b.dataset.likeId, b);
+    });
+  }
+
+  // Which listings this account already likes, so their buttons render
+  // filled. Cards drawn before this answers are repainted when it does.
+  (async function loadMyLikes(){
+    const token = guestAuthToken();
+    if(!token) return;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myLikes', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if(!res.ok) return;
+      const data = await res.json();
+      (Array.isArray(data.listingIds) ? data.listingIds : []).forEach(lid => {
+        likedListingIds.add(String(lid));
+        paintLikeButtons(lid, true, null);
+      });
+    } catch(err){ /* buttons simply start unfilled */ }
+  })();
+
+  function buildExperienceCard(exp, index){
+    const initial = (exp.property_name || '?').trim().charAt(0).toUpperCase();
+    const exteriorPhotos = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
+    const interiorPhotos = Array.isArray(exp.interior_photo_urls) ? exp.interior_photo_urls : [];
+    let allPhotos = [...exteriorPhotos, ...interiorPhotos];
+    if(exp.cover_photo_url && allPhotos.includes(exp.cover_photo_url)){
+      allPhotos = [exp.cover_photo_url, ...allPhotos.filter(url => url !== exp.cover_photo_url)];
+    }
+    // Same horizontally-scrollable, dot-indicator carousel the suite
+    // cards already use (see buildSuiteCard) — experiences only ever
+    // showed their single cover photo before, which undersold places
+    // with several good shots.
+    // A broken/expired photo URL previously left the whole card visually
+    // blank (no fallback), which on a background close to the page's own
+    // color made an entire clickable card look like empty space with no
+    // indication anything was there. onerror swaps to the same lettered
+    // placeholder a zero-photo listing already gets, so a card can never
+    // render invisibly again regardless of why a photo failed to load.
+    const imgFallback = `onerror="this.replaceWith(Object.assign(document.createElement('div'), {className:'suite-photo-placeholder', innerHTML:'<span>${initial}</span>'}))"`;
+    let photoHtml;
+    if(allPhotos.length === 0){
+      photoHtml = `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
+    } else if(allPhotos.length === 1){
+      photoHtml = `<img src="${allPhotos[0]}" alt="${exp.property_name}" loading="lazy" ${imgFallback}>`;
+    } else {
+      const slides = allPhotos.map(url => `<img src="${url}" alt="${exp.property_name}" loading="lazy" ${imgFallback}>`).join('');
+      const dots = allPhotos.map(() => '<span></span>').join('');
+      photoHtml = `
+        <div class="suite-photo-slider">${slides}</div>
+        <div class="suite-photo-dots">${dots}</div>
+      `;
+    }
+
+    const priceLine = exp.price
+      ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' <span style="font-size:12px; opacity:0.65;">/ person</span>' : ' <span style="font-size:12px; opacity:0.65;">/ group</span>'}`
+      : 'Price on enquiry';
+    const hostedAtLine = exp.hosting_property_name
+      ? `Hosted at ${exp.hosting_property_name}${exp.hosting_area ? ', ' + exp.hosting_area + ', ' + exp.hosting_city : exp.hosting_city ? ', ' + exp.hosting_city : ''}`
+      // Without-stay experiences have no hosting property to borrow a
+      // location from — they carry their own address instead (see
+      // submit-listing.js), so that's what shows here for those.
+      : (exp.formatted_address || exp.city || '');
+
+    const card = document.createElement('div');
+    card.className = 'suite-card';
+    card.style.transitionDelay = ((index || 0) % 8) * 60 + 'ms';
+    card.dataset.experienceId = exp.id;
+    card.style.cursor = 'pointer';
+    card.innerHTML = `
+      <div class="suite-photo">
+        ${photoHtml}
+        <div class="suite-badges">
+          ${/* No "Experience" or "Stay" type badge on any card: the type is
+                shown once the guest opens the listing. "Includes a Stay" is
+                kept because it is information, not a type label. */''}
+          ${exp.experience_type === 'with_stay'
+            ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>`
+            : ''}
+          ${exp.experience_category ? `<span class="suite-badge">${exp.experience_category}</span>` : ''}
+          ${exp.experience_tier && exp.experience_tier.label
+            ? `<span class="suite-badge prop-badge prop-${escapeMessageHtml(exp.experience_tier.key)}">${escapeMessageHtml(exp.experience_tier.label)}</span>`
+            : ''}
+        </div>
+        ${likeButtonHtml(exp)}
+      </div>
+      <div class="suite-body">
+        <h3>${exp.property_name}</h3>
+        ${hostedAtLine ? `<div class="loc">${hostedAtLine}</div>` : ''}
+        ${ratingHtml(exp)}
+        ${exp.experience_duration_hours ? `<div class="amenity-tags"><span class="amenity-tag">${exp.experience_duration_hours}h</span></div>` : ''}
+        <div class="price">${priceLine}</div>
+      </div>
+    `;
+    wireLikeButton(card);
+    return card;
+  }
+
+  // Host tier badge. Every rung is shown, Rising Host upward: the top two
+  // in their own metals (gold, diamond), the rest in the same stone as the
+  // other card badges. No badge at all means the host has not reached the
+  // first rung yet.
+  //
+  // One feather silhouette for all of them, differing only in fill, so
+  // the set reads as a family rather than three unrelated icons.
+  const FEATHER_PATH = 'M0 -36 C 17 -22, 23 -2, 16 20 C 11 33, 4 39, 0 42 C -4 39, -11 33, -16 20 C -23 -2, -17 -22, 0 -36 Z';
+  const FEATHER_BARBS = 'M0 -24 L12 -10 M0 -14 L15 2 M0 -4 L14 14 M0 8 L10 24 M0 -24 L-12 -10 M0 -14 L-15 2 M0 -4 L-14 14 M0 8 L-10 24';
+  function hostTierBadgeHtml(tier){
+    if(!tier || !tier.label) return '';
+    const dia = tier.icon === 'feather-diamond';
+    const gold = tier.icon === 'feather-gold';
+    const plain = !dia && !gold;
+    // Gradient ids are suffixed per-card: several cards render at once and
+    // duplicate ids would make every feather adopt the first card's fill.
+    const uid = 'ft' + Math.random().toString(36).slice(2, 8);
+    const fill = dia ? `url(#${uid})` : (gold ? `url(#${uid})` : 'none');
+    const stops = dia
+      ? '<stop offset="0" stop-color="#eaf6ff"/><stop offset="0.4" stop-color="#b9d9ec"/><stop offset="0.75" stop-color="#8fb8d4"/><stop offset="1" stop-color="#dff1fb"/>'
+      : '<stop offset="0" stop-color="#f0d27a"/><stop offset="0.45" stop-color="#c9a227"/><stop offset="1" stop-color="#8a6c39"/>';
+    const edge = plain ? '#e8dccb' : (dia ? '#dff1fb' : '#f0d27a');
+    const barb = plain ? '#f4ebe3' : (dia ? '#ffffff' : '#fff3cf');
+    const facets = dia ? `<path d="M0 -36 L16 8 L0 42 L-16 8 Z" fill="none" stroke="#ffffff" stroke-width="1.4" opacity="0.5"/>` : '';
+    return `<span class="host-tier-badge ${plain ? 'tier-stone' : (dia ? 'tier-diamond' : 'tier-gold')}" title="${escapeMessageHtml(tier.label)}">
+      <svg viewBox="-26 -40 52 86" aria-hidden="true">
+        <defs><linearGradient id="${uid}" x1="0" y1="0" x2="${dia ? 1 : 0}" y2="1">${stops}</linearGradient></defs>
+        <path d="${FEATHER_PATH}" fill="${fill}" stroke="${edge}" stroke-width="2"/>
+        <path d="M0 -36 L0 42" stroke="${edge}" stroke-width="1.6" opacity="0.7"/>
+        <path d="${FEATHER_BARBS}" stroke="${barb}" stroke-width="1.3" opacity="0.7" fill="none"/>
+        ${facets}
+      </svg>${escapeMessageHtml(tier.label)}</span>`;
+  }
+
+  // Star rating from published reviews only. A listing with none shows
+  // "New to Aerva" rather than a zero or an empty star row — no reviews is
+  // not a bad score, and rendering it as one would punish every new
+  // listing on the page.
+  function ratingHtml(listing){
+    const n = Number(listing.review_count) || 0;
+    if(!n || listing.rating == null) return '<div class="suite-rating-new">New to Aerva</div>';
+    const r = Number(listing.rating);
+    return `<div class="suite-rating"><span class="suite-star">\u2605</span>${r.toFixed(2)}<span class="suite-rating-count">(${n})</span></div>`;
+  }
+
+  // Property standing. At most two pills: the rung, plus one flag. The
+  // ladder describes how good the place is; the flag says something the
+  // rung cannot (hygiene specifically, or that it is not yet well known).
+  // Capped at two deliberately — this card already carries Stay, New, a
+  // discount flag and a host badge, and the badge tower is what the
+  // restyle removed.
+  // What each highlight means, in the guest's words. Kept here rather
+  // than sent per listing: the wording is fixed and the API only says
+  // which one applies (see _tiers.js PROPERTY_FLAGS).
+  const BADGE_TIPS = {
+    spotless: 'Spotless: rated near-perfect on hygiene by the guests who scored it.',
+    hidden_treasure: 'Hidden Treasure: excellent, and not yet widely discovered.'
+  };
+
+  function propertyBadgeHtml(listing){
+    const out = [];
+    const t = listing.property_tier, f = listing.property_flag;
+    if(t && t.label) out.push(`<span class="suite-badge prop-badge prop-${escapeMessageHtml(t.key)}" title="Property standing: how this home ranks on its reviews.">${escapeMessageHtml(t.label)}</span>`);
+    if(f && f.label) out.push(`<span class="suite-badge prop-flag" title="${escapeMessageHtml(BADGE_TIPS[f.key] || 'Something this home is rated especially well on.')}">${escapeMessageHtml(f.label)}</span>`);
+    return out.join('');
+  }
+
+  // The modal header carries the same standing the card does. Built from
+  // one helper so the two can never disagree — a guest who clicks through
+  // from a card showing Aerva Exceptional must not land on a page that
+  // quietly omits it.
+  //
+  // PROPERTY standing only. The host badge is deliberately absent from
+  // both surfaces: a card already carries Stay, a discount flag, a rating
+  // and up to two property pills, and adding the host feather made five.
+  // The two also answer different questions — the host badge describes
+  // the person, this describes the place — and a guest browsing
+  // properties is choosing a place. hostTierBadgeHtml still exists and is
+  // still fed by get-listings.js, so putting it back is a one-line change
+  // if it belongs somewhere later.
+  // The trust strip under the property name. This is the last thing a
+  // guest reads before the price, so it is built to answer "is this a
+  // safe booking?" rather than to list attributes: the score is the
+  // largest element, the review count sits right under it as the reason
+  // to believe it, and the host is named with a face rather than being
+  // another pill in a row.
+  //
+  // It renders nothing at all when there is nothing to say. An empty
+  // frame with "no reviews yet" would actively discourage a booking,
+  // which is the opposite of the point.
+  // ---- Host's public profile ----
+  // A full white window over everything, opened from "Hosted by" on any
+  // listing. Shows only what the host chose to share and reviews of their
+  // homes (see ?hostProfile in get-listings.js); contact details never.
+  function formatReviewMonth(ym){
+    const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ''));
+    if(!m) return '';
+    return new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+  }
+
+  function closeHostProfile(){
+    const ov = document.getElementById('hostProfileOverlay');
+    if(ov) ov.classList.remove('is-open');
+    document.body.classList.remove('hp-open');
+    document.removeEventListener('keydown', hostProfileEscape);
+  }
+  function hostProfileEscape(e){ if(e.key === 'Escape') closeHostProfile(); }
+
+  function hostReviewItemHtml(r){
+    const esc = escapeMessageHtml;
+    return `
+      <div class="hp-review">
+        <div class="hp-review-head">
+          <span class="hp-review-prop">${esc(r.property || '')}</span>
+          <span class="hp-review-meta">${r.score ? '★ ' + Number(r.score).toFixed(1) : ''}${r.score && r.month ? ' · ' : ''}${esc(formatReviewMonth(r.month))}</span>
+        </div>
+        ${r.comment ? `<p>${esc(r.comment)}</p>` : ''}
+      </div>`;
+  }
+
+  // "Show more reviews": the same batches as a listing's reviews —
+  // 5 to start, then 15, then 20, then 100 at a time.
+  function wireHostReviewPaging(body, listingId, shown){
+    const btn = body.querySelector('.hp-more');
+    const list = body.querySelector('.hp-review-list');
+    if(!btn || !list) return;
+    let offset = shown;
+    let step = 1;
+    btn.addEventListener('click', async () => {
+      const limit = REVIEW_PAGE_STEPS[step] || REVIEW_PAGE_REST;
+      btn.disabled = true;
+      btn.textContent = 'Loading\u2026';
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId)
+          + '&reviewsOnly=1&offset=' + offset + '&limit=' + limit, { headers: { 'Authorization': 'Bearer ' + (guestAuthToken() || '') } });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || 'Failed');
+        const batch = Array.isArray(data.reviews) ? data.reviews : [];
+        list.insertAdjacentHTML('beforeend', batch.map(hostReviewItemHtml).join(''));
+        offset += batch.length;
+        step++;
+        if(data.hasMoreReviews && batch.length){
+          btn.disabled = false;
+          btn.textContent = 'Show more reviews';
+        } else {
+          btn.remove();
+        }
+      }catch(err){
+        btn.disabled = false;
+        btn.textContent = 'Could not load more \u2014 try again';
+      }
+    });
+  }
+
+  // Small listing cards (host profile, and your own profile). Clicking one
+  // opens that listing — see the [data-hp-open] listener.
+  function listingMiniCardsHtml(list){
+    const esc = escapeMessageHtml;
+    return (list || []).map(l => {
+      const isExp = l.type === 'experience';
+      const href = isExp ? `index.html?experience=${Number(l.id)}` : `index.html?listing=${Number(l.id)}`;
+      const unit = isExp ? (l.priceUnit ? ` / ${esc(String(l.priceUnit).replace(/^per_?/, ''))}` : '') : '/night';
+      const price = l.price ? `${isExp ? '' : 'From '}${fmtGuest(Number(l.price))}${unit}` : '';
+      return `
+        <a class="hp-listing" href="${href}" data-hp-open="${isExp ? 'experience' : 'stay'}" data-hp-id="${Number(l.id)}">
+          ${l.photoUrl ? `<img src="${esc(l.photoUrl)}" alt="" loading="lazy">` : '<span class="hp-listing-ph"></span>'}
+          <span class="hp-listing-body">
+            <span class="hp-listing-type">${isExp ? 'Experience' : esc(l.propertyType || 'Stay')}</span>
+            <span class="hp-listing-name">${esc(l.name)}</span>
+            ${l.place ? `<span class="hp-listing-place">${esc(l.place)}</span>` : ''}
+            ${price ? `<span class="hp-listing-price">${price}</span>` : ''}
+          </span>
+        </a>`;
+    }).join('');
+  }
+
+  function renderHostProfile(p, badgeHtml){
+    const esc = escapeMessageHtml;
+    const initial = esc((p.name || '?').trim().charAt(0).toUpperCase());
+    const photo = p.photoUrl
+      ? `<img class="hp-photo" src="${esc(p.photoUrl)}" alt="">`
+      : `<span class="hp-photo hp-initial">${initial}</span>`;
+    const facts = [
+      p.work ? `<div class="hp-fact"><span class="hp-fact-label">Work</span><span>${esc(p.work)}</span></div>` : '',
+      p.hobbies ? `<div class="hp-fact"><span class="hp-fact-label">Hobbies</span><span>${esc(p.hobbies)}</span></div>` : ''
+    ].join('');
+    const answers = (p.answers || []).map(a =>
+      `<div class="hp-answer"><div class="hp-q">${esc(a.label)}</div><p>${esc(a.answer)}</p></div>`).join('');
+    const cities = (p.hostingIn || []).map(c => `<span class="hp-chip">${esc(c.city)}</span>`).join('');
+    // What this host runs: small cards that open the listing itself.
+    const listingCards = listingMiniCardsHtml(p.listings);
+    const reviews = (p.reviews || []).map(hostReviewItemHtml).join('');
+    // Overall rating across ALL of this host's published stay reviews.
+    const rating = p.rating && p.rating.count > 0 ? p.rating : null;
+    const ratingHtml = rating ? `
+      <div class="hp-rating">
+        <span class="hp-rating-score">${Number(rating.score).toFixed(2)}</span>
+        <span class="hp-rating-stars" aria-hidden="true">${[1,2,3,4,5].map(i => `<span class="${i <= Math.round(rating.score) ? 'on' : ''}">★</span>`).join('')}</span>
+        <span class="hp-rating-count">${rating.count} review${rating.count === 1 ? '' : 's'}</span>
+      </div>` : '';
+    const nothingMore = !facts && !answers && !cities && !reviews;
+    return `
+      <div class="hp-head">
+        ${photo}
+        <div>
+          <div class="hp-eyebrow">Your host</div>
+          <h2 class="hp-name">${esc(p.name)}</h2>
+          <div class="hp-meta">Host${p.memberSince ? ' · on Aerva since ' + esc(p.memberSince) : ''}</div>
+          ${badgeHtml ? `<div class="hp-badge">${badgeHtml}</div>` : ''}
+          ${ratingHtml}
+        </div>
+      </div>
+      ${facts ? `<div class="hp-section"><div class="hp-facts">${facts}</div></div>` : ''}
+      ${answers ? `<div class="hp-section"><h3 class="hp-title">Get to know ${esc((p.name || '').split(' ')[0] || 'them')}</h3>${answers}</div>` : ''}
+      ${listingCards ? `<div class="hp-section"><h3 class="hp-title">${esc((p.name || '').split(' ')[0] || 'Their')}\u2019s homes & experiences</h3><div class="hp-listings">${listingCards}</div></div>` : ''}
+      ${cities ? `<div class="hp-section"><h3 class="hp-title">Hosting in</h3><div class="hp-chips">${cities}</div></div>` : ''}
+      ${reviews ? `<div class="hp-section"><h3 class="hp-title">What guests say about their homes</h3>
+        <div class="hp-review-list">${reviews}</div>
+        ${p.hasMoreReviews ? '<button type="button" class="hp-more">Show more reviews</button>' : ''}
+      </div>` : ''}
+      ${p.partial
+        ? '<p class="hp-empty">The rest of this profile could not be loaded just now. Please try again in a moment.</p>'
+        : (nothingMore ? '<p class="hp-empty">This host hasn\u2019t added more to their profile yet.</p>' : '')}`;
+  }
+
+  async function openHostProfile(listingId, badgeHtml, knownName){
+    let ov = document.getElementById('hostProfileOverlay');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'hostProfileOverlay';
+      ov.className = 'hp-overlay';
+      ov.setAttribute('role', 'dialog');
+      ov.setAttribute('aria-modal', 'true');
+      ov.setAttribute('aria-label', 'Host profile');
+      document.body.appendChild(ov);
+    }
+    ov.innerHTML = '<button type="button" class="hp-close" aria-label="Close">\u00d7</button><div class="hp-body"><p class="hp-empty">Loading profile\u2026</p></div>';
+    ov.querySelector('.hp-close').addEventListener('click', closeHostProfile);
+    ov.classList.add('is-open');
+    ov.scrollTop = 0;
+    document.body.classList.add('hp-open');
+    document.addEventListener('keydown', hostProfileEscape);
+    const body = ov.querySelector('.hp-body');
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?hostProfile=' + encodeURIComponent(listingId) + '&limit=' + REVIEW_PAGE_STEPS[0], { headers: { 'Authorization': 'Bearer ' + (guestAuthToken() || '') } });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || !data.profile) throw new Error(data.error || 'Could not load this profile right now.');
+      body.innerHTML = renderHostProfile(data.profile, badgeHtml);
+      wireHostReviewPaging(body, listingId, (data.profile.reviews || []).length);
+    }catch(err){
+      // Never a dead end: if the full profile cannot be fetched (the
+      // server is mid-deploy, a network blip, an older backend), show the
+      // host as the listing already knows them — name and badge — rather
+      // than an error message.
+      console.error('Host profile could not be loaded:', err);
+      body.innerHTML = renderHostProfile({ name: knownName || 'Your host', answers: [], hostingIn: [], reviews: [], partial: true }, badgeHtml);
+    }
+  }
+
+  // A listing card inside a host profile: open it right here if the page
+  // already has it loaded, otherwise follow its link (?listing= / ?experience=).
+  document.addEventListener('click', function(e){
+    const card = e.target.closest && e.target.closest('[data-hp-open]');
+    if(!card) return;
+    const id = Number(card.getAttribute('data-hp-id'));
+    const isExp = card.getAttribute('data-hp-open') === 'experience';
+    const loaded = isExp ? experiencesById[id] : listingsById[id];
+    if(!loaded) return; // the href takes over
+    e.preventDefault();
+    closeHostProfile();
+    if(isExp) openExperienceDetail(id); else openListingDetail(id);
+  });
+
+  // One listener for every "Hosted by" button, wherever the listing is shown.
+  document.addEventListener('click', function(e){
+    const btn = e.target.closest && e.target.closest('[data-host-profile]');
+    if(btn && !guestAuthToken()) return; // logged out: not clickable
+    if(!btn) return;
+    e.preventDefault();
+    const badges = btn.querySelector('.ts-host-badges');
+    let badgeHtml = '';
+    if(badges){
+      const copy = badges.cloneNode(true);
+      copy.querySelectorAll('.ts-host-view').forEach(v => v.remove());
+      badgeHtml = copy.innerHTML;
+    }
+    const nameEl = btn.querySelector('.ts-host-name');
+    openHostProfile(btn.getAttribute('data-host-profile'), badgeHtml, nameEl ? nameEl.textContent.trim() : '');
+  });
+
+  // ---- Co-hosting (index.html?view=cohost) ----
+  // One full white window, like a host profile: accept or decline an
+  // invitation (the link in the invitation email carries &invite=…), and
+  // see the hosts you co-host for, with a button to start working on each
+  // one's listings. Choosing a host remembers it on this device
+  // (aerva-cohost.js), and every host page then works for that host.
+  const PENDING_INVITE_KEY = 'aerva_pending_cohost_invite';
+  function pendingInvite(){ try{ return localStorage.getItem(PENDING_INVITE_KEY); }catch(e){ return null; } }
+  function setPendingInvite(v){ try{ v ? localStorage.setItem(PENDING_INVITE_KEY, v) : localStorage.removeItem(PENDING_INVITE_KEY); }catch(e){} }
+
+  async function openCohostCenter(){
+    const token = guestAuthToken();
+    const invite = new URLSearchParams(window.location.search).get('invite') || pendingInvite();
+    if(!token){
+      // Sign in (or sign up) first, then come back here.
+      if(invite) setPendingInvite(invite);
+      window.location.href = 'guest-login.html';
+      return;
+    }
+    let ov = document.getElementById('cohostCenter');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'cohostCenter';
+      ov.className = 'hp-overlay';
+      ov.setAttribute('role', 'dialog');
+      ov.setAttribute('aria-modal', 'true');
+      ov.setAttribute('aria-label', 'Co-hosting');
+      document.body.appendChild(ov);
+    }
+    ov.innerHTML = '<button type="button" class="hp-close" aria-label="Close">\u00d7</button><div class="hp-body"><p class="hp-empty">Loading\u2026</p></div>';
+    ov.querySelector('.hp-close').addEventListener('click', () => { ov.classList.remove('is-open'); document.body.classList.remove('hp-open'); });
+    ov.classList.add('is-open');
+    document.body.classList.add('hp-open');
+    const body = ov.querySelector('.hp-body');
+    const esc = escapeMessageHtml;
+    const call = (method, payload, query) => fetch(SUITES_API_BASE + '/api/host-listings' + (query || ''), {
+      method, headers: Object.assign({ 'Authorization': 'Bearer ' + token }, payload ? { 'Content-Type': 'application/json' } : {}),
+      body: payload ? JSON.stringify(payload) : undefined
+    }).then(async r => ({ ok: r.ok, data: await r.json().catch(() => ({})) }));
+
+    async function render(notice){
+      const mine = await call('GET', null, '?myCohosting=1');
+      const list = (mine.ok && mine.data.cohosting) || [];
+      const labels = (mine.data && mine.data.permissionLabels) || [];
+      const current = window.AervaCohost && window.AervaCohost.get();
+      const pending = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      const always = (mine.data && mine.data.alwaysLabel) || '';
+      const accessText = (h) => h.access === 'full'
+        ? 'Full access (everything except renaming, account settings, payouts and bank details)'
+        : ['Limited: ' + always].concat(labels.filter(l => h.permissions.includes(l.key)).map(l => l.label)).join(' \u00b7 ');
+      // Their share of the host's payout: what is approved, what is waiting.
+      const commissionText = (h) => {
+        const bits = [];
+        if(h.commissionPercent != null) bits.push(`You earn ${h.commissionPercent}% of the host\u2019s payout`);
+        if(h.proposalStatus === 'proposed') bits.push(`${h.proposedPercent}% proposed \u2014 waiting for the host`);
+        if(h.proposalStatus === 'declined') bits.push(`Your ${h.proposedPercent}% proposal was declined`);
+        return bits.length ? bits.join(' \u00b7 ') : 'No commission agreed yet';
+      };
+      const earnings = (mine.data && mine.data.earnings) || { total: 0, rows: [] };
+      // Where they are paid: PAN, optional GSTIN, bank account (masked).
+      const payoutRes = list.length ? await call('GET', null, '?myPayoutProfile=1') : { ok: false, data: {} };
+      const payout = (payoutRes.ok && payoutRes.data.profile) || null;
+      const payoutStatus = !payout ? 'Add your payout details to be paid your share.'
+        : payout.status === 'approved' ? 'Approved \u2014 your shares are paid to this account.'
+        : payout.status === 'rejected' ? `Not approved: ${payout.rejectionReason || 'please check and resubmit.'}`
+        : 'Waiting for Aerva to check these. Your shares are held until they are approved.';
+      body.innerHTML = `
+        <div class="hp-eyebrow">Co-hosting</div>
+        <h2 class="hp-name">Hosts you help</h2>
+        ${notice ? `<p class="cohost-notice">${esc(notice)}</p>` : ''}
+        ${pending ? `
+          <div class="hp-section">
+            <h3 class="hp-title">You have an invitation</h3>
+            <p class="hp-meta">A host has invited you to co-host their listings on Aerva.</p>
+            <div class="cohost-actions">
+              <button type="button" class="hp-more cohost-primary" data-cohost-accept>Accept invitation</button>
+              <button type="button" class="hp-more" data-cohost-decline>Decline</button>
+            </div>
+          </div>` : ''}
+        <div class="hp-section">
+          ${list.length ? list.map(h => `
+            <div class="cohost-row">
+              <div>
+                <div class="cohost-host">${esc(h.hostName)}</div>
+                <div class="hp-meta">${esc(accessText(h))} \u00b7 ${h.listingCount} listing${h.listingCount === 1 ? '' : 's'}</div>
+                <div class="hp-meta cohost-commission">${esc(commissionText(h))}</div>
+                <div class="cohost-propose">
+                  <input type="number" min="0.01" max="100" step="0.01" placeholder="%" aria-label="Your share of the host's payout, in percent" data-cohost-pct="${Number(h.hostId)}">
+                  <button type="button" class="hp-more" data-cohost-propose="${Number(h.hostId)}">Propose my share</button>
+                </div>
+              </div>
+              <div class="cohost-actions">
+                ${current && Number(current.hostId) === Number(h.hostId)
+                  ? '<span class="cohost-on">Working now</span>'
+                  : `<button type="button" class="hp-more cohost-primary" data-cohost-open="${Number(h.hostId)}">Open their listings</button>`}
+                <button type="button" class="hp-more" data-cohost-leave="${Number(h.hostId)}">Leave</button>
+              </div>
+            </div>`).join('') : `<p class="hp-empty">You don\u2019t co-host for anyone yet. When a host invites you, the invitation arrives by email.</p>`}
+        </div>
+        ${list.length ? `
+          <div class="hp-section">
+            <h3 class="hp-title">What you have earned</h3>
+            <div class="hp-rating"><span class="hp-rating-score">${fmtGuest(Number(earnings.total) || 0)}</span><span class="hp-rating-count">from paid bookings</span></div>
+            ${(earnings.rows || []).length ? (earnings.rows || []).map(r => `
+              <div class="hp-review">
+                <div class="hp-review-head">
+                  <span class="hp-review-prop">${esc(r.listingName)} \u00b7 ${esc(r.hostName)}</span>
+                  <span class="hp-review-meta">${r.status === 'paid' ? '' : esc(r.status) + ' \u00b7 '}${r.percent}% \u00b7 ${fmtGuest(Number(r.amount) || 0)}</span>
+                </div>
+              </div>`).join('') : '<p class="hp-empty">Nothing yet \u2014 your share is worked out on each booking once your commission is approved.</p>'}
+          </div>` : ''}
+        ${list.length ? `
+          <div class="hp-section">
+            <h3 class="hp-title">Payout details</h3>
+            <p class="hp-meta cohost-commission">${esc(payoutStatus)}</p>
+            ${payout ? `<p class="hp-meta">${payout.panMasked ? 'PAN ' + esc(payout.panMasked) : 'PAN on file'}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
+            <div class="cohost-payout-form">
+              <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCDE1234F" autocomplete="off"></label>
+              <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCDE1234F1Z5" autocomplete="off"></label>
+              <label>Account holder name<input type="text" data-po="holder" maxlength="120" placeholder="As on your bank account"></label>
+              <label>Account number<input type="text" data-po="account" inputmode="numeric" maxlength="18" autocomplete="off"></label>
+              <label>IFSC<input type="text" data-po="ifsc" maxlength="11" placeholder="HDFC0001234" autocomplete="off"></label>
+            </div>
+            <button type="button" class="hp-more cohost-primary" data-po-save>${payout ? 'Update payout details' : 'Save payout details'}</button>
+            <p class="hp-meta" style="margin-top:8px;">Any change is checked again before your next payout.</p>
+          </div>` : ''}
+        ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
+
+      const inviteNow = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      const accept = body.querySelector('[data-cohost-accept]');
+      if(accept) accept.addEventListener('click', async () => {
+        accept.disabled = true;
+        const r = await call('POST', { acceptCohostInvite: { token: inviteNow } });
+        setPendingInvite(null);
+        history.replaceState(null, '', 'index.html?view=cohost');
+        render(r.ok ? `You are now a co-host for ${r.data.hostName}.` : (r.data.error || 'Could not accept the invitation.'));
+      });
+      const decline = body.querySelector('[data-cohost-decline]');
+      if(decline) decline.addEventListener('click', async () => {
+        const r = await call('POST', { declineCohostInvite: { token: inviteNow } });
+        setPendingInvite(null);
+        history.replaceState(null, '', 'index.html?view=cohost');
+        render(r.ok ? 'Invitation declined.' : (r.data.error || 'Could not decline the invitation.'));
+      });
+      body.querySelectorAll('[data-cohost-open]').forEach(b => b.addEventListener('click', () => {
+        const h = list.find(x => Number(x.hostId) === Number(b.getAttribute('data-cohost-open')));
+        if(!h) return;
+        window.AervaCohost.start({ hostId: h.hostId, hostName: h.hostName, access: h.access, permissions: h.permissions });
+        window.location.href = h.access === 'full' || h.permissions.includes('bookings') ? 'host-dashboard.html'
+          : (h.permissions.includes('calendar') ? 'host-status.html'
+          : (h.permissions.includes('analytics') ? 'host-earnings.html' : 'index.html?view=messages'));
+      }));
+      body.querySelectorAll('[data-cohost-leave]').forEach(b => b.addEventListener('click', async () => {
+        if(!confirm('Stop co-hosting for this host? They would need to invite you again.')) return;
+        const hostId = Number(b.getAttribute('data-cohost-leave'));
+        await call('POST', { leaveCohost: { hostId } });
+        const cur = window.AervaCohost.get();
+        if(cur && Number(cur.hostId) === hostId) window.AervaCohost.stop();
+        render('You have left.');
+      }));
+      body.querySelectorAll('[data-cohost-propose]').forEach(b => b.addEventListener('click', async () => {
+        const hostId = Number(b.getAttribute('data-cohost-propose'));
+        const pct = Number(body.querySelector(`[data-cohost-pct="${hostId}"]`).value);
+        const r = await call('POST', { proposeCommission: { hostId, percent: pct } });
+        render(r.ok ? `Proposed ${pct}% \u2014 the host will approve or decline it.` : (r.data.error || 'Could not send the proposal.'));
+      }));
+      const poSave = body.querySelector('[data-po-save]');
+      if(poSave) poSave.addEventListener('click', async () => {
+        const v = (k) => (body.querySelector(`[data-po="${k}"]`) || {}).value || '';
+        poSave.disabled = true;
+        const r = await call('POST', { savePayoutProfile: { pan: v('pan'), gstin: v('gstin'), accountHolderName: v('holder'), accountNumber: v('account'), ifsc: v('ifsc') } });
+        poSave.disabled = false;
+        render(r.ok ? 'Payout details saved \u2014 Aerva will check them before your next payout.' : (r.data.error || 'Could not save your payout details.'));
+      });
+      const stop = body.querySelector('[data-cohost-stop]');
+      if(stop) stop.addEventListener('click', () => { window.AervaCohost.stop(); window.location.href = 'index.html?view=cohost'; });
+    }
+    render();
+  }
+
+  function listingStandingHtml(listing, opts){
+    const n = Number(listing.review_count) || 0;
+    const rated = n > 0 && listing.rating != null;
+    // Stays carry property_tier, experiences carry experience_tier. One
+    // helper serves both surfaces, so it accepts either rather than the
+    // experience modal silently rendering a strip with no badge in it.
+    const tierSrc = listing.property_tier || listing.experience_tier;
+    const tier = tierSrc && tierSrc.label ? tierSrc : null;
+    const flag = listing.property_flag && listing.property_flag.label ? listing.property_flag : null;
+    const host = listing.host_tier && listing.host_tier.label ? listing.host_tier : null;
+    const hostName = String(listing.host_name || '').trim();
+    // The name and address fill the middle of the strip, which otherwise
+    // sat empty on most listings. The saved address where the host set
+    // one, the area and city where they did not — never coordinates.
+    const placeName = String(listing.property_name || '').trim();
+    const addressText = String(listing.formatted_address || '').trim() || formatCityArea(listing);
+    // Stay / Experience and the property type (or an experience's category
+    // and duration) used to sit in a heading above this strip, repeating
+    // the name and address it already carries.
+    const o = opts || {};
+    const placeAddress = [addressText, o.subtitle].filter(Boolean).join(' · ');
+    if(!rated && !tier && !flag && !host && !hostName && !placeName) return '';
+
+    const stars = rated
+      ? [1,2,3,4,5].map(i => `<span class="ts-star${Number(listing.rating) >= i - 0.25 ? ' on' : ''}">\u2605</span>`).join('')
+      : '';
+
+    const scoreBlock = rated ? `
+      <div class="ts-score">
+        <div class="ts-score-num">${Number(listing.rating).toFixed(2)}</div>
+        <div class="ts-score-stars">${stars}</div>
+        <div class="ts-score-count">${n} review${n === 1 ? '' : 's'}</div>
+      </div>` : '';
+
+    const badges = [];
+    if(o.type === 'experience'){
+      badges.push('<span class="ts-badge ts-badge-type ts-badge-type-experience">Experience</span>');
+      if(o.withStay) badges.push('<span class="ts-badge ts-badge-type ts-badge-type-stay">Includes a Stay</span>');
+    } else if(o.type === 'stay'){
+      badges.push('<span class="ts-badge ts-badge-type ts-badge-type-stay">Stay</span>');
+    }
+    if(tier) badges.push(`<span class="ts-badge ts-badge-tier prop-${escapeMessageHtml(tier.key)}" title="Property standing: how this home ranks on its reviews.">${escapeMessageHtml(tier.label)}</span>`);
+    if(flag) badges.push(`<span class="ts-badge ts-badge-flag" title="${escapeMessageHtml(BADGE_TIPS[flag.key] || 'Something this home is rated especially well on.')}">${escapeMessageHtml(flag.label)}</span>`);
+    // Captioned so the three kinds of badge can never be read as one set:
+    // what the PROPERTY earned sits here, what the HOST earned sits beside
+    // their name under "Hosted by".
+    const badgeBlock = badges.length
+      ? `<div class="ts-badge-group"><span class="ts-badge-caption">This property</span><div class="ts-badges">${badges.join('')}</div></div>`
+      : '';
+    const placeBlock = placeName || placeAddress ? `
+      <div class="ts-place">
+        ${placeName ? `<div class="ts-place-name">${escapeMessageHtml(placeName)}</div>` : ''}
+        ${placeAddress ? `<div class="ts-place-address">${escapeMessageHtml(placeAddress)}</div>` : ''}
+      </div>` : '';
+
+    // The initial stands in for a photo. A named person with a mark
+    // reads as accountable in a way "Hosted by X" as plain text does not.
+    const initial = hostName ? escapeMessageHtml(hostName.trim().charAt(0).toUpperCase()) : '';
+    // Tapping the host opens their public profile (openHostProfile below).
+    // It is looked up through this listing, so it only needs its id.
+    // Host profiles are for signed-in users: logged out, "Hosted by" is plain
+    // text — no button, no "View profile".
+    const profileId = !guestAuthToken() ? null : (Number(listing.id) || 0);
+    const hostInner = `
+        ${initial ? `<span class="ts-host-avatar">${initial}</span>` : ''}
+        <span class="ts-host-text">
+          ${hostName ? `<span class="ts-host-label">Hosted by</span><span class="ts-host-name">${escapeMessageHtml(hostName)}</span>` : ''}
+          ${(host || profileId) ? `<span class="ts-host-badges">${host ? hostTierBadgeHtml(host) : ''}${profileId ? '<span class="ts-host-view">View profile</span>' : ''}</span>` : ''}
+        </span>`;
+    const hostBlock = (host || hostName)
+      ? (profileId
+          ? `<button type="button" class="ts-host ts-host-link" data-host-profile="${profileId}" aria-label="View host profile">${hostInner}</button>`
+          : `<div class="ts-host">${hostInner}</div>`)
+      : '';
+
+    const middle = placeBlock + badgeBlock;
+    return `<div class="trust-strip">
+      ${scoreBlock}
+      ${middle ? `<div class="ts-mid">${middle}</div>` : '<div class="ts-mid"></div>'}
+      ${hostBlock}
+    </div>`;
+  }
+
+  function buildSuiteCard(listing, index){
+    const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
+    const offerLine = formatOffer(listing);
+    const promoOfferLine = formatPromotionOffer(listing);
+    const priceLine = listing.nightly_rate
+      ? `From <strong>${fmtGuest(Number(listing.nightly_rate))}</strong>/night`
+      : 'Rate on enquiry';
+
+    // "New" badge — driven entirely by the listing's real created_at date,
+    // never fabricated. A home counts as new for its first 14 days live.
+    const NEW_LISTING_DAYS = 14;
+    let isNew = false;
+    if(listing.created_at){
+      const ageMs = Date.now() - new Date(listing.created_at).getTime();
+      isNew = ageMs >= 0 && ageMs <= NEW_LISTING_DAYS * 24 * 60 * 60 * 1000;
+    }
+
+    // Short badge form of the same discount used in offerLine below — the
+    // full sentence (with the min-nights condition) still shows under the
+    // price; this is just the attention-grabbing version on the photo.
+    // Same dual-unit conversion as formatOffer(), just condensed to fit a badge.
+    let discountBadge = '';
+    if(listing.discount_type && listing.discount_value && listing.nightly_rate){
+      const rate = Number(listing.nightly_rate);
+      const value = Number(listing.discount_value);
+      const baselineNights = listing.discount_min_nights ? Number(listing.discount_min_nights) : 1;
+      const baselineTotal = rate * baselineNights;
+      if(baselineTotal){
+        if(listing.discount_type === 'percentage'){
+          const rupees = Math.round(baselineTotal * (value / 100));
+          discountBadge = `${value}% off`;
+        } else if(listing.discount_type === 'flat'){
+          const percent = Math.round((value / baselineTotal) * 100);
+          discountBadge = `${fmtGuest(value)} off`;
+        }
+      }
+    }
+    // A named, date-scoped promotion (see manage-listing.html) always
+    // takes over the discount badge when one is active — it's more
+    // specific and time-limited than the listing's standing discount, so
+    // it's the more useful thing to lead with, even on the rare occasion
+    // it happens to be numerically smaller. The listing's full offer
+    // sentence below the price still mentions the standing discount too.
+    const promoBadgeText = formatPromotionBadge(listing);
+    if(promoBadgeText) discountBadge = promoBadgeText;
+
+    // Show a handful of amenities directly on the card — enough for a guest
+    // to gauge what's included at a glance, without listing all of them
+    // (which could be two dozen) and crowding the card.
+    const amenitiesList = Array.isArray(listing.amenities) ? listing.amenities : [];
+    const AMENITIES_PREVIEW_COUNT = 4;
+    let amenitiesHtml = '';
+    if(amenitiesList.length > 0){
+      const shown = amenitiesList.slice(0, AMENITIES_PREVIEW_COUNT);
+      const remaining = amenitiesList.length - shown.length;
+      const tags = shown.map(a => `<span class="amenity-tag">${a}</span>`).join('');
+      const moreTag = remaining > 0 ? `<span class="amenity-tag amenity-tag-more">+${remaining} more</span>` : '';
+      amenitiesHtml = `<div class="amenity-tags">${tags}${moreTag}</div>`;
+    }
+
+    // The host's explicit cover choice leads if one was set; otherwise
+    // interior photos lead by default. Either way, the rest follow with
+    // no duplicates.
+    const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
+    const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
+    let allPhotos = [...interiorPhotos, ...exteriorPhotos];
+    if(listing.cover_photo_url && allPhotos.includes(listing.cover_photo_url)){
+      allPhotos = [listing.cover_photo_url, ...allPhotos.filter(url => url !== listing.cover_photo_url)];
+    }
+
+    // Same fallback as buildExperienceCard above — a broken/expired photo
+    // URL swaps to the lettered placeholder instead of leaving the card
+    // visually blank.
+    const imgFallback = `onerror="this.replaceWith(Object.assign(document.createElement('div'), {className:'suite-photo-placeholder', innerHTML:'<span>${initial}</span>'}))"`;
+    let photoHtml;
+    if(allPhotos.length === 0){
+      photoHtml = `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
+    } else if(allPhotos.length === 1){
+      photoHtml = `<img src="${allPhotos[0]}" alt="${listing.property_name}" loading="lazy" ${imgFallback}>`;
+    } else {
+      const slides = allPhotos.map(url => `<img src="${url}" alt="${listing.property_name}" loading="lazy" ${imgFallback}>`).join('');
+      const dots = allPhotos.map(() => '<span></span>').join('');
+      photoHtml = `
+        <div class="suite-photo-slider">${slides}</div>
+        <div class="suite-photo-dots">${dots}</div>
+      `;
+    }
+
+    const card = document.createElement('div');
+    // Distance only shows once the guest has granted location access (see
+    // the "Show distance from me" button) and the listing actually has
+    // coordinates saved — silently omitted otherwise, never a guess.
+    let distanceHtml = '';
+    if(guestLocation && listing.latitude && listing.longitude){
+      const km = haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(listing.latitude), Number(listing.longitude));
+      distanceHtml = `<span>${km < 1 ? 'Less than 1 km' : Math.round(km) + ' km'} from you</span>`;
+    }
+    const mapLinkHtml = (listing.latitude && listing.longitude)
+      ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="suite-map-link">View on map</a>`
+      : '';
+
+    // Pet policy line — only shown when the host has actually set one via
+    // the dedicated Pet Policy section, never inferred from amenities.
+    let petPolicyHtml = '';
+    if(listing.pet_friendly === true){
+      const petTypes = Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length
+        ? listing.allowed_pet_types.join(' & ') + ' welcome'
+        : 'Pet-friendly';
+      const petFeeNote = listing.pet_fee && Number(listing.pet_fee) > 0
+        ? ` · ₹${Number(listing.pet_fee).toLocaleString('en-IN')}/pet`
+        : ' · No pet fee';
+      petPolicyHtml = `<div class="amenity-tags"><span class="amenity-tag">${petTypes}${petFeeNote}</span></div>`;
+    }
+
+    // Capacity/room availability reads as quiet metadata next to the
+    // location, not as a fourth badge stacked down the photo. Four
+    // stacked overlays covered most of the image and made the one badge
+    // that genuinely matters — an active discount — compete with three
+    // pieces of plain information.
+    const capacityText = (listing.property_type === 'Resort' && listing.resort_room_count)
+      ? `${listing.resort_available_room_count || 0} of ${listing.resort_room_count} rooms · sleeps ${listing.resort_available_capacity || listing.resort_total_capacity || 0}`
+      : (Number(listing.max_guests) > 0 ? `Sleeps up to ${Number(listing.max_guests)}` : '');
+
+    card.className = 'suite-card';
+    card.style.transitionDelay = ((index || 0) % 8) * 60 + 'ms';
+    card.dataset.listingId = listing.id;
+    card.style.cursor = 'pointer';
+    const isFav = getFavoriteIds().includes(String(listing.id));
+    card.innerHTML = `
+      <div class="suite-photo">
+        ${photoHtml}
+        <div class="suite-badges">
+          ${isNew ? '<span class="suite-badge">New</span>' : ''}
+          ${discountBadge ? `<span class="suite-badge suite-badge-discount">${discountBadge}</span>` : ''}
+          ${propertyBadgeHtml(listing)}
+        </div>
+        <button type="button" class="fav-heart${isFav ? ' is-fav' : ''}" data-fav-id="${listing.id}" aria-label="Save this home" aria-pressed="${isFav}">
+          <svg viewBox="0 0 24 24"><path d="M12 21s-7.2-4.6-9.8-8.8C.6 8.8 1.8 5 5.2 4c2-.6 3.9.1 5.1 1.7l1.7 2.2 1.7-2.2C15 4.1 16.9 3.4 18.8 4c3.4 1 4.6 4.8 3 8.2C19.2 16.4 12 21 12 21z"/></svg>
+        </button>
+        ${likeButtonHtml(listing)}
+      </div>
+      <div class="suite-body">
+        <h3>${listing.property_name}</h3>
+        <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        ${ratingHtml(listing)}
+        <div class="suite-meta">
+          ${capacityText ? `<span>${capacityText}</span>` : ''}
+          ${distanceHtml}
+          ${mapLinkHtml}
+        </div>
+        ${amenitiesHtml}
+        ${petPolicyHtml}
+        <div class="suite-foot">
+          <div class="price">${priceLine}</div>
+          ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
+          ${promoOfferLine ? `<div class="offer offer-promo">${promoOfferLine}</div>` : ''}
+        </div>
+      </div>
+    `;
+    const favBtn = card.querySelector('.fav-heart');
+    favBtn.addEventListener('click', function(e){
+      e.stopPropagation();
+      toggleFavoriteId(listing.id, favBtn);
+    });
+    wireLikeButton(card);
+    return card;
+  }
+
+  // ---- Recently Viewed & Near You rows ----
+  // Two extra rows between the hero and the main grid. Both respect
+  // whichever tab is active (All/Suites/Aerva Experience) the same way
+  // the main grid does, and never show the same card twice between the
+  // two of them — Recently Viewed takes priority; Near You excludes
+  // anything already shown there.
+  // Recently Viewed is keyed PER ACCOUNT, not per browser. A single
+  // shared key meant a brand new account immediately saw whatever the
+  // previous person on that device had browsed — their history presented
+  // as this guest's own, which is both wrong and a small privacy leak on
+  // any shared or demo machine.
+  //
+  // Logged-out browsing keeps its own ':anon' bucket rather than being
+  // discarded: someone browsing before signing up should still see where
+  // they have been.
+  // Footer copyright always shows the current year.
+  (function(){ const y = document.getElementById('footYear'); if(y) y.textContent = String(new Date().getFullYear()); })();
+
+  const RECENTLY_VIEWED_KEY = 'aerva_recently_viewed';
+  const RECENTLY_VIEWED_MAX = 20;
+  // ---- Per-account browser storage ----
+  // Anything derived from what a PERSON did — viewed, saved, searched —
+  // is keyed by account. A single shared key meant a new account on a
+  // shared or demo device inherited the previous person's activity and
+  // saw it presented as their own.
+  //
+  // Deliberately not applied to device preferences (currency, the
+  // location prompt flag): those describe the browser, not the person,
+  // and resetting them on every login would be user-hostile.
+  let storageOwner = 'anon';
+  function accountKey(base){ return base + ':' + storageOwner; }
+  function recentlyViewedKey(){ return accountKey(RECENTLY_VIEWED_KEY); }
+
+  // Called once the session check resolves, and again on logout. Switching
+  // owner re-renders the row, because whatever is on screen at that moment
+  // belongs to the previous identity.
+  function setRecentlyViewedOwner(owner){
+    const next = owner ? String(owner) : 'anon';
+    if(next === storageOwner) return;
+    storageOwner = next;
+    // Everything on screen at this moment belongs to the previous
+    // identity — the viewed row, the saved hearts, the search history.
+    try{ renderRecentlyViewedRow(); }catch(e){}
+    try{ applyFiltersAndRender(); }catch(e){}
+  }
+
+  // Logged out, the site is strictly fresh: nothing a person viewed, saved
+  // or searched is kept or shown — not from an earlier visit, not from the
+  // account that just logged out, not from before the login check finished.
+  // Those lists exist only per signed-in account. This clears anything a
+  // browser still holds from the old shared or logged-out lists.
+  const PERSONAL_KEYS = ['aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches'];
+  function clearLoggedOutPersonalData(){
+    PERSONAL_KEYS.forEach(base => {
+      try{ safeStorage.remove(base); safeStorage.remove(base + ':anon'); }catch(e){}
+    });
+  }
+  clearLoggedOutPersonalData();
+
+  function trackRecentlyViewed(type, id){
+    if(storageOwner === 'anon') return; // logged out: not recorded
+    let list = [];
+    try{ list = JSON.parse(safeStorage.get(recentlyViewedKey())) || []; } catch(e){ list = []; }
+    list = list.filter(entry => !(entry.type === type && String(entry.id) === String(id)));
+    list.unshift({ type, id, viewedAt: Date.now() });
+    safeStorage.set(recentlyViewedKey(), JSON.stringify(list.slice(0, RECENTLY_VIEWED_MAX)));
+  }
+
+  function getRecentlyViewedEntries(){
+    if(storageOwner === 'anon') return [];
+    let list = [];
+    try{ list = JSON.parse(safeStorage.get(recentlyViewedKey())) || []; } catch(e){ list = []; }
+    // 'suites'/'experiences' narrow to one type; 'all' keeps both, in the
+    // same most-recent-first order they were actually viewed in.
+    return list.filter(entry => {
+      if(currentCategoryFilter === 'suites') return entry.type === 'stay';
+      if(currentCategoryFilter === 'experiences') return entry.type === 'experience';
+      return true;
+    });
+  }
+
+  // Populated by renderRecentlyViewedRow() each time it runs — see there
+  // for why this must be the capped/displayed set, not the full
+  // up-to-20-entry history.
+  let recentlyViewedShownIds = new Set();
+
+  // Single source of truth for "does this stay survive the current
+  // filters". Every row that shows stay cards runs listings through
+  // this, so Recently Viewed / Near You / Resorts can't drift from the
+  // main Available grid — which is exactly what they used to do: the
+  // three rows rendered straight from listingsById and never saw the
+  // price filters at all, so a 4,000–15,000 filter still left ₹20,000
+  // and ₹2,000 cards sitting on screen.
+  //
+  // Sort order is deliberately NOT part of this. Recently Viewed is
+  // ordered by recency and Near You by distance; re-sorting either by
+  // price would destroy the only thing that makes those rows meaningful.
+  function passesStayFilters(l){
+    if(!l) return false;
+    const minPriceEl = document.getElementById('minPrice');
+    const maxPriceEl = document.getElementById('maxPrice');
+    const minPrice = minPriceEl ? minPriceEl.value : '';
+    const maxPrice = maxPriceEl ? maxPriceEl.value : '';
+    if(minPrice && !(l.nightly_rate && Number(l.nightly_rate) >= Number(minPrice))) return false;
+    if(maxPrice && !(l.nightly_rate && Number(l.nightly_rate) <= Number(maxPrice))) return false;
+    // Same pet rule as the main grid. Left out, a guest travelling with a
+    // dog would still be shown homes that don't take pets in these rows
+    // — the identical inconsistency, just with a different field.
+    if(guestCounts.pets > 0){
+      if(l.pet_friendly !== true) return false;
+      if(l.max_pets_allowed && Number(l.max_pets_allowed) < guestCounts.pets) return false;
+    }
+    if(!passesBadgeFilter(l, 'stay')) return false;
+    return true;
+  }
+
+  // Experiences have no nightly rate or pet policy, so the badge filter
+  // is the only one that applies to them.
+  function passesExperienceFilters(e){
+    return !!e && passesBadgeFilter(e, 'experience');
+  }
+
+  function renderRecentlyViewedRow(){
+    const row = document.getElementById('recentlyViewedRow');
+    const container = document.getElementById('recentlyViewedContainer');
+    if(!row || !container){ recentlyViewedShownIds = new Set(); return; }
+    const entries = getRecentlyViewedEntries();
+
+    const cards = [];
+    entries.forEach(entry => {
+      // A previously-viewed listing/experience may since have been
+      // removed, unapproved, or blocked — skip it silently rather than
+      // showing a broken or stale card.
+      // Filtered here, before the 3-card cap, so a filtered-out listing
+      // doesn't consume one of the three slots and leave the row looking
+      // emptier than it should.
+      if(entry.type === 'stay' && listingsById[entry.id] && passesStayFilters(listingsById[entry.id])) cards.push({ type: 'stay', data: listingsById[entry.id] });
+      else if(entry.type === 'experience' && experiencesById[entry.id] && passesExperienceFilters(experiencesById[entry.id])) cards.push({ type: 'experience', data: experiencesById[entry.id] });
+    });
+    // Capped at the 3 most recent — entries are already newest-first (see
+    // getRecentlyViewedEntries), sliced after filtering out stale ones so
+    // a removed/unapproved listing further back in history doesn't leave
+    // fewer than 3 showing when more valid ones actually exist.
+    cards.length = Math.min(cards.length, 3);
+
+    // Exposed so applyFiltersAndRender() excludes from the main grid
+    // ONLY the listings actually shown here — up to 20 are remembered in
+    // localStorage (see RECENTLY_VIEWED_MAX) for history purposes, but
+    // this row only ever displays 3 of them. Excluding all 20 from the
+    // main grid used to make anything past the 3 most recent vanish from
+    // the homepage entirely: not shown here (only 3 fit) and not shown
+    // in Available Listings (excluded). This keeps the two in sync.
+    recentlyViewedShownIds = new Set(cards.map(c => (c.type === 'stay' ? 'stay:' : 'experience:') + c.data.id));
+
+    if(cards.length === 0){
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = 'block';
+    container.innerHTML = '';
+    cards.forEach((item, i) => {
+      // No per-card "Recently Viewed" badge here — the row heading right
+      // above already says that, and repeating it on every single card
+      // was redundant clutter, not useful information.
+      const card = item.type === 'stay' ? buildSuiteCard(item.data, i) : buildExperienceCard(item.data, i);
+      container.appendChild(card);
+    });
+  }
+
+  function renderNearbyRow(){
+    const row = document.getElementById('nearbyRow');
+    const container = document.getElementById('nearbyContainer');
+    if(!row || !container) return;
+
+    // Only shows once a location is actually known — from the manual
+    // "Near Me" button or the auto-prompt-on-login (see
+    // promptLocationOnceForGuest). Never asks for location on its own.
+    if(!guestLocation){
+      row.style.display = 'none';
+      return;
+    }
+
+    const shownIds = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
+    const withDistance = (list, type) => list
+      .filter(item => item.latitude && item.longitude)
+      .filter(item => !shownIds.has(type + ':' + item.id))
+      .map(item => ({ type, data: item, km: haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(item.latitude), Number(item.longitude)) }))
+      .filter(item => item.km <= 200);
+
+    let candidates = [];
+    if(currentCategoryFilter !== 'experiences') candidates = candidates.concat(withDistance(approvedListings.filter(passesStayFilters), 'stay'));
+    if(currentCategoryFilter !== 'suites') candidates = candidates.concat(withDistance(approvedExperiences.filter(passesExperienceFilters), 'experience'));
+    candidates.sort((a, b) => a.km - b.km);
+    candidates = candidates.slice(0, 8);
+
+    if(candidates.length === 0){
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = 'block';
+    container.innerHTML = '';
+    candidates.forEach((item, i) => {
+      const card = item.type === 'stay' ? buildSuiteCard(item.data, i) : buildExperienceCard(item.data, i);
+      container.appendChild(card);
+    });
+  }
+
+  // Resorts get their own dedicated row always — a Resort is a
+  // genuinely different booking model (per-room, not whole-property) from
+  // everything else in the main grid, so calling it out separately helps
+  // regardless of whether location is known. No rating data exists yet
+  // to sort this by "top rated" (see get-listings.js — nothing computes
+  // an average rating anywhere in this codebase currently); this simply
+  // shows what's approved, exactly as it would once reviews exist and
+  // this can genuinely sort by rating instead.
+  function renderResortsRow(){
+    const row = document.getElementById('resortsRow');
+    const container = document.getElementById('resortsContainer');
+    if(!row || !container) return;
+
+    if(currentCategoryFilter === 'experiences'){
+      row.style.display = 'none';
+      return;
+    }
+
+    const shownIds = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
+    const resorts = approvedListings
+      .filter(l => l.property_type === 'Resort')
+      .filter(passesStayFilters)
+      .filter(l => !shownIds.has('stay:' + l.id))
+      .slice(0, 8);
+
+    if(resorts.length === 0){
+      row.style.display = 'none';
+      return;
+    }
+    row.style.display = 'block';
+    container.innerHTML = '';
+    resorts.forEach((item, i) => {
+      container.appendChild(buildSuiteCard(item, i));
+    });
+  }
+
+  // The "specific address matched one property" layout (see performSearch's
+  // 300m-match logic) — one card for the matched property itself, clearly
+  // labeled available/unavailable if dates were searched, then a second
+  // row of other properties within 200km of that SEARCHED address. This is
+  // a different center point than renderNearbyRow's "Near You" (which is
+  // always about the guest's own device location) — here it's centered on
+  // wherever they searched, which may not be where they currently are.
+  function renderSpecificMatchRow(matchedListing, geocoded){
+    const row = document.getElementById('specificMatchRow');
+    const nearbyRow = document.getElementById('specificMatchNearbyRow');
+    const container = document.getElementById('specificMatchContainer');
+    const nearbyContainer = document.getElementById('specificMatchNearbyContainer');
+    const subEl = document.getElementById('specificMatchSub');
+    if(!row || !container) return;
+
+    const datesWereSearched = !!(searchArrivalDate && searchDepartureDate);
+    const card = buildSuiteCard(matchedListing, 0);
+    if(datesWereSearched && matchedListing.is_available === false){
+      addUnavailableCardDressing(card);
+      subEl.textContent = "This property matches your search, but isn't available for the dates you picked — Check Availability to see other dates.";
+    } else if(datesWereSearched){
+      subEl.textContent = 'This property matches your search and is available for your dates.';
+    } else {
+      subEl.textContent = 'This property matches your search.';
+    }
+    container.innerHTML = '';
+    container.appendChild(card);
+    row.style.display = 'block';
+
+    if(nearbyRow && nearbyContainer && geocoded){
+      const candidates = approvedListings
+        .filter(l => l.id !== matchedListing.id && l.latitude && l.longitude)
+        .map(l => ({ l, km: haversineDistanceKm(geocoded.lat, geocoded.lng, Number(l.latitude), Number(l.longitude)) }))
+        .filter(x => x.km <= 200)
+        .sort((a, b) => a.km - b.km)
+        .slice(0, 8);
+      if(candidates.length){
+        nearbyContainer.innerHTML = '';
+        candidates.forEach((x, i) => nearbyContainer.appendChild(buildSuiteCard(x.l, i)));
+        nearbyRow.style.display = 'block';
+      } else {
+        nearbyRow.style.display = 'none';
+      }
+    } else if(nearbyRow){
+      nearbyRow.style.display = 'none';
+    }
+  }
+
+  // ---- Badge filter ----
+  // Filters on the LISTING's own standing, never its host's: a guest
+  // choosing a badge is choosing a place, and a strong host can still
+  // have a weak property. The host badge is still shown on each card;
+  // it just is not something to filter by.
+  // Values are "<kind>:<key>": property / flag for stays, experience for
+  // experiences. Options are rebuilt from the loaded
+  // results, so only badges some live listing actually holds are
+  // offered, and the labels always come from the API rather than a
+  // second copy of the ladder kept here.
+  const BADGE_GROUPS = [
+    { kind: 'property',   label: 'Property standing',   from: 'stay',       field: 'property_tier' },
+    { kind: 'flag',       label: 'Property highlights', from: 'stay',       field: 'property_flag' },
+    { kind: 'experience', label: 'Experience standing', from: 'experience', field: 'experience_tier' }
+  ];
+  function selectedBadge(){
+    const el = document.getElementById('badgeFilter');
+    const raw = el ? el.value : '';
+    if(!raw) return null;
+    const idx = raw.indexOf(':');
+    return idx < 0 ? null : { kind: raw.slice(0, idx), key: raw.slice(idx + 1) };
+  }
+  function refreshBadgeFilterOptions(){
+    const el = document.getElementById('badgeFilter');
+    if(!el) return;
+    const previous = el.value;
+    const html = ['<option value="">Any badge</option>'];
+    BADGE_GROUPS.forEach(group => {
+      // A tab only offers the badges its own cards can carry: Suites shows
+      // property badges, Aerva Experience shows experience ones,
+      // All shows both. A choice the new tab cannot offer falls back to
+      // "Any badge" below rather than silently emptying the grid.
+      if(currentCategoryFilter === 'suites' && group.from !== 'stay') return;
+      if(currentCategoryFilter === 'experiences' && group.from !== 'experience') return;
+      const source = group.from === 'stay' ? approvedListings : approvedExperiences;
+      const seen = new Map();
+      (source || []).forEach(item => {
+        const b = item && item[group.field];
+        if(b && b.key && b.label && !seen.has(b.key)) seen.set(b.key, b.label);
+      });
+      if(!seen.size) return;
+      html.push(`<optgroup label="${escapeMessageHtml(group.label)}">`);
+      seen.forEach((label, key) => {
+        html.push(`<option value="${escapeMessageHtml(group.kind + ':' + key)}">${escapeMessageHtml(label)}</option>`);
+      });
+      html.push('</optgroup>');
+    });
+    el.innerHTML = html.join('');
+    // Keep the guest's choice if that badge is still on offer; otherwise
+    // fall back to "Any badge" rather than silently filtering by
+    // something no longer in the list.
+    el.value = [...el.options].some(o => o.value === previous) ? previous : '';
+  }
+  function passesBadgeFilter(item, type){
+    const sel = selectedBadge();
+    if(!sel) return true;
+    const group = BADGE_GROUPS.find(g => g.kind === sel.kind);
+    if(!group || group.from !== type) return false; // e.g. a host badge never matches an experience
+    const b = item && item[group.field];
+    return !!(b && b.key === sel.key);
+  }
+
+  function applyFiltersAndRender(){
+    const container = document.getElementById('suitesContainer');
+    // Guards against a cached copy of this page that still has the old
+    // .reveal class on the grid: without .in it would stay at opacity 0.
+    container.classList.remove('reveal');
+    container.classList.add('in');
+    refreshBadgeFilterOptions();
+
+    // A place search that resolved to one specific property's own
+    // address (see performSearch) replaces the whole results area with
+    // that property + what's nearby it, instead of the normal
+    // Recently-Viewed/Available/Unavailable breakdown — a guest who
+    // typed one exact address wants that address, not a filtered list.
+    const specificMatchRowEl = document.getElementById('specificMatchRow');
+    const specificMatchNearbyRowEl = document.getElementById('specificMatchNearbyRow');
+    const availableSectionWrapEl = document.getElementById('availableSectionWrap');
+    const recentlyViewedRowEl = document.getElementById('recentlyViewedRow');
+    const nearbyRowEl = document.getElementById('nearbyRow');
+    const unavailableRowEl = document.getElementById('unavailableRow');
+
+    if(specificListingMatch && (currentCategoryFilter === 'all' || currentCategoryFilter === 'suites')){
+      renderSpecificMatchRow(specificListingMatch, specificListingMatchGeo);
+      if(recentlyViewedRowEl) recentlyViewedRowEl.style.display = 'none';
+      if(nearbyRowEl) nearbyRowEl.style.display = 'none';
+      if(unavailableRowEl) unavailableRowEl.style.display = 'none';
+      if(availableSectionWrapEl) availableSectionWrapEl.style.display = 'none';
+      const resortsRowEl = document.getElementById('resortsRow');
+      if(resortsRowEl) resortsRowEl.style.display = 'none';
+      return;
+    }
+    if(specificMatchRowEl) specificMatchRowEl.style.display = 'none';
+    if(specificMatchNearbyRowEl) specificMatchNearbyRowEl.style.display = 'none';
+    if(availableSectionWrapEl) availableSectionWrapEl.style.display = '';
+
+    // Called first, unconditionally — the main grid below has an early
+    // return for its own empty states, but these two rows are
+    // independent of that and should always stay in sync with whatever
+    // just changed (search, filter switch, currency, etc).
+    renderRecentlyViewedRow();
+    renderNearbyRow();
+    renderResortsRow();
+
+    // Price/pet filters are stay-specific concepts (nightly rate, pet
+    // policy) — they only ever narrow the suites portion of the list.
+    // Experiences are included as-is regardless of those two filters,
+    // same as they always were on their own separate view.
+    // Now the same predicate the three rows above use, so the main grid
+    // and those rows can never disagree about what passes.
+    let suiteList = approvedListings.filter(passesStayFilters);
+
+    const wantsPetFriendly = guestCounts.pets > 0;
+
+    const sortOrder = document.getElementById('sortPrice').value;
+    // A listing with no reviews sorts mid-table rather than last. Sending
+    // every new listing to the bottom of a rating sort is a trap: nothing
+    // new is seen, so it never earns the reviews that would lift it.
+    const UNRATED_PLACEHOLDER = 4.2;
+    const ratingOf = (l) => (Number(l.review_count) || 0) > 0 && l.rating != null
+      ? Number(l.rating) : UNRATED_PLACEHOLDER;
+    // Review count breaks ties so a 5.00 from one review does not outrank
+    // a 4.90 from forty.
+    const byRating = (a, b) => ratingOf(b) - ratingOf(a) || (Number(b.review_count)||0) - (Number(a.review_count)||0);
+
+    if(sortOrder === 'asc') suiteList.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
+    else if(sortOrder === 'desc') suiteList.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
+    else if(sortOrder === 'rating') suiteList.sort(byRating);
+    else if(guestLocation){
+      // "Recommended" (no explicit price sort) becomes "nearest first" once
+      // the guest has shared their location via the Near Me button — a
+      // listing with no coordinates sorts last rather than being dropped.
+      suiteList.sort((a, b) => {
+        const da = (a.latitude && a.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(a.latitude), Number(a.longitude)) : Infinity;
+        const db = (b.latitude && b.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(b.latitude), Number(b.longitude)) : Infinity;
+        return da - db;
+      });
+    } else {
+      // "Recommended" with no location known: best reviewed first.
+      suiteList.sort(byRating);
+    }
+
+    const experienceList = approvedExperiences.filter(passesExperienceFilters);
+
+    // "All" interleaves both card types into one grid; "Suites" and
+    // "Aerva Experience" are just filtered views of that exact same
+    // underlying data — not separate sections/fetches anymore.
+    const showSuites = currentCategoryFilter === 'all' || currentCategoryFilter === 'suites';
+    const showExperiences = currentCategoryFilter === 'all' || currentCategoryFilter === 'experiences';
+
+    if(approvedListings.length === 0 && approvedExperiences.length === 0){
+      container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="index.html?view=list-property" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
+      document.getElementById('unavailableRow').style.display = 'none';
+      return;
+    }
+
+    // is_available only ever means something once dates were actually
+    // searched (see get-listings.js — every row is is_available:true
+    // when no dates were given at all). A listing/experience that's
+    // unavailable for the searched dates is split out here rather than
+    // just excluded outright, so it can show in its own row below
+    // instead of silently vanishing with no explanation.
+    const datesWereSearched = !!(searchArrivalDate && searchDepartureDate);
+    // Excludes only what's actually SHOWN in the Recently Viewed row
+    // above — not the full up-to-20-entry history (see
+    // recentlyViewedShownIds, set by renderRecentlyViewedRow() right
+    // before this runs). Excluding the full history here used to make
+    // anything past the 3 most-recently-viewed vanish from the homepage
+    // entirely: not shown in Recently Viewed (only 3 fit there) and not
+    // shown here either. The Unavailable row further down deliberately
+    // still checks against the full recently-viewed list for its own
+    // "show what the guest actually looked at first" ordering, so that
+    // one isn't changed.
+    const availableSuites = (datesWereSearched ? suiteList.filter(l => l.is_available !== false) : suiteList)
+      .filter(l => !recentlyViewedShownIds.has('stay:' + l.id));
+    const unavailableSuites = datesWereSearched ? suiteList.filter(l => l.is_available === false) : [];
+    const availableExperiences = (datesWereSearched ? experienceList.filter(e => e.is_available !== false) : experienceList)
+      .filter(e => !recentlyViewedShownIds.has('experience:' + e.id));
+    const unavailableExperiences = datesWereSearched ? experienceList.filter(e => e.is_available === false) : [];
+
+    const finalSuites = showSuites ? availableSuites : [];
+    const finalExperiences = showExperiences ? availableExperiences : [];
+    const finalUnavailableSuites = showSuites ? unavailableSuites : [];
+    const finalUnavailableExperiences = showExperiences ? unavailableExperiences : [];
+
+    // Computed early since both the empty-state message above and the
+    // unavailable row's own internal ordering (further down) need it —
+    // previously-viewed unavailable results lead that row, everything
+    // else unavailable follows.
+    const viewedKeys = new Set(getRecentlyViewedEntries().map(e => e.type + ':' + e.id));
+    const viewedUnavailableSuites = finalUnavailableSuites.filter(l => viewedKeys.has('stay:' + l.id));
+    const viewedUnavailableExperiences = finalUnavailableExperiences.filter(e => viewedKeys.has('experience:' + e.id));
+
+    container.innerHTML = '';
+    if(finalSuites.length === 0 && finalExperiences.length === 0){
+      let message;
+      const badgeSel = selectedBadge();
+      const badgeName = badgeSel ? (document.getElementById('badgeFilter').selectedOptions[0] || {}).text : '';
+      if(badgeSel) message = `Nothing with the ${badgeName} badge matches your other filters — try Any badge.`;
+      else if(currentCategoryFilter === 'suites' && wantsPetFriendly) message = 'No pet-friendly homes match your other filters — try widening your price range or removing pets.';
+      else if(currentCategoryFilter === 'suites') message = 'No homes match these filters — try widening your price range.';
+      else if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
+      else if(datesWereSearched && (finalUnavailableSuites.length > 0 || finalUnavailableExperiences.length > 0)) message = 'Nothing available for those dates — see what\'s unavailable below, or try different dates.';
+      else message = 'Nothing matches these filters yet — try widening your price range.';
+      container.innerHTML = `<div class="suites-empty">${message}</div>`;
+    } else {
+      // Suites first, then experiences — a stable, predictable order
+      // rather than an interleaved shuffle, so results don't visually
+      // reorder themselves every time a filter changes. Cards are no
+      // longer .reveal-animated (see buildSuiteCard/buildExperienceCard)
+      // — they used to start at opacity:0 and only become visible once
+      // an IntersectionObserver detected them scrolling into view; any
+      // card that observer missed for any reason was left permanently
+      // invisible while still fully clickable underneath. Always-visible
+      // cards trade a minor fade-in animation for eliminating that
+      // entire failure mode outright.
+      let index = 0;
+      finalSuites.forEach(listing => {
+        const card = buildSuiteCard(listing, index++);
+        container.appendChild(card);
+      });
+      finalExperiences.forEach(exp => {
+        const card = buildExperienceCard(exp, index++);
+        container.appendChild(card);
+      });
+    }
+
+    // ---- Unavailable-for-these-dates row ----
+    // Shown any time there ARE unavailable results for a real (dated)
+    // search — no longer gated behind "did the guest view one of these
+    // before," so a place/date search always surfaces what's booked out,
+    // not just the guest's own prior picks. Previously-viewed ones still
+    // lead the row when present, purely as an ordering nicety.
+    const unavailableRow = document.getElementById('unavailableRow');
+    const unavailableContainer = document.getElementById('unavailableContainer');
+    const hasAnyUnavailable = finalUnavailableSuites.length > 0 || finalUnavailableExperiences.length > 0;
+
+    if(!datesWereSearched || !hasAnyUnavailable){
+      unavailableRow.style.display = 'none';
+    } else {
+      unavailableRow.style.display = 'block';
+      unavailableContainer.innerHTML = '';
+      let uIndex = 0;
+      // Viewed-and-unavailable listings lead the row; everything else
+      // unavailable follows after, same two arrays just reordered so the
+      // guest's own recently-viewed picks are the first thing they see.
+      const orderedSuites = [...viewedUnavailableSuites, ...finalUnavailableSuites.filter(l => !viewedKeys.has('stay:' + l.id))];
+      const orderedExperiences = [...viewedUnavailableExperiences, ...finalUnavailableExperiences.filter(e => !viewedKeys.has('experience:' + e.id))];
+      orderedSuites.forEach(listing => {
+        const card = buildSuiteCard(listing, uIndex++);
+        addUnavailableCardDressing(card);
+        unavailableContainer.appendChild(card);
+      });
+      orderedExperiences.forEach(exp => {
+        const card = buildExperienceCard(exp, uIndex++);
+        addUnavailableCardDressing(card);
+        unavailableContainer.appendChild(card);
+      });
+    }
+  }
+
+  // Shared by every place an "unavailable for these dates" card gets
+  // built (the main Unavailable row, and the specific-property-match
+  // card when that one property itself isn't available) — the badge AND
+  // the always-visible "Check Availability" label are the same either
+  // way, and the card stays fully clickable: it opens the same detail
+  // view with its own calendar, so the guest can pick different dates
+  // rather than hitting a dead end.
+  function addUnavailableCardDressing(card){
+    card.classList.add('suite-card--unavailable');
+    const badge = document.createElement('span');
+    badge.className = 'suite-badge suite-unavailable-badge';
+    badge.textContent = 'Not Available';
+    const badgeStack = card.querySelector('.suite-badges');
+    if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
+    const photoEl = card.querySelector('.suite-photo');
+    if(photoEl){
+      const checkBtn = document.createElement('span');
+      checkBtn.className = 'suite-check-availability';
+      checkBtn.textContent = 'Check Availability →';
+      photoEl.appendChild(checkBtn);
+    }
+  }
+
+  // Real address suggestions for the search Place field are wired up in
+  // initGoogleMaps() instead — see below. populateCityOptions() (which
+  // only ever suggested existing listing cities) is retired.
+
+  // Reused across searches so we don't create a new Geocoder instance
+  // every time — cheap either way, but tidier.
+  let placesGeocoder = null;
+
+  // ---- My Bookings + Chat ----
+  function guestAuthToken(){ return safeStorage.get('aerva_guest_session'); }
+
+  // ---- Login gate before payment ----
+  // Bookings are no longer allowed without an account at all (see
+  // create-order.js's own hard 401 if no session — this modal is the UX
+  // side of that, kept inline so a guest doesn't lose their in-progress
+  // dates/guest selections by navigating away to a separate login page).
+  // Email-first: ask for email, check whether it's already registered
+  // (mode=check-email), then show login or signup automatically — a
+  // guest never has to guess which one applies to them.
+  let bookingLoginSuccessCallback = null;
+  let bookingGateEmail = '';
+
+  function requireLoginForBooking(onSuccess){
+    if(guestAuthToken()){ onSuccess(); return; }
+    bookingLoginSuccessCallback = onSuccess;
+    bookingGateEmail = '';
+    document.getElementById('bookingLoginOverlay').style.display = 'flex';
+    document.getElementById('bookingEmailStepView').style.display = 'block';
+    document.getElementById('bookingLoginFormView').style.display = 'none';
+    document.getElementById('bookingSignupFormView').style.display = 'none';
+    document.getElementById('bookingEmailStepError').style.display = 'none';
+    document.getElementById('bookingEmailStepInput').value = '';
+    document.getElementById('bookingEmailStepInput').focus();
+  }
+  function closeBookingLoginGate(){
+    document.getElementById('bookingLoginOverlay').style.display = 'none';
+    bookingLoginSuccessCallback = null;
+  }
+  function backToBookingEmailStep(){
+    document.getElementById('bookingLoginFormView').style.display = 'none';
+    document.getElementById('bookingSignupFormView').style.display = 'none';
+    document.getElementById('bookingEmailStepView').style.display = 'block';
+    document.getElementById('bookingEmailStepInput').focus();
+  }
+  document.getElementById('bookingLoginCloseBtn').addEventListener('click', closeBookingLoginGate);
+  document.getElementById('bookingLoginOverlay').addEventListener('click', (e) => {
+    if(e.target.id === 'bookingLoginOverlay') closeBookingLoginGate();
+  });
+  document.getElementById('bookingLoginChangeEmailLink').addEventListener('click', (e) => { e.preventDefault(); backToBookingEmailStep(); });
+  document.getElementById('bookingSignupChangeEmailLink').addEventListener('click', (e) => { e.preventDefault(); backToBookingEmailStep(); });
+
+  // Also submits on Enter, same as the password/signup fields below.
+  document.getElementById('bookingEmailStepInput').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('bookingEmailStepContinueBtn').click(); }
+  });
+  document.getElementById('bookingEmailStepContinueBtn').addEventListener('click', async () => {
+    const email = document.getElementById('bookingEmailStepInput').value.trim();
+    const errEl = document.getElementById('bookingEmailStepError');
+    const btn = document.getElementById('bookingEmailStepContinueBtn');
+    errEl.style.display = 'none';
+    if(!email || !email.includes('@')){
+      errEl.textContent = 'Please enter a valid email address.';
+      errEl.style.display = 'block';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'check-email', email })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not check that email right now.';
+        errEl.style.display = 'block';
+      } else {
+        bookingGateEmail = email;
+        document.getElementById('bookingEmailStepView').style.display = 'none';
+        if(data.exists){
+          document.getElementById('bookingLoginEmailDisplay').textContent = email;
+          document.getElementById('bookingLoginError').style.display = 'none';
+          document.getElementById('bookingLoginPassword').value = '';
+          document.getElementById('bookingLoginFormView').style.display = 'block';
+          document.getElementById('bookingLoginPassword').focus();
+        } else {
+          document.getElementById('bookingSignupEmailDisplay').textContent = email;
+          document.getElementById('bookingSignupError').style.display = 'none';
+          document.getElementById('bookingSignupSuccessMsg').style.display = 'none';
+          document.getElementById('bookingSignupName').value = '';
+          document.getElementById('bookingSignupPassword').value = '';
+          document.getElementById('bookingSignupFormView').style.display = 'block';
+          document.getElementById('bookingSignupName').focus();
+        }
+      }
+    } catch(err){
+      errEl.textContent = 'Could not check that email right now. Please try again.';
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Continue';
+  });
+
+  document.getElementById('bookingLoginPassword').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('bookingLoginSubmitBtn').click(); }
+  });
+  document.getElementById('bookingLoginSubmitBtn').addEventListener('click', async () => {
+    const password = document.getElementById('bookingLoginPassword').value;
+    const errEl = document.getElementById('bookingLoginError');
+    const btn = document.getElementById('bookingLoginSubmitBtn');
+    errEl.style.display = 'none';
+    if(!password){
+      errEl.textContent = 'Please enter your password.';
+      errEl.style.display = 'block';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Logging in…';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'login', email: bookingGateEmail, password })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not log in.';
+        errEl.style.display = 'block';
+      } else {
+        safeStorage.set('aerva_guest_session', data.sessionToken);
+        // Re-read the session before anything else runs, so the header and
+        // every per-account store bind to the account that just logged in
+        // rather than whoever was here before.
+        try{ if(window.aervaRefreshIdentity) await window.aervaRefreshIdentity(); }catch(e){}
+        const cb = bookingLoginSuccessCallback;
+        closeBookingLoginGate();
+        if(cb) cb();
+      }
+    } catch(err){
+      errEl.textContent = 'Could not log in right now. Please try again.';
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Log In';
+  });
+
+  document.getElementById('bookingSignupSubmitBtn').addEventListener('click', async () => {
+    const name = document.getElementById('bookingSignupName').value.trim();
+    const password = document.getElementById('bookingSignupPassword').value;
+    const errEl = document.getElementById('bookingSignupError');
+    const successEl = document.getElementById('bookingSignupSuccessMsg');
+    const btn = document.getElementById('bookingSignupSubmitBtn');
+    errEl.style.display = 'none';
+    successEl.style.display = 'none';
+    if(!password){
+      errEl.textContent = 'Please choose a password.';
+      errEl.style.display = 'block';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Creating account…';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'signup', email: bookingGateEmail, password, name })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not create your account.';
+        errEl.style.display = 'block';
+      } else {
+        // No session is issued on signup — the account isn't usable
+        // until the verification link is clicked (see guest-auth.js).
+        // The guest has to come back and log in afterward; this can't
+        // seamlessly continue straight to payment the way a login can.
+        successEl.textContent = 'Account created — check your email for a verification link. Once verified, click "not you?" above to log in and complete your booking.';
+        successEl.style.display = 'block';
+        document.getElementById('bookingSignupName').value = '';
+        document.getElementById('bookingSignupPassword').value = '';
+      }
+    } catch(err){
+      errEl.textContent = 'Could not create your account right now. Please try again.';
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Create Account';
+  });
+
+  // ---- Review form ----
+  // Which factors are asked for depends on what was booked. Rating the
+  // hygiene of a guided walk is a question with no sensible answer, and
+  // the endpoint rejects the wrong set anyway — so the form has to branch
+  // or it produces submissions that cannot succeed.
+  const REVIEW_FACTOR_SETS = {
+    stay: [
+      { key: 'hygiene',       label: 'Cleanliness & hygiene' },
+      { key: 'communication', label: 'Communication with the host' },
+      { key: 'services',      label: 'Services provided' },
+      { key: 'value',         label: 'Value for money' },
+      { key: 'location',      label: 'Location' }
+    ],
+    experience: [
+      { key: 'organisation',  label: 'How well it was organised' },
+      { key: 'safety',        label: 'Safety' },
+      { key: 'guide',         label: 'The guide' },
+      { key: 'value',         label: 'Value for money' }
+    ]
+  };
+
+  let reviewOrderId = null;
+  let reviewScores = {};
+
+  function starRowHtml(f){
+    return `<div class="rv-row" data-factor="${f.key}">
+      <span class="rv-label">${escapeMessageHtml(f.label)}</span>
+      <span class="rv-stars">${[1,2,3,4,5].map(n =>
+        `<button type="button" class="rv-star" data-factor="${f.key}" data-value="${n}" aria-label="${n} out of 5">\u2605</button>`
+      ).join('')}</span>
+    </div>`;
+  }
+
+  function paintStars(){
+    document.querySelectorAll('.rv-star').forEach(btn => {
+      const on = (reviewScores[btn.dataset.factor] || 0) >= Number(btn.dataset.value);
+      btn.classList.toggle('is-on', on);
+    });
+  }
+
+  // ---- Profile photo: crop and filter, then upload ----
+  // A second copy of host-dashboard.html's editor: the two pages share no
+  // script. Same six filters, same 640px square output, so a photo looks
+  // the same whichever page it was set from.
+  const PHOTO_FILTERS = [
+    { id: 'none',   label: 'Original', css: 'none' },
+    { id: 'warm',   label: 'Warm',     css: 'saturate(1.15) sepia(0.18) contrast(1.03)' },
+    { id: 'cool',   label: 'Cool',     css: 'saturate(1.05) hue-rotate(-12deg) brightness(1.03)' },
+    { id: 'bright', label: 'Bright',   css: 'brightness(1.12) contrast(1.05) saturate(1.05)' },
+    { id: 'soft',   label: 'Soft',     css: 'brightness(1.06) saturate(0.9) contrast(0.95)' },
+    { id: 'mono',   label: 'Mono',     css: 'grayscale(1) contrast(1.08)' }
+  ];
+  const PHOTO_OUTPUT_SIZE = 640;
+  const photoEditor = { img: null, zoom: 1, offsetX: 0, offsetY: 0, filter: 'none', dragging: false, lastX: 0, lastY: 0 };
+  function photoFilterCss(id){ const f = PHOTO_FILTERS.find(x => x.id === id); return f ? f.css : 'none'; }
+
+  function drawPhoto(ctx, size, filterId){
+    const img = photoEditor.img;
+    ctx.save();
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = '#ebdecd';
+    ctx.fillRect(0, 0, size, size);
+    if(img){
+      const base = Math.max(size / img.width, size / img.height);
+      const scale = base * photoEditor.zoom;
+      const w = img.width * scale, h = img.height * scale;
+      const x = (size - w) / 2 + photoEditor.offsetX * (size / 320);
+      const y = (size - h) / 2 + photoEditor.offsetY * (size / 320);
+      ctx.drawImage(img, x, y, w, h);
+    }
+    ctx.restore();
+    if(img) applyPhotoFilter(ctx, size, filterId === undefined ? photoEditor.filter : filterId);
+  }
+  // Filters are applied to the PIXELS, not through ctx.filter: that
+  // property is unsupported in some browsers (Safari most notably) and
+  // fails silently, which is exactly what "the photo never changes"
+  // looked like. This works everywhere and is what the thumbnails show.
+  function applyPhotoFilter(ctx, size, id){
+    if(!id || id === 'none') return;
+    let img;
+    try{ img = ctx.getImageData(0, 0, size, size); }
+    catch(e){ return; } // tainted or unavailable: leave the photo as it is
+    const d = img.data;
+    const clamp = (v) => v < 0 ? 0 : (v > 255 ? 255 : v);
+    for(let i = 0; i < d.length; i += 4){
+      let r = d[i], g = d[i + 1], b = d[i + 2];
+      if(id === 'warm'){
+        r = r * 1.10 + 12; g = g * 1.02 + 4; b = b * 0.90;
+      } else if(id === 'cool'){
+        r = r * 0.92; g = g * 1.00 + 2; b = b * 1.12 + 8;
+      } else if(id === 'bright'){
+        r = r * 1.10 + 14; g = g * 1.10 + 14; b = b * 1.10 + 14;
+      } else if(id === 'soft'){
+        const grey = 0.299 * r + 0.587 * g + 0.114 * b;
+        // Pull toward grey, then lift: gentler, slightly faded.
+        r = 128 + ((r * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+        g = 128 + ((g * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+        b = 128 + ((b * 0.85 + grey * 0.15) - 128) * 0.90 + 10;
+      } else if(id === 'mono'){
+        const grey = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = g = b = 128 + (grey - 128) * 1.08;
+      }
+      d[i] = clamp(r); d[i + 1] = clamp(g); d[i + 2] = clamp(b);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function renderPhotoPreview(){
+    const c = document.getElementById('photoEditorCanvas');
+    const ctx = c && c.getContext && c.getContext('2d');
+    if(ctx) drawPhoto(ctx, c.width);
+  }
+  function renderFilterChoices(){
+    const box = document.getElementById('photoEditorFilters');
+    box.innerHTML = '';
+    PHOTO_FILTERS.forEach(f => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'photo-filter-btn' + (photoEditor.filter === f.id ? ' is-on' : '');
+      btn.dataset.filter = f.id;
+      const thumb = document.createElement('canvas');
+      thumb.width = 46; thumb.height = 46;
+      const tctx = thumb.getContext && thumb.getContext('2d');
+      if(tctx) drawPhoto(tctx, 46, f.id);
+      btn.appendChild(thumb);
+      btn.appendChild(document.createTextNode(f.label));
+      btn.addEventListener('click', () => { photoEditor.filter = f.id; renderFilterChoices(); renderPhotoPreview(); });
+      box.appendChild(btn);
+    });
+  }
+  function openPhotoEditor(file){
+    if(!/^image\//.test(file.type || '')) return alert('Please choose an image file.');
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        Object.assign(photoEditor, { img, zoom: 1, offsetX: 0, offsetY: 0, filter: 'none' });
+        document.getElementById('photoEditorZoom').value = '100';
+        document.getElementById('photoEditorMsg').style.display = 'none';
+        document.getElementById('photoEditorOverlay').style.display = 'flex';
+        renderFilterChoices();
+        renderPhotoPreview();
+      };
+      img.onerror = () => alert('That image could not be opened. Please try another.');
+      img.src = reader.result;
+    };
+    reader.onerror = () => alert('That image could not be read. Please try another.');
+    reader.readAsDataURL(file);
+  }
+  function closePhotoEditor(){
+    document.getElementById('photoEditorOverlay').style.display = 'none';
+    photoEditor.img = null;
+    document.getElementById('navPhotoInput').value = '';
+  }
+  (function wirePhotoEditor(){
+    const stage = document.getElementById('photoEditorStage');
+    if(!stage) return;
+    stage.addEventListener('pointerdown', e => { photoEditor.dragging = true; photoEditor.lastX = e.clientX; photoEditor.lastY = e.clientY; });
+    stage.addEventListener('pointermove', e => {
+      if(!photoEditor.dragging) return;
+      photoEditor.offsetX += e.clientX - photoEditor.lastX;
+      photoEditor.offsetY += e.clientY - photoEditor.lastY;
+      photoEditor.lastX = e.clientX; photoEditor.lastY = e.clientY;
+      renderPhotoPreview();
+    });
+    ['pointerup', 'pointercancel'].forEach(ev => stage.addEventListener(ev, () => { photoEditor.dragging = false; }));
+    document.getElementById('photoEditorZoom').addEventListener('input', function(){
+      photoEditor.zoom = Math.max(1, Number(this.value) / 100);
+      renderPhotoPreview();
+    });
+    document.getElementById('photoEditorCancel').addEventListener('click', closePhotoEditor);
+    document.getElementById('navPhotoInput').addEventListener('change', function(){
+      const f = this.files && this.files[0];
+      if(f) openPhotoEditor(f);
+    });
+    // The picture is the control: clicking it goes straight to choosing a
+    // photo, rather than putting "Change profile photo" in a menu of
+    // places to navigate to. Clicking the NAME still opens the account
+    // menu, so nothing else moves.
+    // The picture opens your profile, where the photo is changed. It is
+    // one place for who you are, rather than a photo action hidden in a
+    // navigation menu.
+    const avatarRing = document.getElementById('navAvatarRing');
+    if(avatarRing){
+      avatarRing.style.cursor = 'pointer';
+      avatarRing.title = 'Your profile';
+      avatarRing.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        document.getElementById('navAccountMenu').classList.remove('open');
+        showProfileView();
+      });
+    }
+    const profileLink = document.getElementById('navProfileLink');
+    if(profileLink){
+      profileLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        document.getElementById('navAccountMenu').classList.remove('open');
+        showProfileView();
+      });
+    }
+    ['profilePhotoBtn', 'profileChangePhoto'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.addEventListener('click', () => document.getElementById('navPhotoInput').click());
+    });
+    const profileSaveBtn = document.getElementById('profileSave');
+    if(profileSaveBtn) profileSaveBtn.addEventListener('click', saveProfile);
+    document.getElementById('photoEditorUse').addEventListener('click', function(){
+      const btn = this;
+      const msg = document.getElementById('photoEditorMsg');
+      const out = document.createElement('canvas');
+      out.width = PHOTO_OUTPUT_SIZE; out.height = PHOTO_OUTPUT_SIZE;
+      const ctx = out.getContext && out.getContext('2d');
+      if(!ctx){ msg.textContent = 'Could not prepare that image here.'; msg.style.display = 'block'; return; }
+      drawPhoto(ctx, PHOTO_OUTPUT_SIZE);
+      btn.disabled = true; btn.textContent = 'Uploading…';
+      const finish = () => { btn.disabled = false; btn.textContent = 'Use photo'; };
+      const done = async (blob) => {
+        if(!blob){ finish(); msg.textContent = 'Could not prepare that image. Please try another.'; msg.style.display = 'block'; return; }
+        // Built before the uploader is fetched, so a network problem
+        // loading the client cannot be confused with a problem preparing
+        // the image.
+        const photoFile = new File([blob], 'profile.jpg', { type: 'image/jpeg' });
+        try{
+          const { upload } = await import('https://esm.sh/@vercel/blob/client');
+          const result = await upload('profile.jpg', photoFile, {
+            access: 'public', handleUploadUrl: SUITES_API_BASE + '/api/blob-upload'
+          });
+          const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+            body: JSON.stringify({ profilePhotoUrl: result.url })
+          });
+          const data = await res.json();
+          if(!res.ok) throw new Error(data.error || 'Could not save that photo.');
+          const inner = `<img src="${escapeMessageHtml(data.guest.profile_photo_url)}" alt="Profile photo">`;
+          ['navAvatarCircle', 'navAvatarCircleMobile'].forEach(id => {
+            const el = document.getElementById(id);
+            if(el) el.innerHTML = inner;
+          });
+          const profileCircle = document.getElementById('profilePhotoCircle');
+          if(profileCircle) profileCircle.innerHTML = inner;
+          finish();
+          closePhotoEditor();
+        } catch(err){
+          finish();
+          msg.textContent = err.message || 'Upload failed. Please try again.';
+          msg.style.display = 'block';
+        }
+      };
+      if(out.toBlob) out.toBlob(done, 'image/jpeg', 0.9);
+      else done(null);
+    });
+  })();
+
+  // ---- Live numbers, and counting this visit ----
+  // The figures are public and come from completed stays. The visit ping
+  // is sent once per browser per day: enough for "how busy were we
+  // yesterday", without following anybody around.
+  async function loadLiveProof(){
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?publicStats=1');
+      if(!res.ok) return;
+      const d = await res.json();
+      const el = document.getElementById('liveProof');
+      if(!el) return;
+      // Always shown once the server has answered, 0 included: these are
+      // the real counts (real bookings only — see publicStats in
+      // get-listings.js). If the count could not be fetched, nothing is
+      // shown rather than a 0 that was never counted.
+      if(typeof d.staysHosted !== 'number' || typeof d.checkinsThisMonth !== 'number') return;
+      const stats = [
+        [d.staysHosted, d.staysHosted === 1 ? 'stay hosted' : 'stays hosted'],
+        [d.checkinsThisMonth, d.checkinsThisMonth === 1 ? 'guest checked in this month' : 'guests checked in this month']
+      ];
+      // Number first, set large in the headline's gold; label small
+      // beneath. Numbers go through Number(), labels are fixed text.
+      el.innerHTML = stats.map(([n, label]) =>
+        `<span class="lp-stat"><span class="lp-num">${Number(n).toLocaleString('en-IN')}</span><span class="lp-label">${label}</span></span>`
+      ).join('<span class="lp-sep" aria-hidden="true"></span>');
+      el.style.display = 'flex';
+    }catch(err){ /* a number is not worth an error */ }
+  }
+
+  function trackVisitOnce(){
+    const key = 'aerva_visit_day';
+    const today = new Date().toISOString().slice(0, 10);
+    try{
+      if(safeStorage.get(key) === today) return;
+      safeStorage.set(key, today);
+    }catch(e){ /* private mode: count it, rather than not at all */ }
+    fetch(SUITES_API_BASE + '/api/get-listings?trackVisit=1').catch(() => {});
+  }
+
+  // ---- Notifications (header bell) ----
+  // Fed by the session check, which already knows what is outstanding.
+  // Read state is per browser, keyed by item, so the count reflects what
+  // this person has actually looked at.
+  const NAV_NOTIF_READ_KEY = 'aerva_notifications_read';
+  function navNotifRead(){
+    try{ return JSON.parse(safeStorage.get(NAV_NOTIF_READ_KEY) || '[]'); }catch(e){ return []; }
+  }
+  function navMarkRead(id){
+    try{
+      const seen = navNotifRead();
+      if(!seen.includes(id)){ seen.push(id); safeStorage.set(NAV_NOTIF_READ_KEY, JSON.stringify(seen.slice(-200))); }
+    }catch(e){}
+  }
+  function renderNavNotifications(items){
+    const list = document.getElementById('navNotifList');
+    const countEl = document.getElementById('navBellCount');
+    const bell = document.getElementById('navBell');
+    if(!list || !bell) return;
+    const notes = Array.isArray(items) ? items : [];
+    const seen = navNotifRead();
+    const unread = notes.filter(n => !seen.includes(n.id)).length;
+    countEl.textContent = unread > 9 ? '9+' : String(unread);
+    countEl.style.display = unread ? 'block' : 'none';
+    if(!notes.length){
+      list.innerHTML = '<p class="nav-notif-empty">Nothing needs your attention right now.</p>';
+      return;
+    }
+    list.innerHTML = notes.map(n =>
+      `<a class="nav-notif-item${seen.includes(n.id) ? '' : ' is-unread'}" data-notif="${escapeMessageHtml(n.id)}"
+          ${n.orderId ? `data-review-order="${Number(n.orderId)}" data-review-name="${escapeMessageHtml(n.listingName || '')}" data-review-type="${escapeMessageHtml(n.listingType || 'stay')}"` : ''}
+          href="${escapeMessageHtml(n.href || '#')}">
+        <div class="nav-notif-title">${escapeMessageHtml(n.title || '')}</div>
+        <div class="nav-notif-body">${escapeMessageHtml(n.body || '')}</div>
+        ${n.due ? `<div class="nav-notif-due">${escapeMessageHtml(n.due)}</div>` : ''}
+      </a>`).join('');
+    list.querySelectorAll('.nav-notif-item').forEach(el => {
+      el.addEventListener('click', (e) => {
+        navMarkRead(el.dataset.notif);
+        // A review notice opens the review form straight away rather than
+        // dropping someone on My Bookings to find the booking themselves.
+        const orderId = Number(el.dataset.reviewOrder);
+        if(orderId){
+          e.preventDefault();
+          document.getElementById('navNotifPanel').style.display = 'none';
+          openReviewModal({
+            id: orderId,
+            suite_name: el.dataset.reviewName || '',
+            listing_type: el.dataset.reviewType || 'stay'
+          });
+        }
+      });
+    });
+  }
+  (function wireNavBell(){
+    const bell = document.getElementById('navBell');
+    const panel = document.getElementById('navNotifPanel');
+    if(!bell || !panel) return;
+    bell.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+      // Opening the account menu and the bell together would overlap.
+      const accountMenu = document.getElementById('navAccountMenu');
+      if(accountMenu) accountMenu.classList.remove('open');
+    });
+    document.addEventListener('click', (e) => {
+      if(panel.style.display === 'block' && !panel.contains(e.target) && e.target !== bell && !bell.contains(e.target)){
+        panel.style.display = 'none';
+      }
+    });
+    document.addEventListener('keydown', (e) => { if(e.key === 'Escape') panel.style.display = 'none'; });
+  })();
+
+  // Shown once per browser session per number of pending reviews, so
+  // dismissing it does not bring it straight back on the next page, but a
+  // NEW stay to review does re-raise it.
+  function showReviewReminder(count){
+    const bar = document.getElementById('reviewReminderBar');
+    if(!bar) return;
+    if(!count){ bar.style.display = 'none'; return; }
+    const dismissedFor = safeSessionGet('aerva_review_reminder_dismissed');
+    if(dismissedFor === String(count)){ bar.style.display = 'none'; return; }
+    document.getElementById('reviewReminderText').textContent = count === 1
+      ? 'You have a stay to review. It takes a minute, and the window closes 15 days after checkout.'
+      : `You have ${count} stays to review. It takes a minute, and the window closes 15 days after checkout.`;
+    bar.style.display = 'block';
+    document.getElementById('reviewReminderBtn').onclick = () => { window.location.href = 'index.html?view=my-bookings'; };
+    document.getElementById('reviewReminderDismiss').onclick = () => {
+      bar.style.display = 'none';
+      safeSessionSet('aerva_review_reminder_dismissed', String(count));
+    };
+  }
+  // sessionStorage is not available in every context (private modes,
+  // embedded webviews), and a reminder must never be the thing that
+  // throws on page load.
+  function safeSessionGet(k){ try{ return window.sessionStorage.getItem(k); }catch(e){ return null; } }
+  function safeSessionSet(k, v){ try{ window.sessionStorage.setItem(k, v); }catch(e){} }
+
+  function openReviewModal(booking){
+    reviewOrderId = booking.id;
+    reviewScores = {};
+    const set = REVIEW_FACTOR_SETS[booking.listing_type === 'experience' ? 'experience' : 'stay'];
+    const isExp = booking.listing_type === 'experience';
+    document.getElementById('reviewModalBody').innerHTML = `
+      <div class="listing-modal-content">
+        <h2>How was it?</h2>
+        <div class="loc">${escapeMessageHtml(booking.suite_name || '')}</div>
+        <div class="rv-set">${set.map(starRowHtml).join('')}</div>
+        <label class="rv-comment-label" for="reviewComment">Tell other guests about it</label>
+        <textarea id="reviewComment" rows="4" placeholder="What stood out? What should someone know before booking?"></textarea>
+        <p class="rv-error" id="reviewError" style="display:none;"></p>
+        <button type="button" class="filter-clear" id="reviewSubmitBtn" style="margin-top:12px;">Submit review</button>
+      </div>`;
+    document.getElementById('reviewModalOverlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    document.querySelectorAll('.rv-star').forEach(btn => btn.addEventListener('click', () => {
+      reviewScores[btn.dataset.factor] = Number(btn.dataset.value);
+      paintStars();
+    }));
+    document.getElementById('reviewSubmitBtn').addEventListener('click', () => submitReview(set));
+  }
+
+  function closeReviewModal(){
+    document.getElementById('reviewModalOverlay').style.display = 'none';
+    document.body.style.overflow = '';
+    reviewOrderId = null;
+  }
+
+  async function submitReview(set){
+    const errEl = document.getElementById('reviewError');
+    const btn = document.getElementById('reviewSubmitBtn');
+    errEl.style.display = 'none';
+    // Checked here as well as server-side so a guest is told which rating
+    // is missing, by name, instead of being handed a generic rejection
+    // after they have already pressed submit.
+    const missing = set.find(f => !reviewScores[f.key]);
+    if(missing){
+      errEl.textContent = `Please rate "${missing.label}" before submitting.`;
+      errEl.style.display = 'block'; return;
+    }
+    const comment = (document.getElementById('reviewComment').value || '').trim();
+    if(comment.length < 10){
+      errEl.textContent = 'Please write at least a sentence about your visit.';
+      errEl.style.display = 'block'; return;
+    }
+    btn.disabled = true; btn.textContent = 'Submitting\u2026';
+    try{
+      const payload = { mode: 'submitReview', orderId: reviewOrderId, comment };
+      set.forEach(f => { payload[f.key] = reviewScores[f.key]; });
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if(!res.ok){
+        errEl.textContent = data.error || 'Could not save your review right now.';
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Submit review';
+        return;
+      }
+      document.getElementById('reviewModalBody').innerHTML = `
+        <div class="listing-modal-content">
+          <h2>Thank you</h2>
+          <p style="font-size:14px; margin-top:10px;">Thanks for submitting your review.</p>
+        </div>`;
+      loadMyBookings();
+    }catch(err){
+      errEl.textContent = 'Could not save your review right now.';
+      errEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Submit review';
+    }
+  }
+
+  // Bound once at parse time. The close button is inside static markup,
+  // not the rebuilt modal body, so it survives every re-render.
+  (function bindReviewModal(){
+    const rv = document.getElementById('reviewModalOverlay');
+    if(!rv) return;
+    const btn = document.getElementById('reviewModalClose');
+    if(btn) btn.addEventListener('click', closeReviewModal);
+    // Click the backdrop to dismiss, but not a click inside the panel.
+    rv.addEventListener('click', (e) => { if(e.target === rv) closeReviewModal(); });
+    document.addEventListener('keydown', (e) => {
+      if(e.key === 'Escape' && rv.style.display === 'flex') closeReviewModal();
+    });
+  })();
+
+  async function loadMyBookings(){
+    const container = document.getElementById('myBookingsContainer');
+    const token = guestAuthToken();
+    if(!token){
+      container.innerHTML = '<p class="suites-empty">Please <a href="guest-login.html" style="color:var(--gold-deep); text-decoration:underline;">log in</a> to see your bookings.</p>';
+      return;
+    }
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', { headers: { 'Authorization': 'Bearer ' + token } });
+      if(!res.ok) throw new Error('Failed to load');
+      const data = await res.json();
+      const bookings = data.bookings || [];
+      if(!bookings.length){
+        container.innerHTML = '<p class="suites-empty">No bookings yet — once you book a stay or experience, it\'ll show up here.</p>';
+        return;
+      }
+      container.innerHTML = bookings.map(b => {
+        const dateLine = b.arrival === b.departure
+          ? new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+          : `${new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – ${new Date(b.departure).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+        // Messaging only ever unlocks for a confirmed (paid) booking —
+        // matches the same rule messages.js/guest-profile.js enforces
+        // server-side; this button simply doesn't exist for anything else,
+        // rather than existing and failing when clicked.
+        // Cancelled bookings keep their history: the button reads "View
+        // messages" and opens the same thread (guest-profile.js allows it
+        // once a conversation exists).
+        const chatBtnHtml = (b.status === 'paid' || b.status === 'cancelled')
+          ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-top:10px;">${b.status === 'paid' ? 'Message Host' : 'View messages'}</button>`
+          : '';
+        // Only 'open' gets a button. The other states are shown as plain
+        // text where they are worth explaining, and silently where they
+        // are not — a guest whose stay is next month does not need telling
+        // that reviews are not open yet.
+        const reviewHtml =
+          b.review_state === 'open'
+            ? `<button type="button" class="filter-clear" data-review-order="${b.id}" style="margin-top:10px; margin-left:8px;">Leave a review</button>`
+          : b.review_state === 'done'
+            ? `<span style="font-size:12px; opacity:0.6; margin-left:8px;">Review submitted</span>`
+          : b.review_state === 'closed'
+            ? `<span style="font-size:12px; opacity:0.6; margin-left:8px;">Review window closed</span>`
+          : '';
+        return `
+          <div class="listing-card booking-card" data-booking="${b.id}" style="margin-bottom:14px; cursor:pointer;">
+            <div class="listing-info">
+              <h3>${escapeMessageHtml(b.suite_name || '')}</h3>
+              <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(b.status)}</div>
+              ${chatBtnHtml}${reviewHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+      container.querySelectorAll('[data-order-id]').forEach(btn => {
+        btn.addEventListener('click', () => openChatForOrder(Number(btn.dataset.orderId), btn.dataset.listingName));
+      });
+      container.querySelectorAll('[data-review-order]').forEach(btn => {
+        const booking = bookings.find(x => String(x.id) === btn.dataset.reviewOrder);
+        if(booking) btn.addEventListener('click', (e) => { e.stopPropagation(); openReviewModal(booking); });
+      });
+      container.querySelectorAll('[data-order-id]').forEach(btn => {
+        btn.addEventListener('click', (e) => e.stopPropagation()); // the card's own click must not also fire
+      });
+      // The card itself opens the booking.
+      container.querySelectorAll('.booking-card').forEach(card => {
+        const booking = bookings.find(x => String(x.id) === card.dataset.booking);
+        if(booking) card.addEventListener('click', () => showBookingPage(booking));
+      });
+    } catch(err){
+      container.innerHTML = '<p class="suites-empty">Could not load your bookings right now. Please refresh.</p>';
+    }
+  }
+
+  function statusBadgeHtmlGuest(status){
+    const label = status === 'paid' ? 'Confirmed' : status === 'refunded' ? 'Refunded' : status === 'cancelled' ? 'Cancelled' : status;
+    const color = status === 'paid' ? '#3a7d44' : '#8a7f6c';
+    return `<span style="color:${color}; text-transform:uppercase; font-size:11px; letter-spacing:0.06em;">${label}</span>`;
+  }
+
+  let chatCurrentConversationId = null;
+  let chatCurrentOrderId = null;
+
+  async function openChatForOrder(orderId, listingName){
+    const token = guestAuthToken();
+    if(!token) return;
+    chatCurrentOrderId = orderId;
+    document.getElementById('chatModalTitle').textContent = listingName || 'Chat';
+    document.getElementById('chatMessagesContainer').innerHTML = '<p class="loading">Loading…</p>';
+    document.getElementById('chatTemplatesRow').innerHTML = '';
+    document.getElementById('chatModalOverlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${orderId}`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      if(!res.ok){
+        document.getElementById('chatMessagesContainer').innerHTML = `<p class="suites-empty">${data.error || 'Could not open this conversation.'}</p>`;
+        return;
+      }
+      chatCurrentConversationId = data.conversationId;
+      document.getElementById('chatModalTitle').textContent = data.listingName || listingName || 'Chat';
+      renderChatMessages(data.messages || [], data.viewerRole);
+      loadChatTemplates(data.conversationId);
+    } catch(err){
+      document.getElementById('chatMessagesContainer').innerHTML = '<p class="suites-empty">Could not open this conversation. Please try again.</p>';
+    }
+  }
+
+  function renderChatMessages(messages, viewerRole){
+    const container = document.getElementById('chatMessagesContainer');
+    if(!messages.length){
+      container.innerHTML = '<p style="font-size:13px; opacity:0.6; text-align:center;">Say hello — your host will see this once you send it.</p>';
+      return;
+    }
+    container.innerHTML = messages.map(m => {
+      const isMine = m.sender_type === viewerRole;
+      // Goes through renderMessageBody (escapeMessageHtml + link/image
+      // handling) for exactly the same reason the inbox renderer does:
+      // display_text is plain text typed by the other party, and
+      // interpolating it raw here parsed it as HTML, so an <img
+      // onerror=...> in a message ran script in this viewer's browser
+      // under their own session. This renderer was missed when the inbox
+      // one was fixed — the two must stay on the same path.
+      return `
+        <div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;">
+          <div style="background:${isMine ? 'var(--ink)' : 'var(--cream-deep)'}; color:${isMine ? 'var(--cream)' : 'var(--ink)'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${renderMessageBody(m.display_text)}</div>
+          ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
+        </div>
+      `;
+    }).join('');
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function loadChatTemplates(conversationId){
+    const token = guestAuthToken();
+    const row = document.getElementById('chatTemplatesRow');
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversationTemplates&conversationId=${conversationId}`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      const templates = data.templates || [];
+      if(!templates.length){ row.innerHTML = ''; return; }
+      row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${t.body}</button>`).join('');
+      row.querySelectorAll('[data-template]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.getElementById('chatInput').value = btn.dataset.template;
+          document.getElementById('chatInput').focus();
+        });
+      });
+    } catch(err){
+      row.innerHTML = '';
+    }
+  }
+
+  // Soft, client-side-only heads-up — not the real enforcement (that's
+  // server-side in guest-profile.js's redactContactInfo, which always
+  // runs regardless of what happens here). This just warns before
+  // sending rather than after, for a better experience; it deliberately
+  // doesn't block sending outright, since a false positive here shouldn't
+  // stop someone from sending an otherwise-innocent message — the server
+  // is what actually strips anything real.
+  function looksLikeContactInfo(text){
+    if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text)) return true;
+    const digitRun = text.match(/(\+?\d[\d\s\-.()]{6,}\d)/);
+    if (digitRun && (digitRun[0].match(/\d/g) || []).length >= 7) return true;
+    if (/\b(instagram|insta|facebook|whatsapp|telegram)\b/i.test(text)) return true;
+    return false;
+  }
+
+  document.getElementById('chatInput').addEventListener('input', function(){
+    document.getElementById('chatWarning').style.display = looksLikeContactInfo(this.value) ? 'block' : 'none';
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+  });
+
+  async function sendChatMessage(){
+    const input = document.getElementById('chatInput');
+    const text = input.value.trim();
+    if(!text || !chatCurrentConversationId) return;
+    const token = guestAuthToken();
+    input.disabled = true;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ mode: 'send', conversationId: chatCurrentConversationId, text, role: 'guest' })
+      });
+      const data = await res.json();
+      if(res.ok){
+        input.value = '';
+        document.getElementById('chatWarning').style.display = 'none';
+        // Re-fetch rather than locally append — keeps this in sync with
+        // whatever the server actually stored (the redacted version),
+        // rather than briefly showing the guest's own unfiltered text.
+        const convRes = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${chatCurrentOrderId}`, {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const convData = await convRes.json();
+        if(convRes.ok) renderChatMessages(convData.messages || [], convData.viewerRole);
+      }
+    } catch(err){
+      // Silently retryable — the message just doesn't appear; the guest can try again.
+    }
+    input.disabled = false;
+    input.focus();
+  }
+
+  document.getElementById('chatSendBtn').addEventListener('click', sendChatMessage);
+  document.getElementById('chatInput').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChatMessage(); }
+  });
+  document.getElementById('chatModalClose').addEventListener('click', () => {
+    document.getElementById('chatModalOverlay').style.display = 'none';
+    document.body.style.overflow = '';
+  });
+  document.getElementById('chatModalOverlay').addEventListener('click', (e) => {
+    if(e.target.id === 'chatModalOverlay'){
+      document.getElementById('chatModalOverlay').style.display = 'none';
+      document.body.style.overflow = '';
+    }
+  });
+
+  // ============================================================
+  // HOST MESSAGE INBOX — the full list+chat overlay opened by the
+  // header's message icon. Uses the same guest-profile.js modes
+  // host-dashboard.html's Messages tab uses (hostConversations,
+  // hostConversationMessages, send, conversationTemplates, templates,
+  // saveTemplate), plus the new translate mode. This is a second,
+  // independent implementation of that inbox rather than a shared
+  // module — index.html and host-dashboard.html are separate pages with
+  // no shared JS bundle, so there's no way to avoid the duplication
+  // without introducing a build step this static-file setup doesn't have.
+  // ============================================================
+  let inboxConversations = [];
+  let inboxFilter = 'all';
+  let inboxSearchTerm = '';
+  let inboxCurrentConversationId = null;
+  let inboxCurrentOrderId = null;
+  // Which hat this account wears in the CURRENTLY OPEN conversation —
+  // 'host' or 'guest'. Set from that conversation's own my_role field
+  // (see myConversations), never assumed globally: the same account can
+  // be the host on one thread and the guest on another, and this inbox
+  // now shows both side by side rather than being a host-only surface.
+  let inboxCurrentRole = null;
+  let inboxTranslationOn = false;
+  // Caches translated text per message id so toggling translation on/off
+  // repeatedly, or re-rendering after sending a new message, doesn't
+  // re-call (and re-pay for) the translation API for messages already
+  // translated once this session.
+  let inboxTranslationCache = {};
+
+  // Shared by page load AND by every action that actually changes the
+  // read state (opening a conversation, sending, closing the overlay) —
+  // previously this only ever ran once at page load, so reading a
+  // message did nothing to the badge until a full page refresh. Now it's
+  // called right after the read state changes, so the count reflects
+  // reality without needing a reload.
+  function refreshMessagesBadge(){
+    const badge = document.getElementById('hostMessagesUnreadBadge');
+    const badgeMobile = document.getElementById('hostMessagesUnreadBadgeMobile');
+    const token = guestAuthToken();
+    if(!badge || !token) return;
+    fetch(SUITES_API_BASE + '/api/guest-profile?mode=unreadMessageCount', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(countData => {
+        if(!countData) return;
+        const label = countData.count > 9 ? '9+' : String(countData.count);
+        [badge, badgeMobile].forEach(el => {
+          if(!el) return;
+          if(countData.count > 0){
+            el.textContent = label;
+            el.style.display = 'inline-block';
+          } else {
+            el.style.display = 'none';
+          }
+        });
+      })
+      .catch(() => {}); // Non-fatal — badge just keeps its last known value.
+  }
+
+  function openInboxOverlay(){
+    document.getElementById('inboxOverlay').classList.add('open');
+    document.body.style.overflow = 'hidden';
+    loadInboxConversations();
+  }
+  function closeInboxOverlay(){
+    document.getElementById('inboxOverlay').classList.remove('open');
+    document.getElementById('inboxPanel').classList.remove('details-open', 'chat-open');
+    document.body.style.overflow = '';
+    refreshMessagesBadge(); // catches any reads that happened while it was open
+  }
+  document.getElementById('hostMessagesIcon').addEventListener('click', (e) => {
+    e.preventDefault();
+    openInboxOverlay();
+  });
+  document.getElementById('hostMessagesIconMobile').addEventListener('click', (e) => {
+    e.preventDefault();
+    openInboxOverlay(); // the mobile-nav-panel's generic "close on any link click" listener already handles closing the menu itself
+  });
+  document.getElementById('inboxCloseBtn').addEventListener('click', closeInboxOverlay);
+  document.getElementById('inboxOverlay').addEventListener('click', (e) => {
+    if(e.target.id === 'inboxOverlay') closeInboxOverlay();
+  });
+
+  document.getElementById('inboxSearchBtn').addEventListener('click', () => {
+    document.getElementById('inboxSearchRow').classList.toggle('open');
+    document.getElementById('inboxSearchInput').focus();
+  });
+  document.getElementById('inboxSearchInput').addEventListener('input', function(){
+    inboxSearchTerm = this.value.trim().toLowerCase();
+    renderInboxConversationList();
+  });
+  document.querySelectorAll('.inbox-filter-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('.inbox-filter-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      inboxFilter = pill.dataset.inboxFilter;
+      renderInboxConversationList();
+    });
+  });
+
+  // ---- Status tag: derived from the linked booking's own dates/status,
+  // never a separate field to keep in sync. Every Aerva conversation
+  // already requires a confirmed, paid booking to exist at all (there's
+  // no pre-booking enquiry flow) — so a pre-check-in thread is a
+  // confirmed "Upcoming Stay," never an actual unconfirmed enquiry. The
+  // previous "Enquiry" label was factually wrong and read as if the
+  // booking wasn't confirmed yet, when it always is by the time a
+  // conversation can exist at all. ----
+  function inboxStatusTag(conv){
+    if(!conv.arrival || !conv.departure) return { label: 'Message', cls: 'tag-upcoming' };
+    if(conv.booking_status === 'cancelled') return { label: 'Cancelled', cls: 'tag-cancelled' };
+    const today = new Date().toISOString().split('T')[0];
+    if(today > conv.departure) return { label: 'Completed', cls: 'tag-completed' };
+    if(today === conv.arrival) return { label: 'Check-in Today', cls: 'tag-today' };
+    if(today > conv.arrival) return { label: 'Hosting Now', cls: 'tag-hosting' };
+    return { label: 'Upcoming Stay', cls: 'tag-upcoming' };
+  }
+  function inboxDateRangeLabel(conv){
+    if(!conv.arrival || !conv.departure) return '';
+    const fmt = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    return `${fmt(conv.arrival)} – ${fmt(conv.departure)}`;
+  }
+  function inboxRelativeTime(iso){
+    if(!iso) return '';
+    const d = new Date(iso);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if(sameDay) return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+    const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+    if(d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  }
+
+  async function loadInboxConversations(){
+    const listEl = document.getElementById('inboxConversationList');
+    const token = guestAuthToken();
+    if(!token) return;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myConversations', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Failed to load');
+      inboxConversations = data.conversations || [];
+      renderInboxConversationList();
+    } catch(err){
+      listEl.innerHTML = '<p style="padding:20px 22px; font-size:13px; color:#a3402f;">Could not load your conversations right now.</p>';
+    }
+  }
+
+  function renderInboxConversationList(){
+    const listEl = document.getElementById('inboxConversationList');
+    let items = inboxConversations;
+    if(inboxFilter === 'unread') items = items.filter(c => Number(c.unread_count) > 0);
+    if(inboxSearchTerm){
+      items = items.filter(c =>
+        (c.counterpart_name || '').toLowerCase().includes(inboxSearchTerm) ||
+        (c.property_name || '').toLowerCase().includes(inboxSearchTerm)
+      );
+    }
+    if(!items.length){
+      listEl.innerHTML = `<p style="padding:20px 22px; font-size:13px; opacity:0.6;">${inboxConversations.length ? 'No conversations match.' : 'No conversations yet — these open automatically once you message a host, or a guest with a confirmed booking messages you.'}</p>`;
+      return;
+    }
+    listEl.innerHTML = items.map(c => {
+      const tag = inboxStatusTag(c);
+      const name = c.counterpart_name || c.guest_email;
+      const thumb = c.cover_photo_url || c.counterpart_photo_url || '';
+      // "Hosting" / "Guest" — which hat applies to THIS specific thread,
+      // since the same account can be the host on one conversation and
+      // just a guest on another (see my_role, computed server-side).
+      const roleLabel = c.my_role === 'host' ? 'Hosting' : 'Guest';
+      return `
+        <div class="inbox-conv-card${c.id === inboxCurrentConversationId ? ' active' : ''}" data-conv-id="${c.id}">
+          ${thumb ? `<img class="inbox-conv-thumb" src="${thumb}" alt="">` : `<div class="inbox-conv-thumb"></div>`}
+          <div class="inbox-conv-info">
+            <div class="inbox-conv-topline">
+              <span class="inbox-status-tag ${tag.cls}">${tag.label}</span>
+              <span style="opacity:0.5;">·</span>
+              <span style="opacity:0.6;">${roleLabel}</span>
+              <span>${inboxDateRangeLabel(c)}</span>
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+              <!-- The property is the "subject" of this thread — which
+                   booking it's about — and gets top billing over the
+                   counterpart's name, since with repeat guests/hosts or
+                   multiple properties, the name alone doesn't say which
+                   booking a message is actually referring to. -->
+              <div class="inbox-conv-name">${c.property_name || 'Aerva'}</div>
+              <span class="inbox-conv-time">${inboxRelativeTime(c.last_message_at)}</span>
+            </div>
+            <div class="inbox-conv-counterpart">${roleLabel === 'Hosting' ? 'Guest' : 'Host'}: ${name}</div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+              <div class="inbox-conv-preview">${c.last_message || 'No messages yet'}</div>
+              ${Number(c.unread_count) > 0 ? '<span class="inbox-conv-unread-dot"></span>' : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    listEl.querySelectorAll('[data-conv-id]').forEach(card => {
+      card.addEventListener('click', () => openInboxChat(Number(card.dataset.convId)));
+    });
+  }
+
+  async function openInboxChat(conversationId){
+    const conv = inboxConversations.find(c => c.id === conversationId);
+    if(!conv) return;
+    inboxCurrentConversationId = conversationId;
+    inboxCurrentOrderId = conv.order_id || null;
+    inboxCurrentRole = conv.my_role || 'host';
+    inboxTranslationCache = {}; // fresh conversation, fresh cache
+    document.getElementById('inboxPanel').classList.add('chat-open'); // mobile: swap to chat pane
+    document.getElementById('inboxPanel').classList.remove('details-open'); // stale details for the PREVIOUS conversation shouldn't linger
+    document.getElementById('inboxChatPlaceholder').style.display = 'none';
+    document.getElementById('inboxChatContent').style.display = 'flex';
+    document.getElementById('inboxChatName').textContent = conv.property_name || 'Aerva';
+    const roleLabel = conv.my_role === 'host' ? 'Guest' : 'Host';
+    const counterpartEl = document.getElementById('inboxChatCounterpart');
+    counterpartEl.textContent = `${roleLabel}: ${conv.counterpart_name || conv.guest_email}`;
+    // Hosts: the guest's name opens their profile (the details panel).
+    counterpartEl.style.cursor = conv.my_role === 'host' ? 'pointer' : '';
+    counterpartEl.style.textDecoration = conv.my_role === 'host' ? 'underline' : '';
+    counterpartEl.title = conv.my_role === 'host' ? 'View guest profile' : '';
+    counterpartEl.onclick = conv.my_role === 'host' ? () => showInboxBookingDetails(conv) : null;
+    const avatarEl = document.getElementById('inboxChatAvatar');
+    if(conv.counterpart_photo_url){ avatarEl.src = conv.counterpart_photo_url; avatarEl.style.display = ''; }
+    else { avatarEl.style.display = 'none'; }
+    renderInboxConversationList(); // refresh active-card highlight
+    await refreshInboxMessages();
+  }
+  document.getElementById('inboxChatBackBtn').addEventListener('click', () => {
+    // Mobile only (see the .inbox-chat-back-btn media query) — returns
+    // to the conversation list without closing the whole overlay, which
+    // used to be the only way back once a conversation was opened.
+    document.getElementById('inboxPanel').classList.remove('chat-open');
+    document.getElementById('inboxPanel').classList.remove('details-open');
+  });
+
+  // ---- Message body rendering ----
+  // Messages are stored as PLAIN TEXT and must be escaped before they
+  // touch innerHTML. Interpolating display_text directly (as this used
+  // to) meant anything a guest or host typed was parsed as HTML — a
+  // message containing an <img onerror=...> tag would execute script in
+  // the other party's browser, using their logged-in session. Escaping
+  // first closes that off; everything below re-introduces markup only
+  // for patterns this function itself recognises.
+  function escapeMessageHtml(text){
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // Check-in photos arrive as "Caption: https://…jpeg" lines, because a
+  // message is text and a photo can only travel as a link (see
+  // _template-scheduling.js). Pasting a 130-character blob URL into the
+  // thread is unreadable, so an image link is rendered as the actual
+  // image — the way any real messaging product shows a photo — and any
+  // other link becomes a normal tappable anchor.
+  const IMAGE_URL_PATTERN = /^https?:\/\/[^\s]+\.(jpe?g|png|webp|gif)(\?[^\s]*)?$/i;
+  function renderMessageBody(text){
+    const escaped = escapeMessageHtml(text);
+    // Split on whole URLs. Escaping happened first, so the only thing
+    // being matched here is text this function put through itself.
+    return escaped.replace(/https?:&#x2F;&#x2F;[^\s]+|https?:\/\/[^\s]+/gi, (url) => {
+      const clean = url.replace(/&amp;/g, '&');
+      if (IMAGE_URL_PATTERN.test(clean)) {
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer" style="display:block; margin-top:6px;">`
+          + `<img src="${url}" alt="" loading="lazy" style="max-width:220px; width:100%; border-radius:10px; display:block;">`
+          + `</a>`;
+      }
+      return `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:underline; word-break:break-all;">${url}</a>`;
+    });
+  }
+
+  async function refreshInboxMessages(){
+    const token = guestAuthToken();
+    const container = document.getElementById('inboxMessages');
+    container.innerHTML = '<p class="loading" style="font-size:13px; opacity:0.6;">Loading…</p>';
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversationMessages&conversationId=${inboxCurrentConversationId}`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Failed to load');
+      // The server confirms which role I actually hold on this
+      // conversation (myRole) — trusted over the client-side copy from
+      // the list, since that's the one place membership is truly checked.
+      if(data.myRole) inboxCurrentRole = data.myRole;
+      await renderInboxMessages(data.messages || []);
+      loadInboxChatTemplates(inboxCurrentConversationId);
+      // Read messages update their own unread_count server-side, but the
+      // list in memory won't know that until the next full reload — zero
+      // it locally so the unread dot clears immediately, not just after
+      // the overlay is reopened.
+      const conv = inboxConversations.find(c => c.id === inboxCurrentConversationId);
+      if(conv) conv.unread_count = 0;
+      renderInboxConversationList();
+      refreshMessagesBadge(); // the header icon's count should drop the moment these are marked read, not just when the overlay closes
+    } catch(err){
+      container.innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not open this conversation.</p>';
+    }
+  }
+
+  async function renderInboxMessages(messages){
+    const container = document.getElementById('inboxMessages');
+    if(!messages.length){
+      container.innerHTML = '<p style="font-size:13px; opacity:0.6; text-align:center;">No messages yet.</p>';
+      return;
+    }
+    // Translate first (if on), sequentially — these are short chat
+    // messages, not a bulk job, so a handful of awaited calls in a row
+    // is simpler than a Promise.all and in practice not noticeably slower.
+    let translated = {};
+    if(inboxTranslationOn){
+      for(const m of messages){
+        if(inboxTranslationCache[m.id]){ translated[m.id] = inboxTranslationCache[m.id]; continue; }
+        const t = await translateInboxMessage(m.display_text);
+        if(t){ inboxTranslationCache[m.id] = t; translated[m.id] = t; }
+      }
+    }
+    container.innerHTML = messages.map(m => {
+      const isMine = m.sender_type === inboxCurrentRole;
+      const label = isMine ? ('You · ' + (inboxCurrentRole === 'host' ? 'Host' : 'Guest')) : (inboxCurrentRole === 'host' ? 'Guest' : 'Host');
+      const time = new Date(m.created_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+      const shownText = translated[m.id] || m.display_text;
+      const showOriginalLink = translated[m.id] ? `<span class="inbox-message-original-link" data-original="${encodeURIComponent(m.display_text)}">See original</span>` : '';
+      return `
+        <div class="inbox-message-row${isMine ? ' mine' : ''}">
+          <div class="inbox-message-avatar"></div>
+          <div>
+            <div class="inbox-message-meta">${label} · ${time}</div>
+            <div class="inbox-message-bubble" data-msg-id="${m.id}">${renderMessageBody(shownText)}</div>
+            ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
+            ${showOriginalLink}
+          </div>
+        </div>
+      `;
+    }).join('');
+    container.querySelectorAll('.inbox-message-original-link').forEach(link => {
+      link.addEventListener('click', () => {
+        const wrapper = link.closest('div');
+        const bubble = wrapper.querySelector('.inbox-message-bubble');
+        if(bubble) bubble.textContent = decodeURIComponent(link.dataset.original);
+        link.remove();
+      }, { once: true });
+    });
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function translateInboxMessage(text){
+    const token = guestAuthToken();
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ mode: 'translate', text, targetLang: 'en' })
+      });
+      const data = await res.json();
+      if(!res.ok) return null; // translation being unavailable shouldn't block reading the original
+      return data.translatedText || null;
+    } catch(err){
+      return null;
+    }
+  }
+
+  document.getElementById('inboxTranslateToggle').addEventListener('click', async function(){
+    inboxTranslationOn = !inboxTranslationOn;
+    this.classList.toggle('on', inboxTranslationOn);
+    document.getElementById('inboxTranslateLabel').textContent = inboxTranslationOn ? 'Translation on' : 'Translation off';
+    if(inboxCurrentConversationId) await refreshInboxMessages();
+  });
+
+  document.getElementById('inboxDetailsBtn').addEventListener('click', () => {
+    const conv = inboxConversations.find(c => c.id === inboxCurrentConversationId);
+    if(conv) showInboxBookingDetails(conv);
+  });
+
+  function showInboxBookingDetails(conv){
+    const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+    const arrival = conv.arrival ? new Date(conv.arrival + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+    const departure = conv.departure ? new Date(conv.departure + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+    const isHostView = conv.my_role === 'host';
+    // A guest viewing their own booking shouldn't see host-framed numbers
+    // ("Your Payout," commission) — that's the host's business, not
+    // theirs. They see what THEY paid and who to contact instead.
+    document.getElementById('inboxBookingDetailsBody').innerHTML = `
+      <h3 style="font-family:'Bodoni Moda', serif; font-size:19px; margin-bottom:4px;">${escapeMessageHtml(conv.counterpart_name || conv.guest_email || '')}</h3>
+      <p style="font-size:12.5px; opacity:0.6; margin-bottom:20px;">${escapeMessageHtml(conv.property_name || '')}</p>
+      <div style="display:flex; flex-direction:column; gap:12px; font-size:13.5px;">
+        <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Dates</span><span>${arrival} → ${departure}${conv.nights ? ` (${conv.nights} night${conv.nights === 1 ? '' : 's'})` : ''}</span></div>
+        ${conv.guests ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Guests</span><span>${conv.guests}</span></div>` : ''}
+        ${conv.subtotal != null ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">${isHostView ? 'Guest Paid' : 'You Paid'}</span><span>${fmt(Number(conv.subtotal) + Number(conv.gst || 0))}</span></div>` : ''}
+        ${isHostView && conv.payout_amount != null ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Your Payout</span><span style="color:#3a7d44; font-weight:600;">${fmt(conv.payout_amount)}</span></div>` : ''}
+        <div style="display:flex; justify-content:space-between;"><span style="opacity:0.6;">${isHostView ? 'Contact' : 'Host Contact'}</span><span>${escapeMessageHtml(isHostView ? (conv.guest_email || '') : (conv.counterpart_name || '—'))}</span></div>
+      </div>
+      ${isHostView && conv.order_id ? '<div id="inboxGuestProfile" style="margin-top:24px;"></div>' : ''}
+    `;
+    document.getElementById('inboxPanel').classList.add('details-open');
+    if(isHostView && conv.order_id) loadHostGuestProfile(conv.order_id, conv.id);
+  }
+
+  // The host's view of a guest: name and published reviews from other
+  // hosts, nothing else (host-listings.js ?guestProfileForOrder=).
+  async function loadHostGuestProfile(orderId, conversationId){
+    const el = document.getElementById('inboxGuestProfile');
+    if(!el) return;
+    el.innerHTML = '<p style="font-size:13px; opacity:0.6;">Loading guest profile\u2026</p>';
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/host-listings?guestProfileForOrder=${Number(orderId)}`, {
+        headers: { 'Authorization': 'Bearer ' + guestAuthToken() }
+      });
+      const data = await res.json();
+      // The panel may have moved on to another conversation meanwhile.
+      if(inboxCurrentConversationId !== conversationId || !document.body.contains(el)) return;
+      if(!res.ok) throw new Error(data.error || 'Failed');
+      const sm = data.summary || { count: 0 };
+      el.innerHTML = `
+        <div class="listing-modal-section-title" style="margin-top:0;">Guest profile</div>
+        <p style="font-size:15px; margin:0 0 10px;">${escapeMessageHtml(data.guest && data.guest.name || 'Guest')}</p>
+        ${sm.count ? `
+          <div class="rv-summary">
+            ${sm.score ? `<span class="rv-summary-score">${Number(sm.score).toFixed(2)} out of 5</span> &middot; ` : ''}
+            <span class="rv-summary-count">${sm.count} review${sm.count === 1 ? '' : 's'} from hosts</span>
+          </div>
+          <div class="rv-factors">${reviewFactorsHtml(sm.factors)}</div>
+          <div class="rv-list">${(data.reviews || []).map(r => reviewItemHtml(r, false)).join('')}</div>
+        ` : '<p class="rv-empty">No reviews from hosts yet.</p>'}`;
+    } catch(err){
+      if(inboxCurrentConversationId === conversationId) el.innerHTML = '<p class="rv-empty">Could not load this guest\u2019s profile.</p>';
+    }
+  }
+  document.getElementById('inboxDetailsCloseBtn').addEventListener('click', () => {
+    document.getElementById('inboxPanel').classList.remove('details-open');
+  });
+
+  // ---- Template keyword substitution ----
+  // A host writes "Hi @guestname, check-in is @checkin..." once, and it
+  // fills in real values for whichever specific conversation it's used
+  // in — the guest's actual name (the booker, always — see the comment
+  // on guest_display_name in guest-profile.js), and that listing's own
+  // check-in/checkout time, WiFi, access code, and address. Resolved at
+  // the moment a template is inserted, using the currently open
+  // conversation's own data, never a generic/global value.
+  // Same keys and output as _template-scheduling.js (server side).
+  function tplDay(iso){
+    if(!iso) return null;
+    const d = new Date(String(iso).slice(0, 10) + 'T00:00:00Z');
+    if(isNaN(d)) return null;
+    // Built by hand so the server and every browser write it identically.
+    const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MO = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${WD[d.getUTCDay()]}, ${d.getUTCDate()} ${MO[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  }
+  function tplMapLink(c){
+    const lat = Number(c.latitude), lng = Number(c.longitude);
+    if(Number.isFinite(lat) && Number.isFinite(lng) && (lat || lng)) return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+    return c.location_text ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.location_text)}` : null;
+  }
+  const TEMPLATE_PLACEHOLDERS = {
+    '@guestname': c => c.guest_display_name || c.guest_email || 'Guest',
+    '@guests': c => (Number(c.guests) > 0 ? String(Number(c.guests)) : '(guest count not set)'),
+    '@listing': c => c.property_name || '(property name not set)',
+    '@hostname': c => c.host_display_name ? String(c.host_display_name).split(' ')[0] : 'Your host',
+    '@arrival': c => tplDay(c.arrival) || '(arrival date)',
+    '@departure': c => tplDay(c.departure) || '(departure date)',
+    '@nights': c => (Number(c.nights) > 0 ? String(Number(c.nights)) : '(nights)'),
+    '@wifi': c => (c.wifi_name || c.wifi_password) ? `WiFi: ${c.wifi_name || '—'} / Password: ${c.wifi_password || '—'}` : '(WiFi not set yet)',
+    '@maplink': c => tplMapLink(c) || '(map link not available)',
+    '@checkin': c => c.check_in_time || '(check-in time not set yet)',
+    '@checkout': c => c.check_out_time || '(check-out time not set yet)',
+    '@wifiname': c => c.wifi_name || '(WiFi name not set yet)',
+    '@wifipassword': c => c.wifi_password || '(WiFi password not set yet)',
+    '@accesscode': c => c.access_code || '(access code not set yet)',
+    '@location': c => c.location_text || '(location not set yet)'
+  };
+  function resolveBasePlaceholders(text, conv){
+    let result = text;
+    for(const [key, getValue] of Object.entries(TEMPLATE_PLACEHOLDERS)){
+      if(result.toLowerCase().includes(key)){
+        // Case-insensitive match (a host typing @GuestName shouldn't
+        // silently fail to substitute), literal replacement of every
+        // occurrence.
+        //
+        // The lookahead is what stops a SHORTER key from eating a LONGER
+        // placeholder that starts with it: '@checkin' is a prefix of
+        // '@checkininfo', so without this, "@checkininfo" became
+        // "2:00 PMinfo" — the check-in time plus a stray "info" — and the
+        // @checkininfo handler below never saw anything left to replace.
+        // Requiring the next character to not be alphanumeric means each
+        // key only matches a whole placeholder word, and any future
+        // '@checkin…'-prefixed placeholder stays safe too. Kept in sync by
+        // hand with _template-scheduling.js's identical server-side resolver.
+        result = result.replace(new RegExp(key + '(?![a-z0-9])', 'gi'), getValue(conv));
+      }
+    }
+    return result;
+  }
+  // Assembles the fixed check-in fields plus every host-defined custom
+  // field into one readable block — exactly what manage-listing.html's
+  // own live preview builds (kept in sync by hand across these separate
+  // files, same as every other placeholder), and what
+  // auto_send_checkin_instructions sends server-side on booking
+  // confirmation (see _template-scheduling.js).
+  function buildCheckinInstructionsText(conv){
+    const lines = [];
+    if(conv.check_in_time) lines.push(`Check-in: ${conv.check_in_time}`);
+    if(conv.check_out_time) lines.push(`Check-out: ${conv.check_out_time}`);
+    if(conv.wifi_name || conv.wifi_password) lines.push(`WiFi: ${conv.wifi_name || '—'} / ${conv.wifi_password || '—'}`);
+    if(conv.access_code) lines.push(`Access code: ${conv.access_code}`);
+    (Array.isArray(conv.custom_fields) ? conv.custom_fields : []).forEach(f => {
+      if(f.label && f.value) lines.push(`${f.label}: ${f.value}`);
+    });
+    // Messages are text-only — a photo becomes "Caption: link" so a
+    // guest can tap through to see it, same convention
+    // manage-listing.html's own live preview uses.
+    (Array.isArray(conv.checkin_photos) ? conv.checkin_photos : []).forEach(p => {
+      if(p.url) lines.push(`${p.caption || 'Photo'}: ${p.url}`);
+    });
+    return lines.length ? lines.join('\n') : '(check-in instructions not set yet)';
+  }
+  function resolveTemplatePlaceholders(text, conv){
+    let result = resolveBasePlaceholders(text, conv);
+    // @guidance is handled separately: the Description tab's own free
+    // text is allowed to contain the SAME keywords (@checkin, @wifiname,
+    // etc.) — a host writing "Welcome! @checkin / @checkout. WiFi:
+    // @wifiname" as their property description gets those filled in too,
+    // one level deep, before the whole thing is dropped into whatever
+    // template used @guidance.
+    if(result.toLowerCase().includes('@guidance')){
+      const rawGuidance = conv.guest_guidance || '(no additional guidance set yet)';
+      const resolvedGuidance = resolveBasePlaceholders(rawGuidance, conv);
+      result = result.replace(/@guidance/gi, resolvedGuidance);
+    }
+    // @checkinsteps — the host's own check-in steps only.
+    if(result.toLowerCase().includes('@checkinsteps')){
+      const lines = [];
+      (Array.isArray(conv.custom_fields) ? conv.custom_fields : []).forEach(f => { if(f.label && f.value) lines.push(`${f.label}: ${f.value}`); });
+      (Array.isArray(conv.checkin_photos) ? conv.checkin_photos : []).forEach(p => { if(p && p.url) lines.push(`${p.caption || 'Photo'}: ${p.url}`); });
+      result = result.replace(/@checkinsteps/gi, lines.length ? lines.join('\n') : '(check-in steps not set yet)');
+    }
+    // @checkininfo — the assembled fixed-fields-plus-custom-fields block,
+    // handled separately since it needs the custom_fields array, not a
+    // single string lookup like the base placeholders above.
+    if(result.toLowerCase().includes('@checkininfo')){
+      result = result.replace(/@checkininfo/gi, buildCheckinInstructionsText(conv));
+    }
+    return result;
+  }
+
+  async function loadInboxChatTemplates(conversationId){
+    const token = guestAuthToken();
+    const row = document.getElementById('inboxChatTemplatesRow');
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversationTemplates&conversationId=${conversationId}`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      const templates = data.templates || [];
+      if(!templates.length){ row.innerHTML = ''; return; }
+      // The button LABEL is the short title when there is one — the full
+      // body text (often a full sentence with keywords) makes a cramped,
+      // unreadable button label otherwise. The full body is still what
+      // actually gets inserted/resolved on click, via data-template — the
+      // title is purely cosmetic here.
+      row.innerHTML = templates.map(t => {
+        const label = t.title || (t.body.length > 40 ? t.body.slice(0, 40) + '…' : t.body);
+        return `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${label}</button>`;
+      }).join('');
+      row.querySelectorAll('[data-template]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const conv = inboxConversations.find(c => c.id === inboxCurrentConversationId);
+          const resolved = conv ? resolveTemplatePlaceholders(btn.dataset.template, conv) : btn.dataset.template;
+          document.getElementById('inboxChatInput').value = resolved;
+          document.getElementById('inboxChatInput').focus();
+        });
+      });
+    } catch(err){
+      row.innerHTML = '';
+    }
+  }
+
+
+  // ---- @keyword autosuggest — reusable across any input/textarea, not
+  // just the live message box. Typing "@" plus letters shows matching
+  // keywords; picking one inserts it as text. Used on both the chat
+  // input (for ad hoc messages, resolved at send time — see
+  // sendInboxMessage below) and the template body textarea (so a host
+  // gets the same help while authoring a saved template).
+  const KEYWORD_SUGGESTIONS = [
+    { key: '@guestname', desc: "Guest's name" },
+    { key: '@listing', desc: 'Property name' },
+    { key: '@arrival', desc: 'Arrival date' },
+    { key: '@departure', desc: 'Departure date' },
+    { key: '@nights', desc: 'Number of nights' },
+    { key: '@guests', desc: 'Number of guests' },
+    { key: '@checkin', desc: 'Check-in time' },
+    { key: '@checkout', desc: 'Check-out time' },
+    { key: '@wifi', desc: 'WiFi name and password' },
+    { key: '@wifiname', desc: 'WiFi network name' },
+    { key: '@wifipassword', desc: 'WiFi password' },
+    { key: '@accesscode', desc: 'Access / door code' },
+    { key: '@location', desc: 'Property address' },
+    { key: '@maplink', desc: 'Google Maps link' },
+    { key: '@checkinsteps', desc: 'Your check-in steps (Manage → Check-in)' },
+    { key: '@guidance', desc: 'Your saved property description' },
+    { key: '@hostname', desc: 'Your first name' },
+    { key: '@checkininfo', desc: 'All check-in details at once' }
+  ];
+
+  // opts.onKeydown(e, suggestWasOpen) — called for every keydown this
+  // factory doesn't itself need to handle, so the caller can still add
+  // its own behavior (e.g. Enter-to-send) without fighting over the
+  // same event. opts.onChange() — called after a suggestion is inserted,
+  // for anything the caller wants to re-run (resizing, previews, etc.).
+  function setupKeywordAutosuggest(inputEl, dropdownEl, opts = {}){
+    let matches = [];
+    let activeIndex = -1;
+
+    function findActiveMention(){
+      // Only triggers on the "@word" immediately before the cursor, not
+      // any "@" earlier in the text — same convention as @-mentions in
+      // most chat apps.
+      const cursor = inputEl.selectionStart;
+      const beforeCursor = inputEl.value.slice(0, cursor);
+      const match = beforeCursor.match(/@([a-zA-Z]*)$/);
+      if(!match) return null;
+      return { partial: match[0], startIndex: cursor - match[0].length, cursor };
+    }
+    function close(){
+      dropdownEl.style.display = 'none';
+      matches = [];
+    }
+    function render(){
+      const mention = findActiveMention();
+      if(!mention){ close(); return; }
+      const term = mention.partial.slice(1).toLowerCase();
+      matches = KEYWORD_SUGGESTIONS.filter(s => s.key.slice(1).toLowerCase().startsWith(term));
+      if(!matches.length){ close(); return; }
+      activeIndex = 0;
+      dropdownEl.innerHTML = matches.map((s, i) => `
+        <div class="inbox-keyword-suggest-item${i === 0 ? ' active' : ''}" data-suggest-index="${i}">
+          <code>${s.key}</code><span>${s.desc}</span>
+        </div>
+      `).join('');
+      dropdownEl.style.display = 'block';
+      dropdownEl.querySelectorAll('[data-suggest-index]').forEach(el => {
+        el.addEventListener('mousedown', (e) => {
+          // mousedown, not click — fires before the input loses focus,
+          // so apply() can still read/restore the cursor position cleanly.
+          e.preventDefault();
+          apply(mention, matches[Number(el.dataset.suggestIndex)]);
+        });
+      });
+    }
+    function apply(mention, suggestion){
+      const before = inputEl.value.slice(0, mention.startIndex);
+      const after = inputEl.value.slice(mention.cursor);
+      const insertion = suggestion.key + ' ';
+      inputEl.value = before + insertion + after;
+      const newCursor = before.length + insertion.length;
+      inputEl.focus();
+      inputEl.setSelectionRange(newCursor, newCursor);
+      close();
+      if(opts.onChange) opts.onChange();
+    }
+
+    inputEl.addEventListener('input', render);
+    inputEl.addEventListener('blur', () => {
+      // Small delay so a mousedown on a suggestion (which fires before
+      // blur) still gets to run its handler before the dropdown disappears.
+      setTimeout(close, 150);
+    });
+    inputEl.addEventListener('keydown', (e) => {
+      const isOpen = dropdownEl.style.display === 'block' && matches.length;
+      if(isOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')){
+        e.preventDefault();
+        const delta = e.key === 'ArrowDown' ? 1 : -1;
+        activeIndex = (activeIndex + delta + matches.length) % matches.length;
+        dropdownEl.querySelectorAll('.inbox-keyword-suggest-item').forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+        return;
+      }
+      if(isOpen && (e.key === 'Enter' || e.key === 'Tab')){
+        e.preventDefault();
+        const mention = findActiveMention();
+        if(mention) apply(mention, matches[activeIndex]);
+        return;
+      }
+      if(isOpen && e.key === 'Escape'){
+        close();
+        return;
+      }
+      if(opts.onKeydown) opts.onKeydown(e, isOpen);
+    });
+  }
+
+  async function sendInboxMessage(){
+    const input = document.getElementById('inboxChatInput');
+    const rawText = input.value.trim();
+    if(!rawText || !inboxCurrentConversationId) return;
+    const token = guestAuthToken();
+    // Ad hoc keyword resolution — a host typing "@checkin" directly into
+    // the message box (whether picked from the suggestion dropdown or
+    // just typed by hand) gets it resolved to the real value right here,
+    // the same way a saved template does, without needing to save
+    // anything as a template first. Guest-sent messages are left as-is:
+    // a guest has no check-in/WiFi/etc. data of their own to resolve
+    // against, so applying this on their side wouldn't mean anything.
+    let text = rawText;
+    if(inboxCurrentRole === 'host'){
+      const conv = inboxConversations.find(c => c.id === inboxCurrentConversationId);
+      if(conv) text = resolveTemplatePlaceholders(rawText, conv);
+    }
+    input.disabled = true;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ mode: 'send', conversationId: inboxCurrentConversationId, text, role: inboxCurrentRole })
+      });
+      if(res.ok){
+        input.value = '';
+        document.getElementById('inboxChatWarning').style.display = 'none';
+        await refreshInboxMessages();
+        loadInboxConversations(); // refreshes last-message preview in the list
+      }
+    } catch(err){ /* retryable — message just doesn't appear */ }
+    input.disabled = false;
+    input.focus();
+  }
+  document.getElementById('inboxChatSendBtn').addEventListener('click', sendInboxMessage);
+  document.getElementById('inboxChatInput').addEventListener('input', function(){
+    document.getElementById('inboxChatWarning').style.display = looksLikeContactInfo(this.value) ? 'block' : 'none';
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+  });
+  setupKeywordAutosuggest(document.getElementById('inboxChatInput'), document.getElementById('inboxKeywordSuggest'), {
+    onKeydown: (e, suggestOpen) => {
+      if(!suggestOpen && e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendInboxMessage(); }
+    }
+  });
+  // Same autosuggest, attached to the template body textarea — a host
+  // gets the same @keyword help while writing a template as while
+  // sending an ad hoc message. No special Enter handling needed here;
+  // a textarea's normal newline-on-Enter behavior is exactly right for
+  // composing a multi-line template.
+  setupKeywordAutosuggest(document.getElementById('inboxTemplateBodyInput'), document.getElementById('inboxTemplateKeywordSuggest'));
+
+  // ---- Quick-reply template manager (behind the gear icon) ----
+  document.getElementById('inboxSettingsBtn').addEventListener('click', () => {
+    document.getElementById('inboxTemplatesPanel').style.display = 'flex';
+    // Always reopens on the Templates tab, regardless of which tab was
+    // active last time — a predictable default rather than remembering
+    // per-session state for a rarely-opened settings panel.
+    document.querySelectorAll('.guest-info-tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector('[data-guest-info-tab="inboxTemplatesTab"]').classList.add('active');
+    document.getElementById('inboxTemplatesTab').style.display = 'block';
+    document.getElementById('inboxDescriptionTab').style.display = 'none';
+    inboxTemplateScheduleListingsLoaded = false; // refetch fresh each time the panel reopens
+    closeTemplateForm();
+    loadInboxTemplateManager();
+  });
+  document.getElementById('inboxTemplatesCloseBtn').addEventListener('click', () => {
+    document.getElementById('inboxTemplatesPanel').style.display = 'none';
+  });
+
+  // ---- Templates / Description tab switch within that same panel ----
+  document.querySelectorAll('.guest-info-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.guest-info-tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('inboxTemplatesTab').style.display = 'none';
+      document.getElementById('inboxDescriptionTab').style.display = 'none';
+      btn.classList.add('active');
+      const target = document.getElementById(btn.dataset.guestInfoTab);
+      target.style.display = 'flex';
+      target.style.flexDirection = 'column';
+      if(btn.dataset.guestInfoTab === 'inboxDescriptionTab') loadInboxGuidanceTab();
+    });
+  });
+
+  let inboxGuidanceListings = [];
+  async function loadInboxGuidanceTab(){
+    const token = guestAuthToken();
+    const select = document.getElementById('inboxGuidanceListingSelect');
+    select.innerHTML = '<option value="">Loading your properties…</option>';
+    document.getElementById('inboxGuidanceTextarea').value = '';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myListingsGuidance', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      inboxGuidanceListings = data.listings || [];
+      if(!inboxGuidanceListings.length){
+        select.innerHTML = '<option value="">You don\'t have any properties yet</option>';
+        return;
+      }
+      select.innerHTML = inboxGuidanceListings.map(l => `<option value="${l.id}">${l.property_name}</option>`).join('');
+      document.getElementById('inboxGuidanceTextarea').value = inboxGuidanceListings[0].guest_guidance || '';
+    } catch(err){
+      select.innerHTML = '<option value="">Could not load your properties</option>';
+    }
+  }
+  document.getElementById('inboxGuidanceListingSelect').addEventListener('change', function(){
+    const listing = inboxGuidanceListings.find(l => String(l.id) === this.value);
+    document.getElementById('inboxGuidanceTextarea').value = listing ? (listing.guest_guidance || '') : '';
+    document.getElementById('inboxGuidanceSaveMsg').style.display = 'none';
+  });
+  document.getElementById('inboxSaveGuidanceBtn').addEventListener('click', async () => {
+    const token = guestAuthToken();
+    const select = document.getElementById('inboxGuidanceListingSelect');
+    const listingId = select.value;
+    const guidance = document.getElementById('inboxGuidanceTextarea').value;
+    const msgEl = document.getElementById('inboxGuidanceSaveMsg');
+    if(!listingId) return;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ mode: 'saveListingGuidance', listingId: Number(listingId), guidance })
+      });
+      const data = await res.json();
+      msgEl.style.display = 'block';
+      if(res.ok){
+        msgEl.textContent = 'Description saved.';
+        msgEl.style.color = '#3a7d44';
+        const listing = inboxGuidanceListings.find(l => String(l.id) === listingId);
+        if(listing) listing.guest_guidance = guidance;
+      } else {
+        msgEl.textContent = data.error || 'Could not save right now.';
+        msgEl.style.color = '#a3402f';
+      }
+    } catch(err){
+      msgEl.style.display = 'block';
+      msgEl.textContent = 'Could not save right now.';
+      msgEl.style.color = '#a3402f';
+    }
+  });
+
+  // ---- Message templates: ready-made library, your templates (edit /
+  // delete), and the editor with "Send" timing. Server: guest-profile.js
+  // (templates / saveTemplate / deleteTemplate); timed sending:
+  // _template-scheduling.js.
+  const TEMPLATE_LIBRARY = [
+    { title: 'Booking confirmed', trigger: 'booking_confirmed', days: 0,
+      body: 'Hi @guestname,\n\nThank you for booking @listing for @nights night(s), @arrival to @departure. I look forward to hosting you.\n\nI’ll send check-in details before you arrive. Message me here any time.\n\n@hostname' },
+    { title: 'Check-in details', trigger: 'before_checkin', days: 2,
+      body: 'Hi @guestname,\n\nYour stay at @listing starts on @arrival.\n\nCheck-in: from @checkin\nCheck-out: by @checkout\nAddress: @location\nMap: @maplink\n\n@checkinsteps\n\nPlease carry a government photo ID for every adult guest.\n\nSee you soon,\n@hostname' },
+    { title: 'Welcome on check-in day', trigger: 'checkin_day', days: 0,
+      body: 'Welcome, @guestname! Today is check-in day at @listing.\n\nCheck-in: from @checkin\n@wifi\n\nMessage me here if you need anything.' },
+    { title: 'Check-out reminder', trigger: 'checkout_day', days: 0,
+      body: 'Good morning, @guestname. Check-out is by @checkout today.\n\nBefore you leave: close windows and doors, switch off lights and AC, and leave the keys as agreed.\n\nThank you for staying. Safe travels!' },
+    { title: 'Thank you', trigger: 'after_checkout', days: 1,
+      body: 'Hi @guestname,\n\nThank you for staying at @listing. I hope you had a lovely time.\n\nPlease leave a review on Aerva. It helps other guests and me.\n\nYou’re always welcome back,\n@hostname' },
+    { title: 'Directions', trigger: 'manual', days: 0,
+      body: 'Here is how to find @listing:\n@location\n@maplink' },
+    { title: 'WiFi', trigger: 'manual', days: 0, body: '@wifi' }
+  ];
+  function templateWhen(t){
+    const n = Number(t.send_offset_days) || 1;
+    switch(t.send_trigger){
+      case 'booking_confirmed': return 'Sent when a booking is confirmed';
+      case 'before_checkin': return `Sent ${n} day${n === 1 ? '' : 's'} before check-in`;
+      case 'checkin_day': return 'Sent on check-in day';
+      case 'checkout_day': return 'Sent on check-out day';
+      case 'after_checkout': return `Sent ${n} day${n === 1 ? '' : 's'} after check-out`;
+      default: return 'Sent when you tap it';
+    }
+  }
+  let templateEditingId = null;
+  let templateList = [];
+
+  function syncTemplateTriggerFields(){
+    const trig = document.getElementById('tplTrigger').value;
+    const needsDays = trig === 'before_checkin' || trig === 'after_checkout';
+    const timed = ['before_checkin', 'checkin_day', 'checkout_day', 'after_checkout'].includes(trig);
+    document.getElementById('tplDaysWrap').style.display = needsDays ? 'block' : 'none';
+    const note = document.getElementById('tplTimingNote');
+    note.textContent = (trig === 'before_checkin' || trig === 'checkin_day')
+      ? 'Sent about 7:30 am (property’s local date). Booked later than that? Sent as soon as the booking is confirmed.'
+      : timed ? 'Sent about 7:30 am on the day (property’s local date).' : '';
+    note.style.display = timed ? 'block' : 'none';
+    document.getElementById('inboxTemplateScheduleOptions').style.display = trig === 'manual' ? 'none' : 'block';
+    if(trig !== 'manual' && !inboxTemplateScheduleListingsLoaded) return loadInboxTemplateScheduleListings();
+    return Promise.resolve();
+  }
+  function openTemplateForm(){
+    document.getElementById('tplForm').style.display = 'flex';
+    document.getElementById('tplCreateBtn').style.display = 'none';
+    document.getElementById('inboxTemplateSaveMsg').style.display = 'none';
+    try{ document.getElementById('tplForm').scrollIntoView({ behavior: 'smooth', block: 'start' }); }catch(e){}
+  }
+  function closeTemplateForm(){
+    resetTemplateForm();
+    document.getElementById('tplForm').style.display = 'none';
+    document.getElementById('tplCreateBtn').style.display = '';
+  }
+  function resetTemplateForm(){
+    templateEditingId = null;
+    document.getElementById('tplFormTitle').textContent = 'Create template';
+    document.getElementById('tplStartFromWrap').style.display = '';
+    document.getElementById('tplStartFrom').value = '';
+    document.getElementById('inboxTemplateTitleInput').value = '';
+    document.getElementById('inboxTemplateBodyInput').value = '';
+    document.getElementById('tplTrigger').value = 'manual';
+    document.getElementById('tplDays').value = 2;
+    document.querySelectorAll('.inbox-template-schedule-listing').forEach(cb => { cb.checked = false; });
+    syncTemplateTriggerFields();
+  }
+  async function editTemplate(t){
+    resetTemplateForm();
+    openTemplateForm();
+    templateEditingId = t.id;
+    document.getElementById('tplFormTitle').textContent = 'Edit template';
+    document.getElementById('tplStartFromWrap').style.display = 'none';
+    document.getElementById('inboxTemplateTitleInput').value = t.title || '';
+    document.getElementById('inboxTemplateBodyInput').value = t.body || '';
+    document.getElementById('tplTrigger').value = t.send_trigger || 'manual';
+    document.getElementById('tplDays').value = Number(t.send_offset_days) || 2;
+    await syncTemplateTriggerFields();
+    const ids = (t.auto_send_listing_ids || []).map(Number);
+    document.querySelectorAll('.inbox-template-schedule-listing').forEach(cb => { cb.checked = ids.includes(Number(cb.value)); });
+  }
+
+  async function saveTemplatePayload(payload){
+    const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+      body: JSON.stringify(Object.assign({ mode: 'saveTemplate' }, payload))
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data.error || 'Could not save template.');
+    return data;
+  }
+  function showTemplateMsg(text, good){
+    const el = document.getElementById('inboxTemplateSaveMsg');
+    el.textContent = text;
+    el.style.display = 'block';
+    el.style.color = good ? '#3a7d44' : '#a3402f';
+  }
+
+  function renderTemplateLibrary(){ /* ready-made templates now live in Create → Start from */ }
+
+  async function loadInboxTemplateManager(){
+    const container = document.getElementById('inboxTemplateListContainer');
+    container.innerHTML = '<p class="tpl-hint">Loading…</p>';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=templates', { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
+      const data = await res.json();
+      templateList = data.templates || [];
+      renderTemplateLibrary();
+      if(!templateList.length){ container.innerHTML = '<p class="tpl-hint">No templates yet. Tap Create template.</p>'; return; }
+      const esc = escapeMessageHtml;
+      container.innerHTML = templateList.map(t => {
+        const n = (t.auto_send_listing_ids || []).length;
+        return `<div class="tpl-item">
+          <div class="tpl-item-text">
+            <strong>${esc(t.title || 'Untitled')}</strong>
+            <span class="tpl-when">${esc(templateWhen(t))}${t.send_trigger !== 'manual' && n ? ` · ${n} propert${n === 1 ? 'y' : 'ies'}` : ''}</span>
+            <span class="tpl-body">${esc(t.body)}</span>
+          </div>
+          <div class="tpl-item-actions">
+            <button type="button" class="tpl-btn" data-edit-template="${Number(t.id)}">Edit</button>
+            <button type="button" class="tpl-btn" data-delete-template="${Number(t.id)}">Delete</button>
+          </div>
+        </div>`;
+      }).join('');
+      container.querySelectorAll('[data-edit-template]').forEach(btn => btn.addEventListener('click', () => {
+        const t = templateList.find(x => Number(x.id) === Number(btn.dataset.editTemplate));
+        if(t) editTemplate(t);
+      }));
+      container.querySelectorAll('[data-delete-template]').forEach(btn => btn.addEventListener('click', async () => {
+        if(!confirm('Delete this template?')) return;
+        try{
+          await fetch(SUITES_API_BASE + '/api/guest-profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+            body: JSON.stringify({ mode: 'deleteTemplate', templateId: Number(btn.dataset.deleteTemplate) })
+          });
+          if(Number(btn.dataset.deleteTemplate) === templateEditingId) closeTemplateForm();
+          loadInboxTemplateManager();
+        }catch(err){ /* list stays as it was; tap again */ }
+      }));
+    }catch(err){
+      container.innerHTML = '<p class="tpl-hint" style="color:#a3402f;">Could not load templates.</p>';
+    }
+  }
+
+  let inboxTemplateScheduleListingsLoaded = false;
+  async function loadInboxTemplateScheduleListings(){
+    const container = document.getElementById('inboxTemplateScheduleListings');
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myListingsGuidance', { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
+      const data = await res.json();
+      const listings = data.listings || [];
+      inboxTemplateScheduleListingsLoaded = true;
+      container.innerHTML = listings.length
+        ? listings.map(l => `<label class="tpl-check"><input type="checkbox" class="inbox-template-schedule-listing" value="${Number(l.id)}"> ${escapeMessageHtml(l.property_name)}</label>`).join('')
+        : '<p class="tpl-hint">You don’t have any properties yet.</p>';
+    }catch(err){
+      container.innerHTML = '<p class="tpl-hint" style="color:#a3402f;">Could not load your properties.</p>';
+    }
+  }
+
+  (function wireTemplateEditor(){
+    const chips = document.getElementById('tplPlaceholders');
+    const bodyEl = document.getElementById('inboxTemplateBodyInput');
+    // Every placeholder, existing and new, with what it fills in.
+    chips.innerHTML = KEYWORD_SUGGESTIONS.map(k => `<button type="button" class="tpl-ph-row" data-chip="${k.key}"><code>${k.key}</code><span>${escapeMessageHtml(k.desc)}</span></button>`).join('');
+    const startFrom = document.getElementById('tplStartFrom');
+    startFrom.innerHTML = '<option value="">Blank</option>' + TEMPLATE_LIBRARY.map((t, i) => `<option value="${i}">${escapeMessageHtml(t.title)}</option>`).join('');
+    startFrom.addEventListener('change', () => {
+      const t = TEMPLATE_LIBRARY[Number(startFrom.value)];
+      if(!t) return;
+      document.getElementById('inboxTemplateTitleInput').value = t.title;
+      bodyEl.value = t.body;
+      document.getElementById('tplTrigger').value = t.trigger;
+      document.getElementById('tplDays').value = t.days || 2;
+      syncTemplateTriggerFields();
+    });
+    document.getElementById('tplCreateBtn').addEventListener('click', () => { resetTemplateForm(); openTemplateForm(); });
+    chips.querySelectorAll('[data-chip]').forEach(c => c.addEventListener('click', () => {
+      const k = c.dataset.chip;
+      const start = bodyEl.selectionStart != null ? bodyEl.selectionStart : bodyEl.value.length;
+      const end = bodyEl.selectionEnd != null ? bodyEl.selectionEnd : start;
+      const before = bodyEl.value.slice(0, start);
+      const needsSpace = before && !/\s$/.test(before);
+      bodyEl.value = before + (needsSpace ? ' ' : '') + k + ' ' + bodyEl.value.slice(end);
+      const pos = before.length + (needsSpace ? 1 : 0) + k.length + 1;
+      bodyEl.focus();
+      try{ bodyEl.setSelectionRange(pos, pos); }catch(e){}
+    }));
+    document.getElementById('tplTrigger').addEventListener('change', syncTemplateTriggerFields);
+    document.getElementById('tplCancelEdit').addEventListener('click', closeTemplateForm);
+    document.getElementById('inboxAddTemplateBtn').addEventListener('click', async () => {
+      const title = document.getElementById('inboxTemplateTitleInput').value.trim();
+      const body = bodyEl.value.trim();
+      if(!body){ showTemplateMsg('Write the message first.', false); return; }
+      const trigger = document.getElementById('tplTrigger').value;
+      const days = Number(document.getElementById('tplDays').value) || 1;
+      const ids = trigger === 'manual' ? [] : Array.from(document.querySelectorAll('.inbox-template-schedule-listing:checked')).map(cb => Number(cb.value));
+      const btn = document.getElementById('inboxAddTemplateBtn');
+      btn.disabled = true;
+      try{
+        await saveTemplatePayload({ templateId: templateEditingId || undefined, title, body, sendTrigger: trigger, sendOffsetDays: days, autoSendListingIds: ids });
+        const msg = templateEditingId ? 'Changes saved.' : 'Template created.';
+        closeTemplateForm();
+        showTemplateMsg(msg, true);
+        loadInboxTemplateManager();
+      }catch(err){ showTemplateMsg(err.message, false); }
+      btn.disabled = false;
+    });
+  })();
+
+  async function performSearch(){
+    const arrival = searchArrivalDate;
+    const departure = searchDepartureDate;
+    const city = document.getElementById('searchCity').value.trim();
+    const guests = document.getElementById('searchGuests').value;
+    const statusEl = document.getElementById('searchStatus');
+
+    if((arrival && !departure) || (!arrival && departure)){
+      statusEl.textContent = 'Please pick both an arrival and departure date, or leave both blank.';
+      statusEl.style.display = 'block';
+      return;
+    }
+    if(arrival && departure && new Date(departure) <= new Date(arrival)){
+      statusEl.textContent = 'Departure must be after arrival.';
+      statusEl.style.display = 'block';
+      return;
+    }
+
+    const container = document.getElementById('suitesContainer');
+    container.innerHTML = '<div class="suites-loading">Searching…</div>';
+    statusEl.style.display = 'none';
+
+    // A typed place is turned into "within 200km" rather than an exact
+    // text match — geocoding failure (an unrecognized place name) just
+    // falls back to no location filter at all, rather than blocking search.
+    // If the guest picked a real suggestion, we already have exact
+    // coordinates — no need to geocode the same text again. Only fall
+    // back to geocoding when they typed freely without selecting one —
+    // freeForwardGeocode tries Nominatim first, Google only if that fails.
+    const selectedLat = document.getElementById('searchPlaceLat').value;
+    const selectedLng = document.getElementById('searchPlaceLng').value;
+    const geocoded = (selectedLat && selectedLng)
+      ? { lat: Number(selectedLat), lng: Number(selectedLng) }
+      : (city ? await freeForwardGeocode(city) : null);
+
+    if(city) saveRecentSearch(city, geocoded ? geocoded.lat : '', geocoded ? geocoded.lng : '');
+
+    const params = new URLSearchParams();
+    if(geocoded){
+      params.set('lat', geocoded.lat);
+      params.set('lng', geocoded.lng);
+      params.set('radiusKm', '200');
+      // City text is deliberately NOT also sent here — get-listings.js
+      // ignores it when a real distance search is active anyway, and
+      // more importantly shouldn't apply it: a "Mumbai" search should
+      // still surface a nearby Pune listing within 200km, even though
+      // its city field says "Pune," not "Mumbai."
+    } else if(city){
+      // Geocoding failed — still worth trying the old exact-text match
+      // as a fallback rather than silently dropping the filter.
+      params.set('city', city);
+    }
+    if(guests) params.set('guests', guests);
+    if(arrival && departure){ params.set('arrival', arrival); params.set('departure', departure); }
+    // Optional. "At least N rooms" in one property: a home's bedrooms, or
+    // a Resort's bookable rooms (free ones, when dates are set). See
+    // get-listings.js.
+    const roomsNeeded = document.getElementById('roomsNeeded').value;
+    if(roomsNeeded) params.set('roomsNeeded', roomsNeeded);
+
+    try{
+      // Scoped to whichever tab is actually active — searching while on
+      // "Aerva Experience" only touches experience results, and switching
+      // to "Suites" afterward shows suites completely unaffected by that
+      // search (and vice versa). Only "All" updates both together, since
+      // that view is showing both anyway.
+      const searchSuites = currentCategoryFilter !== 'experiences';
+      const searchExperiences = currentCategoryFilter !== 'suites';
+      let suitesCount = approvedListings.length;
+      let experiencesCount = approvedExperiences.length;
+
+      if(searchSuites){
+        const url = SUITES_API_BASE + '/api/get-listings' + (params.toString() ? '?' + params.toString() : '');
+        const res = await fetch(url);
+        if(!res.ok) throw new Error('Search failed');
+        const data = await res.json();
+        approvedListings = data.listings || [];
+        listingsById = {};
+        approvedListings.forEach(l => { listingsById[l.id] = l; });
+        suitesCount = approvedListings.length;
+      }
+
+      // Same location filter now applies to experiences too — same
+      // params, same 200km radius, just against the experiences=1 mode
+      // instead. Dates now carry over too — a searched date range that
+      // overlaps a host-blocked range (or an existing booking) excludes
+      // that experience from results, same rule stays already have.
+      // Guest count still doesn't carry over — experiences don't have a
+      // capacity concept at search time the way a stay's guest count does.
+      if(searchExperiences){
+        const expParams = new URLSearchParams({ experiences: '1' });
+        if(geocoded){
+          expParams.set('lat', geocoded.lat);
+          expParams.set('lng', geocoded.lng);
+          expParams.set('radiusKm', '200');
+        } else if(city){
+          expParams.set('city', city);
+        }
+        if(arrival && departure){
+          expParams.set('arrival', arrival);
+          expParams.set('departure', departure);
+        }
+        try{
+          const expRes = await fetch(SUITES_API_BASE + '/api/get-listings?' + expParams.toString());
+          if(expRes.ok){
+            const expData = await expRes.json();
+            approvedExperiences = expData.experiences || [];
+            experiencesById = {};
+            approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
+            experiencesLoaded = true;
+            experiencesCount = approvedExperiences.length;
+          }
+        } catch(expErr){
+          // Non-fatal — the search still shows correctly-filtered suites
+          // even if the experiences half of the request specifically failed.
+        }
+      }
+
+      const hasFilters = city || guests || (arrival && departure) || roomsNeeded;
+      if(hasFilters){
+        // Only counts whichever type(s) this search actually touched —
+        // a suites-only search reporting an experience count that didn't
+        // change would be misleading about what was actually searched.
+        const totalResults = (searchSuites ? suitesCount : 0) + (searchExperiences ? experiencesCount : 0);
+        statusEl.textContent = totalResults
+          ? `Showing ${totalResults} result${totalResults === 1 ? '' : 's'} matching your search.`
+          : 'Nothing matches your search — try different dates, guests, or place.';
+        statusEl.style.display = 'block';
+      }
+
+      // Did the typed/selected place resolve to one specific property's
+      // own address, rather than just a general city/area? A guest
+      // typing "The Willow Cottage, Jibhi" (or picking that exact
+      // address from the autocomplete) will geocode to essentially the
+      // same point the host saved for that listing — a general area
+      // search never lands this close to one exact building. 300m alone
+      // isn't quite enough of a guarantee, though — a broad city/
+      // district search (e.g. "Mumbai Suburban") can coincidentally
+      // geocode to a point within 300m of some listing purely by chance,
+      // especially in a dense area, which used to hide every other
+      // result behind a false "this one property matches" screen. Now
+      // also requires the searched text to actually share a real word
+      // with that listing's own name or address — a genuine address
+      // search naturally does; a city/area name coincidentally landing
+      // nearby doesn't.
+      function sharesSignificantWord(searchText, listingText){
+        const STOPWORDS = new Set(['the','and','near','city','area','district','sub','suburban','resort','stay','home','villa','apartment','road','street','nagar']);
+        const tokenize = (s) => (s || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3 && !STOPWORDS.has(w));
+        const searchWords = new Set(tokenize(searchText));
+        return tokenize(listingText).some(w => searchWords.has(w));
+      }
+
+      specificListingMatch = null;
+      specificListingMatchGeo = null;
+      if(searchSuites && geocoded){
+        const TIGHT_MATCH_KM = 0.3;
+        let closest = null, closestKm = Infinity;
+        approvedListings.forEach(l => {
+          if(l.latitude && l.longitude){
+            const km = haversineDistanceKm(geocoded.lat, geocoded.lng, Number(l.latitude), Number(l.longitude));
+            if(km < closestKm){ closestKm = km; closest = l; }
+          }
+        });
+        if(closest && closestKm <= TIGHT_MATCH_KM && sharesSignificantWord(city, closest.property_name)){
+          specificListingMatch = closest;
+          specificListingMatchGeo = geocoded;
+        }
+      }
+
+      applyFiltersAndRender();
+    } catch(err){
+      container.innerHTML = '<div class="suites-empty">Could not search right now. Please try again.</div>';
+    }
+  }
+
+  // ---- Listing detail modal ----
+  // Shared by the full listing page (and kept for the modal, in case it's
+  // ever wired back up) — builds the photos + content HTML for one
+  // listing's detail view. Never trims the description here: that's
+  // deliberately kept off the small grid cards, but a guest who opened
+  // the full listing page asked to see everything.
+  // ---- Photo collage + lightbox (listing detail view only) ----
+  // Shows up to 4 photos as a 2x2 grid instead of the one-at-a-time
+  // carousel. A 5th+ photo doesn't get hidden — the 4th tile shows a
+  // "+N photos" overlay, and any tile click opens the lightbox below
+  // with every photo, starting at whichever one was clicked.
+  function buildPhotoCollageHtml(photos, altText, listingId){
+    if(!photos.length) return '';
+    if(photos.length === 1){
+      return `<div class="photo-collage-single" data-lightbox-photos data-listing-id="${listingId}"><img src="${photos[0]}" alt="${altText}" loading="lazy" data-lightbox-index="0"></div>`;
+    }
+    const shown = photos.slice(0, 4);
+    const remaining = photos.length - shown.length;
+    const tiles = shown.map((url, i) => {
+      const isLastVisible = i === shown.length - 1;
+      const overlay = (isLastVisible && remaining > 0)
+        ? `<div class="photo-collage-more-overlay">+${remaining} photo${remaining === 1 ? '' : 's'}</div>`
+        : '';
+      return `<div class="photo-collage-tile" data-lightbox-index="${i}"><img src="${url}" alt="${altText}" loading="lazy">${overlay}</div>`;
+    }).join('');
+    return `<div class="photo-collage" data-lightbox-photos data-listing-id="${listingId}">${tiles}</div>`;
+  }
+
+  let lightboxPhotos = [];
+  let lightboxIndex = 0;
+
+  // Shows every room's own photos, clearly labeled, so a guest browsing
+  // a Resort with several rooms can actually tell which bedroom is
+  // which before picking — the whole-listing photo pool used to mix
+  // every room's photos together with no way to tell them apart. Once
+  // the guest checks a room (or rooms), this narrows to just those
+  // room(s)' own photos instead, since at that point the guest has
+  // already told us which room(s) they actually care about.
+  function renderRoomAwarePhotos(listing, selectedRoomIds){
+    const container = document.getElementById('resortPhotosContainer');
+    if(!container) return;
+    const rooms = Array.isArray(listing.rooms) ? listing.rooms : [];
+    window.roomPhotosForLightbox = window.roomPhotosForLightbox || {};
+
+    const roomsToShow = (selectedRoomIds && selectedRoomIds.length)
+      ? rooms.filter(r => selectedRoomIds.includes(r.id))
+      : rooms;
+
+    let html = '';
+    roomsToShow.forEach(room => {
+      const photos = Array.isArray(room.photos) ? room.photos : (room.coverPhotoUrl ? [room.coverPhotoUrl] : []);
+      if(!photos.length) return;
+      const lightboxId = `room-${listing.id}-${room.id}`;
+      window.roomPhotosForLightbox[lightboxId] = photos;
+      html += `
+        <div style="margin-bottom:18px;">
+          <div style="font-size:12.5px; font-weight:600; margin-bottom:8px;">${room.roomName || 'Room'}</div>
+          ${buildPhotoCollageHtml(photos, room.roomName || listing.property_name, lightboxId)}
+        </div>
+      `;
+    });
+
+    // Exterior/common-area shots aren't tied to any one room — shown
+    // underneath, once, regardless of which room(s) are selected, so a
+    // guest can still see the grounds/shared spaces either way.
+    const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
+    if(exteriorPhotos.length){
+      const lightboxId = `room-${listing.id}-common`;
+      window.roomPhotosForLightbox[lightboxId] = exteriorPhotos;
+      html += `
+        <div style="margin-bottom:18px;">
+          <div style="font-size:12.5px; font-weight:600; margin-bottom:8px;">Common Areas &amp; Grounds</div>
+          ${buildPhotoCollageHtml(exteriorPhotos, listing.property_name, lightboxId)}
+        </div>
+      `;
+    }
+
+    container.innerHTML = html || '<p style="font-size:13px; opacity:0.6;">No photos available yet.</p>';
+  }
+
+  function openPhotoLightbox(photos, startIndex){
+    lightboxPhotos = photos;
+    lightboxIndex = startIndex || 0;
+    renderPhotoLightbox();
+  }
+  function renderPhotoLightbox(){
+    let overlay = document.getElementById('photoLightboxOverlay');
+    if(!overlay){
+      overlay = document.createElement('div');
+      overlay.className = 'photo-lightbox-overlay';
+      overlay.id = 'photoLightboxOverlay';
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => { if(e.target === overlay) closePhotoLightbox(); });
+    }
+    overlay.innerHTML = `
+      <button type="button" class="photo-lightbox-close" id="photoLightboxCloseBtn" aria-label="Close">&times;</button>
+      ${lightboxPhotos.length > 1 ? '<button type="button" class="photo-lightbox-nav photo-lightbox-prev" id="photoLightboxPrevBtn" aria-label="Previous photo">&larr;</button>' : ''}
+      <img class="photo-lightbox-img" src="${lightboxPhotos[lightboxIndex]}" alt="">
+      ${lightboxPhotos.length > 1 ? '<button type="button" class="photo-lightbox-nav photo-lightbox-next" id="photoLightboxNextBtn" aria-label="Next photo">&rarr;</button>' : ''}
+      ${lightboxPhotos.length > 1 ? `<div class="photo-lightbox-counter">${lightboxIndex + 1} / ${lightboxPhotos.length}</div>` : ''}
+    `;
+    overlay.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    document.getElementById('photoLightboxCloseBtn').addEventListener('click', closePhotoLightbox);
+    const prevBtn = document.getElementById('photoLightboxPrevBtn');
+    const nextBtn = document.getElementById('photoLightboxNextBtn');
+    if(prevBtn) prevBtn.addEventListener('click', () => { lightboxIndex = (lightboxIndex - 1 + lightboxPhotos.length) % lightboxPhotos.length; renderPhotoLightbox(); });
+    if(nextBtn) nextBtn.addEventListener('click', () => { lightboxIndex = (lightboxIndex + 1) % lightboxPhotos.length; renderPhotoLightbox(); });
+  }
+  function closePhotoLightbox(){
+    const overlay = document.getElementById('photoLightboxOverlay');
+    if(overlay) overlay.style.display = 'none';
+    document.body.style.overflow = document.getElementById('listingModalOverlay').style.display === 'flex' ? 'hidden' : '';
+  }
+  // Delegated click handler — works for any collage rendered anywhere,
+  // present or future, without needing per-tile listeners re-attached
+  // every time the modal content is rebuilt.
+  document.addEventListener('click', function(e){
+    const tile = e.target.closest('[data-lightbox-photos] [data-lightbox-index]');
+    if(!tile) return;
+    const wrap = tile.closest('[data-lightbox-photos]');
+    // The collage only ever keeps up to 4 <img> tiles in the DOM even
+    // when more photos exist — reopen against the listing's FULL photo
+    // list (same order used to build the collage), not just what's
+    // visibly rendered, so "+N photos" genuinely shows everything.
+    let fullList = Array.from(wrap.querySelectorAll('img')).map(img => img.src);
+    const rawId = wrap.dataset.listingId;
+    const listing = listingsById[rawId];
+    if(listing){
+      const ext = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
+      const intr = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
+      let all = [...intr, ...ext];
+      if(listing.cover_photo_url && all.includes(listing.cover_photo_url)){
+        all = [listing.cover_photo_url, ...all.filter(u => u !== listing.cover_photo_url)];
+      }
+      if(all.length) fullList = all;
+    } else if(typeof rawId === 'string' && rawId.startsWith('exp-hosting-')){
+      // The "Your Stay" collage inside an experience's detail page (see
+      // buildExperienceDetailHtml) — uses the hosting property's OWN
+      // photo fields, kept on the experience object itself rather than
+      // in listingsById (experiences aren't stay listings).
+      const exp = experiencesById[rawId.replace('exp-hosting-', '')];
+      if(exp){
+        const ext = Array.isArray(exp.hosting_exterior_photo_urls) ? exp.hosting_exterior_photo_urls : [];
+        const intr = Array.isArray(exp.hosting_interior_photo_urls) ? exp.hosting_interior_photo_urls : [];
+        let all = [...intr, ...ext];
+        if(exp.hosting_cover_photo_url && all.includes(exp.hosting_cover_photo_url)){
+          all = [exp.hosting_cover_photo_url, ...all.filter(u => u !== exp.hosting_cover_photo_url)];
+        }
+        if(all.length) fullList = all;
+      }
+    } else if(typeof rawId === 'string' && rawId.startsWith('exp-')){
+      // The experience's own photo collage at the top of its detail page.
+      const exp = experiencesById[rawId.replace('exp-', '')];
+      if(exp){
+        const ext = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
+        const intr = Array.isArray(exp.interior_photo_urls) ? exp.interior_photo_urls : [];
+        let all = [...intr, ...ext];
+        if(exp.cover_photo_url && all.includes(exp.cover_photo_url)){
+          all = [exp.cover_photo_url, ...all.filter(u => u !== exp.cover_photo_url)];
+        }
+        if(all.length) fullList = all;
+      }
+    } else if(typeof rawId === 'string' && rawId.startsWith('room-')){
+      // A specific Resort room's own photo collage (see
+      // renderRoomAwarePhotos) — the full list lives in
+      // window.roomPhotosForLightbox since these rooms aren't tracked in
+      // listingsById at all (that map only holds whole listings).
+      const full = window.roomPhotosForLightbox && window.roomPhotosForLightbox[rawId];
+      if(Array.isArray(full) && full.length) fullList = full;
+    }
+    openPhotoLightbox(fullList, Number(tile.dataset.lightboxIndex));
+  });
+
+  // ---- Google Map embed (listing detail sidebar) ----
+  // Reuses the same Maps JS API script already loaded for address
+  // autocomplete elsewhere on this page (see initGoogleMaps near the
+  // top) — no second script tag needed. The script loads async, so this
+  // polls briefly rather than assuming google.maps is ready the instant
+  // the modal opens.
+  // Free map display via Leaflet + OpenStreetMap tiles — used everywhere
+  // a map is just shown with a pin (listing detail, experience detail,
+  // meeting point). Google Maps is only used as a fallback if Leaflet
+  // itself somehow failed to load (e.g. its CDN is blocked/unreachable),
+  // which keeps this feature working either way while defaulting to the
+  // free option to avoid Google Maps API costs.
+  function initListingMapEmbed(container, lat, lng, label){
+    if(!container) return;
+    if(window.L){
+      const centerPosition = [Number(lat), Number(lng)];
+      const map = L.map(container, { zoomControl: true, attributionControl: true }).setView(centerPosition, 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(map);
+      L.marker(centerPosition, { title: label }).addTo(map);
+
+      // Recenter control — without this, panning away from the pin (easy
+      // to do by accident while zooming/scrolling on a small screen)
+      // leaves no way back to the property's actual location short of
+      // reloading the whole page.
+      const RecenterControl = L.Control.extend({
+        options: { position: 'topleft' },
+        onAdd: function(){
+          const btn = L.DomUtil.create('button', 'leaflet-bar leaflet-control map-recenter-btn');
+          btn.type = 'button';
+          btn.title = 'Recenter map';
+          btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
+          L.DomEvent.disableClickPropagation(btn);
+          L.DomEvent.on(btn, 'click', () => map.setView(centerPosition, 14));
+          return btn;
+        }
+      });
+      map.addControl(new RecenterControl());
+      return;
+    }
+    // Leaflet not available yet (or failed to load) — wait briefly for it,
+    // then fall back to Google Maps if it's genuinely not coming.
+    if(!window.google || !window.google.maps){
+      let attempts = 0;
+      const timer = setInterval(() => {
+        attempts++;
+        if(window.L || (window.google && window.google.maps)){
+          clearInterval(timer);
+          initListingMapEmbed(container, lat, lng, label);
+        } else if(attempts > 20){
+          clearInterval(timer); // ~10s, then give up quietly — the "View on map" link still works
+        }
+      }, 500);
+      return;
+    }
+    const position = { lat: Number(lat), lng: Number(lng) };
+    const map = new google.maps.Map(container, {
+      center: position, zoom: 14, disableDefaultUI: true, zoomControl: true,
+    });
+    new google.maps.Marker({ position, map, title: label });
+  }
+
+  function buildListingDetailHtml(listing){
+    const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
+    const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
+    let allPhotos = [...interiorPhotos, ...exteriorPhotos];
+    if(listing.cover_photo_url && allPhotos.includes(listing.cover_photo_url)){
+      allPhotos = [listing.cover_photo_url, ...allPhotos.filter(url => url !== listing.cover_photo_url)];
+    }
+    const photosHtml = buildPhotoCollageHtml(allPhotos, listing.property_name, listing.id);
+
+    const amenitiesList = Array.isArray(listing.amenities) ? listing.amenities : [];
+    const servicesList = Array.isArray(listing.services) ? listing.services : [];
+    const includedList = [...amenitiesList, ...servicesList];
+    const amenitiesHtml = includedList.length
+      ? `<div class="listing-modal-section-title">What's Included</div>
+         <div class="listing-modal-amenity-grid">${includedList.map(a => `<span>✓ ${a}</span>`).join('')}</div>`
+      : '';
+
+    const paidAmenities = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
+    const paidAmenitiesHtml = paidAmenities.length
+      ? `<div class="listing-modal-section-title">Paid Amenities</div>
+         ${paidAmenities.map(a => `<div class="listing-modal-paid-amenity"><span>${a.name}</span><span>${fmt(Number(a.price))}/night</span></div>`).join('')}
+         <p style="font-size:11.5px; opacity:0.55; margin-top:6px;">Availability and exact dates confirmed at booking.</p>`
+      : '';
+
+    // Kept as its own section, separate from the free amenities grid above
+    // — pets come with real rules (a cap, allowed types, an optional fee),
+    // not just a yes/no checkbox, so they get their own honest treatment
+    // here rather than being buried in a bullet list.
+    let petPolicyHtml = '';
+    if(listing.pet_friendly === true){
+      const petTypes = Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length
+        ? listing.allowed_pet_types.join(' & ')
+        : 'Dogs & Cats';
+      const maxPetsLine = listing.max_pets_allowed
+        ? `Up to ${listing.max_pets_allowed} pet${Number(listing.max_pets_allowed) === 1 ? '' : 's'}`
+        : 'No stated limit on how many';
+      const feeLine = listing.pet_fee && Number(listing.pet_fee) > 0
+        ? `${fmt(Number(listing.pet_fee))} per pet, per stay`
+        : 'No pet fee';
+      petPolicyHtml = `
+        <div class="listing-modal-section-title">Pet Policy</div>
+        <div class="listing-modal-amenity-grid">
+          <span>✓ ${petTypes} welcome</span>
+          <span>✓ ${maxPetsLine}</span>
+          <span>✓ ${feeLine}</span>
+        </div>
+        <p style="font-size:11.5px; opacity:0.6; margin-top:8px; line-height:1.5;">Service and emotional-support animals aren't counted toward the pet limit. The first one is free; each additional one is charged the pet fee. Young pets (under 1 year) traveling with an adult pet aren't counted either.</p>`;
+    } else if(listing.pet_friendly === false){
+      petPolicyHtml = `
+        <div class="listing-modal-section-title">Pet Policy</div>
+        <p style="font-size:13.5px; opacity:0.7;">This property does not allow pets.</p>`;
+    }
+
+    const mapLinkHtml = (listing.latitude && listing.longitude)
+      ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="link" style="font-size:13px;">View on map</a>`
+      : '';
+
+    // A Resort's booking column is structurally different enough (room
+    // selection instead of a single price/pet-policy/amenities flow)
+    // that it's a genuinely separate path here, rather than threading
+    // "is this a resort" checks through every line of the regular
+    // column below. Photos/map/description are identical either way,
+    // so those are reused as-is.
+    if(listing.property_type === 'Resort'){
+      const rooms = Array.isArray(listing.rooms) ? listing.rooms : [];
+      return `
+        <div class="listing-modal-content">
+          ${/* Name, address and type all sit in the strip below, so
+                nothing is repeated above it. */''}
+          ${listingStandingHtml(listing, { type: 'stay', subtitle: 'Resort' })}
+          <div class="listing-three-col">
+            <div class="listing-col-booking">
+              <div class="listing-modal-section-title" style="margin-top:0;">Check Availability</div>
+              <div id="resortBookCalendar" data-listing-id="${listing.id}">
+                <p style="font-size:13px; opacity:0.6;">Loading calendar…</p>
+              </div>
+              <p id="resortDatesPrompt" style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick your dates first, then choose which room${rooms.length === 1 ? '' : 's'} you need below.</p>
+              <div class="listing-modal-section-title" style="margin-top:20px;">Rooms</div>
+              <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:6px;">Each room is booked and priced on its own — pick as many as your group needs. A room greyed out below isn't free for the dates you picked.</p>
+              <div id="resortRoomsList">
+                ${rooms.length ? '<p style="font-size:12.5px; opacity:0.5;">Pick dates above to see room availability.</p>' : '<p style="font-size:13px; opacity:0.6;">This resort has no rooms set up yet.</p>'}
+              </div>
+              <div id="resortPriceSummary" style="display:none;"></div>
+              <div id="resortBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+                <div class="field">
+                  <label for="resortBookEmail">Email <span style="color:#a3402f;">*</span></label>
+                  <input id="resortBookEmail" type="email" placeholder="you@email.com" required>
+                </div>
+                <div class="field" style="margin-top:12px;">
+                  <label for="resortBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                  <input id="resortBookPhone" type="tel" placeholder="10-digit mobile number" required>
+                </div>
+                <button type="button" class="btn solid" id="resortBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
+                <p id="resortBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
+                <p id="resortBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
+              </div>
+            </div>
+            <div class="listing-col-photos">
+              <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
+              <div id="resortPhotosContainer" data-listing-id="${listing.id}"></div>
+              <div class="listing-reviews" data-reviews-for="${listing.id}"></div>
+              <p class="desc" style="margin-top:16px;">${listing.description}</p>
+            </div>
+            <div class="listing-col-map">
+              <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
+              ${(listing.latitude && listing.longitude) ? `
+                <div class="listing-map-embed" id="listingMapEmbed"></div>
+                <div style="margin-top:8px;">${mapLinkHtml}</div>
+              ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
+            </div>
+          </div>
+          ${amenitiesHtml}
+        </div>
+      `;
+    }
+
+    const priceLine = listing.nightly_rate
+      ? `From <strong>${fmt(Number(listing.nightly_rate))}</strong>/night`
+      : 'Rate on enquiry';
+    const offerLine = formatOffer(listing);
+    const promoOfferLine = formatPromotionOffer(listing);
+
+    return `
+      <div class="listing-modal-content">
+        ${listingStandingHtml(listing, { type: 'stay', subtitle: listing.property_type || '' })}
+        <div class="listing-three-col">
+          <div class="listing-col-booking">
+            <div class="price">${priceLine}</div>
+            ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
+            ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
+            ${formatPromotionHint(listing) ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${formatPromotionHint(listing)}</div>` : ''}
+            <div class="listing-modal-section-title" style="margin-top:16px;">Check Availability &amp; Price</div>
+            <div id="availabilityCalendar" data-listing-id="${listing.id}">
+              <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
+            </div>
+            <div id="lgCapacityNote" style="display:none; font-size:12.5px; color:#a3402f; padding-top:12px;"></div>
+            <div class="guest-row" style="border:none; padding-top:16px;">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Adults</div>
+                <div class="guest-row-sub">Ages 13 or above</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="dec" aria-label="Decrease adults">−</button>
+                <span class="guest-count" id="lgCountAdults">1</span>
+                <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="inc" aria-label="Increase adults">+</button>
+              </div>
+            </div>
+            <div class="guest-row-divider"></div>
+            <div class="guest-row">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Children</div>
+                <div class="guest-row-sub">Ages 2–12</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="dec" aria-label="Decrease children">−</button>
+                <span class="guest-count" id="lgCountChildren">0</span>
+                <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="inc" aria-label="Increase children">+</button>
+              </div>
+            </div>
+            <div class="guest-row-divider"></div>
+            <div class="guest-row">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Infants</div>
+                <div class="guest-row-sub">Under 2</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" data-lg-type="infants" data-lg-action="dec" aria-label="Decrease infants">−</button>
+                <span class="guest-count" id="lgCountInfants">0</span>
+                <button type="button" class="guest-step-btn" data-lg-type="infants" data-lg-action="inc" aria-label="Increase infants">+</button>
+              </div>
+            </div>
+            ${listing.pet_friendly === true ? `
+            <div class="guest-row-divider"></div>
+            <div class="guest-row">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Pets</div>
+                <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? fmt(Number(listing.pet_fee)) + ' per pet, per stay' : 'No pet fee'}</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" data-lg-type="animals" data-lg-action="dec" aria-label="Decrease pets">−</button>
+                <span class="guest-count" id="lgCountAnimals">0</span>
+                <button type="button" class="guest-step-btn" data-lg-type="animals" data-lg-action="inc" aria-label="Increase pets">+</button>
+              </div>
+            </div>
+            <div id="lgPetList" class="lg-pet-list" style="display:none;"></div>
+            <p id="lgPetNote" class="lg-pet-note" style="display:none;"></p>
+            <p id="lgPetTypesError" class="lg-pet-error" style="display:none;"></p>` : ''}
+            <div id="listingAmenitiesPicker"></div>
+            <div id="listingExperiencesPicker"></div>
+            <div id="listingPriceSummary" style="display:none;"></div>
+            <div id="listingBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+              <div class="field">
+                <label for="listingBookEmail">Email <span style="color:#a3402f;">*</span></label>
+                <input id="listingBookEmail" type="email" placeholder="you@email.com" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="listingBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="listingCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
+                <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+              </div>
+              <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
+              <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
+              <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
+            </div>
+          </div>
+          <div class="listing-col-photos">
+            <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
+            ${photosHtml}
+            <div class="listing-reviews" data-reviews-for="${listing.id}"></div>
+            <p class="desc" style="margin-top:16px;">${listing.description}</p>
+          </div>
+          <div class="listing-col-map">
+            <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
+            ${(listing.latitude && listing.longitude) ? `
+              <div class="listing-map-embed" id="listingMapEmbed"></div>
+              <div style="margin-top:8px;">${mapLinkHtml}</div>
+            ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
+          </div>
+        </div>
+        ${amenitiesHtml}
+        ${paidAmenitiesHtml}
+        ${petPolicyHtml}
+      </div>
+    `;
+  }
+
+  // ---- Reviews under the photos ----
+  // Filled after the detail view opens, from get-listings?reviewsFor=.
+  // Only published reviews ever arrive here, with first names only.
+  // Everything a reviewer wrote is escaped before it touches the page.
+  const REVIEW_MONTH_FMT = { month: 'short', year: 'numeric' };
+  function reviewMonthLabel(ym){
+    if(!ym) return '';
+    const d = new Date(ym + '-01T00:00:00');
+    return isNaN(d) ? '' : d.toLocaleDateString('en-IN', REVIEW_MONTH_FMT);
+  }
+  // One plain line: "Hygiene 5.0 · Communication 5.0 · …"
+  function reviewFactorsHtml(factors){
+    return (factors || []).map(f => `${escapeMessageHtml(f.label)} ${Number(f.value).toFixed(1)}`).join(' &middot; ');
+  }
+  function reviewItemHtml(r, withName){
+    const meta = [reviewMonthLabel(r.month), r.score ? Number(r.score).toFixed(1) + ' out of 5' : ''].filter(Boolean).join(' · ');
+    return `
+      <div class="rv-item">
+        <div class="rv-item-head">
+          ${withName ? `<span class="rv-item-name">${escapeMessageHtml(r.name || 'Guest')}</span>` : ''}
+          ${meta ? `<span class="rv-item-meta">${withName ? ' &middot; ' : ''}${escapeMessageHtml(meta)}</span>` : ''}
+        </div>
+        <p class="rv-item-text">${escapeMessageHtml(r.comment || '')}</p>
+      </div>`;
+  }
+  // How many reviews each press of View more brings in. Five on opening
+  // the page, then batches that take the list to 20, then 40, then the
+  // rest in 100s (the endpoint's own per-request cap).
+  const REVIEW_PAGE_STEPS = [5, 15, 20];
+  const REVIEW_PAGE_REST = 100;
+  async function loadListingReviews(root, listingId){
+    const slot = root && root.querySelector(`.listing-reviews[data-reviews-for="${Number(listingId)}"]`);
+    if(!slot) return;
+    slot.innerHTML = '';
+    let offset = 0;
+    let step = 0;
+    const load = async () => {
+      const limit = REVIEW_PAGE_STEPS[step] || REVIEW_PAGE_REST;
+      step++;
+      const res = await fetch(SUITES_API_BASE + `/api/get-listings?reviewsFor=${Number(listingId)}&offset=${offset}&limit=${limit}`);
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Failed');
+      return data;
+    };
+    try{
+      const data = await load();
+      const sm = data.summary || { count: 0 };
+      if(!sm.count){
+        slot.innerHTML = `
+          <div class="listing-modal-section-title">Reviews</div>
+          <p class="rv-empty">No reviews yet.</p>`;
+        return;
+      }
+      slot.innerHTML = `
+        <div class="listing-modal-section-title">Reviews</div>
+        <div class="rv-summary">
+          <span class="rv-summary-score">${Number(sm.score).toFixed(2)} out of 5</span>
+          <span class="rv-summary-count"> &middot; ${sm.count} review${sm.count === 1 ? '' : 's'}</span>
+        </div>
+        <div class="rv-factors">${reviewFactorsHtml(sm.factors)}</div>
+        <div class="rv-list"></div>
+        <button type="button" class="filter-clear rv-more" style="display:none;">View more</button>`;
+      const list = slot.querySelector('.rv-list');
+      const more = slot.querySelector('.rv-more');
+      const append = (d) => {
+        list.insertAdjacentHTML('beforeend', (d.reviews || []).map(r => reviewItemHtml(r, true)).join(''));
+        offset = d.nextOffset;
+        more.style.display = d.nextOffset != null ? '' : 'none';
+      };
+      append(data);
+      more.addEventListener('click', async () => {
+        more.disabled = true; more.textContent = 'Loading\u2026';
+        try{ append(await load()); }
+        catch(err){ /* keep what is shown; the button stays for a retry */ }
+        more.disabled = false; more.textContent = 'View more';
+      });
+    } catch(err){
+      // Reviews are supporting detail. A failure here must never break
+      // booking, so the section simply stays empty.
+      slot.innerHTML = '';
+    }
+  }
+
+  function openListingDetail(listingId){
+    const listing = listingsById[listingId];
+    if(!listing) return;
+    trackRecentlyViewed('stay', listingId);
+    document.getElementById('listingModalBody').innerHTML = buildListingDetailHtml(listing);
+    document.getElementById('listingModalOverlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    loadListingReviews(document.getElementById('listingModalBody'), listing.id);
+    const mapEl = document.getElementById('listingMapEmbed');
+    if(mapEl && listing.latitude && listing.longitude){
+      initListingMapEmbed(mapEl, listing.latitude, listing.longitude, listing.property_name);
+    }
+    if(listing.property_type === 'Resort'){
+      renderResortBookingCalendar(listing);
+      renderRoomAwarePhotos(listing, []);
+      document.getElementById('resortBookNowBtn').addEventListener('click', () => handleResortBookNow(listing));
+      return;
+    }
+    loadListingExperiences(listing);
+    // This modal previously never actually rendered — buildListingDetailHtml
+    // only sets up the "Loading availability…" placeholder markup, the
+    // real calendar (and the Book Now button's click handler) were only
+    // ever wired up by showFullListingPage, so this modal path silently
+    // never worked before now.
+    renderAvailabilityCalendar(listing);
+    document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
+  }
+
+  // "This property also offers…" — with-stay experiences hosted at this
+  // listing that a guest can add to the SAME booking. create-order.js
+  // already accepts a stays[] and an experiences[] together in one
+  // request (no new checkout needed) — this is just the picker that
+  // feeds that array. Without-stay experiences hosted here are shown
+  // too, but as a plain link to book separately, not an add-on toggle —
+  // they're not part of "the same booking" the way a with-stay one is.
+  async function loadListingExperiences(listing){
+    const container = document.getElementById('listingExperiencesPicker');
+    if(!container) return;
+    container.innerHTML = '';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?experiencesFor=' + encodeURIComponent(listing.id));
+      if(!res.ok) return;
+      const data = await res.json();
+      const experiences = Array.isArray(data.experiences) ? data.experiences : [];
+      if(!experiences.length) return;
+      renderAvailabilityCalendar._lgExperienceOptions = renderAvailabilityCalendar._lgExperienceOptions || {};
+      renderAvailabilityCalendar._lgExperienceOptions[listing.id] = experiences;
+      renderListingExperiencesPicker(listing);
+    } catch(err){
+      // Non-fatal — the booking flow works fine with no experiences shown.
+    }
+  }
+
+  function renderListingExperiencesPicker(listing){
+    const container = document.getElementById('listingExperiencesPicker');
+    if(!container) return;
+    const experiences = ((renderAvailabilityCalendar._lgExperienceOptions || {})[listing.id]) || [];
+    if(!experiences.length){ container.innerHTML = ''; return; }
+
+    renderAvailabilityCalendar._lgSelectedExperience = renderAvailabilityCalendar._lgSelectedExperience || {};
+    const selected = renderAvailabilityCalendar._lgSelectedExperience[listing.id] || null;
+
+    const withStay = experiences.filter(e => e.experience_type === 'with_stay');
+    const withoutStay = experiences.filter(e => e.experience_type !== 'with_stay');
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1 };
+    const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
+
+    const withStayHtml = withStay.length ? `
+      <div class="listing-modal-section-title">This Property Also Offers</div>
+      ${withStay.map(exp => {
+        const isChecked = selected && String(selected.listingId) === String(exp.id);
+        const priceLine = exp.price
+          ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
+          : 'Price on enquiry';
+        return `
+          <div class="listing-modal-paid-amenity" style="align-items:flex-start; flex-direction:column; gap:8px; padding:12px 0;">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; width:100%;">
+              <input type="checkbox" class="lg-experience-checkbox" data-experience-id="${exp.id}" ${isChecked ? 'checked' : ''}>
+              <span style="flex:1;"><strong>${exp.property_name}</strong> — ${priceLine}</span>
+            </label>
+            ${isChecked ? `
+              <div style="display:flex; gap:10px; padding-left:26px; width:100%; box-sizing:border-box;">
+                <input type="date" class="lg-experience-date" data-experience-id="${exp.id}"
+                  value="${selected.date || dates.arrival || ''}"
+                  min="${dates.arrival || ''}" max="${dates.departure || ''}"
+                  style="flex:1; padding:8px; font-size:13px; border:1px solid var(--line-dark);">
+                <input type="number" class="lg-experience-guests" data-experience-id="${exp.id}" min="1"
+                  value="${selected.guests || counts.adults || 1}"
+                  style="width:70px; padding:8px; font-size:13px; border:1px solid var(--line-dark);" title="Guests">
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('')}
+    ` : '';
+
+    const withoutStayHtml = withoutStay.length ? `
+      <div class="listing-modal-section-title">Also Nearby</div>
+      ${withoutStay.map(exp => `
+        <div class="listing-modal-paid-amenity">
+          <span><a href="index.html?experience=${exp.id}" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">${exp.property_name}</a></span>
+          <span>${exp.price ? fmtGuest(Number(exp.price)) + (exp.experience_price_unit === 'per_person' ? '/person' : '/group') : ''}</span>
+        </div>
+      `).join('')}
+    ` : '';
+
+    container.innerHTML = withStayHtml + withoutStayHtml;
+
+    container.querySelectorAll('.lg-experience-checkbox').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if(cb.checked){
+          const exp = withStay.find(e => String(e.id) === cb.dataset.experienceId);
+          renderAvailabilityCalendar._lgSelectedExperience[listing.id] = {
+            listingId: exp.id, date: dates.arrival || '', guests: counts.adults || 1
+          };
+        } else {
+          delete renderAvailabilityCalendar._lgSelectedExperience[listing.id];
+        }
+        renderListingExperiencesPicker(listing);
+        updateListingPriceSummary(listing, dates.arrival, dates.departure);
+      });
+    });
+    container.querySelectorAll('.lg-experience-date').forEach(input => {
+      input.addEventListener('change', () => {
+        const sel = renderAvailabilityCalendar._lgSelectedExperience[listing.id];
+        if(sel) sel.date = input.value;
+      });
+    });
+    container.querySelectorAll('.lg-experience-guests').forEach(input => {
+      input.addEventListener('change', () => {
+        const sel = renderAvailabilityCalendar._lgSelectedExperience[listing.id];
+        if(sel) sel.guests = Math.max(1, Number(input.value) || 1);
+        updateListingPriceSummary(listing, dates.arrival, dates.departure);
+      });
+    });
+  }
+
+  function closeListingDetail(){
+    document.getElementById('listingModalOverlay').style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  // Full listing page — what actually opens (in a new tab) when a guest
+  // clicks a suite card. Same content as buildListingDetailHtml, just
+  // rendered into the page itself instead of an overlay, with the rest
+  // of the homepage (search, grid) hidden rather than shown alongside it.
+  // Every night covered by a booked range, arrival up to (not including)
+  // departure — same convention the backend uses (see create-order.js).
+  function getNightsInRangeClient(arrival, departure){
+    const nights = [];
+    let d = new Date(arrival + 'T00:00:00Z');
+    const end = new Date(departure + 'T00:00:00Z');
+    while(d < end){
+      nights.push(d.toISOString().split('T')[0]);
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return nights;
+  }
+
+  // Real availability, not a guess — pulls actual paid bookings for this
+  // listing from the server (via get-listings.js's ?availabilityFor= mode
+  // — kept in that same file rather than its own endpoint to stay under
+  // Vercel's Hobby-plan serverless function limit). Days the guest can
+  // actually pick, exactly like the homepage's date picker — arrival
+  // first click, departure second — plus a guest count and a live price
+  // summary using the same formula the reserve form itself uses, so what
+  // shows here always matches what checkout would actually charge.
+  async function renderAvailabilityCalendar(listing){
+    const container = document.getElementById('availabilityCalendar');
+    if(!container) return;
+    const listingId = listing.id;
+
+    let bookedRanges = [];
+    let blockedRanges = [];
+    try {
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
+      if(res.ok){
+        const data = await res.json();
+        bookedRanges = Array.isArray(data.bookedRanges) ? data.bookedRanges : [];
+        // The backend has always returned this alongside bookedRanges —
+        // it just never got read here, so a host's own blocked dates
+        // (maintenance, personal use, etc.) never actually greyed out
+        // anything on the guest-facing calendar, even though
+        // create-order.js was already correctly rejecting a booking
+        // attempt against them. A guest could pick a blocked date, fill
+        // out the whole form, and only find out it was never actually
+        // available at the final submit — this fixes that at the source.
+        blockedRanges = Array.isArray(data.blockedRanges) ? data.blockedRanges : [];
+      }
+    } catch(err){
+      console.error('Could not load availability:', err);
+    }
+
+    const bookedNights = new Set();
+    bookedRanges.forEach(r => {
+      if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => bookedNights.add(n));
+    });
+    blockedRanges.forEach(r => {
+      if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => bookedNights.add(n));
+    });
+
+    // Carried over from the main search — via URL params when this is
+    // the full standalone listing page (?listing=<id>&arrival=...,
+    // reached by a direct link with no shared JS state), or directly
+    // from the live search bar's own variables when this is the modal
+    // opened straight from a search-results click (same page, same JS
+    // scope, nothing needs to round-trip through a URL at all). Only
+    // honored if it's actually still a valid, available range for THIS
+    // listing — a date that looked free on the search results a moment
+    // ago could theoretically already be taken.
+    const carriedParams = new URLSearchParams(window.location.search);
+    const carriedArrival = carriedParams.get('arrival') || (typeof searchArrivalDate !== 'undefined' ? searchArrivalDate : '') || '';
+    const carriedDeparture = carriedParams.get('departure') || (typeof searchDepartureDate !== 'undefined' ? searchDepartureDate : '') || '';
+    const todayIsoForValidation = toLocalDateStr(new Date());
+    let initialArrival = '';
+    let initialDeparture = '';
+    if(carriedArrival && carriedDeparture && carriedArrival >= todayIsoForValidation && carriedDeparture > carriedArrival){
+      const carriedNights = getNightsInRangeClient(carriedArrival, carriedDeparture);
+      const hasConflict = carriedNights.some(n => bookedNights.has(n));
+      if(!hasConflict){
+        initialArrival = carriedArrival;
+        initialDeparture = carriedDeparture;
+      }
+    }
+
+    const todayIso = toLocalDateStr(new Date());
+    let viewYear = new Date().getFullYear();
+    let viewMonth = new Date().getMonth();
+    if(initialArrival){
+      const anchor = new Date(initialArrival);
+      viewYear = anchor.getFullYear();
+      viewMonth = anchor.getMonth();
+    }
+    let lgArrival = initialArrival;
+    let lgDeparture = initialDeparture;
+    let lgSelectingStart = !initialArrival;
+
+    // A selected range is only valid to commit if no night inside it is
+    // already booked — picking through a gap between two bookings isn't
+    // something this simple two-click flow can express safely.
+    function rangeHasConflict(arrival, departure){
+      return getNightsInRangeClient(arrival, departure).some(n => bookedNights.has(n));
+    }
+
+    function handleDayClick(iso){
+      if(lgSelectingStart || !lgArrival){
+        lgArrival = iso;
+        lgDeparture = '';
+        lgSelectingStart = false;
+      } else if(iso <= lgArrival || rangeHasConflict(lgArrival, iso)){
+        // Picked an earlier/same date, or a range that crosses a booked
+        // night — start a fresh selection from here instead.
+        lgArrival = iso;
+        lgDeparture = '';
+        lgSelectingStart = false;
+      } else {
+        lgDeparture = iso;
+        lgSelectingStart = true;
+      }
+      renderMonth();
+      updateListingPriceSummary(listing, lgArrival, lgDeparture);
+      renderListingAmenities(listing, lgArrival, lgDeparture);
+    }
+
+    function renderMonth(){
+      const firstDay = new Date(viewYear, viewMonth, 1);
+      const startWeekday = firstDay.getDay();
+      const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+      const isCurrentMonth = viewYear === new Date().getFullYear() && viewMonth === new Date().getMonth();
+
+      let cellsHtml = '';
+      for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
+      for(let day = 1; day <= daysInMonth; day++){
+        const cellDate = new Date(viewYear, viewMonth, day);
+        const iso = toLocalDateStr(cellDate);
+        const isPast = iso < todayIso;
+        const isBooked = bookedNights.has(iso);
+        const isDisabled = isPast || isBooked;
+        let classes = 'calendar-day';
+        if(isDisabled) classes += ' disabled';
+        if(iso === lgArrival || iso === lgDeparture) classes += ' selected-start';
+        else if(lgArrival && lgDeparture && iso > lgArrival && iso < lgDeparture) classes += ' in-range';
+        cellsHtml += `<div class="${classes}" data-lg-date="${iso}">${day}</div>`;
+      }
+
+      container.innerHTML = `
+        <div class="calendar-month-panel" style="max-width:320px; padding:0;">
+          <div class="calendar-month-header">
+            <button type="button" class="cal-nav" id="availCalPrev" aria-label="Previous month" ${isCurrentMonth ? 'disabled' : ''}>‹</button>
+            <div class="calendar-month-label">${MONTH_NAMES[viewMonth]} ${viewYear}</div>
+            <button type="button" class="cal-nav" id="availCalNext" aria-label="Next month">›</button>
+          </div>
+          <div class="calendar-weekdays">
+            <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+          </div>
+          <div class="calendar-grid">${cellsHtml}</div>
+          <p style="font-size:11.5px; opacity:0.6; margin-top:10px;">
+            ${lgArrival && !lgDeparture ? 'Now pick your departure date.' : 'Greyed-out dates are already booked or in the past.'}
+          </p>
+        </div>
+      `;
+
+      document.getElementById('availCalPrev').addEventListener('click', () => {
+        viewMonth -= 1;
+        if(viewMonth < 0){ viewMonth = 11; viewYear -= 1; }
+        renderMonth();
+      });
+      document.getElementById('availCalNext').addEventListener('click', () => {
+        viewMonth += 1;
+        if(viewMonth > 11){ viewMonth = 0; viewYear += 1; }
+        renderMonth();
+      });
+      container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+        cell.addEventListener('click', (e) => {
+          e.stopPropagation();
+          handleDayClick(cell.dataset.lgDate);
+        });
+      });
+    }
+
+    renderMonth();
+
+    // ---- Guest stepper wiring ----
+    const lgCounts = { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
+    // Same carry-over as dates above — URL params for the standalone
+    // page's direct-link case, falling back to the live search bar's own
+    // guestCounts variable for the modal-from-search-results case.
+    const liveGuestCounts = (typeof guestCounts !== 'undefined') ? guestCounts : null;
+    if(carriedParams.get('adults')) lgCounts.adults = Math.max(1, parseInt(carriedParams.get('adults'), 10) || 1);
+    else if(liveGuestCounts && liveGuestCounts.adults) lgCounts.adults = liveGuestCounts.adults;
+    if(carriedParams.get('children')) lgCounts.children = parseInt(carriedParams.get('children'), 10) || 0;
+    else if(liveGuestCounts && liveGuestCounts.children) lgCounts.children = liveGuestCounts.children;
+    if(carriedParams.get('infants')) lgCounts.infants = parseInt(carriedParams.get('infants'), 10) || 0;
+    else if(liveGuestCounts && liveGuestCounts.infants) lgCounts.infants = liveGuestCounts.infants;
+    if(carriedParams.get('pets')) lgCounts.pets = parseInt(carriedParams.get('pets'), 10) || 0;
+    else if(liveGuestCounts && liveGuestCounts.pets) lgCounts.pets = liveGuestCounts.pets;
+    // Respect the host's own cap immediately in the UI, not just as a
+    // server-side rejection after the fact — previously this stepper let
+    // a guest click all the way to 5 pets even on a listing capped at 1.
+    const maxBillablePets = listing.max_pets_allowed ? Math.min(5, Number(listing.max_pets_allowed)) : 5;
+    if(lgCounts.pets > maxBillablePets) lgCounts.pets = maxBillablePets;
+    ['adults', 'children', 'infants', 'pets'].forEach(type => {
+      const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
+      if(countEl) countEl.textContent = lgCounts[type];
+    });
+
+    // ---- Pets: one card per animal ----
+    // Each animal gets: its type, "Service or support animal?" (Yes / No),
+    // and — for a pet — how many young (under 1 year) travel with it.
+    // Everything the rest of the booking reads is derived from this one
+    // list, in the same shape as before:
+    //   lgCounts.pets           pets that count toward the limit and fee
+    //   lgCounts.serviceAnimals service / support animals (1st free per
+    //                           booking, each further one at the pet fee)
+    //   lgCounts.youngLitter    young ones travelling with those pets
+    //   _lgPetTypeSelections / _lgServiceAnimalSelections  their types
+    renderAvailabilityCalendar._lgPetTypeSelections = renderAvailabilityCalendar._lgPetTypeSelections || {};
+    renderAvailabilityCalendar._lgServiceAnimalSelections = renderAvailabilityCalendar._lgServiceAnimalSelections || {};
+    renderAvailabilityCalendar._lgAnimals = renderAvailabilityCalendar._lgAnimals || {};
+    const petTypeOptions = (Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length)
+      ? listing.allowed_pet_types : ['Dog', 'Cat'];
+    const MAX_SERVICE_ANIMALS = 5;
+    const petListEl = container.parentElement.querySelector('#lgPetList');
+    const petNoteEl = container.parentElement.querySelector('#lgPetNote');
+    const petErrorEl = container.parentElement.querySelector('#lgPetTypesError');
+    let animals = renderAvailabilityCalendar._lgAnimals[listingId]
+      || Array.from({ length: lgCounts.pets || 0 }, () => ({ type: petTypeOptions[0], service: false, litter: 0 }));
+    renderAvailabilityCalendar._lgAnimals[listingId] = animals;
+
+    function syncAnimalCounts(){
+      const pets = animals.filter(x => !x.service);
+      const service = animals.filter(x => x.service);
+      lgCounts.animals = animals.length;
+      lgCounts.pets = pets.length;
+      lgCounts.serviceAnimals = service.length;
+      lgCounts.youngLitter = pets.reduce((sum, x) => sum + (Number(x.litter) || 0), 0);
+      renderAvailabilityCalendar._lgPetTypeSelections[listingId] = pets.map(x => x.type);
+      renderAvailabilityCalendar._lgServiceAnimalSelections[listingId] = service.map(x => x.type);
+      const countEl = document.getElementById('lgCountAnimals');
+      if(countEl) countEl.textContent = animals.length;
+      // Instructions only.
+      if(petNoteEl){
+        const notes = [];
+        if(service.length) notes.push('First service or support animal is free. Each additional one is charged the pet fee.');
+        petNoteEl.textContent = notes.join(' ');
+        petNoteEl.style.display = notes.length ? 'block' : 'none';
+      }
+      if(petErrorEl){
+        let msg = '';
+        if(pets.length > maxBillablePets) msg = `This home allows up to ${maxBillablePets} pet${maxBillablePets === 1 ? '' : 's'}. Service or support animals are not counted.`;
+        else if(service.length > MAX_SERVICE_ANIMALS) msg = `Up to ${MAX_SERVICE_ANIMALS} service or support animals.`;
+        petErrorEl.textContent = msg;
+        petErrorEl.style.display = msg ? 'block' : 'none';
+      }
+    }
+
+    function renderAnimalList(){
+      if(!petListEl) return;
+      petListEl.style.display = animals.length ? 'flex' : 'none';
+      petListEl.innerHTML = animals.map((x, i) => `
+        <div class="lg-pet-card" data-animal="${i}">
+          <div class="lg-pet-head">Pet ${i + 1}</div>
+          <label class="lg-pet-field">Type
+            <select class="lg-pet-type" data-animal="${i}">
+              ${petTypeOptions.map(t => `<option value="${escapeMessageHtml(t)}" ${t === x.type ? 'selected' : ''}>${escapeMessageHtml(petTypeLabel(t))}</option>`).join('')}
+            </select>
+          </label>
+          <div class="lg-pet-field">Service or support animal?
+            <div class="lg-pet-yesno" role="group">
+              <button type="button" class="lg-yn ${x.service ? '' : 'on'}" data-animal="${i}" data-service="no">No</button>
+              <button type="button" class="lg-yn ${x.service ? 'on' : ''}" data-animal="${i}" data-service="yes">Yes</button>
+            </div>
+          </div>
+          ${x.service ? '' : `
+          <label class="lg-pet-field">Young ones with this pet (under 1 year)
+            <select class="lg-pet-litter" data-animal="${i}">
+              ${Array.from({ length: 11 }, (_, n) => `<option value="${n}" ${n === (Number(x.litter) || 0) ? 'selected' : ''}>${n === 0 ? 'None' : n}</option>`).join('')}
+            </select>
+          </label>`}
+        </div>`).join('');
+      petListEl.querySelectorAll('.lg-pet-type').forEach(sel => sel.addEventListener('change', () => {
+        animals[Number(sel.dataset.animal)].type = sel.value;
+        syncAnimalCounts();
+      }));
+      petListEl.querySelectorAll('.lg-yn').forEach(btn => btn.addEventListener('click', () => {
+        const a = animals[Number(btn.dataset.animal)];
+        a.service = btn.dataset.service === 'yes';
+        if(a.service) a.litter = 0;
+        syncAnimalCounts();
+        renderAnimalList();
+        updateListingPriceSummary(listing, lgArrival, lgDeparture);
+      }));
+      petListEl.querySelectorAll('.lg-pet-litter').forEach(sel => sel.addEventListener('change', () => {
+        animals[Number(sel.dataset.animal)].litter = Number(sel.value) || 0;
+        syncAnimalCounts();
+        updateListingPriceSummary(listing, lgArrival, lgDeparture);
+      }));
+    }
+    function setAnimalCount(n){
+      while(animals.length < n) animals.push({ type: petTypeOptions[0], service: false, litter: 0 });
+      while(animals.length > n) animals.pop();
+      syncAnimalCounts();
+      renderAnimalList();
+    }
+    syncAnimalCounts();
+    renderAnimalList();
+
+    const LG_MAX = { adults: 16, children: 12, infants: 5, animals: maxBillablePets + MAX_SERVICE_ANIMALS };
+    // A stay is one physical unit with a real ceiling on how many people
+    // can fit — capped here in real time as the stepper moves, not just
+    // caught later at checkout (see create-order.js, which still
+    // enforces this authoritatively either way). Infants/pets don't
+    // count toward this the same way adults/children occupying the
+    // space do. Not applied to a Resort: its real capacity lives
+    // per-room, not on the listing itself, so there's no single ceiling
+    // to check against here.
+    const listingMaxGuests = (listing.property_type !== 'Resort') ? Number(listing.max_guests) : null;
+    container.parentElement.querySelectorAll('.guest-step-btn[data-lg-type]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.lgType;
+        const delta = btn.dataset.lgAction === 'inc' ? 1 : -1;
+        const next = lgCounts[type] + delta;
+        // serviceAnimals/youngLitter have their own floor of 1 while
+        // their toggle is on — going to 0 via the stepper doesn't make
+        // sense, unchecking the toggle is how you remove them entirely.
+        const min = type === 'adults' ? 1 : 0;
+        if(type === 'animals'){
+          const n = animals.length + delta;
+          if(n < 0 || n > LG_MAX.animals) return;
+          setAnimalCount(n);
+          updateListingPriceSummary(listing, lgArrival, lgDeparture);
+          return;
+        }
+        if(next < min || next > LG_MAX[type]) return;
+        if(delta > 0 && (type === 'adults' || type === 'children') && listingMaxGuests > 0){
+          const otherType = type === 'adults' ? 'children' : 'adults';
+          if(next + lgCounts[otherType] > listingMaxGuests){
+            const capNoteEl = container.parentElement.querySelector('#lgCapacityNote');
+            if(capNoteEl){
+              capNoteEl.textContent = `${listing.property_name || 'This home'} sleeps up to ${listingMaxGuests} guests. For a larger group, please book an additional stay.`;
+              capNoteEl.style.display = 'block';
+            }
+            return;
+          }
+        }
+        lgCounts[type] = next;
+        // Any successful change clears a previously-shown capacity
+        // warning — otherwise decrementing back down to a valid count
+        // would leave the message stuck on screen looking unresolved.
+        const capNoteEl = container.parentElement.querySelector('#lgCapacityNote');
+        if(capNoteEl) capNoteEl.style.display = 'none';
+        const countEl = document.getElementById('lgCount' + type.charAt(0).toUpperCase() + type.slice(1));
+        if(countEl) countEl.textContent = next;
+        updateListingPriceSummary(listing, lgArrival, lgDeparture);
+      });
+    });
+
+    // Expose the current guest counts to the price function without a
+    // second copy of this state — read straight off the same object the
+    // stepper buttons above are mutating.
+    container.dataset.listingId = listingId;
+    renderAvailabilityCalendar._lgCounts = renderAvailabilityCalendar._lgCounts || {};
+    renderAvailabilityCalendar._lgCounts[listingId] = lgCounts;
+
+    // If a valid date range carried over from the search, show the price
+    // summary (and any dated amenities) immediately — the whole point of
+    // carrying this state over is that the guest shouldn't have to
+    // re-select anything they'd already picked.
+    if(initialArrival && initialDeparture){
+      updateListingPriceSummary(listing, initialArrival, initialDeparture);
+      if(typeof renderListingAmenities === 'function') renderListingAmenities(listing, initialArrival, initialDeparture);
+    }
+  }
+
+  // Mirrors updatePricing()'s formula exactly (room + extra-guest charge,
+  // discount, guest service fee, pet fee) so the number shown here always
+  // matches what checkout would actually charge — see updatePricing() for
+  // the same math applied to the (currently hidden) multi-stay reserve form.
+  // Same dated-amenity picker as the reserve form's renderStayAmenities —
+  // night-by-night checkboxes for each paid amenity, respecting its own
+  // availability window and excluded weekdays. Selections live in
+  // renderAvailabilityCalendar._lgAmenities, read by both the price
+  // summary and the actual booking request.
+  function renderListingAmenities(listing, arrival, departure){
+    const container = document.getElementById('listingAmenitiesPicker');
+    if(!container) return;
+
+    renderAvailabilityCalendar._lgAmenities = renderAvailabilityCalendar._lgAmenities || {};
+    if(!renderAvailabilityCalendar._lgAmenities[listing.id]) renderAvailabilityCalendar._lgAmenities[listing.id] = {};
+    const selectedAmenities = renderAvailabilityCalendar._lgAmenities[listing.id];
+
+    const paidAmenities = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
+    if(!arrival || !departure || paidAmenities.length === 0){
+      container.innerHTML = '';
+      return;
+    }
+
+    const nights = getNightsInRangeClient(arrival, departure);
+
+    // Drop selections that no longer make sense now that dates changed.
+    const validAmenityIds = new Set(paidAmenities.map(a => String(a.id)));
+    Object.keys(selectedAmenities).forEach(aid => {
+      if(!validAmenityIds.has(aid)){
+        delete selectedAmenities[aid];
+      } else {
+        const kept = new Set([...selectedAmenities[aid]].filter(d => nights.includes(d)));
+        if(kept.size === 0) delete selectedAmenities[aid];
+        else selectedAmenities[aid] = kept;
+      }
+    });
+
+    const rowsHtml = paidAmenities.map(a => {
+      const excludedWeekdays = Array.isArray(a.excludedWeekdays) ? a.excludedWeekdays : [];
+      const availableNights = nights.filter(n =>
+        (!a.availableFrom || n >= a.availableFrom) &&
+        (!a.availableUntil || n <= a.availableUntil) &&
+        !excludedWeekdays.includes(new Date(n + 'T00:00:00').getDay())
+      );
+      if(availableNights.length === 0) return '';
+
+      const selected = selectedAmenities[a.id] || new Set();
+      const chips = availableNights.map(n => {
+        const isChecked = selected.has(n);
+        const label = new Date(n + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
+        return `<label class="amenity-night-chip${isChecked ? ' checked' : ''}"><input type="checkbox" data-lg-amenity-id="${a.id}" data-lg-amenity-date="${n}" ${isChecked ? 'checked' : ''}> ${label}</label>`;
+      }).join('');
+
+      const subtotal = selected.size * Number(a.price);
+      const subtotalText = selected.size > 0
+        ? `${selected.size} night${selected.size === 1 ? '' : 's'} selected — ${fmt(subtotal)}`
+        : 'Tap nights to add this';
+
+      return `
+        <div class="stay-amenity-row">
+          <div class="stay-amenity-head"><strong>${a.name}</strong><span>${fmt(Number(a.price))}/night</span></div>
+          <div class="amenity-night-chips">${chips}</div>
+          <div class="stay-amenity-subtotal">${subtotalText}</div>
+        </div>
+      `;
+    }).join('');
+
+    const disclaimer = rowsHtml ? `<p style="font-size:11px; opacity:0.55; margin-top:8px; line-height:1.5;">Paid amenities are available on the dates shown only, and are subject to weather, local circumstances, national holidays, and other factors outside the host's control. If a selected amenity can't be fulfilled, the host will provide a refund for that amenity.</p>` : '';
+    container.innerHTML = rowsHtml ? `<div class="listing-modal-section-title">Add Paid Amenities</div>${rowsHtml}${disclaimer}` : '';
+
+    container.querySelectorAll('input[type="checkbox"][data-lg-amenity-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const aid = cb.dataset.lgAmenityId;
+        const date = cb.dataset.lgAmenityDate;
+        if(!selectedAmenities[aid]) selectedAmenities[aid] = new Set();
+        if(cb.checked) selectedAmenities[aid].add(date);
+        else selectedAmenities[aid].delete(date);
+        if(selectedAmenities[aid].size === 0) delete selectedAmenities[aid];
+        renderListingAmenities(listing, arrival, departure);
+        updateListingPriceSummary(listing, arrival, departure);
+      });
+    });
+  }
+
+  function updateListingPriceSummary(listing, arrival, departure){
+    const summaryEl = document.getElementById('listingPriceSummary');
+    const actionEl = document.getElementById('listingBookingAction');
+    if(!summaryEl) return;
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
+
+    // Book Now needs to read the current dates too — stashed here since
+    // this function already runs on every date/guest change, same as
+    // _lgCounts above.
+    renderAvailabilityCalendar._lgDates = renderAvailabilityCalendar._lgDates || {};
+    renderAvailabilityCalendar._lgDates[listing.id] = { arrival, departure };
+    // Refreshes the experience date input's min/max to match the new
+    // stay dates, and defaults a freshly-checked experience's date to
+    // the new arrival — same reasoning as the amenities picker re-render
+    // right above every date change.
+    if(typeof renderListingExperiencesPicker === 'function') renderListingExperiencesPicker(listing);
+
+    if(!arrival || !departure){
+      summaryEl.style.display = 'none';
+      if(actionEl) actionEl.style.display = 'none';
+      return;
+    }
+
+    const nights = Math.round((new Date(departure) - new Date(arrival)) / (1000 * 60 * 60 * 24));
+    const rate = listing.nightly_rate ? Number(listing.nightly_rate) : 0;
+    if(!rate || nights <= 0){
+      summaryEl.style.display = 'none';
+      if(actionEl) actionEl.style.display = 'none';
+      return;
+    }
+
+    const guests = counts.adults + counts.children;
+    const roomTotal = rate * nights;
+    const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
+    const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
+    const beforeDiscount = roomTotal + extraTotal;
+    const discount = calculateDiscount(listing, nights, arrival, beforeDiscount);
+    const discountAmount = discount.amount;
+    const petFeeAmount = counts.pets > 0 && listing.pet_fee ? Number(listing.pet_fee) * counts.pets : 0;
+    // One service/support animal per booking is free; each one after the
+    // first is charged at the pet fee (create-order.js charges the same).
+    const chargeableServiceAnimals = Math.max(0, (counts.serviceAnimals || 0) - 1);
+    const serviceAnimalFee = chargeableServiceAnimals > 0 && listing.pet_fee ? Number(listing.pet_fee) * chargeableServiceAnimals : 0;
+
+    // Amenities are priced client-side here only for display — same as
+    // updatePricing() — the real, trusted total is recalculated
+    // server-side in create-order.js from the same selections.
+    let amenityTotal = 0;
+    let amenityNightCount = 0;
+    const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
+    const paidAmenitiesList = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
+    Object.entries(selectedAmenities).forEach(([aid, datesSet]) => {
+      const amenity = paidAmenitiesList.find(a => String(a.id) === String(aid));
+      if(amenity){
+        amenityTotal += Number(amenity.price) * datesSet.size;
+        amenityNightCount += datesSet.size;
+      }
+    });
+
+    const staySubtotal = beforeDiscount - discountAmount + petFeeAmount + serviceAnimalFee + amenityTotal;
+    const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
+    const stayTax = stayGstFor(beforeDiscount - discountAmount, nights, petFeeAmount + serviceAnimalFee + amenityTotal);
+    const total = staySubtotal + guestServiceFee;
+
+    const rows = [];
+    rows.push(`<div class="sum-row"><span>${fmtGuest(rate)} × ${nights} night${nights === 1 ? '' : 's'}</span><span>${fmtGuest(roomTotal)}</span></div>`);
+    if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmtGuest(extraTotal)}</span></div>`);
+    if(discountAmount > 0) rows.push(`<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discountAmount)}</span></div>`);
+    if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee (${counts.pets} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
+    // The first service/support animal is free; any more are charged at
+    // the pet fee, shown as their own line so the guest sees why.
+    if(counts.serviceAnimals > 0) rows.push(`<div class="sum-row"><span>1 service/support animal</span><span>No charge</span></div>`);
+    if(serviceAnimalFee > 0) rows.push(`<div class="sum-row"><span>Additional service/support animal${chargeableServiceAnimals === 1 ? '' : 's'} (${chargeableServiceAnimals} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(serviceAnimalFee)}</span></div>`);
+    if(counts.youngLitter > 0) rows.push(`<div class="sum-row"><span>${counts.youngLitter} young litter pet${counts.youngLitter === 1 ? '' : 's'}</span><span>No charge</span></div>`);
+    if(amenityTotal > 0) rows.push(`<div class="sum-row"><span>Amenities (${amenityNightCount} night${amenityNightCount === 1 ? '' : 's'})</span><span>${fmtGuest(amenityTotal)}</span></div>`);
+    // Experience add-on is priced and charged as its own separate line
+    // in the same order (see create-order.js's experiences[] handling) —
+    // shown here too so the total the guest sees before paying already
+    // includes it, not just the stay itself.
+    const selectedExperience = (renderAvailabilityCalendar._lgSelectedExperience || {})[listing.id] || null;
+    let experienceTotal = 0;
+    let experienceGst = 0;
+    let experienceFee = 0;
+    if(selectedExperience){
+      const expOptions = ((renderAvailabilityCalendar._lgExperienceOptions || {})[listing.id]) || [];
+      const exp = expOptions.find(e => String(e.id) === String(selectedExperience.listingId));
+      if(exp && exp.price){
+        experienceTotal = exp.experience_price_unit === 'per_person'
+          ? Number(exp.price) * (selectedExperience.guests || 1)
+          : Number(exp.price);
+        rows.push(`<div class="sum-row"><span>${escapeMessageHtml(exp.property_name || '')}</span><span>${fmtGuest(experienceTotal)}</span></div>`);
+        experienceGst = experienceGstFor(experienceTotal).gst;
+        // The add-on carries its own guest service fee at checkout
+        // (create-order.js). It used to be left out of this summary, so
+        // the total shown was lower than the amount charged.
+        experienceFee = Math.round(experienceTotal * (GUEST_SERVICE_FEE_RATE / 100));
+      }
+    }
+    const gstShown = stayTax.gst + experienceGst;
+    if(gstShown > 0){
+      const gstLabel = experienceGst > 0 && stayTax.rate !== GST_EXPERIENCE_RATE ? 'GST' : `GST (${stayTax.rate}%)`;
+      rows.push(`<div class="sum-row"><span>${gstLabel}</span><span>${fmtGuest(gstShown)}</span></div>`);
+    }
+    rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee + experienceFee)}</span></div>`);
+    if(listing.security_deposit && Number(listing.security_deposit) > 0){
+      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (held 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
+    }
+
+    const grandTotalInr = total + stayTax.gst + (listing.security_deposit ? Number(listing.security_deposit) : 0) + experienceTotal + experienceGst + experienceFee;
+    // Payment always actually happens in INR (see the note on fmtGuest) —
+    // when showing a converted currency, say so explicitly right here,
+    // not just at the final payment button, so there's no surprise later.
+    // The second sentence covers the real mechanism: it's the guest's own
+    // bank/card network that converts INR to their currency after the
+    // fact, at their own rate plus possibly their own fees — Aerva has no
+    // part in and no control over that conversion.
+    const inrNote = currentCurrency !== 'INR'
+      ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ${fmt(grandTotalInr)} (Indian Rupees) — shown in ${currentCurrency} at today's rate. Your bank or card network sets the actual exchange rate and may apply its own fees; Aerva is not responsible for any difference between this estimate and what your bank charges.</p>`
+      : '';
+
+    summaryEl.innerHTML = `
+      <div class="listing-modal-section-title">Price Summary</div>
+      ${rows.join('')}
+      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);">
+        <span>Total</span><span>${fmtGuest(grandTotalInr)}</span>
+      </div>
+      ${inrNote}
+      <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">This is a live estimate for these dates and guests — the exact amount is confirmed at checkout.</p>
+    `;
+    summaryEl.style.display = 'block';
+    if(actionEl) actionEl.style.display = 'block';
+  }
+
+  // Same checkout flow as the (currently hidden) multi-stay reserve form
+  // — same create-order → Razorpay → verify-payment sequence, same
+  // RAZORPAY_KEY_ID/API_BASE constants — just triggered from this page
+  // directly for a single stay, so a guest never has to leave the
+  // listing they're looking at to actually book it.
+  async function handleListingBookNow(listing){
+    const errorEl = document.getElementById('listingBookError');
+    const confirmEl = document.getElementById('listingBookConfirm');
+    const btn = document.getElementById('listingBookNowBtn');
+    errorEl.style.display = 'none';
+    confirmEl.style.display = 'none';
+
+    if(!guestAuthToken()){
+      requireLoginForBooking(() => handleListingBookNow(listing));
+      return;
+    }
+
+    const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
+    if(!dates.arrival || !dates.departure){
+      errorEl.textContent = 'Please select your arrival and departure dates first.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const email = document.getElementById('listingBookEmail').value.trim();
+    if(!email || !email.includes('@')){
+      errorEl.textContent = 'Please enter a valid email address.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    // Razorpay's own checkout requires a contact number for its
+    // verification step (OTP for UPI/cards) regardless of what we send —
+    // collecting it here and prefilling it below means that step is
+    // already filled in rather than stopping the guest mid-payment to
+    // ask for it themselves.
+    const phone = document.getElementById('listingBookPhone').value.trim().replace(/\D/g, '');
+    if(!phone || phone.length < 10){
+      errorEl.textContent = 'Please enter a valid mobile number.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
+    const guests = counts.adults + counts.children;
+    // The guest-count stepper already never lets adults drop below 1
+    // (see the min:1 rule near LG_MAX), but this checks it explicitly
+    // too — a stay can't be booked by children/infants alone, and the
+    // server enforces this for real (see create-order.js); this is just
+    // a faster, clearer message than waiting on a round trip.
+    if(counts.adults < 1){
+      errorEl.textContent = 'At least one adult (18+) must be part of the group to book this stay.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
+    const selectedAmenitiesPayload = Object.entries(selectedAmenities).map(([amenityId, datesSet]) => ({
+      amenityId: Number(amenityId), dates: [...datesSet]
+    }));
+
+    // Bringing a pet requires saying what kind — one dropdown per pet
+    // slot (see renderPetTypeSlots), so this is always exactly one type
+    // per billable pet, never a looser "at least one kind checked."
+    const petCap = listing.max_pets_allowed ? Math.min(5, Number(listing.max_pets_allowed)) : 5;
+    if(counts.pets > petCap){
+      errorEl.textContent = `This home allows up to ${petCap} pet${petCap === 1 ? '' : 's'}. Service or support animals are not counted.`;
+      errorEl.style.display = 'block';
+      return;
+    }
+    let petTypes = [];
+    if(counts.pets > 0){
+      const modalRoot = document.getElementById('listingModalBody');
+      petTypes = (renderAvailabilityCalendar._lgPetTypeSelections || {})[listing.id] || [];
+      if(petTypes.length !== counts.pets){
+        const petTypesError = (modalRoot || document).querySelector('#lgPetTypesError');
+        if(petTypesError) petTypesError.style.display = 'block';
+        errorEl.textContent = 'Please choose a type for each pet before booking.';
+        errorEl.style.display = 'block';
+        return;
+      }
+    }
+
+    // Service/support animals — never counted or charged, only offered
+    // on pet-friendly listings (see the booking-modal markup). Types come
+    // from the same per-slot picker pattern as billable pets above.
+    let serviceAnimals = [];
+    if(counts.serviceAnimals > 0){
+      const modalRoot = document.getElementById('listingModalBody');
+      const types = (renderAvailabilityCalendar._lgServiceAnimalSelections || {})[listing.id] || [];
+      if(types.length !== counts.serviceAnimals){
+        const errEl = (modalRoot || document).querySelector('#lgServiceAnimalError');
+        if(errEl) errEl.style.display = 'block';
+        errorEl.textContent = 'Please choose a type for each service or support animal before booking.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      serviceAnimals = types.map(type => ({ type }));
+    }
+    const youngLitterCount = counts.youngLitter > 0 ? counts.youngLitter : 0;
+
+    // If the guest checked a with-stay experience add-on, it needs a
+    // date before it can be booked — same requirement create-order.js
+    // enforces server-side.
+    const selectedExperience = (renderAvailabilityCalendar._lgSelectedExperience || {})[listing.id] || null;
+    if(selectedExperience && !selectedExperience.date){
+      errorEl.textContent = 'Please pick a date for the experience you added.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const selectedExperiencesPayload = selectedExperience
+      ? [{ listingId: selectedExperience.listingId, date: selectedExperience.date, guests: selectedExperience.guests || 1 }]
+      : [];
+
+    btn.disabled = true;
+    btn.textContent = 'Preparing payment…';
+
+    let order;
+    try {
+      const orderRes = await fetch(API_BASE + '/api/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({
+          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, petTypes, serviceAnimals, youngLitterCount, selectedAmenities: selectedAmenitiesPayload }],
+          experiences: selectedExperiencesPayload,
+          email,
+          // Only takes effect if this currency is admin-enabled for direct
+          // international charging server-side (see create-order.js) —
+          // otherwise the backend charges INR exactly as it always has.
+          preferredCurrency: currentCurrency,
+          couponCode: document.getElementById('listingCouponCode').value.trim() || undefined
+        })
+      });
+      if(!orderRes.ok){
+        const errData = await orderRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Could not start payment. Please try again.');
+      }
+      order = await orderRes.json();
+      if(order.couponDiscount > 0){
+        // The discount is already baked into what Razorpay will actually
+        // charge (see order.amount below) — this is just confirming to
+        // the guest that their code worked, before the payment popup opens.
+        confirmEl.textContent = `Coupon applied — ${fmt(order.couponDiscount)} off this booking.`;
+        confirmEl.style.display = 'block';
+      }
+    } catch(err){
+      btn.disabled = false;
+      btn.textContent = 'Book Now';
+      errorEl.textContent = err.message || 'Could not start payment. Please try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Book Now';
+
+    if(typeof Razorpay === 'undefined'){
+      errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const options = {
+      key: RAZORPAY_KEY_ID,
+      order_id: order.orderId,   // amount/currency come from the order itself — cannot be edited client-side
+      amount: order.amount,
+      currency: order.currency,
+      name: 'Aerva',
+      description: listing.property_name,
+      prefill: { email, contact: phone },
+      theme: { color: '#a9884f' },
+      config: {
+        display: {
+          sequence: ['upi', 'card', 'netbanking', 'wallet'],
+          preferences: { show_default_blocks: true }
+        }
+      },
+      handler: async function(response){
+        try {
+          const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(response)
+          });
+          const verifyData = await verifyRes.json();
+          if(verifyData.verified){
+            confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm availability and follow up by email shortly.';
+            confirmEl.style.display = 'block';
+          } else {
+            errorEl.textContent = 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
+            errorEl.style.display = 'block';
+          }
+        } catch(err){
+          errorEl.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.';
+          errorEl.style.display = 'block';
+        }
+      },
+      modal: { ondismiss: function(){} }
+    };
+
+    const rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(response){
+      errorEl.textContent = 'Payment failed: ' + response.error.description;
+      errorEl.style.display = 'block';
+    });
+    rzp.open();
+  }
+
+  // ---- Resort booking: pick dates once, then choose which room(s) —
+  // each room independently priced and independently available (see
+  // create-order.js's dedicated resort-room branch). Deliberately
+  // simpler than the regular stay flow above: no pets, no paid
+  // amenities, no extra-guest pricing — a hotel-style room doesn't carry
+  // any of those single-unit concerns. Guest count per room defaults to
+  // that room's own max occupancy (no separate guest-count picker here,
+  // matching the "keep it property-wise" simplification — a guest
+  // choosing a room that sleeps 4 is understood to be booking it for up
+  // to 4, not asked to additionally specify a smaller number).
+  let resortSelectedRooms = {};
+
+  async function renderResortBookingCalendar(listing){
+    const container = document.getElementById('resortBookCalendar');
+    if(!container) return;
+    let resortArrival = '';
+    let resortDeparture = '';
+    let selectingStart = true;
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const minIso = toLocalDateStr(tomorrow);
+    const minDateObj = new Date(minIso + 'T00:00:00');
+    let viewYear = minDateObj.getFullYear();
+    let viewMonth = minDateObj.getMonth();
+
+    function handleDayClick(iso){
+      if(selectingStart || !resortArrival){
+        resortArrival = iso; resortDeparture = ''; selectingStart = false;
+      } else if(iso <= resortArrival){
+        resortArrival = iso; resortDeparture = ''; selectingStart = false;
+      } else {
+        resortDeparture = iso; selectingStart = true;
+      }
+      renderMonth();
+      if(resortArrival && resortDeparture){
+        renderResortRooms(listing, resortArrival, resortDeparture);
+      }
+    }
+
+    function renderMonth(){
+      const firstDay = new Date(viewYear, viewMonth, 1);
+      const startWeekday = firstDay.getDay();
+      const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+      const isMinMonth = viewYear === minDateObj.getFullYear() && viewMonth === minDateObj.getMonth();
+
+      let cellsHtml = '';
+      for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
+      for(let day = 1; day <= daysInMonth; day++){
+        const iso = toLocalDateStr(new Date(viewYear, viewMonth, day));
+        const isDisabled = iso < minIso;
+        let classes = 'calendar-day';
+        if(isDisabled) classes += ' disabled';
+        if(iso === resortArrival || iso === resortDeparture) classes += ' selected-start';
+        else if(resortArrival && resortDeparture && iso > resortArrival && iso < resortDeparture) classes += ' in-range';
+        cellsHtml += `<div class="${classes}" data-resort-date="${iso}">${day}</div>`;
+      }
+      const rangeNoteHtml = resortArrival && resortDeparture
+        ? `<p style="font-size:12px; margin-top:10px;"><strong>${new Date(resortArrival + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(resortDeparture + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</strong></p>`
+        : resortArrival
+        ? `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Now pick your checkout date.</p>`
+        : `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick check-in, then checkout.</p>`;
+
+      container.innerHTML = `
+        <div class="calendar-month-panel" style="max-width:320px; padding:0;">
+          <div class="calendar-month-header">
+            <button type="button" class="cal-nav" id="resortCalPrev" aria-label="Previous month" ${isMinMonth ? 'disabled' : ''}>‹</button>
+            <div class="calendar-month-label">${MONTH_NAMES[viewMonth]} ${viewYear}</div>
+            <button type="button" class="cal-nav" id="resortCalNext" aria-label="Next month">›</button>
+          </div>
+          <div class="calendar-weekdays"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
+          <div class="calendar-grid">${cellsHtml}</div>
+          ${rangeNoteHtml}
+        </div>
+      `;
+      document.getElementById('resortCalPrev').addEventListener('click', () => {
+        viewMonth -= 1; if(viewMonth < 0){ viewMonth = 11; viewYear -= 1; } renderMonth();
+      });
+      document.getElementById('resortCalNext').addEventListener('click', () => {
+        viewMonth += 1; if(viewMonth > 11){ viewMonth = 0; viewYear += 1; } renderMonth();
+      });
+      container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+        cell.addEventListener('click', (e) => { e.stopPropagation(); handleDayClick(cell.dataset.resortDate); });
+      });
+    }
+    renderMonth();
+  }
+
+  async function renderResortRooms(listing, arrival, departure){
+    const container = document.getElementById('resortRoomsList');
+    const promptEl = document.getElementById('resortDatesPrompt');
+    if(promptEl) promptEl.style.display = 'none';
+    const rooms = Array.isArray(listing.rooms) ? listing.rooms : [];
+    resortSelectedRooms = {};
+    updateResortPriceSummary();
+    renderRoomAwarePhotos(listing, []);
+    if(!rooms.length) return;
+
+    container.innerHTML = '<p style="font-size:12.5px; opacity:0.5;">Checking room availability…</p>';
+    const nightsNeeded = getNightsInRangeClient(arrival, departure);
+
+    const roomsWithAvailability = await Promise.all(rooms.map(async room => {
+      try{
+        const res = await fetch(SUITES_API_BASE + `/api/get-listings?availabilityFor=${listing.id}&roomId=${room.id}`);
+        if(!res.ok) return { ...room, available: true }; // fail open — a check failing shouldn't itself block booking
+        const data = await res.json();
+        const ranges = [...(Array.isArray(data.bookedRanges) ? data.bookedRanges : []), ...(Array.isArray(data.blockedRanges) ? data.blockedRanges : [])];
+        const occupied = new Set();
+        ranges.forEach(r => { if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => occupied.add(n)); });
+        return { ...room, available: !nightsNeeded.some(n => occupied.has(n)) };
+      } catch(err){
+        return { ...room, available: true };
+      }
+    }));
+
+    const nights = nightsNeeded.length;
+    container.innerHTML = roomsWithAvailability.map(room => `
+      <label style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--line-dark); cursor:${room.available ? 'pointer' : 'default'}; opacity:${room.available ? '1' : '0.45'};">
+        ${room.coverPhotoUrl
+          ? `<img src="${room.coverPhotoUrl}" alt="" style="width:64px; height:52px; object-fit:cover; border-radius:4px; flex:0 0 auto;">`
+          : `<span style="width:64px; height:52px; flex:0 0 auto; background:var(--cream-deep); border-radius:4px;"></span>`}
+        <input type="checkbox" data-room-id="${room.id}" ${room.available ? '' : 'disabled'} style="width:auto;">
+        <span style="flex:1; min-width:0;">
+          <strong style="display:block; font-size:14px;">${room.roomName}</strong>
+          <span style="font-size:12px; opacity:0.65;">Sleeps up to ${room.maxOccupancy} · ${fmt(Number(room.price))}/night${room.available ? '' : ' · Not available these dates'}</span>
+        </span>
+      </label>
+    `).join('');
+
+    container.querySelectorAll('[data-room-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const room = roomsWithAvailability.find(r => String(r.id) === cb.dataset.roomId);
+        if(cb.checked) resortSelectedRooms[room.id] = { ...room, arrival, departure, nights };
+        else delete resortSelectedRooms[room.id];
+        updateResortPriceSummary();
+        renderRoomAwarePhotos(listing, Object.keys(resortSelectedRooms).map(Number));
+      });
+    });
+  }
+
+  function updateResortPriceSummary(){
+    const summaryEl = document.getElementById('resortPriceSummary');
+    const actionEl = document.getElementById('resortBookingAction');
+    if(!summaryEl || !actionEl) return;
+    const selected = Object.values(resortSelectedRooms);
+    if(!selected.length){
+      summaryEl.style.display = 'none';
+      actionEl.style.display = 'none';
+      return;
+    }
+    const rows = selected.map(r => {
+      const cost = Number(r.price) * r.nights;
+      return `<div class="sum-row"><span>${escapeMessageHtml(r.roomName || '')} × ${r.nights} night${r.nights === 1 ? '' : 's'}</span><span>${fmtGuest(cost)}</span></div>`;
+    }).join('');
+    const subtotal = selected.reduce((sum, r) => sum + Number(r.price) * r.nights, 0);
+    const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
+    // Each room is its own unit for GST, so rooms at different rates can
+    // fall in different bands.
+    const roomTaxes = selected.map(r => stayGstFor(Number(r.price) * r.nights, r.nights, 0));
+    const gst = roomTaxes.reduce((a, t) => a + t.gst, 0);
+    const rates = [...new Set(roomTaxes.map(t => t.rate))];
+    const gstRow = gst > 0
+      ? `<div class="sum-row"><span>${rates.length === 1 ? `GST (${rates[0]}%)` : 'GST'}</span><span>${fmtGuest(gst)}</span></div>`
+      : '';
+    const total = subtotal + gst + guestServiceFee;
+    summaryEl.innerHTML = `
+      <div class="listing-modal-section-title">Price Summary</div>
+      ${rows}
+      ${gstRow}
+      <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
+      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
+    `;
+    summaryEl.style.display = 'block';
+    actionEl.style.display = 'block';
+  }
+
+  async function handleResortBookNow(listing){
+    const errorEl = document.getElementById('resortBookError');
+    const confirmEl = document.getElementById('resortBookConfirm');
+    const btn = document.getElementById('resortBookNowBtn');
+    errorEl.style.display = 'none';
+    confirmEl.style.display = 'none';
+
+    if(!guestAuthToken()){
+      requireLoginForBooking(() => handleResortBookNow(listing));
+      return;
+    }
+    const selected = Object.values(resortSelectedRooms);
+    if(!selected.length){
+      errorEl.textContent = 'Please select at least one room.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const email = document.getElementById('resortBookEmail').value.trim();
+    if(!email || !email.includes('@')){
+      errorEl.textContent = 'Please enter a valid email address.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const phone = document.getElementById('resortBookPhone').value.trim().replace(/\D/g, '');
+    if(!phone || phone.length < 10){
+      errorEl.textContent = 'Please enter a valid mobile number.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Preparing payment…';
+
+    // One stays[] entry per selected room — each becomes its own order
+    // row server-side (see create-order.js's resort branch), which is
+    // also what makes independent per-room payouts fall out naturally
+    // from the existing order structure, same as any other multi-item
+    // booking.
+    //
+    // adults: 1 is a deliberate simplification, not a real headcount —
+    // the Resort flow doesn't currently collect an adults/children
+    // breakdown per room the way a regular villa booking does (see
+    // renderAvailabilityCalendar's guest stepper). create-order.js
+    // requires at least one adult per stay purely as a safety check
+    // against a booking made entirely of children/infants; since a
+    // guest can only reach this point already logged in with a verified
+    // email and phone, they're already established as the adult making
+    // the booking. This satisfies that check correctly without needing
+    // to build a full per-room guest breakdown UI just for this.
+    const stays = selected.map(r => ({
+      listingId: listing.id, roomId: r.id, arrival: r.arrival, departure: r.departure, guests: r.maxOccupancy, adults: 1
+    }));
+
+    let order;
+    try{
+      const orderRes = await fetch(API_BASE + '/api/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({ stays, email, preferredCurrency: currentCurrency })
+      });
+      if(!orderRes.ok){
+        const errData = await orderRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Could not start payment. Please try again.');
+      }
+      order = await orderRes.json();
+    } catch(err){
+      btn.disabled = false;
+      btn.textContent = 'Book Now';
+      errorEl.textContent = err.message || 'Could not start payment. Please try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Book Now';
+
+    if(typeof Razorpay === 'undefined'){
+      errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const options = {
+      key: RAZORPAY_KEY_ID,
+      order_id: order.orderId,
+      amount: order.amount,
+      currency: order.currency,
+      name: 'Aerva',
+      description: listing.property_name,
+      prefill: { email, contact: phone },
+      theme: { color: '#a9884f' },
+      config: { display: { sequence: ['upi', 'card', 'netbanking', 'wallet'], preferences: { show_default_blocks: true } } },
+      handler: async function(response){
+        try{
+          const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(response)
+          });
+          const verifyData = await verifyRes.json();
+          if(verifyData.verified){
+            confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm and follow up by email shortly.';
+            confirmEl.style.display = 'block';
+          } else {
+            errorEl.textContent = 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
+            errorEl.style.display = 'block';
+          }
+        } catch(err){
+          errorEl.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.';
+          errorEl.style.display = 'block';
+        }
+      },
+      modal: { ondismiss: function(){} }
+    };
+    const rzp2 = new Razorpay(options);
+    rzp2.on('payment.failed', function(response){
+      errorEl.textContent = 'Payment failed: ' + response.error.description;
+      errorEl.style.display = 'block';
+    });
+    rzp2.open();
+  }
+
+  // Experience detail page — mirrors buildListingDetailHtml's structure,
+  // but with much simpler booking math (no nights, no discount, price is
+  // either per-person or flat) and a "hosted at" cross-sell into the
+  // existing, already-working stay booking page rather than trying to
+  // embed a second full booking widget inline.
+  function buildExperienceDetailHtml(exp){
+    const exteriorPhotos = Array.isArray(exp.exterior_photo_urls) ? exp.exterior_photo_urls : [];
+    const interiorPhotos = Array.isArray(exp.interior_photo_urls) ? exp.interior_photo_urls : [];
+    let allPhotos = [...interiorPhotos, ...exteriorPhotos];
+    if(exp.cover_photo_url && allPhotos.includes(exp.cover_photo_url)){
+      allPhotos = [exp.cover_photo_url, ...allPhotos.filter(url => url !== exp.cover_photo_url)];
+    }
+    // Same 4-photo collage + lightbox, same 3-column layout (booking |
+    // photos+description | map) the listing detail page already uses —
+    // this used to be its own different-looking layout; now the two
+    // detail pages read as the same product instead of two different ones.
+    const photosHtml = buildPhotoCollageHtml(allPhotos, exp.property_name, 'exp-' + exp.id);
+
+    const priceLine = exp.price
+      ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
+      : 'Price on enquiry';
+    const durationDaysLine = (exp.experience_duration_days && exp.experience_duration_days > 1) ? `${exp.experience_duration_days} days` : '';
+    const durationHoursLine = exp.experience_duration_hours ? `${exp.experience_duration_hours} hour${Number(exp.experience_duration_hours) === 1 ? '' : 's'}${durationDaysLine ? '/day' : ''}` : '';
+    const durationLine = [durationDaysLine, durationHoursLine].filter(Boolean).join(', ');
+
+    // Availability window (optional, host-set — see the "List Experience"
+    // form) — when present, constrains which dates a guest can even pick
+    // in the first place, same as a listing's booked-date greying-out,
+    // just expressed as native min/max rather than a custom calendar.
+    const tomorrowIso = toLocalDateStr(new Date(Date.now() + 86400000));
+    const availableFromIso = exp.experience_available_from ? String(exp.experience_available_from).slice(0, 10) : null;
+    const availableUntilIso = exp.experience_available_until ? String(exp.experience_available_until).slice(0, 10) : null;
+    const bookDateMin = (availableFromIso && availableFromIso > tomorrowIso) ? availableFromIso : tomorrowIso;
+    // A host-set "Available Until" date that's already in the past, or
+    // earlier than the earliest bookable date, would otherwise disable
+    // EVERY day on the calendar with no warning to anyone — every date
+    // would count as "overrunning" a window that's already closed. That
+    // silently makes the whole experience unbookable: no listener even
+    // gets attached to a disabled cell, so clicking does nothing and
+    // throws no error either, which is exactly what made this hard to
+    // spot. Treated as "no upper bound" instead when it's not actually
+    // usable, rather than trusting it blindly.
+    const bookDateMax = (availableUntilIso && availableUntilIso >= bookDateMin) ? availableUntilIso : null;
+    const availabilityNoteHtml = (availableFromIso || bookDateMax) ? `
+      <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">
+        ${availableFromIso && bookDateMax
+          ? `Available ${new Date(availableFromIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(bookDateMax + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`
+          : availableFromIso
+          ? `Available from ${new Date(availableFromIso + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`
+          : `Available through ${new Date(bookDateMax + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}`}
+      </p>
+    ` : '';
+
+    // Only offered as a cross-sell when the hosting property is itself an
+    // approved, bookable stay — never for a pending/rejected/no-rate one.
+    const hostingIsBookable = exp.hosting_listing_id && exp.hosting_status === 'approved' && exp.hosting_nightly_rate;
+    const hostingExteriorPhotos = Array.isArray(exp.hosting_exterior_photo_urls) ? exp.hosting_exterior_photo_urls : [];
+    const hostingInteriorPhotos = Array.isArray(exp.hosting_interior_photo_urls) ? exp.hosting_interior_photo_urls : [];
+    let hostingAllPhotos = [...hostingInteriorPhotos, ...hostingExteriorPhotos];
+    if(exp.hosting_cover_photo_url && hostingAllPhotos.includes(exp.hosting_cover_photo_url)){
+      hostingAllPhotos = [exp.hosting_cover_photo_url, ...hostingAllPhotos.filter(url => url !== exp.hosting_cover_photo_url)];
+    }
+    // The stay's own photos and info show right here, inline — nothing
+    // about this card navigates anywhere. Only the explicit "View
+    // Listing" button does, and only on a deliberate click, in a new
+    // tab, so the guest never loses their place on this experience.
+    const hostingPhotosHtml = hostingAllPhotos.length ? buildPhotoCollageHtml(hostingAllPhotos, exp.hosting_property_name, 'exp-hosting-' + exp.id) : '';
+    const hostingHtml = exp.hosting_property_name ? `
+      <div class="listing-modal-section-title">Hosted At</div>
+      <div class="exp-stay-card">
+        ${hostingPhotosHtml ? `<div style="margin-bottom:16px;">${hostingPhotosHtml}</div>` : ''}
+        <div class="exp-stay-card-head">
+          <div>
+            <h4>${exp.hosting_property_name}</h4>
+            <div class="exp-stay-card-loc">${exp.hosting_area ? exp.hosting_area + ', ' + exp.hosting_city : (exp.hosting_city || '')}</div>
+          </div>
+          ${hostingIsBookable ? `<div class="exp-stay-card-price">From <strong>${fmtGuest(Number(exp.hosting_nightly_rate))}</strong>/night</div>` : ''}
+        </div>
+        ${hostingIsBookable ? `
+          <a href="index.html?listing=${exp.hosting_listing_id}" target="_blank" rel="noopener" class="exp-view-listing-btn">
+            View Listing
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+          <p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Booked separately from this experience, on its own page.</p>
+        ` : `<p style="font-size:12.5px; opacity:0.6; margin-top:8px;">This property isn't currently bookable as a stay.</p>`}
+      </div>
+    ` : '';
+
+    // Logistics — all host-defined (see the "List Experience" form),
+    // shown as-is rather than Aerva interpreting or enforcing any of it.
+    const meetingPointLine = exp.experience_meeting_point_type === 'common_point'
+      ? (exp.experience_meeting_point_details || 'A common meeting point (details from host)')
+      : 'At the property/hotel';
+    const travelValue = exp.experience_arranges_travel
+      ? `Arranged by host${exp.experience_travel_details ? ' — ' + exp.experience_travel_details : ''}`
+      : 'Not included — guests make their own way there';
+    const logisticsItems = [];
+    if(exp.experience_start_time){
+      logisticsItems.push({
+        icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+        label: 'Start Time', value: exp.experience_start_time
+      });
+    }
+    logisticsItems.push({
+      icon: '<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+      label: 'Meeting Point', value: meetingPointLine
+    });
+    logisticsItems.push({
+      icon: '<rect x="3" y="7" width="18" height="13" rx="1.5"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+      label: 'Travel / Transport', value: travelValue
+    });
+    const logisticsGridHtml = `
+      <div class="exp-logistics-grid">
+        ${logisticsItems.map(item => `
+          <div class="exp-logistics-item">
+            <div class="exp-logistics-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">${item.icon}</svg></div>
+            <div>
+              <div class="exp-logistics-label">${item.label}</div>
+              <div class="exp-logistics-value">${item.value}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    const refundPolicyHtml = exp.experience_refund_policy ? `
+      <p style="font-size:12.5px; opacity:0.75; margin-top:6px; padding-top:14px; border-top:1px solid var(--line-dark);"><strong>If you don't reach the meeting point:</strong> ${exp.experience_refund_policy}</p>
+    ` : '';
+    const logisticsHtml = `
+      <div class="listing-modal-section-title">Good to Know</div>
+      ${logisticsGridHtml}
+      ${refundPolicyHtml}
+    `;
+
+    // A common meeting point has its own actual pinned location,
+    // separate from the experience's own address — shown as its own
+    // small map so a guest can see exactly where to go, not just read a
+    // text description of it.
+    const meetingPointMapHtml = (exp.experience_meeting_point_type === 'common_point' && exp.experience_meeting_point_lat && exp.experience_meeting_point_lng) ? `
+      <div class="listing-modal-section-title">Meeting Point Map</div>
+      <div class="listing-map-embed" id="expMeetingPointMapEmbed" style="aspect-ratio:16/9;"></div>
+      <div style="margin-top:8px;">
+        <a href="https://www.google.com/maps/search/?api=1&query=${exp.experience_meeting_point_lat},${exp.experience_meeting_point_lng}" target="_blank" rel="noopener" class="link" style="font-size:13px;">View on map</a>
+      </div>
+    ` : '';
+
+    const instructionsHtml = exp.experience_instructions ? `
+      <div class="listing-modal-section-title">Instructions</div>
+      <p style="font-size:13.5px; line-height:1.8; opacity:0.85; white-space:pre-wrap;">${exp.experience_instructions}</p>
+    ` : '';
+
+    // Kept visually distinct (its own bordered box, not just another
+    // paragraph) since this is the kind of thing a guest specifically
+    // needs to notice before booking, not casually skim past.
+    const specialInstructionsHtml = exp.experience_special_instructions ? `
+      <div class="listing-modal-section-title">Special Instructions</div>
+      <div style="border:1px solid var(--line-dark); background:var(--cream-deep); padding:14px 16px; font-size:13px; line-height:1.7; opacity:0.9;">
+        ${exp.experience_special_instructions}
+      </div>
+    ` : '';
+
+    const mapLinkHtml = (exp.latitude && exp.longitude)
+      ? `<a href="https://www.google.com/maps/search/?api=1&query=${exp.latitude},${exp.longitude}" target="_blank" rel="noopener" class="link" style="font-size:13px;">View on map</a>`
+      : '';
+
+    // Same title-and-location-above, three-column-below structure the
+    // listing detail page uses: booking on the left, photos + description
+    // in the middle, map on the right. Logistics/Hosted-At/Address sit
+    // below the grid, same as amenities/pet-policy do on the listing page.
+    return `
+      <div class="listing-modal-content">
+        ${listingStandingHtml(exp, { type: 'experience', subtitle: [exp.experience_category, durationLine].filter(Boolean).join(' · '), withStay: exp.experience_type === 'with_stay' })}
+        <div class="listing-three-col">
+          <div class="listing-col-booking">
+            <div class="listing-modal-section-title" style="margin-top:16px;">Book This Experience</div>
+            <div class="field">
+              <label>Dates</label>
+              <div id="expBookCalendar" data-min="${bookDateMin}" data-max="${bookDateMax || ''}">
+                <p style="font-size:13px; opacity:0.6;">Loading calendar…</p>
+              </div>
+              <input type="hidden" id="expBookDate">
+              <input type="hidden" id="expBookEndDate">
+              ${availabilityNoteHtml}
+            </div>
+            <div class="guest-row" style="padding-top:16px;">
+              <div class="guest-row-text">
+                <div class="guest-row-title">Guests</div>
+                <div class="guest-row-sub">How many are joining</div>
+              </div>
+              <div class="guest-stepper">
+                <button type="button" class="guest-step-btn" id="expGuestsDec" aria-label="Decrease guests">−</button>
+                <span class="guest-count" id="expGuestsCount">1</span>
+                <button type="button" class="guest-step-btn" id="expGuestsInc" aria-label="Increase guests">+</button>
+              </div>
+            </div>
+            <p id="expFitWarning" style="display:none; font-size:12.5px; color:#a3402f; margin-top:8px;"></p>
+            <div id="expPriceSummary" style="display:none;"></div>
+            <div id="expBookingAction" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+              <div class="field">
+                <label for="expBookEmail">Email <span style="color:#a3402f;">*</span></label>
+                <input id="expBookEmail" type="email" placeholder="you@email.com" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="expBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="expCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
+                <input id="expCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+              </div>
+              <button type="button" class="btn solid" id="expBookNowBtn" style="width:100%; margin-top:6px;">Book Experience</button>
+              <p id="expBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
+              <p id="expBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
+            </div>
+            <div class="listing-modal-price-row">
+              <div><div class="price">${priceLine}</div></div>
+            </div>
+          </div>
+          <div class="listing-col-photos">
+            <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
+            ${photosHtml}
+            <div class="listing-reviews" data-reviews-for="${exp.id}"></div>
+            <p class="desc" style="margin-top:16px;">${exp.description}</p>
+          </div>
+          <div class="listing-col-map">
+            <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
+            ${!exp.hosting_property_name && (exp.formatted_address || exp.city) ? `<p class="loc" style="margin-bottom:10px; text-transform:none; letter-spacing:normal; font-size:13px; opacity:0.8;">📍 ${exp.formatted_address || exp.city}</p>` : ''}
+            ${(exp.latitude && exp.longitude) ? `
+              <div class="listing-map-embed" id="expMapEmbed"></div>
+              <div style="margin-top:8px;">${mapLinkHtml}</div>
+            ` : `<p style="font-size:13px; opacity:0.6;">No location set for this experience yet.</p>`}
+          </div>
+        </div>
+        ${logisticsHtml}
+        ${meetingPointMapHtml}
+        ${instructionsHtml}
+        ${specialInstructionsHtml}
+        ${hostingHtml}
+      </div>
+    `;
+  }
+
+  // A real visual calendar for booking an experience — same month-grid
+  // pattern as renderAvailabilityCalendar (stays), and now genuinely the
+  // SAME interaction too: two clicks pick a start and end date, exactly
+  // like a stay's arrival/departure. This used to auto-compute the end
+  // date from the host's fixed experience_duration_days, letting the
+  // guest only ever pick a single start date — that's a real product
+  // decision to change (guests choosing their own range instead of a
+  // host-fixed length), not a bug fix. create-order.js now prices this
+  // as price × days, an interim assumption pending a real "per day"
+  // pricing model — see the comment there.
+  async function renderExpBookingCalendar(exp){
+    const container = document.getElementById('expBookCalendar');
+    if(!container) return;
+    const minIso = container.dataset.min;
+    const maxIso = container.dataset.max || null;
+
+    // A with_stay experience is tied to a real property (hosting_listing_id)
+    // — booking the experience is supposed to also reserve that stay, so
+    // its own booked/blocked nights need to grey out here too, not just
+    // the experience listing's own (which mostly has none, since
+    // experiences don't track per-date capacity the way stays do). This
+    // used to not exist at all: an experience could show as bookable on
+    // dates where the actual property was already fully booked by
+    // someone else, since nothing here ever checked the linked stay.
+    const occupiedNights = new Set();
+    if(exp.hosting_listing_id){
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(exp.hosting_listing_id));
+        if(res.ok){
+          const data = await res.json();
+          const ranges = [...(Array.isArray(data.bookedRanges) ? data.bookedRanges : []), ...(Array.isArray(data.blockedRanges) ? data.blockedRanges : [])];
+          ranges.forEach(r => {
+            if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => occupiedNights.add(n));
+          });
+        }
+      } catch(err){
+        console.error('Could not load linked stay availability:', err);
+      }
+    }
+
+    let expArrival = '';
+    let expDeparture = '';
+    let expSelectingStart = true;
+    let viewYear, viewMonth;
+    const minDateObj = new Date(minIso + 'T00:00:00');
+    viewYear = minDateObj.getFullYear();
+    viewMonth = minDateObj.getMonth();
+
+    function rangeOverlapsOccupiedNights(startIso, endIso){
+      if(!occupiedNights.size) return false;
+      return getNightsInRangeClient(startIso, endIso).some(n => occupiedNights.has(n));
+    }
+
+    function handleExpDayClick(iso){
+      if(expSelectingStart || !expArrival){
+        expArrival = iso;
+        expDeparture = '';
+        expSelectingStart = false;
+      } else if(iso <= expArrival){
+        // Picked an earlier (or same) date as the second click — start a
+        // fresh selection from here instead, same convention the stay
+        // calendar uses.
+        expArrival = iso;
+        expDeparture = '';
+        expSelectingStart = false;
+      } else if(rangeOverlapsOccupiedNights(expArrival, iso)){
+        // The stay portion isn't free across the whole span the guest
+        // just tried to select — caught here, before any date even
+        // makes it into the booking form, rather than only failing at
+        // the final "Book Experience" click or (worse) at payment.
+        const warningEl = document.getElementById('expFitWarning');
+        if(warningEl){
+          warningEl.textContent = "The stay included with this experience isn't available for the full range you selected. Please choose different dates.";
+          warningEl.style.display = 'block';
+        }
+        expArrival = iso;
+        expDeparture = '';
+        expSelectingStart = false;
+      } else {
+        expDeparture = iso;
+        expSelectingStart = true;
+      }
+      document.getElementById('expBookDate').value = expArrival;
+      document.getElementById('expBookEndDate').value = expDeparture;
+      updateExperiencePriceSummary(exp);
+      renderMonth();
+    }
+
+    function renderMonth(){
+      const firstDay = new Date(viewYear, viewMonth, 1);
+      const startWeekday = firstDay.getDay();
+      const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+      const isMinMonth = viewYear === minDateObj.getFullYear() && viewMonth === minDateObj.getMonth();
+      const maxDateObj = maxIso ? new Date(maxIso + 'T00:00:00') : null;
+      const isMaxMonth = maxDateObj && viewYear === maxDateObj.getFullYear() && viewMonth === maxDateObj.getMonth();
+
+      let cellsHtml = '';
+      for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
+      for(let day = 1; day <= daysInMonth; day++){
+        const iso = toLocalDateStr(new Date(viewYear, viewMonth, day));
+        const isDisabled = iso < minIso || (maxIso && iso > maxIso) || occupiedNights.has(iso);
+        let classes = 'calendar-day';
+        if(isDisabled) classes += ' disabled';
+        if(iso === expArrival || iso === expDeparture) classes += ' selected-start';
+        else if(expArrival && expDeparture && iso > expArrival && iso < expDeparture) classes += ' in-range';
+        cellsHtml += `<div class="${classes}" data-exp-date="${iso}">${day}</div>`;
+      }
+
+      const rangeNoteHtml = expArrival && expDeparture
+        ? `<p style="font-size:12px; margin-top:10px;"><strong>${new Date(expArrival + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(expDeparture + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</strong></p>`
+        : expArrival
+        ? `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Now pick your end date.</p>`
+        : `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick your dates to see the price and continue booking.</p>`;
+
+      container.innerHTML = `
+        <div class="calendar-month-panel" style="max-width:320px; padding:0;">
+          <div class="calendar-month-header">
+            <button type="button" class="cal-nav" id="expCalPrev" aria-label="Previous month" ${isMinMonth ? 'disabled' : ''}>‹</button>
+            <div class="calendar-month-label">${MONTH_NAMES[viewMonth]} ${viewYear}</div>
+            <button type="button" class="cal-nav" id="expCalNext" aria-label="Next month" ${isMaxMonth ? 'disabled' : ''}>›</button>
+          </div>
+          <div class="calendar-weekdays">
+            <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+          </div>
+          <div class="calendar-grid">${cellsHtml}</div>
+          ${rangeNoteHtml}
+        </div>
+      `;
+
+      document.getElementById('expCalPrev').addEventListener('click', () => {
+        viewMonth -= 1;
+        if(viewMonth < 0){ viewMonth = 11; viewYear -= 1; }
+        renderMonth();
+      });
+      document.getElementById('expCalNext').addEventListener('click', () => {
+        viewMonth += 1;
+        if(viewMonth > 11){ viewMonth = 0; viewYear += 1; }
+        renderMonth();
+      });
+      container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+        cell.addEventListener('click', (e) => {
+          e.stopPropagation();
+          handleExpDayClick(cell.dataset.expDate);
+        });
+      });
+    }
+
+    renderMonth();
+  }
+
+  function updateExperiencePriceSummary(exp){
+    const summaryEl = document.getElementById('expPriceSummary');
+    const fitWarningEl = document.getElementById('expFitWarning');
+    if(!summaryEl) return;
+    const guests = Number(document.getElementById('expGuestsCount').textContent) || 1;
+    const price = exp.price ? Number(exp.price) : 0;
+    const startDate = document.getElementById('expBookDate') ? document.getElementById('expBookDate').value : '';
+    const endDate = document.getElementById('expBookEndDate') ? document.getElementById('expBookEndDate').value : '';
+    if(!price || !startDate || !endDate){
+      summaryEl.style.display = 'none';
+      if(fitWarningEl) fitWarningEl.style.display = 'none';
+      return;
+    }
+    // The range is the guest's AVAILABILITY window, not "how many days
+    // of this experience they're buying" — price stays the fixed
+    // package rate regardless of how many days are selected. What the
+    // range determines is whether this experience's own fixed duration
+    // can even fit inside it (see the hours check below), same
+    // reasoning and formula as create-order.js's authoritative version.
+    const days = Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1;
+    const requiredHours = (exp.experience_duration_days && exp.experience_duration_days > 1)
+      ? exp.experience_duration_days * (Number(exp.experience_duration_hours) || 24)
+      : (Number(exp.experience_duration_hours) || 24);
+    const availableHours = days * 24;
+    if(requiredHours > availableHours){
+      summaryEl.style.display = 'none';
+      if(fitWarningEl){
+        fitWarningEl.textContent = `This experience needs about ${requiredHours} hours — your selected dates only give it ${availableHours}. Please select a longer range.`;
+        fitWarningEl.style.display = 'block';
+      }
+      return;
+    }
+    if(fitWarningEl) fitWarningEl.style.display = 'none';
+
+    const subtotalBeforeDiscount = exp.experience_price_unit === 'per_person' ? price * guests : price;
+    // Same discount logic stays use — mirrors calculateDiscount exactly.
+    // durationDays stands in for "nights" purely for the promotion's own
+    // minNights gate; not related to the days/hours fit-check above.
+    const durationDays = exp.experience_duration_days && exp.experience_duration_days > 1 ? exp.experience_duration_days : 1;
+    const discount = calculateDiscount(exp, durationDays, startDate, subtotalBeforeDiscount);
+    const expSubtotal = subtotalBeforeDiscount - discount.amount;
+
+    // A with_stay experience also reserves and charges for the linked
+    // property (see create-order.js) — shown here as an ESTIMATE using
+    // that property's plain nightly rate (no promotions applied
+    // client-side, unlike the experience's own price above), so the
+    // guest sees a total that's actually close to what they'll be
+    // charged, rather than only the experience's own price with the
+    // stay silently added at checkout with no warning beforehand.
+    let hostingSubtotal = 0;
+    let hostingRowHtml = '';
+    if(exp.experience_type === 'with_stay' && exp.hosting_listing_id && exp.hosting_nightly_rate){
+      hostingSubtotal = Number(exp.hosting_nightly_rate) * days;
+      hostingRowHtml = `<div class="sum-row"><span>Stay at ${exp.hosting_property_name || 'the property'} × ${days} night${days === 1 ? '' : 's'}</span><span>${fmtGuest(hostingSubtotal)}</span></div>`;
+    }
+
+    const subtotal = expSubtotal + hostingSubtotal;
+    const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
+    const expGst = experienceGstFor(expSubtotal).gst;
+    const hostingGst = hostingSubtotal > 0 ? stayGstFor(hostingSubtotal, days, 0).gst : 0;
+    const gstTotal = expGst + hostingGst;
+    const gstRowHtml = gstTotal > 0
+      ? `<div class="sum-row"><span>${hostingGst > 0 ? 'GST' : `GST (${GST_EXPERIENCE_RATE}%)`}</span><span>${fmtGuest(gstTotal)}</span></div>`
+      : '';
+    const total = subtotal + gstTotal + guestServiceFee;
+    const inrNote = currentCurrency !== 'INR'
+      ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ${fmt(total)} (Indian Rupees) — shown in ${currentCurrency} at today's rate. Your bank or card network sets the actual exchange rate and may apply its own fees; Aerva is not responsible for any difference between this estimate and what your bank charges.</p>`
+      : '';
+    const discountRowHtml = discount.amount > 0
+      ? `<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discount.amount)}</span></div>`
+      : '';
+    const rateLine = exp.experience_price_unit === 'per_person'
+      ? `${fmtGuest(price)} × ${guests} guest${guests === 1 ? '' : 's'}`
+      : 'Package price';
+    summaryEl.innerHTML = `
+      <div class="listing-modal-section-title">Price Summary</div>
+      <div class="sum-row"><span>${rateLine}</span><span>${fmtGuest(subtotalBeforeDiscount)}</span></div>
+      ${discountRowHtml}
+      ${hostingRowHtml}
+      ${gstRowHtml}
+      <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
+      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
+      ${inrNote}
+    `;
+    summaryEl.style.display = 'block';
+  }
+
+  async function handleExperienceBookNow(exp){
+    const errorEl = document.getElementById('expBookError');
+    const confirmEl = document.getElementById('expBookConfirm');
+    const btn = document.getElementById('expBookNowBtn');
+    errorEl.style.display = 'none';
+    confirmEl.style.display = 'none';
+
+    if(!guestAuthToken()){
+      requireLoginForBooking(() => handleExperienceBookNow(exp));
+      return;
+    }
+
+    const date = document.getElementById('expBookDate').value;
+    const endDate = document.getElementById('expBookEndDate').value;
+    if(!date || !endDate){
+      errorEl.textContent = 'Please choose both a start and end date for this experience.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    // Same fit-check updateExperiencePriceSummary already ran (and
+    // create-order.js will re-check authoritatively) — repeated here so
+    // clicking "Book Experience" gives a clear reason rather than just
+    // failing at the server with no context, if this is ever reached
+    // with a too-short range still selected.
+    const days = Math.round((new Date(endDate) - new Date(date)) / (1000 * 60 * 60 * 24)) + 1;
+    const requiredHours = (exp.experience_duration_days && exp.experience_duration_days > 1)
+      ? exp.experience_duration_days * (Number(exp.experience_duration_hours) || 24)
+      : (Number(exp.experience_duration_hours) || 24);
+    if(requiredHours > days * 24){
+      errorEl.textContent = `This experience needs about ${requiredHours} hours — your selected dates only give it ${days * 24}. Please select a longer range.`;
+      errorEl.style.display = 'block';
+      return;
+    }
+    const email = document.getElementById('expBookEmail').value.trim();
+    if(!email || !email.includes('@')){
+      errorEl.textContent = 'Please enter a valid email address.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const phone = document.getElementById('expBookPhone').value.trim().replace(/\D/g, '');
+    if(!phone || phone.length < 10){
+      errorEl.textContent = 'Please enter a valid mobile number.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const guests = Number(document.getElementById('expGuestsCount').textContent) || 1;
+
+    btn.disabled = true;
+    btn.textContent = 'Preparing payment…';
+
+    let order;
+    try{
+      const orderRes = await fetch(API_BASE + '/api/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({
+          experiences: [{ listingId: exp.id, date, endDate, guests }],
+          email,
+          preferredCurrency: currentCurrency,
+          couponCode: document.getElementById('expCouponCode').value.trim() || undefined
+        })
+      });
+      if(!orderRes.ok){
+        const errData = await orderRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Could not start payment. Please try again.');
+      }
+      order = await orderRes.json();
+      if(order.couponDiscount > 0){
+        confirmEl.textContent = `Coupon applied — ${fmt(order.couponDiscount)} off this booking.`;
+        confirmEl.style.display = 'block';
+      }
+    } catch(err){
+      btn.disabled = false;
+      btn.textContent = 'Book Experience';
+      errorEl.textContent = err.message || 'Could not start payment. Please try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Book Experience';
+
+    if(typeof Razorpay === 'undefined'){
+      errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const options = {
+      key: RAZORPAY_KEY_ID,
+      order_id: order.orderId,
+      amount: order.amount,
+      currency: order.currency,
+      name: 'Aerva',
+      description: exp.property_name,
+      prefill: { email, contact: phone },
+      theme: { color: '#a9884f' },
+      config: {
+        display: { sequence: ['upi', 'card', 'netbanking', 'wallet'], preferences: { show_default_blocks: true } }
+      },
+      handler: async function(response){
+        try{
+          const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(response)
+          });
+          const verifyData = await verifyRes.json();
+          if(verifyData.verified){
+            confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our team will confirm and follow up by email shortly.';
+            confirmEl.style.display = 'block';
+          } else {
+            errorEl.textContent = 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
+            errorEl.style.display = 'block';
+          }
+        } catch(err){
+          errorEl.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.';
+          errorEl.style.display = 'block';
+        }
+      },
+      modal: { ondismiss: function(){} }
+    };
+
+    const rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(response){
+      errorEl.textContent = 'Payment failed: ' + response.error.description;
+      errorEl.style.display = 'block';
+    });
+    rzp.open();
+  }
+
+  // Opens the experience's detail view inline, as a modal — same shell
+  // as openListingDetail uses for stays, same booking widget wiring as
+  // showExperienceDetailPage (the standalone page, still used for direct
+  // ?experience=<id> links) — just inserted into the modal instead of
+  // swapping the whole page out, so a click from search results shows
+  // the calendar/photos/booking immediately with no extra navigation.
+  function openExperienceDetail(experienceId){
+    const exp = experiencesById[experienceId];
+    if(!exp) return;
+    trackRecentlyViewed('experience', experienceId);
+    document.getElementById('listingModalBody').innerHTML = buildExperienceDetailHtml(exp);
+    document.getElementById('listingModalOverlay').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    loadListingReviews(document.getElementById('listingModalBody'), exp.id);
+
+    const mapEl = document.getElementById('expMapEmbed');
+    if(mapEl && exp.latitude && exp.longitude){
+      initListingMapEmbed(mapEl, exp.latitude, exp.longitude, exp.property_name);
+    }
+    const meetingMapEl = document.getElementById('expMeetingPointMapEmbed');
+    if(meetingMapEl && exp.experience_meeting_point_lat && exp.experience_meeting_point_lng){
+      initListingMapEmbed(meetingMapEl, exp.experience_meeting_point_lat, exp.experience_meeting_point_lng, 'Meeting Point');
+    }
+
+    const guestsCountEl = document.getElementById('expGuestsCount');
+    document.getElementById('expGuestsDec').addEventListener('click', () => {
+      const next = Math.max(1, Number(guestsCountEl.textContent) - 1);
+      guestsCountEl.textContent = next;
+      updateExperiencePriceSummary(exp);
+    });
+    document.getElementById('expGuestsInc').addEventListener('click', () => {
+      const next = Math.min(50, Number(guestsCountEl.textContent) + 1);
+      guestsCountEl.textContent = next;
+      updateExperiencePriceSummary(exp);
+    });
+    renderExpBookingCalendar(exp);
+    document.getElementById('expBookNowBtn').addEventListener('click', () => handleExperienceBookNow(exp));
+    updateExperiencePriceSummary(exp);
+  }
+
+  function showExperienceDetailPage(exp){
+    trackRecentlyViewed('experience', exp.id);
+    document.body.classList.remove('showing-hero');
+    document.getElementById('suites').style.display = 'none';
+    const expSection = document.getElementById('experiences');
+    if(expSection) expSection.style.display = 'none';
+    document.getElementById('experienceFullViewBody').innerHTML = buildExperienceDetailHtml(exp);
+    document.getElementById('experienceFullView').style.display = 'block';
+    document.title = exp.property_name + ' — Aerva Experience';
+
+    const mapEl = document.getElementById('expMapEmbed');
+    if(mapEl && exp.latitude && exp.longitude){
+      initListingMapEmbed(mapEl, exp.latitude, exp.longitude, exp.property_name);
+    }
+    const meetingMapEl = document.getElementById('expMeetingPointMapEmbed');
+    if(meetingMapEl && exp.experience_meeting_point_lat && exp.experience_meeting_point_lng){
+      initListingMapEmbed(meetingMapEl, exp.experience_meeting_point_lat, exp.experience_meeting_point_lng, 'Meeting Point');
+    }
+
+    const guestsCountEl = document.getElementById('expGuestsCount');
+    document.getElementById('expGuestsDec').addEventListener('click', () => {
+      const next = Math.max(1, Number(guestsCountEl.textContent) - 1);
+      guestsCountEl.textContent = next;
+      updateExperiencePriceSummary(exp);
+    });
+    document.getElementById('expGuestsInc').addEventListener('click', () => {
+      const next = Math.min(50, Number(guestsCountEl.textContent) + 1);
+      guestsCountEl.textContent = next;
+      updateExperiencePriceSummary(exp);
+    });
+    renderExpBookingCalendar(exp);
+    document.getElementById('expBookNowBtn').addEventListener('click', () => handleExperienceBookNow(exp));
+    updateExperiencePriceSummary(exp);
+  }
+  // Smooth in-page return instead of a full reload — the plain
+  // href="index.html"/"index.html?view=experiences" fallback still
+  // works (e.g. JS disabled, or arriving here via a direct shared link
+  // with no prior browse state to return to), but for the common case
+  // of a guest browsing, opening a listing, then going back, a full
+  // page reload was a jarring way to do something this simple, and lost
+  // whatever search/filter state they had going.
+  document.getElementById('listingFullViewBackLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('listingFullView').style.display = 'none';
+    document.getElementById('suites').style.display = 'block';
+    document.body.classList.add('showing-hero');
+    document.title = 'Aerva — Stay Elegant';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  document.getElementById('experienceFullViewBackLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('experienceFullView').style.display = 'none';
+    document.getElementById('suites').style.display = 'block';
+    const expSection = document.getElementById('experiences');
+    if(expSection) expSection.style.display = 'none';
+    document.body.classList.add('showing-hero');
+    document.title = 'Aerva — Stay Elegant';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  // ---- One booking ----
+  // Opened from My Bookings. Everything about that stay in one place: the
+  // dates and what was paid, where it is, and what other guests have said
+  // — rather than a line in a list with two buttons on it.
+  function showBookingPage(b){
+    const esc = escapeMessageHtml;
+    document.body.classList.remove('showing-hero');
+    hideMainViews();
+    document.getElementById('bookingView').style.display = 'block';
+    document.title = (b.suite_name || 'Your booking') + ' — Aerva';
+    window.scrollTo({ top: 0 });
+
+    const listing = listingsById[b.listing_id] || null;
+    const day = (d) => d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+    const isExp = b.listing_type === 'experience';
+    const money = (v) => v ? fmtGuest(Number(v)) : null;
+
+    const actions = [];
+    if(b.status === 'paid' || b.status === 'cancelled'){
+      actions.push(`<button type="button" class="filter-clear" id="bkMessage">${b.status === 'paid' ? 'Message host' : 'View messages'}</button>`);
+    }
+    if(b.review_state === 'open') actions.push('<button type="button" class="filter-clear" id="bkReview">Leave a review</button>');
+    if(listing) actions.push('<button type="button" class="filter-clear" id="bkListing">View the listing</button>');
+
+    document.getElementById('bookingViewBody').innerHTML = `
+      <h2 class="bk-title">${esc(b.suite_name || 'Your booking')}</h2>
+      <p class="bk-sub">${esc(statusWordGuest(b.status))}${listing ? ' · ' + esc(formatCityArea(listing)) : ''}</p>
+      <div class="bk-facts">
+        ${isExp
+          ? `<div><span>Date</span><strong>${esc(day(b.arrival))}</strong></div>`
+          : `<div><span>Check-in</span><strong>${esc(day(b.arrival))}</strong></div>
+             <div><span>Check-out</span><strong>${esc(day(b.departure))}</strong></div>
+             <div><span>Nights</span><strong>${b.nights || '—'}</strong></div>`}
+        <div><span>Guests</span><strong>${b.guests || 1}</strong></div>
+        ${money(b.total) ? `<div><span>Paid</span><strong>${money(b.total)}</strong></div>` : ''}
+        ${money(b.gst) ? `<div><span>of which GST</span><strong>${money(b.gst)}</strong></div>` : ''}
+      </div>
+      <div class="bk-actions">${actions.join('')}</div>
+      <div class="bk-cols">
+        <div>
+          <div class="listing-modal-section-title" style="margin-top:0;">Where it is</div>
+          ${listing && listing.latitude && listing.longitude
+            ? `<div class="bk-map" id="bkMap"></div>
+               <p class="bk-note" style="margin-top:8px;">${esc(listing.formatted_address || formatCityArea(listing))}</p>`
+            : `<p class="bk-note">${listing ? esc(formatCityArea(listing)) : 'This listing is no longer published on Aerva, so its map and reviews are not available.'}</p>`}
+        </div>
+        <div>
+          ${listing ? `<div class="listing-reviews" data-reviews-for="${Number(b.listing_id)}"></div>` : ''}
+        </div>
+      </div>`;
+
+    const msgBtn = document.getElementById('bkMessage');
+    if(msgBtn) msgBtn.addEventListener('click', () => openChatForOrder(Number(b.id), b.suite_name || ''));
+    const revBtn = document.getElementById('bkReview');
+    if(revBtn) revBtn.addEventListener('click', () => openReviewModal(b));
+    const lstBtn = document.getElementById('bkListing');
+    if(lstBtn) lstBtn.addEventListener('click', () => {
+      document.getElementById('bookingView').style.display = 'none';
+      if(isExp) showExperienceDetailPage(listing); else showFullListingPage(listing);
+    });
+    if(listing){
+      loadListingReviews(document.getElementById('bookingViewBody'), b.listing_id);
+      if(listing.latitude && listing.longitude){
+        initListingMapEmbed(document.getElementById('bkMap'), listing.latitude, listing.longitude, listing.property_name);
+      }
+    }
+  }
+
+  function statusWordGuest(status){
+    return status === 'paid' ? 'Confirmed' : status === 'cancelled' ? 'Cancelled' : status === 'refunded' ? 'Refunded' : String(status || '');
+  }
+
+  // ---- Profile ----
+  // Every full-page view on index.html. Switching views hides ALL of them
+  // first, from this one list — each view used to keep its own list, and
+  // Today's had left out the profile, so Today "did nothing" when clicked
+  // from the profile (it opened underneath it, out of sight).
+  const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'policiesView'];
+
+  // ---- Agreements shown before payment and before listing ----
+  // The guest booking agreement sits directly above every Book button; the
+  // host agreement above every "Submit for review" button. Nothing is sent
+  // until its box is ticked: the booking/listing request itself is checked
+  // on its way out (below), and the server refuses it without the current
+  // version too (create-order.js, submit-listing.js). Text and version come
+  // from aerva-policies.js, the same source as the Policies page.
+  const BOOKING_BUTTONS = '#listingBookNowBtn, #resortBookNowBtn, #expBookNowBtn, #reserveSubmitBtn';
+  const LISTING_BUTTONS = '#listingSubmitBtn, #expSubmitBtn';
+  function agreementBoxHtml(kind){
+    const A = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements;
+    if(!A || !A[kind]) return '';
+    const a = A[kind];
+    const esc = escapeMessageHtml;
+    return `<div class="agreement-box" data-agreement="${kind}">
+      <div class="agreement-title">${esc(a.title)}</div>
+      <ul>${a.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+      <label class="agreement-accept"><input type="checkbox" class="agreement-check"> <span>${esc(a.accept)}</span></label>
+      <a class="agreement-link" href="index.html?view=policies${kind === 'host' ? '&tab=host' : ''}" target="_blank" rel="noopener">Read Aerva’s Policies</a>
+    </div>`;
+  }
+  function mountAgreements(root){
+    (root || document).querySelectorAll(BOOKING_BUTTONS + ', ' + LISTING_BUTTONS).forEach(btn => {
+      const prev = btn.previousElementSibling;
+      if(prev && prev.classList && prev.classList.contains('agreement-box')) return;
+      const kind = btn.matches(LISTING_BUTTONS) ? 'host' : 'guest';
+      const html = agreementBoxHtml(kind);
+      if(html) btn.insertAdjacentHTML('beforebegin', html);
+    });
+  }
+  mountAgreements();
+  new MutationObserver(() => mountAgreements()).observe(document.body, { childList: true, subtree: true });
+
+  // Which button started this request: its box is the one that must be ticked.
+  let lastAgreementButton = null;
+  document.addEventListener('click', function(e){
+    const b = e.target.closest && e.target.closest(BOOKING_BUTTONS + ', ' + LISTING_BUTTONS);
+    if(b) lastAgreementButton = b;
+  }, true);
+  function agreementTicked(btn){
+    const box = btn && btn.previousElementSibling;
+    const check = box && box.classList && box.classList.contains('agreement-box') ? box.querySelector('.agreement-check') : null;
+    return !!(check && check.checked);
+  }
+  (function guardRequests(){
+    const originalFetch = window.fetch ? window.fetch.bind(window) : null;
+    if(!originalFetch) return;
+    // A plain response-like object (not `new Response`, which some
+    // environments lack) — so a missing tick can never slip through.
+    const refuse = (msg) => {
+      const bodyText = JSON.stringify({ error: msg });
+      const res = { ok: false, status: 400, statusText: 'Bad Request', headers: { get: () => 'application/json' },
+        json: async () => JSON.parse(bodyText), text: async () => bodyText };
+      res.clone = () => res;
+      return Promise.resolve(res);
+    };
+    window.fetch = function(input, init){
+      try{
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const isBooking = url.indexOf('/api/create-order') !== -1;
+        const isListing = url.indexOf('/api/submit-listing') !== -1;
+        if((isBooking || isListing) && init && typeof init.body === 'string'){
+          const body = JSON.parse(init.body);
+          const version = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements && window.AERVA_POLICIES.agreements.version;
+          if(isBooking){
+            if(!agreementTicked(lastAgreementButton)) return refuse('Please tick the booking agreement to continue.');
+            body.agreementVersion = version;
+          } else if(!body.isDraft){
+            if(!agreementTicked(lastAgreementButton)) return refuse('Please tick the host agreement to submit.');
+            body.hostAgreementVersion = version;
+          }
+          init = Object.assign({}, init, { body: JSON.stringify(body) });
+        }
+      }catch(e){ /* anything odd: send it as it was; the server still checks */ }
+      return originalFetch(input, init);
+    };
+  })();
+
+  // ---- Policies (index.html?view=policies) ----
+  // Rendered from aerva-policies.js — the same file the admin tool shows.
+  function renderPolicies(tab){
+    const P = window.AERVA_POLICIES;
+    const body = document.getElementById('policiesBody');
+    if(!P || !body) return;
+    const esc = escapeMessageHtml;
+    document.getElementById('policiesUpdated').textContent = 'Last updated ' + P.updated;
+    document.querySelectorAll('[data-pol-tab]').forEach(b => b.classList.toggle('active', b.getAttribute('data-pol-tab') === tab));
+    const section = (sec) => `
+      <div class="policy-section" id="policy-${esc(sec.id || '')}">
+        <h2>${esc(sec.title)}</h2>
+        <ul>${sec.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+      </div>`;
+    if(tab === 'laws'){
+      const L = P.localLaws;
+      body.innerHTML = `<p class="policy-note">${esc(L.note)}</p>` + L.countries.map(c => `
+        <div class="policy-section">
+          <h2>${esc(c.country)}</h2>
+          <ul>${c.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+          ${c.states ? `<div class="policy-states">${c.states.map(st => `<div class="policy-state"><strong>${esc(st.state)}</strong><span>${esc(st.text)}</span></div>`).join('')}</div>` : ''}
+        </div>`).join('');
+      return;
+    }
+    const agr = P.agreements && P.agreements[tab === 'host' ? 'host' : 'guest'];
+    body.innerHTML = (agr ? section({ id: 'agreement', title: agr.title + ' (version ' + P.agreements.version + ')', points: agr.points }) : '')
+      + (tab === 'host' ? P.host : P.guest).map(section).join('')
+      + `<p class="policy-note">Questions: <a href="mailto:${esc(P.contact)}">${esc(P.contact)}</a></p>`;
+  }
+  function showPoliciesView(){
+    hideMainViews();
+    document.getElementById('policiesView').style.display = 'block';
+    document.body.classList.remove('showing-hero');
+    document.title = 'Policies — Aerva';
+    const want = new URLSearchParams(window.location.search).get('tab');
+    renderPolicies(['guest', 'host', 'laws'].includes(want) ? want : 'guest');
+    window.scrollTo(0, 0);
+  }
+  document.addEventListener('click', function(e){
+    const b = e.target.closest && e.target.closest('[data-pol-tab]');
+    if(b) renderPolicies(b.getAttribute('data-pol-tab'));
+  });
+  function hideMainViews(){
+    MAIN_VIEW_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.style.display = 'none';
+    });
+  }
+
+  // Who you are on Aerva: your photo, a few lines about you, where you
+  // have been, and what others have said. Everything here is your own;
+  // see api/_profiles.js for who else may read it.
+  let profileQuestions = [];
+
+  async function showProfileView(){
+    document.body.classList.remove('showing-hero');
+    hideMainViews();
+    document.getElementById('profileView').style.display = 'block';
+    document.title = 'Profile — Aerva';
+    BROWSE_TABS.concat(['catToday']).forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.classList.remove('active');
+    });
+    window.scrollTo({ top: 0 });
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=profile', {
+        headers: { 'Authorization': 'Bearer ' + guestAuthToken() }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not load your profile.');
+      renderProfile(data.profile);
+    }catch(err){
+      document.getElementById('profileFields').innerHTML =
+        `<p class="profile-empty">${escapeMessageHtml(err.message || 'Could not load your profile.')}</p>`;
+    }
+  }
+
+  function renderProfile(p){
+    const esc = escapeMessageHtml;
+    profileQuestions = p.questions || [];
+    document.getElementById('profileName').textContent = p.name || 'Your profile';
+    document.getElementById('profileMeta').textContent =
+      [p.isHost ? 'Host' : 'Guest', p.memberSince ? 'on Aerva since ' + p.memberSince : ''].filter(Boolean).join(' · ');
+    const circle = document.getElementById('profilePhotoCircle');
+    circle.innerHTML = p.photoUrl
+      ? `<img src="${esc(p.photoUrl)}" alt="">`
+      : esc((p.name || 'G').trim().charAt(0).toUpperCase());
+
+    const about = p.about || {};
+    document.getElementById('profileFields').innerHTML =
+      `<div class="profile-field"><label for="pfWork">What I do</label>
+        <input id="pfWork" maxlength="400" value="${esc(p.work || '')}" placeholder="Architect, teacher, retired…"></div>
+       <div class="profile-field"><label for="pfHobbies">What I enjoy</label>
+        <input id="pfHobbies" maxlength="400" value="${esc(p.hobbies || '')}" placeholder="Trekking, film photography, cooking…"></div>`
+      + profileQuestions.map(q => `
+        <div class="profile-field">
+          <label for="pf_${esc(q.id)}">${esc(q.label)}</label>
+          <textarea id="pf_${esc(q.id)}" maxlength="400" placeholder="${esc(q.placeholder || '')}">${esc(about[q.id] || '')}</textarea>
+        </div>`).join('');
+
+    // Where they have been, and where they host.
+    // Your homes and experiences, as the same cards guests see on your
+    // public profile — then the places you have travelled to — then, last,
+    // what others have said.
+    const cards = listingMiniCardsHtml(p.listings);
+    document.getElementById('profileListingsSection').style.display = cards ? 'block' : 'none';
+    document.getElementById('profileListings').innerHTML = cards ? `<div class="hp-listings">${cards}</div>` : '';
+    const places = p.places || { stayed: [], hosting: [] };
+    // Stays and experiences you have booked here, per city.
+    const placeBits = (places.stayed || []).map(x => {
+      const parts = [];
+      if(x.visits > 0) parts.push(`${x.visits} stay${x.visits === 1 ? '' : 's'}`);
+      if(x.experiences > 0) parts.push(`${x.experiences} experience${x.experiences === 1 ? '' : 's'}`);
+      return `<span class="profile-place">${esc(x.city)}${parts.length ? ' · ' + parts.join(' · ') : ''}</span>`;
+    });
+    document.getElementById('profilePlacesSection').style.display = placeBits.length ? 'block' : 'none';
+    document.getElementById('profilePlaces').innerHTML = `<div class="profile-places">${placeBits.join('')}</div>`;
+
+    // What others have said. Published reviews only.
+    const rev = p.reviews || { asGuest: [], asHost: [] };
+    const asGuest = (rev.asGuest || []).map(r => reviewItemHtml({ month: r.month, score: r.score, comment: r.comment }, false)).join('');
+    const asHost = (rev.asHost || []).map(r => reviewItemHtml({ month: r.month, score: r.score, comment: `${r.property ? r.property + ' — ' : ''}${r.comment}` }, false)).join('');
+    const hasReviews = asGuest || asHost;
+    document.getElementById('profileReviewsSection').style.display = hasReviews ? 'block' : 'none';
+    document.getElementById('profileReviews').innerHTML =
+      (asGuest ? `<div class="profile-section-title" style="margin-top:4px;">From hosts you stayed with</div><div class="rv-list">${asGuest}</div>` : '')
+      + (asHost ? `<div class="profile-section-title" style="margin-top:18px;">From guests who stayed with you</div><div class="rv-list">${asHost}</div>` : '');
+  }
+
+  async function saveProfile(){
+    const btn = document.getElementById('profileSave');
+    const msg = document.getElementById('profileMsg');
+    const about = {};
+    profileQuestions.forEach(q => {
+      const el = document.getElementById('pf_' + q.id);
+      if(el && el.value.trim()) about[q.id] = el.value.trim();
+    });
+    btn.disabled = true; btn.textContent = 'Saving…'; msg.textContent = '';
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({
+          mode: 'saveProfile',
+          work: document.getElementById('pfWork').value,
+          hobbies: document.getElementById('pfHobbies').value,
+          about
+        })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not save that.');
+      renderProfile(data.profile);
+      msg.textContent = 'Saved.';
+      msg.style.color = '#2f5c2a';
+    }catch(err){
+      msg.textContent = err.message || 'Could not save that. Please try again.';
+      msg.style.color = '#8a2b2b';
+    }
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+
+  // ---- Today (hosts) ----
+  // Who is arriving, who is leaving, who is staying on, at this host's own
+  // properties. Everything comes from host-listings.js, which works it out
+  // on each listing's own clock.
+  // "Pets: Dog · Young litter: 2 · Service animal: Dog" — so a host sees
+  // who is coming with four legs on the day, not only on the earnings page.
+  function todayAnimalsLine(r){
+    const bits = [];
+    if(Array.isArray(r.petTypes) && r.petTypes.length) bits.push(`Pets: ${r.petTypes.join(', ')}`);
+    if(Number(r.youngLitter) > 0) bits.push(`Young litter: ${Number(r.youngLitter)}`);
+    const sa = Array.isArray(r.serviceAnimals) ? r.serviceAnimals : [];
+    if(sa.length) bits.push(`Service/support animal${sa.length === 1 ? '' : 's'}: ${sa.join(', ')}`);
+    return bits.length ? '🐾 ' + bits.join(' · ') : '';
+  }
+
+  function renderTodayView(today){
+    const box = document.getElementById('todayList');
+    if(!box) return;
+    const t = Object.assign({ arrivals: [], departures: [], staying: [], experiences: [] }, today || {});
+    const esc = escapeMessageHtml;
+    const total = t.arrivals.length + t.departures.length + t.staying.length + t.experiences.length;
+    document.getElementById('todayDate').textContent =
+      new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+    document.getElementById('todayHeading').textContent = total
+      ? (total === 1 ? 'You have 1 reservation' : `You have ${total} reservations`)
+      : 'Nothing booked for today';
+    if(!total){
+      box.innerHTML = '<p class="today-empty">No arrivals, departures or guests staying today.</p>';
+      return;
+    }
+    const row = (r, when, title) => `
+      <button type="button" class="today-row" data-today-order="${Number(r.orderId)}">
+        <span class="today-when">${esc(when)}</span>
+        <span class="today-main">
+          <span class="today-title">${esc(title)}</span>
+          <span class="today-sub">${esc(r.listingName || '')}</span>
+          ${todayAnimalsLine(r) ? `<span class="today-sub today-animals">${esc(todayAnimalsLine(r))}</span>` : ''}
+        </span>
+        <span class="today-thumbs">
+          ${r.guestPhotoUrl
+            ? `<img class="today-avatar" src="${esc(r.guestPhotoUrl)}" alt="">`
+            : `<span class="today-avatar">${esc((r.guestName || 'G').trim().charAt(0).toUpperCase())}</span>`}
+          ${r.photoUrl ? `<img class="today-thumb" src="${esc(r.photoUrl)}" alt="">` : ''}
+        </span>
+      </button>`;
+    const people = (r) => `${r.guestName}${r.guests > 1 ? `'s group of ${r.guests}` : ''}`;
+    const column = (label, rows, empty) => `
+      <div class="today-col">
+        <div class="today-col-head">${esc(label)} <span class="today-col-count">${rows.length}</span></div>
+        ${rows.length ? rows.join('') : `<p class="today-col-empty">${esc(empty)}</p>`}
+      </div>`;
+    const staying = t.staying.map(r => row(r, 'All day',
+      `${people(r)} stays for ${r.nightsLeft === 1 ? 'one more day' : r.nightsLeft + ' more days'}`));
+    // An experience is not checked into — it runs, at its own start time.
+    const experiences = t.experiences.map(r => row(r, r.startTime || 'All day',
+      `${people(r)} joins ${r.listingName || 'your experience'}`));
+    box.innerHTML =
+      `<div class="today-split">
+        ${column('Checking in', t.arrivals.map(r => row(r, r.checkInTime || '1:00 pm', `${people(r)} checks in`)), 'Nobody arriving today.')}
+        ${column('Checking out', t.departures.map(r => row(r, r.checkOutTime || '10:00 am', `${people(r)} checks out`)), 'Nobody leaving today.')}
+      </div>`
+      + (experiences.length
+        ? `<div class="today-staying"><div class="today-group-label">Experiences today</div>${experiences.join('')}</div>`
+        : '')
+      + (staying.length
+        ? `<div class="today-staying"><div class="today-group-label">Staying with you</div>${staying.join('')}</div>`
+        : '');
+    // Kept so the panel can show the booking without asking again.
+    todayRowsById = {};
+    [...t.arrivals, ...t.departures, ...t.staying, ...t.experiences].forEach(r => { todayRowsById[r.orderId] = r; });
+    box.querySelectorAll('[data-today-order]').forEach(el => {
+      el.addEventListener('click', () => openTodayBooking(Number(el.dataset.todayOrder)));
+    });
+  }
+
+  let todayRowsById = {};
+
+  // ---- One booking, opened from Today ----
+  // The stay's own facts, who the guest is, and the thread — so a host can
+  // read what was agreed and reply without leaving the page. Messages go
+  // through the same conversation the guest sees; nothing here exposes an
+  // email or phone number.
+  async function openTodayBooking(orderId){
+    const r = todayRowsById[orderId];
+    if(!r) return;
+    const esc = escapeMessageHtml;
+    const overlay = document.getElementById('todayBookingOverlay');
+    const body = document.getElementById('todayBookingBody');
+    const fmtDay = (d) => d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : '—';
+    overlay.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    body.innerHTML = `
+      <div class="tb-head">
+        <div>
+          <h3 class="tb-name">${esc(r.guestName)}</h3>
+          <p class="tb-listing">${esc(r.listingName || '')}</p>
+        </div>
+        ${r.guestPhotoUrl ? `<img class="tb-avatar" src="${esc(r.guestPhotoUrl)}" alt="">`
+          : `<span class="tb-avatar tb-avatar-initial">${esc((r.guestName || 'G').trim().charAt(0).toUpperCase())}</span>`}
+      </div>
+      <div class="tb-facts">
+        ${r.kind === 'experience' ? `
+          <div><span>Date</span><strong>${esc(fmtDay(r.arrival))}${r.startTime ? ' · ' + esc(r.startTime) : ''}</strong></div>
+          <div><span>Guests</span><strong>${Number(r.guests) || 1}</strong></div>
+        ` : `
+          <div><span>Check-in</span><strong>${esc(fmtDay(r.arrival))}${r.checkInTime ? ' · ' + esc(r.checkInTime) : ''}</strong></div>
+          <div><span>Check-out</span><strong>${esc(fmtDay(r.departure))}${r.checkOutTime ? ' · ' + esc(r.checkOutTime) : ''}</strong></div>
+          <div><span>Guests</span><strong>${Number(r.guests) || 1}</strong></div>
+          <div><span>Nights</span><strong>${r.nights || '—'}</strong></div>
+        `}
+        ${r.payout ? `<div><span>Your payout</span><strong>${fmtGuest(r.payout)}</strong></div>` : ''}
+      </div>
+      <div class="tb-section-title">Message ${esc((r.guestName || 'your guest').split(' ')[0])}</div>
+      <div class="tb-thread" id="tbThread"><p class="tb-muted">Loading messages…</p></div>
+      <div class="tb-compose">
+        <textarea id="tbText" rows="2" placeholder="Write a message…"></textarea>
+        <button type="button" class="filter-clear" id="tbSend">Send</button>
+      </div>
+      <p class="tb-muted" id="tbMsg"></p>`;
+
+    let conversationId = null;
+    const thread = document.getElementById('tbThread');
+    try{
+      const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${Number(orderId)}`, {
+        headers: { 'Authorization': 'Bearer ' + guestAuthToken() }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not open this conversation.');
+      conversationId = data.conversationId;
+      const msgs = data.messages || [];
+      thread.innerHTML = msgs.length
+        ? msgs.map(m => `
+            <div class="tb-msg ${m.sender_type === 'host' ? 'tb-msg-mine' : ''}">
+              <span class="tb-msg-who">${esc(m.sender_type === 'host' ? 'You' : (m.sender_type === 'system' ? 'Aerva' : r.guestName))}</span>
+              <span class="tb-msg-text">${esc(m.display_text || '')}</span>
+            </div>`).join('')
+        : '<p class="tb-muted">No messages yet. Anything you send here reaches them in their Aerva messages.</p>';
+      thread.scrollTop = thread.scrollHeight;
+    } catch(err){
+      thread.innerHTML = `<p class="tb-muted">${esc(err.message || 'Could not open this conversation.')}</p>`;
+    }
+
+    document.getElementById('tbSend').addEventListener('click', async () => {
+      const btn = document.getElementById('tbSend');
+      const text = document.getElementById('tbText').value.trim();
+      const note = document.getElementById('tbMsg');
+      if(!text) return;
+      if(!conversationId){ note.textContent = 'This conversation could not be opened.'; return; }
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ mode: 'send', conversationId, text, role: 'host' })
+        });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || 'Could not send that.');
+        document.getElementById('tbText').value = '';
+        thread.insertAdjacentHTML('beforeend',
+          `<div class="tb-msg tb-msg-mine"><span class="tb-msg-who">You</span><span class="tb-msg-text">${esc(text)}</span></div>`);
+        thread.scrollTop = thread.scrollHeight;
+        note.textContent = '';
+      } catch(err){
+        note.textContent = err.message || 'Could not send that. Please try again.';
+      }
+      btn.disabled = false; btn.textContent = 'Send';
+    });
+  }
+
+  function closeTodayBooking(){
+    document.getElementById('todayBookingOverlay').style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  const BROWSE_TABS = ['catSuites', 'catExperience'];
+
+  async function showTodayView(){
+    document.body.classList.remove('showing-hero');
+    hideMainViews();
+    document.getElementById('todayView').style.display = 'block';
+    document.title = 'Today — Aerva';
+    BROWSE_TABS.forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.classList.remove('active');
+    });
+    const tab = document.getElementById('catToday');
+    if(tab){ tab.style.display = ''; tab.classList.add('active'); }
+    window.scrollTo({ top: 0 });
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/host-listings', {
+        headers: { 'Authorization': 'Bearer ' + guestAuthToken() }
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Could not load today.');
+      renderTodayView(data.today);
+    } catch(err){
+      document.getElementById('todayList').innerHTML =
+        '<p class="today-empty">Could not load today just now. Please refresh.</p>';
+    }
+  }
+
+  function showFullListingPage(listing){
+    trackRecentlyViewed('stay', listing.id);
+    document.body.classList.remove('showing-hero');
+    document.getElementById('suites').style.display = 'none';
+    document.getElementById('listingFullViewBody').innerHTML = buildListingDetailHtml(listing);
+    loadListingReviews(document.getElementById('listingFullViewBody'), listing.id);
+    document.getElementById('listingFullView').style.display = 'block';
+    document.title = listing.property_name + ' — Aerva';
+    if(listing.property_type === 'Resort'){
+      renderResortBookingCalendar(listing);
+      renderRoomAwarePhotos(listing, []);
+      document.getElementById('resortBookNowBtn').addEventListener('click', () => handleResortBookNow(listing));
+      return;
+    }
+    renderAvailabilityCalendar(listing);
+    document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
+  }
+
+  document.getElementById('listingModalClose').addEventListener('click', closeListingDetail);
+  document.getElementById('listingModalOverlay').addEventListener('click', (e) => {
+    if(e.target.id === 'listingModalOverlay') closeListingDetail();
+  });
+
+  function handleCardGridClick(e){
+    // "View on map" opens Google Maps in a new tab — let it behave
+    // completely normally, not trigger the card's own click action.
+    if(e.target.closest('a[target="_blank"]')) return;
+
+    const card = e.target.closest('.suite-card');
+    if(!card) return;
+    e.preventDefault();
+
+    // Suite and experience cards share the same card markup everywhere
+    // (main grid, Recently Viewed, Near You) — each card carries its own
+    // type-specific data attribute, so a click routes to the right
+    // detail view regardless of which row it was clicked from.
+    if(card.dataset.experienceId){
+      openExperienceDetail(card.dataset.experienceId);
+      return;
+    }
+
+    // Opens the same detail view (calendar + photos + booking, all on
+    // one screen) right here as a modal — no new tab, no extra click
+    // "inside" the listing first. The current search's dates/guests
+    // carry straight over since renderAvailabilityCalendar reads the
+    // live searchArrivalDate/searchDepartureDate/guestCounts variables
+    // directly when there's no ?listing= URL to read them from instead.
+    openListingDetail(card.dataset.listingId);
+  }
+  document.getElementById('suitesContainer').addEventListener('click', handleCardGridClick);
+  document.getElementById('recentlyViewedContainer').addEventListener('click', handleCardGridClick);
+  document.getElementById('nearbyContainer').addEventListener('click', handleCardGridClick);
+  // Previously missing entirely — unavailable cards rendered but were
+  // never wired to open anything, making "Check Availability" a label
+  // with nothing behind it. openListingDetail() below builds the same
+  // detail view (with its own fresh calendar) regardless of whether the
+  // card arrived here dimmed as "unavailable" for the originally
+  // searched dates.
+  document.getElementById('unavailableContainer').addEventListener('click', handleCardGridClick);
+  document.getElementById('specificMatchContainer').addEventListener('click', handleCardGridClick);
+  document.getElementById('specificMatchNearbyContainer').addEventListener('click', handleCardGridClick);
+
+  document.getElementById('searchBtn').addEventListener('click', performSearch);
+
+  // Recent-search suggestions — shown on focus when the "Where" field is
+  // empty, independent of whether the Google Maps script has loaded (that
+  // one only powers live address predictions once typing starts). This is
+  // the only place that renders into #placeSuggestions before any input,
+  // so it never fights with the Maps-driven predictions that take over
+  // once the guest starts typing.
+  (function initRecentSearchSuggestions(){
+    const input = document.getElementById('searchCity');
+    const dropdown = document.getElementById('placeSuggestions');
+    if(!input || !dropdown) return;
+
+    function showRecent(){
+      const recents = getRecentSearches();
+      if(recents.length === 0) return;
+      dropdown.innerHTML = '<div class="place-suggest-heading">Recent Searches</div>' +
+        recents.map((r, i) => `
+          <button type="button" class="place-suggest-item" data-recent-index="${i}">${r.text}</button>
+        `).join('');
+      dropdown.style.display = 'block';
+      dropdown.querySelectorAll('[data-recent-index]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const item = recents[Number(btn.dataset.recentIndex)];
+          if(!item) return;
+          input.value = item.text;
+          document.getElementById('searchPlaceLat').value = item.lat || '';
+          document.getElementById('searchPlaceLng').value = item.lng || '';
+          dropdown.innerHTML = '';
+          dropdown.style.display = 'none';
+          openCalendar();
+        });
+      });
+    }
+
+    input.addEventListener('focus', function(){
+      if(this.value.trim() === '') showRecent();
+    });
+
+    document.addEventListener('click', function(e){
+      if(input.value.trim() === '' && !dropdown.contains(e.target) && e.target !== input){
+        setTimeout(() => { dropdown.innerHTML = ''; dropdown.style.display = 'none'; }, 150);
+      }
+    });
+  })();
+
+  document.getElementById('sortPrice').addEventListener('change', applyFiltersAndRender);
+  document.getElementById('badgeFilter').addEventListener('change', applyFiltersAndRender);
+  document.getElementById('minPrice').addEventListener('input', applyFiltersAndRender);
+  document.getElementById('maxPrice').addEventListener('input', applyFiltersAndRender);
+  // Debounced, and re-runs a full performSearch() rather than the
+  // client-side applyFiltersAndRender() min/max price use — this filter
+  // needs the server to check real per-room availability against the
+  // searched dates, which isn't data the browser already has on hand.
+  let roomsNeededDebounce = null;
+  document.getElementById('roomsNeeded').addEventListener('input', () => {
+    clearTimeout(roomsNeededDebounce);
+    roomsNeededDebounce = setTimeout(performSearch, 500);
+  });
+  document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+    searchArrivalDate = '';
+    searchDepartureDate = '';
+    calSelectingStart = true;
+    updateDateRangeBtn();
+    document.getElementById('searchCity').value = '';
+    // Setting .value directly doesn't fire 'input' on its own, which is
+    // what actually re-shows the "Where" field's hint text once it's
+    // empty again — without this, clearing filters would leave the
+    // field looking permanently filled-in-but-blank.
+    document.getElementById('searchCity').dispatchEvent(new Event('input'));
+    // Previously left stale — a prior place search's exact coordinates
+    // stayed in these hidden fields even after the visible text was
+    // cleared, so performSearch() (which reads these first) could still
+    // silently run a location-filtered search after "Clear Filters."
+    document.getElementById('searchPlaceLat').value = '';
+    document.getElementById('searchPlaceLng').value = '';
+    specificListingMatch = null;
+    specificListingMatchGeo = null;
+    guestCounts.adults = 0;
+    guestCounts.children = 0;
+    guestCounts.infants = 0;
+    guestCounts.pets = 0;
+    updateGuestsTrigger();
+    document.getElementById('sortPrice').value = '';
+    document.getElementById('badgeFilter').value = '';
+    document.getElementById('minPrice').value = '';
+    document.getElementById('maxPrice').value = '';
+    document.getElementById('roomsNeeded').value = '';
+    document.getElementById('searchStatus').style.display = 'none';
+    performSearch();
+  });
+
+  // ---- Custom calendar date-range picker (replaces native date inputs) ----
+  let searchArrivalDate = '';
+  let searchDepartureDate = '';
+  // Set by performSearch() when the typed/selected place resolves to one
+  // specific Aerva property's own saved address (not just "somewhere in
+  // this city") — see the matching logic there. Read by
+  // applyFiltersAndRender() to swap the whole results area for the
+  // "matched property + nearby" layout instead of the normal rows.
+  let specificListingMatch = null;
+  let specificListingMatchGeo = null;
+  let calSelectingStart = true;
+  let calViewYear, calViewMonth;
+
+  const dateRangeBtn = document.getElementById('dateRangeBtn');
+  const calendarDropdown = document.getElementById('calendarDropdown');
+  const calMonthLabel1 = document.getElementById('calMonthLabel1');
+  const calMonthLabel2 = document.getElementById('calMonthLabel2');
+  const calendarGrid1 = document.getElementById('calendarGrid1');
+  const calendarGrid2 = document.getElementById('calendarGrid2');
+  const calendarHint = document.getElementById('calendarHint');
+  const calPrevBtn = document.getElementById('calPrev');
+  const calNextBtn = document.getElementById('calNext');
+  const calendarClearBtn = document.getElementById('calendarClear');
+
+  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  // Earliest selectable date across the whole picker: tomorrow — matches
+  // the existing "no same-day arrival" rule used elsewhere on the site.
+  const calMinDate = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  })();
+
+  (function initCalendarView(){
+    calViewYear = calMinDate.getFullYear();
+    calViewMonth = calMinDate.getMonth();
+  })();
+
+  function formatDateLabel(){
+    const fmtShort = (iso) => {
+      const d = new Date(iso);
+      return d.getDate() + ' ' + MONTH_NAMES[d.getMonth()].slice(0, 3);
+    };
+    if(searchArrivalDate && searchDepartureDate) return fmtShort(searchArrivalDate) + ' – ' + fmtShort(searchDepartureDate);
+    if(searchArrivalDate) return fmtShort(searchArrivalDate) + ' – Add departure';
+    return '';
+  }
+
+  function updateDateRangeBtn(){
+    const label = formatDateLabel();
+    if(label){
+      dateRangeBtn.textContent = label;
+      dateRangeBtn.classList.remove('placeholder');
+    } else {
+      dateRangeBtn.textContent = 'Add dates';
+      dateRangeBtn.classList.add('placeholder');
+    }
+  }
+
+  function renderMonthPanel(year, month, labelEl, gridEl){
+    labelEl.textContent = MONTH_NAMES[month] + ' ' + year;
+
+    const firstDay = new Date(year, month, 1);
+    const startWeekday = firstDay.getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    let html = '';
+    for(let i = 0; i < startWeekday; i++){
+      html += '<div class="calendar-day empty"></div>';
+    }
+
+    for(let day = 1; day <= daysInMonth; day++){
+      const cellDate = new Date(year, month, day);
+      cellDate.setHours(0, 0, 0, 0);
+      const iso = toLocalDateStr(cellDate);
+      const isDisabled = cellDate < calMinDate;
+
+      let classes = 'calendar-day';
+      if(isDisabled) classes += ' disabled';
+      if(iso === searchArrivalDate) classes += ' selected-start';
+      if(iso === searchDepartureDate) classes += ' selected-end';
+      if(searchArrivalDate && searchDepartureDate && iso > searchArrivalDate && iso < searchDepartureDate) classes += ' in-range';
+
+      html += `<div class="${classes}" data-date="${iso}">${day}</div>`;
+    }
+
+    gridEl.innerHTML = html;
+
+    gridEl.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+      cell.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleDayClick(cell.dataset.date);
+      });
+    });
+  }
+
+  function renderCalendar(){
+    const isMinMonth = (calViewYear === calMinDate.getFullYear() && calViewMonth === calMinDate.getMonth());
+    calPrevBtn.disabled = isMinMonth;
+
+    // Second panel is always exactly one month ahead of the first.
+    let nextMonth = calViewMonth + 1;
+    let nextYear = calViewYear;
+    if(nextMonth > 11){ nextMonth = 0; nextYear++; }
+
+    renderMonthPanel(calViewYear, calViewMonth, calMonthLabel1, calendarGrid1);
+    renderMonthPanel(nextYear, nextMonth, calMonthLabel2, calendarGrid2);
+
+    calendarHint.textContent = calSelectingStart ? 'Pick your arrival date' : 'Now pick your departure date';
+
+    // Highlight whichever quick-pick (if any) matches the current
+    // selection exactly — e.g. picking dates by hand that happen to be
+    // "earliest arrival + 7 nights" shows "1 week" as selected too.
+    const calMinIso = toLocalDateStr(calMinDate);
+    document.querySelectorAll('.quick-date-btn').forEach(btn => {
+      const matches = searchArrivalDate === calMinIso && searchDepartureDate === isoAddDays(calMinIso, Number(btn.dataset.days));
+      btn.classList.toggle('selected', matches);
+    });
+  }
+
+  function isoAddDays(iso, days){
+    const d = new Date(iso + 'T00:00:00');
+    d.setDate(d.getDate() + days);
+    return toLocalDateStr(d);
+  }
+
+  // Quick date-range presets — always anchored to the earliest bookable
+  // arrival date (calMinDate), so "1 week" always means "the soonest
+  // possible week-long stay" rather than extending whatever the guest may
+  // have already picked.
+  function selectQuickDateRange(days){
+    const arrivalIso = toLocalDateStr(calMinDate);
+    searchArrivalDate = arrivalIso;
+    searchDepartureDate = isoAddDays(arrivalIso, days);
+    calSelectingStart = true;
+    updateDateRangeBtn();
+    renderCalendar();
+    closeCalendar();
+    openGuestsDropdown();
+  }
+
+  document.querySelectorAll('.quick-date-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectQuickDateRange(Number(btn.dataset.days));
+    });
+  });
+
+  function handleDayClick(iso){
+    if(calSelectingStart || !searchArrivalDate){
+      searchArrivalDate = iso;
+      searchDepartureDate = '';
+      calSelectingStart = false;
+    } else if(iso <= searchArrivalDate){
+      // Picked an earlier (or same) date as the second click — start a
+      // fresh range from here instead of allowing an invalid stay.
+      searchArrivalDate = iso;
+      searchDepartureDate = '';
+      calSelectingStart = false;
+    } else {
+      searchDepartureDate = iso;
+      calSelectingStart = true;
+      // Chain straight into guest count — a fully automatic Where -> When
+      // -> Who flow. This only works because the guests field is a custom
+      // dropdown now, not a native <select>; browsers won't let JS force
+      // a native select's picker open, which is why this used to just
+      // move focus there instead of actually opening it.
+      openGuestsDropdown();
+    }
+    updateDateRangeBtn();
+    renderCalendar();
+  }
+
+  // Reparents a dropdown to a direct child of <body> and positions it
+  // with fixed coordinates computed from its trigger's own wrapper —
+  // bypasses this page's dropdown/underlying-card stacking-context bug
+  // entirely (raising z-index alone didn't fix it: something in the
+  // ancestor chain was creating its own isolated stacking context, which
+  // meant no z-index value on the dropdown itself could ever win). Only
+  // reparented on open; closing just hides it in place via the .open
+  // class exactly as before, so nothing about the show/hide logic
+  // elsewhere needs to change.
+  //
+  // On mobile, top/left are deliberately NOT set here — this is the
+  // actual root cause of the calendar appearing off-center on phones:
+  // an inline style set via JS always overrides a stylesheet rule
+  // (including one inside a media query), no matter how specific that
+  // rule is. The CSS media query centers the calendar as a fixed
+  // overlay, but this function was silently fighting it on every single
+  // open, recalculating top/left from the trigger button's position and
+  // overwriting the centering underneath it. Desktop keeps the original
+  // anchored-to-trigger behavior; only mobile skips it.
+  function openDropdownAsPortal(dropdownEl, wrapperEl){
+    document.body.appendChild(dropdownEl);
+    dropdownEl.style.position = 'fixed';
+    if(window.innerWidth > 640){
+      const rect = wrapperEl.getBoundingClientRect();
+      dropdownEl.style.top = (rect.bottom + 10) + 'px';
+      dropdownEl.style.left = rect.left + 'px';
+    } else {
+      dropdownEl.style.top = '';
+      dropdownEl.style.left = '';
+    }
+  }
+
+  function openCalendar(){
+    closeGuestsDropdown();
+    closeMoreFiltersDropdown();
+    openDropdownAsPortal(calendarDropdown, dateRangeBtn.closest('.date-range-wrapper'));
+    calendarDropdown.classList.add('open');
+    // Moved to <body> for the same reason the dropdown itself is
+    // (openDropdownAsPortal, above) — nested inside the search bar, this
+    // backdrop would be contained by its .reveal.in transform (even a
+    // translateY(0) counts — any non-"none" transform value creates a
+    // new containing block for position:fixed), meaning it would only
+    // ever cover the search bar's own box, not the actual viewport.
+    document.body.appendChild(document.getElementById('calendarDropdownBackdrop'));
+    document.getElementById('calendarDropdownBackdrop').classList.add('open');
+    const anchor = searchArrivalDate ? new Date(searchArrivalDate) : calMinDate;
+    calViewYear = anchor.getFullYear();
+    calViewMonth = anchor.getMonth();
+    renderCalendar();
+  }
+  function closeCalendar(){
+    calendarDropdown.classList.remove('open');
+    document.getElementById('calendarDropdownBackdrop').classList.remove('open');
+  }
+
+  dateRangeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if(calendarDropdown.classList.contains('open')) closeCalendar();
+    else openCalendar();
+  });
+
+  calPrevBtn.addEventListener('click', () => {
+    calViewMonth--;
+    if(calViewMonth < 0){ calViewMonth = 11; calViewYear--; }
+    renderCalendar();
+  });
+  calNextBtn.addEventListener('click', () => {
+    calViewMonth++;
+    if(calViewMonth > 11){ calViewMonth = 0; calViewYear++; }
+    renderCalendar();
+  });
+
+  calendarClearBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    searchArrivalDate = '';
+    searchDepartureDate = '';
+    calSelectingStart = true;
+    updateDateRangeBtn();
+    renderCalendar();
+  });
+
+  document.addEventListener('click', (e) => {
+    if(!calendarDropdown.contains(e.target) && e.target !== dateRangeBtn){
+      closeCalendar();
+    }
+  });
+
+  updateDateRangeBtn();
+
+  // ---- Guests dropdown: a custom widget (not a native <select>) so it
+  // can be opened programmatically — completing the Where -> When -> Who
+  // chain automatically after departure is picked, which a native select
+  // can't do (browsers don't let JS force its picker open). ----
+  const guestsTriggerBtn = document.getElementById('guestsTriggerBtn');
+  const guestsHiddenInput = document.getElementById('searchGuests');
+  const guestsDropdown = document.getElementById('guestsDropdown');
+
+  // Only adults + children count toward a home's sleeping capacity — the
+  // hidden #searchGuests value (what performSearch actually sends to
+  // get-listings.js's ?guests= filter) is that sum. Infants and pets are
+  // tracked for the guest's own planning and shown in the trigger label,
+  // but never affect which homes match a capacity search, same as most
+  // booking sites treat them.
+  const guestCounts = { adults: 0, children: 0, infants: 0, pets: 0 };
+  const GUEST_MAX = { adults: 16, children: 12, infants: 5, pets: 5 };
+
+  function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  function guestsSummaryLabel(){
+    const sleeping = guestCounts.adults + guestCounts.children;
+    if(sleeping === 0 && guestCounts.infants === 0 && guestCounts.pets === 0) return 'Add guests';
+    let label = sleeping + (sleeping === 1 ? ' guest' : ' guests');
+    const extras = [];
+    if(guestCounts.infants > 0) extras.push(guestCounts.infants + (guestCounts.infants === 1 ? ' infant' : ' infants'));
+    if(guestCounts.pets > 0) extras.push(guestCounts.pets + (guestCounts.pets === 1 ? ' pet' : ' pets'));
+    if(extras.length) label += ', ' + extras.join(', ');
+    return label;
+  }
+
+  function updateGuestsTrigger(){
+    const sleeping = guestCounts.adults + guestCounts.children;
+    guestsHiddenInput.value = sleeping > 0 ? String(sleeping) : '';
+    guestsTriggerBtn.textContent = guestsSummaryLabel();
+    guestsTriggerBtn.classList.toggle('placeholder', sleeping === 0 && guestCounts.infants === 0 && guestCounts.pets === 0);
+
+    Object.keys(guestCounts).forEach(type => {
+      const countEl = document.getElementById('guestCount' + capitalize(type));
+      if(countEl) countEl.textContent = guestCounts[type];
+      const decBtn = guestsDropdown.querySelector(`.guest-step-btn[data-type="${type}"][data-action="dec"]`);
+      if(decBtn) decBtn.disabled = guestCounts[type] <= 0;
+      const incBtn = guestsDropdown.querySelector(`.guest-step-btn[data-type="${type}"][data-action="inc"]`);
+      if(incBtn) incBtn.disabled = guestCounts[type] >= GUEST_MAX[type];
+    });
+  }
+
+  function openGuestsDropdown(){
+    closeCalendar();
+    closeMoreFiltersDropdown();
+    openDropdownAsPortal(guestsDropdown, guestsTriggerBtn.closest('.search-field'));
+    guestsDropdown.classList.add('open');
+    document.body.appendChild(document.getElementById('guestsDropdownBackdrop'));
+    document.getElementById('guestsDropdownBackdrop').classList.add('open');
+  }
+  function closeGuestsDropdown(){
+    guestsDropdown.classList.remove('open');
+    document.getElementById('guestsDropdownBackdrop').classList.remove('open');
+  }
+
+  guestsTriggerBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if(guestsDropdown.classList.contains('open')) closeGuestsDropdown();
+    else openGuestsDropdown();
+  });
+
+  guestsDropdown.querySelectorAll('.guest-step-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const type = btn.dataset.type;
+      const delta = btn.dataset.action === 'inc' ? 1 : -1;
+      const next = guestCounts[type] + delta;
+      if(next < 0 || next > GUEST_MAX[type]) return;
+      guestCounts[type] = next;
+      updateGuestsTrigger();
+      // Pets drive a client-side amenity filter (pet-friendly homes only)
+      // that doesn't need a fresh server search — re-render immediately,
+      // same as changing the price filters does. Only once listings have
+      // actually loaded, so this doesn't fire prematurely on page load.
+      if(type === 'pets' && approvedListings.length > 0) applyFiltersAndRender();
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if(!guestsDropdown.contains(e.target) && e.target !== guestsTriggerBtn){
+      closeGuestsDropdown();
+    }
+  });
+
+  updateGuestsTrigger();
+
+  // ---- More Filters: Sort By / Min Price / Max Price, tucked behind a
+  // toggle so the filter row only ever shows Clear Filters and Near Me by
+  // default. Same open/close pattern as the calendar and guests dropdowns
+  // — only one of the three is ever open at once. ----
+  const moreFiltersBtn = document.getElementById('moreFiltersBtn');
+  const moreFiltersDropdown = document.getElementById('moreFiltersDropdown');
+
+  function openMoreFiltersDropdown(){
+    closeCalendar();
+    closeGuestsDropdown();
+    openDropdownAsPortal(moreFiltersDropdown, moreFiltersBtn.closest('.more-filters-wrapper'));
+    moreFiltersDropdown.classList.add('open');
+    document.body.appendChild(document.getElementById('moreFiltersDropdownBackdrop'));
+    document.getElementById('moreFiltersDropdownBackdrop').classList.add('open');
+  }
+  function closeMoreFiltersDropdown(){
+    moreFiltersDropdown.classList.remove('open');
+    document.getElementById('moreFiltersDropdownBackdrop').classList.remove('open');
+  }
+
+  // Explicit close (×) buttons and backdrop-tap-to-dismiss — only
+  // visible/active on mobile (see the max-width:640px rule), where this
+  // becomes a centered overlay rather than an anchored dropdown a guest
+  // could tap outside of on the visible page behind it.
+  document.getElementById('calendarDropdownCloseBtn').addEventListener('click', (e) => { e.stopPropagation(); closeCalendar(); });
+  document.getElementById('calendarDropdownBackdrop').addEventListener('click', closeCalendar);
+  document.getElementById('guestsDropdownCloseBtn').addEventListener('click', (e) => { e.stopPropagation(); closeGuestsDropdown(); });
+  document.getElementById('guestsDropdownBackdrop').addEventListener('click', closeGuestsDropdown);
+  document.getElementById('moreFiltersDropdownCloseBtn').addEventListener('click', (e) => { e.stopPropagation(); closeMoreFiltersDropdown(); });
+  document.getElementById('moreFiltersDropdownBackdrop').addEventListener('click', closeMoreFiltersDropdown);
+
+  moreFiltersBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if(moreFiltersDropdown.classList.contains('open')) closeMoreFiltersDropdown();
+    else openMoreFiltersDropdown();
+  });
+
+  document.addEventListener('click', (e) => {
+    if(!moreFiltersDropdown.contains(e.target) && e.target !== moreFiltersBtn){
+      closeMoreFiltersDropdown();
+    }
+  });
+
+  // ---- One shared fetch, powering both the Suites section and the ----
+  // ---- Reserve form's "Home" dropdown, so they never disagree. ----
+  // Cycles the Place field's animated hint through real property
+  // locations (deduplicated city names from current listings) — gives a
+  // sense of where Aerva actually has homes before the guest types
+  // anything, rather than a static, generic placeholder.
+  function startPlaceHintRotation(){
+    const cities = [...new Set(approvedListings.map(l => l.city).filter(Boolean))];
+    const hintTextEl = document.getElementById('placeHintText');
+    if(!hintTextEl || cities.length === 0) return;
+
+    let idx = 0;
+    hintTextEl.textContent = 'Try “' + cities[0] + '”';
+
+    setInterval(() => {
+      idx = (idx + 1) % cities.length;
+      hintTextEl.style.opacity = '0';
+      setTimeout(() => {
+        hintTextEl.textContent = 'Try “' + cities[idx] + '”';
+        hintTextEl.style.opacity = '1';
+      }, 400);
+    }, 2600);
+  }
+
+  // Crossfading background behind the search/filter bar, built from one
+  // representative photo per listing (cover choice first, falling back to
+  // whatever's actually available) — real property photos, not stock
+  // imagery, so it stays accurate as listings change.
+  // Replaces the old fixed-retreat "Day at Aerva" narrative with real
+  // paid amenities pulled from actual approved listings — each shown
+  // tied to the specific property offering it, since price and
+  // availability genuinely vary host to host rather than being one
+  // shared experience.
+  // Real counts from actual approved listings, rather than a fixed
+  // claim that inevitably goes stale as listings are added.
+  function renderLocationStats(){
+    const citiesEl = document.getElementById('locStatCities');
+    const homesEl = document.getElementById('locStatHomes');
+    if(!citiesEl || !homesEl) return;
+
+    const uniqueCities = [...new Set(approvedListings.map(l => l.city).filter(Boolean))];
+    citiesEl.textContent = uniqueCities.length ? uniqueCities.join(', ') : '—';
+    homesEl.textContent = approvedListings.length ? String(approvedListings.length) : '—';
+  }
+
+  function renderExperienceSection(){
+    const listEl = document.getElementById('experienceList');
+    if(!listEl) return;
+
+    const rows = [];
+    approvedListings.forEach(l => {
+      const amenities = Array.isArray(l.paid_amenities) ? l.paid_amenities : [];
+      amenities.forEach(a => {
+        rows.push({ listingName: l.property_name, name: a.name, price: a.price, description: a.description });
+      });
+    });
+
+    if(rows.length === 0){
+      listEl.innerHTML = `<div class="exp-row"><p style="opacity:0.65;">Hosts haven't added any bookable experiences yet — check back soon, or ask your host directly once you've reserved a stay.</p></div>`;
+      return;
+    }
+
+    listEl.innerHTML = rows.slice(0, 8).map(r => `
+      <div class="exp-row">
+        <div class="exp-time">${fmt(Number(r.price))}/night</div>
+        <h3>${r.name}</h3>
+        <p>${r.description ? r.description + ' — ' : ''}Available at ${r.listingName}.</p>
+      </div>
+    `).join('');
+  }
+
+  async function startFilterBgSlideshow(){
+    const slidesEl = document.getElementById('filterBgSlides');
+    if(!slidesEl) return;
+
+    // The admin's chosen photos win if any are set (see admin.html and
+    // get-pending-listings.js's POST mode); otherwise prefers approved
+    // listings' own cover photos — but a cover photo is only ever set
+    // when a host explicitly picks one later in "Manage Price & Offers"
+    // (see update-listing-pricing.js); it's never set at initial
+    // submission, so most/all listings can easily have none yet. Falling
+    // back to ANY exterior/interior photo per-listing was the old
+    // behavior this was deliberately changed away from — but falling
+    // back to nothing at all just leaves the hero blank, which is worse.
+    // The middle ground: use cover photos only when there are enough of
+    // them to actually make a slideshow; otherwise fall back to regular
+    // photos for now, and naturally shift to cover-photos-only on its own
+    // as hosts set them.
+    let photos = [];
+    try {
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?siteBackground=1');
+      if(res.ok){
+        const data = await res.json();
+        photos = Array.isArray(data.images) ? data.images : [];
+      }
+    } catch(err){
+      console.error('Could not load admin background images, falling back to listing photos:', err);
+    }
+
+    // Ten slides, filled in order of preference: the admin's chosen
+    // photos, then hosts' cover photos, then other listing photos. It used
+    // to switch to cover photos ONLY as soon as three listings had one —
+    // which is why the hero dropped from 7–8 slides to 3. The rest are
+    // taken one photo per home per pass, so ten slides are spread across
+    // homes rather than all coming from the first listing.
+    const SLIDE_TARGET = 10;
+    const picked = [];
+    const seen = new Set();
+    const add = (u) => {
+      if(typeof u !== 'string' || !u || seen.has(u) || picked.length >= SLIDE_TARGET) return;
+      seen.add(u);
+      picked.push(u);
+    };
+    photos.forEach(add);
+    approvedListings.forEach(l => add(l.cover_photo_url));
+    const pools = approvedListings.map(l => [
+      ...(Array.isArray(l.interior_photo_urls) ? l.interior_photo_urls : []),
+      ...(Array.isArray(l.exterior_photo_urls) ? l.exterior_photo_urls : [])
+    ]);
+    for(let round = 0; picked.length < SLIDE_TARGET && pools.some(p => round < p.length); round++){
+      pools.forEach(p => add(p[round]));
+    }
+    photos = picked;
+
+    if(photos.length === 0) return;
+
+    slidesEl.innerHTML = photos.map((url, i) =>
+      `<img src="${escapeMessageHtml(url)}" alt="" loading="lazy" class="${i === 0 ? 'is-active' : ''}">`
+    ).join('');
+
+    const dotsEl = document.getElementById('filterBgDots');
+    if(photos.length === 1){
+      if(dotsEl) dotsEl.innerHTML = '';
+      return; // nothing to crossfade to, no dots needed for one photo
+    }
+
+    let idx = 0;
+    const imgs = slidesEl.querySelectorAll('img');
+
+    function goToSlide(newIdx){
+      imgs[idx].classList.remove('is-active');
+      if(dotsEl) dotsEl.children[idx].classList.remove('is-active');
+      idx = newIdx;
+      imgs[idx].classList.add('is-active');
+      if(dotsEl) dotsEl.children[idx].classList.add('is-active');
+    }
+
+    if(dotsEl){
+      dotsEl.innerHTML = photos.map((_, i) =>
+        `<button type="button" class="${i === 0 ? 'is-active' : ''}" aria-label="Show photo ${i + 1}"></button>`
+      ).join('');
+      Array.from(dotsEl.children).forEach((dot, i) => {
+        dot.addEventListener('click', () => goToSlide(i));
+      });
+    }
+
+    setInterval(() => {
+      goToSlide((idx + 1) % imgs.length);
+    }, 5000);
+  }
+
+  async function initSite(){
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings');
+      if(!res.ok) throw new Error('Failed to load listings');
+      const data = await res.json();
+      approvedListings = data.listings || [];
+      listingsById = {};
+      approvedListings.forEach(l => { listingsById[l.id] = l; });
+      startPlaceHintRotation();
+      startFilterBgSlideshow();
+      renderExperienceSection();
+      renderLocationStats();
+    } catch(err){
+      approvedListings = [];
+      listingsById = {};
+      document.getElementById('suitesContainer').innerHTML =
+        '<div class="suites-empty">Could not load homes right now. Please refresh, or check back shortly.</div>';
+      initReserveForm();
+      return;
+    }
+    applyFiltersAndRender();
+    initReserveForm();
+
+    // Experiences are now needed immediately for the combined "All" view
+    // (not just when the guest specifically opens the Experience filter),
+    // so this fetch always runs — applyFiltersAndRender() runs again on
+    // its own once this resolves (see loadExperiences), merging
+    // experience cards into the grid already showing suites.
+    loadExperiences();
+
+    // If this tab was opened as a direct link to one listing (see the
+    // suite-card click handler), show that instead of the homepage grid.
+    const requestedListingId = new URLSearchParams(window.location.search).get('listing');
+    if(requestedListingId && listingsById[requestedListingId]){
+      showFullListingPage(listingsById[requestedListingId]);
+      return;
+    }
+
+    // Same for a direct link to one experience.
+    const requestedExperienceId = new URLSearchParams(window.location.search).get('experience');
+    if(requestedExperienceId){
+      await loadExperiences();
+      if(experiencesById[requestedExperienceId]){
+        showExperienceDetailPage(experiencesById[requestedExperienceId]);
+        return;
+      }
+    }
+
+    // List Property and List Experience are still their own separate
+    // full pages. "All"/"Suites"/"Aerva Experience" are no longer
+    // separate sections at all — they're the SAME combined grid,
+    // filtered differently (see setCategoryFilter) — so a ?view= of
+    // 'suites' or 'experiences' here just sets the initial filter state
+    // rather than swapping to a different section.
+    const requestedView = new URLSearchParams(window.location.search).get('view');
+    // Came back from signing in with a co-host invitation still to answer.
+    if(!requestedView && pendingInvite() && guestAuthToken()) openCohostCenter();
+    if(requestedView === 'list-property'){
+      document.body.classList.remove('showing-hero');
+      document.getElementById('suites').style.display = 'none';
+      document.getElementById('add-listing').style.display = 'block';
+    } else if(requestedView === 'list-experience'){
+      document.body.classList.remove('showing-hero');
+      document.getElementById('suites').style.display = 'none';
+      document.getElementById('list-experience').style.display = 'block';
+    } else if(requestedView === 'my-bookings'){
+      document.body.classList.remove('showing-hero');
+      document.getElementById('suites').style.display = 'none';
+      document.getElementById('my-bookings').style.display = 'block';
+      loadMyBookings();
+    } else if(requestedView === 'suites'){
+      setCategoryFilter('suites');
+    } else if(requestedView === 'experiences'){
+      setCategoryFilter('experiences');
+    } else if(requestedView === 'all'){
+      // The combined view is gone: Suites shows stays, Aerva Experience
+      // shows experiences. An old ?view=all link lands on Suites.
+      setCategoryFilter('suites');
+    } else if(requestedView === 'today'){
+      showTodayView();
+    } else if(requestedView === 'profile'){
+      showProfileView();
+    } else if(requestedView === 'policies'){
+      showPoliciesView();
+    } else if(requestedView === 'cohost'){
+      openCohostCenter();
+    } else if(requestedView === 'messages'){
+      // The Messages icon on every other page links here (see
+      // aerva-header.js): the inbox lives on this page.
+      openInboxOverlay();
+    }
+  }
+
+  // Switches which cards show in the one combined grid — 'all' shows
+  // suites and experiences together, 'suites'/'experiences' show just
+  // that type. Updates the active nav tab and the section's own
+  // heading/subhead to match, then re-renders from whatever data is
+  // already loaded (no re-fetch needed, this is purely a display filter).
+  function setCategoryFilter(filter){
+    // Leaving the profile or Today: bring the browse grid back.
+    const profileSection = document.getElementById('profileView');
+    if(profileSection && profileSection.style.display === 'block'){
+      profileSection.style.display = 'none';
+      document.getElementById('suites').style.display = 'block';
+      document.body.classList.add('showing-hero');
+      document.title = 'Aerva — Stay Elegant';
+    }
+    const todaySection = document.getElementById('todayView');
+    if(todaySection && todaySection.style.display === 'block'){
+      todaySection.style.display = 'none';
+      document.getElementById('suites').style.display = 'block';
+      document.body.classList.add('showing-hero');
+      document.title = 'Aerva — Stay Elegant';
+    }
+    // Same for a single booking's page, which had been left out here.
+    const bookingSection = document.getElementById('bookingView');
+    if(bookingSection && bookingSection.style.display === 'block'){
+      bookingSection.style.display = 'none';
+      document.getElementById('suites').style.display = 'block';
+      document.body.classList.add('showing-hero');
+      document.title = 'Aerva — Stay Elegant';
+    }
+    const todayTab = document.getElementById('catToday');
+    if(todayTab) todayTab.classList.remove('active');
+    currentCategoryFilter = filter;
+    document.getElementById('catSuites').classList.toggle('active', filter === 'suites');
+    document.getElementById('catExperience').classList.toggle('active', filter === 'experiences');
+
+    const eyebrowEl = document.getElementById('browseEyebrow');
+    const headingEl = document.getElementById('browseHeading');
+    const subheadEl = document.getElementById('browseSubhead');
+    // innerHTML, not textContent — the heading always carries one
+    // italicized accent word (see .hero-headline em), matching the
+    // premium hero treatment; textContent would silently strip that
+    // styling out every time the filter switches.
+    if(filter === 'suites'){
+      eyebrowEl.textContent = 'Where You Stay';
+      headingEl.innerHTML = 'Homes, personally <em>chosen</em>.';
+      subheadEl.textContent = 'Every Aerva home is reviewed and approved individually — never a template, never bulk-listed.';
+    } else if(filter === 'experiences'){
+      eyebrowEl.textContent = 'Aerva Experience';
+      headingEl.innerHTML = 'Moments, not just <em>a stay</em>.';
+      subheadEl.textContent = 'Guided treks, cooking classes, local tours — hosted at or near an Aerva property, bookable on their own or alongside a stay.';
+    } else {
+      eyebrowEl.textContent = 'Discover Aerva';
+      headingEl.innerHTML = 'Homes and moments, <em>together</em>.';
+      subheadEl.textContent = 'Every stay and every experience on Aerva, reviewed and approved individually — browse both at once, or filter to just one.';
+    }
+    applyFiltersAndRender();
+  }
+
+  const tbClose = document.getElementById('todayBookingClose');
+  if(tbClose) tbClose.addEventListener('click', closeTodayBooking);
+  const tbOverlay = document.getElementById('todayBookingOverlay');
+  if(tbOverlay) tbOverlay.addEventListener('click', (e) => { if(e.target === tbOverlay) closeTodayBooking(); });
+  document.addEventListener('keydown', (e) => {
+    if(e.key === 'Escape' && tbOverlay && tbOverlay.style.display === 'flex') closeTodayBooking();
+  });
+
+  const catTodayEl = document.getElementById('catToday');
+  if(catTodayEl){
+    catTodayEl.addEventListener('click', (e) => { e.preventDefault(); showTodayView(); });
+  }
+
+  // All three tabs stay real, navigable links (so a direct visit or a
+  // bookmark to ?view=suites still works correctly via initSite above) —
+  // but when the guest is already sitting on this same combined grid,
+  // clicking one just switches the filter instantly instead of doing a
+  // full page reload for what is, underneath, the exact same data.
+  ['catSuites', 'catExperience'].forEach(id => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('click', (e) => {
+      const suitesSection = document.getElementById('suites');
+      if(!suitesSection || suitesSection.style.display === 'none') return; // let it navigate normally
+      e.preventDefault();
+      const filter = id === 'catSuites' ? 'suites' : 'experiences';
+      const url = `index.html?view=${filter}`;
+      window.history.pushState({}, '', url);
+      setCategoryFilter(filter);
+      window.scrollTo({ top: suitesSection.offsetTop - 90, behavior: 'smooth' });
+    });
+  });
+
+  // ---- Currency picker: builds both the desktop and mobile dropdowns
+  // from SUPPORTED_CURRENCIES, so they can never drift out of sync with
+  // each other. ----
+  (function initCurrencyPicker(){
+    const pairs = [
+      { trigger: document.getElementById('currencyTriggerBtn'), dropdown: document.getElementById('currencyDropdown') },
+      { trigger: document.getElementById('currencyTriggerBtnMobile'), dropdown: document.getElementById('currencyDropdownMobile') },
+    ];
+
+    function renderOptions(dropdown){
+      dropdown.innerHTML = Object.keys(SUPPORTED_CURRENCIES).map(code => `
+        <button type="button" class="currency-option${code === currentCurrency ? ' selected' : ''}" data-currency="${code}">
+          <span>${code}</span><span>${SUPPORTED_CURRENCIES[code].symbol}</span>
+        </button>
+      `).join('');
+      dropdown.querySelectorAll('.currency-option').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          setCurrency(btn.dataset.currency, true);
+          pairs.forEach(p => p.dropdown.classList.remove('open'));
+        });
+      });
+    }
+
+    pairs.forEach(({ trigger, dropdown }) => {
+      if(!trigger || !dropdown) return;
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = dropdown.classList.contains('open');
+        pairs.forEach(p => p.dropdown.classList.remove('open'));
+        if(!isOpen){
+          renderOptions(dropdown);
+          dropdown.classList.add('open');
+        }
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      pairs.forEach(({ trigger, dropdown }) => {
+        if(dropdown && !dropdown.contains(e.target) && e.target !== trigger){
+          dropdown.classList.remove('open');
+        }
+      });
+    });
+  })();
+
+  initCurrency();
+  trackVisitOnce();
+  loadLiveProof();
+  initSite();
+
+  // ---- Mobile nav toggle ----
+  (function initMobileNav(){
+    const toggle = document.getElementById('navToggle');
+    const panel = document.getElementById('mobileNavPanel');
+    const scrim = document.getElementById('mobileNavScrim');
+    if(!toggle || !panel || !scrim) return;
+
+    function closeMenu(){
+      toggle.classList.remove('is-open');
+      toggle.setAttribute('aria-expanded', 'false');
+      panel.classList.remove('is-open');
+      scrim.classList.remove('is-open');
+      document.body.style.overflow = '';
+    }
+    function openMenu(){
+      toggle.classList.add('is-open');
+      toggle.setAttribute('aria-expanded', 'true');
+      panel.classList.add('is-open');
+      scrim.classList.add('is-open');
+      document.body.style.overflow = 'hidden';
+    }
+    toggle.addEventListener('click', () => {
+      if(panel.classList.contains('is-open')) closeMenu(); else openMenu();
+    });
+    scrim.addEventListener('click', closeMenu);
+    panel.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
+  })();
+
+  // ---- Standing badge beside the name ----
+  // One badge, whichever applies. guest-auth.js decides which: a host's
+  // own listing badge wins over their guest tier, since that is the one
+  // strangers see. The elite rungs reuse the same feather silhouette the
+  // listing cards use, so a host recognises their own mark.
+  function renderNavTierBadge(tier){
+    const el = document.getElementById('guestTierBadge');
+    if(!el) return;
+    if(!tier || !tier.label){ el.style.display = 'none'; el.innerHTML = ''; return; }
+    const dia = tier.icon === 'feather-diamond';
+    const gold = tier.icon === 'feather-gold';
+    const uid = 'nvt' + Math.random().toString(36).slice(2, 7);
+    let svg = '';
+    if(dia || gold){
+      const stops = dia
+        ? '<stop offset="0" stop-color="#eaf6ff"/><stop offset="0.4" stop-color="#b9d9ec"/><stop offset="1" stop-color="#dff1fb"/>'
+        : '<stop offset="0" stop-color="#f0d27a"/><stop offset="0.45" stop-color="#c9a227"/><stop offset="1" stop-color="#8a6c39"/>';
+      svg = `<svg viewBox="-26 -40 52 86" aria-hidden="true">
+        <defs><linearGradient id="${uid}" x1="0" y1="0" x2="${dia ? 1 : 0}" y2="1">${stops}</linearGradient></defs>
+        <path d="${FEATHER_PATH}" fill="url(#${uid})" stroke="${dia ? '#dff1fb' : '#f0d27a'}" stroke-width="2"/>
+        <path d="${FEATHER_BARBS}" stroke="${dia ? '#ffffff' : '#fff3cf'}" stroke-width="1.3" opacity="0.7" fill="none"/>
+      </svg>`;
+    }
+    el.className = 'nav-tier-badge' + (dia ? ' tier-diamond' : gold ? ' tier-gold' : '');
+    // The blurb is a styled bubble rather than a title attribute. Two
+    // reasons: the native tooltip is unstyleable and was rendering clipped
+    // against the header, and .title is a PLAIN TEXT property — escaping
+    // it, as this used to, makes a blurb containing an apostrophe display
+    // a literal &#39; to the user.
+    el.innerHTML = svg + escapeMessageHtml(tier.label)
+      + (tier.blurb ? `<span class="nav-tier-tip">${escapeMessageHtml(tier.blurb)}</span>` : '');
+    el.removeAttribute('title');
+    el.style.display = 'inline-flex';
+  }
+
+  // ---- Guest login status in the nav bar ----
+  // Checks for a stored session token on every page load and asks the
+  // backend to confirm it's still valid — this is what makes a returning
+  // guest show as logged in automatically ("remembered in the browser"),
+  // without ever storing their password client-side, only the signed
+  // session token.
+  (function initGuestNav(){
+    const guestLoginLink = document.getElementById('guestLoginLink');
+    const guestAccountBox = document.getElementById('guestAccountBox');
+    const guestNameDisplay = document.getElementById('guestNameDisplay');
+    const myListingsLink = document.getElementById('myListingsLink');
+    const guestLogoutLink = document.getElementById('guestLogoutLink');
+    // Mirrors the same elements inside the mobile slide-out panel, so a
+    // returning guest sees their login state there too, not just in the
+    // desktop nav bar which is hidden on small screens.
+    const guestLoginLinkMobile = document.getElementById('guestLoginLinkMobile');
+    const guestAccountBoxMobile = document.getElementById('guestAccountBoxMobile');
+    const guestNameDisplayMobile = document.getElementById('guestNameDisplayMobile');
+    const myListingsLinkMobile = document.getElementById('myListingsLinkMobile');
+    const guestLogoutLinkMobile = document.getElementById('guestLogoutLinkMobile');
+
+    function clearGuestSession(){
+      safeStorage.remove('aerva_guest_session');
+      setRecentlyViewedOwner(null);
+      clearLoggedOutPersonalData();
+      safeStorage.remove('aerva_guest_email');
+      safeStorage.remove('aerva_guest_name');
+      try{ renderNavTierBadge(null); }catch(e){}
+      // A clone payload is a full copy of one host's listing, parked in
+      // storage between the dashboard and the listing form. It is normally
+      // consumed on arrival, but a host who clicks Clone and then logs out
+      // without completing would otherwise leave it for whoever logs in
+      // next on this device.
+      safeStorage.remove('aerva_clone_listing');
+      safeStorage.remove('aerva_clone_with_photos');
+    }
+
+    async function checkGuestSession(){
+      const token = safeStorage.get('aerva_guest_session');
+      if(!token){
+        // No session: make sure nothing from a previous identity is still
+        // on screen. Without this, a badge rendered for the last account
+        // would survive until the next full page load.
+        renderNavTierBadge(null);
+        setRecentlyViewedOwner(null);
+        return;
+      }
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if(res.ok){
+          const data = await res.json();
+          // Bind Recently Viewed to this account before anything renders
+          // with it, so a fresh login never shows the previous person's
+          // browsing on this device.
+          setRecentlyViewedOwner(data.guest.id);
+          renderNavTierBadge(data.guest.tier);
+          showReviewReminder(Number(data.guest.pendingReviews) || 0);
+          renderNavNotifications(data.guest.notifications || []);
+          const greeting = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
+          guestNameDisplay.textContent = greeting;
+          guestLoginLink.style.display = 'none';
+          guestAccountBox.style.display = 'inline-flex';
+          if(guestNameDisplayMobile){
+            guestNameDisplayMobile.textContent = greeting;
+            guestLoginLinkMobile.style.display = 'none';
+            guestAccountBoxMobile.style.display = 'flex';
+          }
+          // The host-only links — My Collection, Status, My Earnings —
+          // appear only once this account has a LIVE listing. An account
+          // with nothing listed, or whose only listing is still pending
+          // review or was rejected, sees just My Bookings and Account
+          // Settings.
+          //
+          // Gated on hasActiveListing (computed by guest-auth.js's
+          // session check), NOT on accountType. account_type flips to
+          // 'guest_host' the instant a property is submitted, which meant
+          // someone awaiting review was shown three pages that had
+          // nothing to show them and no explanation why.
+          //
+          // "List Experience" is deliberately NOT gated at all — a host
+          // can list an experience without ever having listed a property
+          // first (a without-stay experience needs no property; see the
+          // "Hosted At" rule in submit-listing.js), so it stays visible
+          // to any logged-in account. That is the route by which someone
+          // with no listing gets their first one.
+          // Today is a host's view, revealed on the same signal as the
+          // rest of the host navigation.
+          if(data.guest.hasActiveListing === true){
+            const todayTab = document.getElementById('catToday');
+            if(todayTab) todayTab.style.display = '';
+          }
+          if(data.guest.hasActiveListing === true){
+            // .nav-account-menu a's CSS expects display:block (full-width,
+            // stacked, with its own top/bottom padding) — display:inline
+            // was silently breaking that spacing the whole time. Only
+            // became visually obvious once two conditionally-shown links
+            // (My Collection, Status) sat right next to each other.
+            myListingsLink.style.display = 'block';
+            if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
+            const statusMenuLink = document.getElementById('statusMenuLink');
+            const statusMenuLinkMobile = document.getElementById('statusMenuLinkMobile');
+            if(statusMenuLink) statusMenuLink.style.display = 'block';
+            if(statusMenuLinkMobile) statusMenuLinkMobile.style.display = 'block';
+            // My Earnings sits under the same gate as Status — both are
+            // host-only pages, and neither has anything to show until a
+            // listing is actually live and taking bookings.
+            const earningsMenuLink = document.getElementById('earningsMenuLink');
+            const earningsMenuLinkMobile = document.getElementById('earningsMenuLinkMobile');
+            if(earningsMenuLink) earningsMenuLink.style.display = 'block';
+            if(earningsMenuLinkMobile) earningsMenuLinkMobile.style.display = 'block';
+          }
+          // Messages is available to every logged-in account now, not
+          // just hosts — a guest-only account can still have an active
+          // conversation on a booking they made, and should be able to
+          // see it the same way a host sees theirs.
+          const hostMessagesIcon = document.getElementById('hostMessagesIcon');
+          if(hostMessagesIcon){
+            hostMessagesIcon.style.display = 'flex';
+            refreshMessagesBadge();
+          }
+          // Same icon, mirrored into the mobile slide-out panel — this
+          // used to only exist in the desktop nav (.nav-links), which is
+          // display:none below 900px, so a phone guest had no way to
+          // reach Messages at all.
+          const hostMessagesIconMobile = document.getElementById('hostMessagesIconMobile');
+          if(hostMessagesIconMobile) hostMessagesIconMobile.style.display = 'flex';
+          // Location prompt, once per browser, only for a confirmed
+          // logged-in guest — see promptLocationOnceForGuest for the
+          // full reasoning. Fires and forgets; doesn't block anything
+          // else in this function from continuing.
+          promptLocationOnceForGuest();
+          // Always fetch the profile now — it's what supplies the
+          // avatar (photo or initials) for the new account menu, not
+          // just the currency-resume it originally existed for. The
+          // currency-setting itself stays conditional as before, so a
+          // guest's own in-browser choice is never silently overridden.
+          try{
+            const profileRes = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+              headers: { 'Authorization': 'Bearer ' + token }
+            });
+            if(profileRes.ok){
+              const profileData = await profileRes.json();
+              if(profileData.guest){
+                if(!safeStorage.get(CURRENCY_STORAGE_KEY) && profileData.guest.preferredCurrency){
+                  setCurrency(profileData.guest.preferredCurrency, false);
+                }
+                const photoUrl = profileData.guest.profilePhotoUrl;
+                const initial = (profileData.guest.name || data.guest.email || '?').trim().charAt(0).toUpperCase();
+                const avatarInner = photoUrl ? `<img src="${photoUrl}" alt="Profile photo">` : initial;
+                ['navAvatarCircle', 'navAvatarCircleMobile'].forEach(id => {
+                  const el = document.getElementById(id);
+                  if(el) el.innerHTML = avatarInner;
+                });
+              }
+            }
+          } catch(err){
+            // Not critical — the avatar just falls back to "?" and the
+            // location-detected/default currency stays.
+          }
+        } else {
+          // Token expired or invalid — quietly fall back to showing
+          // "Log In" rather than an error; the guest just logs in again.
+          clearGuestSession();
+        }
+      } catch(err){
+        // Network hiccup — leave storage alone so a temporary outage
+        // doesn't force an unnecessary re-login on the next page load.
+      }
+    }
+
+    guestLogoutLink.addEventListener('click', function(e){
+      e.preventDefault();
+      clearGuestSession();
+      window.location.reload();
+    });
+    if(guestLogoutLinkMobile){
+      guestLogoutLinkMobile.addEventListener('click', function(e){
+        e.preventDefault();
+        clearGuestSession();
+        window.location.reload();
+      });
+    }
+
+    // ---- Account dropdown menu (My Listings / Account Settings / Log Out) ----
+    const navAccountTrigger = document.getElementById('navAccountTrigger');
+    const navAccountMenu = document.getElementById('navAccountMenu');
+    if(navAccountTrigger && navAccountMenu){
+      navAccountTrigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navAccountMenu.classList.toggle('open');
+      });
+      document.addEventListener('click', (e) => {
+        if(!navAccountMenu.contains(e.target) && e.target !== navAccountTrigger){
+          navAccountMenu.classList.remove('open');
+        }
+      });
+    }
+
+    // Exposed so an in-page login (the booking gate) can refresh the
+    // header without a page reload. Previously the token was stored and
+    // nothing re-read it, so after logging out of one account and into
+    // another in the same visit, the greeting, standing badge and host
+    // links all still described the PREVIOUS account until a reload.
+    // Every one of those is per-account, so a stale header is a leak.
+    window.aervaRefreshIdentity = checkGuestSession;
+
+    checkGuestSession();
+  })();

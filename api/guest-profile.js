@@ -41,6 +41,7 @@ const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('.
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
+const { resolveActingHost, cohostCan, cohostHasListing } = require('./_cohosts');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -166,7 +167,7 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const guestId = requireGuest(req);
+  let guestId = requireGuest(req); // `let`: a co-host request continues as the host's side (below)
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
 
   // This account's OWN host_id (if it has a linked hosts row) — needed
@@ -185,6 +186,50 @@ module.exports = async (req, res) => {
     myHostId = hostRows[0] ? hostRows[0].host_id : null;
   } catch (err) {
     console.error('Failed to resolve host_id for account', guestId, err);
+  }
+
+  // ---- A co-host answering messages / editing templates for a host ----
+  // ?actingHost=<hostId>. Only these modes are open to a co-host, each
+  // behind its permission; the co-host then acts as the HOST side of the
+  // host's conversations — never as the host's own guest-side trips —
+  // and only on the listings they were given.
+  if (req.query && req.query.actingHost !== undefined) {
+    const ctx = await resolveActingHost(sql, guestId, req.query.actingHost);
+    if (!ctx) return res.status(403).json({ error: 'You are not a co-host for this host, or your access has ended.' });
+    const mode = req.method === 'GET' ? req.query.mode : (req.body || {}).mode;
+    const MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'translate', 'conversationTemplates'];
+    const TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];
+    const isMessage = MESSAGE_MODES.includes(mode);
+    const isTemplate = TEMPLATE_MODES.includes(mode);
+    if (!isMessage && !isTemplate) return res.status(403).json({ error: 'Your co-host access does not include this.' });
+    if (isMessage && !cohostCan(ctx, 'messages') && !(mode === 'conversationTemplates' && cohostCan(ctx, 'templates'))) {
+      return res.status(403).json({ error: 'Your co-host access does not include messages.' });
+    }
+    if (isTemplate && !cohostCan(ctx, 'templates')) {
+      return res.status(403).json({ error: 'Your co-host access does not include message templates.' });
+    }
+    // A specific conversation must be on one of their listings.
+    const convId = Number(req.method === 'GET' ? req.query.conversationId : (req.body || {}).conversationId);
+    if (convId) {
+      const cr = await sql`SELECT listing_id, host_id FROM conversations WHERE id = ${convId}`;
+      if (!cr[0] || Number(cr[0].host_id) !== ctx.hostId || !cohostHasListing(ctx, cr[0].listing_id)) {
+        return res.status(403).json({ error: 'That conversation is not on a listing you co-host.' });
+      }
+    }
+    const bodyListing = Number((req.body || {}).listingId);
+    if (req.method === 'POST' && bodyListing && !cohostHasListing(ctx, bodyListing)) {
+      return res.status(403).json({ error: 'That listing is not one you co-host.' });
+    }
+    // Messages: the host side only (guestId matches no guest-side row).
+    // Templates: stored against the host's own account id.
+    myHostId = ctx.hostId;
+    guestId = isTemplate ? ctx.ownerGuestId : -1;
+    if (mode === 'myConversations') {
+      const originalJson = res.json.bind(res);
+      res.json = (body) => originalJson(body && Array.isArray(body.conversations)
+        ? { ...body, conversations: body.conversations.filter(c => cohostHasListing(ctx, c.listing_id)) }
+        : body);
+    }
   }
 
   // ---- Fetch the full profile bundle, or a chat-related GET mode ----
@@ -259,7 +304,7 @@ module.exports = async (req, res) => {
       if (mode === 'myConversations') {
         const conversations = await sql`
           SELECT c.id, c.listing_id, c.order_id, c.guest_email, c.guest_id, c.host_id,
-                 l.property_name, l.cover_photo_url,
+                 l.property_name, l.cover_photo_url, l.latitude, l.longitude, h.name AS host_display_name,
                  l.check_in_time, l.check_out_time, l.wifi_name, l.wifi_password, l.access_code, l.guest_guidance,
                  l.checkin_photos,
                  COALESCE(l.formatted_address, NULLIF(TRIM(CONCAT_WS(', ', l.area, l.city)), '')) AS location_text,
@@ -379,11 +424,16 @@ module.exports = async (req, res) => {
 
       if (mode === 'templates') {
         const templates = await sql`
-          SELECT id, listing_id, body, sort_order, send_on_booking_confirmed, auto_send_listing_ids
-          FROM message_templates
+          SELECT * FROM message_templates
           WHERE host_id = ${guestId} ORDER BY sort_order ASC, created_at ASC
         `;
-        return res.status(200).json({ templates });
+        return res.status(200).json({ templates: templates.map(t => ({
+          id: t.id, listing_id: t.listing_id, title: t.title || '', body: t.body, sort_order: t.sort_order,
+          send_trigger: t.send_trigger || (t.send_on_booking_confirmed ? 'booking_confirmed' : 'manual'),
+          send_offset_days: Number(t.send_offset_days) || 0,
+          send_on_booking_confirmed: !!t.send_on_booking_confirmed,
+          auto_send_listing_ids: t.auto_send_listing_ids || []
+        })) });
       }
 
       // For the "Description" tab in the template manager — free-text
@@ -820,9 +870,15 @@ module.exports = async (req, res) => {
       }
 
       if (mode === 'saveTemplate') {
-        const { templateId, listingId, body, sendOnBookingConfirmed, autoSendListingIds } = req.body || {};
-        const safeBody = typeof body === 'string' ? body.trim().slice(0, 500) : '';
+        const { templateId, listingId, body, sendOnBookingConfirmed, autoSendListingIds, title, sendTrigger, sendOffsetDays } = req.body || {};
+        const safeBody = typeof body === 'string' ? body.trim().slice(0, 1500) : '';
         if (!safeBody) return res.status(400).json({ error: 'Template text can\'t be empty.' });
+        const safeTitle = typeof title === 'string' ? title.trim().slice(0, 80) : '';
+        // When it is sent. Older pages send only sendOnBookingConfirmed.
+        const TRIGGERS = ['manual', 'booking_confirmed', 'before_checkin', 'checkin_day', 'checkout_day', 'after_checkout'];
+        const safeTrigger = TRIGGERS.includes(sendTrigger) ? sendTrigger : (sendOnBookingConfirmed === true ? 'booking_confirmed' : 'manual');
+        const needsDays = safeTrigger === 'before_checkin' || safeTrigger === 'after_checkout';
+        const safeOffset = needsDays ? Math.max(1, Math.min(14, Math.floor(Number(sendOffsetDays)) || 1)) : 0;
 
         if (listingId) {
           // listings.host_id is a hosts.id (see myHostId's comment up
@@ -838,9 +894,9 @@ module.exports = async (req, res) => {
         // is being scoped to — never trust a raw array of listing ids
         // from the browser without confirming they're actually this
         // host's own properties.
-        const safeSendOnBooking = sendOnBookingConfirmed === true;
+        const safeSendOnBooking = safeTrigger === 'booking_confirmed';
         let safeAutoSendListingIds = [];
-        if (safeSendOnBooking && Array.isArray(autoSendListingIds) && autoSendListingIds.length) {
+        if (safeTrigger !== 'manual' && Array.isArray(autoSendListingIds) && autoSendListingIds.length) {
           const ids = autoSendListingIds.map(Number).filter(Number.isInteger);
           const ownedRows = myHostId != null && ids.length
             ? await sql`SELECT id FROM listings WHERE host_id = ${myHostId} AND id = ANY(${ids})`
@@ -850,8 +906,9 @@ module.exports = async (req, res) => {
 
         if (templateId) {
           const updated = await sql`
-            UPDATE message_templates SET body = ${safeBody}, listing_id = ${listingId || null},
+            UPDATE message_templates SET body = ${safeBody}, title = ${safeTitle || null}, listing_id = ${listingId || null},
               send_on_booking_confirmed = ${safeSendOnBooking},
+              send_trigger = ${safeTrigger}, send_offset_days = ${safeOffset},
               auto_send_listing_ids = ${JSON.stringify(safeAutoSendListingIds)}
             WHERE id = ${templateId} AND host_id = ${guestId} RETURNING id
           `;
@@ -859,8 +916,8 @@ module.exports = async (req, res) => {
           return res.status(200).json({ id: updated[0].id });
         }
         const inserted = await sql`
-          INSERT INTO message_templates (host_id, listing_id, body, send_on_booking_confirmed, auto_send_listing_ids)
-          VALUES (${guestId}, ${listingId || null}, ${safeBody}, ${safeSendOnBooking}, ${JSON.stringify(safeAutoSendListingIds)})
+          INSERT INTO message_templates (host_id, listing_id, title, body, send_on_booking_confirmed, send_trigger, send_offset_days, auto_send_listing_ids)
+          VALUES (${guestId}, ${listingId || null}, ${safeTitle || null}, ${safeBody}, ${safeSendOnBooking}, ${safeTrigger}, ${safeOffset}, ${JSON.stringify(safeAutoSendListingIds)})
           RETURNING id
         `;
         return res.status(200).json({ id: inserted[0].id });
