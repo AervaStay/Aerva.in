@@ -1,0 +1,2353 @@
+:root{
+    --cream:#f4ebe3;
+    --cream-deep:#ebdecd;
+    --ink:#1c1a17;
+    --charcoal:#211e1a;
+    --gold:#a9884f;
+    --gold-deep:#8a6c39;
+    --line-dark: rgba(28,26,23,0.14);
+    --line-light: rgba(244,234,220,0.16);
+    --maxw:1180px;
+    /* WHITE VARIANT. Three tokens move together, because changing one
+       alone is what broke the cards last time: the page, the banded
+       sections that paint their own background, and the card surface
+       that sits on those sections. A card must always differ from
+       whatever is behind it.
+         --page    the body canvas
+         --band    the alternating section background
+         --card    the listing card surface
+       --cream and --cream-deep are left alone: 25 of --cream's 49 uses
+       are TEXT on dark chips, and --cream-deep also paints photo
+       placeholders and small controls that should stay warm. */
+    --page:#ffffff;
+    --band:#ffffff; /* white everywhere (Sept 2026); cards keep their border and shadow */
+    --card:#ffffff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    background:var(--page);
+    color:var(--ink);
+    font-family:'Jost', sans-serif;
+    font-weight:400;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; scroll-behavior:auto !important;}
+  }
+  h1,h2,h3,.display{ font-family:'Bodoni Moda', serif; font-weight:500; letter-spacing:0.01em; }
+  a{color:inherit; text-decoration:none;}
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 40px;}
+  .eyebrow{
+    text-transform:uppercase; letter-spacing:0.28em; font-size:11px;
+    color:var(--gold); font-weight:500;
+  }
+  .on-dark .eyebrow{color:var(--gold);}
+
+  /* ---------- SIGNATURE: rule + star ---------- */
+  .starline{ display:flex; align-items:center; gap:14px; }
+  .starline .rule{ height:1px; width:64px; background:var(--gold); opacity:0.9; }
+  .starline .star{ width:11px; height:11px; flex:none; }
+  .starline.center{ justify-content:center; }
+
+  /* ---------- NAV ---------- */
+  header{
+    position:fixed; top:0; left:0; right:0; z-index:100;
+    padding:20px 0;
+    transition:background .3s ease, border-color .3s ease, box-shadow .3s ease;
+    border-bottom:1px solid transparent;
+  }
+  /* White to match the page, with the separation carried by the border
+     and a real shadow rather than by a tone difference. The cream fill
+     used to do that job on its own; on a white page it would be the only
+     warm band left and would read as a stray stripe. Kept at 0.97 rather
+     than solid so the blur still has something to work with as content
+     scrolls beneath. */
+  header.scrolled{
+    background:rgba(255,255,255,0.97);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line-dark);
+    box-shadow:0 1px 4px rgba(28,26,23,0.06);
+  }
+  /* While transparent (unscrolled, floating over the hero photo), the
+     logo/nav text was still using the same dark --ink color it uses
+     everywhere else on the site — nearly invisible against a bright
+     photo. Switched to light/cream specifically for this state; reverts
+     to the normal dark colors the instant .scrolled applies (the opaque
+     cream background under it makes dark text legible again by then). */
+  /* Scoped to body.showing-hero — only present on the default browsing
+     view (see initSite/switchMainTab-equivalent JS), where the header is
+     actually floating over the hero photo. Removed on every other
+     full-page view (List Property, a listing/experience detail page,
+     etc.) so this light text never ends up sitting on those pages' plain
+     cream background instead, where it would be just as unreadable as
+     the original dark-on-photo problem this is fixing. */
+  body.showing-hero header:not(.scrolled) .wordmark,
+  body.showing-hero header:not(.scrolled) .nav-wordmark,
+  body.showing-hero header:not(.scrolled) .nav-links a,
+  body.showing-hero header:not(.scrolled) .category-item,
+  body.showing-hero header:not(.scrolled) .currency-trigger,
+  body.showing-hero header:not(.scrolled) #guestLoginLink,
+  body.showing-hero header:not(.scrolled) .host-messages-icon,
+  body.showing-hero header:not(.scrolled) .nav-account-name{
+    color:#fdf8f2; text-shadow:0 1px 6px rgba(0,0,0,0.35);
+  }
+  body.showing-hero header:not(.scrolled) .category-item svg{ stroke:#f0dcc3; }
+  body.showing-hero header:not(.scrolled) .currency-trigger{ border-color:rgba(253,248,242,0.5); }
+  body.showing-hero header:not(.scrolled) .nav-toggle span,
+  body.showing-hero header:not(.scrolled) .nav-toggle::before,
+  body.showing-hero header:not(.scrolled) .nav-toggle::after{ background:#fdf8f2; }
+  body.showing-hero header:not(.scrolled) .nav-avatar-ring{ border-color:#f0dcc3; }
+  /* .nav-account-menu (My Listings/Account Settings/etc.) is nested
+     inside .nav-links in the markup, so the ".nav-links a" rule above
+     was also matching its links — even though that dropdown always sits
+     on its own opaque cream background and needs the normal dark text
+     regardless of whether the header behind its trigger button is
+     transparent. Explicitly reset back to the normal dark color here,
+     with enough specificity (adds .nav-account-menu) to win over the
+     broader rule above. */
+  body.showing-hero header:not(.scrolled) .nav-account-menu a{
+    color:var(--ink); text-shadow:none;
+  }
+  nav.wrap{display:flex; align-items:center; justify-content:space-between;}
+  .wordmark{
+    font-family:'Bodoni Moda', serif; font-size:21px; letter-spacing:0.32em;
+    font-weight:500; text-transform:uppercase; color:var(--ink);
+  }
+  .nav-logo{ display:flex; align-items:center; gap:13px; }
+  .nav-logo img{ height:40px; width:auto; display:block; }
+  .nav-logo-text{ display:flex; flex-direction:column; gap:2px; line-height:1; }
+  .nav-wordmark{
+    font-family:'Bodoni Moda', serif; font-size:19px; letter-spacing:0.3em;
+    font-weight:500; text-transform:uppercase; color:var(--ink);
+    position:relative; display:inline-block;
+  }
+  /* A soft gold shine that sweeps across the logo every few seconds, then
+     pauses — not a constant shimmer, more like a single glint of light
+     catching it periodically. Implemented as an overlay (content:
+     attr(data-text), same text duplicated on top) rather than replacing
+     .nav-wordmark's own color outright, so the logo keeps reading
+     correctly in both its light-over-hero-photo and normal-dark states
+     (see the body.showing-hero rules above) — this just adds a highlight
+     on top of whichever base color is already active. */
+  .nav-wordmark::after{
+    content: attr(data-text);
+    position:absolute; left:0; top:0; width:100%; height:100%;
+    background-image:linear-gradient(115deg,
+      transparent 35%, rgba(255,255,255,0.95) 48%, rgba(255,235,205,0.9) 52%, transparent 65%);
+    background-size:300% 100%;
+    background-position:-200% 0;
+    -webkit-background-clip:text; background-clip:text;
+    color:transparent; -webkit-text-fill-color:transparent;
+    mix-blend-mode:overlay;
+    pointer-events:none;
+    animation:navLogoShine 4.5s ease-in-out infinite;
+  }
+  @keyframes navLogoShine{
+    0%, 45%{ background-position:-200% 0; }
+    65%{ background-position:200% 0; }
+    100%{ background-position:200% 0; }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .nav-wordmark::after{ animation:none; display:none; }
+  }
+  .nav-tagline{
+    font-family:'Jost', sans-serif; font-size:9.5px; letter-spacing:0.22em;
+    font-weight:400; text-transform:uppercase; color:var(--gold-deep);
+  }
+  .nav-links{display:flex; gap:38px; align-items:center;}
+  .nav-links a{
+    font-size:14px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink); opacity:1;
+    transition:opacity .25s ease;
+  }
+  .nav-links a:hover{opacity:0.75;}
+  .nav-links a:focus-visible, .btn:focus-visible, .field input:focus-visible, .field select:focus-visible{
+    outline:2px solid var(--gold); outline-offset:4px;
+  }
+  .btn{
+    display:inline-block; padding:13px 30px; border:1px solid var(--ink);
+    font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:var(--ink);
+    transition:background .3s ease, color .3s ease, border-color .3s ease;
+  }
+  .btn:hover{background:var(--ink); color:var(--cream);}
+  .btn.solid{background:var(--ink); color:var(--cream); border-color:var(--ink);}
+  .btn.solid:hover{background:var(--gold-deep); border-color:var(--gold-deep); color:var(--cream);}
+  .btn.gold{border-color:var(--gold); color:var(--ink);}
+  .btn.gold:hover{background:var(--gold); color:var(--ink);}
+  .on-dark .btn{border-color:var(--cream); color:var(--cream);}
+  .on-dark .btn:hover{background:var(--cream); color:var(--ink);}
+
+  /* ---------- HERO ---------- */
+  .hero{
+    position:relative; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center;
+    background:
+      radial-gradient(ellipse 80% 50% at 50% 30%, rgba(169,136,79,0.10), transparent 60%),
+      var(--cream);
+    padding:36px 24px 28px;
+  }
+  .hero-logo{ width:min(220px, 46vw); height:auto; display:block; margin:0 auto; }
+  .hero-sub{
+    max-width:480px; margin:14px auto 0; font-size:14px; line-height:1.6; opacity:0.72;
+    font-family:'Jost', sans-serif;
+  }
+  .hero-actions{display:flex; gap:16px; margin-top:20px; justify-content:center; flex-wrap:wrap;}
+  .hero-loc{ margin-top:18px; font-size:11.5px; letter-spacing:0.18em; text-transform:uppercase; opacity:0.5; }
+
+  /* ---------- SECTION GENERAL ---------- */
+  section{position:relative;}
+  .pad{padding:130px 0;}
+  /* This section is a dedicated full-page destination (opened fresh via
+     ?view=list-property), not scrolled-past-a-hero content — the generic
+     130px top padding (sized for marketing sections) left a lot of dead
+     space above the form. Kept just enough to clear the fixed header. */
+  #add-listing.pad{padding-top:60px; padding-bottom:90px;}
+  #add-listing .section-head{margin-bottom:36px;}
+  .on-dark{background:var(--ink); color:var(--cream);}
+  .section-head{max-width:620px; margin-bottom:64px;}
+  .section-head h2{font-size:clamp(33px,4.4vw,48px); line-height:1.15; margin-top:18px; letter-spacing:0.01em;}
+  .section-head p{margin-top:20px; font-size:15.5px; line-height:1.8; opacity:0.7; max-width:500px;}
+  .on-dark .section-head p{opacity:0.68;}
+  .center-head{margin-left:auto; margin-right:auto; text-align:center;}
+
+  .divider-strip{ padding:60px 0; }
+  .divider-strip .wrap{display:flex; justify-content:center;}
+
+  /* ---------- PHILOSOPHY ---------- */
+  .phil-grid{display:grid; grid-template-columns:0.9fr 1.1fr; gap:80px; align-items:center;}
+  .phil-figure{
+    position:relative; aspect-ratio:4/5; border:1px solid var(--line-dark); overflow:hidden;
+    background:linear-gradient(160deg, var(--cream-deep), var(--cream) 70%);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .phil-figure img{width:56%; height:auto; display:block;}
+  .phil-copy p{font-size:16px; line-height:1.9; opacity:0.78; margin-top:20px;}
+  .phil-copy p+p{margin-top:14px;}
+  .phil-copy .cap{font-family:'Bodoni Moda', serif; font-style:italic; font-size:24px; color:var(--gold-deep); margin-top:30px; line-height:1.5; font-weight:400;}
+
+  /* ---------- SUITES ---------- */
+  /* auto-fill, not auto-fit — with only 1 or 2 results, auto-fit
+     collapses the empty tracks and stretches the remaining card(s) to
+     fill the whole row, turning a single result into a giant banner
+     instead of a properly-sized card. auto-fill keeps those tracks as
+     empty implicit columns instead, so a lone card stays card-sized. */
+  .suite-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:36px;}
+  .browse-row-head{margin:48px 0 22px;}
+  .browse-row-head h3{
+    font-family:'Bodoni Moda', serif; font-weight:400; font-size:28px; color:var(--ink);
+  }
+  #recentlyViewedRow .suite-grid, #nearbyRow .suite-grid{margin-bottom:8px;}
+  /* Dimmed and slightly desaturated, not hidden outright — a guest
+     should still be able to see what exists and consider other dates,
+     but it should read at a glance as "not bookable right now," never
+     mistaken for a normal, available result. */
+  .suite-card--unavailable{opacity:0.7; filter:grayscale(25%); cursor:pointer;}
+  /* Still dimmed to read as "not available for THESE dates" at a glance,
+     but no longer inert — clicking opens the same detail view with its
+     own fresh calendar, letting the guest check other dates. cursor:
+     default and the hover-suppression this used to have made an
+     actionable card look and behave like a dead end. */
+  .suite-card--unavailable .suite-check-availability{
+    position:absolute; bottom:12px; left:12px; right:12px; z-index:2;
+    background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:11px; letter-spacing:0.04em;
+    text-align:center; padding:7px 10px; border-radius:4px; pointer-events:none;
+  }
+  /* Both badges below render as normal flex children INSIDE .suite-badges
+     (see buildSuiteCard/buildExperienceCard + the row-builders that add
+     them), never as their own absolutely-positioned overlay — that's
+     what used to make them land on the exact same top-left corner as the
+     New/discount badges and visually collide with each other. */
+  .suite-unavailable-badge{
+    background:rgba(28,26,23,0.85); color:#f4ebe3; font-size:10px; letter-spacing:0.06em;
+    text-transform:uppercase; padding:5px 10px; border-radius:3px;
+  }
+  /* White card on a near-white band. The old 2px white border separated
+     a cream card from a cream surface; here it would be invisible, so
+     the separation comes from a real hairline plus a slightly deeper
+     shadow. This rule and --band are a pair — neither works alone. */
+  .suite-card{
+    background:var(--card); display:flex; flex-direction:column; border:1px solid rgba(28,26,23,0.16);
+    border-radius:10px; overflow:hidden; box-shadow:0 1px 3px rgba(28,26,23,0.07), 0 8px 20px rgba(28,26,23,0.06);
+    transition:transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s ease, border-color .35s ease;
+  }
+  .suite-card:hover{
+    transform:translateY(-6px); box-shadow:0 14px 30px rgba(28,26,23,0.10); border-color:var(--gold);
+  }
+  .suite-card.reveal{ transition:opacity .55s ease, transform .55s ease; transform:translateY(16px); }
+  .suite-card.reveal.in{ transform:translateY(0); }
+  .suite-card.reveal:hover{ transition:transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s ease, border-color .35s ease; }
+  .suite-photo{width:100%; aspect-ratio:4/3.1; overflow:hidden; background:var(--cream-deep); position:relative;}
+  .suite-photo img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .5s ease;}
+  .suite-card:hover .suite-photo img{transform:scale(1.06);}
+  /* A scrim behind the badge row rather than a hard white band. The
+     badges sat directly on the photo, so their legibility depended on
+     whatever happened to be behind them — a pale bathroom wall washed the
+     light pills out entirely. The scrim is full-bleed and fades to
+     nothing, so it lifts the labels without cropping the image or
+     drawing a line across it.
+     pointer-events:none so it never intercepts the card click. */
+  .suite-photo::before{
+    content:''; position:absolute; top:0; left:0; right:0; height:108px; z-index:5;
+    background:linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.72) 42%, rgba(255,255,255,0) 100%);
+    pointer-events:none;
+  }
+  .suite-badges{
+    position:absolute; top:12px; left:12px; z-index:6; display:flex; flex-wrap:wrap; gap:6px;
+    align-items:flex-start; max-width:calc(100% - 68px);
+  }
+  /* Dark pills on a light scrim: the blur is gone because there is no
+     longer a photo directly behind them to soften, and the fill is solid
+     so the contrast is the same on every image. */
+  .suite-badge{
+    background:rgba(28,26,23,0.88); color:#ffffff;
+    font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; padding:4px 9px; border-radius:100px;
+  }
+  /* The one badge that earns real emphasis — it's the only thing on the
+     photo that changes a decision. Everything else up there is context
+     and now reads as quiet glass pills instead of competing blocks. */
+  .suite-badge-discount{ background:#a3402f; color:#fff; font-weight:500; }
+  .nav-tier-badge{
+    display:inline-flex; align-items:center; gap:4px; margin-left:8px;
+    padding:3px 9px 3px 7px; border-radius:100px; white-space:nowrap;
+    font-size:9px; letter-spacing:0.08em; text-transform:uppercase;
+    background:var(--cream-deep); color:var(--gold-deep); border:1px solid var(--line-dark);
+  }
+  .nav-tier-badge svg{width:9px; height:auto; display:block; flex:0 0 auto;}
+  .nav-tier-badge{position:relative; cursor:default;}
+  .nav-tier-tip{
+    position:absolute; top:calc(100% + 8px); right:0; z-index:60;
+    background:#1c1a17; color:#f4ebe3; padding:7px 11px; border-radius:5px;
+    font-size:11.5px; line-height:1.45; letter-spacing:0; text-transform:none;
+    white-space:normal; width:max-content; max-width:230px; text-align:left;
+    opacity:0; visibility:hidden; transition:opacity .14s ease;
+    box-shadow:0 5px 18px rgba(28,26,23,0.22); pointer-events:none;
+  }
+  /* Anchored right so it opens inward from the header edge — anchored
+     left it ran off the viewport, which is what the native tooltip did. */
+  .nav-tier-badge:hover .nav-tier-tip{opacity:1; visibility:visible;}
+  .nav-tier-badge.tier-gold{ background:rgba(28,20,12,0.9); color:#f0d27a; border-color:transparent; }
+  .nav-tier-badge.tier-diamond{ background:rgba(16,24,32,0.9); color:#cfe6f5; border-color:transparent; }
+  @media (max-width:900px){ .nav-tier-badge{display:none !important;} }
+  .rv-set{margin:16px 0 8px;}
+  .rv-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--line);}
+  .rv-label{font-size:13.5px;}
+  .rv-stars{display:flex; gap:2px; flex:0 0 auto;}
+  .rv-star{background:none; border:none; cursor:pointer; font-size:20px; line-height:1; padding:0 1px; color:var(--line-dark);}
+  .rv-star.is-on{color:#c9a227;}
+  .rv-comment-label{display:block; font-size:12px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.6; margin:14px 0 6px;}
+  #reviewComment{width:100%; box-sizing:border-box; padding:10px 12px; font-size:14px; font-family:inherit; border:1px solid var(--line-dark); background:white; resize:vertical;}
+  .rv-error{color:#a3402f; font-size:13px; margin-top:10px;}
+  /* On a white page the old cream gradient card read as a second surface.
+     A plain rule under the row does the same job of setting the header
+     apart, with less furniture. */
+  .trust-strip{
+    display:flex; align-items:center; gap:22px; margin:0 0 6px;
+    padding:0 0 18px; border:none; border-bottom:1px solid rgba(28,26,23,0.10);
+    background:none; border-radius:0;
+  }
+  .ts-score{flex:0 0 auto; text-align:center; padding-right:22px; border-right:1px solid rgba(28,26,23,0.10);}
+  .ts-score-num{font-family:Georgia,serif; font-size:30px; line-height:1; color:var(--ink);}
+  .ts-score-stars{margin-top:4px; letter-spacing:1px; font-size:11px;}
+  .ts-star{color:var(--line-dark);}
+  .ts-star.on{color:#c9a227;}
+  .ts-score-count{font-size:10.5px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.55; margin-top:4px;}
+  .ts-mid{flex:1 1 auto; min-width:0;}
+  /* Name and address fill the middle of the strip. The address is allowed
+     two lines, then ellipsises, so a long one cannot push the host block
+     off the end of the row. */
+  .ts-place{min-width:0;}
+  .ts-place-name{font-family:'Bodoni Moda', serif; font-size:27px; line-height:1.15; color:var(--ink); overflow-wrap:anywhere;}
+  .ts-place-address{
+    font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--gold-deep);
+    margin-top:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  }
+  .ts-place + .ts-badges{margin-top:10px;}
+  .ts-badge-type-stay{ background:#2f6690; color:#fff; }
+  .ts-badge-type-experience{ background:#5a3a6e; color:#fff; }
+  .ts-badges{display:flex; flex-wrap:wrap; gap:6px;}
+  .ts-badge{
+    display:inline-flex; align-items:center; padding:5px 11px; border-radius:100px;
+    font-size:10px; letter-spacing:0.09em; text-transform:uppercase; white-space:nowrap;
+  }
+  /* Standing (how this property ranks): solid. */
+  .ts-badge-tier{background:rgba(28,26,23,0.86); color:var(--cream);}
+  /* Highlight (one specific thing it does well): outlined, so it reads as
+     a different kind of claim rather than a second rank. */
+  .ts-badge-flag{background:none; color:var(--gold-deep); box-shadow:inset 0 0 0 1px currentColor;}
+  .ts-badge-group{display:flex; flex-direction:column; gap:5px;}
+  .ts-badge-caption{font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.45;}
+  .ts-host{display:flex; align-items:center; gap:9px; flex:0 0 auto;}
+  .ts-host-avatar{
+    width:32px; height:32px; border-radius:50%; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--gold-deep); color:#fff; font-size:13px; font-family:Georgia,serif;
+  }
+  .ts-host-text{display:flex; flex-direction:column; line-height:1.25;}
+  .ts-host-label{font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.5;}
+  .ts-host-name{font-size:13.5px; color:var(--ink);}
+  .ts-host-badges{display:flex; align-items:center; gap:6px; margin-top:4px;}
+  /* Stacks below the breakpoint: side by side the score's right rule and
+     the host block collide once the name is more than a word or two. */
+  @media (max-width:640px){
+    .trust-strip{flex-wrap:wrap; gap:12px; padding:12px 14px;}
+    .ts-score{padding-right:14px;}
+    .ts-host{width:100%; padding-top:10px; border-top:1px solid rgba(28,26,23,0.10);}
+  }
+  .modal-standing{display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:10px;}
+  .modal-host{
+    display:inline-flex; align-items:center; gap:6px; margin-left:4px;
+    padding-left:12px; border-left:1px solid var(--line-dark);
+  }
+  .modal-host-name{font-size:12.5px; opacity:0.7;}
+  /* The divider collapses when the row wraps — a left border at the start
+     of a new line reads as a stray mark, not a separator. */
+  @media (max-width:520px){ .modal-host{border-left:none; padding-left:0; margin-left:0; width:100%; margin-top:2px;} }
+  .modal-rating{display:flex; align-items:center; gap:4px; font-size:14px; color:var(--ink); margin-right:2px;}
+  /* The badges here reuse the card's pills, but the host feather sits on
+     a dark disc there and would be invisible on the modal's cream body —
+     so it keeps its own background rather than inheriting. */
+  .modal-standing .host-tier-badge{font-size:9.5px;}
+  .prop-badge{ background:rgba(28,26,23,0.82); color:var(--cream); font-weight:500; }
+  /* A property HIGHLIGHT (Spotless, Hidden Treasure) is outlined, never
+     solid: it is one specific strength, not a rank, and the two sitting
+     side by side used to look like two ranks. */
+  .suite-badge.prop-flag{ background:rgba(244,235,227,0.92); color:var(--gold-deep); box-shadow:inset 0 0 0 1px var(--gold-deep); font-weight:500; }
+  .prop-outstanding{ background:rgba(47,92,42,0.88); color:#eaf6e8; }
+  .prop-aerva_exceptional{ background:#2f5c2a; color:#fff; }
+  /* Experience rungs share the property pills' shape so the two ladders
+     read as one system, but take their own colours so a guest scanning a
+     mixed grid can tell at a glance which kind of thing they are
+     looking at. */
+  .prop-great_experience{ background:rgba(28,26,23,0.82); color:var(--cream); }
+  .prop-unforgettable{ background:rgba(90,58,110,0.88); color:#f2e9f7; }
+  .prop-wow_experience{ background:#5a3a6e; color:#fff; }
+  .prop-flag{ background:rgba(244,235,227,0.92); color:var(--ink); }
+  .host-tier-badge{
+    display:inline-flex; align-items:center; gap:5px; padding:4px 10px 4px 7px; border-radius:100px;
+    font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; backdrop-filter:blur(3px);
+  }
+  .host-tier-badge svg{width:11px; height:auto; display:block; flex:0 0 auto;}
+  .tier-gold{ background:rgba(28,20,12,0.82); color:#f0d27a; }
+  .tier-diamond{ background:rgba(16,24,32,0.82); color:#cfe6f5; }
+  /* Rising / Established / Signature / Elite: the same stone as the other
+     card badges, so the two metals stay distinct at a glance. */
+  .tier-stone{ background:rgba(28,26,23,0.82); color:var(--cream); }
+  .suite-badge-stay{ background:#4d9a56; color:#fff; }
+  /* Distinguishes a stay from an experience only where it's actually
+     ambiguous — the mixed "All" grid. Suites-only/Experience-only tabs
+     already make this obvious from context, so these are gated to only
+     render when currentCategoryFilter === 'all'. Deliberately a
+     different class from .suite-badge-stay above (which means "this
+     experience happens to include a stay," a different fact). */
+  .suite-badge-type-stay{ background:#2f6690; color:#fff; }
+  .suite-badge-type-experience{ background:#8a6c39; color:#fff; }
+  .suite-badge-rooms{ background:rgba(28,26,23,0.78); color:#fff; }
+  .suite-photo-slider{
+    position:absolute; inset:0; display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
+    -webkit-overflow-scrolling:touch; touch-action:pan-x; scrollbar-width:none;
+  }
+  .suite-photo-slider::-webkit-scrollbar{display:none;}
+  .suite-photo-slider img{
+    width:100%; height:100%; object-fit:cover; flex:0 0 100%; scroll-snap-align:start; display:block;
+  }
+  .suite-photo-dots{
+    position:absolute; bottom:10px; left:0; right:0; display:flex; justify-content:center; gap:5px; pointer-events:none;
+  }
+  .suite-photo-dots span{
+    width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.55);
+  }
+  .suite-body{padding:20px 20px 18px; display:flex; flex-direction:column; flex-grow:1;}
+  .suite-card h3{font-size:19px; font-weight:500; line-height:1.25;}
+  .suite-card .loc{font-size:10.5px; letter-spacing:0.1em; color:var(--gold-deep); margin-top:7px; text-transform:uppercase; opacity:0.9;}
+  /* Capacity, distance and the map link share one quiet row. Previously
+     each was its own full-width block — the map link especially, which
+     had a border-top and uppercase tracking that made a secondary
+     utility link the loudest element on the card, louder than the price. */
+  .suite-rating{display:flex; align-items:center; gap:4px; margin-top:6px; font-size:13px; color:var(--ink);}
+  .suite-star{color:#c9a227; font-size:13px; line-height:1;}
+  .suite-rating-count{font-size:11.5px; opacity:0.55;}
+  .suite-rating-new{font-size:11.5px; opacity:0.55; margin-top:6px; letter-spacing:0.03em;}
+  .suite-meta{
+    display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px;
+    margin-top:8px; font-size:12px; opacity:0.62; line-height:1.4;
+  }
+  .suite-meta > *:not(:last-child)::after{ content:'·'; margin-left:10px; opacity:0.5; }
+  .suite-map-link{ color:var(--gold-deep); text-decoration:underline; text-underline-offset:2px; }
+  .suite-card .desc{font-size:13.5px; line-height:1.75; opacity:0.75; margin-top:14px; flex-grow:1;}
+
+  /* ---------- LISTING DETAIL MODAL ---------- */
+  .listing-modal-overlay{
+    position:fixed; inset:0; background:rgba(20,17,14,0.72); z-index:200;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .listing-modal{
+    background:#fff; max-width:1280px; width:100%; max-height:88vh; overflow:hidden;
+    position:relative; border:1px solid var(--line-dark); display:flex; flex-direction:column;
+  }
+  /* top accounts for the device's safe area. On a phone the modal is
+     full-height (see the max-width:640px rule below), so a flat 12px put
+     this button under the status bar and notch — tappable in theory,
+     awkward in practice and partly hidden on some devices. env() resolves
+     to 0 on anything without an inset, so desktop is unchanged. */
+  .listing-modal-close{
+    position:absolute; top:calc(12px + env(safe-area-inset-top, 0px)); right:12px;
+    width:36px; height:36px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream);
+    border:none; cursor:pointer; font-size:20px; line-height:1; z-index:5;
+  }
+  @media (max-width:640px){
+    /* Extra clearance on top of the inset: the modal starts at the very
+       top of the viewport here, with no page chrome above it. */
+    .listing-modal-close{ top:calc(24px + env(safe-area-inset-top, 0px)); }
+  }
+  .listing-modal-body{overflow-y:auto; flex:1; min-height:0;}
+  /* A full-page listing/experience view (opened via a direct/shared link,
+     not the modal) has no fixed close button the way the modal does —
+     without this, scrolling down into the calendar or description
+     leaves no visible way back except the browser's own back button.
+     Sticks to the top of the viewport instead of scrolling away with
+     the rest of the content. */
+  .sticky-back-bar{
+    position:sticky; top:0; z-index:50; background:rgba(244,235,227,0.92);
+    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    margin:0 -40px 22px; padding:14px 40px; border-bottom:1px solid var(--line-dark);
+  }
+  .sticky-back-bar a{ margin-bottom:0 !important; }
+  .map-recenter-btn{
+    width:34px !important; height:34px !important; display:flex; align-items:center; justify-content:center;
+    background:white; cursor:pointer; color:var(--ink); border:none;
+  }
+  .map-recenter-btn:hover{ background:var(--cream-deep); }
+  .listing-modal-photos{
+    display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; touch-action:pan-x;
+    scrollbar-width:none;
+  }
+  .listing-modal-photos::-webkit-scrollbar{display:none;}
+  .listing-modal-photos img{
+    width:100%; flex:0 0 100%; scroll-snap-align:start; aspect-ratio:4/2.6; object-fit:cover; display:block;
+  }
+
+  /* 4-photo collage — replaces the single-photo-at-a-time carousel above
+     for the listing detail view specifically (buildListingDetailHtml).
+     Always shows exactly up to 4 tiles; a 5th+ photo shows as a "+N
+     photos" overlay on the last tile instead of just being hidden —
+     clicking any tile (including that overlay) opens the full-photo
+     lightbox below. */
+  .photo-collage{
+    display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:4px;
+    aspect-ratio:16/8; overflow:hidden;
+  }
+  .photo-collage-tile{position:relative; cursor:pointer; overflow:hidden; background:#e9e2d6;}
+  .photo-collage-tile img{width:100%; height:100%; object-fit:cover; display:block; transition:transform .35s ease;}
+  .photo-collage-tile:hover img{transform:scale(1.04);}
+  .photo-collage-more-overlay{
+    position:absolute; inset:0; background:rgba(20,17,14,0.55); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:15px; letter-spacing:0.04em;
+  }
+  .photo-collage-single img{aspect-ratio:16/8; object-fit:cover; width:100%; display:block;}
+
+  .photo-lightbox-overlay{
+    position:fixed; inset:0; background:rgba(10,9,8,0.94); z-index:300;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .photo-lightbox-img{max-width:100%; max-height:80vh; object-fit:contain; display:block;}
+  .photo-lightbox-close{
+    position:absolute; top:16px; right:16px; width:40px; height:40px; border-radius:50%;
+    background:rgba(255,255,255,0.12); color:#fff; border:none; cursor:pointer; font-size:22px; line-height:1;
+  }
+  .photo-lightbox-nav{
+    position:absolute; top:50%; transform:translateY(-50%); width:48px; height:48px; border-radius:50%;
+    background:rgba(255,255,255,0.12); color:#fff; border:none; cursor:pointer; font-size:22px; line-height:1;
+  }
+  .photo-lightbox-nav:hover, .photo-lightbox-close:hover{background:rgba(255,255,255,0.24);}
+  .photo-lightbox-prev{left:16px;}
+  .photo-lightbox-next{right:16px;}
+  .photo-lightbox-counter{
+    position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    color:#fff; font-size:12.5px; letter-spacing:0.06em; opacity:0.8;
+  }
+
+  /* Three-column hero row, all visible together above the description:
+     booking widget (calendar/guests/price) on the left, photo collage in
+     the middle, Google Map on the right. Stacks into a single column —
+     same order — on narrow viewports. */
+  .listing-three-col{display:grid; grid-template-columns:1fr 1fr 300px; gap:24px; align-items:start;}
+  .listing-three-col .photo-collage{aspect-ratio:1/1;}
+  .listing-three-col .photo-collage-single img{aspect-ratio:1/1;}
+  .listing-map-embed{width:100%; aspect-ratio:1/1; background:#e9e2d6; border:1px solid var(--line-dark);}
+  @media (max-width: 900px){
+    .listing-three-col{grid-template-columns:1fr;}
+  }
+
+  /* The detail view reads as a white page: a document about one property
+     rather than another panel of the cream browsing surface. Everything
+     below is scoped to it, so cards, filters and the rest are untouched. */
+  .listing-modal-content{padding:28px 30px 34px; background:#fff;}
+  #listingFullView, #experienceFullView{background:#fff;}
+  .listing-modal-content .listing-modal-section-title{
+    color:#8e8577; border-bottom:1px solid rgba(28,26,23,0.08); padding-bottom:6px;
+  }
+  .listing-modal-content .listing-map-embed{border-color:rgba(28,26,23,0.12);}
+  .listing-modal-content h2{font-size:26px; margin-bottom:6px;}
+  .listing-modal-content .loc{font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep);}
+  .listing-modal-content .desc{font-size:14.5px; line-height:1.8; opacity:0.8; margin-top:20px; white-space:pre-wrap;}
+  .listing-modal-section-title{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c; margin:26px 0 10px;}
+  /* Reviews under the photos (listing page) and in the host's guest profile. */
+  /* Reviews are plain text: a line of numbers, then name, date and what
+     the guest wrote. No cards, no pills, no rules between them. */
+  .today-booking{
+    background:#fff; border-radius:14px; padding:26px 28px 28px; max-width:520px; width:100%;
+    max-height:88vh; overflow-y:auto; position:relative;
+  }
+  .tb-head{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px;}
+  .tb-name{font-family:'Bodoni Moda', serif; font-size:23px; margin:0 0 2px;}
+  .tb-listing{font-size:13px; opacity:0.6; margin:0;}
+  .tb-avatar{width:48px; height:48px; border-radius:50%; object-fit:cover; flex:0 0 auto;}
+  .tb-avatar-initial{background:var(--gold-deep); color:var(--cream); display:flex; align-items:center; justify-content:center; font-size:18px;}
+  .tb-facts{display:grid; grid-template-columns:1fr 1fr; gap:10px 18px; margin-bottom:22px;}
+  .tb-facts div{display:flex; flex-direction:column; gap:2px;}
+  .tb-facts span{font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.5;}
+  .tb-facts strong{font-size:14px; font-weight:500;}
+  .tb-section-title{font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.5; margin-bottom:8px;}
+  .tb-thread{
+    max-height:220px; overflow-y:auto; border:1px solid var(--line-dark); border-radius:10px;
+    padding:12px 14px; margin-bottom:10px; display:flex; flex-direction:column; gap:10px;
+  }
+  .tb-msg{display:flex; flex-direction:column; gap:2px; font-size:13.5px;}
+  .tb-msg-who{font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.5;}
+  .tb-msg-text{white-space:pre-line; overflow-wrap:anywhere;}
+  .tb-msg-mine .tb-msg-text{color:var(--gold-deep);}
+  .tb-compose{display:flex; gap:10px; align-items:flex-start;}
+  .tb-compose textarea{
+    flex:1 1 auto; padding:10px 12px; font-family:'Jost', sans-serif; font-size:14px;
+    border:1px solid var(--line-dark); border-radius:8px; resize:vertical;
+  }
+  .tb-muted{font-size:12.5px; opacity:0.6; margin:8px 0 0;}
+  .today-row{width:100%; text-align:left; cursor:pointer; font-family:inherit;}
+
+  .today-heading{font-family:'Bodoni Moda', serif; font-size:32px; margin:0 0 2px;}
+  .today-date{font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:var(--gold-deep); margin:0 0 24px;}
+  .today-split{display:grid; grid-template-columns:1fr 1px 1fr; gap:0 26px; margin-bottom:26px;}
+  .today-split::before{content:''; grid-column:2; background:var(--line-dark);}
+  .today-col{min-width:0;}
+  .today-col:first-child{grid-column:1;}
+  .today-col:last-child{grid-column:3;}
+  .today-col-head{
+    font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.55;
+    margin-bottom:10px; display:flex; align-items:center; gap:8px;
+  }
+  .today-col-count{background:rgba(28,26,23,0.08); border-radius:999px; padding:1px 7px; font-size:10px; letter-spacing:0;}
+  .today-col-empty{font-size:13px; opacity:0.5; margin:0; padding:10px 0;}
+  .today-row{
+    display:flex; align-items:center; gap:16px; background:#fff; border:1px solid var(--line-dark);
+    border-radius:12px; padding:14px 16px; margin-bottom:10px; text-decoration:none; color:inherit;
+  }
+  .today-when{flex:0 0 86px; font-size:13px; opacity:0.65;}
+  .today-main{flex:1 1 auto; min-width:0;}
+  .today-title{font-size:15px; font-weight:500; margin-bottom:2px; display:block;}
+  .today-sub{font-size:13px; opacity:0.6; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .today-thumbs{flex:0 0 auto; display:flex; align-items:center;}
+  .today-thumb{width:38px; height:38px; border-radius:8px; object-fit:cover; border:2px solid #fff;}
+  .today-avatar{
+    width:38px; height:38px; border-radius:50%; object-fit:cover; border:2px solid #fff; margin-right:-10px;
+    background:var(--gold-deep); color:var(--cream); display:flex; align-items:center; justify-content:center; font-size:14px;
+  }
+  .today-group-label{font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.5; margin-bottom:8px;}
+  .today-staying{margin-top:6px; padding-top:22px; border-top:1px solid var(--line-dark);}
+  .today-empty{font-size:14px; opacity:0.6; padding:18px 0;}
+  @media (max-width:760px){
+    .today-split{grid-template-columns:1fr; gap:22px;}
+    .today-split::before{display:none;}
+    .today-col:last-child{grid-column:1; padding-top:20px; border-top:1px solid var(--line-dark);}
+  }
+
+  .live-proof{
+    font-size:12.5px; letter-spacing:0.06em; text-transform:uppercase;
+    color:var(--gold-deep); margin-top:14px;
+  }
+  body.showing-hero header:not(.scrolled) ~ * .live-proof{ color:inherit; }
+
+  .nav-avatar-ring{position:relative;}
+  .nav-avatar-camera{
+    position:absolute; right:-3px; bottom:-3px; width:16px; height:16px; border-radius:50%;
+    background:var(--ink); color:var(--cream); display:flex; align-items:center; justify-content:center;
+    border:1.5px solid var(--cream);
+  }
+  .nav-avatar-camera svg{width:9px; height:9px;}
+
+  .nav-bell-btn{
+    position:relative; background:none; border:none; cursor:pointer; color:var(--ink);
+    padding:4px; display:inline-flex; align-items:center; margin-right:2px;
+  }
+  .nav-bell-btn svg{width:19px; height:19px;}
+  .nav-bell-count{
+    position:absolute; top:-2px; right:-3px; min-width:15px; height:15px; padding:0 3px;
+    border-radius:999px; background:#a3402f; color:#fff; font-size:9.5px; line-height:15px;
+    text-align:center; font-family:'Jost', sans-serif;
+  }
+  .nav-notif-panel{
+    position:absolute; top:calc(100% + 10px); right:0; z-index:120; width:320px; max-width:86vw;
+    background:#fff; border:1px solid var(--line-dark); border-radius:10px;
+    box-shadow:0 14px 34px rgba(28,26,23,0.16); overflow:hidden;
+  }
+  .nav-notif-head{
+    font-size:10px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.55;
+    padding:12px 14px 8px;
+  }
+  /* The panel is nested inside .nav-links, so the header's own link
+     styling (uppercase, wide letter-spacing) and the hero's light text
+     rules were both applying to it — white capitals on white. It always
+     sits on its own opaque background, so everything is reset here. */
+  /* The panel always sits on its own opaque background, so it must never
+     take the header's link styling or the hero's light text — white
+     capitals on white is what that produced. Forced rather than fought
+     over specificity: several header rules target links in this part of
+     the markup, and any of them regaining the upper hand later would
+     make the panel unreadable again. */
+  .nav-notif-panel, .nav-notif-panel *{
+    text-transform:none !important; letter-spacing:normal !important; text-shadow:none !important;
+  }
+  /* Literal colours, not var(): a custom property combined with
+     !important is not honoured everywhere, and this reset has to hold. */
+  .nav-notif-panel .nav-notif-item,
+  .nav-notif-panel .nav-notif-title,
+  .nav-notif-panel .nav-notif-body{ color:#1c1a17 !important; }
+  .nav-notif-panel .nav-notif-head{ text-transform:uppercase !important; letter-spacing:0.12em !important; color:#1c1a17 !important; opacity:0.55; }
+  .nav-notif-panel .nav-notif-due{ text-transform:uppercase !important; letter-spacing:0.06em !important; color:#8a6c39 !important; }
+  .nav-notif-item{
+    display:block; padding:11px 14px; border-top:1px solid var(--line-dark);
+    text-decoration:none; color:var(--ink);
+  }
+  .nav-notif-item:hover{background:var(--cream);}
+  .nav-notif-item.is-unread{background:rgba(138,108,57,0.07);}
+  .nav-notif-title{font-size:13.5px; font-weight:500; margin-bottom:2px;}
+  .nav-notif-body{font-size:12.5px; opacity:0.7; line-height:1.5;}
+  .nav-notif-due{font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--gold-deep); margin-top:4px;}
+  .nav-notif-empty{font-size:13px; opacity:0.6; padding:4px 14px 14px;}
+
+  .photo-editor-overlay{
+    position:fixed; inset:0; z-index:200; background:rgba(28,26,23,0.55);
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .photo-editor{background:#fff; border-radius:14px; padding:22px 24px 24px; max-width:380px; width:100%; box-shadow:0 20px 50px rgba(28,26,23,0.25);}
+  .photo-editor-title{font-family:'Bodoni Moda', serif; font-size:20px; margin:0 0 4px;}
+  .photo-editor-hint{font-size:12.5px; opacity:0.65; margin:0 0 16px; line-height:1.5;}
+  .photo-editor-stage{position:relative; width:320px; max-width:100%; aspect-ratio:1/1; margin:0 auto 14px; background:var(--cream-deep); border-radius:10px; overflow:hidden; touch-action:none; cursor:grab;}
+  .photo-editor-stage:active{cursor:grabbing;}
+  #photoEditorCanvas{width:100%; height:100%; display:block;}
+  .photo-editor-mask{
+    position:absolute; inset:0; pointer-events:none; box-shadow:0 0 0 999px rgba(255,255,255,0.55) inset;
+    -webkit-mask:radial-gradient(circle at 50% 50%, transparent 49%, #000 50%);
+            mask:radial-gradient(circle at 50% 50%, transparent 49%, #000 50%);
+  }
+  .photo-editor-zoom{display:flex; align-items:center; gap:10px; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px;}
+  .photo-editor-zoom input{flex:1 1 auto;}
+  .photo-editor-filters{display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; margin-bottom:16px;}
+  .photo-filter-btn{
+    flex:0 0 auto; background:none; border:1px solid var(--line-dark); border-radius:8px; cursor:pointer;
+    padding:6px 6px 5px; font-family:'Jost', sans-serif; font-size:10px; letter-spacing:0.06em;
+    text-transform:uppercase; color:var(--ink); opacity:0.85;
+  }
+  .photo-filter-btn canvas{display:block; width:46px; height:46px; border-radius:5px; margin-bottom:4px;}
+  .photo-filter-btn.is-on{border-color:var(--ink); opacity:1; box-shadow:inset 0 0 0 1px var(--ink);}
+  .photo-editor-actions{display:flex; gap:10px;}
+
+  #reviewReminderBar{
+    position:sticky; top:0; z-index:60; background:var(--ink); color:var(--cream);
+  }
+  .rr-inner{
+    max-width:1180px; margin:0 auto; padding:11px 40px;
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  }
+  .rr-text{font-size:13.5px; flex:1 1 auto;}
+  .rr-action{
+    background:var(--cream); color:var(--ink); border:none; cursor:pointer;
+    padding:8px 16px; font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase;
+    font-family:'Jost', sans-serif; border-radius:4px;
+  }
+  .rr-dismiss{
+    background:none; border:none; color:var(--cream); opacity:0.6; cursor:pointer;
+    font-size:20px; line-height:1; padding:0 4px;
+  }
+  @media (max-width:640px){ .rr-inner{padding:10px 18px; gap:10px;} .rr-text{flex:1 1 100%;} }
+
+  .rv-summary{font-size:14px; margin-bottom:2px;}
+  .rv-summary-score{font-weight:500;}
+  .rv-summary-count{opacity:0.6;}
+  .rv-factors{font-size:13px; line-height:1.7; opacity:0.75; margin-bottom:20px;}
+  .rv-list{display:flex; flex-direction:column; gap:18px;}
+  .rv-item-head{font-size:13px; margin-bottom:3px;}
+  .rv-item-name{font-weight:500;}
+  .rv-item-meta{opacity:0.55;}
+  .rv-item-text{font-size:14px; line-height:1.7; margin:0; white-space:pre-line; overflow-wrap:anywhere;}
+  .rv-empty{font-size:13.5px; opacity:0.6;}
+  .rv-more{margin-top:18px;}
+  .listing-modal-amenity-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px 20px;}
+  .listing-modal-amenity-grid span{font-size:13.5px; opacity:0.8;}
+  .listing-modal-paid-amenity{
+    display:flex; justify-content:space-between; padding:10px 0; border-top:1px solid var(--line-dark); font-size:13.5px;
+  }
+  .listing-modal-paid-amenity:first-of-type{border-top:none;}
+  .listing-modal-price-row{
+    display:flex; justify-content:space-between; align-items:baseline; margin-top:26px;
+    padding-top:20px; border-top:1px solid var(--line-dark);
+  }
+  .listing-modal-price-row .price{font-size:20px;}
+
+  /* ---------- EXPERIENCE DETAIL: logistics grid + inline stay card ---------- */
+  .exp-logistics-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px 24px; margin:14px 0;}
+  @media (max-width:640px){ .exp-logistics-grid{grid-template-columns:1fr;} }
+  .exp-logistics-item{display:flex; gap:12px; align-items:flex-start;}
+  .exp-logistics-icon{
+    flex:0 0 auto; width:34px; height:34px; border-radius:50%; background:var(--cream-deep);
+    display:flex; align-items:center; justify-content:center; margin-top:1px;
+  }
+  .exp-logistics-icon svg{width:16px; height:16px; stroke:var(--gold-deep); fill:none; stroke-width:1.6;}
+  .exp-logistics-label{font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c; margin-bottom:3px;}
+  .exp-logistics-value{font-size:13.5px; line-height:1.5;}
+  .exp-stay-card{
+    border:1px solid var(--line-dark); background:var(--cream-deep); padding:22px;
+    margin-top:12px; border-radius:2px;
+  }
+  .exp-stay-card-head{display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;}
+  .exp-stay-card-head h4{font-size:18px; font-weight:500; font-family:'Bodoni Moda', serif;}
+  .exp-stay-card-loc{font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:var(--gold-deep); margin-top:6px;}
+  .exp-stay-card-price{font-size:14px; opacity:0.85; white-space:nowrap;}
+  .exp-view-listing-btn{
+    display:inline-flex; align-items:center; gap:6px; margin-top:14px;
+    font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink);
+    border:1px solid var(--ink); padding:11px 22px; transition:background .25s ease, color .25s ease;
+  }
+  .exp-view-listing-btn:hover{background:var(--ink); color:var(--cream);}
+  .exp-view-listing-btn svg{width:13px; height:13px; stroke:currentColor;}
+
+  @media (max-width:640px){
+    .listing-modal-overlay{padding:0;}
+    .listing-modal{max-width:none; max-height:100vh; height:100vh;}
+  }
+
+  .amenity-tags{display:flex; flex-wrap:wrap; gap:5px; margin-top:10px;}
+  .amenity-tag{
+    font-size:11px; letter-spacing:0.02em; padding:3px 9px; border-radius:100px;
+    background:var(--cream-deep); border:1px solid transparent; opacity:0.85;
+    white-space:normal; max-width:100%; word-break:break-word;
+  }
+  .amenity-tag-more{color:var(--gold-deep); opacity:1; background:transparent; border-color:var(--line-dark);}
+  /* Pushed to the bottom of the card so the price line sits on a
+     consistent baseline across a row of cards of differing heights. */
+  .suite-foot{margin-top:auto; padding-top:14px;}
+  .suite-card .price{font-size:15px; margin-top:0; color:var(--ink); opacity:1; line-height:1.3;}
+  .suite-card .price strong{font-weight:600; font-size:18px;}
+  .suite-card .offer{font-size:11.5px; letter-spacing:0.03em; color:var(--gold-deep); margin-top:4px; font-style:italic; font-family:'Bodoni Moda', serif;}
+  .suite-card .offer-promo{color:#2f5c2a;}
+  .suite-card .link{margin-top:20px; font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink); border-top:1px solid var(--line-dark); padding-top:16px; display:flex; justify-content:space-between; align-items:center;}
+  .suite-card .link svg{width:13px; height:13px; transition:transform .25s ease; stroke:var(--gold-deep);}
+  .suite-card:hover .link svg{transform:translateX(4px);}
+  .suite-photo-placeholder{width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:linear-gradient(160deg, var(--cream-deep), var(--cream) 70%);}
+  .suite-photo-placeholder span{font-family:'Bodoni Moda', serif; font-size:42px; color:var(--gold-deep); opacity:0.55;}
+  .suites-empty{text-align:center; padding:40px 20px; opacity:0.6; font-size:14px; grid-column:1/-1;}
+  .suites-loading{text-align:center; padding:40px 20px; opacity:0.5; font-size:14px; grid-column:1/-1;}
+
+  /* ---------- CATEGORY ICON NAV — now inline in the header, between
+     the logo and the currency/account links, rather than its own
+     full-width row below. Compact horizontal layout (icon beside label)
+     instead of the old stacked one, to fit the header's height. ---------- */
+  .header-category-nav{
+    display:flex; align-items:center; gap:26px; flex-wrap:nowrap;
+  }
+  .category-item{
+    display:flex; flex-direction:row; align-items:center; gap:6px;
+    font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--ink); opacity:1; padding-bottom:2px; border-bottom:2px solid transparent;
+    transition:opacity .25s ease, border-color .25s ease; white-space:nowrap;
+  }
+  .category-item svg{width:16px; height:16px; stroke:var(--gold-deep); fill:none; stroke-width:1.4;}
+  .category-item:hover{opacity:0.75;}
+  .category-item.active{opacity:1; border-color:var(--gold);}
+
+  /* "Host with Aerva" — replaces the old single "List Property" link.
+     Covers listing a property AND an experience now, so it needed a
+     hover menu rather than going straight to one form. Pure CSS :hover
+     (no JS) — same simple pattern as a native menu, and never blocks a
+     direct click on the parent link itself while the submenu is closed. */
+  .category-item-dropdown{position:relative;}
+  .category-item-submenu{
+    position:absolute; top:100%; left:50%; transform:translateX(-50%);
+    margin-top:14px; background:var(--cream); border:1px solid var(--line-dark);
+    box-shadow:0 12px 30px rgba(20,17,14,0.16); min-width:190px; padding:8px 0;
+    opacity:0; visibility:hidden; transition:opacity .2s ease;
+    /* Bridges the gap above so the hover chain survives moving the mouse
+       from the trigger down into the menu, rather than closing mid-transit. */
+  }
+  .category-item-submenu::before{
+    content:''; position:absolute; top:-14px; left:0; right:0; height:14px;
+  }
+  .category-item-dropdown:hover .category-item-submenu,
+  .category-item-submenu:hover{ opacity:1; visibility:visible; }
+  .category-item-submenu a{
+    display:block; padding:11px 20px; font-size:12px; letter-spacing:0.06em;
+    text-transform:uppercase; color:var(--ink); opacity:0.8; white-space:nowrap;
+  }
+  .category-item-submenu a:hover{background:var(--cream-deep); opacity:1;}
+  @media (max-width:1100px){
+    .header-category-nav{gap:16px;}
+    .category-item{font-size:10px;}
+  }
+  @media (max-width:900px){
+    .header-category-nav{display:none;}
+  }
+
+  /* ---------- PILL SEARCH BAR ---------- */
+  .pill-search{
+    display:flex; align-items:stretch; background:var(--cream);
+    border:1px solid var(--line-dark); border-radius:999px; overflow:visible;
+    box-shadow:0 10px 30px rgba(20,17,14,0.18);
+  }
+  .pill-search .search-field{
+    flex-direction:row; align-items:center; gap:2px; padding:10px 26px;
+    border-right:1px solid var(--line-dark); position:relative; min-width:0;
+  }
+  .pill-search .search-field:last-of-type{border-right:none;}
+  .pill-search .search-field label{
+    font-size:10.5px; letter-spacing:0.1em; white-space:nowrap; margin-right:8px;
+  }
+  .pill-search .search-field input, .pill-search .search-field select,
+  .pill-search .date-range-btn{
+    border-bottom:none; padding:0; font-size:13.5px;
+  }
+  /* The More Filters popup's fields (Sort By / Min / Max Price) live
+     inside .pill-search now too (see the search-and-filters restructure),
+     but they're a normal stacked dropdown panel, not pill segments — undo
+     the row-styling above so they don't get squeezed into a single line. */
+  .pill-search .more-filters-dropdown .search-field{
+    flex-direction:column; align-items:flex-start; gap:6px; padding:0;
+    border-right:none; width:100%;
+  }
+  .pill-search .more-filters-dropdown .search-field label{
+    font-size:11px; letter-spacing:0.12em; white-space:normal; margin-right:0;
+  }
+  .pill-search .more-filters-dropdown .search-field input,
+  .pill-search .more-filters-dropdown .search-field select{
+    border-bottom:1px solid var(--line-dark); padding:8px 2px; font-size:14px; width:100%;
+  }
+  .pill-search-submit{
+    flex:0 0 auto; width:52px; height:52px; margin:6px 6px 6px 0; border-radius:50%;
+    background:var(--gold-deep); border:none; color:var(--cream); cursor:pointer;
+    display:flex; align-items:center; justify-content:center; align-self:center;
+    transition:background .25s ease;
+  }
+  .pill-search-submit:hover{background:var(--ink);}
+  .pill-search-submit svg{width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:2;}
+  @media (max-width:640px){
+    .pill-search{border-radius:16px; flex-direction:column;}
+    .pill-search .search-field{border-right:none; border-bottom:1px solid var(--line-dark); padding:14px 20px;}
+    .pill-search .filter-bar{border-left:none; border-top:1px solid var(--line-dark); padding:14px 20px;}
+    .pill-search-submit{width:100%; border-radius:10px; margin:10px 16px 16px;}
+  }
+
+  /* ---------- FAVORITE HEART ---------- */
+  .suite-photo{position:relative;}
+  /* Darkened from 35% to 62%. The old value relied on a photo behind it
+     for contrast; against the light scrim a translucent dark circle with
+     a white outline icon disappeared into the gradient. */
+  .fav-heart{
+    position:absolute; top:12px; right:12px; z-index:7; width:34px; height:34px;
+    border:none; background:rgba(20,17,14,0.62); border-radius:50%; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; transition:transform .15s ease, background .15s ease;
+  }
+  .fav-heart:hover{transform:scale(1.08);}
+  .fav-heart svg{width:17px; height:17px; stroke:#fff; fill:none; stroke-width:1.8; transition:fill .15s ease, stroke .15s ease;}
+  .fav-heart.is-fav svg{fill:var(--gold); stroke:var(--gold);}
+
+  /* ---------- RECENTLY VIEWED STRIP ---------- */
+  .recent-strip-wrap{padding:56px 0 0;}
+  .recent-strip{
+    display:flex; gap:20px; overflow-x:auto; padding-bottom:8px; scroll-snap-type:x proximity; touch-action:pan-x;
+    scrollbar-width:thin;
+  }
+  .recent-card{
+    flex:0 0 auto; width:190px; scroll-snap-align:start; cursor:pointer;
+  }
+  .recent-card .photo{
+    width:190px; height:190px; border-radius:6px; overflow:hidden; background:var(--cream-deep);
+    border:1px solid var(--line-dark); position:relative;
+  }
+  .recent-card .photo img{width:100%; height:100%; object-fit:cover; display:block;}
+  .recent-card h4{font-size:14px; font-weight:500; margin-top:10px;}
+  .recent-card .loc{font-size:12px; opacity:0.65; margin-top:2px; text-transform:none; letter-spacing:0; color:var(--ink);}
+
+  .search-bar, .filter-bar{
+    display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px;
+    background:var(--cream); border:1px solid var(--line-dark); padding:22px;
+  }
+  .search-bar{margin-bottom:14px; position:relative; z-index:10;}
+  /* ---------- Premium full-height hero: photo crossfade behind a large
+     serif headline, with the search pill floating near the bottom —
+     same slideshow mechanism as before, just composed as a proper hero
+     instead of a thin strip that only sat behind the search bar. ---------- */
+  .filter-bg-wrap{
+    position:relative; min-height:min(88vh, 820px); padding:140px 0 40px;
+    display:flex; flex-direction:column; justify-content:flex-end;
+  }
+  .filter-bg-slides{position:absolute; inset:0; z-index:0;}
+  .filter-bg-slides img{
+    position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+    opacity:0; transition:opacity 1.2s ease;
+  }
+  .filter-bg-slides img.is-active{opacity:1;}
+  /* Darkens the photos enough that the (fully opaque) search/filter boxes
+     on top stay perfectly legible — the slideshow shows through only in
+     the padding around those boxes, never behind their own text. */
+  /* Darkens the photos enough that the (fully opaque) search/filter boxes
+     on top stay perfectly legible — the slideshow shows through only in
+     the padding around those boxes, never behind their own text. Darker
+     at the very top too, specifically so the logo/nav stay readable
+     against a bright sky or light-colored photo while the header itself
+     is still transparent (before .scrolled kicks in) — a flat top-to-
+     bottom fade wasn't dark enough right behind the header specifically. */
+  .filter-bg-overlay{
+    position:absolute; inset:0; z-index:1;
+    background:linear-gradient(180deg,
+      rgba(20,17,14,0.58) 0%, rgba(20,17,14,0.34) 14%,
+      rgba(20,17,14,0.2) 32%, rgba(20,17,14,0.28) 55%,
+      rgba(20,17,14,0.66) 100%);
+  }
+  .filter-bg-wrap .wrap{position:relative; z-index:2;}
+  .hero-eyebrow-line{
+    display:flex; align-items:center; gap:14px; margin-bottom:22px;
+    font-size:12px; letter-spacing:0.22em; text-transform:uppercase; color:#f0dcc3;
+  }
+  .hero-eyebrow-line .rule{width:44px; height:1px; background:#f0dcc3; opacity:0.7;}
+  .hero-headline{
+    font-family:'Bodoni Moda', serif; font-weight:400; color:#fff;
+    font-size:clamp(38px, 5.4vw, 68px); line-height:1.08; margin-bottom:18px;
+    text-shadow:0 2px 24px rgba(0,0,0,0.25); max-width:820px;
+  }
+  .hero-headline em{font-style:italic; color:#f0c98a;}
+  .hero-subhead{
+    color:#f4ebe0; opacity:0.88; font-size:15px; line-height:1.7;
+    max-width:520px; margin-bottom:36px;
+  }
+  .filter-bg-dots{
+    position:absolute; left:50%; bottom:16px; transform:translateX(-50%); z-index:3;
+    display:flex; gap:8px;
+  }
+  .filter-bg-dots button{
+    width:8px; height:8px; border-radius:50%; border:1px solid rgba(255,255,255,0.7);
+    background:transparent; padding:0; cursor:pointer; transition:background .25s ease;
+  }
+  .filter-bg-dots button.is-active{background:#fff;}
+  @media (max-width:640px){
+    .filter-bg-wrap{min-height:min(92vh, 720px); padding:120px 0 32px;}
+    .hero-headline{font-size:clamp(30px, 9vw, 44px);}
+  }
+  .pill-search .filter-bar{
+    padding:10px 22px; border-left:1px solid var(--line-dark); margin:0; flex-shrink:0;
+  }
+  .filter-bar{
+    margin-bottom:0; padding:0; gap:14px; opacity:0.92;
+    background:none; border:none; align-items:center; width:auto; flex:0 1 auto;
+  }
+  .filter-bar .search-field{min-width:150px;}
+  .filter-bar .search-field label{
+    white-space:nowrap; font-size:11.5px; letter-spacing:0.07em;
+  }
+  .sort-field{ flex:0 1 180px; min-width:140px; max-width:190px; }
+  .search-field{display:flex; flex-direction:column; gap:6px; flex:1; min-width:130px;}
+  .search-field-where{
+    /* "Where" holds full place names ("Bandra West, Mumbai,
+       Maharashtra") while "When"/"Who" only ever show a short date
+       range or a number — giving all three equal flex made the one
+       field that actually needs room the most cramped of the three. */
+    flex:2.2; min-width:200px;
+  }
+  .search-field label{font-size:14px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7f6c; font-weight:700;}
+  .search-field input, .search-field select{
+    background:transparent; border:none; border-bottom:1px solid var(--line-dark);
+    padding:8px 2px; font-family:'Jost', sans-serif; font-size:16.5px; color:var(--ink);
+    width:100%; box-sizing:border-box;
+  }
+  .search-field input:focus, .search-field select:focus{outline:none; border-color:var(--gold-deep);}
+  .place-input-wrap{position:relative; display:flex; align-items:center; flex:1; min-width:0;}
+  .place-hint{
+    position:absolute; left:2px; top:50%; transform:translateY(-50%); pointer-events:none;
+    font-family:'Jost', sans-serif; font-size:16.5px; color:#a89c86;
+    opacity:0; transition:opacity 0.4s ease; white-space:nowrap; overflow:hidden;
+  }
+  /* Only shows while the field is genuinely empty — same rule a real
+     placeholder follows, so this reads as "the placeholder is animated"
+     rather than an obviously separate overlay element. */
+  #searchCity:placeholder-shown ~ .place-hint{opacity:1;}
+  #placeHintText{display:inline-block; transition:opacity 0.4s ease;}
+  .place-suggestions{
+    position:absolute; top:100%; left:0; right:0; margin-top:6px; background:var(--cream, #f4ebe3);
+    border:1px solid var(--line-dark); box-shadow:0 6px 18px rgba(0,0,0,0.12); z-index:40;
+    max-height:280px; overflow-y:auto;
+  }
+  .place-suggest-heading{
+    font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c;
+    padding:10px 14px 4px;
+  }
+  .place-suggest-item{
+    display:flex; justify-content:space-between; align-items:center; width:100%; text-align:left;
+    background:none; border:none; padding:9px 14px; font-family:'Jost', sans-serif; font-size:13.5px;
+    color:var(--ink); cursor:pointer; gap:10px;
+  }
+  .place-suggest-item:hover{background:rgba(0,0,0,0.045);}
+  .place-suggest-item span{font-size:11.5px; opacity:0.6; white-space:nowrap;}
+  .search-bar .btn{flex:0 0 auto; padding:12px 28px; margin-bottom:1px;}
+  .filter-clear{
+    flex:0 0 auto; background:none; border:none; font-size:15px; letter-spacing:0.05em;
+    color:var(--ink); text-decoration:underline; cursor:pointer; padding:8px 0; margin-bottom:1px;
+  }
+  .near-me-btn{
+    display:inline-flex; align-items:center; gap:6px; text-decoration:none;
+    border:1px solid var(--line-dark); border-radius:999px; padding:9px 16px !important;
+    transition:border-color .2s ease, background .2s ease;
+  }
+  .near-me-btn:hover{ border-color:var(--gold); background:rgba(169,136,79,0.08); }
+  .near-me-btn svg{width:17px; height:17px; flex:0 0 auto;}
+  .near-me-btn:disabled{opacity:0.6; cursor:default;}
+  .search-status{font-size:14.5px; opacity:0.7; margin-top:14px; margin-bottom:6px;}
+
+  .date-range-wrapper{position:relative;}
+  .date-range-btn{
+    background:transparent; border:none; border-bottom:1px solid var(--line-dark);
+    padding:8px 2px; font-family:'Jost', sans-serif; font-size:16.5px; color:var(--ink);
+    width:100%; text-align:left; cursor:pointer;
+  }
+  .date-range-btn:focus{outline:none; border-color:var(--gold-deep);}
+  .date-range-btn.placeholder{opacity:0.45;}
+  .calendar-dropdown{
+    display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:300;
+    background-color:#f4ebe3; opacity:1; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
+    padding:20px; width:600px; max-width:90vw;
+  }
+  .calendar-dropdown.open{display:block;}
+  /* Actual visibility is mobile-only (see the max-width:640px rule
+     below) — on desktop this anchored dropdown already works fine with
+     a normal click-outside-to-close, no full-screen dimming needed.
+     The JS toggles this class unconditionally on both screen sizes;
+     it's this media query split that decides whether it's ever
+     actually seen. */
+  .calendar-dropdown-backdrop{display:none;}
+  .calendar-dropdown-close{
+    display:none; position:absolute; top:12px; right:12px; width:32px; height:32px; border-radius:50%;
+    background:var(--cream, #f4ebe3); border:1px solid var(--line-dark); font-size:20px; line-height:1;
+    cursor:pointer; align-items:center; justify-content:center; z-index:1;
+  }
+  .quick-date-row{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid var(--line-dark);}
+  .quick-date-btn{
+    background:none; border:1px solid var(--line-dark); border-radius:999px; padding:7px 14px;
+    font-size:13.5px; font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer;
+    transition:border-color .2s ease, background .2s ease;
+  }
+  .quick-date-btn:hover{border-color:var(--gold-deep); background:rgba(169,136,79,0.08);}
+  .quick-date-btn.selected{background:var(--ink); border-color:var(--ink); color:var(--cream);}
+  .calendar-months{display:flex; gap:28px; background-color:#f4ebe3;}
+  .calendar-month-panel{flex:1; min-width:0; background-color:#f4ebe3;}
+  .calendar-month-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; background-color:#f4ebe3;}
+  .calendar-month-label{font-family:'Bodoni Moda', serif; font-size:15px; letter-spacing:0.02em; text-align:center; flex:1;}
+  .cal-nav-spacer{width:28px; height:28px; flex:0 0 auto;}
+  .cal-nav{
+    background-color:#f4ebe3; border:1px solid var(--line-dark); width:28px; height:28px; cursor:pointer;
+    font-size:16px; color:var(--ink); display:flex; align-items:center; justify-content:center; flex:0 0 auto;
+  }
+  .cal-nav:disabled{opacity:0.3; cursor:default;}
+  .calendar-weekdays{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); text-align:center; font-size:10.5px; letter-spacing:0.06em; opacity:0.5; margin-bottom:4px; background-color:#f4ebe3;}
+  .calendar-grid{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:2px; background-color:#f4ebe3;}
+  .calendar-day{
+    aspect-ratio:1/1; display:flex; align-items:center; justify-content:center;
+    font-size:12.5px; cursor:pointer; border-radius:50%; color:var(--ink); background-color:#f4ebe3;
+  }
+  .calendar-day:hover:not(.disabled):not(.empty){background-color:#ebdecd;}
+  .calendar-day.disabled{opacity:0.25; cursor:default;}
+  .calendar-day.empty{cursor:default; background-color:#f4ebe3;}
+  .calendar-day.selected-start, .calendar-day.selected-end{background:var(--ink); color:var(--cream); border-radius:50%;}
+  .calendar-day.in-range{background:var(--cream-deep); border-radius:0;}
+  .calendar-footer{display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:12px; border-top:1px solid var(--line-dark);}
+  #calendarHint{font-size:11.5px; opacity:0.6;}
+  .calendar-clear{background:none; border:none; font-size:11.5px; letter-spacing:0.05em; color:var(--gold-deep); text-decoration:underline; cursor:pointer;}
+  .guests-dropdown{
+    display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:300;
+    background-color:#f4ebe3; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
+    padding:8px 20px; width:320px; max-width:90vw; flex-direction:column;
+  }
+  .guests-dropdown.open{display:flex;}
+  .guest-row{display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 0;}
+  .guest-row-divider{height:1px; background:var(--line-dark);}
+  .guest-row-title{font-size:16.5px; font-weight:600; color:var(--ink);}
+  .guest-row-sub{font-size:13.5px; opacity:0.6; margin-top:2px;}
+  .guest-row-sub-muted{opacity:0.45;}
+  .guest-stepper{display:flex; align-items:center; gap:14px; flex:0 0 auto;}
+  .room-space-photo-box{
+    width:76px; height:58px; flex:0 0 auto; border:1px dashed var(--line-dark); background:var(--cream);
+    display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:pointer;
+    position:relative;
+  }
+  .room-space-photo-box img{width:100%; height:100%; object-fit:cover; display:block;}
+  .room-space-photo-box span{font-size:11px; opacity:0.5; text-align:center; padding:0 6px;}
+  .room-photo-remove-btn{
+    position:absolute; top:-7px; right:-7px; width:20px; height:20px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream); border:none; cursor:pointer;
+    font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:1;
+  }
+  .room-photo-remove-btn:hover{background:#a3402f;}
+  .bedroom-tab-bar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;}
+  .bedroom-tab{
+    width:34px; height:34px; border-radius:50%; border:1px solid var(--line-dark); background:var(--cream);
+    display:flex; align-items:center; justify-content:center; font-size:14px; cursor:pointer; flex:0 0 auto;
+    position:relative;
+  }
+  .bedroom-tab.active{background:var(--ink); color:var(--cream); border-color:var(--ink);}
+  .bedroom-tab-dot{
+    position:absolute; top:-3px; right:-3px; width:10px; height:10px; border-radius:50%;
+    background:#a3402f; border:1.5px solid var(--cream);
+  }
+  .bedroom-tab-dot.complete{background:#3a7d44;}
+  .room-bucket{margin-top:14px;}
+  .room-bucket-label{font-size:12.5px; font-weight:600; margin-bottom:6px;}
+  .room-bucket-label .required-mark{color:#a3402f;}
+  .room-bucket-label .optional-mark{opacity:0.55; font-weight:normal; text-transform:none; letter-spacing:0;}
+  .room-bucket-grid{
+    display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start; min-height:64px;
+    border:1px dashed transparent; border-radius:4px; padding:4px; transition:border-color .15s ease, background .15s ease;
+  }
+  .room-bucket-grid.drop-target{border-color:var(--gold-deep); background:rgba(169,136,79,0.08);}
+  .room-photo-move-btn{
+    position:absolute; bottom:-7px; right:-7px; width:20px; height:20px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream); border:none; cursor:pointer;
+    font-size:11px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:1;
+  }
+  .room-photo-move-btn:hover{background:#8a6c39;}
+  .room-photo-move-btn.picked-up{background:var(--gold-deep);}
+  .guest-step-btn{
+    width:30px; height:30px; border-radius:50%; border:1px solid var(--line-dark);
+    background:none; color:var(--ink); font-size:16px; line-height:1; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; transition:border-color .2s ease, opacity .2s ease;
+  }
+  .guest-step-btn:hover:not(:disabled){border-color:var(--gold-deep);}
+  .guest-step-btn:disabled{opacity:0.3; cursor:default;}
+  .guest-count{font-size:16px; min-width:16px; text-align:center;}
+  .more-filters-wrapper{position:relative;}
+  .more-filters-btn svg{width:17px; height:17px; flex:0 0 auto;}
+  .more-filters-dropdown{
+    display:none; position:absolute; top:calc(100% + 10px); left:0; z-index:300;
+    background-color:#f4ebe3; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
+    padding:20px; width:340px; max-width:90vw; flex-direction:column; gap:16px;
+  }
+  .more-filters-dropdown.open{display:flex;}
+  .more-filters-dropdown .search-field{min-width:0;}
+  .currency-picker-wrap{position:relative;}
+  /* ---------- Logged-in account avatar + dropdown menu (nav bar) ---------- */
+  .nav-account-wrap{position:relative;}
+  .nav-account-trigger{
+    display:flex; align-items:center; gap:8px; background:none; border:none; cursor:pointer;
+    font-family:'Jost', sans-serif; padding:0;
+  }
+  .nav-avatar-ring{
+    width:30px; height:30px; border-radius:50%; padding:2px; flex:0 0 auto;
+    border:2px solid var(--gold);
+  }
+  .nav-avatar-circle{
+    width:100%; height:100%; border-radius:50%; overflow:hidden; background:var(--gold-deep);
+    display:flex; align-items:center; justify-content:center; color:var(--cream);
+    font-family:Georgia,serif; font-size:12px;
+  }
+  .nav-avatar-circle img{width:100%; height:100%; object-fit:cover; display:block;}
+  .nav-account-name{font-size:14px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.75;}
+  /* Shown in the header next to the login/account area for every
+     logged-in account, host or not — a guest-only account can still have
+     a live conversation about a booking they made. (This was host-only
+     once, hence the class name; the gating moved but the name stayed.) */
+  .host-messages-icon{
+    position:relative; display:flex; align-items:center; justify-content:center;
+    width:22px; height:22px; color:var(--ink);
+  }
+  .host-messages-icon svg{width:22px; height:22px;}
+  .host-messages-badge{
+    position:absolute; top:-6px; right:-8px; min-width:16px; height:16px; padding:0 4px;
+    background:#a3402f; color:#fff; font-size:10px; font-weight:600; line-height:16px;
+    text-align:center; border-radius:8px;
+  }
+
+  /* ---------- HOST MESSAGE INBOX (overlay, opens over index.html —
+     no navigation to host-dashboard.html) ---------- */
+  .inbox-overlay{
+    display:none; position:fixed; inset:0; z-index:400;
+    background:rgba(20,17,14,0.55); align-items:center; justify-content:center; padding:24px;
+  }
+  .inbox-overlay.open{display:flex;}
+  .inbox-panel{
+    background:var(--cream); width:min(1120px, 96vw); height:min(760px, 92vh);
+    display:flex; border-radius:10px; overflow:hidden; box-shadow:0 30px 80px rgba(20,17,14,0.35);
+    position:relative;
+  }
+  .inbox-close-btn{
+    position:absolute; top:14px; right:16px; z-index:5; background:none; border:none;
+    font-size:24px; line-height:1; cursor:pointer; color:var(--ink); opacity:0.6;
+    width:40px; height:40px; display:flex; align-items:center; justify-content:center;
+  }
+  .inbox-close-btn:hover{opacity:1;}
+  .inbox-chat-back-btn{
+    display:none; flex:0 0 auto; width:36px; height:36px; border-radius:50%; border:1px solid var(--line-dark);
+    background:none; align-items:center; justify-content:center; cursor:pointer; color:var(--ink);
+    margin-right:4px;
+  }
+  .inbox-list-pane{
+    flex:0 0 380px; border-right:1px solid var(--line-dark); display:flex; flex-direction:column;
+    background:#fff; min-width:0; position:relative;
+  }
+  @media (max-width:760px){
+    /* Full-screen on a phone instead of a rounded, inset dialog with
+       margin on every side — that layout eats into an already tight
+       viewport and reads as "a small awkward box" rather than a proper
+       full-screen inbox the way a phone's own apps look. */
+    .inbox-overlay{padding:0;}
+    .inbox-panel{width:100vw; height:100dvh; border-radius:0; max-width:none; max-height:none;}
+    .inbox-list-pane{flex-basis:100%;}
+    .inbox-chat-pane{display:none;}
+    .inbox-panel.chat-open .inbox-list-pane{display:none;}
+    .inbox-panel.chat-open .inbox-chat-pane{display:flex;}
+    /* Previously there was no way back to the conversation list on a
+       phone once you opened one — closing the whole overlay and
+       reopening it was the only escape. This restores an actual "back"
+       affordance, the same way any phone messaging app has one. */
+    .inbox-chat-back-btn{display:flex;}
+    .inbox-close-btn{top:10px; right:10px;}
+  }
+  .inbox-list-header{
+    padding:22px 22px 14px; flex:0 0 auto; display:flex; align-items:center; justify-content:space-between;
+  }
+  .inbox-list-header h2{font-family:'Bodoni Moda', serif; font-weight:400; font-size:26px;}
+  .inbox-header-icons{display:flex; gap:8px;}
+  .inbox-icon-btn{
+    width:36px; height:36px; border-radius:50%; border:1px solid var(--line-dark); background:none;
+    display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--ink);
+    transition:border-color .2s ease;
+  }
+  .inbox-icon-btn:hover{border-color:var(--gold-deep);}
+  .inbox-icon-btn svg{width:16px; height:16px;}
+  .inbox-search-row{padding:0 22px 12px; display:none;}
+  .inbox-search-row.open{display:block;}
+  .inbox-search-row input{
+    width:100%; padding:9px 12px; border:1px solid var(--line-dark); background:var(--cream);
+    font-family:'Jost', sans-serif; font-size:13.5px; box-sizing:border-box;
+  }
+  .inbox-filter-pills{padding:0 22px 16px; display:flex; gap:8px; flex:0 0 auto;}
+  .inbox-filter-pill{
+    padding:9px 16px; border-radius:999px; border:1px solid var(--line-dark); background:none;
+    font-size:13px; font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer;
+    transition:background .2s ease, border-color .2s ease;
+  }
+  .inbox-filter-pill.active{background:var(--ink); border-color:var(--ink); color:#fff;}
+  .guest-info-tab-btn{
+    padding:9px 16px; border-radius:999px; border:1px solid var(--line-dark); background:none;
+    font-size:13px; font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer;
+    transition:background .2s ease, border-color .2s ease;
+  }
+  .guest-info-tab-btn.active{background:var(--ink); border-color:var(--ink); color:#fff;}
+  .inbox-conversation-list{flex:1 1 auto; overflow-y:auto; border-top:1px solid var(--line-dark);}
+  .inbox-conv-card{
+    display:flex; gap:12px; padding:16px 22px; cursor:pointer; border-bottom:1px solid var(--line-dark);
+    transition:background .15s ease;
+  }
+  .inbox-conv-card:hover{background:var(--cream);}
+  .inbox-conv-card.active{background:var(--cream-deep);}
+  .inbox-conv-thumb{
+    width:52px; height:52px; border-radius:50%; object-fit:cover; flex:0 0 auto; background:var(--cream-deep);
+  }
+  .inbox-conv-info{min-width:0; flex:1 1 auto;}
+  .inbox-conv-topline{display:flex; align-items:center; gap:8px; font-size:11.5px; color:#8a7f6c; margin-bottom:3px; flex-wrap:wrap;}
+  .inbox-status-tag{
+    text-transform:uppercase; letter-spacing:0.04em; font-weight:600; font-size:10.5px; padding:2px 8px; border-radius:999px;
+  }
+  .inbox-status-tag.tag-upcoming{background:#eee3d3; color:#8a6c39;}
+  .inbox-status-tag.tag-today{background:#3a7d44; color:#fff;}
+  .inbox-status-tag.tag-hosting{background:#2f6690; color:#fff;}
+  .inbox-status-tag.tag-completed{background:#e7e2da; color:#6b6459;}
+  .inbox-status-tag.tag-cancelled{background:#f3d9d4; color:#a3402f;}
+  .inbox-conv-name{font-size:15px; font-weight:700; color:var(--ink); margin-bottom:1px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .inbox-conv-counterpart{font-size:12.5px; opacity:0.6; margin-bottom:2px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .inbox-conv-preview{font-size:13px; opacity:0.65; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .inbox-conv-time{font-size:11px; opacity:0.5; flex:0 0 auto; white-space:nowrap;}
+  .inbox-conv-unread-dot{width:9px; height:9px; border-radius:50%; background:var(--gold-deep); flex:0 0 auto; align-self:center;}
+  .inbox-chat-pane{flex:1 1 auto; display:flex; flex-direction:column; min-width:0;}
+  /* Hidden by default — shown by adding .details-open on .inbox-panel
+     (see the Details button's click handler). Docked as a real flex
+     sibling, not an overlay: opening it shrinks the chat pane to make
+     room rather than covering the conversation you're already reading,
+     so both stay visible and usable side by side. */
+  .inbox-details-pane{
+    display:none; flex:0 0 300px; border-left:1px solid var(--line-dark);
+    background:#fff; position:relative; overflow-y:auto;
+  }
+  .inbox-panel.details-open .inbox-details-pane{display:block;}
+  @media (max-width:960px){
+    /* Not enough room for three columns at once on a narrower desktop/
+       tablet width — the details pane takes over the chat pane's spot
+       instead of squeezing in beside it. */
+    .inbox-panel.details-open .inbox-chat-pane{display:none;}
+    .inbox-details-pane{flex:1 1 auto;}
+  }
+  .inbox-chat-placeholder{margin:auto; font-size:13.5px; opacity:0.55; text-align:center; padding:0 40px;}
+  .inbox-chat-header{
+    padding:20px 24px; border-bottom:1px solid var(--line-dark); flex:0 0 auto;
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+  }
+  .inbox-chat-header-left{display:flex; align-items:center; gap:12px; min-width:0;}
+  .inbox-chat-avatar{width:44px; height:44px; border-radius:50%; object-fit:cover; flex:0 0 auto; background:var(--cream-deep);}
+  .inbox-chat-name{font-family:'Bodoni Moda', serif; font-size:20px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .inbox-translate-toggle{
+    display:flex; align-items:center; gap:6px; font-size:12.5px; color:#8a7f6c; cursor:pointer;
+    background:none; border:none; padding:0; margin-top:2px;
+  }
+  .inbox-translate-toggle svg{width:14px; height:14px;}
+  .inbox-translate-toggle.on{color:var(--gold-deep);}
+  .inbox-chat-header-right{display:flex; align-items:center; gap:10px; flex:0 0 auto;}
+  .inbox-messages{flex:1 1 auto; overflow-y:auto; padding:20px 24px; display:flex; flex-direction:column; gap:16px;}
+  .inbox-message-row{display:flex; gap:10px; max-width:80%;}
+  .inbox-message-row.mine{align-self:flex-end; flex-direction:row-reverse;}
+  .inbox-message-avatar{width:30px; height:30px; border-radius:50%; object-fit:cover; flex:0 0 auto; background:var(--cream-deep);}
+  .inbox-message-meta{font-size:11.5px; color:#8a7f6c; margin-bottom:4px;}
+  .inbox-message-row.mine .inbox-message-meta{text-align:right;}
+  .inbox-message-bubble{padding:11px 15px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;}
+  .inbox-message-row:not(.mine) .inbox-message-bubble{background:var(--cream-deep); color:var(--ink);}
+  .inbox-message-row.mine .inbox-message-bubble{background:var(--ink); color:var(--cream);}
+  .inbox-message-original-link{font-size:10.5px; opacity:0.55; margin-top:3px; cursor:pointer; text-decoration:underline; display:inline-block;}
+  .inbox-templates-row{padding:0 24px 10px; display:flex; gap:8px; overflow-x:auto; flex:0 0 auto;}
+  .inbox-input-row{padding:14px 24px 20px; border-top:1px solid var(--line-dark); flex:0 0 auto;}
+  .inbox-input-row textarea{
+    flex:1; resize:none; background:#fff; border:1px solid var(--line-dark); padding:10px 12px;
+    font-family:'Jost', sans-serif; font-size:14px; color:var(--ink); max-height:100px; box-sizing:border-box;
+  }
+  .inbox-keyword-suggest-item{
+    padding:9px 14px; cursor:pointer; font-size:13px; display:flex; justify-content:space-between; gap:12px;
+    border-bottom:1px solid var(--line-dark);
+  }
+  .inbox-keyword-suggest-item:last-child{border-bottom:none;}
+  .inbox-keyword-suggest-item:hover, .inbox-keyword-suggest-item.active{background:var(--cream);}
+  .inbox-keyword-suggest-item code{font-weight:600; color:var(--gold-deep);}
+  .inbox-keyword-suggest-item span{opacity:0.55; font-size:12px;}
+  .nav-account-menu{
+    position:absolute; top:calc(100% + 12px); right:0; background:var(--cream); border:1px solid var(--line-dark);
+    min-width:200px; padding:8px 0; box-shadow:0 12px 30px rgba(20,17,14,0.16); z-index:60; display:none;
+  }
+  .nav-account-menu.open{display:block;}
+  .nav-account-menu a{
+    display:block; padding:11px 18px; font-size:13px; color:var(--ink); text-decoration:none;
+  }
+  .nav-account-menu a:hover{background:var(--cream-deep);}
+  .nav-account-menu .menu-divider{height:1px; background:var(--line-dark); margin:6px 0;}
+  .currency-trigger{
+    background:none; border:1px solid var(--line-dark); border-radius:999px; padding:6px 12px;
+    font-size:14.5px; letter-spacing:0.05em; color:var(--ink); cursor:pointer; font-family:'Jost', sans-serif;
+    transition:border-color .2s ease;
+  }
+  .currency-trigger:hover{border-color:var(--gold-deep);}
+  .currency-dropdown{
+    display:none; position:absolute; top:calc(100% + 8px); right:0; z-index:50;
+    background-color:#f4ebe3; border:1px solid var(--line-dark); box-shadow:0 10px 30px rgba(28,26,23,0.15);
+    padding:6px; width:180px; flex-direction:column;
+  }
+  .currency-dropdown.open{display:flex;}
+  .currency-option{
+    background:none; border:none; text-align:left; padding:9px 12px; font-size:13.5px;
+    font-family:'Jost', sans-serif; color:var(--ink); cursor:pointer; border-radius:3px; display:flex; justify-content:space-between;
+  }
+  .currency-option:hover{background-color:#ebdecd;}
+  .currency-option.selected{background:var(--ink); color:var(--cream);}
+  @media (max-width:640px){
+    .guests-dropdown{width:100%;}
+    .more-filters-dropdown{width:100%;}
+    .currency-dropdown{width:100%; left:0; right:auto;}
+  }
+  @media (max-width:640px){
+    .guests-dropdown{width:100%;}
+    .more-filters-dropdown{width:100%;}
+  }
+  @media (max-width:640px){
+    .search-bar, .filter-bar{flex-direction:column; align-items:stretch;}
+    .sort-field{ max-width:none; }
+    .search-bar .btn{width:100%;}
+    /* An anchored position:absolute dropdown (left:0 relative to the
+       "When" field) drifts unpredictably on mobile — its actual pixel
+       position depends on the .wrap container's own padding, the pill
+       search's internal field padding, AND the search bar's scroll-
+       reveal transform, all stacking in ways that pushed this
+       significantly off-center in practice (see the reported
+       screenshot). Converted to a fixed, viewport-centered overlay
+       instead — completely independent of wherever the "When" button
+       happens to sit, so it can't drift regardless of what changes
+       around it later.
+    */
+    .calendar-dropdown{
+      position:fixed; top:50%; left:50%; transform:translate(-50%, -50%);
+      width:calc(100vw - 32px); max-width:420px; max-height:80vh; overflow-y:auto;
+    }
+    /* Same fix, same reason, for the other two dropdowns sharing
+       openDropdownAsPortal — that function no longer sets inline top/
+       left on mobile for any of the three, so all three need their own
+       centered-overlay position here rather than just the calendar. */
+    .guests-dropdown, .more-filters-dropdown{
+      position:fixed; top:50%; left:50%; transform:translate(-50%, -50%);
+      width:calc(100vw - 32px); max-width:420px; max-height:80vh; overflow-y:auto;
+    }
+    .calendar-dropdown-close{display:flex;}
+    .calendar-dropdown-backdrop.open{display:block; position:fixed; inset:0; background:rgba(28,26,23,0.5); z-index:299;}
+    .calendar-months{flex-direction:column; gap:20px;}
+    /* Two columns at tablet width (900px breakpoint above) becomes two
+       cramped, narrow cards on an actual phone — a genuine single-column
+       list reads far better here. This used to be overridden right back
+       to two columns by the 900px block above it: both media queries
+       are true at once on a phone (390px is ≤640px AND ≤900px), and
+       since that other rule came later in the file, it always won,
+       silently undoing this. Fixed by bounding the tablet rule below to
+       stop overlapping this one at all, rather than relying on source
+       order between two rules that both apply. */
+    .suite-grid{grid-template-columns:1fr;}
+  }
+  @media (min-width:641px) and (max-width:900px){
+    /* Tablet width only now — see the note above on why this needed a
+       lower bound. */
+    .suite-grid{grid-template-columns:1fr 1fr;}
+  }
+
+  .photo-preview-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(90px,1fr)); gap:10px; margin-top:12px;}
+  .photo-preview-item{position:relative; aspect-ratio:1/1; border:1px solid var(--line-dark); overflow:hidden;}
+  .photo-preview-item img{width:100%; height:100%; object-fit:cover; display:block;}
+  .photo-remove-btn{
+    position:absolute; top:4px; right:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream); border:none; cursor:pointer;
+    font-size:14px; line-height:1; display:flex; align-items:center; justify-content:center;
+  }
+  .photo-remove-btn:hover{background:#a3402f;}
+  .photo-preview-item.is-cover{border:2px solid var(--gold, #a8834a);}
+  .photo-cover-btn{
+    position:absolute; bottom:4px; left:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:#f5c451; border:none; cursor:pointer;
+    font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center;
+  }
+  .photo-cover-btn:hover{background:rgba(28,26,23,1);}
+  .photo-reorder-btns{
+    position:absolute; bottom:4px; right:4px; display:flex; gap:2px;
+  }
+  .photo-reorder-btns button{
+    width:20px; height:22px; border-radius:2px; background:rgba(28,26,23,0.85); color:var(--cream);
+    border:none; cursor:pointer; font-size:13px; line-height:1;
+  }
+  .photo-reorder-btns button:hover:not(:disabled){background:rgba(28,26,23,1);}
+  .photo-reorder-btns button:disabled{opacity:0.3; cursor:default;}
+  .photo-order-badge{
+    position:absolute; top:4px; left:4px; width:22px; height:22px; border-radius:50%;
+    background:rgba(28,26,23,0.85); color:var(--cream); font-size:11.5px; font-weight:600;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  /* ---------- EXPERIENCE ---------- */
+  .exp-list{display:flex; flex-direction:column;}
+  .exp-row{
+    display:grid; grid-template-columns:130px 1fr 1fr; gap:32px; align-items:start;
+    padding:36px 0; border-top:1px solid var(--line-light);
+  }
+  .exp-list .exp-row:last-child{border-bottom:1px solid var(--line-light);}
+  .exp-time{font-family:'Bodoni Moda',serif; font-style:italic; color:var(--gold); font-size:15px; padding-top:4px; font-weight:400;}
+  .exp-row h3{font-size:21px; font-weight:500;}
+  .exp-row p{font-size:14.5px; line-height:1.8; opacity:0.68; padding-top:4px;}
+
+  /* ---------- RESERVE ---------- */
+  .reserve-grid{display:grid; grid-template-columns:1fr 1fr; gap:74px; align-items:center;}
+  .reserve-form{display:flex; flex-direction:column; gap:18px;}
+  .form-row{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  .field{display:flex; flex-direction:column; gap:8px; min-width:0;}
+  .field label{font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#8a7f6c;}
+  .field input, .field select{
+    background:transparent; border:none; border-bottom:1px solid var(--line-dark);
+    padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink);
+    width:100%; max-width:100%; box-sizing:border-box;
+  }
+  .field input::placeholder{color:rgba(28,26,23,0.35);}
+  .field input:focus, .field select:focus{outline:none; border-color:var(--gold-deep);}
+  .field input:read-only{color:rgba(28,26,23,0.55); cursor:default;}
+  .reserve-form .btn{margin-top:10px; align-self:flex-start;}
+  .confirm{font-size:13px; opacity:0.65; padding-top:6px;}
+  .sum-row{display:flex; justify-content:space-between; font-size:13.5px; padding:5px 0; opacity:0.8;}
+  .sum-row.sum-total{border-top:1px solid var(--line-dark); margin-top:8px; padding-top:12px; font-size:16px; font-weight:500; opacity:1; color:var(--ink);}
+  .pay-badges{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
+  .pay-badges span{
+    font-size:11px; letter-spacing:0.04em; border:1px solid var(--line-dark);
+    padding:6px 12px; color:var(--ink); opacity:0.75;
+  }
+
+  .stay-row{border:1px solid var(--line-dark); padding:20px; display:flex; flex-direction:column; gap:16px; margin-bottom:16px; min-width:0; box-sizing:border-box;}
+  #stayRows{min-width:0; display:flex; flex-direction:column;}
+  .stay-row-head{display:flex; justify-content:space-between; align-items:center;}
+  .stay-row-head .eyebrow{margin:0;}
+  .removeStayBtn{background:none; border:none; font-size:11px; letter-spacing:0.06em; color:var(--gold-deep); cursor:pointer; text-transform:uppercase; padding:0;}
+  .removeStayBtn:hover{text-decoration:underline;}
+  .stayRow-error{color:#a3402f; font-size:12.5px; margin-top:-8px;}
+  .stayRow-subtotal{font-size:13px; opacity:0.75; text-align:right;}
+  .stay-amenity-row{border:1px solid var(--line-dark); padding:12px; margin-top:10px;}
+  .stay-amenity-head{display:flex; justify-content:space-between; font-size:13.5px; margin-bottom:8px;}
+  .amenity-night-chips{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;}
+  .amenity-night-chip{
+    font-size:11.5px; border:1px solid var(--line-dark); padding:5px 10px; cursor:pointer;
+    display:inline-flex; align-items:center; gap:4px; user-select:none;
+  }
+  .amenity-night-chip input{width:auto; margin:0;}
+  .amenity-night-chip.checked{background:#1c1a17; color:#f4ebe3; border-color:#1c1a17;}
+  .stay-amenity-subtotal{font-size:11.5px; opacity:0.7;}
+
+  .check-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:10px 16px;}
+  .check-item{display:flex; align-items:center; gap:8px; font-size:13.5px; opacity:0.85; cursor:pointer;}
+  .radio-row{display:flex; gap:24px; margin-top:6px;}
+  .check-item input{width:auto; accent-color:var(--gold-deep); cursor:pointer;}
+  /* ---------- LOCATION ---------- */
+  .loc-grid{display:grid; grid-template-columns:1.1fr 0.9fr; gap:74px; align-items:center;}
+  .loc-copy p{font-size:15.5px; line-height:1.85; opacity:0.7; margin-top:18px;}
+  .loc-list{margin-top:32px; display:flex; flex-direction:column; gap:14px;}
+  .loc-list div{display:flex; justify-content:space-between; border-top:1px solid var(--line-light); padding-top:14px; font-size:13.5px;}
+  .loc-list span:first-child{opacity:0.55;}
+  .loc-list span:last-child{color:var(--gold);}
+  .loc-map{aspect-ratio:1/1; border:1px solid var(--line-light); position:relative; overflow:hidden;}
+  .loc-map svg{width:100%; height:100%;}
+
+  /* ---------- FOOTER ---------- */
+  footer{background:var(--charcoal); color:var(--cream); padding:80px 0 34px; border-top:1px solid var(--line-light);}
+  .foot-top{text-align:center; padding-bottom:60px; border-bottom:1px solid var(--line-light); margin-bottom:50px;}
+  .foot-top .wordmark{color:var(--cream); font-size:22px; margin-bottom:18px;}
+  .foot-top .starline{margin:0 auto 16px;}
+  .foot-top .tagline{font-size:12px; letter-spacing:0.4em; text-transform:uppercase; color:var(--gold);}
+  .foot-grid{display:grid; grid-template-columns:1.3fr 1fr 1fr 1fr; gap:40px;}
+  .foot-col p{font-size:13px; line-height:1.8; opacity:0.55; max-width:260px;}
+  footer h4{font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:var(--gold); margin-bottom:18px;}
+  footer ul{list-style:none; display:flex; flex-direction:column; gap:11px;}
+  footer ul a{font-size:13px; opacity:0.62; transition:opacity .2s ease;}
+  footer ul a:hover{opacity:1;}
+  .foot-bottom{
+    margin-top:56px; padding-top:26px; border-top:1px solid var(--line-light);
+    display:flex; justify-content:space-between; font-size:11.5px; opacity:0.45; flex-wrap:wrap; gap:10px;
+    letter-spacing:0.04em;
+  }
+
+  /* ---------- REVEAL ---------- */
+  .reveal{opacity:0; transform:translateY(20px); transition:opacity .8s ease, transform .8s ease;}
+  .reveal.in{opacity:1; transform:translateY(0);}
+
+  /* ---------- MOBILE NAV ---------- */
+  .nav-toggle{
+    display:none; background:none; border:none; cursor:pointer; padding:8px;
+    width:40px; height:40px; align-items:center; justify-content:center;
+  }
+  .nav-toggle span, .nav-toggle::before, .nav-toggle::after{
+    content:''; display:block; width:22px; height:1.5px; background:var(--ink);
+    transition:transform .25s ease, opacity .25s ease;
+  }
+  .nav-toggle::before{ margin-bottom:6px; }
+  .nav-toggle::after{ margin-top:6px; }
+  .nav-toggle.is-open::before{ transform:translateY(7.5px) rotate(45deg); }
+  .nav-toggle.is-open::after{ transform:translateY(-7.5px) rotate(-45deg); }
+  .nav-toggle.is-open span{ opacity:0; }
+
+  .mobile-nav-panel{
+    position:fixed; top:0; right:0; bottom:0; width:min(320px, 84vw);
+    background:var(--cream); z-index:150; padding:100px 32px 40px;
+    box-shadow:-8px 0 40px rgba(0,0,0,0.18);
+    transform:translateX(100%); transition:transform .35s ease;
+    display:flex; flex-direction:column; gap:26px; overflow-y:auto;
+  }
+  .mobile-nav-panel.is-open{ transform:translateX(0); }
+  .mobile-nav-panel a{
+    font-size:15px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink);
+  }
+  .mobile-nav-panel .btn{ text-align:center; }
+  .mobile-nav-scrim{
+    position:fixed; inset:0; background:rgba(20,17,14,0.5); z-index:140;
+    opacity:0; pointer-events:none; transition:opacity .3s ease;
+  }
+  .mobile-nav-scrim.is-open{ opacity:1; pointer-events:auto; }
+
+  /* ---------- RESPONSIVE ---------- */
+  @media (max-width:900px){
+    .nav-links{display:none;}
+    .nav-toggle{display:flex; flex-direction:column;}
+    .phil-grid, .reserve-grid, .loc-grid{grid-template-columns:1fr; gap:44px;}
+    .exp-row{grid-template-columns:1fr; gap:8px;}
+    .exp-time{padding-top:0;}
+    .foot-grid{grid-template-columns:1fr 1fr; row-gap:36px;}
+    .form-row{grid-template-columns:1fr;}
+    .wrap{padding:0 24px;}
+    .sticky-back-bar{margin:0 -24px 22px; padding:14px 24px;}
+    .pad{padding:92px 0;}
+    .hero-logo{width:min(180px, 58vw);}
+  }
+  @media (min-width:901px){
+    .nav-toggle{display:none;}
+    .mobile-nav-panel, .mobile-nav-scrim{display:none;}
+  }
+  .required-mark{color:#a3402f;}
+
+/* ---------- PROFILE ---------- */
+.profile-wrap{max-width:760px;}
+.profile-top{display:flex; align-items:center; gap:22px; margin-bottom:34px;}
+.profile-photo-btn{position:relative; background:none; border:none; padding:0; cursor:pointer;}
+.profile-photo{
+  width:92px; height:92px; border-radius:50%; background:var(--gold-deep); color:var(--cream);
+  display:flex; align-items:center; justify-content:center; font-family:'Bodoni Moda', serif;
+  font-size:34px; overflow:hidden;
+}
+.profile-photo img{width:100%; height:100%; object-fit:cover;}
+.profile-photo-camera{
+  position:absolute; right:2px; bottom:2px; width:26px; height:26px; border-radius:50%;
+  background:var(--ink); color:var(--cream); display:flex; align-items:center; justify-content:center;
+  border:2px solid var(--band);
+}
+.profile-photo-camera svg{width:13px; height:13px;}
+.profile-name{font-family:'Bodoni Moda', serif; font-size:30px; margin:0 0 4px;}
+.profile-meta{font-size:12.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--gold-deep); margin:0 0 12px;}
+.profile-section{border-top:1px solid var(--line-dark); padding-top:24px; margin-bottom:30px;}
+.profile-section-title{font-size:11px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.55; margin-bottom:8px;}
+.profile-hint{font-size:13px; opacity:0.65; margin:0 0 18px; line-height:1.6;}
+.profile-fields{display:flex; flex-direction:column; gap:16px; margin-bottom:18px;}
+.profile-field label{display:block; font-size:11.5px; letter-spacing:0.04em; text-transform:uppercase; opacity:0.6; margin-bottom:6px;}
+.profile-field input, .profile-field textarea{
+  width:100%; box-sizing:border-box; padding:11px 12px; font-family:'Jost', sans-serif; font-size:14px;
+  color:var(--ink); background:#fff; border:1px solid var(--line-dark); border-radius:6px;
+}
+.profile-field textarea{resize:vertical; min-height:74px; line-height:1.6;}
+.profile-field input:focus, .profile-field textarea:focus{outline:none; border-color:var(--gold-deep);}
+.profile-save{padding:11px 26px; border-radius:4px; background:var(--ink); color:var(--cream); border:none; cursor:pointer;
+  font-family:'Jost', sans-serif; font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase;}
+.profile-msg{font-size:13px; margin:12px 0 0;}
+.profile-places{display:flex; flex-wrap:wrap; gap:8px;}
+.profile-place{background:#fff; border:1px solid var(--line-dark); border-radius:999px; padding:7px 14px; font-size:13px;}
+.profile-empty{font-size:13px; opacity:0.6;}
+
+/* ---------- ONE BOOKING ---------- */
+.back-to-bookings{display:inline-flex; margin-bottom:22px;}
+.bk-title{font-family:'Bodoni Moda', serif; font-size:32px; margin:0 0 4px;}
+.bk-sub{font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; color:var(--gold-deep); margin:0 0 22px;}
+.bk-facts{display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:14px 22px; margin-bottom:22px;}
+.bk-facts div{display:flex; flex-direction:column; gap:2px;}
+.bk-facts span{font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.5;}
+.bk-facts strong{font-size:15px; font-weight:500;}
+.bk-actions{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:30px;}
+.bk-cols{display:grid; grid-template-columns:1fr 1fr; gap:30px;}
+@media (max-width:820px){ .bk-cols{grid-template-columns:1fr;} }
+.bk-map{width:100%; height:280px; border:1px solid var(--line-dark); border-radius:12px; background:var(--cream-deep);}
+.bk-note{font-size:13px; opacity:0.6; line-height:1.6;}
+
+/* ---------- HEADER RESTYLE (Sept 2026) ----------
+   Over a photo the header had nothing of its own to stand on: the logo
+   mark is dark ink on a transparent PNG, the tagline was dark gold, and
+   the bell icon had been left out of the light-text rules, so all three
+   sank into any darker image. Three changes fix it for every photo
+   rather than tuning to one:
+     1. A soft dark scrim behind the bar while it floats over the hero,
+        fading out below the header so there is no visible band.
+     2. The logo mark rendered light over the hero (CSS filter on the same
+        PNG, no second asset), ink everywhere else.
+     3. One type scale for the whole bar. It had 11px, 14px and 14.5px
+        side by side, which is most of why it read as cluttered.
+   The scrolled state (white bar, dark text) is unchanged. */
+
+header{ padding:16px 0; }
+
+/* 1. Scrim. A pseudo-element rather than the header's own background, so
+   it can extend below the bar and fade out; header's z-index already
+   makes it a stacking context, so z-index:-1 stays behind the nav. */
+body.showing-hero header:not(.scrolled)::before{
+  content:''; position:absolute; left:0; right:0; top:0; height:170%;
+  background:linear-gradient(to bottom,
+    rgba(17,14,11,0.58) 0%, rgba(17,14,11,0.30) 55%, rgba(17,14,11,0) 100%);
+  pointer-events:none; z-index:-1;
+}
+
+/* 2. Logo: mark, hairline, then wordmark over tagline. */
+.nav-logo{ gap:14px; }
+.nav-logo img{ height:42px; transition:filter .3s ease; }
+.nav-logo-text{ gap:5px; padding-left:14px; border-left:1px solid var(--line-dark); }
+.nav-wordmark{ font-size:20px; letter-spacing:0.34em; }
+.nav-tagline{ font-size:8.5px; letter-spacing:0.36em; font-weight:500; }
+body.showing-hero header:not(.scrolled) .nav-logo img{
+  filter:brightness(0) invert(1) drop-shadow(0 1px 3px rgba(0,0,0,0.35));
+  opacity:0.96;
+}
+body.showing-hero header:not(.scrolled) .nav-logo-text{ border-left-color:rgba(253,248,242,0.35); }
+body.showing-hero header:not(.scrolled) .nav-tagline{
+  color:#e6cfa2; text-shadow:0 1px 4px rgba(0,0,0,0.4);
+}
+
+/* 3. One type scale: 12px, wide tracking, medium weight. */
+.header-category-nav{ gap:30px; }
+.category-item{ font-size:11.5px; letter-spacing:0.14em; font-weight:500; padding-bottom:5px; }
+.category-item svg{ width:15px; height:15px; }
+.nav-links{ gap:24px; }
+#guestLoginLink{ font-size:12px; letter-spacing:0.14em; font-weight:500; }
+.currency-trigger{ font-size:12px; letter-spacing:0.12em; padding:6px 13px; }
+.nav-account-name{ font-size:12px; letter-spacing:0.12em; font-weight:500; opacity:1; }
+@media (max-width:1100px){
+  .header-category-nav{ gap:18px; }
+  .category-item{ font-size:10.5px; letter-spacing:0.1em; }
+}
+
+/* Over the hero: the pieces the original light-text rules missed. */
+body.showing-hero header:not(.scrolled) .nav-bell-btn{
+  color:#fdf8f2; filter:drop-shadow(0 1px 4px rgba(0,0,0,0.35));
+}
+body.showing-hero header:not(.scrolled) .category-item.active{ border-color:#e6cfa2; }
+body.showing-hero header:not(.scrolled) .currency-trigger{ background:rgba(255,255,255,0.08); }
+body.showing-hero header:not(.scrolled) .nav-avatar-camera{ border-color:#fdf8f2; }
+
+/* ---------- HEADER ON PHONES (Sept 2026) ----------
+   Below 900px the category nav was display:none and the hamburger panel
+   only held account links, so on a phone there was no way to reach
+   Suites, Aerva Experience or Host With Aerva at all. The categories now
+   stay visible as a second row: one line, swiped sideways when it does
+   not fit. touch-action:pan-x as on every horizontal scroller here. */
+.category-mobile-only{ display:none; }
+@media (max-width:900px){
+  header{ padding:12px 0; }
+  nav.wrap{ flex-wrap:wrap; row-gap:10px; }
+  .header-category-nav{
+    display:flex; order:3; width:100%; gap:22px;
+    overflow-x:auto; touch-action:pan-x; -webkit-overflow-scrolling:touch;
+    scrollbar-width:none; padding-bottom:2px;
+  }
+  .header-category-nav::-webkit-scrollbar{ display:none; }
+  .category-item{ flex:0 0 auto; font-size:10.5px; letter-spacing:0.1em; }
+  .category-item-dropdown{ display:none; }
+  .category-mobile-only{ display:flex; }
+  /* The header is a row taller now; keep the hero text clear of it. */
+  .filter-bg-wrap{ padding-top:150px; }
+}
+
+/* ---------- FOOTER RESTYLE (Sept 2026) ----------
+   Brand block on the left (mark, wordmark, one line about Aerva), three
+   short link columns, a quiet bottom line. Same charcoal ground. */
+footer{ padding:72px 0 30px; }
+footer .foot-grid{ grid-template-columns:1.6fr 1fr 1fr 1fr; gap:48px; align-items:start; }
+.foot-logo{ display:inline-flex; align-items:center; gap:14px; margin-bottom:22px; color:var(--cream); }
+.foot-logo img{ height:44px; width:auto; filter:brightness(0) invert(1); opacity:0.92; }
+.foot-logo-text{ display:flex; flex-direction:column; gap:6px; padding-left:14px; border-left:1px solid var(--line-light); line-height:1; }
+.foot-wordmark{ font-family:'Bodoni Moda', serif; font-size:20px; letter-spacing:0.34em; font-weight:500; text-transform:uppercase; }
+.foot-tagline{ font-size:8.5px; letter-spacing:0.36em; font-weight:500; text-transform:uppercase; color:var(--gold); }
+.foot-brand p{ font-size:13.5px; line-height:1.8; opacity:0.6; max-width:320px; margin:0; }
+footer h4{ font-size:10.5px; letter-spacing:0.18em; font-weight:500; margin-bottom:20px; }
+footer ul{ gap:12px; padding:0; margin:0; }
+footer ul a{ font-size:13.5px; opacity:0.7; }
+footer ul a:hover{ opacity:1; color:#fff; }
+footer .foot-bottom{ margin-top:60px; padding-top:22px; font-size:11px; letter-spacing:0.08em; opacity:0.45; }
+@media (max-width:900px){
+  footer .foot-grid{ grid-template-columns:1fr 1fr; gap:36px 28px; }
+  .foot-brand{ grid-column:1 / -1; }
+}
+@media (max-width:520px){
+  footer{ padding:56px 0 26px; }
+  footer .foot-grid{ grid-template-columns:1fr; }
+  footer .foot-bottom{ flex-direction:column; gap:6px; }
+}
+
+/* ---------- MESSAGES RESTYLE (Sept 2026) ----------
+   Calmer and closer to a modern chat: a white list with rounded rows and
+   a gold marker on the open conversation, a soft backdrop behind the
+   thread so bubbles stand out, bubbles with a tail corner, template
+   chips that swipe, and a rounded composer with a round send button.
+   Layout, IDs and behaviour are unchanged. */
+.inbox-panel{ background:#fff; border-radius:18px; border:1px solid var(--line-dark); }
+.inbox-list-header{ padding:24px 22px 14px; }
+.inbox-list-header h2{ font-size:28px; font-weight:500; }
+.inbox-icon-btn{ background:#fff; }
+.inbox-search-row input{ border-radius:999px; padding:10px 16px; background:#f7f3ee; border-color:transparent; }
+.inbox-search-row input:focus{ outline:none; border-color:var(--gold-deep); background:#fff; }
+.inbox-filter-pill, .guest-info-tab-btn{ padding:7px 14px; font-size:11px; letter-spacing:0.1em; text-transform:uppercase; }
+.inbox-conversation-list{ border-top:none; padding:4px 10px 12px; }
+.inbox-conv-card{ border-bottom:none; border-radius:12px; padding:12px 12px; margin-bottom:2px; position:relative; }
+.inbox-conv-card:hover{ background:#f7f3ee; }
+.inbox-conv-card.active{ background:#f3ece2; }
+.inbox-conv-card.active::before{
+  content:''; position:absolute; left:0; top:12px; bottom:12px; width:3px; border-radius:3px; background:var(--gold);
+}
+.inbox-conv-thumb{ width:48px; height:48px; }
+.inbox-conv-name{ font-weight:600; font-size:14.5px; }
+.inbox-status-tag{ border-radius:999px; }
+.inbox-conv-unread-dot{ background:var(--gold); box-shadow:0 0 0 3px rgba(169,136,79,0.18); }
+
+.inbox-chat-pane{ background:#faf8f5; }
+.inbox-chat-header{ background:#fff; padding:16px 24px; }
+.inbox-chat-name{ font-weight:500; }
+.inbox-messages{ padding:24px 28px; gap:14px; }
+.inbox-message-row{ max-width:72%; }
+.inbox-message-bubble{ border-radius:18px; padding:11px 16px; box-shadow:0 1px 1px rgba(28,26,23,0.04); }
+.inbox-message-row:not(.mine) .inbox-message-bubble{ background:#fff; border:1px solid var(--line-dark); border-bottom-left-radius:6px; }
+.inbox-message-row.mine .inbox-message-bubble{ border-bottom-right-radius:6px; }
+.inbox-message-meta{ font-size:11px; letter-spacing:0.02em; }
+
+.inbox-templates-row{
+  padding:10px 24px 6px; touch-action:pan-x; scrollbar-width:none; background:#faf8f5;
+}
+.inbox-templates-row::-webkit-scrollbar{ display:none; }
+.inbox-templates-row .filter-clear{
+  flex:0 0 auto; border-radius:999px; background:#fff; border:1px solid var(--line-dark);
+  padding:7px 14px; font-size:12px; white-space:nowrap;
+}
+.inbox-templates-row .filter-clear:hover{ border-color:var(--gold-deep); }
+.inbox-input-row{ background:#fff; padding:12px 20px 16px; }
+.inbox-input-row textarea{
+  border-radius:22px; background:#f7f3ee; border-color:transparent; padding:12px 18px; line-height:1.4;
+}
+.inbox-input-row textarea:focus{ outline:none; background:#fff; border-color:var(--gold-deep); }
+#inboxChatSendBtn{ border-radius:50%; }
+.inbox-details-pane{ background:#fff; }
+@media (max-width:760px){
+  .inbox-panel{ border-radius:0; border:none; }
+  .inbox-messages{ padding:18px 16px; }
+  .inbox-message-row{ max-width:86%; }
+  .inbox-templates-row{ padding:8px 16px 4px; }
+  .inbox-input-row{ padding:10px 12px 14px; }
+}
+
+/* ---------- LIKES (Sept 2026) ----------
+   Thumbs-up with a count, bottom-left of every card photo. Same dark
+   glass as the save heart (top-right) so the two read as a pair; gold
+   when liked. The count is left out while it is 0. */
+.like-btn{
+  position:absolute; left:12px; bottom:12px; z-index:7;
+  display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 11px;
+  border:none; border-radius:999px; background:rgba(20,17,14,0.62); color:#fff; cursor:pointer;
+  font-family:'Jost', sans-serif; font-size:12.5px; letter-spacing:0.02em;
+  transition:transform .15s ease, background .15s ease;
+}
+.like-btn:hover{ transform:scale(1.05); }
+.like-btn:disabled{ cursor:progress; }
+.like-btn svg{ width:16px; height:16px; fill:none; stroke:#fff; stroke-width:1.7; stroke-linejoin:round; transition:fill .15s ease, stroke .15s ease; }
+.like-btn .like-count:empty{ display:none; }
+.like-btn.is-liked svg{ fill:var(--gold); stroke:var(--gold); }
+.like-btn.is-liked{ color:var(--gold); }
+
+/* ---------- LIVE COUNTER IN THE HERO (Sept 2026) ----------
+   The counter sat right on top of the search bar in dark gold on a dark
+   photo, so it could barely be read, with a large empty gap above it.
+   It now belongs to the hero text: straight under the subhead, number
+   large in the headline's gold (Bodoni), label small in cream beneath,
+   a hairline between the two figures, and clear space before the search
+   bar. */
+.live-proof{
+  align-items:center; gap:22px; flex-wrap:wrap;
+  margin:-14px 0 30px; color:#f4ebe0; text-transform:none; letter-spacing:0;
+}
+.live-proof .lp-stat{ display:flex; flex-direction:column; gap:4px; }
+.live-proof .lp-num{
+  font-family:'Bodoni Moda', serif; font-size:26px; line-height:1; color:#f0c98a;
+  text-shadow:0 2px 14px rgba(0,0,0,0.35);
+}
+.live-proof .lp-label{
+  font-family:'Jost', sans-serif; font-size:10.5px; letter-spacing:0.16em; text-transform:uppercase;
+  color:#f4ebe0; opacity:0.9; text-shadow:0 1px 8px rgba(0,0,0,0.45);
+}
+.live-proof .lp-sep{ width:1px; height:30px; background:rgba(240,220,195,0.45); }
+@media (max-width:640px){
+  .live-proof{ gap:16px; margin:-18px 0 24px; }
+  .live-proof .lp-num{ font-size:22px; }
+  .live-proof .lp-label{ font-size:9.5px; letter-spacing:0.12em; }
+}
+
+/* ---------- HOST PUBLIC PROFILE (Sept 2026) ----------
+   "Hosted by" is now a button; its profile opens as one full white
+   window over everything, with its own close button (Esc works too). */
+/* The whole block is the button, but it must not look like one: no grey
+   box, no shifted margins (those clipped "Hosted by" at the top). Avatar,
+   then label / name / one row with the badge and a small outlined
+   "View profile" pill that darkens on hover. */
+.trust-strip .ts-host-link{
+  -webkit-appearance:none; appearance:none; background:transparent; border:0; margin:0; padding:0;
+  font:inherit; color:inherit; text-align:left; cursor:pointer; gap:12px;
+}
+.trust-strip .ts-host-link:focus-visible{ outline:2px solid var(--gold-deep); outline-offset:4px; border-radius:10px; }
+.ts-host-link .ts-host-avatar{ transition:box-shadow .15s ease; }
+.ts-host-link:hover .ts-host-avatar{ box-shadow:0 0 0 2px #fff, 0 0 0 3px var(--gold); }
+.ts-host-link .ts-host-name{ font-family:'Bodoni Moda', serif; font-size:17px; line-height:1.2; }
+.ts-host-link:hover .ts-host-name{ text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:1px; }
+.ts-host-link .ts-host-label{ margin-bottom:2px; }
+.ts-host-link .ts-host-badges{ margin-top:7px; gap:8px; flex-wrap:wrap; }
+.ts-host-view{
+  display:inline-flex; align-items:center; height:24px; padding:0 11px; border-radius:999px;
+  border:1px solid var(--line-dark); font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+  color:var(--gold-deep); white-space:nowrap; transition:border-color .15s ease, background .15s ease;
+}
+.ts-host-view::after{ content:'\203A'; margin-left:6px; font-size:13px; line-height:1; }
+.ts-host-link:hover .ts-host-view{ border-color:var(--gold-deep); background:#faf6f0; }
+
+body.hp-open{ overflow:hidden; }
+.hp-overlay{ position:fixed; inset:0; z-index:400; background:#fff; overflow-y:auto; display:none; -webkit-overflow-scrolling:touch; }
+.hp-overlay.is-open{ display:block; }
+.hp-close{
+  position:fixed; top:calc(16px + env(safe-area-inset-top, 0px)); right:18px; z-index:2;
+  width:40px; height:40px; border-radius:50%; border:none; cursor:pointer;
+  background:rgba(28,26,23,0.85); color:#fff; font-size:22px; line-height:1;
+}
+.hp-body{ max-width:760px; margin:0 auto; padding:84px 28px 72px; color:var(--ink); }
+.hp-head{ display:flex; align-items:center; gap:26px; padding-bottom:30px; border-bottom:1px solid var(--line-dark); }
+.hp-photo{ width:112px; height:112px; border-radius:50%; object-fit:cover; flex:0 0 auto; border:3px solid #fff; box-shadow:0 0 0 2px var(--gold); }
+.hp-initial{ display:flex; align-items:center; justify-content:center; background:var(--gold-deep); color:#fff; font-family:'Bodoni Moda', serif; font-size:42px; }
+.hp-eyebrow{ font-size:10.5px; letter-spacing:0.18em; text-transform:uppercase; color:var(--gold-deep); margin-bottom:6px; }
+.hp-name{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:36px; line-height:1.1; margin:0; }
+.hp-meta{ font-size:13px; opacity:0.6; margin-top:6px; }
+.hp-badge{ margin-top:12px; }
+.hp-section{ padding:30px 0; border-bottom:1px solid var(--line-dark); }
+.hp-section:last-child{ border-bottom:none; }
+.hp-title{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:22px; margin:0 0 16px; }
+.hp-facts{ display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; }
+.hp-fact{ display:flex; flex-direction:column; gap:4px; font-size:15px; line-height:1.6; }
+.hp-fact-label, .hp-q{ font-size:10.5px; letter-spacing:0.14em; text-transform:uppercase; opacity:0.5; }
+.hp-answer + .hp-answer{ margin-top:18px; }
+.hp-answer p, .hp-review p{ margin:6px 0 0; font-size:15px; line-height:1.7; white-space:pre-wrap; }
+.hp-chips{ display:flex; flex-wrap:wrap; gap:8px; }
+.hp-chip{ padding:7px 14px; border-radius:999px; border:1px solid var(--line-dark); font-size:13px; }
+.hp-review{ padding:16px 0; border-top:1px solid rgba(28,26,23,0.07); }
+.hp-review:first-of-type{ border-top:none; padding-top:0; }
+.hp-review-head{ display:flex; justify-content:space-between; gap:14px; flex-wrap:wrap; font-size:13px; }
+.hp-review-prop{ font-weight:500; }
+.hp-review-meta{ opacity:0.6; }
+.hp-empty{ font-size:15px; opacity:0.6; padding:24px 0; }
+@media (max-width:640px){
+  .hp-body{ padding:76px 20px 56px; }
+  .hp-head{ flex-direction:column; align-items:flex-start; gap:18px; }
+  .hp-photo{ width:92px; height:92px; }
+  .hp-name{ font-size:30px; }
+  .hp-facts{ grid-template-columns:1fr; }
+}
+.ts-host-link .ts-host-avatar{ width:46px; height:46px; font-family:'Bodoni Moda', serif; font-size:19px; }
+
+/* ---------- ALL-WHITE SITE (Sept 2026) ----------
+   Every page surface is white. What stays warm is deliberate and small:
+   hover tints, chips and badges, photo placeholders — accents, not
+   backgrounds. Cards, panels and inputs separate from the page by their
+   border and shadow instead of by a tinted ground. */
+.pill-search, .search-bar, .filter-bar{ background:#fff; }
+.sticky-back-bar{ background:rgba(255,255,255,0.94); }
+.mobile-nav-panel{ background:#fff; }
+.nav-account-menu, .category-item-submenu, .currency-menu, .nav-notif-panel{ background:#fff; }
+.inbox-chat-pane, .inbox-templates-row{ background:#fff; }
+
+/* ---------- ALL-WHITE, PART 2 (Sept 2026) ----------
+   The date pickers and the drop-down panels still painted their own
+   cream (#f4ebe3 written straight into each rule), so the booking
+   calendar on a listing stayed beige. All of them are white now; the
+   selected dates, the range between them and hover tints keep their
+   colours (those rules are more specific and still win). */
+.calendar-dropdown, .calendar-dropdown-close,
+.calendar-months, .calendar-month-panel, .calendar-month-header,
+.cal-nav, .calendar-weekdays, .calendar-grid,
+.calendar-day, .calendar-day.empty,
+.guests-dropdown, .more-filters-dropdown, .currency-dropdown,
+.place-suggestions, .bedroom-tab, .rr-action{
+  background-color:#fff;
+}
+
+/* Host profile: overall rating under the name, and "Show more reviews". */
+.hp-rating{ display:flex; align-items:baseline; gap:10px; margin-top:14px; flex-wrap:wrap; }
+.hp-rating-score{ font-family:'Bodoni Moda', serif; font-size:28px; line-height:1; }
+.hp-rating-stars span{ color:var(--line-dark); font-size:14px; letter-spacing:1px; }
+.hp-rating-stars span.on{ color:#c9a227; }
+.hp-rating-count{ font-size:11px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.6; }
+.hp-more{
+  margin-top:18px; background:#fff; border:1px solid var(--line-dark); border-radius:999px;
+  padding:10px 20px; font-family:'Jost', sans-serif; font-size:11.5px; letter-spacing:0.12em;
+  text-transform:uppercase; cursor:pointer; color:var(--ink);
+}
+.hp-more:hover{ border-color:var(--gold-deep); }
+.hp-more:disabled{ opacity:0.6; cursor:progress; }
+
+/* Host profile: the host's live homes and experiences as small cards. */
+.hp-listings{ display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:16px; }
+.hp-listing{
+  display:flex; flex-direction:column; border:1px solid var(--line-dark); border-radius:12px; overflow:hidden;
+  background:#fff; color:inherit; text-decoration:none; transition:box-shadow .2s ease, border-color .2s ease, transform .2s ease;
+}
+.hp-listing:hover{ border-color:var(--gold); box-shadow:0 8px 22px rgba(28,26,23,0.10); transform:translateY(-2px); }
+.hp-listing img, .hp-listing-ph{ width:100%; aspect-ratio:4/3; object-fit:cover; display:block; background:var(--cream-deep); }
+.hp-listing-body{ display:flex; flex-direction:column; gap:3px; padding:12px 14px 14px; }
+.hp-listing-type{ font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold-deep); }
+.hp-listing-name{ font-family:'Bodoni Moda', serif; font-size:17px; line-height:1.25; }
+.hp-listing-place{ font-size:12.5px; opacity:0.6; }
+.hp-listing-price{ font-size:13.5px; margin-top:4px; }
+@media (max-width:640px){ .hp-listings{ grid-template-columns:1fr 1fr; gap:12px; } .hp-listing-name{ font-size:15px; } }
+
+/* Co-hosting page (index.html?view=cohost). */
+.cohost-row{ display:flex; justify-content:space-between; align-items:center; gap:18px; flex-wrap:wrap; padding:18px 0; border-top:1px solid var(--line-dark); }
+.cohost-row:first-child{ border-top:none; padding-top:0; }
+.cohost-host{ font-family:'Bodoni Moda', serif; font-size:21px; margin-bottom:4px; }
+.cohost-actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.cohost-actions .hp-more{ margin-top:0; }
+.hp-more.cohost-primary{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.cohost-on{ font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold-deep); }
+.cohost-notice{ margin:14px 0 0; padding:12px 16px; border:1px solid var(--line-dark); border-left:3px solid var(--gold); border-radius:10px; font-size:14px; }
+body.is-cohosting{ padding-bottom:70px; }
+
+.cohost-commission{ margin-top:4px; color:var(--gold-deep); }
+.cohost-propose{ display:flex; gap:8px; align-items:center; margin-top:10px; }
+.cohost-propose input{ width:90px; padding:9px 12px; border:1px solid var(--line-dark); border-radius:999px; font-family:'Jost', sans-serif; font-size:14px; }
+.cohost-propose .hp-more{ margin-top:0; }
+
+.cohost-payout-form{ display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px 16px; margin:14px 0 16px; }
+.cohost-payout-form label{ display:flex; flex-direction:column; gap:6px; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.85; }
+.cohost-payout-form label span{ text-transform:none; letter-spacing:0; opacity:0.6; }
+.cohost-payout-form input{ padding:10px 12px; border:1px solid var(--line-dark); border-radius:8px; font-family:'Jost', sans-serif; font-size:15px; letter-spacing:0.02em; text-transform:none; }
+
+/* ---------- FOOTER, SECOND RESTYLE (Sept 2026) ----------
+   Brand block left, three short columns right, a thin gold rule, then the
+   copyright line. Reach Us is the email only, with Instagram and Facebook
+   as quiet round icons beneath it. */
+footer{ padding:80px 0 34px; }
+footer .foot-top{ display:grid; grid-template-columns:minmax(260px, 1.3fr) 2fr; gap:64px; align-items:start; }
+footer .foot-cols{ display:grid; grid-template-columns:repeat(3, 1fr); gap:40px; }
+footer .foot-grid{ display:none; } /* the earlier layout, if cached CSS meets new markup */
+.foot-brand p{ font-size:14px; line-height:1.85; opacity:0.62; max-width:360px; margin:0; }
+footer h4{ font-size:10.5px; letter-spacing:0.2em; font-weight:500; text-transform:uppercase; color:var(--gold); margin:0 0 22px; }
+footer ul{ list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:14px; }
+footer ul a{ font-size:14.5px; opacity:0.75; color:var(--cream); text-decoration:none; transition:opacity .2s ease; }
+footer ul a:hover{ opacity:1; }
+.foot-mail{ letter-spacing:0.02em; }
+.foot-social{ display:flex; gap:12px; margin-top:22px; }
+.foot-social-link{
+  width:40px; height:40px; border-radius:50%; border:1px solid rgba(244,235,227,0.28);
+  display:inline-flex; align-items:center; justify-content:center; color:var(--cream);
+  transition:border-color .2s ease, background .2s ease, transform .2s ease;
+}
+.foot-social-link:hover{ border-color:var(--gold); background:rgba(169,136,79,0.12); transform:translateY(-2px); }
+.foot-social-link svg{ width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linejoin:round; }
+.foot-social-link svg .dot{ fill:currentColor; stroke:none; }
+.foot-social-link svg path{ fill:currentColor; stroke:none; }
+/* No address yet → not shown at all, rather than a link to nowhere. */
+.foot-social-link[href=""], .foot-social-link:not([href]){ display:none; }
+footer .foot-bottom{
+  margin-top:64px; padding-top:24px; border-top:1px solid rgba(169,136,79,0.35);
+  display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  font-size:11.5px; letter-spacing:0.1em; opacity:0.55;
+}
+.foot-bottom-right{ text-transform:uppercase; letter-spacing:0.3em; }
+@media (max-width:980px){
+  footer .foot-top{ grid-template-columns:1fr; gap:44px; }
+}
+@media (max-width:560px){
+  footer{ padding:60px 0 28px; }
+  footer .foot-cols{ grid-template-columns:1fr 1fr; gap:32px 24px; }
+  footer .foot-cols .foot-col:last-child{ grid-column:1 / -1; }
+  footer .foot-bottom{ flex-direction:column; align-items:flex-start; margin-top:44px; }
+}
+
+/* ---------- POLICIES PAGE (Sept 2026) ---------- */
+#policiesView{ background:#fff; }
+.policies-wrap{ max-width:820px; }
+.policies-title{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:44px; margin:0 0 6px; }
+.policies-updated{ font-size:13px; opacity:0.6; margin:0 0 26px; }
+.policies-tabs{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:30px; }
+.policies-tab{
+  background:#fff; border:1px solid var(--line-dark); border-radius:999px; padding:10px 20px; cursor:pointer;
+  font-family:'Jost', sans-serif; font-size:13px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink);
+}
+.policies-tab.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.policy-section{ padding:22px 0; border-top:1px solid var(--line-dark); }
+.policy-section h2{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:24px; margin:0 0 12px; }
+.policy-section ul{ margin:0; padding-left:20px; }
+.policy-section li{ font-size:16px; line-height:1.7; margin:6px 0; }
+.policy-states{ margin-top:14px; display:flex; flex-direction:column; gap:10px; }
+.policy-state{ display:flex; flex-direction:column; gap:2px; font-size:15.5px; line-height:1.6; padding:10px 14px; border:1px solid var(--line-dark); border-radius:10px; }
+.policy-state strong{ font-weight:600; }
+.policy-note{ font-size:15px; opacity:0.75; margin:18px 0 0; }
+.policy-note a{ color:var(--gold-deep); }
+.foot-policies{ color:inherit; text-decoration:underline; text-underline-offset:3px; }
+@media (max-width:640px){ .policies-title{ font-size:34px; } .policy-section li{ font-size:15.5px; } }
+
+/* Booking picker: one card per pet (type, service animal Yes/No, young ones). */
+.lg-pet-list{ flex-direction:column; gap:10px; margin:6px 0 10px; }
+.lg-pet-card{ border:1px solid var(--line-dark); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:10px; background:#fff; }
+.lg-pet-head{ font-size:12px; letter-spacing:0.12em; text-transform:uppercase; color:var(--gold-deep); }
+.lg-pet-field{ display:flex; flex-direction:column; gap:6px; font-size:14px; }
+.lg-pet-field select{ padding:8px 10px; border:1px solid var(--line-dark); border-radius:8px; background:#fff; font-family:inherit; font-size:14px; }
+.lg-pet-yesno{ display:flex; gap:6px; }
+.lg-yn{ flex:1; padding:8px 10px; border:1px solid var(--line-dark); border-radius:999px; background:#fff; font-family:inherit; font-size:13.5px; cursor:pointer; }
+.lg-yn.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.lg-pet-note{ font-size:13.5px; margin:0 0 8px; opacity:0.8; }
+.lg-pet-error{ font-size:13.5px; color:#a3402f; margin:0 0 8px; }
+
+/* Agreements above Book / Submit buttons. */
+.agreement-box{ border:1px solid var(--line-dark); border-radius:10px; padding:14px 16px; margin:14px 0 12px; background:#fff; text-align:left; }
+.agreement-title{ font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold-deep); margin-bottom:8px; }
+.agreement-box ul{ margin:0 0 12px; padding-left:18px; max-height:180px; overflow:auto; }
+.agreement-box li{ font-size:13.5px; line-height:1.6; margin:4px 0; }
+.agreement-accept{ display:flex; gap:10px; align-items:flex-start; font-size:14px; line-height:1.5; cursor:pointer; }
+.agreement-accept input{ margin-top:3px; width:18px; height:18px; flex:0 0 auto; }
+.agreement-link{ display:inline-block; margin-top:8px; font-size:13px; color:var(--gold-deep); }
+
+/* ---------- Message templates (Guest Info & Templates) ---------- */
+.tpl-h{ font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold-deep); font-weight:500; margin:18px 0 10px; }
+.tpl-hint{ font-size:13.5px; opacity:0.7; margin:6px 0; line-height:1.5; }
+.tpl-lib-item, .tpl-item{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:12px 0; border-bottom:1px solid var(--line-dark); }
+.tpl-lib-text, .tpl-item-text{ display:flex; flex-direction:column; gap:3px; min-width:0; }
+.tpl-lib-text strong, .tpl-item-text strong{ font-size:15px; font-weight:600; }
+.tpl-lib-text span, .tpl-when{ font-size:13px; color:var(--gold-deep); }
+.tpl-body{ font-size:14px; opacity:0.75; white-space:pre-wrap; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.tpl-item-actions{ display:flex; gap:6px; flex:0 0 auto; }
+.tpl-btn{ min-height:40px; padding:8px 14px; border:1px solid var(--line-dark); border-radius:999px; background:#fff; font-family:'Jost', sans-serif; font-size:13px; letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; color:var(--ink); display:inline-flex; align-items:center; justify-content:center; }
+.tpl-btn.primary{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.tpl-btn:disabled{ opacity:0.55; cursor:default; }
+.tpl-form{ margin-top:18px; padding-top:6px; border-top:1px solid var(--line-dark); display:flex; flex-direction:column; gap:6px; }
+.tpl-label{ font-size:13px; font-weight:600; margin-top:8px; }
+.tpl-input{ width:100%; box-sizing:border-box; padding:11px 12px; border:1px solid var(--line-dark); border-radius:8px; font-family:'Jost', sans-serif; font-size:15px; background:#fff; }
+textarea.tpl-input{ resize:vertical; line-height:1.55; }
+.tpl-chips{ display:flex; flex-wrap:wrap; gap:6px; }
+.tpl-chip{ padding:7px 11px; border:1px solid var(--line-dark); border-radius:999px; background:#fff; font-size:13px; font-family:ui-monospace, Menlo, monospace; cursor:pointer; }
+.tpl-props{ display:flex; flex-direction:column; gap:8px; }
+.tpl-check{ display:flex; align-items:center; gap:10px; font-size:14.5px; cursor:pointer; min-height:36px; }
+.tpl-check input{ width:18px; height:18px; }
+.tpl-actions{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+.tpl-msg{ font-size:14px; margin:8px 0 0; }
+/* Phones: the panel takes the whole screen; 16px inputs stop iOS zooming. */
+@media (max-width:640px){
+  #inboxTemplatesPanel{ position:fixed !important; inset:0 !important; z-index:1200 !important; padding-bottom:env(safe-area-inset-bottom, 0px); }
+  #inboxTemplatesTab{ padding:14px 16px 40px !important; }
+  .tpl-input, textarea.tpl-input, select.tpl-input{ font-size:16px; }
+  .tpl-item{ flex-direction:column; }
+  .tpl-item-actions{ width:100%; }
+  .tpl-item-actions .tpl-btn{ flex:1; }
+  .tpl-actions .tpl-btn{ flex:1; min-height:46px; }
+  .tpl-chip{ padding:9px 12px; font-size:14px; }
+}
+
+/* Simple template editor: Create button, list, form with a placeholder list. */
+.tpl-create{ width:100%; min-height:46px; margin:4px 0 8px; }
+.tpl-hint-inline{ font-weight:400; opacity:0.6; margin-left:6px; font-size:12.5px; }
+.tpl-ph{ border:1px solid var(--line-dark); border-radius:10px; padding:10px 12px; margin-top:8px; }
+.tpl-ph-list{ display:flex; flex-direction:column; max-height:220px; overflow:auto; margin-top:6px; }
+.tpl-ph-row{ display:flex; gap:10px; align-items:baseline; text-align:left; background:none; border:none; border-top:1px solid #f0e9df; padding:9px 2px; cursor:pointer; font-family:'Jost', sans-serif; font-size:14px; color:var(--ink); }
+.tpl-ph-row:first-child{ border-top:none; }
+.tpl-ph-row code{ font-family:ui-monospace, Menlo, monospace; font-size:13px; color:var(--gold-deep); min-width:118px; }
+.tpl-ph-row:hover{ background:#faf8f5; }
+@media (max-width:640px){ .tpl-ph-list{ max-height:none; } .tpl-ph-row{ padding:11px 2px; } }
+
+/* Aerva Privacy page */
+#privacyView{ background:#fff; }
+.privacy-eyebrow{ font-size:13px; letter-spacing:0.08em; opacity:0.6; margin-bottom:6px; }
+.privacy-intro{ font-size:17px; line-height:1.7; margin:10px 0 6px; max-width:720px; }
+
+/* Terms of Service: the bordered notice at the top, and the line under
+   every login / sign-up button. */
+.legal-notice{ border:1px solid var(--line-dark); border-radius:14px; padding:16px 20px; margin:18px 0 22px; font-size:15.5px; line-height:1.65; background:#fff; }
+.terms-note{ font-size:12.5px; line-height:1.6; opacity:0.75; margin:12px 0 0; text-align:center; }
+.terms-note a{ color:inherit; text-decoration:underline; text-underline-offset:2px; }
+
+/* Policy Center list, and the Terms version heading / notice links. */
+.policy-index{ display:flex; flex-direction:column; border-top:1px solid var(--line-dark); }
+.policy-index-item{ display:flex; flex-direction:column; gap:3px; padding:16px 2px; border-bottom:1px solid var(--line-dark); color:inherit; text-decoration:none; }
+.policy-index-item:hover .policy-index-title{ text-decoration:underline; text-underline-offset:3px; }
+.policy-index-title{ font-size:17px; font-weight:500; }
+.policy-index-summary{ font-size:14.5px; opacity:0.7; line-height:1.5; }
+.policy-back{ margin:0 0 8px; font-size:14px; }
+.policy-back a{ color:var(--gold-deep); }
+.legal-notice p{ margin:4px 0; }
+.legal-notice ul{ margin:6px 0 2px; padding-left:22px; }
+.legal-notice li{ margin:4px 0; }
+.legal-notice a{ color:inherit; text-decoration:underline; text-underline-offset:2px; font-weight:500; }
+.legal-notice a[aria-current]{ color:var(--gold-deep); }
+.terms-version{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:26px; margin:22px 0 10px; }
+
+/* ---------- Search card filters on phones (Sept 2026) ----------
+   An earlier phone rule for this panel was overridden by the desktop rule
+   written after it, so on phones the panel kept its desktop left border,
+   refused to shrink, and ran past the card's right edge. This block is
+   last in the file, so it wins. Two equal columns (More Filters, Near
+   Me), Clear filters centred below; edges line up with the search button. */
+@media (max-width:640px){
+  .pill-search .filter-bar{
+    border-left:none; border-top:none;          /* the Who row already draws the line above */
+    padding:16px 20px 4px; margin:0; box-sizing:border-box;
+    width:100%; max-width:100%; flex:0 0 auto; align-self:stretch;
+    display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; align-items:center;
+    background:transparent;
+  }
+  .pill-search .filter-bar .more-filters-wrapper{ grid-column:1; grid-row:1; min-width:0; }
+  .pill-search .filter-bar #showDistanceBtn{ grid-column:2; grid-row:1; }
+  .pill-search .filter-bar .more-filters-btn,
+  .pill-search .filter-bar #showDistanceBtn{
+    width:100%; min-width:0; min-height:46px; margin:0; padding:0 10px; box-sizing:border-box;
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    white-space:nowrap; font-size:14px; letter-spacing:0.02em;
+  }
+  .pill-search .filter-bar .more-filters-btn svg,
+  .pill-search .filter-bar #showDistanceBtn svg{ flex:0 0 auto; }
+  .pill-search .filter-bar #clearFiltersBtn{ grid-column:1 / -1; grid-row:2; justify-self:center; margin:0; padding:6px 0; }
+  .pill-search-submit{ width:auto; align-self:stretch; margin:12px 20px 18px; }
+}
+
+/* Coupon rule under the coupon field at checkout. */
+.coupon-rule{ font-size:12.5px; line-height:1.5; opacity:0.7; margin:6px 0 0; }
+
+/* ---------- Payout summary (index.html?payout=<id>) ---------- */
+.payout-overlay{ position:fixed; inset:0; z-index:3000; background:rgba(20,18,15,0.45); display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:40px 16px; }
+.payout-sheet{ position:relative; width:100%; max-width:520px; background:#fff; border-radius:18px; padding:28px 22px 24px; box-shadow:0 20px 60px rgba(0,0,0,0.18); }
+.payout-close{ position:absolute; top:12px; right:14px; background:none; border:none; font-size:28px; line-height:1; cursor:pointer; color:var(--ink); }
+.payout-hero{ text-align:center; margin:8px 0 18px; }
+.payout-amount{ font-family:'Bodoni Moda', Georgia, serif; font-size:44px; font-weight:500; }
+.payout-card{ border:1px solid #e6dccd; border-radius:16px; padding:6px 20px 16px; margin-top:14px; }
+.payout-row{ padding:14px 0; border-bottom:1px solid #f0e9df; }
+.payout-row:last-child{ border-bottom:none; }
+.payout-status{ font-size:16px; font-weight:500; display:flex; align-items:center; gap:8px; }
+.payout-dot{ width:9px; height:9px; border-radius:50%; background:#3a7d44; display:inline-block; }
+.payout-label{ font-size:15px; font-weight:600; }
+.payout-muted{ font-size:14.5px; opacity:0.72; margin-top:3px; line-height:1.5; }
+.payout-ref{ word-break:break-all; }
+.payout-guest{ font-family:'Bodoni Moda', Georgia, serif; font-size:24px; text-align:center; margin-top:14px; }
+.payout-center{ text-align:center; }
+.payout-line{ display:flex; justify-content:space-between; gap:12px; font-size:15px; padding:6px 0; }
+.payout-total{ border-top:1px solid #e6dccd; margin-top:8px; padding-top:12px; font-weight:600; }
+@media (max-width:640px){ .payout-overlay{ padding:0; align-items:stretch; } .payout-sheet{ border-radius:0; min-height:100%; padding-top:52px; } }
+
+/* My Bookings: cancellation request status */
+.booking-request-note{ display:inline-block; font-size:13px; opacity:0.75; margin-top:8px; }
+
+/* ---------- Co-hosting page: Your co-hosts ---------- */
+.cohost-team-card{ border:1px solid var(--line-dark, #e6dccd); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
+.cohost-team-head{ display:flex; gap:14px; align-items:center; margin-bottom:10px; }
+.cohost-team-photo{ width:52px; height:52px; border-radius:50%; object-fit:cover; flex:0 0 52px; }
+.cohost-team-initial{ display:flex; align-items:center; justify-content:center; background:#f1ede6; color:#8a6c39; font-family:'Bodoni Moda', serif; font-size:22px; }
+.cohost-team-name{ font-size:17px; font-weight:500; }
+.cohost-team-tag{ display:inline-block; font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:#f1ede6; color:#6b6358; margin-left:6px; vertical-align:middle; }
+.cohost-team-tag.is-active{ background:#e6f1e8; color:#3a7d44; }
+.cohost-team-profile{ margin:0 0 8px; font-size:14.5px; }
+.cohost-team-profile p{ margin:3px 0; }
+.cohost-team-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.cohost-team-actions a.hp-more{ text-decoration:none; display:inline-block; }
+.cohost-invite-form{ display:flex; flex-direction:column; gap:12px; margin-top:12px; max-width:520px; }
+.cohost-invite-form[hidden], .cohost-invite-group[hidden]{ display:none; }
+.cohost-invite-form label{ display:flex; gap:8px; align-items:center; font-size:15px; }
+.cohost-invite-form > label{ flex-direction:column; align-items:stretch; gap:6px; }
+.cohost-invite-form input[type="email"]{ padding:11px 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; }
+.cohost-invite-group{ display:flex; flex-direction:column; gap:6px; }
+.cohost-invite-group > span{ font-size:13px; letter-spacing:0.04em; color:#8a6c39; }
+
+/* Your co-hosts: listing-by-listing access, "already co-hosted" summary */
+.cohost-access-table{ border:1px solid var(--line-dark, #e6dccd); border-radius:10px; margin:10px 0; overflow:hidden; font-size:14.5px; }
+.cohost-access-head, .cohost-access-row{ display:grid; grid-template-columns:1fr 1.4fr; gap:12px; padding:9px 12px; }
+.cohost-access-head{ background:#faf7f2; font-size:12px; letter-spacing:0.06em; text-transform:uppercase; color:#8a6c39; }
+.cohost-access-row + .cohost-access-row, .cohost-access-head + .cohost-access-row{ border-top:1px solid #f0e9df; }
+.cohost-taken{ background:#faf7f2; border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; }
+.cohost-taken > span{ font-size:13px; letter-spacing:0.04em; color:#8a6c39; }
+.cohost-taken-row{ display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; font-size:14.5px; }
+.cohost-taken-row > span{ opacity:0.8; }
+.cohost-step > span{ font-size:14px; font-weight:600; color:var(--ink, #1c1a17); letter-spacing:0; }
+.cohost-team-card .cohost-invite-form{ margin-top:14px; }
+@media (max-width:640px){ .cohost-access-head, .cohost-access-row{ grid-template-columns:1fr; gap:2px; } }
+
+/* Co-hosting forms: every field styled alike (email, phone, text, number, textarea) */
+.cohost-invite-form input[type="tel"],
+.cohost-invite-form input[type="text"],
+.cohost-invite-form input[type="number"],
+.cohost-invite-form textarea{ padding:11px 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; font-family:inherit; background:#fff; color:var(--ink, #1c1a17); width:100%; box-sizing:border-box; }
+.cohost-invite-form textarea{ resize:vertical; line-height:1.5; }
+.cohost-invite-form input:focus, .cohost-invite-form textarea:focus{ outline:none; border-color:#A9885A; }
+.cohost-details .hp-meta{ margin:0 0 6px; }
