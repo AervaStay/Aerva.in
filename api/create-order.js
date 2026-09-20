@@ -65,6 +65,7 @@ const { sanitizeBody } = require('./_plain-text');
 const { AGREEMENT_VERSION } = require('./_agreements');
 const { syncStaleFeeds } = require('./_calendar-sync');
 const { decryptField } = require('./_secure-fields');
+const { releaseDueCoupons } = require('./_coupons');
 const { requestContext } = require('./_audit-log');
 // Fixed platform commission rates — replaces the old per-listing
 // commission_rate column, which is no longer read for new bookings (kept
@@ -781,10 +782,14 @@ module.exports = async (req, res) => {
     // baked into what's actually charged, not just displayed.
     let appliedCouponId = null;
     let appliedCouponDiscount = 0;
+    let couponForfeited = 0;
     if (couponCode && String(couponCode).trim()) {
       if (!guestId) {
         return res.status(400).json({ error: 'Please log in to your account to use a coupon.' });
       }
+      // A cancellation coupon whose 15 minutes are up is released first, so a
+      // guest applying it right away is never told it is invalid.
+      await releaseDueCoupons(sql, { force: true });
       const cleanCode = String(couponCode).trim().toUpperCase();
       const couponRows = await sql`
         SELECT id, guest_id, amount, status, expires_at FROM coupons WHERE code = ${cleanCode}
@@ -797,14 +802,19 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'This coupon is not valid for your account.' });
       }
       if (coupon.status !== 'active') {
-        return res.status(400).json({ error: coupon.status === 'redeemed' ? 'This coupon has already been used.' : 'This coupon is no longer valid.' });
+        return res.status(400).json({ error: coupon.status === 'redeemed' ? 'This coupon has already been used.' : coupon.status === 'scheduled' ? 'This coupon is not active yet. It is released 15 minutes after the cancellation.' : 'This coupon is no longer valid.' });
       }
       if (new Date(coupon.expires_at) < new Date()) {
         return res.status(400).json({ error: 'This coupon has expired.' });
       }
-      // Never let a coupon discount a booking below zero, and never
-      // discount more than the coupon is actually worth.
-      appliedCouponDiscount = Math.min(Number(coupon.amount), totalRupees);
+      // A coupon covers the BOOKING PRICE only (stays and experiences,
+      // including amenities and pet fees). The guest service fee, GST and
+      // any security deposit are always paid in full, on the full price.
+      // If the coupon is worth more than the booking price, the unused
+      // part is forfeited: not refunded, not carried over (Aerva income,
+      // recorded on the coupon when payment is confirmed).
+      appliedCouponDiscount = Math.min(Math.round(Number(coupon.amount)), Math.round(grandSubtotal));
+      couponForfeited = Math.max(0, Math.round(Number(coupon.amount)) - appliedCouponDiscount);
       appliedCouponId = coupon.id;
       totalRupees = Math.max(0, totalRupees - appliedCouponDiscount);
     }
@@ -860,6 +870,7 @@ module.exports = async (req, res) => {
         chargeAmount: chargeAmount || '',
         couponId: appliedCouponId || '',
         couponDiscount: appliedCouponDiscount || '',
+        couponForfeited: couponForfeited || '',
         agreement: agreementNote,
         // Razorpay notes have a size limit we haven't hit in practice yet,
         // but amenities make this payload meaningfully bigger than before
@@ -898,6 +909,7 @@ module.exports = async (req, res) => {
       totalDeposit: grandDeposit,
       gst,
       couponDiscount: appliedCouponDiscount || 0,
+      couponForfeited: couponForfeited || 0,
     });
   } catch (err) {
     console.error('create-order error:', err);

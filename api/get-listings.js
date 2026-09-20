@@ -68,6 +68,7 @@ const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIER
 const { verifyToken, secretMatches } = require('./_approval-token');
 const { buildIcs, syncStaleFeeds } = require('./_calendar-sync');
 const { sendScheduledTemplates } = require('./_template-scheduling');
+const { releaseDueCoupons } = require('./_coupons');
 const { decryptField } = require('./_secure-fields');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
@@ -480,6 +481,16 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  // ---- Cancellation coupons: release any whose 15 minutes are up ----
+  // GET ?releaseCoupons=1 (cron secret) — for an external pinger every few
+  // minutes (e.g. cron-job.org) so coupons go out right on time. Every
+  // other request here also runs the (throttled) check below.
+  if (req.method === 'GET' && req.query.releaseCoupons === '1') {
+    if (!isCronAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(200).json(await releaseDueCoupons(sql, { force: true }));
+  }
+  if (req.method === 'GET') await releaseDueCoupons(sql);
+
   // ---- Calendar export: GET ?ical=<secret token> ----
   // A listing's (or resort room's) calendar for Airbnb, Agoda, Booking.com,
   // Vrbo…: dates booked on Aerva and dates the host blocked. Dates imported
@@ -554,6 +565,7 @@ module.exports = async (req, res) => {
     // Timed message templates due today (before check-in, check-in day,
     // check-out day, after check-out) — see _template-scheduling.js.
     const scheduledMessages = await sendScheduledTemplates(sql, { deadlineMs: 6000 });
+    const couponRelease = await releaseDueCoupons(sql, { force: true });
     try {
       // Both sides in — release the pair together.
       const pairs = await sql`
@@ -682,6 +694,7 @@ module.exports = async (req, res) => {
       const summary = {
         calendarSync,
         scheduledMessages,
+        couponRelease,
         publishedPaired: pairs.length + pairsBack.length,
         publishedLapsed: lapsedListing.length + lapsedGuest.length,
         prompted: promptedCount,

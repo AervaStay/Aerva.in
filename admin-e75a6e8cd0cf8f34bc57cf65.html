@@ -379,6 +379,10 @@
     <h2 style="font-family:Georgia,serif; font-weight:normal;">Co-host payout details to review</h2>
     <p style="opacity:0.7; font-size:14px;">PAN, GSTIN and bank account a co-host has entered. A co-host is only paid while these are approved.</p>
     <div id="payoutProfilesList"><p style="opacity:0.6;">Loading…</p></div>
+    <p id="couponForfeitLine" style="margin-top:28px; font-size:14.5px;"></p>
+    <h2 style="font-family:Georgia,serif; font-weight:normal; margin-top:40px;">Cancellation coupons to deduct from hosts</h2>
+    <p style="opacity:0.7; font-size:14px;">When a host or co-host cancels without paying for the guest’s 10% coupon, the coupon still goes to the guest and whoever cancelled owes the amount: from the host’s next payout, or from the co-host’s own share. Deduct it, then mark it recovered. Over 6 months unrecovered: decide whether to chase it or write it off.</p>
+    <div id="penaltiesList"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="font-family:Georgia,serif; font-weight:normal; margin-top:40px;">Booking payouts</h2>
     <p style="opacity:0.7; font-size:14px;">The 200 most recent paid bookings: the host payout (after Aerva’s commission), each co-host’s share, and what the host keeps, with where each is paid. “Hold” means that person’s bank details are not approved yet.</p>
     <div id="payoutsList"><p style="opacity:0.6;">Loading…</p></div>
@@ -1477,17 +1481,41 @@
             <button class="reject-btn" onclick="reviewCohostPayout(${Number(p.guestId)}, false)">Reject</button>
           </div>
         </div>`).join('') : '<p style="opacity:0.6;">Nothing waiting.</p>';
+      document.getElementById('couponForfeitLine').textContent = 'Unused coupon balances kept by Aerva (coupons worth more than the booking price): ' + payInr(data.couponForfeitTotal || 0);
+      const pens = data.penalties || [];
+      document.getElementById('penaltiesList').innerHTML = pens.length ? pens.map(p => `
+        <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;${p.overSixMonths ? ' border-left:3px solid #a3402f;' : ''}">
+          ${p.payer === 'cohost' ? `Co-host <strong>${escAdmin(p.payerName)}</strong> (for host ${escAdmin(p.hostName || '')})` : `<strong>${escAdmin(p.hostName || 'Host #' + p.hostId)}</strong>`} owes <strong>${payInr(p.amount)}</strong>
+          · cancelled ${escAdmin(p.booking || '')} (booking #${Number(p.orderId) || '—'}) on ${payDate(p.createdAt)}
+          ${p.overSixMonths ? '<span style="color:#a3402f;"> · over 6 months — decide</span>' : ''}
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button class="approve-btn" onclick="settlePenalty(${Number(p.id)}, 'recovered')">Recovered from payout</button>
+            <input type="text" id="penaltyNote${Number(p.id)}" placeholder="Reason, if writing off" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:220px;">
+            <button class="reject-btn" onclick="settlePenalty(${Number(p.id)}, 'written_off')">Write off</button>
+          </div>
+        </div>`).join('') : '<p style="opacity:0.6;">Nothing to deduct.</p>';
       const rows = data.payouts || [];
       listEl.innerHTML = rows.length ? rows.map(o => `
         <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;">
           <div><strong>${escAdmin(o.listing || '')}</strong> · ${payDate(o.arrival)} → ${payDate(o.departure)} · booking #${Number(o.orderId)}</div>
           <div style="opacity:0.75; margin:4px 0;">Guest paid ${payInr(o.total)} · Aerva commission ${payInr(o.commission)} · host payout ${payInr(o.hostPayout)}</div>
-          ${(o.cohosts || []).map(c => `<div>Co-host <strong>${escAdmin(c.name)}</strong> (${Number(c.percent)}%) — <strong>${payInr(c.amount)}</strong> → ${payeeLine(c)}</div>`).join('')}
+          ${(o.cohosts || []).map(c => `<div>Co-host <strong>${escAdmin(c.name)}</strong> (${Number(c.percent)}%) — <strong>${payInr(c.amount)}</strong> → ${payeeLine(c)}</div>${c.penaltyToDeduct ? `<div style="color:#a3402f;">Deduct ${payInr(c.penaltyToDeduct)} (cancellation coupons) from this co-host’s share, then mark it recovered above.</div>` : ''}`).join('')}
           <div>Host <strong>${escAdmin(o.host && o.host.name || '')}</strong> — <strong>${payInr(o.hostNet)}</strong> → ${payeeLine(o.host)}</div>
+          ${o.penaltyToDeduct ? `<div style="color:#a3402f;">Deduct ${payInr(o.penaltyToDeduct)} (cancellation coupons) from this payout, then mark it recovered above.</div>` : ''}
         </div>`).join('') : '<p style="opacity:0.6;">No paid bookings yet.</p>';
     }catch(err){
       profilesEl.innerHTML = listEl.innerHTML = '<p style="color:#a3402f;">' + escAdmin(err.message) + '</p>';
     }
+  }
+  async function settlePenalty(id, action){
+    const noteEl = document.getElementById('penaltyNote' + id);
+    const note = noteEl ? noteEl.value.trim() : '';
+    if(action === 'written_off' && !note){ alert('Please give a reason for writing this off.'); return; }
+    if(!confirm(action === 'recovered' ? 'Mark this as recovered from the host’s payout?' : 'Write this off as Aerva’s loss?')) return;
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ settleHostPenalty: { id, action, note } }) });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok){ alert(data.error || 'Could not save.'); return; }
+    loadPayouts();
   }
   async function reviewCohostPayout(guestId, approve){
     const reasonEl = document.getElementById('payoutReject' + guestId);
@@ -1573,8 +1601,9 @@
       + '<div class="pol-sec pol-open"><h3>Open items</h3>' + list(P.openItems) + '</div>'
       + block('Admin notes', P.adminNotes)
       + (P.agreements ? block('Agreements (version ' + P.agreements.version + ')', [P.agreements.guest, P.agreements.host]) : '')
-      + block('Guest policy', P.guest)
-      + block('Host policy', P.host)
+      + (P.terms ? block('Terms of Service — all versions', P.terms.common.concat(...P.terms.regions.map(r => (P.terms.specific[r.id] || []).map(x => ({ title: r.label + ': ' + x.title, points: x.points }))))) : '')
+      + (P.privacy ? block('Privacy — ' + P.privacy.title, P.privacy.sections) : '')
+      + (P.documents ? block('Policy documents', P.documents.map(d => ({ title: d.title, points: d.sections.flatMap(x => x.points) }))) : '')
       + '<h2 class="pol-h">Local laws</h2><p style="opacity:0.7;">' + escAdmin(P.localLaws.note) + '</p>'
       + P.localLaws.countries.map(c => '<div class="pol-sec"><h3>' + escAdmin(c.country) + '</h3>' + list(c.points)
           + (c.states ? list(c.states.map(st => st.state + ': ' + st.text)) : '') + '</div>').join('');

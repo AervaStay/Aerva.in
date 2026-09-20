@@ -75,6 +75,7 @@ const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
+const { COUPON_RELEASE_DELAY_MINUTES, sendCouponEmail } = require('./_coupons');
 const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
@@ -130,41 +131,7 @@ async function sendCancellationEmail(order){
   }
 }
 
-async function sendCouponEmail(coupon, code, expiresAt){
-  if (!process.env.RESEND_API_KEY) {
-    console.error('RESEND_API_KEY not set — guest will not receive their coupon.');
-    return;
-  }
-  const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
-  const expiresLabel = expiresAt.toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
-  const html = `
-    <div style="font-family:sans-serif; max-width:480px;">
-      <h2 style="font-family:Georgia,serif;">You've received an Aerva coupon</h2>
-      <p>Your host for <strong>${coupon.suite_name}</strong> has issued you a coupon worth <strong>${fmt(coupon.amount)}</strong>.</p>
-      <p style="background:#f4eadc; padding:16px; text-align:center; font-size:20px; letter-spacing:0.05em; font-weight:600;">${code}</p>
-      <p>Apply this code at checkout on any Aerva stay or experience. Valid until <strong>${expiresLabel}</strong> (3 months from today).</p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this coupon? Contact hello@aerva.in.</p>
-    </div>
-  `;
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      from: 'Aerva <hello@aerva.in>',
-      to: coupon.guest_email,
-      subject: 'You\'ve received an Aerva coupon',
-      html
-    })
-  });
-  if (!res.ok) {
-    let detail;
-    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
-    console.error('Resend send failed (coupon notice):', res.status, detail);
-  }
-}
+// sendCouponEmail now lives in _coupons.js (shared with the automatic release).
 const SITE_BASE = 'https://aerva.in';
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
@@ -278,6 +245,8 @@ const COHOST_ACTIONS = {
   removePromotionDay: { perm: 'rates', promotionFrom: b => b.promotionId },
   cancelBooking:      { perm: 'cancel', orderFrom: b => b.orderId },
   cancelWithCoupon:   { perm: 'cancel', orderFrom: b => b.orderId },
+  buyCouponOrder:     { perm: 'cancel', orderFrom: b => b.bookingId },
+  verifyCouponPayment:{ perm: 'cancel', couponFrom: b => b.couponId },
   raiseDispute:       { perm: FULL_ONLY, orderFrom: b => b.orderId },
   reviewGuest:        { perm: FULL_ONLY, orderFrom: b => b.orderId }
 };
@@ -302,6 +271,8 @@ async function cohostGate(req, res, accountId) {
     const q = req.query || {};
     if (q.analytics === '1') { perm = 'analytics'; mode = 'analytics'; }
     else if (q.statusCalendar === '1') { perm = 'calendar'; mode = 'statusCalendar'; }
+    // The co-host's own cancellation-coupon deductions (never the host's).
+    else if (q.myPenalties === '1') { perm = 'cancel'; mode = 'myPenalties'; }
     else if (q.guestProfileForOrder !== undefined) {
       perm = 'bookings'; mode = 'guestProfile';
       const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(q.guestProfileForOrder) || 0}`;
@@ -320,6 +291,10 @@ async function cohostGate(req, res, accountId) {
     if (rule.orderFrom) {
       const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(rule.orderFrom(payload)) || 0}`;
       listingId = o[0] ? o[0].listing_id : -1;
+    }
+    if (rule.couponFrom) {
+      const cr = await sql`SELECT o.listing_id FROM coupons c JOIN orders o ON o.id = c.source_order_id WHERE c.id = ${Number(rule.couponFrom(payload)) || 0}`;
+      listingId = cr[0] ? cr[0].listing_id : -1;
     }
     if (rule.promotionFrom) {
       const pr = await sql`SELECT listing_id FROM listing_promotions WHERE id = ${Number(rule.promotionFrom(payload)) || 0}`;
@@ -705,6 +680,7 @@ module.exports = async (req, res) => {
   // `let`, not `const`: a co-host request continues below AS the host it
   // is working for, once cohostGate() has checked what it may do.
   let guestId = requireGuestId(req);
+  let cohostActor = null; // set when a co-host acts for the host (?actingHost=)
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
   const accountId = guestId; // the person actually signed in, always
 
@@ -751,6 +727,7 @@ module.exports = async (req, res) => {
     const gate = await cohostGate(req, res, accountId);
     if (!gate) return; // already answered with 403 / 400
     guestId = gate.ctx.ownerGuestId;
+    cohostActor = { cohostId: gate.ctx.cohostId, guestId: accountId };
   }
 
   // ---- Send an OTP to verify a host's phone number ----
@@ -1880,6 +1857,69 @@ module.exports = async (req, res) => {
   // is still a live paid booking, and (if requested) is past the
   // 48-hour check-in cutoff. Returns { error, status } on any failure,
   // or { order, guest } on success — callers check which shape they got.
+  // ---- Host cancellation coupon ----
+  // When a host cancels, they first buy the guest a coupon worth 10% of
+  // what the guest paid for the booking and any linked rooms paid together
+  // (excluding security deposits). The amount is set here, never by the
+  // host. The coupon is held ('reserved') until the booking is cancelled,
+  // then released to the guest ('active', 3 months) and emailed to them.
+  async function cancellationCouponAmount(order, orderId){
+    const rows = order.razorpay_order_id
+      ? await sql`SELECT total, deposit_amount FROM orders WHERE razorpay_order_id = ${order.razorpay_order_id} AND status = 'paid'`
+      : await sql`SELECT total, deposit_amount FROM orders WHERE id = ${orderId}`;
+    const base = rows.reduce((sum, r) => sum + Math.max(0, (Number(r.total) || 0) - (Number(r.deposit_amount) || 0)), 0);
+    return Math.max(1, Math.round(base * 0.10));
+  }
+  // Host chose not to pay now: the coupon is issued straight away (Aerva
+  // fronts it) and the same amount is recorded against the host, to be
+  // deducted from their next payout. Never throws: the refund is done.
+  async function issueCouponChargedToNextPayout(order, orderId, hostId, amount){
+    try {
+      const guestAccount = order.guest_id;
+      if (!amount || !guestAccount) {
+        await logAudit(sql, { action: 'host_cancellation_coupon_skipped', success: false, actorType: 'system', targetType: 'order', targetId: orderId, metadata: { amount, reason: guestAccount ? 'zero amount' : 'no guest account' } });
+        return { amount: 0 };
+      }
+      const code = 'AERVA-' + crypto.randomBytes(5).toString('hex').toUpperCase();
+      // Released to the guest automatically after the delay (_coupons.js).
+      const coupon = (await sql`
+        INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, release_at)
+        VALUES (${code}, ${guestAccount}, ${amount}, ${hostId}, ${orderId}, 'scheduled', now() + make_interval(mins => ${COUPON_RELEASE_DELAY_MINUTES}))
+        RETURNING id
+      `)[0];
+      // Owed by whoever cancelled: the host, or the co-host themselves
+      // (from their own co-host share). Aerva is not involved in any money
+      // between host and co-host.
+      let recorded = false;
+      try {
+        await sql`INSERT INTO host_penalties (host_id, order_id, coupon_id, amount, payer_guest_id, cohost_id)
+                  VALUES (${hostId}, ${orderId}, ${coupon.id}, ${amount}, ${cohostActor ? cohostActor.guestId : null}, ${cohostActor ? cohostActor.cohostId : null})`;
+        recorded = true;
+      } catch (err) {
+        console.error('next-payout deduction not recorded (run migration_host_penalties.sql and migration_coupon_release.sql):', err.message);
+      }
+      await logAudit(sql, { action: 'cancellation_coupon_charged_to_payout', success: recorded, actorType: cohostActor ? 'cohost' : 'system', targetType: 'order', targetId: orderId,
+        metadata: { couponId: coupon.id, amount, hostId, payer: cohostActor ? 'cohost' : 'host', payerGuestId: cohostActor ? cohostActor.guestId : null, deductionRecorded: recorded } });
+      return { amount };
+    } catch (err) {
+      console.error('coupon for next-payout cancellation failed (refund already done):', err);
+      await logAudit(sql, { action: 'host_cancellation_coupon_failed', success: false, actorType: 'system', targetType: 'order', targetId: orderId, metadata: { error: String(err.message).slice(0, 200) } });
+      return { amount: 0 };
+    }
+  }
+  // After a paid-now cancellation: the held coupon is scheduled for the
+  // guest, released automatically after the delay (_coupons.js).
+  async function scheduleCancellationCoupon(couponId, orderId){
+    try {
+      await sql`UPDATE coupons SET status = 'scheduled', release_at = now() + make_interval(mins => ${COUPON_RELEASE_DELAY_MINUTES})
+                WHERE id = ${couponId} AND status = 'reserved'`;
+      await logAudit(sql, { action: 'cancellation_coupon_scheduled', success: true, actorType: 'system', targetType: 'coupon', targetId: couponId, metadata: { orderId, releaseMinutes: COUPON_RELEASE_DELAY_MINUTES } });
+    } catch (err) {
+      console.error('scheduleCancellationCoupon failed (booking already cancelled):', err);
+      await logAudit(sql, { action: 'cancellation_coupon_schedule_failed', success: false, actorType: 'system', targetType: 'coupon', targetId: couponId, metadata: { orderId, error: String(err.message).slice(0, 200) } });
+    }
+  }
+
   async function loadCancellableOrder(orderId, enforceCutoff){
     const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
     const guest = guestRows[0];
@@ -2021,8 +2061,28 @@ module.exports = async (req, res) => {
       const loaded = await loadCancellableOrder(orderId, true);
       if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
 
+      // The guest's 10% coupon is paid for by the host, one of two ways:
+      //  1. up front: buyCouponOrder → verifyCouponPayment (coupon held), or
+      //  2. { payLater: true }: Aerva issues the coupon now and the amount is
+      //     deducted from the host's next payout (host_penalties).
+      // Either way the booking and deposit are refunded in full at once.
+      const held = (await sql`SELECT id, amount FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
+      const payLater = req.body.cancelBooking.payLater === true;
+      if (!held && !payLater) {
+        const amount = await cancellationCouponAmount(loaded.order, orderId);
+        return res.status(402).json({ error: `Choose how to pay the guest’s cancellation coupon (₹${amount.toLocaleString('en-IN')}).`, needsCoupon: true, amount });
+      }
+      const amountLater = held ? 0 : await cancellationCouponAmount(loaded.order, orderId);
+
       await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host');
-      return res.status(200).json({ success: true });
+      // Refund done: now the coupon goes to the guest. The host never sees
+      // its code (it is only emailed to the guest).
+      if (held) {
+        await scheduleCancellationCoupon(held.id, orderId);
+        return res.status(200).json({ success: true, couponAmount: Number(held.amount), paid: 'now', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES });
+      }
+      const issued = await issueCouponChargedToNextPayout(loaded.order, orderId, loaded.guest.host_id, amountLater);
+      return res.status(200).json({ success: true, couponAmount: issued.amount, paid: 'next_payout', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES });
     } catch (err) {
       console.error('host-listings (cancelBooking) error:', err);
       const status = err.isUserFacing ? err.status : 500;
@@ -2036,158 +2096,99 @@ module.exports = async (req, res) => {
   // below) — this is the whole point of the design: the host commits to
   // and pays for the guest's compensation before the cancellation is
   // even allowed to happen, not as a penalty applied afterward.
+  // The old "prioritize a bigger booking" route (host pre-pays a coupon,
+  // then cancels) is replaced: every host cancellation now refunds in full
+  // AND gives the guest a 10% coupon, charged to the host's next payout.
   if (req.method === 'POST' && req.body && req.body.cancelWithCoupon) {
+    return res.status(410).json({ error: 'Use Cancel Booking. The guest now always receives a full refund plus a 10% Aerva coupon.' });
+  }
+
+  // GET ?myPenalties=1 — cancellation coupons to be deducted from this
+  // host's next payout.
+  if (req.method === 'GET' && (req.query || {}).myPenalties === '1') {
     try {
-      const { orderId } = req.body.cancelWithCoupon;
-      if (!orderId) return res.status(400).json({ error: 'Missing booking.' });
-
-      const loaded = await loadCancellableOrder(orderId, true);
-      if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
-
-      const couponRows = await sql`
-        SELECT id FROM coupons
-        WHERE source_order_id = ${orderId} AND status = 'active' AND expires_at > now()
-      `;
-      if (!couponRows[0]) {
-        return res.status(400).json({ error: 'A compensation coupon must be issued to this guest before this booking can be cancelled to prioritize another one. Issue a coupon first.' });
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(200).json({ owed: [], total: 0 });
+      let rows = [];
+      try {
+        rows = cohostActor
+          ? await sql`SELECT p.id, p.amount, p.created_at, o.suite_name FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
+                      WHERE p.payer_guest_id = ${cohostActor.guestId} AND p.status = 'owed' ORDER BY p.created_at`
+          : await sql`SELECT p.id, p.amount, p.created_at, o.suite_name FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
+                      WHERE p.host_id = ${g.host_id} AND p.payer_guest_id IS NULL AND p.status = 'owed' ORDER BY p.created_at`;
+      } catch (err) {
+        try { // before migration_coupon_release.sql: everything is the host's
+          if (!cohostActor) rows = await sql`SELECT p.id, p.amount, p.created_at, o.suite_name FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
+                                             WHERE p.host_id = ${g.host_id} AND p.status = 'owed' ORDER BY p.created_at`;
+        } catch (e2) { /* table not created yet */ }
       }
-
-      await executeCancellationRefund(
-        loaded.order, orderId,
-        'Host prioritized a different booking on this space; guest was issued a compensation coupon before cancellation.',
-        loaded.guest.host_id, 'booking_cancelled_by_host_with_coupon'
-      );
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ owed: rows.map(r => ({ id: r.id, amount: Number(r.amount), createdAt: r.created_at, booking: r.suite_name })),
+                                    total: Math.round(rows.reduce((t, r) => t + Number(r.amount), 0)) });
     } catch (err) {
-      console.error('host-listings (cancelWithCoupon) error:', err);
-      const status = err.isUserFacing ? err.status : 500;
-      return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking right now. Please try again, or contact hello@aerva.in.' });
+      return res.status(500).json({ error: 'Could not load this right now.' });
     }
   }
 
-  // ---- Buy a compensation coupon for a guest (step 1: create the
-  // Razorpay order for the HOST to pay Aerva) ----
-  // This is a genuinely different kind of transaction from everything
-  // else in this codebase — the host is paying Aerva, not a guest paying
-  // for a stay. Creates a 'pending_payment' coupon row now; it only
-  // becomes real and usable once verifyCouponPayment below confirms the
-  // payment actually succeeded.
+  // ---- Step 1 of a host cancellation: buy the guest's 10% coupon ----
+  // POST { buyCouponOrder: { bookingId } } — the amount is worked out here
+  // (cancellationCouponAmount); anything the page sends is ignored.
   if (req.method === 'POST' && req.body && req.body.buyCouponOrder) {
     try {
-      const { bookingId, amount } = req.body.buyCouponOrder;
-      const numAmount = Number(amount);
-      if (!bookingId || !numAmount || numAmount <= 0) {
-        return res.status(400).json({ error: 'Please enter a booking and a valid amount.' });
-      }
-
-      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-      const guest = guestRows[0];
-      if (!guest || !guest.host_id) {
-        return res.status(403).json({ error: 'You do not have permission to do this.' });
-      }
-
-      // Ownership check — the booking this coupon is "against" has to
-      // genuinely belong to this host, same as every other order lookup
-      // in this file.
-      const orderRows = await sql`
-        SELECT o.id, o.guest_id, o.guest_email, o.suite_name
-        FROM orders o
-        JOIN listings l ON o.listing_id = l.id
-        WHERE o.id = ${bookingId} AND l.host_id = ${guest.host_id}
-      `;
-      const sourceOrder = orderRows[0];
-      if (!sourceOrder) {
-        return res.status(403).json({ error: 'That booking ID does not belong to one of your listings.' });
-      }
-      if (!sourceOrder.guest_id) {
-        return res.status(400).json({ error: 'This booking has no linked guest account to issue a coupon to.' });
-      }
-
+      const bookingId = Number((req.body.buyCouponOrder || {}).bookingId) || 0;
+      const loaded = await loadCancellableOrder(bookingId, true);
+      if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
+      if (!loaded.order.guest_id) return res.status(400).json({ error: 'This booking has no guest account to send a coupon to.' });
+      const already = (await sql`SELECT id FROM coupons WHERE source_order_id = ${bookingId} AND status = 'reserved' LIMIT 1`)[0];
+      if (already) return res.status(200).json({ alreadyPaid: true });
+      const amount = await cancellationCouponAmount(loaded.order, bookingId);
       const razorpayOrder = await razorpay.orders.create({
-        amount: Math.round(numAmount * 100), // paise — coupon purchases are always INR, host-side, regardless of what currency the guest was charged in
-        currency: 'INR',
-        receipt: `aerva_coupon_${Date.now()}`,
-        notes: { type: 'host_coupon_purchase', hostId: String(guest.host_id), bookingId: String(bookingId) },
+        amount: amount * 100, currency: 'INR', receipt: `aerva_coupon_${Date.now()}`,
+        notes: { type: 'host_cancellation_coupon', hostId: String(loaded.guest.host_id), bookingId: String(bookingId), paidBy: cohostActor ? 'cohost:' + accountId : 'host' }
       });
-
       const couponRows = await sql`
         INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, razorpay_order_id)
-        VALUES (${'PENDING-' + razorpayOrder.id}, ${sourceOrder.guest_id}, ${numAmount}, ${guest.host_id}, ${bookingId}, 'pending_payment', ${razorpayOrder.id})
+        VALUES (${'PENDING-' + razorpayOrder.id}, ${loaded.order.guest_id}, ${amount}, ${loaded.guest.host_id}, ${bookingId}, 'pending_payment', ${razorpayOrder.id})
         RETURNING id
       `;
-
-      return res.status(200).json({
-        couponId: couponRows[0].id,
-        razorpayOrderId: razorpayOrder.id,
-        amount: razorpayOrder.amount,
-        currency: razorpayOrder.currency,
-      });
+      return res.status(200).json({ couponId: couponRows[0].id, amount, razorpayOrderId: razorpayOrder.id, keyId: process.env.RAZORPAY_KEY_ID, currency: 'INR' });
     } catch (err) {
       console.error('host-listings (buyCouponOrder) error:', err);
-      return res.status(500).json({ error: 'Could not start the coupon payment right now. Please try again.' });
+      return res.status(500).json({ error: 'Could not start the coupon payment. Please try again.' });
     }
   }
 
-  // ---- Confirm the coupon payment actually succeeded (step 2) ----
-  // Same "never trust the browser's word alone" principle as
-  // verify-payment.js — re-verifies the Razorpay signature server-side
-  // before treating the coupon as real. Only on success does the coupon
-  // become 'active', get its real code, and get emailed to the guest.
+  // ---- Step 2: confirm the coupon payment ----
+  // The coupon is created and HELD ('reserved') for the cancellation. Its
+  // code is never returned to the host: the guest receives it by email
+  // 15 minutes after the booking is cancelled (_coupons.js).
   if (req.method === 'POST' && req.body && req.body.verifyCouponPayment) {
     try {
       const { couponId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body.verifyCouponPayment;
       if (!verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
         return res.status(400).json({ verified: false, error: 'Payment could not be verified.' });
       }
-
       const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
       const guest = guestRows[0];
-      if (!guest || !guest.host_id) {
-        return res.status(403).json({ error: 'You do not have permission to do this.' });
-      }
-
-      const rows = await sql`
-        SELECT c.id, c.status, c.amount, c.guest_id, c.source_order_id, c.razorpay_order_id, o.guest_email, o.suite_name
-        FROM coupons c
-        JOIN orders o ON c.source_order_id = o.id
-        WHERE c.id = ${couponId} AND c.issuing_host_id = ${guest.host_id}
-      `;
-      const coupon = rows[0];
+      if (!guest || !guest.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+      const coupon = (await sql`SELECT id, status, razorpay_order_id FROM coupons WHERE id = ${Number(couponId) || 0} AND issuing_host_id = ${guest.host_id}`)[0];
       if (!coupon) return res.status(403).json({ error: 'You do not have permission to do this.' });
-      if (coupon.razorpay_order_id !== razorpay_order_id) {
-        return res.status(400).json({ error: 'This payment does not match the coupon being confirmed.' });
-      }
-      if (coupon.status === 'active') {
-        return res.status(200).json({ verified: true, code: coupon.code }); // already processed — safe to no-op rather than error on a retry
-      }
-
-      // A real, guessable-resistant code — not the placeholder written at
-      // buyCouponOrder time.
+      if (coupon.razorpay_order_id !== razorpay_order_id) return res.status(400).json({ error: 'This payment does not match the coupon being confirmed.' });
+      if (coupon.status === 'reserved' || coupon.status === 'active') return res.status(200).json({ verified: true });
       const code = 'AERVA-' + crypto.randomBytes(5).toString('hex').toUpperCase();
-      const expiresAt = new Date();
-      expiresAt.setMonth(expiresAt.getMonth() + 3);
-
       await sql`
-        UPDATE coupons SET
-          status = 'active', code = ${code}, razorpay_payment_id = ${razorpay_payment_id}, expires_at = ${expiresAt.toISOString()}
-        WHERE id = ${couponId}
+        UPDATE coupons SET status = 'reserved', code = ${code}, razorpay_payment_id = ${razorpay_payment_id}
+        WHERE id = ${coupon.id} AND status = 'pending_payment'
       `;
-
-      await logAudit(sql, {
-        action: 'coupon_purchased', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-        targetType: 'coupon', targetId: couponId
-      });
-
-      await sendCouponEmail(coupon, code, expiresAt);
-
-      return res.status(200).json({ verified: true, code });
+      try { await sql`UPDATE coupons SET paid_by_guest_id = ${accountId} WHERE id = ${coupon.id}`; } catch (err) { /* column added by migration_coupon_release.sql */ }
+      await logAudit(sql, { action: 'coupon_purchased', success: true, actorType: cohostActor ? 'cohost' : 'host', actorIdentifier: String(cohostActor ? accountId : guest.host_id), targetType: 'coupon', targetId: coupon.id,
+        metadata: { paidBy: cohostActor ? 'cohost' : 'host' } });
+      return res.status(200).json({ verified: true });
     } catch (err) {
       console.error('host-listings (verifyCouponPayment) error:', err);
       return res.status(500).json({ error: 'Could not confirm the coupon payment right now. Please try again.' });
     }
   }
 
-  // ---- Submit or resubmit verification info ----
   if (req.method === 'POST') {
     try {
       const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;

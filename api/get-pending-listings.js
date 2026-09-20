@@ -1276,6 +1276,28 @@ module.exports = async (req, res) => {
     // an admin looking at the uploaded document (or the bank details)
     // and deciding whether it's genuine, rather than the old behavior
     // of trusting any upload automatically.
+    // ---- Cancellation coupon owed by a host: recovered from a payout, or written off ----
+    // POST { settleHostPenalty: { id, action: 'recovered' | 'written_off', note } }
+    if (req.body && req.body.settleHostPenalty) {
+      try {
+        const { id, action, note } = req.body.settleHostPenalty;
+        if (action !== 'recovered' && action !== 'written_off') return res.status(400).json({ error: 'Invalid action.' });
+        const why = typeof note === 'string' ? note.trim().slice(0, 300) : '';
+        if (action === 'written_off' && !why) return res.status(400).json({ error: 'Please give a reason for writing this off.' });
+        const upd = await sql`
+          UPDATE host_penalties SET status = ${action}, note = ${why || null}, settled_at = now(), settled_by = ${ADMIN_ACTOR}
+          WHERE id = ${Number(id) || 0} AND status = 'owed' RETURNING id, host_id, amount
+        `;
+        if (!upd.length) return res.status(404).json({ error: 'That amount is not owed any more.' });
+        await logAudit(sql, { action: action === 'recovered' ? 'host_penalty_recovered' : 'host_penalty_written_off', success: true, actorType: 'admin', ...ADMIN_AUDIT,
+          targetType: 'host', targetId: upd[0].host_id, metadata: { penaltyId: upd[0].id, amount: Number(upd[0].amount), note: why || null } });
+        return res.status(200).json({ success: true });
+      } catch (err) {
+        console.error('settleHostPenalty failed:', err);
+        return res.status(500).json({ error: 'Could not save that right now.' });
+      }
+    }
+
     // ---- Approve or reject a co-host's payout details ----
     // POST { reviewCohostPayout: { guestId, approve, reason } }
     if (req.body && req.body.reviewCohostPayout) {
@@ -1513,7 +1535,7 @@ module.exports = async (req, res) => {
       try {
         const ids = orders.map(o => o.id);
         if (ids.length) shares = await sql`
-          SELECT s.order_id, s.percent, s.amount, g.name, g.email,
+          SELECT s.order_id, s.percent, s.amount, s.cohost_guest_id, g.name, g.email,
                  p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status AS profile_status
           FROM order_cohost_shares s
           LEFT JOIN guests g ON g.id = s.cohost_guest_id
@@ -1523,9 +1545,49 @@ module.exports = async (req, res) => {
       } catch (err) { console.error('co-host shares unavailable:', err.message); }
       const byOrder = {};
       shares.forEach(x => { (byOrder[x.order_id] = byOrder[x.order_id] || []).push(x); });
+      // Cancellation coupons the host chose to pay from their next payout.
+      // Rows older than 6 months are flagged for an admin decision.
+      let penalties = [];
+      try {
+        try {
+          penalties = await sql`
+            SELECT p.id, p.host_id, p.amount, p.created_at, h.name AS host_name, o.suite_name, o.id AS order_id,
+                   p.payer_guest_id, pg.name AS payer_name, pg.email AS payer_email,
+                   (p.created_at < now() - interval '6 months') AS over_six_months
+            FROM host_penalties p JOIN hosts h ON h.id = p.host_id LEFT JOIN orders o ON o.id = p.order_id
+            LEFT JOIN guests pg ON pg.id = p.payer_guest_id
+            WHERE p.status = 'owed' ORDER BY p.created_at
+          `;
+        } catch (err) { // before migration_coupon_release.sql: all owed by hosts
+          penalties = await sql`
+            SELECT p.id, p.host_id, p.amount, p.created_at, h.name AS host_name, o.suite_name, o.id AS order_id,
+                   (p.created_at < now() - interval '6 months') AS over_six_months
+            FROM host_penalties p JOIN hosts h ON h.id = p.host_id LEFT JOIN orders o ON o.id = p.order_id
+            WHERE p.status = 'owed' ORDER BY p.created_at
+          `;
+        }
+      } catch (err) { /* table not created yet */ }
+      // Owed by the host (from the host's payout) or by a co-host who
+      // cancelled (from that co-host's own share).
+      const owedByHost = {};
+      const owedByCohost = {};
+      penalties.forEach(p => {
+        if (p.payer_guest_id) owedByCohost[p.payer_guest_id] = (owedByCohost[p.payer_guest_id] || 0) + Number(p.amount);
+        else owedByHost[p.host_id] = (owedByHost[p.host_id] || 0) + Number(p.amount);
+      });
+      // Unused coupon balances (coupon worth more than the booking price):
+      // forfeited by the guest, kept by Aerva.
+      let couponForfeitTotal = 0;
+      try {
+        couponForfeitTotal = Math.round(Number((await sql`SELECT COALESCE(SUM(forfeited_amount), 0) AS t FROM coupons WHERE status = 'redeemed'`)[0].t) || 0);
+      } catch (err) { /* column not added yet */ }
       await logAudit(sql, { action: 'admin_viewed_payouts', success: true, actorType: 'admin', ...ADMIN_AUDIT,
         metadata: { bookings: orders.length, pendingProfiles: pendingProfiles.length } });
       return res.status(200).json({
+        couponForfeitTotal,
+        penalties: penalties.map(p => ({ id: p.id, hostId: p.host_id, hostName: p.host_name, amount: Number(p.amount),
+          payer: p.payer_guest_id ? 'cohost' : 'host', payerName: p.payer_guest_id ? (p.payer_name || p.payer_email || 'Co-host') : p.host_name,
+          booking: p.suite_name, orderId: p.order_id, createdAt: p.created_at, overSixMonths: !!p.over_six_months })),
         pendingProfiles: pendingProfiles.map(p => ({
           guestId: p.guest_id, name: p.name, email: p.email, pan: readableForAdmin(p.pan_number), gstin: readableForAdmin(p.gstin),
           holder: p.account_holder_name, account: readableForAdmin(p.bank_account_number), ifsc: p.bank_ifsc,
@@ -1534,12 +1596,14 @@ module.exports = async (req, res) => {
         payouts: orders.map(o => {
           const cs = (byOrder[o.id] || []).map(x => ({
             name: x.name || x.email || 'Co-host', percent: Number(x.percent), amount: Number(x.amount),
+            penaltyToDeduct: Math.round(owedByCohost[x.cohost_guest_id] || 0),
             holder: x.account_holder_name || null, account: readableForAdmin(x.bank_account_number), ifsc: x.bank_ifsc || null,
             // Paid only once their payout details are approved.
             ready: x.profile_status === 'approved', profileStatus: x.profile_status || 'missing'
           }));
           const coTotal = cs.reduce((a, x) => a + x.amount, 0);
           return {
+            penaltyToDeduct: Math.round(owedByHost[o.host_id] || 0),
             orderId: o.id, listing: o.suite_name, arrival: o.arrival, departure: o.departure,
             total: Number(o.total) || 0, commission: Number(o.commission_amount) || 0,
             hostPayout: Number(o.payout_amount) || 0, hostNet: (Number(o.payout_amount) || 0) - coTotal,
