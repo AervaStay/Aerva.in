@@ -55,7 +55,7 @@ const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { openFlagsForHost } = require('./_compliance');
-const { verifyGoogleIdToken } = require('./_social-auth');
+const { verifyGoogleIdToken, verifyGoogleAccessToken } = require('./_social-auth');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { normalizeToE164 } = require('./_phone-validation');
 const { sanitizeBody } = require('./_plain-text');
@@ -611,8 +611,10 @@ module.exports = async (req, res) => {
 
   // ---- Sign in with Google ----
   if (mode === 'google') {
-    const { idToken } = req.body || {};
-    const verified = await verifyGoogleIdToken(idToken);
+    // idToken: Google's drawn button. accessToken: Google's pop-up, used by
+    // Aerva's own Google tile. Both are checked with Google server-side.
+    const { idToken, accessToken } = req.body || {};
+    const verified = accessToken ? await verifyGoogleAccessToken(accessToken) : await verifyGoogleIdToken(idToken);
     if (verified.error) {
       await logAudit(sql, {
         action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: null,

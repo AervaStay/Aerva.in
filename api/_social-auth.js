@@ -53,4 +53,42 @@ async function verifyGoogleIdToken(idToken) {
   return { googleId: data.sub, email: data.email.toLowerCase(), name: data.name || null };
 }
 
-module.exports = { verifyGoogleIdToken };
+// The same check for Google's pop-up sign-in (used with Aerva's own
+// Google tile, not Google's drawn button): an ACCESS token instead of an
+// ID token. Two calls to Google:
+//   1. tokeninfo — confirms the token is real, unexpired, and was issued
+//      to THIS app (aud / azp = GOOGLE_CLIENT_ID). Without this, a token
+//      granted to any other website could be replayed here.
+//   2. userinfo  — the person's Google id, email (verified?) and name.
+async function verifyGoogleAccessToken(accessToken) {
+  if (!accessToken || typeof accessToken !== 'string' || accessToken.length > 4096) return { error: 'Missing Google credential.' };
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    console.error('GOOGLE_CLIENT_ID not set — cannot verify Google sign-in.');
+    return { error: 'Google sign-in is not available right now.' };
+  }
+  const fail = { error: 'That Google sign-in could not be verified — please try again.' };
+  try {
+    const infoRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`);
+    if (!infoRes.ok) return fail;
+    const info = await infoRes.json().catch(() => null);
+    if (!info) return fail;
+    const issuedTo = info.aud || info.azp;
+    if (issuedTo !== process.env.GOOGLE_CLIENT_ID) {
+      console.error('Google access token issued to another app:', issuedTo);
+      return fail;
+    }
+    if (Number(info.expires_in) <= 0) return fail;
+    const userRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!userRes.ok) return fail;
+    const u = await userRes.json().catch(() => null);
+    if (!u || !u.sub || !u.email) return fail;
+    if (info.sub && String(info.sub) !== String(u.sub)) return fail;
+    if (u.email_verified !== true && u.email_verified !== 'true') return { error: 'Your Google account email is not verified.' };
+    return { googleId: String(u.sub), email: String(u.email).toLowerCase(), name: u.name || null };
+  } catch (err) {
+    console.error('Google access-token check failed:', err);
+    return { error: 'Could not verify Google sign-in right now. Please try again.' };
+  }
+}
+
+module.exports = { verifyGoogleIdToken, verifyGoogleAccessToken };
