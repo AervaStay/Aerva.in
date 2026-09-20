@@ -400,7 +400,7 @@ async function handleCohostModes(req, res, accountId) {
   const b = (req.method === 'POST' && req.body) || {};
   const isMode = (req.method === 'GET' && (q.cohosts === '1' || q.myCohosting === '1'))
     || (req.method === 'POST' && (b.inviteCohost || b.updateCohost || b.removeCohost || b.acceptCohostInvite || b.declineCohostInvite || b.leaveCohost
-        || b.proposeCommission || b.decideCommission || b.savePayoutProfile))
+        || b.proposeCommission || b.decideCommission || b.savePayoutProfile || b.resendCohostInvite))
     || (req.method === 'GET' && q.myPayoutProfile === '1');
   if (!isMode) return false;
   if (q.actingHost !== undefined) { cohostDenied(res, 'Co-hosts cannot manage co-hosts.'); return true; }
@@ -412,6 +412,23 @@ async function handleCohostModes(req, res, accountId) {
 
     // ---- The co-host's side ----
     if (req.method === 'GET' && q.myCohosting === '1') {
+      // Invitations waiting for me (sent to my email, within 14 days): shown
+      // on my Co-hosting page even if the email never arrived.
+      let invitations = [];
+      if (me.email) {
+        const inv = await sql`
+          SELECT c.id, c.access, c.permissions, c.listing_ids, c.invited_at, h.name AS host_name, h.id AS host_id
+          FROM cohosts c JOIN hosts h ON h.id = c.host_id
+          WHERE lower(c.invited_email) = ${String(me.email).trim().toLowerCase()} AND c.status = 'invited'
+            AND c.invited_at > now() - interval '14 days' AND (${me.host_id || 0}::int = 0 OR c.host_id <> ${me.host_id || 0})
+          ORDER BY c.invited_at DESC
+        `;
+        for (const r of inv) {
+          const ls = await sql`SELECT property_name FROM listings WHERE id = ANY(${(r.listing_ids || []).map(Number)})`;
+          invitations.push({ id: r.id, hostName: r.host_name || 'A host', access: r.access, permissions: cleanPermissions(r.permissions),
+            listingNames: ls.map(l => l.property_name), invitedAt: r.invited_at, token: inviteToken(r.id) });
+        }
+      }
       const active = await sql`
         SELECT c.id, c.host_id, c.access, c.permissions, c.listing_ids, h.name AS host_name,
                c.commission_percent, c.proposed_percent, c.proposal_status
@@ -439,7 +456,7 @@ async function handleCohostModes(req, res, accountId) {
                                status: r.status, listingName: r.property_name, hostName: r.host_name }))
         };
       } catch (err) { console.error('co-host earnings failed:', err.message); }
-      res.status(200).json({
+      res.status(200).json({ invitations,
         cohosting: active.map(r => ({
           hostId: r.host_id, hostName: r.host_name || 'Host', access: r.access,
           permissions: r.access === 'full' ? COHOST_PERMISSIONS.map(p => p.key) : cleanPermissions(r.permissions),
@@ -530,7 +547,16 @@ async function handleCohostModes(req, res, accountId) {
       if (!rowId) { res.status(400).json({ error: 'This invitation link is not valid or has expired. Ask the host to send it again.' }); return true; }
       const rows = await sql`SELECT c.*, h.name AS host_name FROM cohosts c JOIN hosts h ON h.id = c.host_id WHERE c.id = ${rowId}`;
       const inv = rows[0];
+      const accessInfo = (row) => ({ hostId: row.host_id, hostName: row.host_name || 'Host', access: row.access,
+        permissions: row.access === 'full' ? COHOST_PERMISSIONS.map(p => p.key) : cleanPermissions(row.permissions) });
+      // Clicked again after accepting: just open the host's listings again.
+      if (inv && inv.status === 'active' && Number(inv.cohost_guest_id) === Number(me.id) && b.acceptCohostInvite) {
+        res.status(200).json(Object.assign({ success: true, alreadyAccepted: true }, accessInfo(inv))); return true;
+      }
       if (!inv || inv.status !== 'invited') { res.status(410).json({ error: 'This invitation is no longer open.' }); return true; }
+      if (inv.invited_at && Date.now() - new Date(inv.invited_at).getTime() > 14 * 24 * 3600 * 1000) {
+        res.status(410).json({ error: 'This invitation has expired. Ask the host to send it again.' }); return true;
+      }
       if (!me.email || String(me.email).trim().toLowerCase() !== String(inv.invited_email).toLowerCase()) {
         res.status(403).json({ error: `This invitation was sent to ${inv.invited_email}. Sign in with that email to accept it.` });
         return true;
@@ -550,7 +576,7 @@ async function handleCohostModes(req, res, accountId) {
       `;
       if (!upd.length) { res.status(410).json({ error: 'This invitation is no longer open.' }); return true; }
       await logAudit(sql, { action: 'cohost_accepted', success: true, actorType: 'guest', actorIdentifier: String(me.id), targetType: 'host', targetId: inv.host_id, metadata: { cohostId: inv.id } });
-      res.status(200).json({ success: true, hostId: inv.host_id, hostName: inv.host_name || 'Host' });
+      res.status(200).json(Object.assign({ success: true }, accessInfo(inv)));
       return true;
     }
     if (b.leaveCohost) {
@@ -584,6 +610,7 @@ async function handleCohostModes(req, res, accountId) {
           id: r.id, email: r.invited_email, name: r.cohost_name || null, access: r.access,
           permissions: cleanPermissions(r.permissions), listingIds: (r.listing_ids || []).map(Number),
           status: r.status, invitedAt: r.invited_at, acceptedAt: r.accepted_at,
+          expired: r.status === 'invited' && !!r.invited_at && Date.now() - new Date(r.invited_at).getTime() > 14 * 24 * 3600 * 1000,
           commissionPercent: r.commission_percent == null ? null : Number(r.commission_percent),
           proposedPercent: r.proposed_percent == null ? null : Number(r.proposed_percent),
           proposalStatus: r.proposal_status || null
@@ -653,6 +680,21 @@ async function handleCohostModes(req, res, accountId) {
       // The link is returned too, so the host can pass it on themselves
       // if the email does not arrive. It only works for that email.
       res.status(200).json({ success: true, id: ins[0].id, emailed, inviteLink: `https://aerva.in/index.html?view=cohost&invite=${encodeURIComponent(token)}` });
+      return true;
+    }
+    if (b.resendCohostInvite) {
+      const row = (await sql`SELECT id, invited_email, access, permissions, listing_ids, invited_at FROM cohosts
+                             WHERE id = ${Number(b.resendCohostInvite.id) || 0} AND host_id = ${me.host_id} AND status = 'invited'`)[0];
+      if (!row) { res.status(404).json({ error: 'Invitation not found.' }); return true; }
+      if (row.invited_at && Date.now() - new Date(row.invited_at).getTime() < 60 * 1000) {
+        res.status(429).json({ error: 'The invitation was just sent. Wait a minute before sending it again.' }); return true;
+      }
+      await sql`UPDATE cohosts SET invited_at = now() WHERE id = ${row.id} AND status = 'invited'`;
+      const token = inviteToken(row.id);
+      const names = ownListings.filter(l => (row.listing_ids || []).map(Number).includes(Number(l.id))).map(l => l.property_name);
+      const emailed = await emailCohostInvite({ to: row.invited_email, hostName: me.name || 'Your host', access: row.access, permissions: cleanPermissions(row.permissions), listingNames: names, token });
+      await logAudit(sql, { action: 'cohost_invite_resent', success: true, actorType: 'host', actorIdentifier: String(me.host_id), targetType: 'cohost', targetId: row.id, metadata: { emailed } });
+      res.status(200).json({ success: true, emailed, inviteLink: `https://aerva.in/index.html?view=cohost&invite=${encodeURIComponent(token)}` });
       return true;
     }
     if (b.updateCohost) {

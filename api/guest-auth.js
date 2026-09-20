@@ -58,6 +58,7 @@ const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { openFlagsForHost } = require('./_compliance');
 const { verifyGoogleIdToken, verifyGoogleAccessToken } = require('./_social-auth');
 const { recentPayoutNotifications } = require('./_payouts');
+const { readInviteToken } = require('./_cohosts');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { normalizeToE164 } = require('./_phone-validation');
 const { sanitizeBody } = require('./_plain-text');
@@ -230,6 +231,30 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   // ---- GET: either "verify this email link" or "check my session" ----
+  // ---- Co-host invitation: who it is for, and do they have an account? ----
+  // GET ?inviteInfo=<invite token>. No sign-in needed: only someone holding
+  // the invitation link (sent to that email) can ask. The site uses it to
+  // send the invitee to sign-in (account exists) or sign-up (it does not).
+  // Inviting never creates an account.
+  if (req.method === 'GET' && req.query && req.query.inviteInfo) {
+    try {
+      const id = readInviteToken(String(req.query.inviteInfo));
+      const inv = id ? (await sql`SELECT c.status, c.invited_email, c.invited_at, h.name AS host_name FROM cohosts c JOIN hosts h ON h.id = c.host_id WHERE c.id = ${id}`)[0] : null;
+      const expired = inv && inv.invited_at && Date.now() - new Date(inv.invited_at).getTime() > 14 * 24 * 3600 * 1000;
+      if (!inv || (inv.status !== 'invited' && inv.status !== 'active') || (inv.status === 'invited' && expired)) {
+        return res.status(410).json({ valid: false, error: 'This invitation has expired or is no longer open. Ask the host to send it again.' });
+      }
+      const email = String(inv.invited_email).trim().toLowerCase();
+      let hasAccount = false;
+      try { hasAccount = (await sql`SELECT 1 FROM guests WHERE lower(email) = ${email} AND deleted_at IS NULL LIMIT 1`).length > 0; }
+      catch (e) { hasAccount = (await sql`SELECT 1 FROM guests WHERE lower(email) = ${email} LIMIT 1`).length > 0; }
+      return res.status(200).json({ valid: true, email, hostName: inv.host_name || 'A host', hasAccount });
+    } catch (err) {
+      console.error('inviteInfo failed:', err);
+      return res.status(500).json({ error: 'Could not check this invitation right now.' });
+    }
+  }
+
   if (req.method === 'GET') {
     // A query-string token means this is a click from the verification
     // email — distinct from the Authorization-header session check below.
@@ -413,6 +438,21 @@ module.exports = async (req, res) => {
             });
           });
         }
+        // Co-host invitations waiting for this email (within 14 days).
+        try {
+          const invites = await sql`
+            SELECT c.id, h.name AS host_name FROM cohosts c JOIN hosts h ON h.id = c.host_id
+            WHERE lower(c.invited_email) = ${String(guest.email || '').trim().toLowerCase()} AND c.status = 'invited'
+              AND c.invited_at > now() - interval '14 days' AND c.host_id <> ${guest.host_id || 0}
+            ORDER BY c.invited_at DESC LIMIT 5
+          `;
+          invites.forEach(i => notifications.push({
+            id: 'cohost-invite:' + i.id, kind: 'action',
+            title: `${i.host_name || 'A host'} invited you to co-host`,
+            body: 'Accept or decline on your Co-hosting page.',
+            href: 'index.html?view=cohost'
+          }));
+        } catch (err) { /* co-host tables not there */ }
         // Payouts sent in the last 30 days (as host, or as a co-host).
         (await recentPayoutNotifications(sql, { hostId: guest.host_id, guestId: guest.id })).forEach(n => notifications.push(n));
       } catch (err) {

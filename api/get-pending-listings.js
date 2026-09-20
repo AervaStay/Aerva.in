@@ -90,6 +90,7 @@ const bcrypt = require('bcryptjs');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
 const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout } = require('./_payouts');
 const { safeRefund } = require('./_refunds');
+const { releaseDueDeposits } = require('./_deposits');
 const { encryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens, maskAccount } = require('./_secure-fields');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
@@ -1076,81 +1077,10 @@ module.exports = async (req, res) => {
     // admin.html is the safety check before it runs, at least until this
     // has been tested enough in production to trust running unattended.
     if (req.body && req.body.processDeposits) {
+      // Same job the scheduler runs every 15 minutes (_deposits.js).
       try {
-        const eligible = await sql`
-          SELECT id, razorpay_payment_id, deposit_amount, charge_currency
-          FROM orders
-          WHERE deposit_status = 'held' AND deposit_release_at <= CURRENT_DATE AND deposit_amount > 0
-        `;
-
-        const results = [];
-        for (const order of eligible) {
-          // Claim the order before any money moves. Two clicks, two admins,
-          // or a host raising a concern at the same moment would otherwise
-          // all see 'held' and each issue a refund. Only the request whose
-          // UPDATE actually flips held -> refunding goes on to refund.
-          const claimed = await sql`
-            UPDATE orders SET deposit_status = 'refunding'
-            WHERE id = ${order.id} AND deposit_status = 'held'
-            RETURNING id
-          `;
-          if (!claimed.length) {
-            results.push({ orderId: order.id, success: false, error: 'Already being processed, or no longer held.' });
-            continue;
-          }
-          let refund = null;
-          try {
-            if (!order.razorpay_payment_id) {
-              throw new Error('No Razorpay payment is recorded for this booking, so the deposit cannot be refunded automatically.');
-            }
-            // A refund has to be issued in the SAME currency the payment
-            // was originally charged in — deposit_amount is always stored
-            // in INR, but if this particular order was charged directly
-            // in a foreign currency (International Payments — see
-            // create-order.js), refunding it as INR paise against a
-            // foreign-currency payment would be wrong. Convert first.
-            const currency = order.charge_currency || 'INR';
-            let refundAmount;
-            if (currency === 'INR') {
-              refundAmount = Math.round(Number(order.deposit_amount) * 100);
-            } else {
-              refundAmount = await convertInrToForeignSubunit(sql, Number(order.deposit_amount), currency);
-              if (!refundAmount) {
-                throw new Error(`No cached rate available to refund this ${currency} deposit — left 'held' for manual review.`);
-              }
-            }
-
-            // A partial refund on the ORIGINAL payment — Razorpay sends
-            // this back to whatever the guest originally paid with
-            // (card, UPI, etc.) automatically. This is what satisfies
-            // "refunded ... into the same account" — Aerva never asks
-            // for or stores separate refund destination details.
-            refund = await safeRefund(sql, razorpay, { orderId: order.id, paymentId: order.razorpay_payment_id, amountSubunit: refundAmount, kind: 'deposit' });
-          } catch (refundErr) {
-            // Nothing was refunded: put it back to 'held' so it is picked
-            // up next time, or handled by hand. One failure never blocks
-            // the rest of the batch.
-            console.error(`processDeposits: refund failed for order ${order.id}:`, refundErr);
-            await sql`UPDATE orders SET deposit_status = 'held' WHERE id = ${order.id} AND deposit_status = 'refunding'`;
-            results.push({ orderId: order.id, success: false, error: razorpayErrorMessage(refundErr) });
-            continue;
-          }
-          try {
-            await sql`
-              UPDATE orders SET deposit_status = 'refunded', deposit_refund_id = ${refund.id}
-              WHERE id = ${order.id}
-            `;
-            results.push({ orderId: order.id, success: true });
-          } catch (saveErr) {
-            // The money HAS moved. The order stays 'refunding', which
-            // nothing will pick up again, so it can never be refunded
-            // twice; it just needs its record finished by hand.
-            console.error(`processDeposits: refund ${refund.id} issued for order ${order.id} but saving failed:`, saveErr);
-            results.push({ orderId: order.id, success: false, error: `Refund ${refund.id} was issued, but saving it failed. The booking is locked as 'refunding' so it cannot be refunded twice; update its record by hand.` });
-          }
-        }
-
-        return res.status(200).json({ processed: results.length, results });
+        const out = await releaseDueDeposits(sql, razorpay, { deadlineMs: 8000 });
+        return res.status(200).json({ processed: out.processed, results: out.results });
       } catch (err) {
         console.error('get-pending-listings (processDeposits) error:', err);
         return res.status(500).json({ error: 'Could not process deposits right now.' });
@@ -1371,6 +1301,10 @@ module.exports = async (req, res) => {
         if (!rf) return res.status(404).json({ error: 'Refund not found.' });
         if (rf.status !== 'failed') return res.status(409).json({ error: rf.status === 'processed' ? 'This refund has already been processed.' : 'This refund is in progress.' });
         const r = await safeRefund(sql, razorpay, { orderId: rf.order_id, paymentId: rf.razorpay_payment_id, amountSubunit: rf.amount, kind: rf.kind });
+        // A retried deposit refund also settles the deposit on the booking.
+        if (rf.kind === 'deposit' && r.id) {
+          await sql`UPDATE orders SET deposit_status = 'refunded', deposit_refund_id = ${r.id} WHERE id = ${rf.order_id} AND deposit_status IN ('held', 'refunding')`;
+        }
         await logAudit(sql, { action: 'refund_retried', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'order', targetId: rf.order_id, metadata: { refundId: id, kind: rf.kind, result: r.adopted ? 'adopted' : 'created' } });
         return res.status(200).json({ success: true, adopted: !!r.adopted, status: r.status });
       } catch (err) {
