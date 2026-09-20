@@ -4457,9 +4457,26 @@
     const token = guestAuthToken();
     const invite = new URLSearchParams(window.location.search).get('invite') || pendingInvite();
     if(!token){
-      // Sign in (or sign up) first, then come back here.
-      if(invite) setPendingInvite(invite);
-      window.location.href = 'guest-login.html';
+      // Not signed in. From an invitation: sign in if the invited email has
+      // an account, sign up if not (inviting never creates one), then come
+      // back here, where it is accepted.
+      if(!invite){ window.location.href = 'guest-login.html'; return; }
+      let info = null;
+      try{ const r = await fetch(SUITES_API_BASE + '/api/guest-auth?inviteInfo=' + encodeURIComponent(invite)); info = await r.json(); }catch(e){}
+      if(info && info.valid === false){
+        setPendingInvite(null);
+        const box = document.createElement('div');
+        box.className = 'hp-overlay is-open'; box.setAttribute('role', 'dialog');
+        box.innerHTML = '<button type="button" class="hp-close" aria-label="Close">\u00d7</button><div class="hp-body"><div class="hp-eyebrow">Co-hosting</div><p class="cohost-notice">' + escapeMessageHtml(info.error) + '</p></div>';
+        box.querySelector('.hp-close').addEventListener('click', () => { box.remove(); history.replaceState(null, '', 'index.html'); });
+        document.body.appendChild(box);
+        return;
+      }
+      setPendingInvite(invite);
+      const q = new URLSearchParams({ invite: '1', mode: info && info.hasAccount === false ? 'signup' : 'login' });
+      if(info && info.email) q.set('email', info.email);
+      if(info && info.hostName) q.set('host', info.hostName);
+      window.location.href = 'guest-login.html?' + q.toString();
       return;
     }
     let ov = document.getElementById('cohostCenter');
@@ -4482,6 +4499,41 @@
       method, headers: Object.assign({ 'Authorization': 'Bearer ' + token }, payload ? { 'Content-Type': 'application/json' } : {}),
       body: payload ? JSON.stringify(payload) : undefined
     }).then(async r => ({ ok: r.ok, data: await r.json().catch(() => ({})) }));
+
+    // Where a co-host starts for a host: the same page the host sees.
+    const startPageFor = (h) => h.access === 'full' || (h.permissions || []).includes('bookings') ? 'host-dashboard.html'
+      : ((h.permissions || []).includes('calendar') ? 'host-status.html'
+      : ((h.permissions || []).includes('analytics') ? 'host-earnings.html' : 'host-dashboard.html'));
+
+    // Arrived from the invitation's "Accept invitation" link (now signed
+    // in): accept it and open the host's listings. The wrong account, or an
+    // invitation no longer open, stays here with the reason.
+    const arriving = new URLSearchParams(window.location.search).get('invite') || pendingInvite();
+    if(arriving){
+      const r = await call('POST', { acceptCohostInvite: { token: arriving } });
+      if(r.ok && r.data.hostId){
+        setPendingInvite(null);
+        window.AervaCohost.start({ hostId: r.data.hostId, hostName: r.data.hostName, access: r.data.access, permissions: r.data.permissions || [] });
+        window.location.href = startPageFor(r.data);
+        return;
+      }
+      setPendingInvite(null);
+      history.replaceState(null, '', 'index.html?view=cohost');
+      const wrongAccount = /Sign in with that email/.test(r.data.error || '');
+      await render(r.data.error || 'Could not accept the invitation.');
+      if(wrongAccount){
+        // Keep the invitation: after switching, it is accepted automatically.
+        setPendingInvite(arriving);
+        const note = body.querySelector('.cohost-notice');
+        if(note){
+          const a = document.createElement('a');
+          a.href = 'guest-login.html?switchAccount=1'; a.textContent = 'Switch account';
+          a.style.cssText = 'display:inline-block; margin-left:8px; color:var(--gold-deep); text-decoration:underline;';
+          note.appendChild(a);
+        }
+      }
+      return;
+    }
 
     async function render(notice){
       const mine = await call('GET', null, '?myCohosting=1');
@@ -4509,10 +4561,24 @@
         : payout.status === 'approved' ? 'Approved \u2014 your shares are paid to this account.'
         : payout.status === 'rejected' ? `Not approved: ${payout.rejectionReason || 'please check and resubmit.'}`
         : 'Waiting for Aerva to check these. Your shares are held until they are approved.';
+      // Invitations sent to this email (shown even if the email never arrived).
+      const invites = (mine.data && mine.data.invitations) || [];
+      const linkToken = pending || '';
+      const invitesHtml = invites.filter(v => !linkToken || v.token !== linkToken).length ? `<div class="hp-section cohost-invites">
+          <h3 class="hp-title">Invitations</h3>
+          ${invites.map(v => `<div class="cohost-invite-row">
+            <p><strong>${esc(v.hostName)}</strong> invited you to co-host ${esc(v.listingNames.join(', ') || 'their listings')}.</p>
+            <p class="hp-meta">${esc(accessText(v))}</p>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+              <button type="button" class="hp-more cohost-primary" data-inv-accept="${esc(v.token)}">Accept</button>
+              <button type="button" class="hp-more" data-inv-decline="${esc(v.token)}">Decline</button>
+            </div></div>`).join('')}
+        </div>` : '';
       body.innerHTML = `
         <div class="hp-eyebrow">Co-hosting</div>
         <h2 class="hp-name">Hosts you help</h2>
         ${notice ? `<p class="cohost-notice">${esc(notice)}</p>` : ''}
+        ${invitesHtml}
         ${pending ? `
           <div class="hp-section">
             <h3 class="hp-title">You have an invitation</h3>
@@ -4572,6 +4638,13 @@
         ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
 
       const inviteNow = pendingInvite() || new URLSearchParams(window.location.search).get('invite');
+      body.querySelectorAll('[data-inv-accept],[data-inv-decline]').forEach(btn => btn.addEventListener('click', async () => {
+        const acceptIt = btn.hasAttribute('data-inv-accept');
+        const tok = btn.getAttribute(acceptIt ? 'data-inv-accept' : 'data-inv-decline');
+        btn.disabled = true;
+        const r = await call('POST', acceptIt ? { acceptCohostInvite: { token: tok } } : { declineCohostInvite: { token: tok } });
+        render(r.ok ? (acceptIt ? `You are now a co-host for ${r.data.hostName}.` : 'Invitation declined.') : (r.data.error || 'Could not answer the invitation.'));
+      }));
       const accept = body.querySelector('[data-cohost-accept]');
       if(accept) accept.addEventListener('click', async () => {
         accept.disabled = true;
