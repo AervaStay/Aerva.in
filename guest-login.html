@@ -36,6 +36,7 @@
 
   .social-buttons{display:flex; flex-direction:column; gap:10px; margin-bottom:20px;}
   #googleSignInBtn{display:flex; justify-content:center;}
+  .divider-below{margin:26px 0 18px;}
   #googleSignInBtn > div{width:100% !important;}
   .social-btn{
     display:flex; align-items:center; justify-content:center; gap:10px;
@@ -64,11 +65,6 @@
     <p class="subtitle">Log in to view your bookings.</p>
     <p id="switchAccountNote" style="display:none; font-size:12.5px; background:#faf3e6; border:1px solid #ddc9a3; color:#8a6c39; padding:10px 12px; margin-bottom:16px;"></p>
 
-    <div class="social-buttons">
-      <div id="googleSignInBtn"></div>
-    </div>
-    <div class="divider"><span>or</span></div>
-
     <form id="loginForm">
       <div class="field">
         <label for="loginEmail">Email</label>
@@ -83,9 +79,16 @@
       <p class="error" id="socialError" style="display:none;"></p>
       <p class="switch-mode" id="resendVerificationRow" style="display:none;"><button type="button" id="resendVerificationBtn">Resend verification email</button></p>
     </form>
+    <div class="divider divider-below"><span>or</span></div>
+    <div class="social-buttons">
+      <div id="googleSignInBtn"></div>
+    </div>
     <p class="switch-mode"><button type="button" id="showForgotPassword">Forgot your password?</button></p>
     <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
-    <p class="switch-mode"><button type="button" id="showPhoneRequest">Log in with phone instead</button></p>
+    <!-- Phone login is built and working (guest-phone-auth.js + the screens
+         below); hidden until Twilio is set up. To show it again, set
+         PHONE_LOGIN_ENABLED = true in the script further down. -->
+    <p class="switch-mode" id="phoneLoginRow" style="display:none;"><button type="button" id="showPhoneRequest">Log in with phone instead</button></p>
   </div>
 
   <div id="forgotPasswordState" style="display:none;">
@@ -219,6 +222,10 @@
   // environment variable so guest-auth.js can verify tokens were issued
   // for this exact client id. Until it's filled in, the button below
   // simply shows an error if clicked — nothing else on this page is affected.
+  // Phone login: built, tested, hidden for now (turn on after Twilio setup).
+  const PHONE_LOGIN_ENABLED = false;
+  if(PHONE_LOGIN_ENABLED){ const row = document.getElementById('phoneLoginRow'); if(row) row.style.display = ''; }
+
   const GOOGLE_CLIENT_ID = '431078338314-ii1i2a1elktl6ijfkgmobhs3tsq3ujq7.apps.googleusercontent.com';
 
   const checkingState = document.getElementById('checkingState');
