@@ -4722,7 +4722,7 @@
               </div>
               <div class="cohost-actions">
                 ${current && Number(current.hostId) === Number(h.hostId)
-                  ? '<span class="cohost-on">Working now</span>'
+                  ? `<span class="cohost-on">Working now</span><button type="button" class="hp-more" data-cohost-stop="${Number(h.hostId)}">Stop co-hosting</button>`
                   : ((missingByHost[h.hostId] || []).length
                       ? '<span class="hp-meta">Finish your details above to open their listings.</span>'
                       : `<button type="button" class="hp-more cohost-primary" data-cohost-open="${Number(h.hostId)}">Open their listings</button>`)}
@@ -4845,6 +4845,11 @@
         b.disabled = true;
         const r = await call('POST', { resendCohostInvite: { id: Number(b.getAttribute('data-team-resend')) } });
         render(r.ok ? (r.data.emailed ? 'Invitation sent again. It is valid for 14 days.' : 'The email could not be sent. Share this link with them: ' + r.data.inviteLink) : (r.data.error || 'Could not resend the invitation.'));
+      }));
+      body.querySelectorAll('[data-cohost-stop]').forEach(b => b.addEventListener('click', () => {
+        const name = (list.find(h => Number(h.hostId) === Number(b.getAttribute('data-cohost-stop'))) || {}).hostName || 'this host';
+        if(window.AervaCohost && typeof window.AervaCohost.stop === 'function') window.AervaCohost.stop();
+        render(`Stopped co-hosting for ${name}. You are back on your own account.`);
       }));
       body.querySelectorAll('[data-inv-accept],[data-inv-decline]').forEach(btn => btn.addEventListener('click', async () => {
         const acceptIt = btn.hasAttribute('data-inv-accept');
