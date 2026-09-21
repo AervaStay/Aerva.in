@@ -28,6 +28,13 @@
     },
     stop: function(){
       try{ localStorage.removeItem(KEY); }catch(e){}
+      // Take the bar away at once: the Co-hosting page redraws in place
+      // rather than reloading, so nothing else would remove it.
+      try{
+        var bar = document.getElementById('cohostBar');
+        if(bar) bar.remove();
+        document.body.classList.remove('is-cohosting');
+      }catch(e){}
     }
   };
 
@@ -95,17 +102,16 @@
       + "font-family:'Jost', sans-serif; font-size:13px;";
     var label = document.createElement('span');
     label.textContent = 'Co-hosting for ' + (acting.hostName || 'a host') + ' \u00b7 ' + (acting.access === 'full' ? 'Full access' : 'Limited access');
-    var stop = document.createElement('button');
-    stop.type = 'button';
-    stop.textContent = 'Stop co-hosting';
-    stop.style.cssText = 'background:#fff; color:#1c1a17; border:none; border-radius:999px; padding:7px 14px; cursor:pointer;'
-      + "font-family:'Jost', sans-serif; font-size:11.5px; letter-spacing:0.08em; text-transform:uppercase;";
-    stop.addEventListener('click', function(){
-      window.AervaCohost.stop();
-      window.location.href = 'index.html?view=cohost';
-    });
+    // Stopping is done on the Co-hosting tab, not here: this bar only says
+    // whose listings you are working on, and takes you there.
+    var go = document.createElement('span');
+    go.textContent = '\u203a';
+    go.style.cssText = 'opacity:0.7; font-size:18px; line-height:1;';
+    bar.style.cursor = 'pointer';
+    bar.addEventListener('click', function(){ window.location.href = 'index.html?view=cohost'; });
+    bar.setAttribute('title', 'Open the Co-hosting page');
     bar.appendChild(label);
-    bar.appendChild(stop);
+    bar.appendChild(go);
     document.body.appendChild(bar);
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', showBar);
