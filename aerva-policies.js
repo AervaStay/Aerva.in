@@ -18,7 +18,7 @@ window.AERVA_POLICIES = {
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-09c',
+    version: '2026-09d',
     guest: {
       title: 'Booking agreement',
       points: [
@@ -27,7 +27,8 @@ window.AERVA_POLICIES = {
         'The host: provides the home or experience as described, keeps it safe and clean, and follows local laws.',
         'Aerva: takes your payment, handles refunds and complaints under Aerva’s Policies, and keeps your booking records.',
         'No violence, threats, verbal abuse, harassment or discrimination of any kind, including on gender.',
-        'Any security deposit is refunded under Aerva’s Security Deposit and Damage Policy. Damage above the deposit is between you and the host, under the law.',
+        'Any security deposit is refunded under Aerva’s Security Deposit and Damage Policy. Damage above the deposit is between you and the host, and is to be settled directly with the host.',
+        'Aerva provides no support beyond the security deposit and your booking details.',
         'You are responsible for your own safety and for any physical, mental or emotional harm you or your guests cause or suffer that is beyond Aerva’s control.',
         'Aerva does not own, run or inspect properties or experiences, and does not control what hosts or guests do. To the extent the law allows, Aerva is not responsible for the acts or omissions of any host, guest or third party, including criminal acts, death, injury, self-harm or any life-threatening situation, and pays no claim for them.',
         'Aerva’s decision on any matter under its policies is full and final.',
@@ -44,7 +45,8 @@ window.AERVA_POLICIES = {
         'Aerva: takes payment, pays you your share after Aerva’s fees and taxes, and handles refunds and complaints under Aerva’s Policies.',
         'You are responsible for your own taxes, insurance and legal compliance.',
         'No violence, threats, verbal abuse, harassment or discrimination of any kind, including on gender.',
-        'Damage claims go through Aerva, up to the security deposit. Damage above the deposit is between you and the guest, under the law.',
+        'Damage claims go through Aerva, up to the security deposit. Damage above the deposit is between you and the guest, and is to be settled directly with the guest.',
+        'Aerva provides no support beyond the security deposit and the booking details.',
         'You are responsible for your guests’ safety at your property as the law requires, and for any physical, mental or emotional harm that is beyond Aerva’s control.',
         'Aerva does not own, run or inspect your property, and does not control what guests do. To the extent the law allows, Aerva is not responsible for the acts or omissions of any guest, host or third party, including criminal acts, death, injury, self-harm or any life-threatening situation, and pays no claim for them.',
         'Aerva’s decision on any matter under its policies is full and final.',
@@ -239,7 +241,7 @@ window.AERVA_POLICIES = {
     { id: 'offline-fees', title: 'Offline Fee Policy', summary: 'When a host may charge anything outside Aerva.', sections: [
       { title: 'Rule', points: [
         'Hosts may not charge guests any fee outside Aerva. Every charge must be part of the price shown on Aerva before booking.',
-        'Security deposits and damage claims go through Aerva only.'
+        'Security deposit claims go through Aerva, up to the deposit. Anything beyond the deposit is settled directly between the host and the guest.'
       ]}
     ]},
     { id: 'off-platform', title: 'Off-Platform Policy', summary: 'What must not happen outside Aerva.', sections: [
@@ -329,7 +331,8 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Damage above the deposit', points: [
         'Aerva handles damage claims only up to the security deposit.',
-        'Damage above the deposit, or where no deposit is held, is between the host and the guest, to be resolved under the law. Aerva is not a party to it and pays no part of it.'
+        'Damage above the deposit, or where no deposit is held, is between the host and the guest, and is to be settled directly between them.',
+        'Aerva provides no support beyond the security deposit and the booking details. It is not a party to any settlement and pays no part of it.'
       ]}
     ]},
     { id: 'reviews', title: 'Reviews Policy', summary: 'The rules for reviews left on Aerva.', sections: [
