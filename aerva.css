@@ -2376,3 +2376,200 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
   padding:9px 18px; font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; }
 .review-prompt-btn:hover{ opacity:0.9; }
 @media (max-width:640px){ .review-prompt{ margin:0 14px 10px; } .review-prompt-btn{ width:100%; } }
+
+
+/* =====================================================================
+   DESIGN REFINEMENT (Sept 2026) — clarity for every guest
+   ---------------------------------------------------------------------
+   One layer, placed last, that refines the site rather than rewriting it:
+   • real text colours instead of faded (opacity) grey, so everything
+     passes accessibility contrast and reads clearly at any age;
+   • nothing smaller than 13px; body text 16px;
+   • photos at full strength (the white wash across the top of every
+     listing photo is replaced by a light dark fade behind the badges);
+   • listing cards in a clear order: name, place, rating, key facts,
+     up to three features, then a separate price band with "View details";
+   • booking in numbered steps, with plain labels and large buttons.
+   Brand stays as it is: white, gold, Bodoni Moda for names and headings,
+   Jost for everything else.
+   ===================================================================== */
+:root{
+  --ink:#1c1b19;          /* headings and body text */
+  --ink-2:#4a453e;        /* secondary text (10:1 on white) */
+  --ink-3:#6e675d;        /* fine print (5.6:1 on white) */
+  --gold-text:#7c6030;    /* gold used for words (5.9:1 on white) */
+  --hairline:#e7dfd4;
+  --surface-2:#f7f3ee;    /* quiet panels: chips, the price band */
+  --ok:#2f6b3a;
+  --alert:#a3402f;
+}
+body{ font-size:16px; line-height:1.6; color:var(--ink); text-rendering:optimizeLegibility; }
+:focus-visible{ outline:2px solid var(--gold); outline-offset:3px; }
+input, select, textarea{ font-size:16px; }          /* also stops phones zooming in */
+
+/* ---- Buttons: larger, sentence case, unmistakable ---- */
+.btn{
+  min-height:48px; padding:13px 28px; border-radius:8px;
+  font-family:'Jost', sans-serif; font-size:15.5px; font-weight:500;
+  letter-spacing:0.02em; text-transform:none;
+  display:inline-flex; align-items:center; justify-content:center; text-align:center;
+}
+.btn.solid{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.btn.solid:hover{ background:var(--gold-text); border-color:var(--gold-text); color:#fff; }
+.btn:disabled, .btn[disabled]{ opacity:0.55; cursor:not-allowed; }
+
+/* ---- Form fields: visible labels in plain words ---- */
+.field label{
+  font-size:14px; font-weight:500; letter-spacing:0; text-transform:none; color:var(--ink-2);
+}
+.label-hint{ font-weight:400; color:var(--ink-3); }
+.field input, .field select{ font-size:16px; padding:12px 2px; border-bottom-color:#cfc5b8; }
+.field input::placeholder{ color:#8f877c; }
+
+/* ---- Listing cards ---- */
+.suite-grid{ gap:32px 28px; }
+.suite-card{
+  border:1px solid #ddd3c6; border-radius:12px;
+  box-shadow:0 1px 2px rgba(28,27,25,0.06), 0 10px 26px rgba(28,27,25,0.09);
+}
+.suite-card:hover{ transform:translateY(-3px); border-color:#c9b48e; box-shadow:0 2px 4px rgba(28,27,25,0.07), 0 16px 34px rgba(28,27,25,0.13); }
+.suite-card:focus-within{ border-color:var(--gold); }
+/* Full-strength photos: a short, light dark fade only behind the badges. */
+.suite-photo{ aspect-ratio:4/3; background:#e9e2d8; }
+.suite-photo::before{
+  height:72px;
+  background:linear-gradient(180deg, rgba(20,18,15,0.34) 0%, rgba(20,18,15,0.14) 55%, rgba(20,18,15,0) 100%);
+}
+.suite-photo img, .suite-photo-slider img{ filter:contrast(1.04) saturate(1.06); }
+.suite-card:hover .suite-photo img{ transform:scale(1.03); }
+.suite-badge{
+  background:#fff; color:var(--ink);
+  font-size:12px; font-weight:500; letter-spacing:0.01em; text-transform:none;
+  padding:5px 10px; border-radius:999px; box-shadow:0 1px 3px rgba(0,0,0,0.18);
+}
+.suite-badge-discount{ background:var(--alert); color:#fff; }
+.suite-unavailable-badge{ font-size:12px; letter-spacing:0.01em; text-transform:none; }
+.suite-photo-dots span{ width:6px; height:6px; background:rgba(255,255,255,0.7); box-shadow:0 0 2px rgba(0,0,0,0.4); }
+
+.suite-body{ padding:18px 20px 0; gap:0; }
+.suite-card h3{
+  font-family:'Bodoni Moda', Georgia, serif; font-size:21px; font-weight:500; line-height:1.25; color:var(--ink);
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+}
+.suite-card .loc{
+  font-size:14.5px; letter-spacing:0; text-transform:none; color:var(--ink-2); opacity:1; margin-top:6px;
+}
+.suite-rating{ font-size:14.5px; margin-top:8px; color:var(--ink); }
+.suite-star{ color:var(--gold); font-size:15px; }
+.suite-rating-count, .suite-rating-new{ font-size:14px; color:var(--ink-3); opacity:1; }
+/* Facts are spaced apart, not joined by separators: a separator is left
+   dangling at the end of a line whenever the row wraps. */
+.suite-meta{
+  gap:4px 18px; margin-top:10px; font-size:14.5px; color:var(--ink-2); opacity:1;
+}
+.suite-meta > *:not(:last-child)::after{ content:none; }
+.suite-map-link{ color:var(--gold-text); text-underline-offset:3px; }
+.amenity-tags{ gap:6px; margin-top:12px; }
+.amenity-tag{
+  font-size:13px; padding:4px 11px; border-radius:999px; opacity:1;
+  background:var(--surface-2); color:var(--ink-2); border:1px solid #ebe3d8;
+}
+.amenity-tag-more{ background:transparent; color:var(--gold-text); border-color:#e0d6c8; }
+
+/* The price band: its own quiet panel, so price and the next step are
+   never lost among the details above. */
+/* margin-top:auto keeps the band on the bottom edge of every card, so
+   prices line up across a row whatever the details above them. The item
+   just before it keeps a fixed gap. */
+.suite-body > :nth-last-child(2){ margin-bottom:18px; }
+.suite-foot{
+  display:flex; align-items:flex-end; justify-content:space-between; gap:12px;
+  margin:auto -20px 0; padding:14px 20px 16px;
+  background:var(--surface-2); border-top:1px solid var(--hairline);
+}
+.suite-price{ display:flex; flex-direction:column; gap:1px; min-width:0; }
+.suite-price-from{ font-size:13px; color:var(--ink-3); }
+.suite-price-line{ line-height:1.25; }
+.suite-price-amount{ font-size:21px; font-weight:600; color:var(--ink); letter-spacing:-0.01em; }
+.suite-price-unit{ font-size:14px; color:var(--ink-2); }
+.suite-offer{ font-size:13.5px; color:var(--ok); margin-top:3px; }
+.suite-cta{
+  flex:none; font-size:14px; font-weight:500; color:var(--ink);
+  border:1px solid var(--ink); border-radius:8px; padding:8px 14px; white-space:nowrap;
+  transition:background .2s ease, color .2s ease;
+}
+.suite-card:hover .suite-cta{ background:var(--ink); color:#fff; }
+.suite-card--unavailable{ opacity:1; filter:none; }
+.suite-card--unavailable .suite-photo img{ filter:grayscale(35%) brightness(0.92); }
+.suite-card--unavailable .suite-check-availability{ font-size:13px; padding:9px 12px; border-radius:8px; letter-spacing:0; }
+.suites-empty{ font-size:15px; color:var(--ink-2); opacity:1; }
+.browse-row-head h3{ font-size:30px; }
+
+/* ---- Listing page ---- */
+.listing-modal-section-title{
+  font-family:'Jost', sans-serif; font-size:16px; font-weight:600; letter-spacing:0;
+  text-transform:none; color:var(--ink); margin:28px 0 12px;
+}
+.listing-modal-content .listing-modal-section-title{ color:var(--ink); border-bottom:1px solid var(--hairline); padding-bottom:8px; }
+.listing-modal-content .loc{ font-size:15px; letter-spacing:0; text-transform:none; color:var(--ink-2); }
+.listing-modal-content .desc{ font-size:16px; line-height:1.75; color:var(--ink); opacity:1; max-width:68ch; }
+.listing-col-booking .price{ font-size:17px; color:var(--ink-2); }
+.listing-col-booking .price strong{ font-size:26px; font-weight:600; color:var(--ink); }
+.listing-col-booking .offer{ font-size:14px; font-style:normal; font-family:'Jost', sans-serif; letter-spacing:0; }
+/* Small grey helper lines written inline across the booking column: made
+   readable without touching each one. */
+.listing-modal p[style*="font-size:11"], .listing-modal p[style*="font-size:12"],
+#listingFullView p[style*="font-size:11"], #listingFullView p[style*="font-size:12"],
+#experienceFullView p[style*="font-size:11"], #experienceFullView p[style*="font-size:12"]{
+  font-size:14px !important; line-height:1.55 !important;
+}
+.listing-modal p[style*="opacity"], #listingFullView p[style*="opacity"], #experienceFullView p[style*="opacity"]{
+  opacity:1 !important; color:var(--ink-3);
+}
+.guest-row-title{ font-size:17px; }
+.guest-row-sub, .guest-row-sub-muted{ font-size:14.5px; color:var(--ink-3); opacity:1; }
+.guest-step-btn{ min-width:44px; min-height:44px; font-size:20px; }
+.guest-count{ font-size:18px; min-width:28px; text-align:center; }
+.coupon-rule{ font-size:13.5px; color:var(--ink-3); line-height:1.5; }
+.sum-row{ font-size:15.5px; padding:5px 0; }
+
+/* Booking steps */
+.book-step{ display:flex; align-items:center; gap:12px; margin:26px 0 12px; }
+.listing-col-booking > .book-step:first-child, .listing-col-booking > .price + .book-step{ margin-top:18px; }
+.book-step-n{
+  flex:none; width:30px; height:30px; border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:var(--ink); color:#fff; font-size:15px; font-weight:600;
+}
+.book-step-text{ font-size:18px; font-weight:600; color:var(--ink); letter-spacing:0; }
+.step-help{ font-size:14.5px; color:var(--ink-2); margin:-4px 0 14px; }
+.pay-note{ font-size:14px; color:var(--ink-2); line-height:1.55; margin-top:12px; text-align:center; }
+
+/* Sheets and dialogs used across booking, cancelling and payouts */
+.payout-sheet .payout-muted{ color:var(--ink-2); opacity:1; font-size:15px; }
+.payout-line{ font-size:15.5px; }
+
+@media (max-width:640px){
+  .suite-card h3{ font-size:20px; }
+  .suite-price-amount{ font-size:20px; }
+  .book-step-text{ font-size:17px; }
+  .suite-cta{ padding:8px 12px; }
+}
+@media (prefers-reduced-motion: reduce){
+  .suite-card:hover{ transform:none; }
+  .suite-card:hover .suite-photo img{ transform:none; }
+}
+/* The total is what every guest checks before paying: give it weight. */
+.sum-row[style*="font-weight:600"]{ font-size:19px; padding-top:12px !important; }
+
+/* "Prices have been changed recently" — shown in place of payment when a
+   host changed a price after the page loaded. Sits inside the booking
+   message area (which is styled red for errors), so it sets its own look. */
+.price-changed{
+  color:var(--ink); font-style:normal; font-family:'Jost', sans-serif; letter-spacing:0;
+  background:#fbf6ec; border:1px solid #e6d3ab; border-left:4px solid var(--gold);
+  border-radius:10px; padding:14px 16px; margin-top:6px;
+}
+.price-changed-title{ font-size:16px; font-weight:600; margin:0 0 8px; color:var(--ink); }
+.price-changed .sum-row{ font-size:15px; }
+.price-changed-total{ font-size:18px !important; font-weight:600; border-top:1px solid #e6d3ab; margin-top:6px; padding-top:10px !important; }

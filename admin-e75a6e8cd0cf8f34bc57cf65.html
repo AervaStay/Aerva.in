@@ -246,6 +246,7 @@
       <button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs</button>
       <button class="tab-btn" id="tabTrafficBtn" onclick="switchTab('traffic')">Traffic</button>
       <button class="tab-btn" id="tabPayoutsBtn" onclick="switchTab('payouts')">Payouts</button>
+      <button class="tab-btn" id="tabTrustBtn" onclick="switchTab('trust')">Guest Safety</button>
       <button class="tab-btn" id="tabAuditBtn" onclick="switchTab('audit')">Audit Log</button>
       <button class="tab-btn" id="tabPoliciesBtn" onclick="switchTab('policies')">Policies</button>
     </div>
@@ -391,7 +392,16 @@
     <p style="opacity:0.7; font-size:14px;">The 200 most recent paid bookings: the host payout (after Aerva’s commission), each co-host’s share, and what the host keeps, with where each is paid. “Hold” means that person’s bank details are not approved yet.</p>
     <div id="payoutsList"><p style="opacity:0.6;">Loading…</p></div>
   </div>
-  <div id="auditView" style="display:none;">
+  <div id="trustView" style="display:none;">
+      <h3>Stay disputes</h3>
+      <p style="font-size:13.5px; opacity:0.75; max-width:760px;">A guest reported a problem during the stay. Give the host’s account more weight: refund only when the guest’s evidence stands and the host cannot justify. A refund covers the nights from the day it was raised to check-out; the host is paid for the nights used. The host’s payout is held until you decide.</p>
+      <div id="stayDisputesList"><p style="opacity:0.6;">Loading…</p></div>
+      <h3 style="margin-top:34px;">Guest ID proofs to review</h3>
+      <p style="font-size:13.5px; opacity:0.75; max-width:760px;">Every booking needs a valid ID. Rejecting an ID gives the guest a short deadline on their upcoming bookings; without a new valid ID they are cancelled and refunded in full.</p>
+      <div id="guestIdsList"><p style="opacity:0.6;">Loading…</p></div>
+    </div>
+
+    <div id="auditView" style="display:none;">
     <h2 style="font-family:Georgia,serif; font-weight:normal;">Audit log</h2>
     <div class="audit-filters">
       <select id="auditWho">
@@ -1379,8 +1389,46 @@
             ${j.lastOk === false ? ' · FAILED: ' + escAdmin(j.lastError || '') : j.lastOk ? ' · OK · ' + escAdmin(jobSummary(j.lastResult)) : ''}
             ${j.failures ? ' · ' + Number(j.failures) + ' failure' + (j.failures === 1 ? '' : 's') + ' in ' + Number(j.runs) + ' runs' : ''}
           </div>
+          <div style="font-size:13px; margin-top:4px;">
+            ${j.lastImpactCount ? `Last affected <strong>${Number(j.lastImpactCount)} ${Number(j.lastImpactCount) === 1 ? 'person' : 'people'}</strong> (${escAdmin(jobWhen(j.lastImpactAt))})` : '<span style="opacity:0.6;">No one affected recently</span>'}
+            · <a href="#" style="color:#8a6c39;" onclick="toggleJobRuns('${escAdmin(j.name)}', this); return false;">Recent runs</a>
+          </div>
+          <div id="jobRuns-${escAdmin(j.name)}" style="display:none; margin-top:10px;"></div>
         </div>`).join('');
     }catch(e){ box.innerHTML = '<p>Could not load jobs.</p>'; }
+  }
+  // Recent runs of one job: when, outcome, and exactly who was affected.
+  async function toggleJobRuns(name, link){
+    const box = document.getElementById('jobRuns-' + name);
+    if(!box) return;
+    if(box.style.display === 'block'){ box.style.display = 'none'; link.textContent = 'Recent runs'; return; }
+    box.style.display = 'block'; link.textContent = 'Hide runs';
+    box.innerHTML = '<p style="opacity:0.6; font-size:13px;">Loading…</p>';
+    try{
+      const res = await fetch(API_BASE + '/api/get-listings?jobRuns=1&job=' + encodeURIComponent(name) + '&limit=20', { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load runs.') + '</p>'; return; }
+      if(!d.runs.length){ box.innerHTML = '<p style="font-size:13px; opacity:0.7;">No runs have affected anyone yet.</p>'; return; }
+      box.innerHTML = d.runs.map((r, i) => `
+        <details style="border:1px solid #eee; border-radius:8px; padding:8px 12px; margin-bottom:8px;${r.ok ? '' : ' border-left:3px solid #a3402f;'}">
+          <summary style="cursor:pointer; font-size:13.5px;">
+            <strong>${escAdmin(new Date(r.started_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</strong>
+            · ${r.ok ? 'OK' : 'Failed'} · ${Number(r.affected_count)} ${Number(r.affected_count) === 1 ? 'person' : 'people'} affected
+            ${r.error ? ' · ' + escAdmin(r.error) : ''}
+          </summary>
+          ${(r.affected || []).length ? `
+          <div style="overflow-x:auto; margin-top:8px;">
+            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+              <thead><tr style="text-align:left; border-bottom:1px solid #ddd;"><th style="padding:6px 8px;">Who</th><th style="padding:6px 8px;">Name</th><th style="padding:6px 8px;">Email</th><th style="padding:6px 8px;">What happened</th></tr></thead>
+              <tbody>${r.affected.map(p => `<tr style="border-bottom:1px solid #f2f2f2;">
+                <td style="padding:6px 8px; white-space:nowrap;">${escAdmin(p.who)}</td>
+                <td style="padding:6px 8px;">${escAdmin(p.name)}</td>
+                <td style="padding:6px 8px;">${escAdmin(p.email)}</td>
+                <td style="padding:6px 8px;">${escAdmin(p.what)}</td></tr>`).join('')}</tbody>
+            </table>
+          </div>` : '<p style="font-size:13px; opacity:0.7; margin:6px 0 0;">No one was affected by this run.</p>'}
+        </details>`).join('');
+    }catch(e){ box.innerHTML = '<p>Could not load runs.</p>'; }
   }
   async function runJobNow(name){
     const res = await fetch(API_BASE + '/api/get-listings?runJob=' + encodeURIComponent(name), { headers: authHeaders() });
@@ -1710,6 +1758,9 @@
     document.getElementById('tabTrafficBtn').classList.toggle('active', tab === 'traffic');
     document.getElementById('tabPayoutsBtn').classList.toggle('active', tab === 'payouts');
     document.getElementById('tabAuditBtn').classList.toggle('active', tab === 'audit');
+    document.getElementById('tabTrustBtn').classList.toggle('active', tab === 'trust');
+    document.getElementById('trustView').style.display = tab === 'trust' ? 'block' : 'none';
+    if(tab === 'trust'){ loadStayDisputes(); loadGuestIds(); }
     document.getElementById('tabPoliciesBtn').classList.toggle('active', tab === 'policies');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
@@ -1826,6 +1877,7 @@
       if(l.status === 'approved'){
         actions = `
           <button type="button" class="reject-btn" onclick="promptListingStatus(${l.id}, 'block')">Block</button>
+          <button type="button" class="reject-btn" onclick="blockForPhoneInPhoto(${l.id})" title="A listing photo shows a phone number: block at once">Block: phone number in photo</button>
           <button type="button" class="reject-btn" onclick="promptListingStatus(${l.id}, 'remove')">Remove</button>
         `;
       } else if(l.status === 'blocked'){
@@ -1857,6 +1909,78 @@
     const reason = window.prompt(`Reason for ${label} this listing (optional, shown to the host):`, '');
     if(reason === null) return; // cancelled
     setListingStatus(listingId, action, reason);
+  }
+
+  // Content Policy: no phone numbers (or other contact details) in listing
+  // photos. One click blocks the listing at once, with this reason emailed
+  // to the host. They replace the photo and ask Aerva to unblock.
+  const PHONE_IN_PHOTO_REASON = 'A photo in this listing shows a phone number. Phone numbers and other contact details are not allowed in listing photos, so the listing has been blocked. Replace the photo from Manage listing, then write to hello@aerva.in to have it reviewed.';
+  function blockForPhoneInPhoto(listingId){
+    if(!confirm('Block this listing now because a photo shows a phone number? The host is emailed the reason.')) return;
+    setListingStatus(listingId, 'block', PHONE_IN_PHOTO_REASON);
+  }
+
+  // ---- Guest Safety tab: stay disputes and guest ID proofs ----
+  const fileLinks = (list) => (list || []).map((u, i) => `<a href="${escAdmin(u)}" target="_blank" rel="noopener" style="margin-right:10px;">File ${i + 1}</a>`).join('') || '<span style="opacity:0.6;">none</span>';
+  async function loadStayDisputes(){
+    const box = document.getElementById('stayDisputesList');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?stayDisputes=1', { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
+      if(!d.disputes.length){ box.innerHTML = '<p style="opacity:0.7;">No open disputes.</p>'; return; }
+      box.innerHTML = d.disputes.map(x => `
+        <div style="border:1px solid #e6ded3; border-radius:10px; padding:14px 16px; margin-bottom:12px;">
+          <strong>#${Number(x.id)} · ${escAdmin(x.suite_name)}</strong> · ${escAdmin(String(x.arrival).slice(0,10))} → ${escAdmin(String(x.departure).slice(0,10))} · raised ${escAdmin(String(x.raised_date).slice(0,10))}
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:10px; font-size:14px;">
+            <div style="background:#f7f3ee; border-radius:8px; padding:10px;"><strong>Host${x.host_name ? ' — ' + escAdmin(x.host_name) : ''}</strong><br>
+              ${x.host_response ? escAdmin(x.host_response) : '<span style="opacity:0.6;">No reply yet</span>'}<br><small>${fileLinks(x.host_evidence)}</small></div>
+            <div style="border:1px solid #eee; border-radius:8px; padding:10px;"><strong>Guest${x.guest_name ? ' — ' + escAdmin(x.guest_name) : ''}</strong>: ${escAdmin((d.reasons || {})[x.reason] || x.reason)}<br>
+              ${escAdmin(x.details || '')}<br><small>${fileLinks(x.evidence)}</small></div>
+          </div>
+          <input id="dispNote-${Number(x.id)}" placeholder="Note to both (optional)" style="width:100%; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="approve-btn" onclick="decideStayDispute(${Number(x.id)}, false)">No refund (host justified)</button>
+            <button type="button" class="reject-btn" onclick="decideStayDispute(${Number(x.id)}, true)">Refund from the day raised to check-out</button>
+          </div>
+          <p id="dispErr-${Number(x.id)}" style="color:#a3402f; font-size:13px;"></p>
+        </div>`).join('');
+    }catch(e){ box.innerHTML = '<p>Could not load disputes.</p>'; }
+  }
+  async function decideStayDispute(id, refund){
+    if(!confirm(refund ? 'Refund the guest for the nights from the day this was raised to check-out? The host is paid for the nights used.' : 'Decide no refund?')) return;
+    const note = (document.getElementById('dispNote-' + id) || {}).value || '';
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ decideStayDispute: { disputeId: id, refund, note } }) });
+    const d = await res.json().catch(() => ({}));
+    if(!res.ok){ const e = document.getElementById('dispErr-' + id); if(e) e.textContent = d.error || 'Could not decide.'; return; }
+    if(refund) alert(`Refunded ${d.refundNights} night(s): ₹${Number(d.total).toLocaleString('en-IN')}. Host is paid ₹${Number(d.hostPayout).toLocaleString('en-IN')}.`);
+    loadStayDisputes();
+  }
+  async function loadGuestIds(){
+    const box = document.getElementById('guestIdsList');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?guestIds=1', { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
+      if(!d.ids.length){ box.innerHTML = '<p style="opacity:0.7;">No IDs waiting for review.</p>'; return; }
+      box.innerHTML = d.ids.map(x => `
+        <div style="border:1px solid #e6ded3; border-radius:10px; padding:12px 16px; margin-bottom:10px; font-size:14px;">
+          <strong>${escAdmin(x.name || 'Guest')}</strong> · ${escAdmin(x.email)} · ${escAdmin(x.phone || 'no phone')} · ${escAdmin((d.types || {})[x.type] || x.type)}
+          · ${x.url ? `<a href="${escAdmin(x.url)}" target="_blank" rel="noopener">Open ID</a>` : '<span style="color:#a3402f;">unreadable — check DATA_ENCRYPTION_KEY</span>'}
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="approve-btn" onclick="reviewGuestId(${Number(x.guestId)}, true)">Verify</button>
+            <button type="button" class="reject-btn" onclick="reviewGuestId(${Number(x.guestId)}, false)">Reject</button>
+          </div>
+        </div>`).join('');
+    }catch(e){ box.innerHTML = '<p>Could not load IDs.</p>'; }
+  }
+  async function reviewGuestId(guestId, approve){
+    let reason = '';
+    if(!approve){ reason = prompt('Why is this ID not accepted? The guest sees this.', 'The photo is not clear enough to read. Please upload a clear photo or PDF of a valid government ID.'); if(reason === null) return; }
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ reviewGuestId: { guestId, approve, reason } }) });
+    const d = await res.json().catch(() => ({}));
+    if(!res.ok){ alert(d.error || 'Could not save.'); return; }
+    loadGuestIds();
   }
 
   async function setListingStatus(listingId, action, reason){

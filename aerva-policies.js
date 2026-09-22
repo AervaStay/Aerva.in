@@ -11,19 +11,21 @@
 // admin tool.
 window.AERVA_POLICIES = {
   version: '1.0',
-  updated: 'September 2026',
+  updated: '22 September 2026',
   contact: 'hello@aerva.in',
 
   // Shown before payment (guest) and before listing (host). The version is
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-09d',
+    version: '2026-09f',
     guest: {
       title: 'Booking agreement',
       points: [
         'Your booking is an agreement between you and the host. Aerva is the platform that connects you and takes payment.',
-        'You: give true details of every guest and pet, carry ID, follow the house rules and the law, and pay for any damage you or your guests cause.',
+        'You: give true details of every guest and pet, keep a phone number and a valid ID proof on your account, carry ID, follow the house rules and the law, and pay for any damage you or your guests cause.',
+        'Your booking is confirmed only when payment completes within the 90-second payment window. A payment that does not match the booking amount, or completes after the window, is not a booking and is refunded.',
+        'Cancellations and changes are requests to the host through Aerva Messages, under the refund policy shown before you pay. Problems during the stay are reported through Aerva with evidence; Aerva decides.',
         'The host: provides the home or experience as described, keeps it safe and clean, and follows local laws.',
         'Aerva: takes your payment, handles refunds and complaints under Aerva’s Policies, and keeps your booking records.',
         'No violence, threats, verbal abuse, harassment or discrimination of any kind, including on gender.',
@@ -41,6 +43,8 @@ window.AERVA_POLICIES = {
       points: [
         'Each booking is an agreement between you and the guest. Aerva is the platform that connects you and takes payment.',
         'You: list accurately, keep your property safe, clean and legal, hold every registration your area requires, report foreign guests on Form III within 24 hours, and honour every confirmed booking.',
+        'Keep a phone number on your account and listing. Listing photos must not show phone numbers or any other contact details; a listing with such a photo is blocked immediately.',
+        'Answer guests’ cancellation and change requests in Aerva Messages. When a guest reports a problem during a stay, give your side; your payout for that booking is held until Aerva decides.',
         'The guest: follows your house rules and the law, and pays for damage they cause.',
         'Aerva: takes payment, pays you your share after Aerva’s fees and taxes, and handles refunds and complaints under Aerva’s Policies.',
         'You are responsible for your own taxes, insurance and legal compliance.',
@@ -174,6 +178,8 @@ window.AERVA_POLICIES = {
     sections: [
       { id: 'collect', title: 'What Aerva collects', points: [
         'Details you give: name, email, phone, profile, bookings, messages and reviews.',
+        'From guests: an ID proof, required to book. Only Aerva sees it; hosts see only that an ID is on file. It is kept until you replace it or delete your account.',
+        'Photos and documents you send as evidence when reporting a problem with a stay.',
         'From hosts and co-hosts: verification results, PAN, bank details and listing details.',
         'Payment references. Card and UPI details are handled by the payment provider, not Aerva.',
         'Technical data such as IP address and device, for security.'
@@ -210,6 +216,16 @@ window.AERVA_POLICIES = {
         'Charges are in Indian Rupees. Amounts shown in other currencies are estimates.',
         'A booking is confirmed only when payment succeeds.'
       ]},
+      { title: 'The payment window', points: [
+        'When you continue to payment, the dates are held for you for 90 seconds. No one else can book or see them as available during that time.',
+        'Pay within the 90 seconds. Closing the payment window, a failed payment or the timer running out ends it at once and releases the dates.',
+        'A payment completed after the window has ended, or after it was closed or cancelled, is not a booking. It is refunded in full.',
+        'You have 5 payment attempts per listing per day.',
+        'If the host changes a price after you open a listing, you are shown the new price before paying.'
+      ]},
+      { title: 'Amount checks', points: [
+        'The amount you pay must equal the booking amount. If it does not, the booking is cancelled and the full amount paid is refunded the next day.'
+      ]},
       { title: 'Refunds', points: [
         'Refunds, where due, go to the original payment method. Timing depends on your bank or card issuer.'
       ]},
@@ -234,7 +250,7 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',
-        'Service fees are refunded only when a host cancels, or where Aerva decides or the law requires.',
+        'The guest service fee is not refunded when a guest cancels. It is refunded when a host cancels, when a stay issue is upheld (for the nights refunded), or where Aerva decides or the law requires.',
         'Aerva may change its fees. The fees shown when you book apply to that booking.'
       ]}
     ]},
@@ -278,20 +294,56 @@ window.AERVA_POLICIES = {
       ]}
     ]},
     { id: 'cancellation-stays', title: 'Cancellation Policy for Stays', summary: 'How cancellations work for stays.', sections: [
-      { title: 'Guests', points: [
-        'For an environmental hazard, a life-threatening situation or an emergency, request a cancellation from My Bookings. If the host accepts, you are refunded in full.',
-        'For any other cancellation, write to hello@aerva.in with your booking ID. Refunds, where due, follow the terms shown when you booked.'
+      { title: 'Refund policies', points: [
+        'Each listing has a Flexible or Firm policy, shown before you pay. Your booking keeps the policy it was paid under.',
+        'Flexible: 30 or more days before check-in, full refund; 10 to 29 days, 80%; 5 to 9 days, 50%; 2 to 4 days, 30%; less than 2 days, the host decides (0 to 100%).',
+        'Firm: 30 or more days before check-in, full refund; 5 to 29 days, 50%; less than 5 days, the host decides (0 to 100%). If the host declines, there is no refund.',
+        'Days are counted to the listing’s check-in time, where the property is. For example, for check-in tomorrow at 1:00 PM, a request made today before 1:00 PM is 24 hours or more before check-in; a request at 2:00 PM is less.'
+      ]},
+      { title: 'How a guest cancels', points: [
+        'Send a cancellation request from My Bookings or the booking’s Messages thread. The host accepts or rejects it.',
+        'The refund percentage is fixed when you send the request.',
+        'If the host does not answer within 24 hours, a request with a fixed refund is accepted at that refund, and a request where the host decides is settled with no refund.',
+        'Refunds cover the booking price and its GST at the percentage above. Aerva’s guest service fee is not refunded. The security deposit is always refunded in full.',
+        'For an environmental hazard, a life-threatening situation, a medical or family emergency, or a travel restriction, choose that reason. If the host accepts, the booking price, GST and deposit are refunded in full.',
+        'A part paid by coupon is returned as a coupon, in the same proportion.'
       ]},
       { title: 'Hosts', points: [
-        'Hosts may cancel only more than 48 hours before check-in, and must give a reason. The guest is told the reason.',
-        'When a host cancels, the guest is refunded in full at once (booking and security deposit). The refund starts automatically.',
-        'The guest also receives an Aerva coupon worth 10% of the booking, valid for 3 months. It is sent automatically 15 minutes after the cancellation.',
-        'The host pays for the coupon, either before cancelling or by deduction from their next payout.'
+        'Hosts may cancel only 48 hours or more before check-in time, and must give a reason. The guest is told the reason.',
+        'A host may cancel at most 3 bookings in any 12 months. Further cancellations are handled only by Aerva.',
+        'When a host cancels, the guest is refunded in full at once (booking, fees and security deposit).',
+        'The guest also receives an Aerva coupon worth 10% of the booking, valid for 3 months, sent automatically 15 minutes after the cancellation. The host pays for it, before cancelling or from their next payout.',
+        'What a guest is not refunded after cancelling is paid to the host, less Aerva’s commission, on the usual payout day.'
       ]},
       { title: 'Co-hosts', points: [
-        'The same rules apply when a co-host cancels on the host’s behalf.',
-        'The co-host pays for the coupon from their own account before cancelling.',
-        'Any money between a host and a co-host, including for cancellations, is for them to settle between themselves. Aerva is not involved.'
+        'The same rules apply when a co-host acts for the host. A co-host pays for the coupon from their own account before cancelling.',
+        'Any money between a host and a co-host is for them to settle between themselves.'
+      ]}
+    ]},
+    { id: 'booking-changes', title: 'Changing a Booking', summary: 'How guests change dates, guests, pets or add-ons.', sections: [
+      { title: 'What can change', points: [
+        'Stays: dates (move, extend or shorten), the number of guests, pets and paid add-ons.',
+        'Experiences: the date and the number of guests.',
+        'An experience that includes a stay changes together with its stay: a new date moves both, and the number of guests applies to both.',
+        'Before check-in, and during the stay until 12:00 AM (midnight) at the start of check-out day (for an experience, its last day), where the property is. From then on no change is possible.',
+        'During a stay, check-in cannot move; check-out, guests and add-ons can.'
+      ]},
+      { title: 'How', points: [
+        'Choose the change in My Bookings. The new price and the difference are shown before you send it.',
+        'The request goes to the host in Aerva Messages. The host accepts or rejects it. Until then, the booking stays as it is.',
+        'If the new total is lower, the full difference is refunded once the host accepts.',
+        'If the new total is higher, pay the difference within 24 hours of the host accepting, through the 90-second payment window. The change applies only when that payment succeeds.',
+        'If prices change before the host answers or before you pay, the request closes; send a new one.'
+      ]}
+    ]},
+    { id: 'booking-requirements', title: 'Booking Requirements', summary: 'What every guest needs to book, and late-night bookings.', sections: [
+      { title: 'To book', points: [
+        'An Aerva account, with your phone number and a valid ID proof of the guest booking: Aadhaar, passport, driving licence, voter ID or PAN card. Guests from outside India use a passport.',
+        'If a booking is paid but no valid ID is on your account (for example, it was removed or not accepted), add a valid ID by the time shown in My Bookings. Otherwise the booking is cancelled and everything paid is refunded in full.',
+        'Aerva may review any ID and ask for a new one.'
+      ]},
+      { title: 'Late-night bookings', points: [
+        'Between 12:00 AM and 6:00 AM, where the property is, you may still book the night that has already begun. It counts as the previous day’s night, with check-out that day or later. Once booked, you may check in straight away.'
       ]}
     ]},
     { id: 'cancellation-experiences', title: 'Cancellation Policy for Experiences', summary: 'How cancellations work for experiences.', sections: [
@@ -309,13 +361,16 @@ window.AERVA_POLICIES = {
         'Known or foreseeable events at the time of booking, and personal circumstances, are not covered.'
       ]}
     ]},
-    { id: 'stay-issues', title: 'Stay Issues and Refund Policy', summary: 'What happens when a stay cannot go ahead as booked.', sections: [
-      { title: 'When it applies', points: [
-        'You cannot get in, or the property is unsafe, not clean, or significantly different from its listing.'
+    { id: 'stay-issues', title: 'Stay Issues and Refund Policy', summary: 'What happens when a guest is not happy during a stay.', sections: [
+      { title: 'Reporting a problem', points: [
+        'During the stay, up to the day before check-out, report the problem from My Bookings with at least one photo or document as evidence.',
+        'The host is told and gives their side through Aerva. The host’s payout for the booking is held until Aerva decides.'
       ]},
-      { title: 'What to do', points: [
-        'Tell your host through Aerva Messages and write to hello@aerva.in with photos, before check-out.',
-        'Aerva may offer a full or partial refund or an Aerva coupon, at its discretion.'
+      { title: 'Aerva’s decision', points: [
+        'Aerva gives the host’s account more weight. A refund is given only when the guest’s evidence stands and the host cannot justify.',
+        'If upheld, the nights from the day the problem was reported to check-out are refunded, with their GST and service fee. The host is paid for the nights already used, less Aerva’s commission.',
+        'The security deposit is handled separately under the Security Deposit and Damage Policy.',
+        'Aerva’s decision is full and final.'
       ]}
     ]},
     { id: 'refund-experiences', title: 'Refund Policy for Experiences', summary: 'How refunds work when an experience is disrupted.', sections: [
@@ -395,6 +450,7 @@ window.AERVA_POLICIES = {
       { title: 'Not allowed', points: [
         'Content that is illegal, false or misleading, sexual, violent, hateful or harassing.',
         'Other people’s personal information, contact details or links for booking outside Aerva.',
+        'Phone numbers, email addresses, websites, social media handles or QR codes in listing photos. A listing with such a photo is blocked immediately.',
         'Photos that are not of the actual listing, or that you do not have the right to use.',
         'Spam or advertising.'
       ]},
@@ -471,12 +527,15 @@ window.AERVA_POLICIES = {
     ]},
     { title: 'How Aerva stores sensitive data', points: [
       'Aadhaar: document deleted on approve or reject; only the status is kept. Aadhaar numbers are never collected.',
+      'Guest ID proof: file address stored encrypted; only admins open it (Guest Safety tab). Erased when the account is deleted.',
       'PAN: card image deleted on review; number kept encrypted (AES-256-GCM, key in Vercel).',
       'Bank account and co-host GSTIN: kept encrypted.',
       'Audit log: every admin, host, co-host and system action is recorded and never deleted.'
     ]},
     { title: 'How admins apply these policies', points: [
       'Deposit disputes: decide within the dispute tab; record the reason.',
+      'Stay disputes (Guest Safety tab): give the host’s account more weight; refund only when the guest’s evidence stands and the host cannot justify.',
+      'Listing photos with phone numbers or other contact details: use “Block: phone number in photo” on the listing.',
       'Hazard reports: rebook or refund the guest when the property is unsafe; review the listing.',
       'Reviews: remove only when false, abusive or retaliatory; the badge recalculates.',
       'Compliance flags: hosts have 15 days; listings are blocked automatically after that.',
@@ -488,7 +547,8 @@ window.AERVA_POLICIES = {
   openItems: [
     'Add the Grievance Officer’s name and designation to the Complaints section (required by the E-Commerce Rules).',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',
-    'Guests cannot cancel online yet; cancellations come by email. Decide stay cancellation terms (e.g. flexible / firm) before building self-cancellation.',
+    'Have the lawyer review agreements 2026-09f: ID proof requirement and cancellation for a missing ID, the 90-second payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
+    'Confirm with the CA how GST is treated on the part of a booking price kept after a guest cancels.',
     'TDS under section 194-O is not yet deducted from payouts. Confirm the rate with the CA before real payouts.',
     'Remind hosts to file Form III when a foreign guest books (not built).',
     'Aadhaar and PAN files waiting for review sit in public storage until reviewed. Review them promptly.',

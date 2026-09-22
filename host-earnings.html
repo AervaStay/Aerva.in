@@ -918,8 +918,8 @@ async function loadMyPayouts(){
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadMyPayouts); else loadMyPayouts();
 </script>
 <script>
-// Guest cancellation requests (hazard, life-threatening, emergency, travel
-// restriction). Accept: full refund, no coupon, no charge to you.
+// Guest cancellation requests. Each shows only the choice for that
+// booking (server: host-listings cancellationRequests / _cancellations.js).
 async function loadCancellationRequests(){
   const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
   if(!token) return;
@@ -942,26 +942,85 @@ async function loadCancellationRequests(){
     const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
     box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 6px;">Cancellation requests</h2>'
       + list.map(r => `<div style="padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px;" data-req="${Number(r.id)}">
-          <strong>${esc(r.guestName)}</strong> · ${esc(r.listing)} · ${esc(day(r.arrival))} – ${esc(day(r.departure))}<br>
+          <strong>${esc(r.guestName)}</strong> · ${esc(r.listing)} · ${esc(day(r.arrival))} – ${esc(day(r.departure))}${r.daysBefore != null ? ' · ' + (r.daysBefore === 0 ? 'check-in today' : r.daysBefore === 1 ? 'check-in tomorrow' : r.daysBefore + ' days before check-in') : ''}<br>
           <span>${esc(r.reason)}</span>${r.details ? `<br><span style="opacity:0.75;">${esc(r.details)}</span>` : ''}
-          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
-            <button type="button" class="btn-small" data-accept="${Number(r.id)}">Accept: refund the guest in full</button>
-            <button type="button" class="dispute-btn" data-decline="${Number(r.id)}">Decline</button>
-          </div></div>`).join('');
-    const answer = async (id, accept) => {
-      if(accept && !confirm('Accept? The booking is cancelled and the guest is refunded in full. No coupon and no charge to you.')) return;
-      if(!accept && !confirm('Decline? The booking stands, and the guest is told.')) return;
+          ${r.option && r.option.type === 'choose'
+            ? `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+                 <label style="font-size:13px;">Refund <input type="number" min="0" max="100" step="1" value="0" data-pct="${Number(r.id)}" style="width:70px; padding:6px; border:1px solid #d9cfc2; border-radius:6px; font-size:16px;"> %</label>
+                 <button type="button" class="btn-small" data-choose="${Number(r.id)}">Confirm</button>
+                 <button type="button" class="dispute-btn" data-decline="${Number(r.id)}">Reject</button>
+               </div>`
+            : `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+                 <span style="font-size:13px; opacity:0.8;">Guest gets back ₹${Math.round(Number(r.guestGetsBack) || 0).toLocaleString('en-IN')}</span>
+                 <button type="button" class="btn-small" data-accept="${Number(r.id)}">Accept</button>
+                 <button type="button" class="dispute-btn" data-decline="${Number(r.id)}">Reject</button>
+               </div>`}
+          </div>`).join('');
+    const answer = async (id, accept, refundPercent) => {
+      if(!confirm(accept ? 'Confirm your answer? This cannot be undone.' : 'Reject this request?')) return;
       const r = await fetch('https://aerva-in.vercel.app/api/host-listings' + (q ? '?' + q.slice(1) : ''), { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ respondCancellationRequest: { requestId: id, accept } }) });
+        body: JSON.stringify({ respondCancellationRequest: { requestId: id, accept, refundPercent } }) });
       const d = await r.json().catch(() => ({}));
       if(!r.ok){ alert(d.error || 'Could not answer this request.'); return; }
       loadCancellationRequests(); if(typeof loadListings === 'function') loadListings();
     };
     box.querySelectorAll('[data-accept]').forEach(b => b.addEventListener('click', () => answer(Number(b.dataset.accept), true)));
     box.querySelectorAll('[data-decline]').forEach(b => b.addEventListener('click', () => answer(Number(b.dataset.decline), false)));
+    box.querySelectorAll('[data-choose]').forEach(b => b.addEventListener('click', () => {
+      const id = Number(b.dataset.choose);
+      const input = box.querySelector('[data-pct="' + id + '"]');
+      const pct = Math.round(Number(input && input.value));
+      if(!(pct >= 0 && pct <= 100)){ alert('Enter a refund between 0 and 100%.'); return; }
+      answer(id, true, pct);
+    }));
   }catch(err){ /* leave the page as it is */ }
 }
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadCancellationRequests); else loadCancellationRequests();
+</script>
+<script>
+// Booking changes guests have asked for. Each shows only the change and
+// what the guest pays or gets back (server: host-listings bookingChanges).
+async function loadBookingChanges(){
+  const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
+  if(!token) return;
+  const acting = (window.AervaCohost && typeof window.AervaCohost.get === 'function') ? window.AervaCohost.get() : null;
+  const q = acting && acting.hostId ? '&actingHost=' + encodeURIComponent(acting.hostId) : '';
+  try{
+    const res = await fetch('https://aerva-in.vercel.app/api/host-listings?bookingChanges=1' + q, { headers: { 'Authorization': 'Bearer ' + token } });
+    const data = await res.json();
+    const list = (res.ok && data.changes) || [];
+    let box = document.getElementById('bookingChangesSection');
+    if(!list.length){ if(box) box.remove(); return; }
+    if(!box){
+      box = document.createElement('section');
+      box.id = 'bookingChangesSection';
+      box.style.cssText = 'margin:0 0 28px; background:#fff; border:1px solid #ece4d8; border-left:3px solid #a9884f; border-radius:12px; padding:16px 18px;';
+      const wrap = document.querySelector('.wrap') || document.body;
+      wrap.insertBefore(box, wrap.firstChild);
+    }
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const inr = (n) => '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
+    box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 6px;">Change requests</h2>'
+      + list.map(c => `<div style="padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px;">
+          <strong>${esc(c.guestName)}</strong> · ${esc(c.listing)}<br><span>${esc(c.summary)}</span>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+            <span style="font-size:13px; opacity:0.85;">${c.difference > 0 ? 'Guest pays ' + inr(c.difference) + ' more' : c.difference < 0 ? 'Guest gets back ' + inr(c.difference) : 'Same total'}</span>
+            <button type="button" class="btn-small" data-ch-accept="${Number(c.id)}">Accept</button>
+            <button type="button" class="dispute-btn" data-ch-reject="${Number(c.id)}">Reject</button>
+          </div></div>`).join('');
+    const answer = async (id, accept) => {
+      if(!confirm(accept ? 'Accept this change?' : 'Reject this change? The booking stays as it is.')) return;
+      const r = await fetch('https://aerva-in.vercel.app/api/host-listings' + (q ? '?' + q.slice(1) : ''), { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ respondBookingChange: { changeId: id, accept } }) });
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok){ alert(d.error || 'Could not answer this change.'); }
+      loadBookingChanges();
+    };
+    box.querySelectorAll('[data-ch-accept]').forEach(b => b.addEventListener('click', () => answer(Number(b.dataset.chAccept), true)));
+    box.querySelectorAll('[data-ch-reject]').forEach(b => b.addEventListener('click', () => answer(Number(b.dataset.chReject), false)));
+  }catch(err){ /* leave the page as it is */ }
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadBookingChanges); else loadBookingChanges();
 </script>
 <script src="aerva-header.js" defer></script>
 </body>

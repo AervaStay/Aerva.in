@@ -165,3 +165,16 @@ body.ah-has-header .back-home{ display:none !important; }
    profile panel the avatar did. */
 body.ah-has-header #profileTriggerCluster{ display:none !important; }
 body.ah-has-header .top-row > .logout-btn{ display:none !important; }
+
+/* ---------------------------------------------------------------------
+   Readability on every page that carries this header (Sept 2026):
+   visible keyboard focus, form fields that phones do not zoom into, and
+   solid text colour. Layout and sizes of each page are left as they are.
+   --------------------------------------------------------------------- */
+body.ah-has-header{ color:#1c1b19; text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased; }
+body.ah-has-header :focus-visible{ outline:2px solid #a9884f; outline-offset:3px; }
+body.ah-has-header input, body.ah-has-header select, body.ah-has-header textarea{ font-size:16px; }
+body.ah-has-header input::placeholder, body.ah-has-header textarea::placeholder{ color:#8f877c; }
+.ah-menu a, .ah-panel a{ font-size:14.5px; }
+.ah-notif-body{ opacity:1; color:#4a453e; }
+.ah-notif-head{ opacity:1; color:#6e675d; font-size:11.5px; }

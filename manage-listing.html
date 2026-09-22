@@ -376,8 +376,19 @@
         <p class="price-history-note">Charged to the guest at checkout and held by Aerva for 7 days after checkout. If you don't raise a concern in that window, it's refunded to the guest automatically.</p>
       </div>
 
+      <div class="field">
+        <label for="cancellationPolicy">Refund policy when a guest cancels</label>
+        <select id="cancellationPolicy">
+          <option value="flexible">Flexible</option>
+          <option value="firm">Firm</option>
+        </select>
+        <p class="price-history-note" id="cancellationPolicyNote"></p>
+        <p class="price-history-note">Applies to new bookings only — every booking keeps the policy it was paid under. In every guest cancellation Aerva's service fee is non-refundable and the deposit is refunded in full. What the guest is not refunded is paid to you, less Aerva's commission, on the usual payout day.</p>
+      </div>
+
       <div class="eyebrow">Photos</div>
       <div class="field">
+        <p class="photo-rule" style="font-size:14px; line-height:1.5; color:#7c3a2d; background:#fbf1ee; border:1px solid #ecd2cb; border-radius:8px; padding:10px 12px; margin:0 0 12px;"><strong>Important:</strong> photos must not show phone numbers, email addresses, websites, social media handles or QR codes. A listing with any such photo is blocked immediately.</p>
         <label>Exterior <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(up to 20)</span></label>
         <div class="photo-preview-grid" id="exteriorPreviewGrid"></div>
         <input type="file" id="exteriorFileInput" accept="image/*" multiple style="display:none;">
@@ -1719,6 +1730,8 @@
       });
 
       document.getElementById('securityDeposit').value = l.security_deposit || '';
+      document.getElementById('cancellationPolicy').value = l.cancellation_policy === 'firm' ? 'firm' : 'flexible';
+      describeCancellationPolicy();
       document.getElementById('checkInTime').value = time12To24(l.check_in_time);
       document.getElementById('checkOutTime').value = time12To24(l.check_out_time);
       document.getElementById('wifiName').value = l.wifi_name || '';
@@ -1913,6 +1926,7 @@
           services: Array.from(document.querySelectorAll('input[name="service"]:checked')).map(cb => cb.value),
           paidAmenities: paidAmenityRows,
           securityDeposit: toInr(document.getElementById('securityDeposit').value),
+          cancellationPolicy: document.getElementById('cancellationPolicy').value,
           petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
           maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
           allowedPetTypes: petFriendlyYes.checked ? Array.from(document.querySelectorAll('input[name="petType"]:checked')).map(cb => cb.value) : [],
@@ -2190,5 +2204,20 @@
 })();
 </script>
 <script src="aerva-header.js" defer></script>
+<script>
+// Refund policy wording — must match the tiers in api/_cancellations.js.
+function describeCancellationPolicy(){
+  var sel = document.getElementById('cancellationPolicy');
+  var note = document.getElementById('cancellationPolicyNote');
+  if(!sel || !note) return;
+  note.textContent = sel.value === 'firm'
+    ? 'Firm: full refund 30 or more days before check-in · 50% from 5 to 29 days · within 4 days you choose the refund (0–100%).'
+    : 'Flexible: full refund 30 or more days before check-in · 80% from 10 to 29 days · 50% from 5 to 9 days · 30% from 2 to 4 days · in the last day you choose the refund (0–100%).';
+}
+(function(){
+  var sel = document.getElementById('cancellationPolicy');
+  if(sel){ sel.addEventListener('change', describeCancellationPolicy); describeCancellationPolicy(); }
+})();
+</script>
 </body>
 </html>

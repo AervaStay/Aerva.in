@@ -763,6 +763,7 @@
     const options = {
       key: RAZORPAY_KEY_ID,
       order_id: order.orderId,   // amount/currency come from the order itself — cannot be edited client-side
+      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
       amount: order.amount,
       currency: order.currency,
       name: 'Aerva',
@@ -781,6 +782,7 @@
         }
       },
       handler: async function(response){
+        aervaCheckoutSucceeded();
         // Verify server-side before telling the guest they're booked.
         try{
           const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
@@ -794,14 +796,14 @@
             document.querySelector('.confirm').textContent =
               'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm availability for each stay and follow up by email shortly.';
           } else {
-            alert('We could not verify this payment. Please contact us before assuming your booking is confirmed.');
+            alert((verifyData && verifyData.message) || 'We could not verify this payment. Please contact us before assuming your booking is confirmed.');
           }
         } catch(err){
           alert('Payment went through, but we could not confirm it automatically. Please email us your payment ID.');
         }
       },
       modal: {
-        ondismiss: function(){}
+        ondismiss: function(){ aervaEndCheckout('closed'); }
       }
     };
 
@@ -983,7 +985,7 @@
         errorEl.style.display = 'block';
       }
       sendBtn.disabled = false;
-      sendBtn.textContent = 'Send Verification Code';
+      sendBtn.textContent = 'Send verification code';
     });
 
     verifyBtn.addEventListener('click', async () => {
@@ -2182,7 +2184,7 @@
                   <input type="checkbox" data-clone-target="${roomSpaceRows.indexOf(other)}" style="width:auto;"> ${other.name}
                 </label>
               `).join('')}
-              <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Clone Now</button>
+              <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Copy this listing</button>
             </div>
           ` : ''}
         </div>
@@ -2722,7 +2724,7 @@
           errorEl.style.display = 'block';
           activeBtn.disabled = false;
           otherBtn.disabled = false;
-          activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+          activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
           return;
         }
       }
@@ -2747,7 +2749,7 @@
         errorEl.style.display = 'block';
         activeBtn.disabled = false;
         otherBtn.disabled = false;
-        activeBtn.textContent = 'Submit Listing for Review';
+        activeBtn.textContent = 'Send listing for review';
         return;
       }
       const roomsStillMissingPhotos = roomSpaceRows.filter(r =>
@@ -2758,7 +2760,7 @@
         errorEl.style.display = 'block';
         activeBtn.disabled = false;
         otherBtn.disabled = false;
-        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
         return;
       }
     }
@@ -2862,7 +2864,7 @@
         errorEl.style.display = 'block';
         activeBtn.disabled = false;
         otherBtn.disabled = false;
-        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
         return;
       }
 
@@ -2938,7 +2940,7 @@
       errorEl.style.display = 'block';
       activeBtn.disabled = false;
       otherBtn.disabled = false;
-      activeBtn.textContent = isDraft ? 'Save as Draft' : 'Submit Listing for Review';
+      activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
     }
   }
 
@@ -3510,13 +3512,13 @@
           errorEl.textContent = data.error || 'Something went wrong. Please try again.';
           errorEl.style.display = 'block';
           this.disabled = false;
-          this.textContent = 'Submit Experience for Review';
+          this.textContent = 'Send experience for review';
         }
       } catch(err){
         errorEl.textContent = 'Something went wrong. Please try again.';
         errorEl.style.display = 'block';
         this.disabled = false;
-        this.textContent = 'Submit Experience for Review';
+        this.textContent = 'Send experience for review';
       }
     });
   }
@@ -4110,8 +4112,8 @@
     }
 
     const priceLine = exp.price
-      ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' <span style="font-size:12px; opacity:0.65;">/ person</span>' : ' <span style="font-size:12px; opacity:0.65;">/ group</span>'}`
-      : 'Price on enquiry';
+      ? `<span class="suite-price-amount">${fmtGuest(Number(exp.price))}</span> <span class="suite-price-unit">${exp.experience_price_unit === 'per_person' ? 'per person' : 'per group'}</span>`
+      : '<span class="suite-price-unit">Price on request</span>';
     const hostedAtLine = exp.hosting_property_name
       ? `Hosted at ${exp.hosting_property_name}${exp.hosting_area ? ', ' + exp.hosting_area + ', ' + exp.hosting_city : exp.hosting_city ? ', ' + exp.hosting_city : ''}`
       // Without-stay experiences have no hosting property to borrow a
@@ -4145,8 +4147,12 @@
         <h3>${exp.property_name}</h3>
         ${hostedAtLine ? `<div class="loc">${hostedAtLine}</div>` : ''}
         ${ratingHtml(exp)}
-        ${exp.experience_duration_hours ? `<div class="amenity-tags"><span class="amenity-tag">${exp.experience_duration_hours}h</span></div>` : ''}
-        <div class="price">${priceLine}</div>
+        ${(exp.experience_duration_days > 1 || exp.experience_duration_hours)
+          ? `<div class="suite-meta"><span>${exp.experience_duration_days > 1 ? exp.experience_duration_days + ' days' : exp.experience_duration_hours + (Number(exp.experience_duration_hours) === 1 ? ' hour' : ' hours')}</span></div>` : ''}
+        <div class="suite-foot">
+          <div class="suite-price"><span class="suite-price-line">${priceLine}</span></div>
+          <span class="suite-cta" aria-hidden="true">View details</span>
+        </div>
       </div>
     `;
     wireLikeButton(card);
@@ -4998,7 +5004,7 @@
     const promoOfferLine = formatPromotionOffer(listing);
     const priceLine = listing.nightly_rate
       ? `From <strong>${fmtGuest(Number(listing.nightly_rate))}</strong>/night`
-      : 'Rate on enquiry';
+      : 'Price on request';
 
     // "New" badge — driven entirely by the listing's real created_at date,
     // never fabricated. A home counts as new for its first 14 days live.
@@ -5042,7 +5048,7 @@
     // to gauge what's included at a glance, without listing all of them
     // (which could be two dozen) and crowding the card.
     const amenitiesList = Array.isArray(listing.amenities) ? listing.amenities : [];
-    const AMENITIES_PREVIEW_COUNT = 4;
+    const AMENITIES_PREVIEW_COUNT = 3; // three reads at a glance; the rest are on the listing
     let amenitiesHtml = '';
     if(amenitiesList.length > 0){
       const shown = amenitiesList.slice(0, AMENITIES_PREVIEW_COUNT);
@@ -5135,7 +5141,7 @@
       </div>
       <div class="suite-body">
         <h3>${listing.property_name}</h3>
-        <div class="loc">${formatCityArea(listing)}${listing.property_type ? ' · ' + listing.property_type : ''}</div>
+        <div class="loc">${[formatCityArea(listing), listing.property_type].filter(Boolean).join(', ')}</div>
         ${ratingHtml(listing)}
         <div class="suite-meta">
           ${capacityText ? `<span>${capacityText}</span>` : ''}
@@ -5145,9 +5151,14 @@
         ${amenitiesHtml}
         ${petPolicyHtml}
         <div class="suite-foot">
-          <div class="price">${priceLine}</div>
-          ${offerLine ? `<div class="offer">${offerLine}</div>` : ''}
-          ${promoOfferLine ? `<div class="offer offer-promo">${promoOfferLine}</div>` : ''}
+          <div class="suite-price">
+            ${listing.nightly_rate
+              ? `<span class="suite-price-from">From</span>
+                 <span class="suite-price-line"><span class="suite-price-amount">${fmtGuest(Number(listing.nightly_rate))}</span> <span class="suite-price-unit">per night</span></span>`
+              : '<span class="suite-price-line"><span class="suite-price-unit">Price on request</span></span>'}
+            ${promoOfferLine ? `<span class="suite-offer">${promoOfferLine}</span>` : (offerLine ? `<span class="suite-offer">${offerLine}</span>` : '')}
+          </div>
+          <span class="suite-cta" aria-hidden="true">View details</span>
         </div>
       </div>
     `;
@@ -5877,7 +5888,7 @@
       errEl.style.display = 'block';
     }
     btn.disabled = false;
-    btn.textContent = 'Log In';
+    btn.textContent = 'Log in';
   });
 
   document.getElementById('bookingSignupSubmitBtn').addEventListener('click', async () => {
@@ -5919,7 +5930,7 @@
       errEl.style.display = 'block';
     }
     btn.disabled = false;
-    btn.textContent = 'Create Account';
+    btn.textContent = 'Create account';
   });
 
   // ---- Review form ----
@@ -6334,6 +6345,152 @@
     });
   }
 
+  // ---- Cancellation request card at the top of a booking's thread ----
+  // host: the guest's request with ONLY this booking's choice (server:
+  // _cancellations.js cancellationCard) — nothing about other brackets.
+  // guest: "waiting for your host", or a button to send a request.
+  function showCancellationCard(anchorId, card, reload){
+    const anchor = document.getElementById(anchorId);
+    if(!anchor) return;
+    let box = document.getElementById(anchorId + 'Cancel');
+    if(!box){
+      box = document.createElement('div');
+      box.id = anchorId + 'Cancel';
+      box.style.cssText = 'margin:0 0 10px; padding:12px 14px; border:1px solid #ece4d8; border-left:3px solid #a3402f; border-radius:10px; background:#fff; font-size:14px;';
+      anchor.parentNode.insertBefore(box, anchor);
+    }
+    if(!card){ box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    const esc = escapeMessageHtml;
+    const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+    if(card.pending){ box.innerHTML = '<strong>Cancellation request sent</strong> · waiting for your host.'; return; }
+    if(card.canRequest){
+      box.innerHTML = '<span>Need to cancel?</span> <button type="button" class="filter-clear" style="margin-left:8px;">Request cancellation</button>';
+      box.querySelector('button').addEventListener('click', () => openPolicyCancel(card.orderId, ''));
+      return;
+    }
+    const o = card.option || {};
+    const when = card.daysBefore == null ? '' : (card.daysBefore === 0 ? ' · check-in today' : card.daysBefore === 1 ? ' · check-in tomorrow' : ` · ${card.daysBefore} days before check-in`);
+    const head = `<strong>Cancellation request</strong>${esc(when)}<br><span>${esc(card.reason)}</span>${card.details ? `<br><span style="opacity:0.75;">${esc(card.details)}</span>` : ''}`;
+    let actions;
+    if(o.type === 'choose'){
+      actions = `<label style="font-size:13px;">Refund <input type="number" min="0" max="100" step="1" value="0" class="cc-pct" style="width:64px; padding:6px; border:1px solid #d9cfc2; border-radius:6px; font-size:16px;"> %</label>
+        <button type="button" class="btn-small cc-accept">Confirm</button><button type="button" class="dispute-btn cc-reject">Reject</button>`;
+    } else {
+      actions = `<span style="font-size:13px; opacity:0.8;">Guest gets back ${inr(card.guestGetsBack)}</span>
+        <button type="button" class="btn-small cc-accept">Accept</button><button type="button" class="dispute-btn cc-reject">Reject</button>`;
+    }
+    box.innerHTML = head + `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">${actions}</div><p class="cc-msg" style="font-size:12.5px; color:#a3402f; margin:6px 0 0;"></p>`;
+    const answer = async (accept) => {
+      const msg = box.querySelector('.cc-msg');
+      const body = { requestId: card.requestId, accept };
+      if(o.type === 'choose' && accept){
+        const pct = Math.round(Number(box.querySelector('.cc-pct').value));
+        if(!(pct >= 0 && pct <= 100)){ msg.textContent = 'Enter 0 to 100.'; return; }
+        body.refundPercent = pct;
+      }
+      if(!confirm(accept ? 'Confirm your answer? This cannot be undone.' : 'Reject this request?')) return;
+      box.querySelectorAll('button').forEach(b => b.disabled = true);
+      try{
+        const r = await fetch(SUITES_API_BASE + '/api/host-listings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ respondCancellationRequest: body }) });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok){ msg.textContent = d.error || 'Could not answer this request.'; box.querySelectorAll('button').forEach(b => b.disabled = false); return; }
+        if(typeof reload === 'function') reload();
+      }catch(err){ msg.textContent = 'Could not answer this request. Try again.'; box.querySelectorAll('button').forEach(b => b.disabled = false); }
+    };
+    box.querySelector('.cc-accept').addEventListener('click', () => answer(true));
+    box.querySelector('.cc-reject').addEventListener('click', () => answer(false));
+  }
+
+  // ---- Change request card at the top of a booking's thread ----
+  // host: the change and what the guest pays or gets back — Accept / Reject.
+  // guest: waiting for the host, or a button to pay the difference.
+  function showChangeCard(anchorId, card, reload){
+    const anchor = document.getElementById(anchorId);
+    if(!anchor) return;
+    let box = document.getElementById(anchorId + 'Change');
+    if(!box){
+      box = document.createElement('div');
+      box.id = anchorId + 'Change';
+      box.style.cssText = 'margin:0 0 10px; padding:12px 14px; border:1px solid #ece4d8; border-left:3px solid var(--gold); border-radius:10px; background:#fff; font-size:14px;';
+      anchor.parentNode.insertBefore(box, anchor);
+    }
+    if(!card){ box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    const esc = escapeMessageHtml;
+    const inr = (n) => '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
+    const money = card.difference > 0 ? `Guest pays ${inr(card.difference)} more` : card.difference < 0 ? `Guest gets back ${inr(card.difference)}` : 'Same total';
+    if(card.status){ // guest view
+      box.innerHTML = card.status === 'awaiting_payment'
+        ? `<strong>Your host accepted your change.</strong><br><span>${esc(card.summary)}</span><div style="margin-top:10px;"><button type="button" class="btn solid cc-pay" style="min-height:44px;">Pay ${inr(card.difference)} to confirm</button></div>`
+        : `<strong>Change requested</strong> · waiting for your host<br><span style="color:var(--ink-2);">${esc(card.summary)}</span>`;
+      const pay = box.querySelector('.cc-pay');
+      if(pay) pay.addEventListener('click', () => aervaPayChange(card.changeId, pay));
+      return;
+    }
+    if(card.awaitingPayment){ box.innerHTML = `<strong>Change accepted</strong> · waiting for the guest to pay ${inr(card.awaitingPayment)}<br><span style="color:var(--ink-2);">${esc(card.summary)}</span>`; return; }
+    box.innerHTML = `<strong>Change request</strong><br><span>${esc(card.summary)}</span>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+        <span style="font-size:13px; opacity:0.85;">${money}</span>
+        <button type="button" class="btn-small cc-accept">Accept</button><button type="button" class="dispute-btn cc-reject">Reject</button>
+      </div><p class="cc-msg" style="font-size:12.5px; color:#a3402f; margin:6px 0 0;"></p>`;
+    const answer = async (accept) => {
+      if(!confirm(accept ? 'Accept this change?' : 'Reject this change? The booking stays as it is.')) return;
+      const msg = box.querySelector('.cc-msg');
+      box.querySelectorAll('button').forEach(b => b.disabled = true);
+      try{
+        const r = await fetch(SUITES_API_BASE + '/api/host-listings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ respondBookingChange: { changeId: card.changeId, accept } }) });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok){ msg.textContent = d.error || 'Could not answer this change.'; box.querySelectorAll('button').forEach(b => b.disabled = false); return; }
+        if(typeof reload === 'function') reload();
+      }catch(err){ msg.textContent = 'Could not answer this change. Try again.'; box.querySelectorAll('button').forEach(b => b.disabled = false); }
+    };
+    box.querySelector('.cc-accept').addEventListener('click', () => answer(true));
+    box.querySelector('.cc-reject').addEventListener('click', () => answer(false));
+  }
+
+  // ---- Problem-report card at the top of a booking's thread ----
+  // host: the guest's report and evidence, and a box to give their side.
+  // guest: that Aerva is reviewing it.
+  function showDisputeCard(anchorId, card, reload){
+    const anchor = document.getElementById(anchorId);
+    if(!anchor) return;
+    let box = document.getElementById(anchorId + 'Dispute');
+    if(!box){
+      box = document.createElement('div');
+      box.id = anchorId + 'Dispute';
+      box.style.cssText = 'margin:0 0 10px; padding:12px 14px; border:1px solid #ece4d8; border-left:3px solid #a3402f; border-radius:10px; background:#fff; font-size:14px;';
+      anchor.parentNode.insertBefore(box, anchor);
+    }
+    if(!card){ box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    const esc = escapeMessageHtml;
+    if(card.role !== 'host'){
+      box.innerHTML = `<strong>Problem reported</strong> · Aerva is reviewing it${card.hostResponded ? ' (your host has replied)' : ''}.<br><span style="color:var(--ink-2);">${esc(card.reason)}</span>`;
+      return;
+    }
+    const files = (card.evidence || []).map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener" style="margin-right:10px;">Photo ${i + 1}</a>`).join('');
+    box.innerHTML = `<strong>The guest reported a problem</strong><br><span>${esc(card.reason)}: ${esc(card.details || '')}</span><br><small>${files}</small>
+      ${card.hostResponded ? '<p style="margin:8px 0 0; color:var(--ink-2);">You have replied. Aerva will decide.</p>' : `
+      <p style="margin:8px 0 4px; font-size:13.5px; color:var(--ink-2);">Give your side. Aerva decides after reading both; your payout for this booking is held until then.</p>
+      <textarea class="dp-text" rows="3" maxlength="2000" style="width:100%; box-sizing:border-box; padding:9px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;"></textarea>
+      <input class="dp-files" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" style="margin:6px 0; font-size:14px;">
+      <button type="button" class="btn-small dp-send">Send my reply</button><p class="dp-msg" style="font-size:12.5px; color:#a3402f; margin:6px 0 0;"></p>`}`;
+    const send = box.querySelector('.dp-send');
+    if(send) send.addEventListener('click', async () => {
+      const msg = box.querySelector('.dp-msg'); send.disabled = true;
+      try{
+        const evidence = await aervaUploadFiles([...box.querySelector('.dp-files').files].slice(0, 8), 'dispute-evidence');
+        const r = await fetch(SUITES_API_BASE + '/api/host-listings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ respondStayDispute: { disputeId: card.disputeId, response: box.querySelector('.dp-text').value, evidence } }) });
+        const d = await r.json(); if(!r.ok) throw new Error(d.error || 'Could not send your reply.');
+        if(typeof reload === 'function') reload();
+      }catch(err){ msg.textContent = err.message; send.disabled = false; }
+    });
+  }
+
   // The host's review of a guest (server: host-listings reviewGuest).
   const GUEST_REVIEW_FACTORS = [
     { key: 'cleanliness',   label: 'Left the place clean' },
@@ -6352,7 +6509,7 @@
       <div class="rv-set">${GUEST_REVIEW_FACTORS.map(starRowHtml).join('')}</div>
       <label class="rv-comment-label" for="guestReviewComment">A few words for other hosts</label>
       <textarea id="guestReviewComment" rows="4" maxlength="1000" placeholder="How was it having them stay?"></textarea>
-      <button type="button" class="btn solid" id="guestReviewSend" style="width:100%; margin-top:14px; cursor:pointer;">Submit review</button>
+      <button type="button" class="btn solid" id="guestReviewSend" style="width:100%; margin-top:14px; cursor:pointer;">Send review</button>
       <p class="payout-muted" id="guestReviewMsg" style="margin-top:10px;"></p></div>`;
     const close = () => { ov.remove(); };
     ov.addEventListener('click', (e) => { if(e.target === ov) close(); });
@@ -6392,7 +6549,7 @@
         <label class="rv-comment-label" for="reviewComment">Tell other guests about it</label>
         <textarea id="reviewComment" rows="4" placeholder="What stood out? What should someone know before booking?"></textarea>
         <p class="rv-error" id="reviewError" style="display:none;"></p>
-        <button type="button" class="filter-clear" id="reviewSubmitBtn" style="margin-top:12px;">Submit review</button>
+        <button type="button" class="filter-clear" id="reviewSubmitBtn" style="margin-top:12px;">Send review</button>
       </div>`;
     document.getElementById('reviewModalOverlay').style.display = 'flex';
     document.body.style.overflow = 'hidden';
@@ -6440,7 +6597,7 @@
       if(!res.ok){
         errEl.textContent = data.error || 'Could not save your review right now.';
         errEl.style.display = 'block';
-        btn.disabled = false; btn.textContent = 'Submit review';
+        btn.disabled = false; btn.textContent = 'Send review';
         return;
       }
       document.getElementById('reviewModalBody').innerHTML = `
@@ -6452,7 +6609,7 @@
     }catch(err){
       errEl.textContent = 'Could not save your review right now.';
       errEl.style.display = 'block';
-      btn.disabled = false; btn.textContent = 'Submit review';
+      btn.disabled = false; btn.textContent = 'Send review';
     }
   }
 
@@ -6499,10 +6656,23 @@
         // once a conversation exists).
         const localToday = String(b.local_today || '').slice(0, 10);
         const upcoming = b.status === 'paid' && (!localToday || String(b.departure).slice(0, 10) >= localToday);
+        // Stays can be changed before check-in and during the stay (the
+        // server applies the midnight-before-check-out limit exactly).
+        const ch = b.open_change;
+        const changeHtml = !upcoming ? ''
+          : ch && ch.status === 'pending' ? `<span class="booking-request-note">Change requested · waiting for your host <a href="#" data-withdraw-change="${ch.id}" style="color:var(--gold-text); margin-left:6px;">Withdraw</a></span>`
+          : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="margin-top:10px; min-height:44px; padding:10px 18px;">Pay ₹${Number(ch.difference).toLocaleString('en-IN')} to confirm your change</button>`
+          : `<button type="button" class="filter-clear" data-change-booking="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-left:8px;">Change booking</button>`;
+        const idDueHtml = b.id_required_by
+          ? `<div class="price-changed" style="margin:10px 0 4px;"><strong>Add your ID to keep this booking</strong><br>
+               <span style="font-size:14px;">By ${escapeMessageHtml(new Date(b.id_required_by).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))} — otherwise it is cancelled and refunded in full.</span>
+               <div id="idDue-${b.id}"></div><button type="button" class="btn solid" data-add-id="${b.id}" style="margin-top:8px; min-height:44px; padding:10px 18px;">Add my ID</button></div>` : '';
+        const inStay = !!localToday && (b.listing_type || 'stay') === 'stay' && String(b.arrival).slice(0, 10) <= localToday && localToday < String(b.departure).slice(0, 10);
+        const reportHtml = inStay ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-left:8px;">Report a problem</button>` : '';
         const requestHtml = !upcoming ? ''
           : b.cancel_request_status === 'pending' ? '<span class="booking-request-note">Cancellation requested · waiting for the host</span>'
           : b.cancel_request_status === 'declined' ? '<span class="booking-request-note">Cancellation request declined by the host</span>'
-          : `<button type="button" class="filter-clear" data-request-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Request cancellation</button>`;
+          : `<button type="button" class="filter-clear" data-policy-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-left:8px;">Request cancellation</button>`;
         const chatBtnHtml = (b.status === 'paid' || b.status === 'cancelled')
           ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-top:10px;">${b.status === 'paid' ? 'Message Host' : 'View messages'}</button>`
           : '';
@@ -6523,7 +6693,7 @@
             <div class="listing-info">
               <h3>${escapeMessageHtml(b.suite_name || '')}</h3>
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(b.status)}</div>
-              ${chatBtnHtml}${reviewHtml}${requestHtml}
+              ${idDueHtml}${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}
             </div>
           </div>
         `;
@@ -6540,6 +6710,35 @@
       });
       // Ask the host to accept a cancellation (hazard / life-threatening /
       // emergency / travel restriction). Accepted: full refund.
+      container.querySelectorAll('[data-add-id]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const slot = document.getElementById('idDue-' + btn.dataset.addId);
+          btn.style.display = 'none';
+          aervaIdPanel(slot, { needs: ['id'], message: 'Add your ID proof', onDone: () => loadMyBookings() });
+        });
+      });
+      container.querySelectorAll('[data-report-problem]').forEach(btn => {
+        btn.addEventListener('click', (e) => { e.stopPropagation(); openReportProblem(Number(btn.dataset.reportProblem), btn.dataset.listingName || ''); });
+      });
+      container.querySelectorAll('[data-change-booking]').forEach(btn => {
+        btn.addEventListener('click', (e) => { e.stopPropagation(); openChangeBooking(Number(btn.dataset.changeBooking), btn.dataset.listingName || ''); });
+      });
+      container.querySelectorAll('[data-pay-change]').forEach(btn => {
+        btn.addEventListener('click', (e) => { e.stopPropagation(); aervaPayChange(Number(btn.dataset.payChange), btn); });
+      });
+      container.querySelectorAll('[data-withdraw-change]').forEach(a => {
+        a.addEventListener('click', async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          if(!confirm('Withdraw your change request? Your booking stays as it is.')) return;
+          await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+            body: JSON.stringify({ mode: 'withdrawChange', changeId: Number(a.dataset.withdrawChange) }) });
+          loadMyBookings();
+        });
+      });
+      container.querySelectorAll('[data-policy-cancel]').forEach(btn => {
+        btn.addEventListener('click', (e) => { e.stopPropagation(); openPolicyCancel(Number(btn.dataset.policyCancel), btn.dataset.listingName || ''); });
+      });
       container.querySelectorAll('[data-request-cancel]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); openCancelRequest(Number(btn.dataset.requestCancel), btn.dataset.listingName || ''); });
       });
@@ -6585,6 +6784,9 @@
       document.getElementById('chatModalTitle').textContent = data.listingName || listingName || 'Chat';
       renderChatMessages(data.messages || [], data.viewerRole);
       showReviewPrompt('chatReviewPrompt', data.reviewPrompt);
+      showCancellationCard('chatReviewPrompt', data.cancellation, () => openChatForOrder(orderId, listingName));
+      showChangeCard('chatReviewPrompt', data.change, () => openChatForOrder(orderId, listingName));
+      showDisputeCard('chatReviewPrompt', data.dispute, () => openChatForOrder(orderId, listingName));
       loadChatTemplates(data.conversationId);
     } catch(err){
       document.getElementById('chatMessagesContainer').innerHTML = '<p class="suites-empty">Could not open this conversation. Please try again.</p>';
@@ -6997,6 +7199,9 @@
       // the list, since that's the one place membership is truly checked.
       if(data.myRole) inboxCurrentRole = data.myRole;
       showReviewPrompt('inboxReviewPrompt', data.reviewPrompt);
+      showCancellationCard('inboxReviewPrompt', data.cancellation, () => refreshInboxMessages());
+      showChangeCard('inboxReviewPrompt', data.change, () => refreshInboxMessages());
+      showDisputeCard('inboxReviewPrompt', data.dispute, () => refreshInboxMessages());
       await renderInboxMessages(data.messages || []);
       loadInboxChatTemplates(inboxCurrentConversationId);
       // Read messages update their own unread_count server-side, but the
@@ -8256,27 +8461,30 @@
           ${listingStandingHtml(listing, { type: 'stay', subtitle: 'Resort' })}
           <div class="listing-three-col">
             <div class="listing-col-booking">
-              <div class="listing-modal-section-title" style="margin-top:0;">Check Availability</div>
+              ${bookStep(1, 'Choose your dates')}
               <div id="resortBookCalendar" data-listing-id="${listing.id}">
                 <p style="font-size:13px; opacity:0.6;">Loading calendar…</p>
               </div>
               <p id="resortDatesPrompt" style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick your dates first, then choose which room${rooms.length === 1 ? '' : 's'} you need below.</p>
-              <div class="listing-modal-section-title" style="margin-top:20px;">Rooms</div>
+              ${bookStep(2, 'Choose your room' + (rooms.length === 1 ? '' : 's'))}
               <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:6px;">Each room is booked and priced on its own — pick as many as your group needs. A room greyed out below isn't free for the dates you picked.</p>
               <div id="resortRoomsList">
                 ${rooms.length ? '<p style="font-size:12.5px; opacity:0.5;">Pick dates above to see room availability.</p>' : '<p style="font-size:13px; opacity:0.6;">This resort has no rooms set up yet.</p>'}
               </div>
               <div id="resortPriceSummary" style="display:none;"></div>
               <div id="resortBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+                ${bookStep(4, 'Your details')}
+                <p class="step-help">We send your booking confirmation to this email.</p>
                 <div class="field">
                   <label for="resortBookEmail">Email <span style="color:#a3402f;">*</span></label>
                   <input id="resortBookEmail" type="email" placeholder="you@email.com" required>
                 </div>
                 <div class="field" style="margin-top:12px;">
-                  <label for="resortBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                  <label for="resortBookPhone">Mobile number <span style="color:#a3402f;">*</span></label>
                   <input id="resortBookPhone" type="tel" placeholder="10-digit mobile number" required>
                 </div>
-                <button type="button" class="btn solid" id="resortBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
+                <button type="button" class="btn solid" id="resortBookNowBtn" style="width:100%; margin-top:6px;">Continue to payment</button>
+                ${PAY_NOTE_HTML}
                 <p id="resortBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
                 <p id="resortBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
               </div>
@@ -8302,7 +8510,7 @@
 
     const priceLine = listing.nightly_rate
       ? `From <strong>${fmt(Number(listing.nightly_rate))}</strong>/night`
-      : 'Rate on enquiry';
+      : 'Price on request';
     const offerLine = formatOffer(listing);
     const promoOfferLine = formatPromotionOffer(listing);
 
@@ -8315,12 +8523,13 @@
             ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
             ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
             ${formatPromotionHint(listing) ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${formatPromotionHint(listing)}</div>` : ''}
-            <div class="listing-modal-section-title" style="margin-top:16px;">Check Availability &amp; Price</div>
+            ${bookStep(1, 'Choose your dates')}
             <div id="availabilityCalendar" data-listing-id="${listing.id}">
               <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
             </div>
             <div id="lgCapacityNote" style="display:none; font-size:12.5px; color:#a3402f; padding-top:12px;"></div>
-            <div class="guest-row" style="border:none; padding-top:16px;">
+            ${bookStep(2, 'Who is coming')}
+            <div class="guest-row" style="border:none; padding-top:4px;">
               <div class="guest-row-text">
                 <div class="guest-row-title">Adults</div>
                 <div class="guest-row-sub">Ages 13 or above</div>
@@ -8375,20 +8584,23 @@
             <div id="listingExperiencesPicker"></div>
             <div id="listingPriceSummary" style="display:none;"></div>
             <div id="listingBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+              ${bookStep(4, 'Your details')}
+              <p class="step-help">We send your booking confirmation to this email.</p>
               <div class="field">
                 <label for="listingBookEmail">Email <span style="color:#a3402f;">*</span></label>
                 <input id="listingBookEmail" type="email" placeholder="you@email.com" required>
               </div>
               <div class="field" style="margin-top:12px;">
-                <label for="listingBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                <label for="listingBookPhone">Mobile number <span style="color:#a3402f;">*</span></label>
                 <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" required>
               </div>
               <div class="field" style="margin-top:12px;">
-                <label for="listingCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
+                <label for="listingCouponCode">Coupon code <span class="label-hint">(optional — log in to use one)</span></label>
                 <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
                 <p class="coupon-rule">Coupons cover the booking price only. Service fee, GST and any deposit are charged in full. Any unused coupon balance is not refunded.</p>
               </div>
-              <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Book Now</button>
+              <button type="button" class="btn solid" id="listingBookNowBtn" style="width:100%; margin-top:6px;">Continue to payment</button>
+              ${PAY_NOTE_HTML}
               <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
               <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
             </div>
@@ -8570,7 +8782,7 @@
         const isChecked = selected && String(selected.listingId) === String(exp.id);
         const priceLine = exp.price
           ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
-          : 'Price on enquiry';
+          : 'Price on request';
         return `
           <div class="listing-modal-paid-amenity" style="align-items:flex-start; flex-direction:column; gap:8px; padding:12px 0;">
             <label style="display:flex; align-items:center; gap:8px; cursor:pointer; width:100%;">
@@ -8722,7 +8934,10 @@
       }
     }
 
-    const todayIso = toLocalDateStr(new Date());
+    // The earliest night a guest can book, on the PROPERTY's clock. Between
+    // 12:00 AM and 6:00 AM that is still last night (a late-night booking —
+    // same rule as api/_booking-rules.js).
+    const todayIso = aervaEarliestArrival((typeof listing !== 'undefined' && listing && listing.timezone) || 'Asia/Kolkata');
     let viewYear = new Date().getFullYear();
     let viewMonth = new Date().getMonth();
     if(initialArrival){
@@ -9216,13 +9431,14 @@
       : '';
 
     summaryEl.innerHTML = `
-      <div class="listing-modal-section-title">Price Summary</div>
+      ${bookStep(3, 'Check your total')}
       ${rows.join('')}
       <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);">
         <span>Total</span><span>${fmtGuest(grandTotalInr)}</span>
       </div>
       ${inrNote}
       <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">This is a live estimate for these dates and guests — the exact amount is confirmed at checkout.</p>
+      <p style="font-size:12px; opacity:0.75; margin-top:10px; padding-top:10px; border-top:1px solid var(--line-dark);"><strong>Cancellation:</strong> ${cancellationPolicyText(listing.cancellation_policy)}</p>
     `;
     summaryEl.style.display = 'block';
     if(actionEl) actionEl.style.display = 'block';
@@ -9357,11 +9573,23 @@
           // international charging server-side (see create-order.js) —
           // otherwise the backend charges INR exactly as it always has.
           preferredCurrency: currentCurrency,
-          couponCode: document.getElementById('listingCouponCode').value.trim() || undefined
+          couponCode: document.getElementById('listingCouponCode').value.trim() || undefined,
+          pricesSeen: aervaPricesSeen([listing]),
+          phone
         })
       });
       if(!orderRes.ok){
         const errData = await orderRes.json().catch(() => ({}));
+        if(errData.priceChanged){
+          aervaShowPriceChange(errorEl, errData, btn);
+          btn.disabled = false; btn.textContent = 'Continue to payment';
+          return;
+        }
+        if(Array.isArray(errData.needs) && errData.needs.length){
+          aervaShowNeeds(errorEl, errData, btn);
+          btn.disabled = false; btn.textContent = 'Continue to payment';
+          return;
+        }
         throw new Error(errData.error || 'Could not start payment. Please try again.');
       }
       order = await orderRes.json();
@@ -9375,14 +9603,14 @@
       }
     } catch(err){
       btn.disabled = false;
-      btn.textContent = 'Book Now';
+      btn.textContent = 'Continue to payment';
       errorEl.textContent = err.message || 'Could not start payment. Please try again.';
       errorEl.style.display = 'block';
       return;
     }
 
     btn.disabled = false;
-    btn.textContent = 'Book Now';
+    btn.textContent = 'Continue to payment';
 
     if(typeof Razorpay === 'undefined'){
       errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
@@ -9393,6 +9621,7 @@
     const options = {
       key: RAZORPAY_KEY_ID,
       order_id: order.orderId,   // amount/currency come from the order itself — cannot be edited client-side
+      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
       amount: order.amount,
       currency: order.currency,
       name: 'Aerva',
@@ -9406,6 +9635,7 @@
         }
       },
       handler: async function(response){
+        aervaCheckoutSucceeded();
         try {
           const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
             method: 'POST',
@@ -9417,7 +9647,7 @@
             confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm availability and follow up by email shortly.';
             confirmEl.style.display = 'block';
           } else {
-            errorEl.textContent = 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
+            errorEl.textContent = (verifyData && verifyData.message) || 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
             errorEl.style.display = 'block';
           }
         } catch(err){
@@ -9425,15 +9655,13 @@
           errorEl.style.display = 'block';
         }
       },
-      modal: { ondismiss: function(){} }
+      modal: { ondismiss: function(){ aervaEndCheckout('closed'); } }
     };
 
     const rzp = new Razorpay(options);
-    rzp.on('payment.failed', function(response){
-      errorEl.textContent = 'Payment failed: ' + response.error.description;
-      errorEl.style.display = 'block';
-    });
+    rzp.on('payment.failed', function(response){ aervaEndCheckout('failed'); });
     rzp.open();
+    aervaWatchCheckout(rzp, order, errorEl);
   }
 
   // ---- Resort booking: pick dates once, then choose which room(s) —
@@ -9447,6 +9675,7 @@
   // choosing a room that sleeps 4 is understood to be booking it for up
   // to 4, not asked to additionally specify a smaller number).
   let resortSelectedRooms = {};
+  let resortPolicy = 'flexible'; // the resort being booked; set in renderResortRooms
 
   async function renderResortBookingCalendar(listing){
     const container = document.getElementById('resortBookCalendar');
@@ -9524,6 +9753,7 @@
   }
 
   async function renderResortRooms(listing, arrival, departure){
+    resortPolicy = listing && listing.cancellation_policy === 'firm' ? 'firm' : 'flexible';
     const container = document.getElementById('resortRoomsList');
     const promptEl = document.getElementById('resortDatesPrompt');
     if(promptEl) promptEl.style.display = 'none';
@@ -9601,11 +9831,12 @@
       : '';
     const total = subtotal + gst + guestServiceFee;
     summaryEl.innerHTML = `
-      <div class="listing-modal-section-title">Price Summary</div>
+      ${bookStep(3, 'Check your total')}
       ${rows}
       ${gstRow}
       <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
       <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
+      <p style="font-size:12px; opacity:0.75; margin-top:10px; padding-top:10px; border-top:1px solid var(--line-dark);"><strong>Cancellation:</strong> ${cancellationPolicyText(resortPolicy)}</p>
     `;
     summaryEl.style.display = 'block';
     actionEl.style.display = 'block';
@@ -9669,23 +9900,33 @@
       const orderRes = await fetch(API_BASE + '/api/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-        body: JSON.stringify({ stays, email, preferredCurrency: currentCurrency })
+        body: JSON.stringify({ stays, email, preferredCurrency: currentCurrency, pricesSeen: aervaPricesSeen([listing]), phone })
       });
       if(!orderRes.ok){
         const errData = await orderRes.json().catch(() => ({}));
+        if(errData.priceChanged){
+          aervaShowPriceChange(errorEl, errData, btn);
+          btn.disabled = false; btn.textContent = 'Continue to payment';
+          return;
+        }
+        if(Array.isArray(errData.needs) && errData.needs.length){
+          aervaShowNeeds(errorEl, errData, btn);
+          btn.disabled = false; btn.textContent = 'Continue to payment';
+          return;
+        }
         throw new Error(errData.error || 'Could not start payment. Please try again.');
       }
       order = await orderRes.json();
     } catch(err){
       btn.disabled = false;
-      btn.textContent = 'Book Now';
+      btn.textContent = 'Continue to payment';
       errorEl.textContent = err.message || 'Could not start payment. Please try again.';
       errorEl.style.display = 'block';
       return;
     }
 
     btn.disabled = false;
-    btn.textContent = 'Book Now';
+    btn.textContent = 'Continue to payment';
 
     if(typeof Razorpay === 'undefined'){
       errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
@@ -9696,6 +9937,7 @@
     const options = {
       key: RAZORPAY_KEY_ID,
       order_id: order.orderId,
+      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
       amount: order.amount,
       currency: order.currency,
       name: 'Aerva',
@@ -9704,6 +9946,7 @@
       theme: { color: '#a9884f' },
       config: { display: { sequence: ['upi', 'card', 'netbanking', 'wallet'], preferences: { show_default_blocks: true } } },
       handler: async function(response){
+        aervaCheckoutSucceeded();
         try{
           const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(response)
@@ -9713,7 +9956,7 @@
             confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm and follow up by email shortly.';
             confirmEl.style.display = 'block';
           } else {
-            errorEl.textContent = 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
+            errorEl.textContent = (verifyData && verifyData.message) || 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
             errorEl.style.display = 'block';
           }
         } catch(err){
@@ -9721,14 +9964,12 @@
           errorEl.style.display = 'block';
         }
       },
-      modal: { ondismiss: function(){} }
+      modal: { ondismiss: function(){ aervaEndCheckout('closed'); } }
     };
     const rzp2 = new Razorpay(options);
-    rzp2.on('payment.failed', function(response){
-      errorEl.textContent = 'Payment failed: ' + response.error.description;
-      errorEl.style.display = 'block';
-    });
+    rzp2.on('payment.failed', function(response){ aervaEndCheckout('failed'); });
     rzp2.open();
+    aervaWatchCheckout(rzp2, order, errorEl);
   }
 
   // Experience detail page — mirrors buildListingDetailHtml's structure,
@@ -9751,7 +9992,7 @@
 
     const priceLine = exp.price
       ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
-      : 'Price on enquiry';
+      : 'Price on request';
     const durationDaysLine = (exp.experience_duration_days && exp.experience_duration_days > 1) ? `${exp.experience_duration_days} days` : '';
     const durationHoursLine = exp.experience_duration_hours ? `${exp.experience_duration_hours} hour${Number(exp.experience_duration_hours) === 1 ? '' : 's'}${durationDaysLine ? '/day' : ''}` : '';
     const durationLine = [durationDaysLine, durationHoursLine].filter(Boolean).join(', ');
@@ -9904,9 +10145,8 @@
         ${listingStandingHtml(exp, { type: 'experience', subtitle: [exp.experience_category, durationLine].filter(Boolean).join(' · '), withStay: exp.experience_type === 'with_stay' })}
         <div class="listing-three-col">
           <div class="listing-col-booking">
-            <div class="listing-modal-section-title" style="margin-top:16px;">Book This Experience</div>
+            ${bookStep(1, 'Choose your date')}
             <div class="field">
-              <label>Dates</label>
               <div id="expBookCalendar" data-min="${bookDateMin}" data-max="${bookDateMax || ''}">
                 <p style="font-size:13px; opacity:0.6;">Loading calendar…</p>
               </div>
@@ -9914,7 +10154,8 @@
               <input type="hidden" id="expBookEndDate">
               ${availabilityNoteHtml}
             </div>
-            <div class="guest-row" style="padding-top:16px;">
+            ${bookStep(2, 'How many guests')}
+            <div class="guest-row" style="padding-top:4px;">
               <div class="guest-row-text">
                 <div class="guest-row-title">Guests</div>
                 <div class="guest-row-sub">How many are joining</div>
@@ -9928,20 +10169,23 @@
             <p id="expFitWarning" style="display:none; font-size:12.5px; color:#a3402f; margin-top:8px;"></p>
             <div id="expPriceSummary" style="display:none;"></div>
             <div id="expBookingAction" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+              ${bookStep(4, 'Your details')}
+              <p class="step-help">We send your booking confirmation to this email.</p>
               <div class="field">
                 <label for="expBookEmail">Email <span style="color:#a3402f;">*</span></label>
                 <input id="expBookEmail" type="email" placeholder="you@email.com" required>
               </div>
               <div class="field" style="margin-top:12px;">
-                <label for="expBookPhone">Mobile Number <span style="color:#a3402f;">*</span></label>
+                <label for="expBookPhone">Mobile number <span style="color:#a3402f;">*</span></label>
                 <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" required>
               </div>
               <div class="field" style="margin-top:12px;">
-                <label for="expCouponCode">Coupon Code <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, requires being logged in</span></label>
+                <label for="expCouponCode">Coupon code <span class="label-hint">(optional — log in to use one)</span></label>
                 <input id="expCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
                 <p class="coupon-rule">Coupons cover the booking price only. Service fee, GST and any deposit are charged in full. Any unused coupon balance is not refunded.</p>
               </div>
-              <button type="button" class="btn solid" id="expBookNowBtn" style="width:100%; margin-top:6px;">Book Experience</button>
+              <button type="button" class="btn solid" id="expBookNowBtn" style="width:100%; margin-top:6px;">Continue to payment</button>
+              ${PAY_NOTE_HTML}
               <p id="expBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
               <p id="expBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
             </div>
@@ -10198,7 +10442,7 @@
       ? `${fmtGuest(price)} × ${guests} guest${guests === 1 ? '' : 's'}`
       : 'Package price';
     summaryEl.innerHTML = `
-      <div class="listing-modal-section-title">Price Summary</div>
+      ${bookStep(3, 'Check your total')}
       <div class="sum-row"><span>${rateLine}</span><span>${fmtGuest(subtotalBeforeDiscount)}</span></div>
       ${discountRowHtml}
       ${hostingRowHtml}
@@ -10206,6 +10450,7 @@
       <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
       <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
       ${inrNote}
+      <p style="font-size:12px; opacity:0.75; margin-top:10px; padding-top:10px; border-top:1px solid var(--line-dark);"><strong>Cancellation:</strong> ${cancellationPolicyText(exp.cancellation_policy)}</p>
     `;
     summaryEl.style.display = 'block';
   }
@@ -10269,11 +10514,23 @@
           experiences: [{ listingId: exp.id, date, endDate, guests }],
           email,
           preferredCurrency: currentCurrency,
-          couponCode: document.getElementById('expCouponCode').value.trim() || undefined
+          couponCode: document.getElementById('expCouponCode').value.trim() || undefined,
+          pricesSeen: aervaPricesSeen([exp]),
+          phone
         })
       });
       if(!orderRes.ok){
         const errData = await orderRes.json().catch(() => ({}));
+        if(errData.priceChanged){
+          aervaShowPriceChange(errorEl, errData, btn);
+          btn.disabled = false; btn.textContent = 'Continue to payment';
+          return;
+        }
+        if(Array.isArray(errData.needs) && errData.needs.length){
+          aervaShowNeeds(errorEl, errData, btn);
+          btn.disabled = false; btn.textContent = 'Continue to payment';
+          return;
+        }
         throw new Error(errData.error || 'Could not start payment. Please try again.');
       }
       order = await orderRes.json();
@@ -10284,14 +10541,14 @@
       }
     } catch(err){
       btn.disabled = false;
-      btn.textContent = 'Book Experience';
+      btn.textContent = 'Continue to payment';
       errorEl.textContent = err.message || 'Could not start payment. Please try again.';
       errorEl.style.display = 'block';
       return;
     }
 
     btn.disabled = false;
-    btn.textContent = 'Book Experience';
+    btn.textContent = 'Continue to payment';
 
     if(typeof Razorpay === 'undefined'){
       errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
@@ -10302,6 +10559,7 @@
     const options = {
       key: RAZORPAY_KEY_ID,
       order_id: order.orderId,
+      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
       amount: order.amount,
       currency: order.currency,
       name: 'Aerva',
@@ -10312,6 +10570,7 @@
         display: { sequence: ['upi', 'card', 'netbanking', 'wallet'], preferences: { show_default_blocks: true } }
       },
       handler: async function(response){
+        aervaCheckoutSucceeded();
         try{
           const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
             method: 'POST',
@@ -10323,7 +10582,7 @@
             confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our team will confirm and follow up by email shortly.';
             confirmEl.style.display = 'block';
           } else {
-            errorEl.textContent = 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
+            errorEl.textContent = (verifyData && verifyData.message) || 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
             errorEl.style.display = 'block';
           }
         } catch(err){
@@ -10331,15 +10590,13 @@
           errorEl.style.display = 'block';
         }
       },
-      modal: { ondismiss: function(){} }
+      modal: { ondismiss: function(){ aervaEndCheckout('closed'); } }
     };
 
     const rzp = new Razorpay(options);
-    rzp.on('payment.failed', function(response){
-      errorEl.textContent = 'Payment failed: ' + response.error.description;
-      errorEl.style.display = 'block';
-    });
+    rzp.on('payment.failed', function(response){ aervaEndCheckout('failed'); });
     rzp.open();
+    aervaWatchCheckout(rzp, order, errorEl);
   }
 
   // Opens the experience's detail view inline, as a modal — same shell
@@ -12304,6 +12561,441 @@
     .catch(() => { body.innerHTML = '<p class="payout-muted">Could not load this payout. Try again.</p>'; });
 })();
 
+
+// ---- Late-night bookings: between 12:00 AM and 6:00 AM on the property's
+// clock, last night can still be booked (server: api/_booking-rules.js) ----
+function aervaEarliestArrival(zone){
+  try{
+    const parts = {};
+    new Intl.DateTimeFormat('en-US', { timeZone: zone || 'Asia/Kolkata', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' })
+      .formatToParts(new Date()).forEach(p => { parts[p.type] = p.value; });
+    const date = `${parts.year}-${parts.month}-${parts.day}`;
+    if(Number(parts.hour) >= 6) return date;
+    const d = new Date(date + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }catch(e){ return toLocalDateStr(new Date()); }
+}
+
+// ---- Booking steps: a numbered heading for each stage of booking ----
+// Booking is a real sequence, so it is numbered: guests of any age can see
+// where they are and what comes next.
+function bookStep(n, text){
+  return `<div class="book-step"><span class="book-step-n" aria-hidden="true">${n}</span><span class="book-step-text">${text}</span></div>`;
+}
+const PAY_NOTE_HTML = '<p class="pay-note">You pay securely on the next screen by UPI, card or net banking. Your booking is confirmed by email straight after.</p>';
+
+// ---- The 90-second payment window (server: api/_booking-rules.js) ----
+// Starts when the guest taps Continue to payment. A countdown sits above
+// Razorpay's window; every few seconds the server is asked whether the
+// window is still open (timed out? host changed a price?). Closing the
+// window, a failed payment, or the timer running out ends it at once and
+// releases the dates. Only a payment made inside the window becomes a booking.
+let aervaCheckout = null; // { rzp, orderId, msgEl, tick, poll, bar }
+function aervaWatchCheckout(rzp, order, msgEl){
+  aervaStopCheckout();
+  if(!order || !order.orderId) return;
+  const seconds = Number(order.holdSeconds) || 0;
+  const state = { rzp, orderId: order.orderId, msgEl, left: seconds };
+  aervaCheckout = state;
+  if(!seconds) return; // no window was opened (older server): nothing to time
+  const bar = document.createElement('div');
+  bar.id = 'aervaCheckoutTimer';
+  bar.setAttribute('role', 'timer');
+  bar.setAttribute('aria-live', 'polite');
+  bar.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:2147483647; background:#1c1b19; color:#fff; text-align:center;'
+    + "padding:calc(10px + env(safe-area-inset-top, 0px)) 16px 10px; font-family:'Jost', sans-serif; font-size:15px; font-weight:500; box-shadow:0 2px 8px rgba(0,0,0,0.25);";
+  document.body.appendChild(bar);
+  state.bar = bar;
+  const paint = () => {
+    const m = Math.floor(state.left / 60), sec = String(state.left % 60).padStart(2, '0');
+    bar.textContent = `Pay within ${m}:${sec} — dates held for you`;
+    bar.style.background = state.left <= 20 ? '#a3402f' : '#1c1b19';
+  };
+  paint();
+  state.tick = setInterval(() => {
+    state.left = Math.max(0, state.left - 1);
+    paint();
+    if(state.left === 0) aervaEndCheckout('expired');
+  }, 1000);
+  state.poll = setInterval(async () => {
+    try{
+      const r = await fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ holdStatus: state.orderId }) });
+      const d = await r.json();
+      if(aervaCheckout !== state) return;
+      if(d && d.active === false) aervaEndCheckout(d.reason || 'released');
+      else if(d && typeof d.secondsLeft === 'number' && Math.abs(d.secondsLeft - state.left) > 2) state.left = d.secondsLeft; // stay in step with the server
+    }catch(e){ /* keep counting; the server still enforces the window */ }
+  }, 4000);
+}
+function aervaStopCheckout(){
+  if(!aervaCheckout) return;
+  clearInterval(aervaCheckout.tick); clearInterval(aervaCheckout.poll);
+  if(aervaCheckout.bar) aervaCheckout.bar.remove();
+  aervaCheckout = null;
+}
+// Payment succeeded: the booking takes the dates; nothing to release here.
+function aervaCheckoutSucceeded(){ aervaStopCheckout(); }
+// Closed, failed, timed out, released, or the price changed: end it now.
+function aervaEndCheckout(reason){
+  const state = aervaCheckout;
+  if(!state) return;
+  aervaStopCheckout();
+  try{ state.rzp && state.rzp.close && state.rzp.close(); }catch(e){}
+  aervaReleaseHold(state.orderId);
+  const messages = {
+    closed: 'Payment cancelled. Your dates have been released.',
+    failed: 'The payment did not go through, so nothing was booked. Your dates have been released.',
+    expired: 'The 90-second payment window has ended and your dates have been released. You can start again.',
+    released: 'This payment was cancelled and your dates have been released.',
+    price_changed: 'Prices have been changed recently. Tap Continue to payment to see the new price.'
+  };
+  if(state.msgEl){ state.msgEl.textContent = messages[reason] || messages.released; state.msgEl.style.display = 'block'; }
+}
+
+// ---- "Prices have been changed recently" ----
+// The page sends the price stamp of each listing it is showing; if the host
+// changed a price since, the server returns the new breakdown instead of
+// opening payment, and the guest confirms it first.
+let aervaPriceAccepted = {};
+function aervaPricesSeen(items){
+  const out = {};
+  (items || []).forEach(x => { if(x && x.id != null) out[String(x.id)] = x.price_changed_at || null; });
+  Object.keys(aervaPriceAccepted).forEach(k => { if(k in out) out[k] = aervaPriceAccepted[k]; });
+  return out;
+}
+function aervaShowPriceChange(msgEl, data, btn){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inr = (n) => (n < 0 ? '−' : '') + '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
+  msgEl.style.display = 'block';
+  msgEl.innerHTML = `<div class="price-changed">
+      <p class="price-changed-title">Prices have been changed recently. The new price is below.</p>
+      ${(data.lines || []).map(l => `<div class="sum-row"><span>${esc(l.label)}</span><span>${inr(l.amount)}</span></div>`).join('')}
+      <div class="sum-row price-changed-total"><span>New total</span><span>${inr(data.total)}</span></div>
+      <button type="button" class="btn solid price-changed-go" style="width:100%; margin-top:12px;">Continue with the new price</button>
+    </div>`;
+  msgEl.querySelector('.price-changed-go').addEventListener('click', () => {
+    aervaPriceAccepted = Object.assign({}, aervaPriceAccepted, data.pricesSeen || {});
+    msgEl.style.display = 'none'; msgEl.innerHTML = '';
+    if(btn) btn.click();
+  });
+}
+
+// ---- Release the payment window's hold on the dates ----
+// (api/create-order.js releaseHold). Best effort: the hold expires on its own.
+function aervaReleaseHold(orderId){
+  if(!orderId) return;
+  try{
+    fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ releaseHold: orderId }), keepalive: true }).catch(function(){});
+  }catch(e){}
+}
+
+// ---- Refund policy wording — must match api/_cancellations.js ----
+function cancellationPolicyText(policy){
+  return policy === 'firm'
+    ? 'Firm — full refund 30+ days before check-in; 50% from 5 to 29 days; within 4 days the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.'
+    : 'Flexible — full refund 30+ days before check-in; 80% from 10 to 29 days; 50% from 5 to 9 days; 30% from 2 to 4 days; in the last day the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.';
+}
+
+// ---- Uploading files (ID proof, evidence) to Aerva's storage ----
+async function aervaUploadFiles(files, payload){
+  const { upload } = await import('https://esm.sh/@vercel/blob/client');
+  const out = [];
+  for(const f of files){
+    if(f.size > 8 * 1024 * 1024) throw new Error(`"${f.name}" is larger than 8 MB.`);
+    const r = await upload(f.name, f, { access: 'public', handleUploadUrl: SUITES_API_BASE + '/api/blob-upload', clientPayload: payload });
+    out.push(r.url);
+  }
+  return out;
+}
+
+// ---- Phone number and ID proof, required to book (api/_guest-id.js) ----
+// Opens where the booking message shows, asks only for what is missing,
+// then continues to payment by pressing the same button again.
+function aervaShowNeeds(msgEl, data, btn){
+  const needs = data.needs || [];
+  if(needs.includes('login')){
+    msgEl.style.display = 'block';
+    msgEl.innerHTML = `<div class="price-changed"><p class="price-changed-title">Please log in to book</p>
+      <p style="margin:0 0 10px;">Every booking needs an Aerva account with your phone number and ID proof.</p>
+      <a class="btn solid" href="guest-login.html?next=${encodeURIComponent(location.href)}" style="width:100%;">Log in or create an account</a></div>`;
+    return;
+  }
+  aervaIdPanel(msgEl, { needs, message: data.error, onDone: () => { msgEl.style.display = 'none'; msgEl.innerHTML = ''; if(btn) btn.click(); } });
+}
+async function aervaIdPanel(host, { needs = ['id'], message = '', onDone } = {}){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let types = { aadhaar: 'Aadhaar', passport: 'Passport', driving_licence: 'Driving licence', voter_id: 'Voter ID', pan: 'PAN card' };
+  try{ const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=bookingRequirements', { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } }); const d = await r.json(); if(d.idTypes) types = d.idTypes; }catch(e){}
+  host.style.display = 'block';
+  host.innerHTML = `<div class="price-changed">
+    <p class="price-changed-title">${esc(message || 'A few details are needed to book')}</p>
+    ${needs.includes('phone') ? `<label class="payout-label" for="needPhone">Mobile number</label>
+      <input id="needPhone" type="tel" placeholder="10-digit mobile number" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">` : ''}
+    ${needs.includes('id') ? `<label class="payout-label" for="needIdType">ID proof (of the guest booking)</label>
+      <select id="needIdType" style="width:100%; padding:11px; margin:6px 0 8px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;">
+        ${Object.keys(types).map(k => `<option value="${esc(k)}">${esc(types[k])}</option>`).join('')}</select>
+      <input id="needIdFile" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" style="margin:4px 0 6px; font-size:15px;">
+      <p style="font-size:13.5px; color:var(--ink-3); margin:0 0 10px;">A clear photo or PDF. Only Aerva sees it; your host sees only that an ID is on file.</p>` : ''}
+    <button type="button" class="btn solid" id="needSave" style="width:100%;">Save and continue</button>
+    <p id="needMsg" style="font-size:14px; color:#a3402f; margin:8px 0 0;"></p></div>`;
+  host.querySelector('#needSave').addEventListener('click', async () => {
+    const msg = host.querySelector('#needMsg'); const save = host.querySelector('#needSave');
+    msg.textContent = ''; save.disabled = true; save.textContent = 'Saving…';
+    const auth = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() };
+    try{
+      if(needs.includes('phone')){
+        const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: auth, body: JSON.stringify({ mode: 'savePhone', phone: host.querySelector('#needPhone').value }) });
+        const d = await r.json(); if(!r.ok) throw new Error(d.error || 'Could not save your number.');
+      }
+      if(needs.includes('id')){
+        const file = host.querySelector('#needIdFile').files[0];
+        if(!file) throw new Error('Choose a photo or PDF of your ID.');
+        const [url] = await aervaUploadFiles([file], 'guest-id');
+        const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: auth, body: JSON.stringify({ mode: 'saveIdDocument', url, type: host.querySelector('#needIdType').value }) });
+        const d = await r.json(); if(!r.ok) throw new Error(d.error || 'Could not save your ID.');
+      }
+      if(typeof onDone === 'function') onDone();
+    }catch(err){ msg.textContent = err.message || 'Could not save. Try again.'; save.disabled = false; save.textContent = 'Save and continue'; }
+  });
+}
+
+// ---- Guest: report a problem during the stay (api/_stay-disputes.js) ----
+function openReportProblem(orderId, listingName){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const overlay = document.createElement('div');
+  overlay.className = 'payout-overlay';
+  const field = 'width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;';
+  overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Report a problem">
+    <button type="button" class="payout-close" aria-label="Close">×</button>
+    <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Report a problem</h2>
+    <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
+    <p class="step-help">Tell your host and Aerva what is wrong, with photos. Aerva decides after hearing your host. If the problem is upheld, the nights from today to check-out are refunded.</p>
+    <label class="payout-label" for="rpReason">What is the problem?</label>
+    <select id="rpReason" style="${field}">
+      <option value="not_as_described">Not as described in the listing</option>
+      <option value="unsafe">Unsafe or not working (water, power, locks, etc.)</option>
+      <option value="not_clean">Not clean</option>
+      <option value="no_access">Could not get in</option>
+      <option value="host_conduct">Host behaviour</option>
+      <option value="other">Something else</option>
+    </select>
+    <label class="payout-label" for="rpDetails">Describe it</label>
+    <textarea id="rpDetails" rows="4" maxlength="2000" style="${field}"></textarea>
+    <label class="payout-label" for="rpFiles">Photos or documents (at least one, up to 8)</label>
+    <input id="rpFiles" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" style="margin:6px 0 14px; font-size:15px;">
+    <button type="button" class="btn solid" id="rpSend" style="width:100%;">Send report</button>
+    <p id="rpMsg" style="font-size:14px; color:#a3402f; margin-top:10px;"></p>
+  </div>`;
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
+  overlay.querySelector('.payout-close').addEventListener('click', close);
+  document.body.appendChild(overlay);
+  overlay.querySelector('#rpSend').addEventListener('click', async () => {
+    const msg = overlay.querySelector('#rpMsg'); const btn = overlay.querySelector('#rpSend');
+    const files = [...overlay.querySelector('#rpFiles').files].slice(0, 8);
+    if(!files.length){ msg.textContent = 'Please add at least one photo or document.'; return; }
+    btn.disabled = true; btn.textContent = 'Sending…'; msg.textContent = '';
+    try{
+      const evidence = await aervaUploadFiles(files, 'dispute-evidence');
+      const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({ mode: 'raiseDispute', orderId, reason: overlay.querySelector('#rpReason').value, details: overlay.querySelector('#rpDetails').value, evidence }) });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.error || 'Could not send your report.');
+      overlay.querySelector('.payout-sheet').innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500;">Report sent</h2><p>Your host has been told, and Aerva will decide after hearing them. We will email you the outcome.</p><button type="button" class="btn solid" style="width:100%;" onclick="this.closest(\'.payout-overlay\').remove()">Close</button>';
+    }catch(err){ msg.textContent = err.message; btn.disabled = false; btn.textContent = 'Send report'; }
+  });
+}
+
+// ---- Guest: change a booking ----
+// New dates, guests, pets and add-ons; the new price and the difference are
+// shown before anything is sent. The request goes to the host in Messages.
+async function openChangeBooking(orderId, listingName){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inr = (n) => (n < 0 ? '−' : '') + '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
+  const overlay = document.createElement('div');
+  overlay.className = 'payout-overlay';
+  overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Change booking">
+    <button type="button" class="payout-close" aria-label="Close">×</button>
+    <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Change booking</h2>
+    <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
+    <div id="chBody"><p class="payout-muted">Loading…</p></div>
+  </div>`;
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
+  overlay.querySelector('.payout-close').addEventListener('click', close);
+  document.body.appendChild(overlay);
+  const body = overlay.querySelector('#chBody');
+  const auth = { 'Authorization': 'Bearer ' + guestAuthToken() };
+  let o;
+  try{
+    const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=changeOptions&orderId=' + encodeURIComponent(orderId), { headers: auth });
+    o = await r.json();
+    if(!r.ok){ body.innerHTML = `<p class="payout-muted">${esc(o.error || 'This booking cannot be changed.')}</p>`; return; }
+  }catch(err){ body.innerHTML = '<p class="payout-muted">Could not load this. Try again.</p>'; return; }
+  if(o.openChange){ body.innerHTML = `<p>You already have a change open: ${esc(o.openChange.summary)}.</p>`; return; }
+  const field = 'width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;';
+  const num = (id, label, value, min, max) => `<label class="payout-label" for="${id}">${label}</label>
+    <select id="${id}" style="${field}">${Array.from({ length: max - min + 1 }, (_, i) => min + i).map(n => `<option value="${n}"${n === value ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+  const maxG = o.limits.maxGuests || 16;
+  const isStay = o.kind === 'stay';
+  body.innerHTML = `
+    ${bookStep(1, isStay ? 'New dates' : 'New date')}
+    ${o.kind === 'pair' ? '<p class="step-help">This experience includes a stay. Both move together.</p>' : ''}
+    ${o.started ? `<p class="step-help">${isStay ? `You have checked in, so check-in stays ${esc(o.current.arrival)}. You can change check-out.` : 'This has already started, so the date cannot move. You can change the number of guests.'}</p>` : ''}
+    <label class="payout-label" for="chIn">${isStay ? 'Check-in' : 'Date'}</label>
+    <input id="chIn" type="date" value="${esc(o.current.arrival)}" min="${esc(o.today)}" ${o.started ? 'disabled' : ''} style="${field}">
+    ${isStay ? `<label class="payout-label" for="chOut">Check-out</label>
+    <input id="chOut" type="date" value="${esc(o.current.departure)}" style="${field}">` : ''}
+    ${bookStep(2, 'Who is coming')}
+    ${num('chAdults', 'Adults (13 or above)', Math.max(1, o.current.guests), 1, maxG)}
+    ${num('chChildren', 'Children (2–12)', 0, 0, maxG)}
+    ${o.limits.petFriendly ? num('chPets', 'Pets', o.current.pets, 0, o.limits.maxPets != null ? o.limits.maxPets : 5)
+      + (o.limits.petTypes.length ? `<div id="chPetTypes" style="margin:-4px 0 12px;">${o.limits.petTypes.map(t => `<label style="margin-right:14px; font-size:15px;"><input type="checkbox" value="${esc(t)}"${o.current.petTypes.includes(t) ? ' checked' : ''}> ${esc(t)}</label>`).join('')}</div>` : '') : ''}
+    ${o.limits.amenities.length ? `${bookStep(3, 'Add-ons')}<div id="chAmenities">${o.limits.amenities.map(a => `<label style="display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #eee; font-size:15px;"><span><input type="checkbox" value="${a.id}"${o.current.amenityIds.includes(a.id) ? ' checked' : ''}> ${esc(a.name)}</span><span>${inr(a.price)} a night</span></label>`).join('')}</div>` : ''}
+    <button type="button" class="btn solid" id="chQuote" style="width:100%; margin-top:16px;">See the new price</button>
+    <div id="chResult"></div>
+    <p id="chMsg" class="payout-muted" style="margin-top:10px; color:#a3402f;"></p>`;
+  const read = () => ({
+    arrival: overlay.querySelector('#chIn').value, departure: overlay.querySelector('#chOut') ? overlay.querySelector('#chOut').value : '',
+    adults: Number(overlay.querySelector('#chAdults').value), children: Number(overlay.querySelector('#chChildren').value), infants: 0,
+    pets: overlay.querySelector('#chPets') ? Number(overlay.querySelector('#chPets').value) : 0,
+    petTypes: [...overlay.querySelectorAll('#chPetTypes input:checked')].map(i => i.value),
+    amenityIds: [...overlay.querySelectorAll('#chAmenities input:checked')].map(i => Number(i.value))
+  });
+  const post = (payload) => fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, auth), body: JSON.stringify(payload) })
+    .then(async r => ({ ok: r.ok, d: await r.json().catch(() => ({})) }));
+  overlay.querySelector('#chQuote').addEventListener('click', async () => {
+    const msg = overlay.querySelector('#chMsg'); const out = overlay.querySelector('#chResult');
+    msg.textContent = ''; out.innerHTML = '';
+    const change = read();
+    const { ok, d } = await post({ mode: 'changeQuote', orderId, change });
+    if(!ok){ msg.textContent = d.error || 'Could not price this change.'; return; }
+    const line = (l, v) => `<div class="payout-line"><span>${esc(l)}</span><span>${v}</span></div>`;
+    const diffText = d.difference > 0 ? `You pay ${inr(d.difference)} more` : d.difference < 0 ? `You get back ${inr(-d.difference)}` : 'The total stays the same';
+    out.innerHTML = `${bookStep(o.limits.amenities.length ? 4 : 3, 'Check the new total')}
+      <p class="step-help">${d.summary ? d.summary.split('; ').map(esc).join('<br>') : 'Nothing has changed yet.'}</p>
+      ${d.lines.map(l => line(l.label, inr(l.amount))).join('')}
+      <div style="border-top:1px solid var(--hairline); margin-top:8px; padding-top:4px;"></div>
+      ${line('Current total', inr(d.oldTotal))}
+      ${line('New total', '<strong>' + inr(d.newTotal) + '</strong>')}
+      <div class="sum-row" style="font-weight:600; font-size:18px; padding-top:10px;"><span>${diffText}</span><span></span></div>
+      <p class="pay-note" style="text-align:left;">Your host is asked first. ${d.difference > 0 ? 'Once they accept, you pay the difference to confirm.' : d.difference < 0 ? 'Once they accept, the difference is refunded in full.' : ''} Until then your booking stays as it is.</p>
+      ${d.summary ? '<button type="button" class="btn solid" id="chSend" style="width:100%; margin-top:10px;">Send change request to host</button>' : ''}`;
+    const send = out.querySelector('#chSend');
+    if(send) send.addEventListener('click', async () => {
+      send.disabled = true;
+      const res = await post({ mode: 'requestChange', orderId, change });
+      if(!res.ok){ msg.textContent = res.d.error || 'Could not send the request.'; send.disabled = false; return; }
+      body.innerHTML = '<p>Your change request has been sent to your host in Messages. We will email you when they answer.</p>';
+      if(typeof loadMyBookings === 'function') loadMyBookings();
+    });
+  });
+}
+
+// ---- Guest: pay the difference for an accepted change ----
+// Same strict 90-second payment window as a booking.
+async function aervaPayChange(changeId, btn){
+  const label = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Preparing payment…'; }
+  const note = document.createElement('p');
+  note.className = 'offer'; note.style.cssText = 'color:#a3402f; margin-top:8px;';
+  if(btn && btn.parentNode) btn.parentNode.appendChild(note);
+  let order;
+  try{
+    const r = await fetch(SUITES_API_BASE + '/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+      body: JSON.stringify({ payChange: changeId }) });
+    order = await r.json();
+    if(!r.ok) throw new Error(order.error || 'Could not start the payment.');
+  }catch(err){ note.textContent = err.message; if(btn){ btn.disabled = false; btn.textContent = label; } return; }
+  if(btn){ btn.disabled = false; btn.textContent = label; }
+  if(typeof Razorpay === 'undefined'){ note.textContent = 'Payment gateway did not load. Please check your connection and try again.'; return; }
+  const rzp = new Razorpay({
+    key: RAZORPAY_KEY_ID, order_id: order.orderId, amount: order.amount, currency: order.currency,
+    timeout: order.holdSeconds || undefined, name: 'Aerva', description: order.description || 'Booking change',
+    theme: { color: '#a9884f' },
+    handler: async function(response){
+      aervaCheckoutSucceeded();
+      try{
+        const v = await fetch(SUITES_API_BASE + '/api/verify-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(response) });
+        const d = await v.json();
+        note.style.color = d.verified ? '#2f6b3a' : '#a3402f';
+        note.textContent = d.verified ? 'Payment received. Your booking has been changed — we have emailed you the details.' : (d.message || 'We could not confirm this payment. Please contact us.');
+        if(typeof loadMyBookings === 'function') setTimeout(loadMyBookings, 1500);
+      }catch(e){ note.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.'; }
+    },
+    modal: { ondismiss: function(){ aervaEndCheckout('closed'); } }
+  });
+  rzp.on('payment.failed', function(){ aervaEndCheckout('failed'); });
+  rzp.open();
+  aervaWatchCheckout(rzp, order, note);
+}
+
+// ---- Guest: request a cancellation ----
+// The request goes to the host in the booking's message thread; the host
+// answers there. The guest sees only what applies to THIS booking now.
+async function openPolicyCancel(orderId, listingName){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+  const overlay = document.createElement('div');
+  overlay.className = 'payout-overlay';
+  overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Request cancellation">
+    <button type="button" class="payout-close" aria-label="Close">×</button>
+    <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Request cancellation</h2>
+    <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
+    <div id="pcBody"><p class="payout-muted">Loading…</p></div>
+  </div>`;
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
+  overlay.querySelector('.payout-close').addEventListener('click', close);
+  document.body.appendChild(overlay);
+  const body = overlay.querySelector('#pcBody');
+  const auth = { 'Authorization': 'Bearer ' + guestAuthToken() };
+  let q = null;
+  try{
+    const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=cancellationQuote&orderId=' + encodeURIComponent(orderId), { headers: auth });
+    q = await r.json();
+    if(!r.ok){ body.innerHTML = `<p class="payout-muted">${esc(q.error || 'This booking cannot be cancelled here.')}</p>`; return; }
+  }catch(err){ body.innerHTML = '<p class="payout-muted">Could not load this. Try again.</p>'; return; }
+  const line = (label, value) => `<div class="payout-line"><span>${esc(label)}</span><span>${value}</span></div>`;
+  const planText = () => {
+    const reason = overlay.querySelector('#pcReason').value;
+    if(reason !== 'change_of_plans') return '<p class="payout-muted" style="margin:8px 0;">If your host accepts, the booking price and deposit are refunded in full. Aerva\u2019s service fee is non-refundable.</p>';
+    if(!q.allowed) return `<p class="payout-muted" style="margin:8px 0;">${esc(q.error || '')}</p>`;
+    if(q.hostDecides) return `<p class="payout-muted" style="margin:8px 0;">Your host decides the refund.</p>${line('Deposit refunded', inr(q.ifNoRefund.deposit))}${line('Aerva service fee (non-refundable)', inr(q.ifNoRefund.feeKept))}`;
+    return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
+  };
+  body.innerHTML = `<label class="payout-label" for="pcReason">Reason</label>
+    <select id="pcReason" style="width:100%; padding:11px; margin:6px 0 10px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;">
+      <option value="change_of_plans">Change of plans</option>
+      <option value="emergency">Medical or family emergency</option>
+      <option value="life_threatening">Life-threatening situation</option>
+      <option value="environmental">Environmental hazard (flood, fire, landslide or similar)</option>
+      <option value="travel_restriction">Government order or travel restriction</option>
+    </select>
+    <div id="pcPlan"></div>
+    <label class="payout-label" for="pcNote">Message to your host (optional)</label>
+    <textarea id="pcNote" rows="3" maxlength="800" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;"></textarea>
+    <button type="button" class="btn" id="pcGo" style="width:100%;">Send request to host</button>
+    <p id="pcMsg" class="payout-muted" style="margin-top:10px;"></p>`;
+  const plan = overlay.querySelector('#pcPlan');
+  const refresh = () => { plan.innerHTML = planText(); };
+  overlay.querySelector('#pcReason').addEventListener('change', refresh);
+  refresh();
+  overlay.querySelector('#pcGo').addEventListener('click', async () => {
+    const msg = overlay.querySelector('#pcMsg');
+    const btn = overlay.querySelector('#pcGo');
+    btn.disabled = true; msg.textContent = '';
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, auth),
+        body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode: overlay.querySelector('#pcReason').value, details: overlay.querySelector('#pcNote').value.trim() }) });
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok){ msg.textContent = d.error || 'Could not send the request.'; btn.disabled = false; return; }
+      body.innerHTML = '<p>Your request has been sent to your host in Messages. We will email you when they answer.</p>';
+      if(typeof loadMyBookings === 'function') loadMyBookings();
+    }catch(err){ msg.textContent = 'Could not send the request. Try again.'; btn.disabled = false; }
+  });
+}
 
 // ---- Guest: request a cancellation the host can accept (full refund) ----
 function openCancelRequest(orderId, listingName){
