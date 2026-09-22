@@ -70,7 +70,12 @@ const { buildIcs, syncStaleFeeds } = require('./_calendar-sync');
 const { sendScheduledTemplates } = require('./_template-scheduling');
 const { releaseDueCoupons } = require('./_coupons');
 const { runAutoPayouts } = require('./_payouts');
-const { runScheduled, jobStatus } = require('./_scheduler');
+const { runScheduled, jobStatus, jobRuns } = require('./_scheduler');
+const { reconcilePayments, processScheduledRefunds } = require('./_confirm-booking');
+const { settleUnansweredRequests } = require('./_cancellations');
+const { heldListingIds } = require('./_booking-rules');
+const { expireChanges } = require('./_booking-changes');
+const { enforceIdDeadlines } = require('./_guest-id');
 const { releaseDueDeposits } = require('./_deposits');
 const { decryptField } = require('./_secure-fields');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
@@ -507,6 +512,27 @@ async function refreshCurrencyRates(sql) {
 // Fast, time-sensitive jobs run every 5–15 minutes; heavy ones hourly or
 // daily. One pinger (?runSchedules=1 every 5 minutes) drives them all.
 const JOBS = [
+  // Payments whose browser never came back (UPI app switch, closed tab):
+  // Razorpay is asked directly and the booking is recorded. First in line —
+  // a guest who has paid should never wait behind anything else.
+  { name: 'payment_reconcile', label: 'Record paid bookings whose confirmation never arrived from the browser', everyMinutes: 5,
+    run: (c) => reconcilePayments(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  // Last-days cancellation requests the host has not answered in 24 hours
+  // are settled as no refund of the booking price (_cancellations.js).
+  { name: 'unanswered_cancellations', label: 'Settle cancellation requests the host did not answer within 24 hours', everyMinutes: 15,
+    run: (c) => settleUnansweredRequests(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  // Payments whose amount did not match the booking: refunded in full the
+  // day after (_confirm-booking.js).
+  { name: 'scheduled_refunds', label: 'Next-day refunds for payments that did not match the booking amount', everyMinutes: 15,
+    run: (c) => processScheduledRefunds(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  // Booking changes that can no longer happen: check-out day has begun,
+  // or the 24 hours to pay the difference have passed.
+  { name: 'booking_changes_expiry', label: 'Close booking changes past their time limit', everyMinutes: 15,
+    run: (c) => expireChanges(c.sql) },
+  // Paid bookings still without a valid ID proof at their deadline:
+  // cancelled and refunded in full (_guest-id.js).
+  { name: 'id_deadlines', label: 'Cancel and refund bookings still without a valid ID proof at their deadline', everyMinutes: 5,
+    run: (c) => enforceIdDeadlines(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'coupon_release', label: 'Release cancellation coupons (15 minutes after a cancellation)', everyMinutes: 5,
     run: (c) => releaseDueCoupons(c.sql, { force: true }) },
   { name: 'payouts', label: 'Payouts (5 PM on check-out day; retries every 4 hours; payout and refund status)', everyMinutes: 5,
@@ -761,6 +787,13 @@ module.exports = async (req, res) => {
   if (req.method === 'GET' && (req.query.releaseCoupons === '1' || req.query.runSchedules === '1')) {
     if (!isCronAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
     return res.status(200).json(await runJobs(sql, { budgetMs: 8000 }));
+  }
+  // GET ?jobRuns=1[&job=<name>] (admin): recent runs that affected people,
+  // failed, or were run by hand — with who was affected and how.
+  if (req.method === 'GET' && req.query.jobRuns === '1') {
+    if (!isAdminAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    const job = typeof req.query.job === 'string' && JOBS.some(j => j.name === req.query.job) ? req.query.job : null;
+    return res.status(200).json({ runs: await jobRuns(sql, { job, limit: req.query.limit }) });
   }
   // GET ?jobStatus=1 (admin): every job, its schedule and how its last run went.
   // GET ?runJob=<name> (admin): run one job now (for when something went wrong).
@@ -1213,6 +1246,13 @@ module.exports = async (req, res) => {
         arrival: toDateStr(r.arrival),
         departure: toDateStr(r.departure),
       }));
+      // Dates being paid for right now by someone else show as booked.
+      try {
+        const holdRows = roomId
+          ? await sql`SELECT arrival, departure FROM booking_holds WHERE room_id = ${roomId} AND released = false AND expires_at > now()`
+          : await sql`SELECT arrival, departure FROM booking_holds WHERE listing_id = ${listingId} AND room_id IS NULL AND released = false AND expires_at > now()`;
+        holdRows.forEach(r => bookedRanges.push({ arrival: toDateStr(r.arrival), departure: toDateStr(r.departure) }));
+      } catch (err) { /* holds table not created yet */ }
 
       // Host-blocked dates (maintenance, personal use, etc.) — shown on
       // the same calendar as booked dates so a guest can't even try to
@@ -1377,7 +1417,9 @@ module.exports = async (req, res) => {
                 )
               )
             )
-          ) AS is_available
+          ) AS is_available,
+          COALESCE(to_jsonb(e)->>'cancellation_policy', 'flexible') AS cancellation_policy,
+          to_jsonb(e)->>'price_changed_at' AS price_changed_at
         FROM listings e
         LEFT JOIN listings h ON h.id = e.hosting_listing_id
         WHERE e.status = 'approved' AND e.listing_type = 'experience'
@@ -1538,7 +1580,9 @@ module.exports = async (req, res) => {
                experience_start_time, experience_refund_policy,
                experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
                experience_instructions, experience_special_instructions,
-               experience_available_from, experience_available_until
+               experience_available_from, experience_available_until,
+               COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
+               to_jsonb(listings)->>'price_changed_at' AS price_changed_at
         FROM listings
         WHERE status = 'approved' AND listing_type = 'experience' AND hosting_listing_id = ${hostingId}
         ORDER BY created_at DESC
@@ -1620,7 +1664,11 @@ module.exports = async (req, res) => {
             )
           )
         ) AS is_available,
-        host_id
+        host_id,
+        -- read through to_jsonb so this query still works before the
+        -- migration adds the column (every listing is then Flexible)
+        COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
+        to_jsonb(listings)->>'price_changed_at' AS price_changed_at
       FROM listings
       WHERE status = 'approved' AND listing_type = 'stay'
         AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter} OR area ILIKE ${effectiveCityFilter})
@@ -1640,6 +1688,17 @@ module.exports = async (req, res) => {
           return capacity === null || capacity >= guestsFilter;
         })
       : listings;
+
+    // A home whose dates are inside someone's 90-second payment window is
+    // not shown at all for those dates — to anyone, the payer included
+    // (_booking-rules.js). It reappears the moment the window closes.
+    if (arrivalFilter) {
+      const held = await heldListingIds(sql, arrivalFilter, departureFilter);
+      for (let i = afterGuestsFilter.length - 1; i >= 0; i--) {
+        const l = afterGuestsFilter[i];
+        if (l.property_type !== 'Resort' && held.has(Number(l.id))) afterGuestsFilter.splice(i, 1);
+      }
+    }
 
     // A resort's real availability/capacity lives in its ROOMS, not the
     // listing row itself — is_available above only checked for orders/
@@ -1672,6 +1731,14 @@ module.exports = async (req, res) => {
         FROM listing_rooms
         WHERE listing_id = ANY(${resortIds}) AND is_active = TRUE
       `;
+      if (arrivalFilter) {
+        try {
+          const heldRooms = new Set((await sql`SELECT DISTINCT room_id FROM booking_holds
+            WHERE released = false AND expires_at > now() AND listing_id = ANY(${resortIds}) AND room_id IS NOT NULL
+              AND arrival < ${departureFilter}::date AND departure > ${arrivalFilter}::date`).map(r => Number(r.room_id)));
+          roomRows.forEach(r => { if (heldRooms.has(Number(r.id))) r.is_free = false; });
+        } catch (err) { /* holds table not created yet */ }
+      }
       const capacityByListing = {};
       for (const r of roomRows) {
         if (!capacityByListing[r.listing_id]) capacityByListing[r.listing_id] = { total: 0, available: 0, count: 0, availableCount: 0 };

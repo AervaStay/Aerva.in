@@ -91,4 +91,47 @@ async function pollRefunds(sql, razorpay) {
   return out;
 }
 
-module.exports = { safeRefund, pollRefunds };
+// Refunds spread over every payment of a booking: the original payment
+// first, then any payments for earlier changes. Each payment is refunded at
+// most once per purpose (kind), never beyond what it has left. Returns the
+// rupees refunded; anything that could not be refunded in cash is the
+// caller's to return as a coupon.
+async function refundAcrossPayments(sql, razorpay, { orderId, amountInr, kindBase }) {
+  let remaining = Math.max(0, Math.round(Number(amountInr) || 0));
+  if (!remaining) return { refundedInr: 0, shortfallInr: 0, firstRefundId: null };
+  const o = (await sql`SELECT razorpay_payment_id FROM orders WHERE id = ${orderId}`)[0];
+  let extra = [];
+  // Change payments of any row of the same purchase: a change to an
+  // "Includes a Stay" pair is paid once, for both halves.
+  try {
+    extra = await sql`SELECT DISTINCT bc.id, bc.razorpay_payment_id FROM booking_changes bc JOIN orders x ON x.id = bc.order_id
+                      WHERE x.razorpay_order_id = (SELECT razorpay_order_id FROM orders WHERE id = ${orderId})
+                        AND bc.status = 'applied' AND bc.razorpay_payment_id IS NOT NULL ORDER BY bc.id`;
+  } catch (e) { /* none */ }
+  // Newest change payment first, the original payment last: the original
+  // carries the security deposit, which must stay refundable.
+  const payments = [...extra.map(r => r.razorpay_payment_id).reverse(), o && o.razorpay_payment_id].filter(Boolean);
+  let refundedInr = 0, firstRefundId = null;
+  for (const pid of payments) {
+    if (!remaining) break;
+    const pay = await razorpay.payments.fetch(pid);
+    const left = Math.floor((Number(pay.amount) - Number(pay.amount_refunded || 0)) / 100);
+    const take = Math.min(left, remaining);
+    if (take <= 0) continue;
+    const refund = await safeRefund(sql, razorpay, { orderId, paymentId: pid, amountSubunit: take * 100, kind: `${kindBase}:${pid}` });
+    if (!firstRefundId) firstRefundId = refund.id;
+    refundedInr += take; remaining -= take;
+  }
+  return { refundedInr, shortfallInr: remaining, firstRefundId };
+}
+async function hasChangePayments(sql, orderId) {
+  try {
+    return (await sql`SELECT 1 FROM booking_changes bc JOIN orders x ON x.id = bc.order_id
+                      WHERE x.razorpay_order_id = (SELECT razorpay_order_id FROM orders WHERE id = ${orderId})
+                        AND bc.status = 'applied' AND bc.razorpay_payment_id IS NOT NULL LIMIT 1`).length > 0;
+  }
+  catch (e) { return false; }
+}
+
+
+module.exports = { safeRefund, pollRefunds, refundAcrossPayments, hasChangePayments };

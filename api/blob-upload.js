@@ -42,7 +42,9 @@ module.exports = async (req, res) => {
         // What protects it today is restricting *what* can be uploaded:
         // images only (plus PDF for the Aadhaar case above), capped size,
         // so it can't be abused to host arbitrary files.
-        const isAadhaarUpload = clientPayload === 'aadhaar-verification';
+        // Documents that may be PDFs: a host's Aadhaar, a guest's ID proof
+        // (required to book), and evidence for a problem during a stay.
+        const isAadhaarUpload = ['aadhaar-verification', 'guest-id', 'dispute-evidence'].includes(clientPayload);
         const allowedContentTypes = isAadhaarUpload
           ? ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
           : ['image/jpeg', 'image/png', 'image/webp'];

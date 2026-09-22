@@ -42,6 +42,63 @@ const { verifyToken } = require('./_approval-token');
 const { isAccountDeleted, deletionBlockers, deleteAccount } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
+const { cancellationQuote, createCancellationRequest, cancellationCard } = require('./_cancellations');
+const { changeOptions, quoteChange, requestChange, withdrawChange, openChangeFor, loadBooking } = require('./_booking-changes');
+const { saveIdDocument, idSummary, ID_TYPES } = require('./_guest-id');
+const { raiseDispute, openDisputeFor, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
+// The problem-report card at the top of a booking's thread.
+async function disputeCard(sql, conversationId, role) {
+  try {
+    const c = (await sql`SELECT order_id FROM conversations WHERE id = ${conversationId}`)[0];
+    const d = c && c.order_id ? await openDisputeFor(sql, c.order_id) : null;
+    if (!d) return null;
+    return { disputeId: d.id, reason: DISPUTE_REASONS[d.reason] || 'Problem', details: d.details, status: d.status, role,
+             evidence: role === 'host' ? d.evidence : undefined, hostResponded: !!d.host_responded_at };
+  } catch (err) { return null; }
+}
+const { normalizeToE164 } = require('./_phone-validation');
+
+// What the guest sees about a change: never the internal pricing record.
+function changeView(qc) {
+  const q = qc.quote;
+  if (q.kind === 'experience' || q.kind === 'pair') {
+    const x = q.experience, st = q.stay;
+    const lines = [{ label: `${x.suite} — ${x.guests} guest${x.guests === 1 ? '' : 's'}`, amount: x.subtotal }];
+    if (st) lines.push({ label: `Included stay — ${st.nights} night${st.nights === 1 ? '' : 's'}`, amount: st.subtotal });
+    lines.push({ label: 'GST', amount: x.gst + (st ? st.gst : 0) });
+    lines.push({ label: 'Guest service fee', amount: x.guestServiceFee + (st ? st.guestServiceFee : 0) });
+    if (st && st.depositAmount) lines.push({ label: 'Refundable deposit', amount: st.depositAmount });
+    return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference };
+  }
+  const lines = [{ label: `${q.nights} night${q.nights === 1 ? '' : 's'}${q.discountAmount ? ' (after discount)' : ''}`, amount: q.roomPortion }];
+  (q.amenities || []).forEach(a => lines.push({ label: a.name, amount: a.total }));
+  if (q.petFeeAmount) lines.push({ label: 'Pet fee', amount: q.petFeeAmount });
+  if (q.gst) lines.push({ label: 'GST', amount: q.gst });
+  lines.push({ label: 'Guest service fee', amount: q.guestServiceFee });
+  if (q.depositAmount) lines.push({ label: 'Refundable deposit', amount: q.depositAmount });
+  return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference };
+}
+// The change card at the top of a booking's thread.
+async function changeCard(sql, conversationId, role) {
+  try {
+    const c = (await sql`SELECT c.order_id FROM conversations c WHERE c.id = ${conversationId}`)[0];
+    if (!c || !c.order_id) return null;
+    // A change to an "Includes a Stay" pair shows in the thread of either half.
+    const main = await loadBooking(sql, c.order_id);
+    const ch = await openChangeFor(sql, main ? main.id : c.order_id);
+    if (!ch) return null;
+    if (role === 'host') return ch.status === 'pending' ? { changeId: ch.id, summary: ch.summary, difference: ch.difference } : { changeId: ch.id, summary: ch.summary, awaitingPayment: ch.difference };
+    return { changeId: ch.id, orderId: c.order_id, summary: ch.summary, status: ch.status, difference: ch.difference };
+  } catch (err) { return null; }
+}
+let razorpayInstance = null;
+function razorpayClient() {
+  if (!razorpayInstance) {
+    const Razorpay = require('razorpay');
+    razorpayInstance = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
+  }
+  return razorpayInstance;
+}
 const { resolveActingHost, cohostCan, cohostHasListing, cohostDetailsMissing, DETAILS_REQUIRED_MESSAGE } = require('./_cohosts');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -290,6 +347,26 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     const mode = req.query.mode;
     try {
+      // ---- What this account still needs to book (phone, ID proof) ----
+      // GET ?mode=bookingRequirements — status only, never the document.
+      if (mode === 'bookingRequirements') {
+        return res.status(200).json(Object.assign(await idSummary(sql, guestId), { idTypes: ID_TYPES }));
+      }
+
+      // ---- Changing a booking: what can change, and the current booking ----
+      // GET ?mode=changeOptions&orderId=
+      if (mode === 'changeOptions') {
+        try { return res.status(200).json(await changeOptions(sql, Number(req.query.orderId) || 0, guestId)); }
+        catch (err) { return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this right now.' }); }
+      }
+
+      // ---- What cancelling would refund, under the booking's policy ----
+      // GET ?mode=cancellationQuote&orderId= — changes nothing.
+      if (mode === 'cancellationQuote') {
+        const q = await cancellationQuote(sql, Number(req.query.orderId) || 0, guestId);
+        if (q.status) return res.status(q.status).json({ error: q.error });
+        return res.status(200).json(q);
+      }
       if (mode === 'conversation') {
         const orderId = Number(req.query.orderId);
         if (!orderId) return res.status(400).json({ error: 'Missing order.' });
@@ -346,7 +423,10 @@ module.exports = async (req, res) => {
         // making it look like nothing was ever received.
         const viewerRole = isGuest ? 'guest' : 'host';
         return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole, messages,
-          reviewPrompt: await threadReviewPrompt(sql, conversationId, viewerRole) });
+          reviewPrompt: await threadReviewPrompt(sql, conversationId, viewerRole),
+          cancellation: await cancellationCard(sql, conversationId, viewerRole),
+          change: await changeCard(sql, conversationId, viewerRole),
+          dispute: await disputeCard(sql, conversationId, viewerRole) });
       }
 
       // Every conversation this account is part of — as host on some,
@@ -476,7 +556,10 @@ module.exports = async (req, res) => {
           `;
         }
         const myRole = isHost ? 'host' : 'guest';
-        return res.status(200).json({ messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole) });
+        return res.status(200).json({ messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole),
+                                      cancellation: await cancellationCard(sql, conversationId, myRole),
+                                      change: await changeCard(sql, conversationId, myRole),
+                                      dispute: await disputeCard(sql, conversationId, myRole) });
       }
 
       if (mode === 'templates') {
@@ -566,6 +649,27 @@ module.exports = async (req, res) => {
         WHERE o.guest_id = ${guestId}
         ORDER BY o.created_at DESC
       `;
+      // Bookings waiting for the guest's ID proof (deadline shown in My Bookings).
+      try {
+        const ids = bookings.map(b => b.id);
+        if (ids.length) {
+          const due = await sql`SELECT id, id_required_by FROM orders WHERE id = ANY(${ids}) AND id_required_by IS NOT NULL AND status = 'paid'`;
+          const byId = {}; due.forEach(r => { byId[r.id] = r.id_required_by; });
+          bookings.forEach(b => { b.id_required_by = byId[b.id] || null; });
+        }
+      } catch (err) { /* before migration_trust_rules.sql */ }
+
+      // The open change on each booking (waiting for the host, or for payment).
+      try {
+        const ids = bookings.map(b => b.id);
+        if (ids.length) {
+          const chs = await sql`SELECT DISTINCT ON (order_id) order_id, id, status, summary, difference FROM booking_changes
+                                WHERE order_id = ANY(${ids}) AND status IN ('pending', 'awaiting_payment') ORDER BY order_id, id DESC`;
+          const byOrder = {}; chs.forEach(c => { byOrder[c.order_id] = { id: c.id, status: c.status, summary: c.summary, difference: c.difference }; });
+          bookings.forEach(b => { b.open_change = byOrder[b.id] || null; });
+        }
+      } catch (err) { /* booking_changes not created yet */ }
+
       // Latest cancellation request per booking (guest's "Request cancellation").
       try {
         const ids = bookings.map(b => b.id);
@@ -694,6 +798,72 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     const { mode } = req.body || {};
     try {
+      // ---- Report a problem during the stay (_stay-disputes.js) ----
+      // POST { mode: 'raiseDispute', orderId, reason, details, evidence: [urls] }
+      if (mode === 'raiseDispute') {
+        try {
+          const b = req.body || {};
+          const row = await raiseDispute(sql, { orderId: Number(b.orderId) || 0, guestId, reason: b.reason, details: b.details, evidence: b.evidence });
+          return res.status(200).json({ success: true, disputeId: row.id });
+        } catch (err) {
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send your report right now.' });
+        }
+      }
+
+      // ---- ID proof and phone (required to book, _guest-id.js) ----
+      // POST { mode: 'saveIdDocument', url, type }  (url from /api/blob-upload, payload 'guest-id')
+      // POST { mode: 'savePhone', phone }
+      if (mode === 'saveIdDocument') {
+        try { return res.status(200).json(await saveIdDocument(sql, guestId, req.body || {})); }
+        catch (err) { return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not save your ID right now.' }); }
+      }
+      if (mode === 'savePhone') {
+        const e164 = normalizeToE164(String((req.body || {}).phone || ''));
+        if (!e164) return res.status(400).json({ error: 'Please enter a valid mobile number, with the country code if you are outside India.' });
+        try {
+          await sql`UPDATE guests SET phone = ${e164} WHERE id = ${guestId}`;
+          return res.status(200).json({ phone: e164 });
+        } catch (err) {
+          if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'This phone number is already used by another Aerva account.' });
+          throw err;
+        }
+      }
+
+      // ---- Changing a booking ----
+      // POST { mode: 'changeQuote',   orderId, change } → new price and difference
+      // POST { mode: 'requestChange', orderId, change } → sent to the host in Messages
+      // POST { mode: 'withdrawChange', changeId }
+      // change: { arrival, departure, adults, children, infants, pets, petTypes, amenityIds }
+      if (mode === 'changeQuote' || mode === 'requestChange' || mode === 'withdrawChange') {
+        try {
+          const b = req.body || {};
+          if (mode === 'withdrawChange') return res.status(200).json(await withdrawChange(sql, { changeId: Number(b.changeId) || 0, guestId }));
+          if (mode === 'changeQuote') return res.status(200).json(changeView(await quoteChange(sql, Number(b.orderId) || 0, guestId, b.change || {})));
+          const row = await requestChange(sql, { orderId: Number(b.orderId) || 0, guestId, input: b.change || {} });
+          return res.status(200).json({ requested: true, changeId: row.id });
+        } catch (err) {
+          if (!err.isUserFacing) console.error('booking change failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again.' });
+        }
+      }
+
+      // ---- Guest asks to cancel (any reason) ----
+      // POST { mode: 'cancelBooking' | 'requestCancellation', orderId, reasonCode, details }
+      // A guest never cancels on their own: the request goes into the
+      // booking's message thread and the host answers there (or in My
+      // Earnings), seeing only the choice for this booking's bracket.
+      if (mode === 'cancelBooking' || mode === 'requestCancellation') {
+        try {
+          const b = req.body || {};
+          const out = await createCancellationRequest(sql, { orderId: Number(b.orderId) || 0, guestId, reasonCode: b.reasonCode || 'change_of_plans', details: b.details });
+          if (out.error) return res.status(out.status || 400).json({ error: out.error });
+          return res.status(200).json({ success: true, requested: true });
+        } catch (err) {
+          console.error('cancellation request failed:', err);
+          return res.status(500).json({ error: 'Could not send the request right now. Please try again.' });
+        }
+      }
+
       // ---- Like / unlike a listing ----
       // POST { mode: 'toggleLike', listingId } -> { liked, likeCount }
       //
@@ -996,43 +1166,6 @@ module.exports = async (req, res) => {
           RETURNING id
         `;
         return res.status(200).json({ id: inserted[0].id });
-      }
-
-      // ---- Ask the host to accept a cancellation (hazard / life-threatening /
-      // emergency / travel restriction). If accepted: full refund. ----
-      if (mode === 'requestCancellation') {
-        const REASONS = { environmental: 'Environmental hazard (flood, fire, landslide or similar)', life_threatening: 'Life-threatening situation',
-                          emergency: 'Medical or family emergency', travel_restriction: 'Government order or travel restriction' };
-        const { orderId, reasonCode } = req.body || {};
-        const details = String((req.body || {}).details || '').trim().slice(0, 800);
-        if (!REASONS[reasonCode]) return res.status(400).json({ error: 'Choose a reason.' });
-        const o = (await sql`
-          SELECT o.id, o.status, o.suite_name, o.arrival, o.departure, o.guest_id, l.host_id,
-                 (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
-          FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${Number(orderId) || 0}
-        `)[0];
-        if (!o || o.guest_id !== guestId) return res.status(404).json({ error: 'Booking not found.' });
-        if (o.status !== 'paid') return res.status(400).json({ error: 'Only a confirmed booking can be cancelled.' });
-        if (String(o.departure).slice(0, 10) < String(o.local_today instanceof Date ? o.local_today.toISOString() : o.local_today).slice(0, 10)) {
-          return res.status(400).json({ error: 'This stay has already ended.' });
-        }
-        try {
-          await sql`INSERT INTO cancellation_requests (order_id, guest_id, reason_code, details) VALUES (${o.id}, ${guestId}, ${reasonCode}, ${details || null})`;
-        } catch (err) {
-          if (/idx_cancel_requests_open|duplicate key/.test(err.message)) return res.status(409).json({ error: 'You already have a request waiting for the host.' });
-          throw err;
-        }
-        await logAudit(sql, { action: 'guest_cancellation_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: o.id, metadata: { reasonCode } });
-        try {
-          const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
-          if (process.env.RESEND_API_KEY && host && host.email) {
-            const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-            await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: host.email, subject: `Cancellation request for ${o.suite_name}`,
-                html: `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">A guest has asked to cancel</h2><p><strong>${esc(o.suite_name)}</strong> (${o.arrival} — ${o.departure})</p><p><strong>Reason:</strong> ${esc(REASONS[reasonCode])}${details ? ' — ' + esc(details) : ''}</p><p>Accept (the guest is refunded in full; no coupon and no charge to you) or decline in My Earnings.</p><p><a href="https://aerva.in/host-earnings.html" style="color:#8a6c39;">Open My Earnings</a></p></div>` }) });
-          }
-        } catch (err) { console.error('request email failed:', err.message); }
-        return res.status(200).json({ success: true });
       }
 
       if (mode === 'deleteTemplate') {

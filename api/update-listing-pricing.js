@@ -244,7 +244,8 @@ module.exports = async (req, res) => {
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                experience_price_unit, commission_rate,
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
-               auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason
+               auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason,
+               COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -336,7 +337,7 @@ module.exports = async (req, res) => {
               latitude, longitude, formattedAddress, city, area, pincode, maxGuests,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
-              customFields, autoSendCheckinInstructions, checkinPhotos, rooms, bedrooms } = req.body || {};
+              customFields, autoSendCheckinInstructions, checkinPhotos, rooms, bedrooms, cancellationPolicy } = req.body || {};
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -543,6 +544,15 @@ module.exports = async (req, res) => {
         RETURNING id, property_name, host_email, max_guests
       `;
       const listing = updated[0];
+
+      // Refund policy (Flexible / Firm). Applies to NEW bookings only: each
+      // paid booking keeps the policy it was bought under (_cancellations.js).
+      // Separate from the save above so the save still works before
+      // migration_cancellation_policy.sql has run.
+      if (cancellationPolicy === 'flexible' || cancellationPolicy === 'firm') {
+        try { await sql`UPDATE listings SET cancellation_policy = ${cancellationPolicy} WHERE id = ${listingId}`; }
+        catch (err) { console.error('cancellation_policy not saved (run migration_cancellation_policy.sql):', err.message); }
+      }
 
       if (rateChanged) {
         await sql`INSERT INTO price_history (listing_id, nightly_rate) VALUES (${listingId}, ${rate})`;

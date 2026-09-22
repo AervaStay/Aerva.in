@@ -89,6 +89,8 @@ const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
 const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout } = require('./_payouts');
+const { disputesForAdmin, decideDispute, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
+const { reviewIdDocument, idDocumentUrlForAdmin, ID_TYPES } = require('./_guest-id');
 const { safeRefund } = require('./_refunds');
 const { releaseDueDeposits } = require('./_deposits');
 const { encryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens, maskAccount } = require('./_secure-fields');
@@ -475,6 +477,49 @@ module.exports = async (req, res) => {
   // plus the IP and device the request came from (see _audit-log.js).
   const ADMIN_AUDIT = await adminContext(sql, req, sessionPayload, hasValidSecret);
   const ADMIN_ACTOR = ADMIN_AUDIT.actorIdentifier;
+
+  // ---- Stay disputes (guest reported a problem during the stay) ----
+  // GET ?stayDisputes=1[&status=all] · POST { decideStayDispute: { disputeId, refund, note } }
+  // The host's account is given more weight: refund only when the guest's
+  // evidence stands and the host cannot justify (_stay-disputes.js).
+  if (req.method === 'GET' && req.query.stayDisputes === '1') {
+    const rows = await disputesForAdmin(sql, { status: req.query.status === 'all' ? 'all' : 'open' });
+    return res.status(200).json({ reasons: DISPUTE_REASONS, disputes: rows });
+  }
+  if (req.method === 'POST' && req.body && req.body.decideStayDispute) {
+    try {
+      const b = req.body.decideStayDispute;
+      const out = await decideDispute(sql, razorpay, { disputeId: Number(b.disputeId) || 0, refund: b.refund === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('decideStayDispute failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not decide this dispute.' });
+    }
+  }
+
+  // ---- Guest ID proofs waiting for review ----
+  // GET ?guestIds=1 · POST { reviewGuestId: { guestId, approve, reason } }
+  // The document address is decrypted for the admin only, here.
+  if (req.method === 'GET' && req.query.guestIds === '1') {
+    let rows = [];
+    try {
+      rows = await sql`SELECT id, name, email, phone, id_document_url, id_document_type, id_status, id_uploaded_at FROM guests
+                       WHERE id_status = 'uploaded' AND deleted_at IS NULL ORDER BY id_uploaded_at LIMIT 100`;
+    } catch (err) { /* before migration_trust_rules.sql */ }
+    return res.status(200).json({ types: ID_TYPES, ids: rows.map(r => ({ guestId: r.id, name: r.name, email: r.email, phone: r.phone,
+      type: r.id_document_type, uploadedAt: r.id_uploaded_at, url: idDocumentUrlForAdmin(r.id_document_url) })) });
+  }
+  if (req.method === 'POST' && req.body && req.body.reviewGuestId) {
+    try {
+      const b = req.body.reviewGuestId;
+      const out = await reviewIdDocument(sql, { guestId: Number(b.guestId) || 0, approve: b.approve === true, reason: String(b.reason || ''), adminLabel: ADMIN_ACTOR });
+      await logAudit(sql, { action: b.approve === true ? 'guest_id_verified' : 'guest_id_rejected', success: true, actorType: 'admin', ...ADMIN_AUDIT,
+        targetType: 'guest', targetId: Number(b.guestId) || null, metadata: { reason: b.reason || null } });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not save this review.' });
+    }
+  }
 
   // ---- Audit history (admin only) ----
   // GET ?auditLog=1 [&who=admin|host|guest|cohost|system] [&q=text]

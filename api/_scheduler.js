@@ -8,6 +8,13 @@
 // A job is claimed with a lock in job_runs before it runs, so two triggers
 // never run the same job at once. Its outcome is recorded for Admin →
 // Scheduled jobs. Jobs are written to be safe to repeat.
+//
+// Every run that affected anyone, failed, or was started by hand (and every
+// run of a daily job) is also written to job_run_log with WHO it affected
+// (_job-impact.js), for Admin → Batch Jobs. Quiet runs are not logged, so
+// the log holds what matters rather than thousands of empty rows.
+
+const { impactFor } = require('./_job-impact');
 
 async function ensureRow(sql, name) {
   await sql`INSERT INTO job_runs (name) VALUES (${name}) ON CONFLICT (name) DO NOTHING`;
@@ -42,6 +49,25 @@ async function finish(sql, name, ok, result, error) {
             WHERE name = ${name}`;
 }
 
+// One row per run worth keeping. Never throws (before
+// migration_job_run_log.sql the table does not exist).
+async function logRun(sql, name, since, ok, result, error, affected) {
+  try {
+    await sql`INSERT INTO job_run_log (job, started_at, finished_at, ok, result, error, affected_count, affected)
+              VALUES (${name}, ${since}, now(), ${ok}, ${result == null ? null : JSON.stringify(result)}::jsonb,
+                      ${error ? String(error).slice(0, 500) : null}, ${affected.length}, ${JSON.stringify(affected)}::jsonb)`;
+  } catch (err) { /* table not created yet */ }
+}
+
+// Recent logged runs of one job (or all), newest first, for the admin page.
+async function jobRuns(sql, { job = null, limit = 30 } = {}) {
+  try {
+    return await sql`SELECT id, job, started_at, finished_at, ok, result, error, affected_count, affected
+                     FROM job_run_log WHERE (${job}::text IS NULL OR job = ${job})
+                     ORDER BY started_at DESC LIMIT ${Math.min(100, Math.max(1, Number(limit) || 30))}`;
+  } catch (err) { return []; }
+}
+
 // Run what is due. opts: { budgetMs, only (job name), force (bool),
 // forceDaily (bool), lightOnly (skip heavy jobs), ctx }.
 async function runScheduled(sql, jobs, opts = {}) {
@@ -61,14 +87,20 @@ async function runScheduled(sql, jobs, opts = {}) {
       jobsTableMissing = true; claimed = true;
     }
     if (!claimed) continue;
+    // The database's own clock, so "since" matches every timestamp it writes.
+    let since = new Date();
+    try { since = (await sql`SELECT now() AS t`)[0].t; } catch (e) { /* use the server clock */ }
     try {
       const result = await job.run(Object.assign({ remainingMs: Math.max(1000, budget - (Date.now() - started)) }, opts.ctx || {}));
-      out.ran.push({ job: job.name, result });
+      const affected = await impactFor(sql, job.name, since);
+      out.ran.push({ job: job.name, result, affectedCount: affected.length });
       if (!jobsTableMissing) await finish(sql, job.name, true, result, null);
+      if (affected.length || force || job.dailyAtHour != null) await logRun(sql, job.name, since, true, result, null, affected);
     } catch (err) {
       console.error(`scheduled job ${job.name} failed:`, err);
       out.failed.push({ job: job.name, error: String((err && err.message) || err) });
       if (!jobsTableMissing) { try { await finish(sql, job.name, false, null, (err && err.message) || err); } catch (e) { /* recorded next time */ } }
+      await logRun(sql, job.name, since, false, null, (err && err.message) || err, await impactFor(sql, job.name, since));
     }
   }
   out.ms = Date.now() - started;
@@ -79,13 +111,20 @@ async function jobStatus(sql, jobs) {
   let rows = [];
   try { rows = await sql`SELECT * FROM job_runs`; } catch (err) { /* table not there yet */ }
   const byName = {}; rows.forEach(r => { byName[r.name] = r; });
+  let recent = [];
+  try {
+    recent = await sql`SELECT DISTINCT ON (job) job, started_at, affected_count FROM job_run_log WHERE affected_count > 0 ORDER BY job, started_at DESC`;
+  } catch (err) { /* log table not there yet */ }
+  const lastImpact = {}; recent.forEach(r => { lastImpact[r.job] = r; });
   return jobs.map(j => {
     const r = byName[j.name] || {};
     return { name: j.name, label: j.label, schedule: j.dailyAtHour != null ? `Daily from ${j.dailyAtHour}:00 (India time)` : `Every ${j.everyMinutes} minutes`,
       lastStartedAt: r.last_started_at || null, lastFinishedAt: r.last_finished_at || null, lastOk: r.last_ok == null ? null : r.last_ok,
       lastResult: r.last_result || null, lastError: r.last_error || null, runs: r.runs || 0, failures: r.failures || 0,
-      running: !!(r.locked_until && new Date(r.locked_until) > new Date()) };
+      running: !!(r.locked_until && new Date(r.locked_until) > new Date()),
+      lastImpactAt: lastImpact[j.name] ? lastImpact[j.name].started_at : null,
+      lastImpactCount: lastImpact[j.name] ? lastImpact[j.name].affected_count : 0 };
   });
 }
 
-module.exports = { runScheduled, jobStatus };
+module.exports = { runScheduled, jobStatus, jobRuns };

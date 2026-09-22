@@ -78,7 +78,11 @@ const { convertInrToForeignSubunit } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const { COUPON_RELEASE_DELAY_MINUTES, sendCouponEmail } = require('./_coupons');
 const { loadPayoutSummary } = require('./_payouts');
-const { safeRefund } = require('./_refunds');
+const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refunds');
+const { respondChange } = require('./_booking-changes');
+const { respondDispute } = require('./_stay-disputes');
+const { hoursUntilCheckIn, hoursUntilCheckInTime, paidByOrderRow, dateStr } = require('./_booking-rules');
+const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REQUEST_REASONS, depositStillHeld, guestGetsBackFor } = require('./_cancellations');
 const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
@@ -273,6 +277,8 @@ const COHOST_ACTIONS = {
   cancelWithCoupon:   { perm: 'cancel', orderFrom: b => b.orderId },
   buyCouponOrder:     { perm: 'cancel', orderFrom: b => b.bookingId },
   respondCancellationRequest: { perm: 'cancel', requestFrom: b => b.requestId },
+  respondBookingChange: { perm: 'cancel', changeFrom: b => b.changeId },
+  respondStayDispute: { perm: 'cancel', disputeFrom: b => b.disputeId },
   verifyCouponPayment:{ perm: 'cancel', couponFrom: b => b.couponId },
   raiseDispute:       { perm: FULL_ONLY, orderFrom: b => b.orderId },
   reviewGuest:        { perm: FULL_ONLY, orderFrom: b => b.orderId }
@@ -304,6 +310,7 @@ async function cohostGate(req, res, accountId) {
     // The co-host's own cancellation-coupon deductions (never the host's).
     else if (q.myPenalties === '1') { perm = 'cancel'; mode = 'myPenalties'; }
     else if (q.cancellationRequests === '1') { perm = 'cancel'; mode = 'cancellationRequests'; }
+    else if (q.bookingChanges === '1') { perm = 'cancel'; mode = 'bookingChanges'; }
     else if (q.guestProfileForOrder !== undefined) {
       perm = 'bookings'; mode = 'guestProfile';
       const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(q.guestProfileForOrder) || 0}`;
@@ -326,6 +333,14 @@ async function cohostGate(req, res, accountId) {
     if (rule.requestFrom) {
       const rr = await sql`SELECT o.listing_id FROM cancellation_requests r JOIN orders o ON o.id = r.order_id WHERE r.id = ${Number(rule.requestFrom(payload)) || 0}`;
       listingId = rr[0] ? rr[0].listing_id : -1;
+    }
+    if (rule.disputeFrom) {
+      const dr = await sql`SELECT o.listing_id FROM stay_disputes d JOIN orders o ON o.id = d.order_id WHERE d.id = ${Number(rule.disputeFrom(payload)) || 0}`;
+      listingId = dr[0] ? dr[0].listing_id : -1;
+    }
+    if (rule.changeFrom) {
+      const cr = await sql`SELECT o.listing_id FROM booking_changes c JOIN orders o ON o.id = c.order_id WHERE c.id = ${Number(rule.changeFrom(payload)) || 0}`;
+      listingId = cr[0] ? cr[0].listing_id : -1;
     }
     if (rule.couponFrom) {
       const cr = await sql`SELECT o.listing_id FROM coupons c JOIN orders o ON o.id = c.source_order_id WHERE c.id = ${Number(rule.couponFrom(payload)) || 0}`;
@@ -2107,11 +2122,33 @@ module.exports = async (req, res) => {
   // host. The coupon is held ('reserved') until the booking is cancelled,
   // then released to the guest ('active', 3 months) and emailed to them.
   async function cancellationCouponAmount(order, orderId){
-    const rows = order.razorpay_order_id
-      ? await sql`SELECT total, deposit_amount FROM orders WHERE razorpay_order_id = ${order.razorpay_order_id} AND status = 'paid'`
-      : await sql`SELECT total, deposit_amount FROM orders WHERE id = ${orderId}`;
+    // This booking and its linked pair only (an experience that includes a
+    // stay). Other homes in the same cart belong to other bookings — often
+    // other hosts — and are not part of this cancellation.
+    const ids = [Number(orderId)].concat((await linkedSiblings(orderId)).map(r => r.id));
+    const rows = await sql`SELECT total, deposit_amount FROM orders WHERE id = ANY(${ids})`;
     const base = rows.reduce((sum, r) => sum + Math.max(0, (Number(r.total) || 0) - (Number(r.deposit_amount) || 0)), 0);
     return Math.max(1, Math.round(base * 0.10));
+  }
+  // The other half of an "Includes a Stay" purchase: the experience and
+  // the nights at the home that hosts it, bought as one thing (same
+  // payment, same start date, and the experience names that home as its
+  // hosting_listing_id). ONLY these are cancelled together. Every other
+  // row sharing the payment is a separate booking in the same cart.
+  async function linkedSiblings(orderId){
+    return await sql`
+      SELECT o2.id, o2.total, o2.charge_currency, o2.deposit_status, o2.deposit_amount, o2.razorpay_payment_id
+      FROM orders o1
+      JOIN orders o2 ON o2.razorpay_order_id = o1.razorpay_order_id AND o2.id <> o1.id
+                    AND o2.status = 'paid' AND o2.arrival = o1.arrival
+      WHERE o1.id = ${orderId} AND (
+        (COALESCE(o1.order_type, 'stay') = 'experience' AND COALESCE(o2.order_type, 'stay') = 'stay'
+          AND EXISTS (SELECT 1 FROM listings e WHERE e.id = o1.listing_id AND e.experience_type = 'with_stay' AND e.hosting_listing_id = o2.listing_id))
+        OR
+        (COALESCE(o1.order_type, 'stay') = 'stay' AND o2.order_type = 'experience'
+          AND EXISTS (SELECT 1 FROM listings e WHERE e.id = o2.listing_id AND e.experience_type = 'with_stay' AND e.hosting_listing_id = o1.listing_id))
+      )
+    `;
   }
   // Host chose not to pay now: the coupon is issued straight away (Aerva
   // fronts it) and the same amount is recorded against the host, to be
@@ -2171,7 +2208,9 @@ module.exports = async (req, res) => {
     }
     const rows = await sql`
       SELECT o.id, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_id, o.status,
-             o.total, o.deposit_status, o.charge_currency, o.razorpay_payment_id, o.razorpay_order_id
+             o.total, o.deposit_status, o.deposit_amount, o.charge_currency, o.razorpay_payment_id, o.razorpay_order_id,
+             l.timezone, l.check_in_time,
+             (o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS stay_ended
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
       WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
@@ -2186,102 +2225,171 @@ module.exports = async (req, res) => {
     if (order.status !== 'paid') {
       return { error: 'Only a paid, confirmed booking can be cancelled this way.', status: 400 };
     }
+    // Once check-out has passed nothing can be cancelled: the deposit may
+    // already have gone back to the guest, and the payout to the host.
+    if (order.stay_ended) {
+      return { error: 'This stay has already ended, so it can no longer be cancelled.', status: 400 };
+    }
     if (enforceCutoff) {
-      const arrivalDate = new Date(order.arrival + 'T00:00:00Z');
-      const hoursUntilArrival = (arrivalDate.getTime() - Date.now()) / (1000 * 60 * 60);
-      if (hoursUntilArrival < CANCELLATION_CUTOFF_HOURS) {
+      // Counted to the check-in MOMENT on the property's clock (e.g. 1:00 PM),
+      // not midnight — the same clock as the guest's cancellation brackets.
+      const hoursUntilArrival = hoursUntilCheckInTime(order.arrival, order.timezone, order.check_in_time);
+      if (!(hoursUntilArrival >= CANCELLATION_CUTOFF_HOURS)) {
         return {
           error: `This stay checks in within ${CANCELLATION_CUTOFF_HOURS} hours — bookings this close to check-in can no longer be cancelled by the host. Please contact hello@aerva.in if this is urgent.`,
           status: 400
         };
       }
     }
+    // Emails and messages show plain dates, not a Date object's long form.
+    order.arrival = dateStr(order.arrival) || order.arrival;
+    order.departure = dateStr(order.departure) || order.departure;
     return { order, guest };
   }
+
+  // A payout already sent (or being sent) for a booking cannot be taken
+  // back by refunding the guest — Aerva would pay twice. Refused with a
+  // clear message instead; 'due' payouts are simply cancelled with the
+  // booking. Before the payouts table exists, nothing to check.
+  async function assertNoPayoutSent(ids){
+    let rows = [];
+    try { rows = await sql`SELECT status FROM payouts WHERE order_id = ANY(${ids})`; } catch (err) { return; }
+    const DEAD = ['failed', 'reversed', 'rejected', 'cancelled'];
+    if (rows.some(r => r.status !== 'due' && !DEAD.includes(r.status))) {
+      throw Object.assign(new Error('The host payout for this booking has already been sent, so it cannot be cancelled here. Please contact hello@aerva.in.'), { isUserFacing: true, status: 409 });
+    }
+  }
+
+  // A guest who paid part of a booking with a coupon gets that part back as
+  // a new coupon when the booking is cancelled (their cash is refunded
+  // separately). Never throws: the cancellation and refund are done.
+  async function restoreCouponValue(order, cancelledIds, paidMap){
+    // Keeps the original coupon's expiry, with at least 30 days left (_cancellations.js).
+    const value = cancelledIds.reduce((t, id) => t + ((paidMap[id] || {}).couponAbsorbed || 0), 0);
+    if (value > 0) await returnCouponValue(sql, { razorpayOrderId: order.razorpay_order_id, amount: value, sourceOrderId: cancelledIds[0], guestEmail: order.guest_email, suiteName: order.suite_name });
+  }
+
+  // At most 3 host cancellations in any 12 months (co-host cancellations
+  // count for the host). The 4th is refused here, before any coupon is paid
+  // for; Aerva then decides case by case.
+  async function hostLimitReached(hostId){
+    return (await hostCancellationsLastYear(sql, hostId)) >= HOST_CANCELLATIONS_PER_YEAR;
+  }
+  const HOST_LIMIT_MESSAGE = `You have already cancelled ${HOST_CANCELLATIONS_PER_YEAR} bookings in the last 12 months, which is the limit. To cancel this one, please contact hello@aerva.in.`;
 
   // Actually performs the refund + DB update + email — shared by a plain
   // host cancellation and a coupon-gated "prioritize a bigger booking"
   // cancellation. Identical money-handling either way; only the gate
   // checks before calling this differ.
   async function executeCancellationRefund(order, orderId, reason, hostId, auditAction, emailOpts = {}){
-    const currency = order.charge_currency || 'INR';
-    let refundAmount;
-    if (currency === 'INR') {
-      refundAmount = Math.round(Number(order.total) * 100);
-    } else {
-      refundAmount = await convertInrToForeignSubunit(sql, Number(order.total), currency);
-      if (!refundAmount) {
+    // What is cancelled: this booking, plus its linked half if it is an
+    // "Includes a Stay" purchase. Never the other homes in the same cart.
+    const siblings = await linkedSiblings(orderId);
+    const allIds = [Number(orderId)].concat(siblings.map(r => Number(r.id)));
+    await assertNoPayoutSent(allIds);
+    // One cancellation at a time: claimed before any money moves, so a guest
+    // request, a second click or the scheduler can never cancel it as well.
+    const claim = await claimForCancellation(sql, allIds);
+    try {
+      const result = await cancelClaimed();
+      // Anything still carrying this claim (a linked half that could not be
+      // finished and was logged for follow-up) is released, never left locked.
+      await releaseClaim(sql, allIds, claim);
+      return result;
+    } catch (err) {
+      await releaseClaim(sql, allIds, claim);
+      throw err;
+    }
+    async function cancelClaimed(){
+
+    // Refund what the guest actually PAID for each row: orders.total is the
+    // price before any coupon, and Razorpay refuses to refund more than it
+    // captured. The coupon part comes back as a coupon (restoreCouponValue).
+    const paidMap = await paidByOrderRow(sql, order.razorpay_order_id);
+    // A deposit already refunded (or being refunded) is never refunded again.
+    const depositOf = new Map([[Number(orderId), order]].concat(siblings.map(r => [Number(r.id), r])));
+    const refundSubunit = async (id, currency) => {
+      const row = depositOf.get(Number(id)) || {};
+      const inr = Math.max(0, ((paidMap[id] || {}).paid || 0) - (depositStillHeld(row) ? 0 : Math.round(Number(row.deposit_amount) || 0)));
+      if (currency === 'INR') return Math.round(inr * 100);
+      const amt = await convertInrToForeignSubunit(sql, inr, currency);
+      if (!amt && inr > 0) {
         throw Object.assign(new Error(`No cached exchange rate available to refund this ${currency} booking right now. Please try again shortly.`), { isUserFacing: true, status: 502 });
       }
-    }
+      return amt;
+    };
 
     // Guarded: once per booking, checked against Razorpay (_refunds.js).
-    const refund = await safeRefund(sql, razorpay, { orderId, paymentId: order.razorpay_payment_id, amountSubunit: refundAmount, kind: 'cancellation' });
+    // A booking changed with an extra payment is refunded across all its payments.
+    const refund = await hasChangePayments(sql, orderId)
+      ? { id: (await refundAcrossPayments(sql, razorpay, { orderId, amountInr: Math.round((await refundSubunit(Number(orderId), 'INR')) / 100), kindBase: 'cancellation' })).firstRefundId }
+      : await safeRefund(sql, razorpay, { orderId, paymentId: order.razorpay_payment_id,
+          amountSubunit: await refundSubunit(Number(orderId), order.charge_currency || 'INR'), kind: 'cancellation' });
 
-    await sql`
+    // Only the request that actually flips 'paid' → 'cancelled' carries on
+    // to coupons and emails, so a double click can never send two.
+    const flipped = await sql`
       UPDATE orders SET
         status = 'cancelled',
         cancellation_reason = ${String(reason).trim().slice(0, 1000)},
         cancelled_at = now(),
         deposit_status = ${order.deposit_status === 'held' ? 'refunded' : order.deposit_status},
-        deposit_refund_id = ${refund.id}
-      WHERE id = ${orderId}
+        deposit_refund_id = ${refund.id},
+        cancel_claim = NULL, cancel_claimed_at = NULL
+      WHERE id = ${orderId} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}
+      RETURNING id
     `;
+    if (!flipped.length) return false;
+    const cancelledIds = [Number(orderId)];
 
     await logAudit(sql, {
       action: auditAction, success: true, actorType: 'host', actorIdentifier: String(hostId),
       targetType: 'order', targetId: orderId
     });
 
-    // An "Includes a Stay" experience is one purchase written as two rows
-    // sharing a payment: the experience and the nights at the property
-    // hosting it. Cancelling either cancels both — the guest bought one
-    // thing, and leaving them with half of it (nights but no experience,
-    // or the reverse) is never what they want. Refunded separately
-    // against the same payment, which Razorpay allows as long as the
-    // refunds together do not exceed what was captured.
-    //
-    // Never throws: this booking is already cancelled and refunded by the
-    // point we get here, and reporting that as a failure would be wrong.
-    // A failure is logged for a human to finish by hand.
-    if (order.razorpay_order_id) {
+    // The linked half. Never throws: this booking is already cancelled and
+    // refunded; a failure is logged for a person to finish.
+    for (const sib of siblings) {
       try {
-        const siblings = await sql`
-          SELECT id, total, charge_currency, deposit_status, razorpay_payment_id
-          FROM orders
-          WHERE razorpay_order_id = ${order.razorpay_order_id} AND id <> ${orderId} AND status = 'paid'
+        // Refunded across all the purchase's payments when it was changed
+        // (a change to an "Includes a Stay" pair is paid once, for both halves).
+        const sibRefund = await hasChangePayments(sql, sib.id)
+          ? { id: (await refundAcrossPayments(sql, razorpay, { orderId: sib.id, amountInr: Math.round((await refundSubunit(Number(sib.id), 'INR')) / 100), kind: 'cancellation', kindBase: 'cancellation' })).firstRefundId }
+          : await safeRefund(sql, razorpay, { orderId: sib.id, paymentId: sib.razorpay_payment_id,
+              amountSubunit: await refundSubunit(Number(sib.id), sib.charge_currency || 'INR'), kind: 'cancellation' });
+        const done = await sql`
+          UPDATE orders SET
+            status = 'cancelled',
+            cancellation_reason = ${'Cancelled with the linked booking: ' + String(reason).trim().slice(0, 900)},
+            cancelled_at = now(),
+            deposit_status = ${sib.deposit_status === 'held' ? 'refunded' : sib.deposit_status},
+            deposit_refund_id = ${sibRefund.id},
+            cancel_claim = NULL, cancel_claimed_at = NULL
+          WHERE id = ${sib.id} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}
+          RETURNING id
         `;
-        for (const sib of siblings) {
-          const sibCurrency = sib.charge_currency || 'INR';
-          const sibAmount = sibCurrency === 'INR'
-            ? Math.round(Number(sib.total) * 100)
-            : await convertInrToForeignSubunit(sql, Number(sib.total), sibCurrency);
-          if (!sibAmount) throw new Error(`No cached ${sibCurrency} rate to refund linked booking ${sib.id}`);
-          const sibRefund = await safeRefund(sql, razorpay, { orderId: sib.id, paymentId: sib.razorpay_payment_id, amountSubunit: sibAmount, kind: 'cancellation' });
-          await sql`
-            UPDATE orders SET
-              status = 'cancelled',
-              cancellation_reason = ${'Cancelled with the linked booking: ' + String(reason).trim().slice(0, 900)},
-              cancelled_at = now(),
-              deposit_status = ${sib.deposit_status === 'held' ? 'refunded' : sib.deposit_status},
-              deposit_refund_id = ${sibRefund.id}
-            WHERE id = ${sib.id}
-          `;
-          await logAudit(sql, {
-            action: 'order_cancelled_with_linked', success: true, actorType: 'host', actorIdentifier: String(hostId),
-            targetType: 'order', targetId: sib.id, metadata: { cancelledWith: orderId }
-          });
-        }
+        if (done.length) cancelledIds.push(Number(sib.id));
+        await logAudit(sql, {
+          action: 'order_cancelled_with_linked', success: true, actorType: 'host', actorIdentifier: String(hostId),
+          targetType: 'order', targetId: sib.id, metadata: { cancelledWith: orderId }
+        });
       } catch (err) {
         console.error('linked cancellation failed (needs manual follow-up):', orderId, err);
         await logAudit(sql, {
           action: 'order_cancelled_with_linked', success: false, actorType: 'host', actorIdentifier: String(hostId),
-          targetType: 'order', targetId: orderId, metadata: { reason: String(err && err.message || err).slice(0, 300) }
+          targetType: 'order', targetId: sib.id, metadata: { cancelledWith: orderId, reason: String(err && err.message || err).slice(0, 300) }
         });
       }
     }
 
+    // A payout not yet sent is cancelled with the booking.
+    try { await sql`UPDATE payouts SET status = 'cancelled' WHERE order_id = ANY(${cancelledIds}) AND status = 'due'`; }
+    catch (err) { /* payouts table not created yet */ }
+
+    await restoreCouponValue(order, cancelledIds, paidMap);
     await sendCancellationEmail(order, emailOpts);
+    return true;
+    }
   }
 
   // ---- Cancel a booking (host-initiated, no coupon required) ----
@@ -2307,6 +2415,7 @@ module.exports = async (req, res) => {
       const reason = reasonLabel + (details ? ' — ' + details : '');
       const loaded = await loadCancellableOrder(orderId, true);
       if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
+      if (await hostLimitReached(loaded.guest.host_id)) return res.status(403).json({ error: HOST_LIMIT_MESSAGE, limitReached: true });
 
       // The guest's 10% coupon is paid for by the host, one of two ways:
       //  1. up front: buyCouponOrder → verifyCouponPayment (coupon held), or
@@ -2324,7 +2433,10 @@ module.exports = async (req, res) => {
       }
       const amountLater = held ? 0 : await cancellationCouponAmount(loaded.order, orderId);
 
-      await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host', { reasonLabel, details });
+      const didCancel = await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host', { reasonLabel, details });
+      // Another request (a double click) already cancelled it: never issue
+      // a second coupon or penalty.
+      if (!didCancel) return res.status(409).json({ error: 'This booking has already been cancelled.' });
       // Refund done: now the coupon goes to the guest. The host never sees
       // its code (it is only emailed to the guest).
       if (held) {
@@ -2445,40 +2557,79 @@ module.exports = async (req, res) => {
       let rows = [];
       try {
         rows = await sql`
-          SELECT r.id, r.reason_code, r.details, r.created_at, o.id AS order_id, o.listing_id, o.suite_name, o.arrival, o.departure, o.total,
+          SELECT r.id, r.reason_code, r.details, r.created_at, r.policy_percent, r.days_before, o.id AS order_id, o.listing_id, o.suite_name, o.arrival, o.departure, o.total,
                  COALESCE(gu.name, o.guest_email) AS guest_name
           FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id
           LEFT JOIN guests gu ON gu.id = o.guest_id
-          WHERE r.status = 'pending' AND o.status = 'paid' AND l.host_id = ${g.host_id}
+          WHERE r.status = 'pending' AND r.decided_at IS NULL AND o.status = 'paid' AND l.host_id = ${g.host_id}
           ORDER BY r.created_at
         `;
       } catch (err) { /* migration_cancellation_requests.sql not run yet */ }
       if (cohostActor) rows = rows.filter(r => cohostHasListing(cohostActor.ctx, r.listing_id));
+      for (const r of rows) {
+        const opt = hostOption(r);
+        r.guest_gets_back = opt.type === 'choose' ? null : await guestGetsBackFor(sql, r.order_id, opt.percent);
+      }
       return res.status(200).json({ requests: rows.map(r => ({ id: r.id, orderId: r.order_id, listing: r.suite_name, arrival: r.arrival, departure: r.departure,
-        total: Number(r.total), guestName: r.guest_name, reason: GUEST_CANCEL_REASONS[r.reason_code] || r.reason_code, details: r.details || '', createdAt: r.created_at })) });
+        total: Number(r.total), guestName: r.guest_name, details: r.details || '', createdAt: r.created_at,
+        reason: REQUEST_REASONS[r.reason_code] || (r.reason_code === 'late_cancellation' ? 'Cancellation' : r.reason_code),
+        daysBefore: r.days_before,
+        // Only this booking's own choice — never the other brackets.
+        option: hostOption(r), guestGetsBack: r.guest_gets_back })) });
     } catch (err) {
       console.error('cancellationRequests failed:', err);
       return res.status(500).json({ error: 'Could not load cancellation requests right now.' });
     }
   }
   if (req.method === 'POST' && req.body && req.body.respondCancellationRequest) {
+    let claimedId = null;
     try {
       const { requestId, accept } = req.body.respondCancellationRequest;
       const note = String(req.body.respondCancellationRequest.note || '').trim().slice(0, 500);
-      const rq = (await sql`SELECT id, order_id, reason_code, details, status FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
+      const rq = (await sql`SELECT * FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
       if (!rq) return res.status(404).json({ error: 'Request not found.' });
-      if (rq.status !== 'pending') return res.status(409).json({ error: 'This request has already been answered.' });
-      const loaded = await loadCancellableOrder(rq.order_id, false); // emergencies: no 48-hour cut-off
+      if (rq.status !== 'pending' || rq.decided_at) return res.status(409).json({ error: 'This request has already been answered.' });
+      const loaded = await loadCancellableOrder(rq.order_id, false); // requests: no 48-hour cut-off
       if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
-      const label = GUEST_CANCEL_REASONS[rq.reason_code] || 'Guest request';
-      if (accept === true) {
-        await executeCancellationRefund(loaded.order, rq.order_id, `Guest request accepted: ${label}${rq.details ? ' — ' + rq.details : ''}`,
-          loaded.guest.host_id, 'booking_cancelled_on_guest_request', { guestRequested: true, reasonLabel: label, details: rq.details });
-        await sql`UPDATE cancellation_requests SET status = 'accepted', host_note = ${note || null}, decided_at = now(), decided_by = ${accountId} WHERE id = ${rq.id}`;
-        return res.status(200).json({ success: true, accepted: true });
+      // Answered once: claimed here, so a second click or the 24-hour job
+      // at the same moment can never answer it too.
+      if (!(await claimRequest(sql, rq.id))) return res.status(409).json({ error: 'This request has already been answered.' });
+      claimedId = rq.id;
+      const option = hostOption(rq);
+      const decide = async (status, pct) => {
+        await sql`UPDATE cancellation_requests SET status = ${status}, refund_percent = ${pct}, host_note = ${note || null}, decided_at = now(), decided_by = ${accountId}
+                  WHERE id = ${rq.id} AND status = 'pending'`;
+        claimedId = null;
+      };
+
+      if (option.type === 'emergency') {
+        // The booking price, GST and deposit come back in full. Aerva's
+        // service fee is kept, as in every cancellation a guest asks for.
+        if (accept === true) {
+          await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct: 100, by: 'emergency' });
+          await decide('accepted', 100);
+          return res.status(200).json({ success: true, accepted: true, refundPercent: 100 });
+        }
+      } else if (option.type === 'fixed') {
+        if (accept === true) {
+          await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct: option.percent, by: 'host_accept' });
+          await decide('accepted', option.percent);
+          return res.status(200).json({ success: true, accepted: true, refundPercent: option.percent });
+        }
+      } else {
+        // The host chooses 0–100%; rejecting means no refund. Either way the
+        // booking is cancelled.
+        const pct = accept === true ? Math.round(Number(req.body.respondCancellationRequest.refundPercent)) : 0;
+        if (accept === true && !(pct >= 0 && pct <= 100)) { await unclaimRequest(sql, rq.id); claimedId = null; return res.status(400).json({ error: 'Choose a refund between 0% and 100%.' }); }
+        await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct, by: accept === true ? 'host_chose' : 'host_declined', note });
+        await decide(accept === true ? 'accepted' : 'declined', pct);
+        return res.status(200).json({ success: true, accepted: accept === true, refundPercent: pct });
       }
-      await sql`UPDATE cancellation_requests SET status = 'declined', host_note = ${note || null}, decided_at = now(), decided_by = ${accountId} WHERE id = ${rq.id}`;
+
+      // Rejected (emergency or fixed bracket): the booking stands.
+      await decide('declined', null);
       await logAudit(sql, { action: 'guest_cancellation_request_declined', success: true, actorType: cohostActor ? 'cohost' : 'host', actorIdentifier: String(accountId), targetType: 'order', targetId: rq.order_id, metadata: { requestId: rq.id } });
+      await postThreadMessage(sql, rq.order_id, 'host', `Cancellation request declined. The booking stands.${note ? ' ' + note : ''}`);
       try {
         if (process.env.RESEND_API_KEY && loaded.order.guest_email) {
           const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2489,9 +2640,61 @@ module.exports = async (req, res) => {
       } catch (err) { console.error('decline email failed:', err.message); }
       return res.status(200).json({ success: true, accepted: false });
     } catch (err) {
+      if (claimedId) await unclaimRequest(sql, claimedId);
       console.error('respondCancellationRequest failed:', err);
       const status = err.isUserFacing ? err.status : 500;
       return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not answer this request right now.' });
+    }
+  }
+
+  // ---- Booking changes asked for by guests ----
+  // GET ?bookingChanges=1 → changes waiting for this host's answer.
+  // POST { respondBookingChange: { changeId, accept, note } }
+  // The host sees only the change itself: old → new, and what the guest
+  // pays or gets back (_booking-changes.js).
+  if (req.method === 'GET' && (req.query || {}).bookingChanges === '1') {
+    try {
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(200).json({ changes: [] });
+      let rows = [];
+      try {
+        rows = await sql`
+          SELECT c.id, c.summary, c.difference, c.created_at, o.id AS order_id, o.listing_id, o.suite_name, COALESCE(gu.name, o.guest_email) AS guest_name
+          FROM booking_changes c JOIN orders o ON o.id = c.order_id JOIN listings l ON l.id = o.listing_id LEFT JOIN guests gu ON gu.id = o.guest_id
+          WHERE c.status = 'pending' AND c.decided_at IS NULL AND o.status = 'paid' AND l.host_id = ${g.host_id}
+          ORDER BY c.created_at`;
+      } catch (err) { /* booking_changes not created yet */ }
+      if (cohostActor) rows = rows.filter(r => cohostHasListing(cohostActor.ctx, r.listing_id));
+      return res.status(200).json({ changes: rows.map(r => ({ id: r.id, orderId: r.order_id, listing: r.suite_name, guestName: r.guest_name,
+        summary: r.summary, difference: r.difference, createdAt: r.created_at })) });
+    } catch (err) {
+      console.error('bookingChanges failed:', err);
+      return res.status(500).json({ error: 'Could not load change requests right now.' });
+    }
+  }
+  // ---- The host's side of a problem the guest reported (_stay-disputes.js) ----
+  // POST { respondStayDispute: { disputeId, response, evidence: [urls] } }
+  if (req.method === 'POST' && req.body && req.body.respondStayDispute) {
+    try {
+      const b = req.body.respondStayDispute;
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+      return res.status(200).json(await respondDispute(sql, { disputeId: Number(b.disputeId) || 0, hostId: g.host_id, response: b.response, evidence: b.evidence }));
+    } catch (err) {
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send your reply.' });
+    }
+  }
+  if (req.method === 'POST' && req.body && req.body.respondBookingChange) {
+    try {
+      const b = req.body.respondBookingChange;
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+      const out = await respondChange(sql, razorpay, { changeId: Number(b.changeId) || 0, accept: b.accept === true, hostId: g.host_id, accountId,
+        note: String(b.note || '').trim().slice(0, 500) });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('respondBookingChange failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not answer this change right now.' });
     }
   }
 
@@ -2503,6 +2706,7 @@ module.exports = async (req, res) => {
       const bookingId = Number((req.body.buyCouponOrder || {}).bookingId) || 0;
       const loaded = await loadCancellableOrder(bookingId, true);
       if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
+      if (await hostLimitReached(loaded.guest.host_id)) return res.status(403).json({ error: HOST_LIMIT_MESSAGE, limitReached: true });
       if (!loaded.order.guest_id) return res.status(400).json({ error: 'This booking has no guest account to send a coupon to.' });
       const already = (await sql`SELECT id FROM coupons WHERE source_order_id = ${bookingId} AND status = 'reserved' LIMIT 1`)[0];
       if (already) return res.status(200).json({ alreadyPaid: true });

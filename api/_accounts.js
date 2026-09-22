@@ -4,7 +4,7 @@
 // 'deleteAccount'). Refused while anything is still open: an upcoming or
 // current stay (as guest), upcoming bookings on their listings, payouts
 // not yet sent, or cancellation coupons owed. Otherwise their personal
-// data is erased: name, email, phone, photo, profile, sign-in, PAN, bank,
+// data is erased: name, email, phone, photo, ID proof, profile, sign-in, PAN, bank,
 // GSTIN, co-host links and payout details, message text, review text (star
 // ratings stay), reviews written about them, templates, calendar links, and
 // their listings' photos, address, map position and check-in details; the
@@ -71,8 +71,14 @@ async function deleteAccount(sql, guestId) {
   const placeholderEmail = `deleted-${guestId}@deleted.aerva.in`;
   const tryRun = async (label, q) => { try { await q; } catch (e) { console.error('deleteAccount step skipped:', label, e.message); } };
 
-  // Photos in storage (profile and listings): best effort.
+  // Photos in storage (profile and listings), and the guest's ID proof
+  // (stored encrypted, so it is read back to find the file): best effort.
   const urls = await blobUrlsOf(sql, guestId, hostId);
+  try {
+    const idRow = (await sql`SELECT id_document_url FROM guests WHERE id = ${guestId}`)[0];
+    const idUrl = idRow && idRow.id_document_url ? require('./_secure-fields').decryptField(idRow.id_document_url) : null;
+    if (idUrl) urls.push(idUrl);
+  } catch (e) { /* before migration_trust_rules.sql */ }
   if (urls.length && process.env.BLOB_READ_WRITE_TOKEN) {
     try { await require('@vercel/blob').del(urls); } catch (e) { console.error('photo deletion failed:', e.message); }
   }
@@ -120,6 +126,8 @@ async function deleteAccount(sql, guestId) {
   await sql`UPDATE guests SET name = ${DELETED_NAME}, email = ${placeholderEmail}, phone = NULL, password_hash = NULL, google_id = NULL,
               profile_photo_url = NULL, profile_work = NULL, profile_hobbies = NULL, profile_about = NULL, email_verified = false
             WHERE id = ${guestId}`;
+  await tryRun('ID proof', sql`UPDATE guests SET id_document_url = NULL, id_document_type = NULL, id_status = NULL, id_rejection_reason = NULL WHERE id = ${guestId}`);
+  await tryRun('stay dispute text', sql`UPDATE stay_disputes SET details = NULL, evidence = '[]'::jsonb WHERE guest_id = ${guestId}`);
   await tryRun('mark deleted', sql`UPDATE guests SET deleted_at = now() WHERE id = ${guestId}`);
   return { ok: true };
 }

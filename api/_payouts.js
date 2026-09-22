@@ -120,12 +120,15 @@ const round2 = (n) => Math.round(n * 100) / 100;
 async function planPayouts(sql, orderId) {
   const { decryptField, maskAccount } = require('./_secure-fields');
   const o = (await sql`
-    SELECT o.id, o.status, o.commission_amount, o.payout_amount, h.id AS host_id, h.name AS host_name,
+    SELECT o.id, o.status, (to_jsonb(o)->>'payout_on_cancel')::boolean AS payout_on_cancel, o.commission_amount, o.payout_amount, h.id AS host_id, h.name AS host_name,
            h.bank_account_holder_name, h.bank_account_number, h.bank_ifsc, h.bank_status, h.razorpayx_fund_account_id,
            h.pan_number AS host_pan, h.pan_status AS host_pan_status
     FROM orders o JOIN listings l ON l.id = o.listing_id JOIN hosts h ON h.id = l.host_id WHERE o.id = ${orderId}
   `)[0];
-  if (!o || o.status !== 'paid') return [];
+  // A guest-cancelled booking still pays the host the part the guest was
+  // not refunded (payout_amount was reduced to it, _cancellations.js).
+  // Host-cancelled and refunded-in-full bookings never have this flag.
+  if (!o || !(o.status === 'paid' || (o.status === 'cancelled' && o.payout_on_cancel === true && Number(o.payout_amount) > 0))) return [];
   let shares = [];
   try {
     shares = await sql`SELECT s.cohost_guest_id, s.amount, g.name, g.email, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status AS profile_status, p.razorpayx_fund_account_id, p.pan_number AS cohost_pan
@@ -298,14 +301,23 @@ async function runAutoPayouts(sql, { deadlineMs = 7000, razorpay = null } = {}) 
     const orders = await sql`
       SELECT o.id FROM orders o JOIN listings l ON l.id = o.listing_id
       CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata')) AS local_now) lt
-      WHERE o.status = 'paid' AND o.departure IS NOT NULL
+      WHERE (o.status = 'paid' OR (o.status = 'cancelled' AND (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE AND o.payout_amount > 0))
+        AND o.departure IS NOT NULL
         AND o.departure >= lt.local_now::date - 30
         AND (o.departure < lt.local_now::date OR (o.departure = lt.local_now::date AND extract(hour from lt.local_now) >= ${PAYOUT_HOUR}))
         AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.order_id = o.id AND p.payee_type = 'host')
       ORDER BY o.departure LIMIT 100
     `;
+    // A booking with an open stay dispute is held until Aerva decides
+    // (_stay-disputes.js): its payout may shrink to the nights used.
+    let held = new Set();
+    try {
+      const ids = orders.map(o => o.id);
+      if (ids.length) held = new Set((await sql`SELECT order_id FROM stay_disputes WHERE order_id = ANY(${ids}) AND status IN ('open', 'host_responded')`).map(r => r.order_id));
+    } catch (err) { /* stay_disputes not created yet */ }
     for (const o of orders) {
       if (Date.now() - started > deadlineMs) break;
+      if (held.has(o.id)) continue;
       for (const { row } of await createPayoutRows(sql, o.id)) {
         out.created++;
         if (Number(row.net) === 0) { await markPayoutSent(sql, row.id, { reference: 'Nothing to pay', by: 'automatic' }); continue; }
