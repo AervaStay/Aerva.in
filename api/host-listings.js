@@ -1306,7 +1306,10 @@ module.exports = async (req, res) => {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: 'Aerva <hello@aerva.in>', to: 'hello@aerva.in', reply_to: email,
+            // Where the team actually reads it: set FEEDBACK_EMAIL in Vercel
+            // to any inbox. Every message is also saved and listed in
+            // Admin → Feedback, so nothing is lost if email fails.
+            from: 'Aerva <hello@aerva.in>', to: process.env.FEEDBACK_EMAIL || 'hello@aerva.in', reply_to: email,
             subject: `Host feedback (${category}) from ${me.name || email}`, html
           })
         });
@@ -1315,7 +1318,8 @@ module.exports = async (req, res) => {
       console.error('host feedback email failed (feedback itself is saved):', err);
     }
 
-    return res.status(200).json({ success: true, message: 'Thank you — we have your note and will be in touch on the number you gave us.' });
+    return res.status(200).json({ success: true, reference: `FB-${Date.now().toString(36).toUpperCase().slice(-6)}`,
+      message: 'Thank you — we have your note and will be in touch on the number you gave us.' });
   }
 
   // ---- Host views a guest's profile ----
@@ -1483,17 +1487,33 @@ module.exports = async (req, res) => {
         ORDER BY created_at DESC
       `;
 
-      const DAYS = 30;
-      const startDate = new Date();
-      startDate.setUTCHours(0, 0, 0, 0);
+      // The window to show. Default: today and the next 29 days. The page
+      // may ask for any range with ?from=&to= — up to ONE YEAR of history
+      // and a year ahead, at most 366 days at a time.
+      const MAX_SPAN_DAYS = 366, MAX_HISTORY_DAYS = 365, MAX_FUTURE_DAYS = 365;
+      // A real calendar date, not just the right shape: "2026-13-45" has
+      // the shape but is not a date, and would make a nonsense window.
+      const asDay = (v) => {
+        const t = String(v || '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
+        const d = new Date(t + 'T00:00:00Z');
+        return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === t ? t : null;
+      };
+      const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+      const shift = (base, n) => { const d = new Date(base); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+      const earliest = shift(today, -MAX_HISTORY_DAYS), latest = shift(today, MAX_FUTURE_DAYS);
+      let startStr2 = asDay(req.query.from) || shift(today, 0);
+      let endStr2 = asDay(req.query.to) || shift(today, 29);
+      if (startStr2 < earliest) startStr2 = earliest;
+      if (endStr2 > latest) endStr2 = latest;
+      if (endStr2 < startStr2) endStr2 = startStr2;
       const dayStrs = [];
-      for (let i = 0; i < DAYS; i++) {
-        const d = new Date(startDate);
-        d.setUTCDate(d.getUTCDate() + i);
+      for (let d = new Date(startStr2 + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= endStr2 && dayStrs.length < MAX_SPAN_DAYS; d.setUTCDate(d.getUTCDate() + 1)) {
         dayStrs.push(d.toISOString().slice(0, 10));
       }
       const endStr = dayStrs[dayStrs.length - 1];
       const startStr = dayStrs[0];
+      const todayStr = shift(today, 0);
 
       // Same real-price-per-date logic as the sidebar's Block Dates/
       // Promotions calendar (sbComputePriceForDate in host-dashboard.html)
@@ -1552,9 +1572,13 @@ module.exports = async (req, res) => {
           const rooms = await sql`SELECT id, room_name, nightly_rate FROM listing_rooms WHERE listing_id = ${listing.id} AND is_active = TRUE ORDER BY sort_order ASC, created_at ASC`;
           for (const room of rooms) {
             const bookedRangesRaw = await sql`
-              SELECT id, arrival AS start_date, departure AS end_date, guest_email, guests, nights, total FROM orders
-              WHERE room_id = ${room.id} AND status = 'paid'
-                AND arrival < ${endStr}::date AND departure > ${startStr}::date
+              SELECT o.id, o.arrival AS start_date, o.departure AS end_date, o.guest_email, o.guests, o.nights, o.total,
+                     o.payout_amount, o.deposit_amount, o.deposit_status, o.created_at, o.razorpay_order_id,
+                     g.name AS guest_name, g.phone AS guest_phone, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
+                     (g.id_status IS NOT NULL AND g.id_document_url IS NOT NULL) AS guest_id_on_file
+              FROM orders o LEFT JOIN guests g ON g.id = o.guest_id
+              WHERE o.room_id = ${room.id} AND o.status = 'paid'
+                AND o.arrival < ${endStr}::date AND o.departure > ${startStr}::date
             `;
             const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
             const blockedRangesRaw = await sql`
@@ -1590,9 +1614,13 @@ module.exports = async (req, res) => {
           }
         } else {
           const bookedRangesRaw = await sql`
-            SELECT id, arrival AS start_date, departure AS end_date, guest_email, guests, nights, total FROM orders
-            WHERE listing_id = ${listing.id} AND status = 'paid'
-              AND arrival < ${endStr}::date AND departure > ${startStr}::date
+            SELECT o.id, o.arrival AS start_date, o.departure AS end_date, o.guest_email, o.guests, o.nights, o.total,
+                     o.payout_amount, o.deposit_amount, o.deposit_status, o.created_at, o.razorpay_order_id,
+                     g.name AS guest_name, g.phone AS guest_phone, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
+                     (g.id_status IS NOT NULL AND g.id_document_url IS NOT NULL) AS guest_id_on_file
+              FROM orders o LEFT JOIN guests g ON g.id = o.guest_id
+            WHERE o.listing_id = ${listing.id} AND o.status = 'paid'
+              AND o.arrival < ${endStr}::date AND o.departure > ${startStr}::date
           `;
           const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
           const blockedRangesRaw = await sql`
@@ -1611,7 +1639,8 @@ module.exports = async (req, res) => {
         }
       }
 
-      return res.status(200).json({ startDate: startStr, days: DAYS, rows });
+      return res.status(200).json({ startDate: startStr, endDate: endStr, days: dayStrs.length, today: todayStr,
+                                    earliest, latest, dayStrs, rows });
     } catch (err) {
       console.error('host-listings (statusCalendar) error:', err);
       return res.status(500).json({ error: 'Could not load the status calendar right now.' });

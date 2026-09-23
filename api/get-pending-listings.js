@@ -478,6 +478,24 @@ module.exports = async (req, res) => {
   const ADMIN_AUDIT = await adminContext(sql, req, sessionPayload, hasValidSecret);
   const ADMIN_ACTOR = ADMIN_AUDIT.actorIdentifier;
 
+  // ---- Feedback hosts have sent ("Tell us what needs looking at") ----
+  // GET ?feedback=1 — read from the audit log, where every message is
+  // saved as it arrives, so nothing depends on an email getting through.
+  if (req.method === 'GET' && req.query.feedback === '1') {
+    let rows = [];
+    try {
+      rows = await sql`SELECT a.id, a.created_at, a.metadata, g.name AS from_name, g.email AS account_email
+                       FROM audit_log a LEFT JOIN guests g ON g.id::text = a.actor_identifier
+                       WHERE a.action = 'host_feedback' ORDER BY a.created_at DESC LIMIT 200`;
+    } catch (err) { console.error('feedback list failed:', err.message); }
+    return res.status(200).json({ feedback: rows.map(r => {
+      const m = r.metadata || {};
+      return { id: r.id, at: r.created_at, category: m.category || '—', message: m.message || '',
+               replyEmail: m.replyEmail || null, replyPhone: m.replyPhone || null,
+               name: m.name || r.from_name || null, accountEmail: m.accountEmail || r.account_email || null };
+    }) });
+  }
+
   // ---- Stay disputes (guest reported a problem during the stay) ----
   // GET ?stayDisputes=1[&status=all] · POST { decideStayDispute: { disputeId, refund, note } }
   // The host's account is given more weight: refund only when the guest's

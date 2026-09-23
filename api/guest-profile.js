@@ -372,7 +372,9 @@ module.exports = async (req, res) => {
         if (!orderId) return res.status(400).json({ error: 'Missing order.' });
 
         const orderRows = await sql`
-          SELECT o.id, o.listing_id, o.guest_id, o.guest_email, o.status, l.host_id, l.property_name
+          SELECT o.id, o.listing_id, o.guest_id, o.guest_email, o.status, o.arrival, o.departure, o.guests, o.nights, o.total,
+                 to_jsonb(o)->>'confirmation_code' AS confirmation_code,
+                 l.host_id, l.property_name
           FROM orders o
           JOIN listings l ON l.id = o.listing_id
           WHERE o.id = ${orderId}
@@ -423,6 +425,9 @@ module.exports = async (req, res) => {
         // making it look like nothing was ever received.
         const viewerRole = isGuest ? 'guest' : 'host';
         return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole, messages,
+          booking: { orderId: order.id, confirmationCode: order.confirmation_code || null,
+                     arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights,
+                     total: order.total, status: order.status },
           reviewPrompt: await threadReviewPrompt(sql, conversationId, viewerRole),
           cancellation: await cancellationCard(sql, conversationId, viewerRole),
           change: await changeCard(sql, conversationId, viewerRole),
@@ -641,6 +646,7 @@ module.exports = async (req, res) => {
       const bookings = await sql`
         SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights,
                o.subtotal, o.discount_amount, o.gst, o.total, o.status, o.created_at,
+               to_jsonb(o)->>'confirmation_code' AS confirmation_code,
                COALESCE(l.listing_type, 'stay') AS listing_type,
                EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id) AS reviewed,
                (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today

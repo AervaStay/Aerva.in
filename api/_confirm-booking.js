@@ -32,15 +32,63 @@ const { confirmChangePayment } = require('./_booking-changes');
 const { markIdDeadlineIfMissing } = require('./_guest-id');
 
 // Fallback only for orders placed before the split commission existed.
+const crypto = require('crypto');
 const FALLBACK_COMMISSION_RATE = 15;
-const DEPOSIT_HOLD_DAYS = 7;
+const DEPOSIT_HOLD_DAYS = 7;   // a deposit is held for 7 days after departure
+
+// ---- The booking's confirmation code ----
+// RANDOM only: eight digits, carrying nothing about the booking, the
+// guest, the date or anything else —  48291374.
+//
+// Never issued twice: every code is claimed in the confirmation_codes
+// register before it goes on a booking, so a code cannot come back even
+// after a booking is cancelled. A draw that collides is simply redrawn.
+//
+// Eight digits is one hundred million codes — room for a very long time.
+// Draws only begin to collide once a large share is taken, and a collision
+// is simply redrawn. Nothing on Aerva looks a booking up by its code, so a
+// guessed code opens nothing; if that ever changes, widen the code
+// (CODE_LENGTH / CODE_ALPHABET below) before building it.
+const CODE_ALPHABET = '0123456789';
+const CODE_LENGTH = 8;
+function randomCode() {
+  const bytes = crypto.randomBytes(CODE_LENGTH * 2);
+  let out = '';
+  // Only values that divide evenly across the alphabet are used, so every
+  // digit is equally likely (a plain % would favour the low digits).
+  const limit = Math.floor(256 / CODE_ALPHABET.length) * CODE_ALPHABET.length;
+  for (let i = 0; out.length < CODE_LENGTH; i++) {
+    const b = i < bytes.length ? bytes[i] : crypto.randomBytes(1)[0];
+    if (b < limit) out += CODE_ALPHABET[b % CODE_ALPHABET.length];
+  }
+  return out;
+}
+// Claims a code that has never been issued. Returns null if the register
+// is not there yet (before migration_confirmation_code.sql).
+async function issueConfirmationCode(sql, orderId) {
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const code = randomCode();
+    try {
+      const got = await sql`INSERT INTO confirmation_codes (code, order_id) VALUES (${code}, ${orderId})
+                            ON CONFLICT (code) DO NOTHING RETURNING code`;
+      if (got.length) return code;
+    } catch (err) {
+      console.error('confirmation code register unavailable:', err.message);
+      return null;
+    }
+  }
+  // 25 collisions in a row means the code space is filling up.
+  console.error('could not claim a confirmation code after 25 tries — consider a longer code (CODE_LENGTH in _confirm-booking.js)');
+  return null;
+}
+
 // Builds a simple, single-page-per-item PDF summarizing everything in
 // this booking — generated fresh from the SAME trusted stays/experiences
 // data pulled from Razorpay's order notes above, never from anything the
 // browser sends, same reasoning as the DB inserts below. Returns a
 // Buffer (pdfkit streams to memory here, never touches disk — this is a
 // serverless function with no persistent filesystem to write to).
-function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, chargeCurrency, couponDiscount = 0){
+function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, chargeCurrency, couponDiscount = 0, confirmationCodes = null){
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const chunks = [];
@@ -54,7 +102,16 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
     doc.fontSize(22).font('Helvetica-Bold').text('Aerva', { align: 'center' });
     doc.fontSize(11).font('Helvetica').fillColor('#8a6c39').text('Booking Confirmation', { align: 'center' });
     doc.moveDown(0.5);
-    doc.fontSize(9).fillColor('#888').text(`Reference: ${razorpayOrderId}`, { align: 'center' });
+    if (confirmationCodes && confirmationCodes.length) {
+      doc.fontSize(13).font('Helvetica-Bold').fillColor('#1c1b19')
+        .text(confirmationCodes.length === 1 ? `Confirmation code: ${confirmationCodes[0].code}` : 'Confirmation codes', { align: 'center' });
+      if (confirmationCodes.length > 1) {
+        doc.fontSize(10).font('Helvetica').fillColor('#444');
+        confirmationCodes.forEach(c => doc.text(`${c.item}: ${c.code}`, { align: 'center' }));
+      }
+      doc.moveDown(0.3);
+    }
+    doc.fontSize(9).font('Helvetica').fillColor('#888').text(`Reference: ${razorpayOrderId}`, { align: 'center' });
     doc.moveDown(2);
     doc.fillColor('#000');
 
@@ -138,7 +195,7 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
 // special handling needed beyond what fetch/JSON already do.
 // The host's side of a confirmed booking: what was booked, and what the
 // host must do. One email per host per payment. Never throws.
-async function sendHostBookingEmails(sql, stays, experiences, agreementVersion) {
+async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, confirmationCodes = null) {
   if (!process.env.RESEND_API_KEY) return;
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const items = [
@@ -161,7 +218,10 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion) 
       const html = `
         <div style="font-family:sans-serif; max-width:520px;">
           <h2 style="font-family:Georgia,serif;">New confirmed booking</h2>
-          <ul>${list.map(i => `<li><strong>${esc(i.name)}</strong> — ${esc(i.when)} — ${Number(i.guests) || 0} guest(s)${i.pets ? `, ${i.pets} pet(s)` : ''}${i.service ? `, ${i.service} service/support animal(s)` : ''}</li>`).join('')}</ul>
+          <ul>${list.map(i => {
+            const code = (confirmationCodes || []).find(c => c.item === i.name);
+            return `<li><strong>${esc(i.name)}</strong> — ${esc(i.when)} — ${Number(i.guests) || 0} guest(s)${i.pets ? `, ${i.pets} pet(s)` : ''}${i.service ? `, ${i.service} service/support animal(s)` : ''}${code ? `<br><span style="font-size:13px; color:#6b5222;">Confirmation code: <strong>${esc(code.code)}</strong> — the guest shows this at check-in</span>` : ''}</li>`;
+          }).join('')}</ul>
           <p><strong>Your responsibilities for this booking:</strong></p>
           <ul>
             <li>Provide the home or experience as listed, safe and clean.</li>
@@ -181,7 +241,7 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion) 
   }
 }
 
-async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreementVersion = null){
+async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreementVersion = null, confirmationCodes = null){
   if (!process.env.RESEND_API_KEY) {
     console.error('RESEND_API_KEY not set — booking confirmation email not sent.');
     return;
@@ -194,6 +254,10 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
       <h2 style="font-family:Georgia,serif;">Your booking is confirmed</h2>
       <p>Thank you for booking with Aerva:</p>
       <ul>${itemsListHtml}</ul>
+      ${(confirmationCodes || []).length ? `<div style="background:#f6efe3; border:1px solid #e0cda8; border-radius:10px; padding:14px 16px; margin:14px 0;">
+        <p style="margin:0 0 6px; font-size:13px; color:#6b5222;">Your confirmation code${confirmationCodes.length > 1 ? 's' : ''} — show this at check-in:</p>
+        ${confirmationCodes.map(c => `<p style="margin:2px 0; font-size:19px; font-weight:600; letter-spacing:0.04em; color:#1c1b19;">${c.code}${confirmationCodes.length > 1 ? ` <span style="font-size:13px; font-weight:400; color:#6b5222;">— ${c.item}</span>` : ''}</p>`).join('')}
+      </div>` : ''}
       <p>Your full booking details — dates, amounts, and everything else — are attached as a PDF to this email.</p>
       ${agreementVersion ? `<p style="font-size:13px; opacity:0.8;">You accepted Aerva’s booking agreement (version ${agreementVersion}) before paying. Read it and Aerva’s Policies at <a href="https://aerva.in/index.html?view=policies">aerva.in/policies</a>.</p>` : ''}
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Reply to this email or write to hello@aerva.in.</p>
@@ -695,7 +759,20 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     return { status: 'conflict', message: `${conflictReason} The booking was not made, and your payment is being refunded in full — we have emailed you the details.` };
   }
 
-  // 6b. Confirmed. Each booking keeps the refund policy it was paid under,
+  // 6b. Confirmed. Every booking gets its confirmation code.
+  try {
+    for (const w of written) {
+      const code = await issueConfirmationCode(sql, w.id);
+      if (!code) continue;
+      const set = await sql`UPDATE orders SET confirmation_code = ${code} WHERE id = ${w.id} AND confirmation_code IS NULL RETURNING confirmation_code`;
+      // Already had one (a repeat confirmation): keep it, and the code just
+      // claimed stays in the register, never to be issued again.
+      w.confirmationCode = set.length ? code : (await sql`SELECT confirmation_code FROM orders WHERE id = ${w.id}`)[0].confirmation_code;
+    }
+    ctx.confirmationCodes = written.filter(w => w.confirmationCode).map(w => ({ item: w.row.suite, code: w.confirmationCode }));
+  } catch (err) { console.error('confirmation code not set:', err.message); }
+
+  // Each booking keeps the refund policy it was paid under,
   // so a host switching to Firm later never changes it (_cancellations.js).
   try {
     await sql`UPDATE orders o SET cancellation_policy = l.cancellation_policy FROM listings l
@@ -714,11 +791,11 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
 
   if (ctx.email) {
     try {
-      const pdf = await generateBookingConfirmationPdf(ctx.stays, ctx.experiences, razorpayOrderId, ctx.chargeCurrency, ctx.couponDiscount);
-      await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version);
+      const pdf = await generateBookingConfirmationPdf(ctx.stays, ctx.experiences, razorpayOrderId, ctx.chargeCurrency, ctx.couponDiscount, ctx.confirmationCodes);
+      await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version, ctx.confirmationCodes);
     } catch (err) { console.error('Could not send booking confirmation email:', err); }
   }
-  try { await sendHostBookingEmails(sql, ctx.stays, ctx.experiences, ctx.agreement.version); }
+  try { await sendHostBookingEmails(sql, ctx.stays, ctx.experiences, ctx.agreement.version, ctx.confirmationCodes); }
   catch (err) { console.error('host booking emails failed:', err.message); }
 
   // The booking now holds the dates itself; the temporary hold goes.
