@@ -6345,6 +6345,32 @@
     });
   }
 
+  // ---- Booking details at the top of a thread ----
+  // The confirmation code first: it is what a guest reads out at check-in
+  // and what a host checks them in against.
+  function showBookingDetails(anchorId, b){
+    const anchor = document.getElementById(anchorId);
+    if(!anchor) return;
+    let box = document.getElementById(anchorId + 'Booking');
+    if(!box){
+      box = document.createElement('div');
+      box.id = anchorId + 'Booking';
+      box.style.cssText = 'margin:0 0 10px; padding:12px 14px; border:1px solid #e0cda8; border-radius:10px; background:#f6efe3; font-size:14px; color:#1c1b19;';
+      anchor.parentNode.insertBefore(box, anchor);
+    }
+    if(!b){ box.style.display = 'none'; box.innerHTML = ''; return; }
+    const esc = escapeMessageHtml;
+    const d = (x) => x ? new Date(String(x).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+    box.style.display = 'block';
+    box.innerHTML = `
+      ${b.confirmationCode ? `<div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
+        <span style="font-size:12.5px; color:#6b5222;">Confirmation code</span>
+        <strong style="font-size:18px; letter-spacing:0.04em;">${esc(b.confirmationCode)}</strong></div>` : ''}
+      <div style="font-size:13.5px; color:#4a453e; margin-top:${b.confirmationCode ? '6px' : '0'};">
+        ${d(b.arrival)}${b.departure ? ` – ${d(b.departure)}` : ''}${b.nights ? ` · ${b.nights} night${b.nights === 1 ? '' : 's'}` : ''}${b.guests ? ` · ${b.guests} guest${b.guests === 1 ? '' : 's'}` : ''}${b.status && b.status !== 'paid' ? ` · ${esc(b.status)}` : ''}
+      </div>`;
+  }
+
   // ---- Cancellation request card at the top of a booking's thread ----
   // host: the guest's request with ONLY this booking's choice (server:
   // _cancellations.js cancellationCard) — nothing about other brackets.
@@ -6663,6 +6689,9 @@
           : ch && ch.status === 'pending' ? `<span class="booking-request-note">Change requested · waiting for your host <a href="#" data-withdraw-change="${ch.id}" style="color:var(--gold-text); margin-left:6px;">Withdraw</a></span>`
           : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="margin-top:10px; min-height:44px; padding:10px 18px;">Pay ₹${Number(ch.difference).toLocaleString('en-IN')} to confirm your change</button>`
           : `<button type="button" class="filter-clear" data-change-booking="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-left:8px;">Change booking</button>`;
+        const codeHtml = b.confirmation_code && b.status === 'paid'
+          ? `<div class="confirm-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${escapeMessageHtml(b.confirmation_code)}">Copy</button></div>`
+          : '';
         const idDueHtml = b.id_required_by
           ? `<div class="price-changed" style="margin:10px 0 4px;"><strong>Add your ID to keep this booking</strong><br>
                <span style="font-size:14px;">By ${escapeMessageHtml(new Date(b.id_required_by).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))} — otherwise it is cancelled and refunded in full.</span>
@@ -6693,7 +6722,7 @@
             <div class="listing-info">
               <h3>${escapeMessageHtml(b.suite_name || '')}</h3>
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(b.status)}</div>
-              ${idDueHtml}${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}
+              ${codeHtml}${idDueHtml}${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}
             </div>
           </div>
         `;
@@ -6710,6 +6739,13 @@
       });
       // Ask the host to accept a cancellation (hazard / life-threatening /
       // emergency / travel restriction). Accepted: full refund.
+      container.querySelectorAll('[data-copy-code]').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try{ await navigator.clipboard.writeText(btn.dataset.copyCode); btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
+          catch(err){ btn.textContent = btn.dataset.copyCode; }
+        });
+      });
       container.querySelectorAll('[data-add-id]').forEach(btn => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -6784,6 +6820,7 @@
       document.getElementById('chatModalTitle').textContent = data.listingName || listingName || 'Chat';
       renderChatMessages(data.messages || [], data.viewerRole);
       showReviewPrompt('chatReviewPrompt', data.reviewPrompt);
+      showBookingDetails('chatReviewPrompt', data.booking);
       showCancellationCard('chatReviewPrompt', data.cancellation, () => openChatForOrder(orderId, listingName));
       showChangeCard('chatReviewPrompt', data.change, () => openChatForOrder(orderId, listingName));
       showDisputeCard('chatReviewPrompt', data.dispute, () => openChatForOrder(orderId, listingName));
@@ -7199,6 +7236,7 @@
       // the list, since that's the one place membership is truly checked.
       if(data.myRole) inboxCurrentRole = data.myRole;
       showReviewPrompt('inboxReviewPrompt', data.reviewPrompt);
+      showBookingDetails('inboxReviewPrompt', data.booking);
       showCancellationCard('inboxReviewPrompt', data.cancellation, () => refreshInboxMessages());
       showChangeCard('inboxReviewPrompt', data.change, () => refreshInboxMessages());
       showDisputeCard('inboxReviewPrompt', data.dispute, () => refreshInboxMessages());

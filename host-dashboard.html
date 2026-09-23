@@ -469,6 +469,15 @@
     border:1px solid #ddd0bc; border-radius:4px;
   }
   .feedback-card textarea{resize:vertical; min-height:130px; line-height:1.6;}
+  /* Sent: what happens next, so nobody wonders whether it went anywhere. */
+  .feedback-sent{border-color:#bcd6b3; background:#f7fbf5;}
+  /* A disabled action must look disabled. */
+  .ch-btn[disabled], .settings-save-btn[disabled]{opacity:0.45; cursor:not-allowed;}
+  .ch-btn[disabled]:hover, .settings-save-btn[disabled]:hover{opacity:0.45;}
+  .feedback-tick{width:44px; height:44px; border-radius:50%; background:#eaf3e6; display:flex; align-items:center; justify-content:center; margin-bottom:12px;}
+  .feedback-next{margin:14px 0 6px; padding-left:20px; font-size:14.5px; line-height:1.7; color:#4a453e;}
+  .feedback-next a{color:#7c6030;}
+  .feedback-ref{font-size:13px; color:#6e675d; margin:6px 0 16px;}
   .feedback-card input:focus, .feedback-card select:focus, .feedback-card textarea:focus{
     outline:none; border-color:var(--gold-deep, #8a6c39);
   }
@@ -760,7 +769,21 @@
   </div>
 
   <div id="feedbackSection" style="display:none;">
-    <div class="feedback-card">
+    <div class="feedback-card feedback-sent" id="feedbackSent" hidden>
+      <div class="feedback-tick" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#2f6b3a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <h2 class="feedback-title">Thank you — we have it</h2>
+      <p class="feedback-intro" id="feedbackSentWhat"></p>
+      <ul class="feedback-next">
+        <li>A person at Aerva reads every message.</li>
+        <li>We come back to you on the email and number you gave us.</li>
+        <li>Urgent? Write to <a href="mailto:hello@aerva.in">hello@aerva.in</a> and mention your reference.</li>
+      </ul>
+      <p class="feedback-ref" id="feedbackRef"></p>
+      <button type="button" class="settings-save-btn" id="feedbackAgainBtn">Send another</button>
+    </div>
+    <div class="feedback-card" id="feedbackForm">
       <h2 class="feedback-title">Tell us what needs looking at</h2>
       <p class="feedback-intro">Something broken, confusing, or missing on the site? Send it here and we will come back to you. We read every one.</p>
 
@@ -1382,15 +1405,26 @@
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Could not send that right now.');
-      msg.textContent = data.message || 'Thank you — we have your note.';
-      msg.style.color = '#2f5c2a';
+      // Show the confirmation instead of the form, with what happens next.
+      const what = document.getElementById('feedbackCategory').value;
+      document.getElementById('feedbackSentWhat').textContent = `Your note about “${what.toLowerCase()}” is with the Aerva team.`;
+      document.getElementById('feedbackRef').textContent = data.reference ? `Your reference: ${data.reference}` : '';
+      document.getElementById('feedbackForm').hidden = true;
+      document.getElementById('feedbackSent').hidden = false;
+      document.getElementById('feedbackSent').scrollIntoView({ behavior: 'smooth', block: 'center' });
       document.getElementById('feedbackMessage').value = '';
+      msg.textContent = '';
     } catch(err){
       fail(err.message || 'Could not send that right now. Please try again.');
     }
     btn.disabled = false; btn.textContent = 'Send to Aerva';
   }
   document.getElementById('feedbackSubmitBtn').addEventListener('click', submitHostFeedback);
+  document.getElementById('feedbackAgainBtn').addEventListener('click', () => {
+    document.getElementById('feedbackSent').hidden = true;
+    document.getElementById('feedbackForm').hidden = false;
+    document.getElementById('feedbackMessage').focus();
+  });
 
   document.getElementById('dashboardMainTabs').addEventListener('click', (e) => {
     const btn = e.target.closest('.listing-tab-btn');
@@ -4110,7 +4144,16 @@
     return 'Limited' + (extras.length ? ' + ' + extras.join(', ') : '');
   }
 
+  // A listing has ONE co-host: active, or invited within the last 14 days
+  // (the same rule host-listings.js applies). A listing already taken
+  // cannot be offered again, and if every listing is taken there is
+  // nobody left to invite.
+  const holdsListings = (c) => c.status === 'active' || (c.status === 'invited' && !c.expired);
+  const holderOf = (listingId) => state.cohosts.find(c => holdsListings(c) && (c.listingIds || []).map(Number).includes(Number(listingId)));
+
   function render(section, message){
+    const freeListings = state.listings.filter(l => !holderOf(l.id));
+    const noneFree = state.listings.length > 0 && freeListings.length === 0;
     const rows = state.cohosts.map(c => `
       <div class="ch-row">
         <div>
@@ -4130,7 +4173,11 @@
       <h2>Co-hosts</h2>
       <p class="ch-sub">Let someone help run your listings. Every co-host can manage them, see analytics, change prices, block dates and cancel bookings; you choose the rest, and which listings. Only you can rename a listing or change your account settings.</p>
       ${rows || '<p class="ch-note">No co-hosts yet.</p>'}
-      <div style="margin-top:16px;"><button type="button" class="ch-btn primary" id="chAddBtn">Invite a co-host</button></div>
+      <div style="margin-top:16px;">
+        <button type="button" class="ch-btn primary" id="chAddBtn"${noneFree || !state.listings.length ? ' disabled' : ''}>Invite a co-host</button>
+        ${noneFree ? '<p class="ch-note">Every listing already has a co-host. A listing can have only one — remove a co-host from a listing first, then invite someone new.</p>'
+          : (!state.listings.length ? '<p class="ch-note">Add a listing first; then you can invite a co-host for it.</p>' : '')}
+      </div>
       <div class="ch-form" id="chForm">
         <div id="chEmailWrap">
           <label class="ch-field" for="chEmail">Their email</label>
@@ -4148,7 +4195,12 @@
           <p class="ch-note">Every co-host can use the Manage page, but only you can rename a listing. Co-hosts propose their share of your payout; it applies once you approve it.</p>
         </div>
         <label class="ch-field">On these listings</label>
-        <div class="ch-choices">${state.listings.map(l => `<label><input type="checkbox" name="chListing" value="${Number(l.id)}"> ${esc(l.name)}${l.type === 'experience' ? ' (experience)' : ''}</label>`).join('')}</div>
+        <div class="ch-choices">${state.listings.map(l => {
+          const held = holderOf(l.id);
+          const mine = editingId && held && Number(held.id) === Number(editingId);   // editing this co-host: their own listings stay tickable
+          const blocked = held && !mine;
+          return `<label${blocked ? ' style="opacity:0.55;"' : ''}><input type="checkbox" name="chListing" value="${Number(l.id)}"${blocked ? ' disabled' : ''}> ${esc(l.name)}${l.type === 'experience' ? ' (experience)' : ''}${blocked ? ` <span class="ch-note" style="display:inline;">— co-hosted by ${esc(held.name || held.email)}</span>` : ''}</label>`;
+        }).join('')}</div>
         <div style="margin-top:18px; display:flex; gap:10px;">
           <button type="button" class="ch-btn primary" id="chSave">Send invitation</button>
           <button type="button" class="ch-btn" id="chCancel">Cancel</button>

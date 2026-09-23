@@ -121,6 +121,47 @@
   .empty{opacity:0.6; font-size:13px;}
   .error{color:#a3402f; font-size:13px;}
 
+  /* ---- Bookings in the chosen range (Sept 2026) ---- */
+  .bookings-panel{ margin:28px 0 40px; }
+  .bookings-head{ font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 4px; color:#1c1b19; }
+  .bookings-table{ width:100%; border-collapse:collapse; font-size:14px; color:#1c1b19; }
+  .bookings-table th{ text-align:left; font-size:12.5px; font-weight:600; color:#6e675d; padding:8px 12px; border-bottom:1px solid #e6ded3; white-space:nowrap; }
+  .bookings-table td{ padding:11px 12px; border-bottom:1px solid #f1eae0; vertical-align:top; }
+  .bookings-table tr:hover td{ background:#fdfbf8; }
+  .bookings-table .sub{ font-size:12.5px; color:#6e675d; }
+  .code-cell{ font-size:13px; font-weight:600; letter-spacing:0.03em; color:#6b5222; background:#f6efe3; border:1px solid #e0cda8; border-radius:6px; padding:3px 8px; white-space:nowrap; }
+  .bookings-table .sub a{ color:#7c6030; }
+  .when-pill{ display:inline-block; font-size:12px; padding:3px 10px; border-radius:999px; white-space:nowrap; }
+  .when-past{ background:#f1efec; color:#6e675d; }
+  .when-upcoming{ background:#eaf3e6; color:#2f5c2a; }
+  .when-staying-now{ background:#f3e6d0; color:#6b5222; }
+
+  /* ---- Filters and date range (Sept 2026) ---- */
+  .status-controls{ display:flex; flex-direction:column; gap:10px; margin:0 0 16px; }
+  .status-filters, .status-range{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:13.5px; color:#4a453e; }
+  .status-filters-title{ font-size:12px; font-weight:600; color:#6e675d; min-width:44px; }
+  .status-filter{ display:inline-flex; align-items:center; gap:7px; cursor:pointer; padding:5px 10px; border:1px solid #e6ded3; border-radius:999px; }
+  .status-filter:hover{ border-color:#c9b48e; }
+  .status-filter input{ width:16px; height:16px; accent-color:#8a6c39; margin:0; }
+  .status-filter .sw{ width:13px; height:13px; border-radius:3px; display:inline-block; }
+  .sw-open{ background:#fff; border:1px solid #ddd3c6; }
+  .sw-promo{ background:#eaf3e6; border:1px solid #bcd6b3; }
+  .sw-booked{ background:#f3e6d0; border:1px solid #ddc9a2; }
+  .sw-blocked{ background:#f1efec; border:1px solid #d7d1c8; }
+  .status-filter-note{ font-size:12.5px; color:#6e675d; }
+  .status-range label{ font-size:12.5px; color:#6e675d; }
+  .status-range input[type="date"]{ font-size:15px; padding:7px 9px; border:1px solid #ddd3c6; border-radius:8px; background:#fff; color:#1c1b19; }
+  .range-chip{ font-family:inherit; font-size:13px; padding:7px 13px; border:1px solid #ddd3c6; border-radius:999px; background:#fff; color:#4a453e; cursor:pointer; }
+  .range-chip:hover{ border-color:#a9885a; color:#1c1b19; }
+  .range-chip.is-on{ background:#f6efe3; border-color:#a9885a; color:#6b5222; font-weight:600; }
+  /* A state that is switched off fades right back; the rest stay clear. */
+  .status-cal-cell.is-filtered{ background:#fcfbfa !important; color:#cfc8bf !important; box-shadow:none !important; }
+  .status-cal-cell.is-filtered *{ opacity:0.35; }
+  .status-cal-cell.is-filtered::before{ display:none; }
+  /* Past nights can be read but not changed. */
+  .status-cal-cell.is-past{ opacity:0.82; }
+
+
   /* ---------------------------------------------------------------
      Status calendar — light, readable palette (Sept 2026)
      Black and near-black filled squares made the grid heavy and hid
@@ -171,17 +212,32 @@
     <button class="logout-btn" id="logoutBtn">Log Out</button>
   </div>
 
-  <p style="font-size:14px; line-height:1.6; color:#4a453e; max-width:70ch; margin:-4px 0 16px;">Every approved stay, next 30 days. A Resort's rooms each get their own row here — no need to open the listing separately to see per-room availability. Each square shows the real price for that date (discounted if a promotion applies), or the guest's name if it's booked. Tap a date to open its panel. Keep tapping more dates in the SAME row and the range grows with each tap — the panel stays open and updates as you go. Tap an already-blocked or promoted date to remove it — a real guest booking can't be changed here.</p>
-  <div class="status-legend" style="display:flex; gap:16px; align-items:center; margin-bottom:14px; flex-wrap:wrap;">
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#fff; border:1px solid #ddd3c6; display:inline-block; border-radius:2px;"></span> Open</span>
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#f1efec; border:1px solid #d7d1c8; display:inline-block; border-radius:2px;"></span> Blocked</span>
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#eaf3e6; border:1px solid #bcd6b3; display:inline-block; border-radius:2px;"></span> Promotion</span>
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#f3e6d0; border:1px solid #ddc9a2; display:inline-block; border-radius:2px;"></span> Booked</span>
-    <span style="display:flex; align-items:center; gap:5px;"><span style="width:14px; height:14px; background:#f6e7c8; box-shadow:inset 0 0 0 2px #a9885a; display:inline-block; border-radius:2px;"></span> Selecting</span>
+  <p style="font-size:14px; line-height:1.6; color:#4a453e; max-width:70ch; margin:-4px 0 16px;">Every approved stay. Choose the dates to look at — up to one year of history — and tick the states you want to stand out. A Resort's rooms each get their own row here — no need to open the listing separately to see per-room availability. Each square shows the real price for that date (discounted if a promotion applies), or the guest's name if it's booked. Tap a date to open its panel. Keep tapping more dates in the SAME row and the range grows with each tap — the panel stays open and updates as you go. Tap an already-blocked or promoted date to remove it — a real guest booking can't be changed here.</p>
+  <div class="status-controls">
+    <div class="status-filters">
+      <span class="status-filters-title">Show</span>
+      <label class="status-filter"><input type="checkbox" id="fltOpen" checked> <span class="sw sw-open"></span> Open</label>
+      <label class="status-filter"><input type="checkbox" id="fltPromo" checked> <span class="sw sw-promo"></span> Promotion</label>
+      <label class="status-filter"><input type="checkbox" id="fltBooked" checked> <span class="sw sw-booked"></span> Booked</label>
+      <label class="status-filter"><input type="checkbox" id="fltBlocked" checked> <span class="sw sw-blocked"></span> Blocked</label>
+      <span class="status-filter-note" id="filterNote"></span>
+    </div>
+    <div class="status-range">
+      <span class="status-filters-title">Dates</span>
+      <label for="calFrom">From</label><input type="date" id="calFrom">
+      <label for="calTo">To</label><input type="date" id="calTo">
+      <button type="button" class="range-chip" data-range="30">Next 30 days</button>
+      <button type="button" class="range-chip" data-range="thismonth">This month</button>
+      <button type="button" class="range-chip" data-range="lastmonth">Last month</button>
+      <button type="button" class="range-chip" data-range="12m">Last 12 months</button>
+      <span class="status-filter-note">History goes back one year; up to 366 days at a time.</span>
+    </div>
   </div>
   <div id="statusCalendarWrap" style="overflow-x:auto; -webkit-overflow-scrolling:touch; touch-action:pan-x; border:1px solid #ddd0bc; border-radius:4px;">
     <p style="padding:16px; opacity:0.6; font-size:13px;">Loading…</p>
   </div>
+
+  <section id="statusBookingsList" class="bookings-panel"></section>
 
   <div id="rangeConfirmOverlay" class="range-panel">
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;" id="rangeConfirmRowLabel"></p>
@@ -281,7 +337,8 @@
   async function loadStatusCalendar(){
     const wrap = document.getElementById('statusCalendarWrap');
     try{
-      const res = await fetch(API_BASE + '/api/host-listings?statusCalendar=1', {
+      const q = calRange.from && calRange.to ? `&from=${calRange.from}&to=${calRange.to}` : '';
+      const res = await fetch(API_BASE + '/api/host-listings?statusCalendar=1' + q, {
         headers: { 'Authorization': 'Bearer ' + sessionToken }
       });
       const data = await res.json();
@@ -291,6 +348,8 @@
       }
       lastStatusData = data;
       renderStatusCalendar(data);
+      renderBookingsList(data);
+      applyFilters();
     } catch(err){
       wrap.innerHTML = '<p class="error" style="padding:16px;">Could not reach the server — please try again.</p>';
     }
@@ -845,6 +904,124 @@
 
   function closePromoDetail(){ closeAllPopovers(); }
 
+  // ---- Filters and the date range ----
+  // The page asks the server for whatever range is chosen (up to a year of
+  // history, 366 days at a time). The four checkboxes only change what
+  // stands out: a state switched off fades back, and a row with nothing
+  // left to show is hidden.
+  let calRange = { from: null, to: null };
+  let calLimits = { earliest: null, latest: null, today: null };
+  const dayShift = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+
+  function syncRangeInputs(data){
+    const from = document.getElementById('calFrom'), to = document.getElementById('calTo');
+    if(!from || !to) return;
+    from.value = data.startDate; to.value = data.endDate || data.startDate;
+    if(data.earliest){ from.min = data.earliest; to.min = data.earliest; }
+    if(data.latest){ from.max = data.latest; to.max = data.latest; }
+  }
+  function setRange(from, to, chip){
+    calRange = { from, to };
+    document.querySelectorAll('.range-chip').forEach(b => b.classList.toggle('is-on', b === chip));
+    loadStatusCalendar();
+  }
+  function applyFilters(){
+    const on = {
+      open: document.getElementById('fltOpen').checked,
+      promo: document.getElementById('fltPromo').checked,
+      booked: document.getElementById('fltBooked').checked,
+      blocked: document.getElementById('fltBlocked').checked
+    };
+    let shown = 0, hiddenRows = 0;
+    document.querySelectorAll('#statusCalendarWrap tbody tr').forEach(tr => {
+      let matches = 0;
+      tr.querySelectorAll('.status-cal-cell').forEach(td => {
+        const keep = on[td.dataset.kind];
+        td.classList.toggle('is-filtered', !keep);
+        if(keep) matches++;
+      });
+      const hide = matches === 0;
+      tr.style.display = hide ? 'none' : '';
+      if(hide) hiddenRows++; else shown += matches;
+    });
+    const note = document.getElementById('filterNote');
+    if(note){
+      const allOn = Object.values(on).every(Boolean);
+      note.textContent = allOn ? '' : `${shown} date${shown === 1 ? '' : 's'} shown${hiddenRows ? ` · ${hiddenRows} listing${hiddenRows === 1 ? '' : 's'} hidden` : ''}`;
+    }
+  }
+  function wireStatusControls(){
+    ['fltOpen', 'fltPromo', 'fltBooked', 'fltBlocked'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.addEventListener('change', applyFilters);
+    });
+    const from = document.getElementById('calFrom'), to = document.getElementById('calTo');
+    const manual = () => {
+      if(!from.value || !to.value) return;
+      if(to.value < from.value) to.value = from.value;
+      if(calLimits.earliest && from.value < calLimits.earliest) from.value = calLimits.earliest;
+      setRange(from.value, to.value, null);
+    };
+    if(from) from.addEventListener('change', manual);
+    if(to) to.addEventListener('change', manual);
+    document.querySelectorAll('.range-chip').forEach(btn => btn.addEventListener('click', () => {
+      const today = calLimits.today || new Date().toISOString().slice(0, 10);
+      const [y, m] = today.split('-').map(Number);
+      const monthStart = (yy, mm) => `${yy}-${String(mm).padStart(2, '0')}-01`;
+      const lastDay = (yy, mm) => new Date(Date.UTC(yy, mm, 0)).toISOString().slice(0, 10);
+      const kind = btn.dataset.range;
+      if(kind === '30') setRange(today, dayShift(today, 29), btn);
+      else if(kind === 'thismonth') setRange(monthStart(y, m), lastDay(y, m), btn);
+      else if(kind === 'lastmonth'){ const py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1; setRange(monthStart(py, pm), lastDay(py, pm), btn); }
+      else if(kind === '12m') setRange(dayShift(today, -365), today, btn);
+    }));
+  }
+
+  // ---- Bookings in the chosen range ----
+  // Every booking the calendar covers, past and future, with its details.
+  const depositLabel = (st) => ({ held: 'held', refunded: 'refunded', refunding: 'being refunded', disputed: 'disputed', resolved: 'settled', none: 'none' }[st] || st || '—');
+  function bookingWhen(b, today){
+    const t = today || (lastStatusData && lastStatusData.today) || new Date().toISOString().slice(0, 10);
+    if(b.end_date <= t) return 'past';
+    if(b.start_date > t) return 'upcoming';
+    return 'staying now';
+  }
+  function renderBookingsList(data){
+    const box = document.getElementById('statusBookingsList');
+    if(!box) return;
+    const all = [];
+    (data.rows || []).forEach(row => (row.bookings || []).forEach(b => all.push({ ...b, label: row.label })));
+    all.sort((x, y) => (x.start_date < y.start_date ? 1 : x.start_date > y.start_date ? -1 : 0)); // newest first
+    const rangeText = `${data.startDate} to ${data.endDate || data.startDate}`;
+    if(!all.length){
+      box.innerHTML = `<h2 class="bookings-head">Bookings in this range</h2><p style="color:#6e675d; font-size:14px;">No bookings between ${rangeText}.</p>`;
+      return;
+    }
+    const money = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+    const fmt = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    const earned = all.reduce((t, b) => t + (Number(b.payout_amount) || 0), 0);
+    box.innerHTML = `
+      <h2 class="bookings-head">Bookings in this range</h2>
+      <p style="color:#6e675d; font-size:13.5px; margin:0 0 12px;">${all.length} booking${all.length === 1 ? '' : 's'} between ${rangeText} · your payouts total ${money(earned)} before TDS</p>
+      <div style="overflow-x:auto;"><table class="bookings-table">
+        <thead><tr><th>When</th><th>Code</th><th>Listing</th><th>Guest</th><th>Dates</th><th>Guests</th><th>Guest paid</th><th>Your payout</th><th>Deposit</th></tr></thead>
+        <tbody>${all.map(b => {
+          const when = bookingWhen(b, data.today);
+          return `<tr>
+            <td><span class="when-pill when-${when.replace(' ', '-')}">${when}</span></td>
+            <td>${b.confirmation_code ? `<span class="code-cell">${b.confirmation_code}</span>` : '<span class="sub">—</span>'}</td>
+            <td>${b.label || '—'}</td>
+            <td>${b.guest_name || b.guest_email || '—'}${b.guest_phone ? `<br><span class="sub"><a href="tel:${b.guest_phone}">${b.guest_phone}</a></span>` : ''}${b.guest_email ? `<br><span class="sub"><a href="mailto:${b.guest_email}">${b.guest_email}</a></span>` : ''}</td>
+            <td>${fmt(b.start_date)} – ${fmt(b.end_date)}<br><span class="sub">${b.nights || ''} night${b.nights === 1 ? '' : 's'}</span></td>
+            <td>${b.guests || '—'}</td>
+            <td>${money(b.total)}</td>
+            <td>${money(b.payout_amount)}</td>
+            <td>${Number(b.deposit_amount) ? money(b.deposit_amount) + '<br><span class="sub">' + depositLabel(b.deposit_status) + '</span>' : '—'}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`;
+  }
+
   function renderStatusCalendar(data){
     const wrap = document.getElementById('statusCalendarWrap');
     if(!data.rows || !data.rows.length){
@@ -858,7 +1035,9 @@
       d.setUTCDate(d.getUTCDate() + i);
       days.push(d);
     }
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = data.today || new Date().toISOString().slice(0, 10);
+    calLimits = { earliest: data.earliest || null, latest: data.latest || null, today: todayStr };
+    syncRangeInputs(data);
     const fmtDay = (d) => d.toLocaleDateString('en-IN', { day: 'numeric' });
     const fmtWeekday = (d) => d.toLocaleDateString('en-IN', { weekday: 'narrow' });
     const statusLabel = { available: 'Available — tap to start a selection', booked: 'Booked (real guest)', blocked: 'Blocked by you — tap to remove' };
@@ -922,7 +1101,13 @@
         }
         const promoClass = (status === 'available' && pricing.promoName) ? ' is-promo' : '';
         const selectingClass = isSelecting ? ' is-selecting' : '';
-        return `<td class="status-cal-cell is-${status}${promoClass}${selectingClass}${isToday ? ' is-today' : ''}" title="${cellTitle}"${clickAttr}>${innerHtml}</td>`;
+        // A night that has passed is shown for the record, but cannot be
+        // blocked, unblocked or promoted — the server would refuse anyway.
+        const isPast = dateStr < todayStr;
+        if(isPast && status !== 'booked') { clickAttr = ''; cellTitle = `${row.label} — ${dateStr}: ${status === 'blocked' ? 'Blocked (past)' : 'Past date'}`; }
+        else if(isPast) { cellTitle = `${row.label} — ${dateStr}: past booking — tap for details`; }
+        const kind = status === 'booked' ? 'booked' : status === 'blocked' ? 'blocked' : (promoClass ? 'promo' : 'open');
+        return `<td class="status-cal-cell is-${status}${promoClass}${selectingClass}${isToday ? ' is-today' : ''}${isPast ? ' is-past' : ''}" data-kind="${kind}" title="${cellTitle}"${clickAttr}>${innerHtml}</td>`;
       }).join('');
       return `<tr><td class="status-cal-listing-cell">${row.label}</td>${cells}</tr>`;
     }).join('');
@@ -941,11 +1126,19 @@
     const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
     document.getElementById('statusBookingDetailContent').innerHTML = `
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Booking Detail</p>
-      <p style="font-size:16px; font-weight:600; margin:0 0 12px;">${b.label || 'Booking'}</p>
-      <p style="margin:4px 0;"><strong>Guest:</strong> ${b.guest_email || '—'}</p>
-      <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}${b.nights ? ` (${b.nights} night${b.nights === 1 ? '' : 's'})` : ''}</p>
+      <p style="font-size:16px; font-weight:600; margin:0 0 8px;">${b.label || 'Booking'}</p>
+      ${b.confirmation_code ? `<p style="margin:0 0 12px; padding:8px 10px; background:#f6efe3; border:1px solid #e0cda8; border-radius:8px;">
+        <span style="font-size:12.5px; color:#6b5222;">Confirmation code</span><br>
+        <strong style="font-size:17px; letter-spacing:0.05em;">${b.confirmation_code}</strong></p>` : ''}
+      <p style="margin:4px 0;"><strong>Guest:</strong> ${b.guest_name || (b.guest_email || '—')}${b.guest_id_on_file ? ' <span style="color:#2f6b3a; font-size:12.5px;">· ID on file</span>' : ''}</p>
+      ${b.guest_email ? `<p style="margin:4px 0;"><strong>Email:</strong> <a href="mailto:${b.guest_email}" style="color:#7c6030;">${b.guest_email}</a></p>` : ''}
+      ${b.guest_phone ? `<p style="margin:4px 0;"><strong>Phone:</strong> <a href="tel:${b.guest_phone}" style="color:#7c6030;">${b.guest_phone}</a></p>` : ''}
+      <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}${b.nights ? ` (${b.nights} night${b.nights === 1 ? '' : 's'})` : ''} <span style="color:#6e675d;">· ${bookingWhen(b)}</span></p>
       ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${b.guests}</p>` : ''}
-      ${b.total ? `<p style="margin:4px 0;"><strong>Total paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
+      ${b.total ? `<p style="margin:4px 0;"><strong>Guest paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
+      ${b.payout_amount ? `<p style="margin:4px 0;"><strong>Your payout:</strong> ₹${Number(b.payout_amount).toLocaleString('en-IN')} <span style="color:#6e675d; font-size:12.5px;">before TDS</span></p>` : ''}
+      ${Number(b.deposit_amount) ? `<p style="margin:4px 0;"><strong>Deposit:</strong> ₹${Number(b.deposit_amount).toLocaleString('en-IN')} · ${depositLabel(b.deposit_status)}</p>` : ''}
+      ${b.created_at ? `<p style="margin:4px 0; color:#6e675d; font-size:12.5px;">Booked on ${fmtDate(String(b.created_at).slice(0, 10))}${b.razorpay_order_id ? ` · Ref ${b.razorpay_order_id}` : ''}</p>` : ''}
     `;
     openPopover(document.getElementById('statusBookingDetailOverlay'), lastClickedCell);
   }
@@ -953,6 +1146,7 @@
   function closeStatusBookingDetail(){ closeAllPopovers(); }
 
   if(sessionToken){
+    wireStatusControls();
     loadStatusCalendar();
   }
 

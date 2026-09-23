@@ -393,7 +393,11 @@
     <div id="payoutsList"><p style="opacity:0.6;">Loading…</p></div>
   </div>
   <div id="trustView" style="display:none;">
-      <h3>Stay disputes</h3>
+      <h3>Feedback from hosts</h3>
+      <p style="font-size:13.5px; opacity:0.75; max-width:760px;">Everything sent through “Tell us what needs looking at”. Saved as it arrives, so it is here even if the email did not reach the inbox. Set FEEDBACK_EMAIL in Vercel to have it emailed somewhere you read.</p>
+      <div id="feedbackList"><p style="opacity:0.6;">Loading…</p></div>
+
+      <h3 style="margin-top:34px;">Stay disputes</h3>
       <p style="font-size:13.5px; opacity:0.75; max-width:760px;">A guest reported a problem during the stay. Give the host’s account more weight: refund only when the guest’s evidence stands and the host cannot justify. A refund covers the nights from the day it was raised to check-out; the host is paid for the nights used. The host’s payout is held until you decide.</p>
       <div id="stayDisputesList"><p style="opacity:0.6;">Loading…</p></div>
       <h3 style="margin-top:34px;">Guest ID proofs to review</h3>
@@ -1760,7 +1764,7 @@
     document.getElementById('tabAuditBtn').classList.toggle('active', tab === 'audit');
     document.getElementById('tabTrustBtn').classList.toggle('active', tab === 'trust');
     document.getElementById('trustView').style.display = tab === 'trust' ? 'block' : 'none';
-    if(tab === 'trust'){ loadStayDisputes(); loadGuestIds(); }
+    if(tab === 'trust'){ loadFeedback(); loadStayDisputes(); loadGuestIds(); }
     document.getElementById('tabPoliciesBtn').classList.toggle('active', tab === 'policies');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
@@ -1922,6 +1926,25 @@
 
   // ---- Guest Safety tab: stay disputes and guest ID proofs ----
   const fileLinks = (list) => (list || []).map((u, i) => `<a href="${escAdmin(u)}" target="_blank" rel="noopener" style="margin-right:10px;">File ${i + 1}</a>`).join('') || '<span style="opacity:0.6;">none</span>';
+  async function loadFeedback(){
+    const box = document.getElementById('feedbackList');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?feedback=1', { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
+      if(!d.feedback.length){ box.innerHTML = '<p style="opacity:0.7;">Nothing sent yet.</p>'; return; }
+      box.innerHTML = d.feedback.map(f => `
+        <div style="border:1px solid #e6ded3; border-radius:10px; padding:12px 16px; margin-bottom:10px; font-size:14px;">
+          <strong>${escAdmin(f.category)}</strong> · ${escAdmin(new Date(f.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}
+          · ${escAdmin(f.name || 'Host')}${f.accountEmail ? ' (' + escAdmin(f.accountEmail) + ')' : ''}
+          <p style="white-space:pre-wrap; margin:8px 0;">${escAdmin(f.message)}</p>
+          <p style="margin:0; font-size:13px;">Reply to:
+            ${f.replyEmail ? `<a href="mailto:${escAdmin(f.replyEmail)}">${escAdmin(f.replyEmail)}</a>` : '—'}
+            ${f.replyPhone ? ` · <a href="tel:${escAdmin(f.replyPhone)}">${escAdmin(f.replyPhone)}</a>` : ''}</p>
+        </div>`).join('');
+    }catch(e){ box.innerHTML = '<p>Could not load feedback.</p>'; }
+  }
+
   async function loadStayDisputes(){
     const box = document.getElementById('stayDisputesList');
     try{
