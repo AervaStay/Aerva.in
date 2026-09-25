@@ -2587,3 +2587,46 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
   border:1px solid #c9a86a; border-radius:999px; background:#fff; color:#6b5222; cursor:pointer;
 }
 .confirm-code-copy:hover{ background:#f3e6d0; }
+
+/* ---- ID proof: see what is being uploaded, and what is on file ---- */
+.id-note{ font-size:13.5px; line-height:1.5; color:var(--ink-3); margin:0 0 10px; }
+.id-warn{ color:var(--alert); }
+.id-preview{ display:flex; align-items:center; gap:12px; margin:8px 0 10px; padding:10px; background:#fff; border:1px solid #e6ded3; border-radius:10px; }
+.id-preview-img{ width:74px; height:52px; object-fit:cover; border-radius:6px; border:1px solid #e6ded3; }
+.id-preview-meta{ display:flex; flex-direction:column; gap:2px; font-size:13.5px; min-width:0; }
+.id-preview-meta strong{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px; }
+.id-preview-meta span{ font-size:12.5px; color:var(--ink-3); }
+.id-thumb-pdf{ display:inline-flex; align-items:center; justify-content:center; width:44px; height:52px; border-radius:6px; background:#f1efec; border:1px solid #ddd3c6; font-size:12px; font-weight:600; color:var(--ink-2); }
+.id-onfile{ display:flex; align-items:center; gap:12px; margin:4px 0 12px; padding:10px 12px; background:#f7fbf5; border:1px solid #bcd6b3; border-radius:10px; }
+.id-onfile .id-note{ margin:0; }
+.id-onfile-tick{ width:26px; height:26px; flex:none; border-radius:50%; background:#eaf3e6; color:#2f6b3a; display:inline-flex; align-items:center; justify-content:center; font-size:15px; }
+.id-thumb{ margin-left:auto; }
+.id-thumb img{ width:64px; height:44px; object-fit:cover; border-radius:6px; border:1px solid #bcd6b3; display:block; }
+
+/* DigiLocker: the recommended way to prove who you are. */
+.id-verify{ margin:4px 0 2px; }
+.id-or{ display:flex; align-items:center; gap:10px; margin:14px 0 10px; font-size:13px; color:var(--ink-3); }
+.id-or::before, .id-or::after{ content:''; flex:1; height:1px; background:var(--hairline); }
+.digilocker-bar{
+  position:fixed; left:50%; bottom:calc(18px + env(safe-area-inset-bottom, 0px)); transform:translateX(-50%);
+  z-index:600; display:flex; align-items:center; gap:14px; max-width:calc(100vw - 28px);
+  background:#1c1b19; color:#fff; padding:12px 14px 12px 18px; border-radius:999px;
+  font-size:14.5px; box-shadow:0 10px 30px rgba(0,0,0,0.25);
+}
+.digilocker-bar.is-ok{ background:#2f6b3a; }
+.digilocker-bar button{ background:none; border:none; color:inherit; font-size:20px; line-height:1; cursor:pointer; padding:0 4px; }
+
+/* A followed link to a listing that is no longer bookable. */
+.link-gone{
+  position:fixed; left:50%; bottom:calc(18px + env(safe-area-inset-bottom, 0px)); transform:translateX(-50%);
+  z-index:600; display:flex; align-items:center; gap:14px; max-width:calc(100vw - 28px);
+  background:#1c1b19; color:#fff; padding:12px 14px 12px 18px; border-radius:999px;
+  font-size:14.5px; box-shadow:0 10px 30px rgba(0,0,0,0.25);
+}
+.link-gone button{ background:none; border:none; color:inherit; font-size:20px; line-height:1; cursor:pointer; padding:0 4px; }
+
+/* Leaving a review, with the window that is closing. */
+.review-open{ display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0 0 8px; }
+.review-window{ font-size:13px; color:var(--ink-3); }
+.review-window.is-soon{ color:#a3402f; font-weight:500; }
+.review-note{ font-size:13px; color:var(--ink-3); margin-left:8px; }

@@ -6692,10 +6692,6 @@
         const codeHtml = b.confirmation_code && b.status === 'paid'
           ? `<div class="confirm-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${escapeMessageHtml(b.confirmation_code)}">Copy</button></div>`
           : '';
-        const idDueHtml = b.id_required_by
-          ? `<div class="price-changed" style="margin:10px 0 4px;"><strong>Add your ID to keep this booking</strong><br>
-               <span style="font-size:14px;">By ${escapeMessageHtml(new Date(b.id_required_by).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))} — otherwise it is cancelled and refunded in full.</span>
-               <div id="idDue-${b.id}"></div><button type="button" class="btn solid" data-add-id="${b.id}" style="margin-top:8px; min-height:44px; padding:10px 18px;">Add my ID</button></div>` : '';
         const inStay = !!localToday && (b.listing_type || 'stay') === 'stay' && String(b.arrival).slice(0, 10) <= localToday && localToday < String(b.departure).slice(0, 10);
         const reportHtml = inStay ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-left:8px;">Report a problem</button>` : '';
         const requestHtml = !upcoming ? ''
@@ -6709,20 +6705,28 @@
         // text where they are worth explaining, and silently where they
         // are not — a guest whose stay is next month does not need telling
         // that reviews are not open yet.
+        // The window is shown with the button: reviews close 15 days after
+        // check-out, and a guest who cannot see the deadline only finds out
+        // once it has passed.
+        const daysLeft = b.review_days_left;
+        const windowNote = daysLeft == null ? ''
+          : daysLeft <= 0 ? 'Last day to review'
+          : daysLeft === 1 ? '1 day left to review'
+          : `${daysLeft} days left to review`;
         const reviewHtml =
           b.review_state === 'open'
-            ? `<button type="button" class="filter-clear" data-review-order="${b.id}" style="margin-top:10px; margin-left:8px;">Leave a review</button>`
+            ? `<span class="review-open"><button type="button" class="filter-clear" data-review-order="${b.id}">Leave a review</button>${windowNote ? `<span class="review-window${daysLeft != null && daysLeft <= 3 ? ' is-soon' : ''}">${windowNote}</span>` : ''}</span>`
           : b.review_state === 'done'
-            ? `<span style="font-size:12px; opacity:0.6; margin-left:8px;">Review submitted</span>`
+            ? `<span class="review-note">Review submitted</span>`
           : b.review_state === 'closed'
-            ? `<span style="font-size:12px; opacity:0.6; margin-left:8px;">Review window closed</span>`
+            ? `<span class="review-note">Review window closed${b.review_window_days ? ` \u00b7 reviews close ${b.review_window_days} days after check-out` : ''}</span>`
           : '';
         return `
           <div class="listing-card booking-card" data-booking="${b.id}" style="margin-bottom:14px; cursor:pointer;">
             <div class="listing-info">
               <h3>${escapeMessageHtml(b.suite_name || '')}</h3>
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(b.status)}</div>
-              ${codeHtml}${idDueHtml}${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}
+              ${codeHtml}${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}
             </div>
           </div>
         `;
@@ -6744,14 +6748,6 @@
           e.stopPropagation();
           try{ await navigator.clipboard.writeText(btn.dataset.copyCode); btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
           catch(err){ btn.textContent = btn.dataset.copyCode; }
-        });
-      });
-      container.querySelectorAll('[data-add-id]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const slot = document.getElementById('idDue-' + btn.dataset.addId);
-          btn.style.display = 'none';
-          aervaIdPanel(slot, { needs: ['id'], message: 'Add your ID proof', onDone: () => loadMyBookings() });
         });
       });
       container.querySelectorAll('[data-report-problem]').forEach(btn => {
@@ -8512,9 +8508,17 @@
               <div id="resortPriceSummary" style="display:none;"></div>
               <div id="resortBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
                 ${bookStep(4, 'Your details')}
-                <p class="step-help">We send your booking confirmation to this email.</p>
+                <p class="step-help">Your name and the number of guests go to your host; we send your confirmation to this email.</p>
                 <div class="field">
-                  <label for="resortBookEmail">Email <span style="color:#a3402f;">*</span></label>
+                  <label for="resortBookFirstName">First name <span style="color:#a3402f;">*</span></label>
+                <input id="resortBookFirstName" type="text" placeholder="As on your ID" autocomplete="given-name" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="resortBookLastName">Last name <span style="color:#a3402f;">*</span></label>
+                <input id="resortBookLastName" type="text" placeholder="As on your ID" autocomplete="family-name" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="resortBookEmail">Email <span style="color:#a3402f;">*</span></label>
                   <input id="resortBookEmail" type="email" placeholder="you@email.com" required>
                 </div>
                 <div class="field" style="margin-top:12px;">
@@ -8623,8 +8627,16 @@
             <div id="listingPriceSummary" style="display:none;"></div>
             <div id="listingBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
               ${bookStep(4, 'Your details')}
-              <p class="step-help">We send your booking confirmation to this email.</p>
+              <p class="step-help">Your name and the number of guests go to your host; we send your confirmation to this email.</p>
               <div class="field">
+                <label for="listingBookFirstName">First name <span style="color:#a3402f;">*</span></label>
+                <input id="listingBookFirstName" type="text" placeholder="As on your ID" autocomplete="given-name" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="listingBookLastName">Last name <span style="color:#a3402f;">*</span></label>
+                <input id="listingBookLastName" type="text" placeholder="As on your ID" autocomplete="family-name" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
                 <label for="listingBookEmail">Email <span style="color:#a3402f;">*</span></label>
                 <input id="listingBookEmail" type="email" placeholder="you@email.com" required>
               </div>
@@ -9613,7 +9625,9 @@
           preferredCurrency: currentCurrency,
           couponCode: document.getElementById('listingCouponCode').value.trim() || undefined,
           pricesSeen: aervaPricesSeen([listing]),
-          phone
+          phone,
+          firstName: (document.getElementById('listingBookFirstName') || {}).value,
+          lastName: (document.getElementById('listingBookLastName') || {}).value
         })
       });
       if(!orderRes.ok){
@@ -9624,7 +9638,8 @@
           return;
         }
         if(Array.isArray(errData.needs) && errData.needs.length){
-          aervaShowNeeds(errorEl, errData, btn);
+          if(errData.needs.includes('name')){ errorEl.textContent = errData.error; errorEl.style.display = 'block'; }
+          else aervaShowNeeds(errorEl, errData, btn);
           btn.disabled = false; btn.textContent = 'Continue to payment';
           return;
         }
@@ -9938,7 +9953,8 @@
       const orderRes = await fetch(API_BASE + '/api/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-        body: JSON.stringify({ stays, email, preferredCurrency: currentCurrency, pricesSeen: aervaPricesSeen([listing]), phone })
+        body: JSON.stringify({ stays, email, preferredCurrency: currentCurrency, pricesSeen: aervaPricesSeen([listing]), phone,
+          firstName: (document.getElementById('resortBookFirstName') || {}).value, lastName: (document.getElementById('resortBookLastName') || {}).value })
       });
       if(!orderRes.ok){
         const errData = await orderRes.json().catch(() => ({}));
@@ -9948,7 +9964,8 @@
           return;
         }
         if(Array.isArray(errData.needs) && errData.needs.length){
-          aervaShowNeeds(errorEl, errData, btn);
+          if(errData.needs.includes('name')){ errorEl.textContent = errData.error; errorEl.style.display = 'block'; }
+          else aervaShowNeeds(errorEl, errData, btn);
           btn.disabled = false; btn.textContent = 'Continue to payment';
           return;
         }
@@ -10208,8 +10225,16 @@
             <div id="expPriceSummary" style="display:none;"></div>
             <div id="expBookingAction" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
               ${bookStep(4, 'Your details')}
-              <p class="step-help">We send your booking confirmation to this email.</p>
+              <p class="step-help">Your name and the number of guests go to your host; we send your confirmation to this email.</p>
               <div class="field">
+                <label for="expBookFirstName">First name <span style="color:#a3402f;">*</span></label>
+                <input id="expBookFirstName" type="text" placeholder="As on your ID" autocomplete="given-name" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
+                <label for="expBookLastName">Last name <span style="color:#a3402f;">*</span></label>
+                <input id="expBookLastName" type="text" placeholder="As on your ID" autocomplete="family-name" required>
+              </div>
+              <div class="field" style="margin-top:12px;">
                 <label for="expBookEmail">Email <span style="color:#a3402f;">*</span></label>
                 <input id="expBookEmail" type="email" placeholder="you@email.com" required>
               </div>
@@ -10554,7 +10579,9 @@
           preferredCurrency: currentCurrency,
           couponCode: document.getElementById('expCouponCode').value.trim() || undefined,
           pricesSeen: aervaPricesSeen([exp]),
-          phone
+          phone,
+          firstName: (document.getElementById('expBookFirstName') || {}).value,
+          lastName: (document.getElementById('expBookLastName') || {}).value
         })
       });
       if(!orderRes.ok){
@@ -10565,7 +10592,8 @@
           return;
         }
         if(Array.isArray(errData.needs) && errData.needs.length){
-          aervaShowNeeds(errorEl, errData, btn);
+          if(errData.needs.includes('name')){ errorEl.textContent = errData.error; errorEl.style.display = 'block'; }
+          else aervaShowNeeds(errorEl, errData, btn);
           btn.disabled = false; btn.textContent = 'Continue to payment';
           return;
         }
@@ -12070,22 +12098,30 @@
     // experience cards into the grid already showing suites.
     loadExperiences();
 
-    // If this tab was opened as a direct link to one listing (see the
-    // suite-card click handler), show that instead of the homepage grid.
-    const requestedListingId = new URLSearchParams(window.location.search).get('listing');
-    if(requestedListingId && listingsById[requestedListingId]){
-      showFullListingPage(listingsById[requestedListingId]);
-      return;
-    }
-
-    // Same for a direct link to one experience.
-    const requestedExperienceId = new URLSearchParams(window.location.search).get('experience');
-    if(requestedExperienceId){
+    // Opened as a direct link to one listing or experience — from a host
+    // profile card, a co-host's listing slides, a shared link. BOTH kinds
+    // are looked for whichever parameter was used: a card only knows what
+    // it was told, and landing on the homepage with no explanation is the
+    // worst possible answer to a link someone deliberately followed.
+    const linkParams = new URLSearchParams(window.location.search);
+    const requestedId = linkParams.get('listing') || linkParams.get('experience');
+    if(requestedId){
+      if(listingsById[requestedId]){ showFullListingPage(listingsById[requestedId]); return; }
+      // Experiences load separately; wait for them before giving up.
       await loadExperiences();
-      if(experiencesById[requestedExperienceId]){
-        showExperienceDetailPage(experiencesById[requestedExperienceId]);
-        return;
-      }
+      if(experiencesById[requestedId]){ showExperienceDetailPage(experiencesById[requestedId]); return; }
+      if(listingsById[requestedId]){ showFullListingPage(listingsById[requestedId]); return; }
+      // Genuinely not bookable now (deactivated, removed, or under
+      // review). Say so, rather than showing the homepage as if the link
+      // had been mistyped.
+      const note = document.createElement('div');
+      note.setAttribute('role', 'status');
+      note.className = 'link-gone';
+      note.innerHTML = '<span>That listing is not available right now — it may have been taken down by its host.</span>'
+        + '<button type="button" aria-label="Close">\u00d7</button>';
+      document.body.appendChild(note);
+      note.querySelector('button').addEventListener('click', () => note.remove());
+      setTimeout(() => note.remove(), 10000);
     }
 
     // List Property and List Experience are still their own separate
@@ -12735,7 +12771,7 @@ function cancellationPolicyText(policy){
     : 'Flexible — full refund 30+ days before check-in; 80% from 10 to 29 days; 50% from 5 to 9 days; 30% from 2 to 4 days; in the last day the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.';
 }
 
-// ---- Uploading files (ID proof, evidence) to Aerva's storage ----
+// ---- Uploading files (evidence for a reported problem) ----
 async function aervaUploadFiles(files, payload){
   const { upload } = await import('https://esm.sh/@vercel/blob/client');
   const out = [];
@@ -12755,46 +12791,100 @@ function aervaShowNeeds(msgEl, data, btn){
   if(needs.includes('login')){
     msgEl.style.display = 'block';
     msgEl.innerHTML = `<div class="price-changed"><p class="price-changed-title">Please log in to book</p>
-      <p style="margin:0 0 10px;">Every booking needs an Aerva account with your phone number and ID proof.</p>
+      <p style="margin:0 0 10px;">Every booking needs an Aerva account: one email address and one mobile number.</p>
       <a class="btn solid" href="guest-login.html?next=${encodeURIComponent(location.href)}" style="width:100%;">Log in or create an account</a></div>`;
     return;
   }
   aervaIdPanel(msgEl, { needs, message: data.error, onDone: () => { msgEl.style.display = 'none'; msgEl.innerHTML = ''; if(btn) btn.click(); } });
 }
-async function aervaIdPanel(host, { needs = ['id'], message = '', onDone } = {}){
+async function aervaIdPanel(host, { needs = ['email'], message = '', onDone } = {}){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  let types = { aadhaar: 'Aadhaar', passport: 'Passport', driving_licence: 'Driving licence', voter_id: 'Voter ID', pan: 'PAN card' };
-  try{ const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=bookingRequirements', { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } }); const d = await r.json(); if(d.idTypes) types = d.idTypes; }catch(e){}
+  // An account is ONE email address and ONE phone number. The email is
+  // confirmed by a code sent to it (api/_email-otp.js) — email costs
+  // nothing to send, every SMS is billed. The number is what the host
+  // uses to reach the guest about the stay.
+  let have = {};
+  try{
+    const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=bookingRequirements', { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
+    have = await r.json();
+  }catch(e){}
+  const askEmail = needs.includes('email') && !have.emailConfirmed;
+  const askPhone = needs.includes('phone') && !have.hasPhone;
+  if(!askEmail && !askPhone){ if(typeof onDone === 'function') onDone(); return; }
+
   host.style.display = 'block';
   host.innerHTML = `<div class="price-changed">
-    <p class="price-changed-title">${esc(message || 'A few details are needed to book')}</p>
-    ${needs.includes('phone') ? `<label class="payout-label" for="needPhone">Mobile number</label>
-      <input id="needPhone" type="tel" placeholder="10-digit mobile number" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">` : ''}
-    ${needs.includes('id') ? `<label class="payout-label" for="needIdType">ID proof (of the guest booking)</label>
-      <select id="needIdType" style="width:100%; padding:11px; margin:6px 0 8px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;">
-        ${Object.keys(types).map(k => `<option value="${esc(k)}">${esc(types[k])}</option>`).join('')}</select>
-      <input id="needIdFile" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" style="margin:4px 0 6px; font-size:15px;">
-      <p style="font-size:13.5px; color:var(--ink-3); margin:0 0 10px;">A clear photo or PDF. Only Aerva sees it; your host sees only that an ID is on file.</p>` : ''}
-    <button type="button" class="btn solid" id="needSave" style="width:100%;">Save and continue</button>
-    <p id="needMsg" style="font-size:14px; color:#a3402f; margin:8px 0 0;"></p></div>`;
-  host.querySelector('#needSave').addEventListener('click', async () => {
-    const msg = host.querySelector('#needMsg'); const save = host.querySelector('#needSave');
-    msg.textContent = ''; save.disabled = true; save.textContent = 'Saving…';
-    const auth = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() };
-    try{
-      if(needs.includes('phone')){
-        const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: auth, body: JSON.stringify({ mode: 'savePhone', phone: host.querySelector('#needPhone').value }) });
-        const d = await r.json(); if(!r.ok) throw new Error(d.error || 'Could not save your number.');
-      }
-      if(needs.includes('id')){
-        const file = host.querySelector('#needIdFile').files[0];
-        if(!file) throw new Error('Choose a photo or PDF of your ID.');
-        const [url] = await aervaUploadFiles([file], 'guest-id');
-        const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: auth, body: JSON.stringify({ mode: 'saveIdDocument', url, type: host.querySelector('#needIdType').value }) });
-        const d = await r.json(); if(!r.ok) throw new Error(d.error || 'Could not save your ID.');
-      }
-      if(typeof onDone === 'function') onDone();
-    }catch(err){ msg.textContent = err.message || 'Could not save. Try again.'; save.disabled = false; save.textContent = 'Save and continue'; }
+    <p class="price-changed-title">${esc(message || 'Confirm your details to book')}</p>
+    ${askEmail ? `<label class="payout-label" for="otpEmail">Email address</label>
+      <input id="otpEmail" type="email" inputmode="email" autocomplete="email" value="${esc(have.email || '')}" placeholder="you@email.com" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 6px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
+      <p class="id-note">We send a one-time code here. Your booking confirmation comes to this address too.</p>
+      <button type="button" class="btn solid" id="otpSend" style="width:100%;">Email me a code</button>
+      <div id="otpStep2" hidden>
+        <label class="payout-label" for="otpCode" style="margin-top:12px; display:block;">Enter the code</label>
+        <input id="otpCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 8px; border:1px solid #d9cfc2; border-radius:8px; font-size:18px; letter-spacing:0.18em;">
+        <button type="button" class="btn solid" id="otpConfirm" style="width:100%;">Confirm email</button>
+        <button type="button" class="filter-clear" id="otpAgain" style="margin-top:8px;">Send it again</button>
+      </div>` : ''}
+    ${askPhone ? `<div id="phoneStep"${askEmail ? ' hidden' : ''}>
+      <label class="payout-label" for="needPhone"${askEmail ? ' style="margin-top:14px; display:block;"' : ''}>Mobile number</label>
+      <input id="needPhone" type="tel" inputmode="tel" placeholder="10-digit mobile number" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 6px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
+      <p class="id-note">Your host uses this to reach you about your stay.</p>
+      <button type="button" class="btn solid" id="phoneSave" style="width:100%;">Save and continue</button>
+    </div>` : ''}
+    <p id="needMsg" class="id-note" style="margin:8px 0 0;"></p></div>`;
+
+  const msg = host.querySelector('#needMsg');
+  const say = (t, bad) => { msg.classList.toggle('id-warn', !!bad); msg.textContent = t; };
+  const post = (body) => fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() }, body: JSON.stringify(body) })
+    .then(async r => ({ ok: r.ok, d: await r.json().catch(() => ({})) }));
+  // Once the email is confirmed, the number is asked for (if it is still
+  // missing); once both are in, checkout carries on where it left off.
+  const finish = () => {
+    const step = host.querySelector('#phoneStep');
+    if(step && step.hidden){                       // email done, number still to come
+      step.hidden = false;
+      host.querySelector('#needPhone').focus();
+      say('Email confirmed. One more thing.');
+      return;
+    }
+    if(typeof onDone === 'function') onDone();
+  };
+
+  const sendBtn = host.querySelector('#otpSend');
+  if(sendBtn){
+    const send = async (btn) => {
+      const email = host.querySelector('#otpEmail').value.trim();
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return say('Enter a valid email address.', true);
+      btn.disabled = true; btn.textContent = 'Sending…'; say('');
+      const { ok, d } = await post({ mode: 'emailOtpRequest', email });
+      btn.disabled = false; btn.textContent = btn.id === 'otpSend' ? 'Email me a code' : 'Send it again';
+      if(!ok) return say(d.error || 'Could not send the code. Please try again.', true);
+      host.querySelector('#otpStep2').hidden = false;
+      host.querySelector('#otpCode').focus();
+      say(`Code sent to ${email}. It is good for ${d.expiresInMinutes || 10} minutes — check your spam folder if it is not there.`);
+    };
+    sendBtn.addEventListener('click', (e) => send(e.currentTarget));
+    host.querySelector('#otpAgain').addEventListener('click', (e) => send(e.currentTarget));
+    host.querySelector('#otpConfirm').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const code = host.querySelector('#otpCode').value.trim();
+      if(!code) return say('Enter the code from your email.', true);
+      btn.disabled = true; btn.textContent = 'Checking…'; say('');
+      const { ok, d } = await post({ mode: 'emailOtpVerify', email: host.querySelector('#otpEmail').value.trim(), code });
+      if(!ok){ btn.disabled = false; btn.textContent = 'Confirm email'; return say(d.error || 'That code did not match.', true); }
+      btn.textContent = 'Confirmed';
+      finish();
+    });
+  }
+
+  const phoneBtn = host.querySelector('#phoneSave');
+  if(phoneBtn) phoneBtn.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = 'Saving…'; say('');
+    const { ok, d } = await post({ mode: 'savePhone', phone: host.querySelector('#needPhone').value });
+    if(!ok){ btn.disabled = false; btn.textContent = 'Save and continue'; return say(d.error || 'Could not save your number.', true); }
+    if(typeof onDone === 'function') onDone();
   });
 }
 

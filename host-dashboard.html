@@ -1122,10 +1122,15 @@
       <div id="accountControls" style="margin-top:28px; padding-top:18px; border-top:1px solid #ece4d8;">
         <div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:#8a6c39; margin-bottom:10px;">Account</div>
         <div id="hostingControl"></div>
-        <div style="margin-top:14px;">
+        <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+          <button type="button" id="pauseAccountBtn" style="background:none; border:1px solid #d9cfc2; border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;">Pause account</button>
           <button type="button" id="deleteAccountBtn" style="background:none; border:1px solid #a3402f; color:#a3402f; border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;">Delete account</button>
-          <div id="deleteAccountPanel" style="display:none; margin-top:12px; font-size:14px;"></div>
         </div>
+        <p style="font-size:13px; color:#6e675d; line-height:1.6; margin:10px 0 0; max-width:62ch;">
+          <strong>Pause</strong> hides your listings and takes no new bookings. Nothing is erased, and logging in again brings it all back.
+          <strong>Delete</strong> erases your personal details for good and cannot be undone. Bookings already paid for go ahead either way.
+        </p>
+        <div id="deleteAccountPanel" style="display:none; margin-top:12px; font-size:14px;"></div>
       </div>
 
       <!-- ---- Payment Options ---- -->
@@ -1347,6 +1352,42 @@
   function statusBadgeHtml(status){
     return `<span class="status-badge status-${status}">${status}</span>`;
   }
+  // Pause the whole account (guest-profile.js, mode 'deactivateAccount').
+  // Reversible: logging in again restores the account and the listings
+  // hidden with it, so this asks once and then signs them out.
+  (function(){
+    const btn = document.getElementById('pauseAccountBtn');
+    if(!btn) return;
+    btn.addEventListener('click', async () => {
+      if(!confirm('Pause your account? Your listings are hidden and take no new bookings. Nothing is erased — logging in again brings everything back. Bookings already paid for go ahead.')) return;
+      btn.disabled = true; btn.textContent = 'Pausing…';
+      try{
+        const res = await fetch(API_BASE + '/api/guest-profile', { method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+          body: JSON.stringify({ mode: 'deactivateAccount' }) });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.error || 'Could not pause your account.');
+        alert(`Your account is paused${data.listingsHidden ? ` and ${data.listingsHidden} listing${data.listingsHidden === 1 ? ' is' : 's are'} hidden` : ''}. Log in again whenever you want it back.`);
+        ['aerva_guest_session','aerva_guest_email','aerva_guest_name'].forEach(k => { try{ localStorage.removeItem(k); }catch(e){} });
+        window.location.href = 'index.html';
+      }catch(err){
+        alert(err.message); btn.disabled = false; btn.textContent = 'Pause account';
+      }
+    });
+  })();
+
+  // Remove a listing for good (host-listings.js, removeListing). Refused
+  // by the server while guests are booked in; it says so if they are.
+  async function removeListing(listingId, name){
+    if(!confirm(`Remove "${name || 'this listing'}" for good?\n\nIt disappears from Aerva and from your own list. Past bookings, reviews and payouts stay on record. This cannot be undone by you — only Aerva can put it back.`)) return;
+    if(!confirm('Last check: remove it permanently?')) return;
+    const res = await fetch(API_BASE + '/api/host-listings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+      body: JSON.stringify({ removeListing: { listingId } }) });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok){ alert(data.error || 'Could not remove this listing right now.'); return; }
+    loadListings();
+  }
+
   // Deactivate / reactivate a listing (host only). Existing bookings go ahead.
   async function setListingActive(listingId, active){
     if(!confirm(active ? 'Reactivate this listing? It goes live again straight away.' : 'Deactivate this listing? It is hidden from search and takes no new bookings. Existing bookings go ahead.')) return;
@@ -1725,6 +1766,7 @@
           ${cloneLink}
           ${item.status === 'approved' && !window.AervaCohostActive ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0; color:#a3402f;" onclick="event.stopPropagation(); setListingActive(${Number(item.id)}, false)">Deactivate</button>` : ''}
           ${item.status === 'deactivated' && !window.AervaCohostActive ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); setListingActive(${Number(item.id)}, true)">Reactivate</button>` : ''}
+          ${['approved', 'deactivated', 'rejected'].includes(item.status) && !window.AervaCohostActive ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0; color:#a3402f;" onclick="event.stopPropagation(); removeListing(${Number(item.id)}, '${String(item.property_name || '').replace(/'/g, "\\'").replace(/</g, '')}')">Remove</button>` : ''}
         </div>
       </div>
     `;
