@@ -4692,7 +4692,32 @@
       document.body.appendChild(ov);
     }
     ov.innerHTML = '<button type="button" class="hp-close" aria-label="Close">\u00d7</button><div class="hp-body"><p class="hp-empty">Loading\u2026</p></div>';
-    ov.querySelector('.hp-close').addEventListener('click', () => { ov.classList.remove('is-open'); document.body.classList.remove('hp-open'); });
+    // Closing has to take ?view=cohost out of the address bar as well as
+    // hide the panel. It did not, so the URL still read
+    // index.html?view=cohost long after the panel was dismissed — and a
+    // refresh, a bookmark, or a restored tab opened straight back onto
+    // Co-hosting instead of the homepage. Several actions in here also
+    // replaceState to that URL, so it gets pinned even when the panel was
+    // never opened from a link.
+    //
+    // Other params are preserved rather than replaced wholesale with
+    // 'index.html', so a refresh keeps whatever else the page was showing.
+    const closeCohostCenter = () => {
+      ov.classList.remove('is-open');
+      document.body.classList.remove('hp-open');
+      document.removeEventListener('keydown', cohostCenterEscape);
+      try{
+        const u = new URL(window.location.href);
+        if(u.searchParams.get('view') === 'cohost'){
+          u.searchParams.delete('view');
+          u.searchParams.delete('invite');   // spent — never re-accept on refresh
+          history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
+        }
+      }catch(e){ /* an odd URL is not a reason to leave the panel open */ }
+    };
+    function cohostCenterEscape(e){ if(e.key === 'Escape') closeCohostCenter(); }
+    ov.querySelector('.hp-close').addEventListener('click', closeCohostCenter);
+    document.addEventListener('keydown', cohostCenterEscape);
     ov.classList.add('is-open');
     document.body.classList.add('hp-open');
     const body = ov.querySelector('.hp-body');
