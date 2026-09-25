@@ -3025,6 +3025,9 @@ module.exports = async (req, res) => {
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
              o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
+             -- not revenue: only so the page knows what unit a refund
+             -- amount is in before it prints a ₹ in front of it
+             o.charge_currency,
              o.guest_email, g.name AS guest_name
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
@@ -3046,6 +3049,77 @@ module.exports = async (req, res) => {
       }
     } catch (err) {
       console.error('co-host shares unavailable (non-fatal):', err.message);
+    }
+
+    // What a cancellation actually did, for the earnings page's
+    // "Cancelled & refunded" view. Needed because cancelling does NOT
+    // zero payout_amount — it cancels the payout row instead — so that
+    // column still holds what the host WOULD have earned. Showing it as
+    // a payout on a cancelled booking would be a lie; these three facts
+    // are what makes the row honest:
+    //
+    //   refund_status  — did the guest's money actually go back? A
+    //                    'failed' refund is a problem the host should
+    //                    see, not something buried in an admin screen.
+    //   coupon_cost    — when the HOST cancels, the guest gets a coupon
+    //                    the host pays for. That is the real cost.
+    //   cancelled_by   — 'guest' when a cancellation request was
+    //                    accepted, otherwise the host's own doing.
+    //
+    // Separate and fail-safe, like the co-host block above: on a
+    // deployment where any of these tables is missing the bookings list
+    // must still load, just without the extra detail.
+    try {
+      const ids = bookings.map(b => b.id);
+      const cancelledIds = bookings.filter(b => b.status === 'cancelled' || b.status === 'refunded').map(b => b.id);
+      if (ids.length) {
+        // A booking can have several refunds (the stay and the deposit).
+        // 'failed' is reported ahead of everything else, then 'pending',
+        // because those are the two a host may need to chase.
+        const RANK = { failed: 3, creating: 2, new: 2, pending: 1, processed: 0 };
+        const byOrder = {};
+        try {
+          const rf = await sql`SELECT order_id, kind, amount, status FROM refunds WHERE order_id = ANY(${ids})`;
+          rf.forEach(r => {
+            const o = byOrder[r.order_id] || (byOrder[r.order_id] = { amount: 0, status: 'processed' });
+            // Stored in the charge currency's subunit (paise for INR).
+            if (r.status !== 'failed') o.amount += Number(r.amount) || 0;
+            if ((RANK[r.status] || 0) > (RANK[o.status] || 0)) o.status = r.status;
+          });
+        } catch (e) { console.error('refund detail unavailable (non-fatal):', e.message); }
+
+        const couponByOrder = {};
+        if (cancelledIds.length) {
+          try {
+            const cp = await sql`SELECT source_order_id, COALESCE(SUM(amount), 0)::int AS amt
+                                 FROM coupons
+                                 WHERE source_order_id = ANY(${cancelledIds}) AND issuing_host_id = ${guest.host_id}
+                                 GROUP BY source_order_id`;
+            cp.forEach(r => { couponByOrder[r.source_order_id] = Number(r.amt) || 0; });
+          } catch (e) { console.error('coupon cost unavailable (non-fatal):', e.message); }
+        }
+
+        const guestAsked = new Set();
+        if (cancelledIds.length) {
+          try {
+            const cr = await sql`SELECT DISTINCT order_id FROM cancellation_requests
+                                 WHERE order_id = ANY(${cancelledIds}) AND status = 'accepted'`;
+            cr.forEach(r => guestAsked.add(Number(r.order_id)));
+          } catch (e) { console.error('cancellation requests unavailable (non-fatal):', e.message); }
+        }
+
+        bookings.forEach(b => {
+          const r = byOrder[b.id];
+          b.refund_amount_subunit = r ? r.amount : 0;
+          b.refund_status = r ? r.status : null;
+          b.coupon_cost = couponByOrder[b.id] || 0;
+          b.cancelled_by = (b.status === 'cancelled' || b.status === 'refunded')
+            ? (guestAsked.has(Number(b.id)) ? 'guest' : 'host')
+            : null;
+        });
+      }
+    } catch (err) {
+      console.error('cancellation detail unavailable (non-fatal):', err.message);
     }
 
 
