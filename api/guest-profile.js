@@ -44,7 +44,8 @@ const { logAudit } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
 const { cancellationQuote, createCancellationRequest, cancellationCard } = require('./_cancellations');
 const { changeOptions, quoteChange, requestChange, withdrawChange, openChangeFor, loadBooking } = require('./_booking-changes');
-const { saveIdDocument, idSummary, ID_TYPES } = require('./_guest-id');
+const { idSummary } = require('./_guest-id');
+const emailOtp = require('./_email-otp');
 const { raiseDispute, openDisputeFor, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
 // The problem-report card at the top of a booking's thread.
 async function disputeCard(sql, conversationId, role) {
@@ -244,9 +245,6 @@ async function threadReviewPrompt(sql, conversationId, role) {
 }
 
 module.exports = async (req, res) => {
-  // Typed text can never become markup — see _plain-text.js.
-  sanitizeBody(req);
-
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, PATCH, POST, OPTIONS');
@@ -276,6 +274,33 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('deleteAccount failed:', err);
       return res.status(500).json({ error: 'Could not delete your account right now. Please try again.' });
+    }
+  }
+
+  // ---- Pause my account (guest or host) ----
+  // POST { mode: 'deactivateAccount' }
+  // Nothing is erased. The account takes no bookings, and a host's live
+  // listings are hidden, exactly as "deactivate hosting" does. Logging in
+  // again brings all of it back on its own (guest-auth.js), which is why
+  // this is offered beside deleting rather than instead of it.
+  // Bookings already paid for go ahead: a paused account does not cancel
+  // a stay someone is counting on.
+  if (req.method === 'POST' && req.body && req.body.mode === 'deactivateAccount') {
+    try {
+      const me = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0] || {};
+      let hidden = [];
+      if (me.host_id) {
+        hidden = await sql`UPDATE listings SET status = 'deactivated', deactivated_by = 'hosting', deactivated_at = now()
+                           WHERE host_id = ${me.host_id} AND status = 'approved' RETURNING id`;
+        try { await sql`UPDATE hosts SET hosting_status = 'deactivated' WHERE id = ${me.host_id}`; } catch (e) { /* column not added yet */ }
+      }
+      await sql`UPDATE guests SET account_status = 'deactivated', deactivated_at = now() WHERE id = ${guestId}`;
+      await logAudit(sql, { action: 'account_deactivated', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+        targetType: 'guest', targetId: guestId, metadata: { listingsHidden: hidden.length } });
+      return res.status(200).json({ success: true, listingsHidden: hidden.length });
+    } catch (err) {
+      console.error('deactivateAccount failed:', err);
+      return res.status(500).json({ error: 'Could not pause your account right now. Please try again.' });
     }
   }
 
@@ -347,10 +372,12 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     const mode = req.query.mode;
     try {
-      // ---- What this account still needs to book (phone, ID proof) ----
-      // GET ?mode=bookingRequirements — status only, never the document.
+      // ---- What this account still needs to book ----
+      // GET ?mode=bookingRequirements — a phone number, nothing more.
+      // Aerva does not ask guests for an ID: the host checks one at
+      // check-in, as the law requires of them.
       if (mode === 'bookingRequirements') {
-        return res.status(200).json(Object.assign(await idSummary(sql, guestId), { idTypes: ID_TYPES }));
+        return res.status(200).json(await idSummary(sql, guestId));
       }
 
       // ---- Changing a booking: what can change, and the current booking ----
@@ -655,16 +682,6 @@ module.exports = async (req, res) => {
         WHERE o.guest_id = ${guestId}
         ORDER BY o.created_at DESC
       `;
-      // Bookings waiting for the guest's ID proof (deadline shown in My Bookings).
-      try {
-        const ids = bookings.map(b => b.id);
-        if (ids.length) {
-          const due = await sql`SELECT id, id_required_by FROM orders WHERE id = ANY(${ids}) AND id_required_by IS NOT NULL AND status = 'paid'`;
-          const byId = {}; due.forEach(r => { byId[r.id] = r.id_required_by; });
-          bookings.forEach(b => { b.id_required_by = byId[b.id] || null; });
-        }
-      } catch (err) { /* before migration_trust_rules.sql */ }
-
       // The open change on each booking (waiting for the host, or for payment).
       try {
         const ids = bookings.map(b => b.id);
@@ -702,6 +719,14 @@ module.exports = async (req, res) => {
           const w = reviewWindowState(b.departure, b.local_today);
           b.review_state = w === 'upcoming' ? null : w;
         }
+        // How long is left to review, so the guest can see the window
+        // rather than discovering it closed. Counted on the property's
+        // calendar, like the window itself.
+        if (b.review_state === 'open') {
+          const used = daysSinceCheckout(b.departure, b.local_today);
+          b.review_days_left = used == null ? null : Math.max(0, REVIEW_WINDOW_DAYS - used);
+        }
+        b.review_window_days = REVIEW_WINDOW_DAYS;
         delete b.reviewed;
         delete b.local_today;
       });
@@ -816,21 +841,53 @@ module.exports = async (req, res) => {
         }
       }
 
-      // ---- ID proof and phone (required to book, _guest-id.js) ----
-      // POST { mode: 'saveIdDocument', url, type }  (url from /api/blob-upload, payload 'guest-id')
-      // POST { mode: 'savePhone', phone }
-      if (mode === 'saveIdDocument') {
-        try { return res.status(200).json(await saveIdDocument(sql, guestId, req.body || {})); }
-        catch (err) { return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not save your ID right now.' }); }
+      // ---- Confirming the account's email, and its one phone number ----
+      // An account is ONE email address and ONE phone number. The code
+      // goes to the email: email costs nothing to send, every SMS is
+      // billed (_email-otp.js).
+      //   POST { mode: 'emailOtpRequest', email }
+      //   POST { mode: 'emailOtpVerify', email, code }
+      //   POST { mode: 'savePhone', phone }
+      if (mode === 'emailOtpRequest' || mode === 'emailOtpVerify') {
+        const b = req.body || {};
+        const wanted = emailOtp.normalizeEmail(b.email);
+        if (!emailOtp.looksLikeEmail(wanted)) return res.status(400).json({ error: 'Please enter a valid email address.' });
+        // One email per account: if another account already uses it, this
+        // one cannot take it. That account's owner reached it first.
+        const taken = await sql`SELECT id FROM guests WHERE lower(btrim(email)) = ${wanted} AND id <> ${guestId} AND deleted_at IS NULL`;
+        if (taken.length) {
+          return res.status(409).json({ error: 'That email address is already on another Aerva account. Log in with it instead, or use a different address.' });
+        }
+        try {
+          if (mode === 'emailOtpRequest') {
+            const out = await emailOtp.requestCode(sql, wanted, { purpose: 'link' });
+            return res.status(200).json({ sent: true, email: out.email, expiresInMinutes: out.expiresInMinutes });
+          }
+          const check = await emailOtp.checkCode(sql, wanted, b.code);
+          if (!check.ok) return res.status(400).json({ error: check.error });
+          await sql`UPDATE guests SET email = ${wanted}, email_verified_at = now() WHERE id = ${guestId}`;
+          await logAudit(sql, { action: 'guest_email_confirmed', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+            targetType: 'guest', targetId: guestId, metadata: { email: wanted } });
+          return res.status(200).json({ confirmed: true, email: wanted });
+        } catch (err) {
+          if (err.isUserFacing) return res.status(err.status).json({ error: err.message });
+          console.error('email OTP failed:', err);
+          return res.status(500).json({ error: 'Could not do this right now. Please try again.' });
+        }
       }
       if (mode === 'savePhone') {
         const e164 = normalizeToE164(String((req.body || {}).phone || ''));
         if (!e164) return res.status(400).json({ error: 'Please enter a valid mobile number, with the country code if you are outside India.' });
+        // One phone per account, same rule as the email.
+        const taken = await sql`SELECT id FROM guests WHERE btrim(phone) = ${e164} AND id <> ${guestId} AND deleted_at IS NULL`;
+        if (taken.length) {
+          return res.status(409).json({ error: 'That number is already on another Aerva account. Log in with it instead, or use a different one.' });
+        }
         try {
           await sql`UPDATE guests SET phone = ${e164} WHERE id = ${guestId}`;
           return res.status(200).json({ phone: e164 });
         } catch (err) {
-          if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'This phone number is already used by another Aerva account.' });
+          if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'That number is already on another Aerva account.' });
           throw err;
         }
       }

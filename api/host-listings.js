@@ -1574,8 +1574,9 @@ module.exports = async (req, res) => {
             const bookedRangesRaw = await sql`
               SELECT o.id, o.arrival AS start_date, o.departure AS end_date, o.guest_email, o.guests, o.nights, o.total,
                      o.payout_amount, o.deposit_amount, o.deposit_status, o.created_at, o.razorpay_order_id,
-                     g.name AS guest_name, g.phone AS guest_phone, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
-                     (g.id_status IS NOT NULL AND g.id_document_url IS NOT NULL) AS guest_id_on_file
+                     COALESCE(NULLIF(btrim(concat_ws(' ', to_jsonb(o)->>'guest_first_name', to_jsonb(o)->>'guest_last_name')), ''), g.name) AS guest_name,
+                     g.phone AS guest_phone, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
+                     to_jsonb(g)->>'phone_verified_at' AS guest_phone_verified
               FROM orders o LEFT JOIN guests g ON g.id = o.guest_id
               WHERE o.room_id = ${room.id} AND o.status = 'paid'
                 AND o.arrival < ${endStr}::date AND o.departure > ${startStr}::date
@@ -1616,8 +1617,9 @@ module.exports = async (req, res) => {
           const bookedRangesRaw = await sql`
             SELECT o.id, o.arrival AS start_date, o.departure AS end_date, o.guest_email, o.guests, o.nights, o.total,
                      o.payout_amount, o.deposit_amount, o.deposit_status, o.created_at, o.razorpay_order_id,
-                     g.name AS guest_name, g.phone AS guest_phone, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
-                     (g.id_status IS NOT NULL AND g.id_document_url IS NOT NULL) AS guest_id_on_file
+                     COALESCE(NULLIF(btrim(concat_ws(' ', to_jsonb(o)->>'guest_first_name', to_jsonb(o)->>'guest_last_name')), ''), g.name) AS guest_name,
+                     g.phone AS guest_phone, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
+                     to_jsonb(g)->>'phone_verified_at' AS guest_phone_verified
               FROM orders o LEFT JOIN guests g ON g.id = o.guest_id
             WHERE o.listing_id = ${listing.id} AND o.status = 'paid'
               AND o.arrival < ${endStr}::date AND o.departure > ${startStr}::date
@@ -2534,6 +2536,39 @@ module.exports = async (req, res) => {
       return res.status(200).json({ hostingStatus: st });
     } catch (err) { return res.status(500).json({ error: 'Could not load this right now.' }); }
   }
+  // ---- Remove a listing for good (host only) ----
+  // POST { removeListing: { listingId } }
+  // Hidden from everyone and gone from the host's own list. Its bookings,
+  // reviews and payouts stay on record, so nothing owed or already lived
+  // through is lost. Refused while a guest is booked in: taking the roof
+  // from someone who has paid for it is never a self-service action.
+  // Only an admin can put it back.
+  if (req.method === 'POST' && req.body && req.body.removeListing) {
+    try {
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
+      const id = Number((req.body.removeListing || {}).listingId) || 0;
+      const l = (await sql`SELECT id, property_name, status FROM listings WHERE id = ${id} AND host_id = ${g.host_id}`)[0];
+      if (!l) return res.status(404).json({ error: 'Listing not found.' });
+      if (l.status === 'removed') return res.status(400).json({ error: 'This listing has already been removed.' });
+      const booked = await sql`
+        SELECT o.id FROM orders o
+        CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l2.timezone), ''), 'Asia/Kolkata'))::date AS today
+                            FROM listings l2 WHERE l2.id = ${l.id}) t
+        WHERE o.listing_id = ${l.id} AND o.status = 'paid' AND o.departure >= t.today LIMIT 1`;
+      if (booked.length) {
+        return res.status(409).json({ error: 'This listing has guests booked in. Deactivate it instead — it takes no new bookings, and you can remove it once those stays are over.' });
+      }
+      await sql`UPDATE listings SET status = 'removed', removed_by = 'host', removed_at = now() WHERE id = ${l.id}`;
+      await logAudit(sql, { action: 'listing_removed_by_host', success: true, actorType: 'host', actorIdentifier: String(g.host_id),
+        targetType: 'listing', targetId: l.id, metadata: { name: l.property_name, fromStatus: l.status } });
+      return res.status(200).json({ success: true, status: 'removed' });
+    } catch (err) {
+      console.error('removeListing failed:', err);
+      return res.status(500).json({ error: 'Could not remove this listing right now.' });
+    }
+  }
+
   if (req.method === 'POST' && req.body && (req.body.setListingActive || req.body.setHostingActive)) {
     try {
       const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];

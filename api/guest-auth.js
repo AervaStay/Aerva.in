@@ -50,7 +50,7 @@
 const bcrypt = require('bcryptjs');
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
-const { isAccountDeleted } = require('./_accounts');
+const { isAccountDeleted, reactivateIfPaused } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
@@ -271,7 +271,8 @@ module.exports = async (req, res) => {
         const guest = rows[0];
         if (!guest) return res.status(404).json({ error: 'Account not found.' });
 
-        const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+        await reactivateIfPaused(sql, guest.id);   // logging in un-pauses a paused account
+      const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
         await logAudit(sql, {
           action: 'guest_email_verified', success: true, actorType: 'guest', actorIdentifier: guest.email,
           targetType: 'guest', targetId: guest.id
@@ -643,6 +644,7 @@ module.exports = async (req, res) => {
       // link — one click both resets the password AND signs them in,
       // rather than making them turn around and log in again immediately
       // with the password they just set.
+      await reactivateIfPaused(sql, guest.id);   // logging in un-pauses a paused account
       const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
       await logAudit(sql, {
         action: 'guest_password_reset_completed', success: true, actorType: 'guest', actorIdentifier: guest.email,
@@ -670,6 +672,7 @@ module.exports = async (req, res) => {
     }
     try {
       const guest = await findOrLinkSocialGuest(sql, { providerId: verified.googleId, email: verified.email, name: verified.name });
+      await reactivateIfPaused(sql, guest.id);   // logging in un-pauses a paused account
       const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
       await logAudit(sql, {
         action: 'guest_login', success: true, actorType: 'guest', actorIdentifier: verified.email,
@@ -835,6 +838,7 @@ module.exports = async (req, res) => {
         });
       }
 
+      await reactivateIfPaused(sql, guest.id);   // logging in un-pauses a paused account
       const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
       await logAudit(sql, {
         action: 'guest_login', success: true, actorType: 'guest', actorIdentifier: cleanEmail,

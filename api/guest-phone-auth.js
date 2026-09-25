@@ -8,7 +8,16 @@
 //     Triggers an SMS with a one-time code to the given phone number
 //     (E.164 format, e.g. +919876543210).
 //
-//   POST { mode: 'verify', phone, code }
+//   NOTE: every code Twilio sends costs money, per message. Confirming an
+//   account is therefore done by EMAIL instead (guest-auth.js, mode
+//   'emailOtp…'), which costs nothing — this stays only for hosts and
+//   guests who prefer to sign in with their number.
+//
+//   POST { mode: 'verify', phone, code }        — sign in by phone
+//   POST { mode: 'link', phone, code }           — signed in already:
+//     attaches this verified number to THAT account instead of switching
+//     to another one. Every account ends up linked to a number its owner
+//     proved by OTP, which is what a host is given to reach the guest.
 //     Checks the code with Twilio. If correct, finds or creates a guest
 //     account by phone number and returns a 30-day session token — the
 //     same token type/shape as email+password login, so the existing
@@ -19,7 +28,7 @@
 // console — not the same as a phone number SID).
 
 const { neon } = require('@neondatabase/serverless');
-const { createToken } = require('./_approval-token');
+const { createToken, verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { E164_PATTERN, normalizeToE164, phoneMatchSuffix } = require('./_phone-validation');
@@ -154,7 +163,9 @@ module.exports = async (req, res) => {
   }
 
   // ---- Verify the OTP ----
-  if (mode === 'verify') {
+  // 'verify' signs the guest in; 'link' attaches the number to the account
+  // they are already signed in to. Both need the same code check first.
+  if (mode === 'verify' || mode === 'link') {
     if (!code || typeof code !== 'string') {
       return res.status(400).json({ error: 'Please enter the code you received.' });
     }
@@ -195,6 +206,25 @@ module.exports = async (req, res) => {
           metadata: { reason: 'code_rejected', ip: clientIp }
         });
         return res.status(401).json({ error: 'That code is incorrect or has expired. Please request a new one.' });
+      }
+
+      // Signed in already: the verified number joins THIS account.
+      if (mode === 'link') {
+        const auth = String(req.headers.authorization || '');
+        const payload = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
+        const meId = payload && payload.action === 'guest-session' ? Number(payload.listingId) : 0;
+        if (!meId) return res.status(401).json({ error: 'Please log in again.' });
+        // The number may already sit on another account — that account's
+        // owner proved it once too, so it is not simply taken away.
+        const taken = await sql`SELECT id FROM guests WHERE phone = ${cleanPhone} AND id <> ${meId} AND deleted_at IS NULL`;
+        if (taken.length) {
+          return res.status(409).json({ error: 'This number is already on another Aerva account. Log in with that number instead, or use a different one.' });
+        }
+        await sql`UPDATE guests SET phone = ${cleanPhone}, phone_verified_at = now() WHERE id = ${meId}`;
+        await logAudit(sql, { action: 'guest_phone_linked', success: true, actorType: 'guest', actorIdentifier: cleanPhone,
+          targetType: 'guest', targetId: meId, metadata: { ip: clientIp } });
+        const me = (await sql`SELECT id, email, name, phone FROM guests WHERE id = ${meId}`)[0];
+        return res.status(200).json({ linked: true, guest: safeGuest(me) });
       }
 
       // Code approved — find or create the guest account by phone.
@@ -247,6 +277,12 @@ module.exports = async (req, res) => {
         `;
         guest = inserted[0];
       }
+
+      // The number is proved, so the account is linked to it from here on.
+      try { await sql`UPDATE guests SET phone_verified_at = now() WHERE id = ${guest.id}`; }
+      catch (err) { /* before migration_guest_details.sql */ }
+      // Logging in un-pauses an account that was paused (_accounts.js).
+      await require('./_accounts').reactivateIfPaused(sql, guest.id);
 
       const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
       await logAudit(sql, {

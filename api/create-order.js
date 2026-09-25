@@ -146,7 +146,7 @@ module.exports = async (req, res) => {
 
   let holdIds = [];
   try {
-    const { stays, experiences, email, preferredCurrency, couponCode, pricesSeen } = req.body;
+    const { stays, experiences, email, preferredCurrency, couponCode, pricesSeen, firstName, lastName } = req.body;
 
     // The booking agreement must be accepted, in its current wording, before
     // any payment is created (aerva-policies.js → agreements.guest). What was
@@ -179,10 +179,23 @@ module.exports = async (req, res) => {
     }
 
     const guestId = getOptionalGuestId(req);
+    // The name of the guest staying, as given at checkout. Kept on the
+    // account too, so it is filled in next time.
+    const guestFirst = String(req.body.firstName || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    const guestLast = String(req.body.lastName || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    if (!guestFirst || !guestLast) {
+      return res.status(400).json({ error: 'Please give the first and last name of the guest staying.', needs: ['name'] });
+    }
+    try {
+      await sql`UPDATE guests SET first_name = ${guestFirst}, last_name = ${guestLast},
+                                  name = COALESCE(NULLIF(btrim(name), ''), ${guestFirst + ' ' + guestLast})
+                WHERE id = ${guestId}`;
+    } catch (err) { /* before migration_guest_details.sql */ }
+
     // Every booking needs an account with a phone number and ID proof
     // (_guest-id.js). The phone typed at checkout is saved to the account if
     // it has none. `needs` tells the page what to ask for.
-    try { await assertCanBook(sql, guestId, { phone: req.body.phone }); }
+    try { await assertCanBook(sql, guestId); }
     catch (err) {
       if (err.isUserFacing) return res.status(err.status).json({ error: err.message, needs: err.needs || [] });
       throw err;
@@ -476,6 +489,9 @@ module.exports = async (req, res) => {
       notes: {
         email,
         guestId: guestId || '',
+        // The guest's own name, given at checkout — this is what the host
+        // is told, with the number of guests.
+        firstName: guestFirst, lastName: guestLast,
         stayCount: safeStays.length,
         experienceCount: safeExperiences.length,
         chargeCurrency,

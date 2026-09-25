@@ -132,4 +132,28 @@ async function deleteAccount(sql, guestId) {
   return { ok: true };
 }
 
-module.exports = { isAccountDeleted, deletionBlockers, deleteAccount, DELETED_NAME };
+// Logging in un-pauses an account that was paused (guest-profile.js,
+// mode 'deactivateAccount'): the person is back, so their account and the
+// listings hidden with it come back too. Only listings hidden BY the pause
+// are restored — one deactivated on its own stays that way. Never throws:
+// a login must not fail because this could not run.
+async function reactivateIfPaused(sql, guestId) {
+  try {
+    const back = await sql`UPDATE guests SET account_status = NULL, deactivated_at = NULL
+                           WHERE id = ${guestId} AND account_status = 'deactivated' RETURNING host_id`;
+    if (!back.length) return { reactivated: false };
+    const hostId = back[0].host_id;
+    let restored = [];
+    if (hostId) {
+      restored = await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL
+                           WHERE host_id = ${hostId} AND status = 'deactivated' AND deactivated_by = 'hosting' RETURNING id`;
+      try { await sql`UPDATE hosts SET hosting_status = 'active' WHERE id = ${hostId}`; } catch (e) { /* column not added yet */ }
+    }
+    return { reactivated: true, listingsRestored: restored.length };
+  } catch (err) {
+    console.error('reactivateIfPaused failed (non-fatal):', err.message);
+    return { reactivated: false };
+  }
+}
+
+module.exports = { isAccountDeleted, deletionBlockers, deleteAccount, reactivateIfPaused, DELETED_NAME };
