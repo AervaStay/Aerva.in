@@ -4232,6 +4232,155 @@
   // The card's rating: a star and a number, sitting on the same line as
   // the price. The fuller block below (ratingHtml) still runs on the
   // listing page, where there is room for the review count.
+  // ---- A co-host's own earnings: by host, by listing, over time ----
+  //
+  // The section used to be a total and a flat list of every booking, with
+  // no way to ask the two questions a co-host actually has: what does
+  // THIS property earn me, and what does THIS host earn me. Someone
+  // helping three hosts across six properties could only read one number
+  // that mixed all of it together.
+  //
+  // Two filters and one chart, all reading the same rows. The listing
+  // filter narrows to the chosen host, so the pair can never describe a
+  // combination that does not exist.
+  const CE = { hostId: 'all', listingId: 'all', data: null };
+
+  const ceMonthName = (key) => ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][Number(key.slice(5,7)) - 1] || key;
+
+  function ceRows(){
+    const rows = (CE.data && CE.data.earnings && CE.data.earnings.rows) || [];
+    return rows.filter(r =>
+      (CE.hostId === 'all' || String(r.hostId) === String(CE.hostId)) &&
+      (CE.listingId === 'all' || String(r.listingId) === String(CE.listingId)));
+  }
+
+  // Listings this co-host holds, narrowed to the chosen host. Taken from
+  // the co-hosting rows rather than from earnings, so a property that has
+  // not earned anything yet is still offered — "this one earns me
+  // nothing" is an answer worth being able to get.
+  function ceListings(){
+    const out = [];
+    ((CE.data && CE.data.cohosting) || []).forEach(c => {
+      if(CE.hostId !== 'all' && String(c.hostId) !== String(CE.hostId)) return;
+      (c.listings || []).forEach(l => { if(!out.some(x => String(x.id) === String(l.id))) out.push(l); });
+    });
+    return out;
+  }
+
+  // Monthly bars of my share. One series, so no legend — the heading
+  // names it. Bars carry a 4px rounded top and sit 2px apart.
+  function ceChart(rows){
+    if(!rows.length) return '';
+    const by = {};
+    rows.filter(r => r.status === 'paid' && r.month).forEach(r => {
+      by[r.month] = (by[r.month] || 0) + (Number(r.amount) || 0);
+    });
+    const months = Object.keys(by).sort();
+    if(!months.length) return '';
+    // A continuous run of months, so a quiet month is a gap and not a
+    // month that silently vanished from the axis.
+    const span = [];
+    let cur = months[0];
+    const last = months[months.length - 1];
+    for(let guard = 0; guard < 36 && cur <= last; guard++){
+      span.push(cur);
+      let y = Number(cur.slice(0,4)), m = Number(cur.slice(5,7)) + 1;
+      if(m > 12){ m = 1; y++; }
+      cur = y + '-' + String(m).padStart(2, '0');
+    }
+    const W = 640, H = 170, padL = 46, padR = 10, padT = 12, padB = 26;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const peak = Math.max(...span.map(m => by[m] || 0), 1);
+    const nice = Math.pow(10, Math.floor(Math.log10(peak)));
+    const top = Math.ceil((peak * 1.12) / nice) * nice || 1;
+    const bw = Math.max(6, Math.min(34, plotW / span.length - 6));
+    let grid = '', bars = '';
+    for(let i = 0; i <= 3; i++){
+      const y = padT + plotH - (plotH * i / 3);
+      grid += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="#e8e0d3" stroke-width="1"/>`
+           +  `<text x="${padL - 7}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="#8a8178">${fmtGuest(Math.round(top * i / 3))}</text>`;
+    }
+    span.forEach((m, i) => {
+      const v = by[m] || 0;
+      const x = padL + (plotW / span.length) * i + (plotW / span.length - bw) / 2;
+      const h = v > 0 ? Math.max(2, (v / top) * plotH) : 0;
+      if(h > 0){
+        bars += `<rect class="ce-bar" data-tip="${escapeMessageHtml(ceMonthName(m) + ' ' + m.slice(0,4) + ' · ' + fmtGuest(v))}"`
+             +  ` x="${x.toFixed(1)}" y="${(padT + plotH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="4" fill="#3a7d44"></rect>`;
+      }
+      // Every other label when the run is long, so they never collide.
+      if(span.length <= 12 || i % 2 === 0){
+        bars += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9.5" fill="#8a8178">${ceMonthName(m)}</text>`;
+      }
+    });
+    return `<div class="ce-chart"><svg viewBox="0 0 ${W} ${H}" role="img"
+      aria-label="Your share by month, highest ${fmtGuest(peak)}">${grid}${bars}</svg></div>`;
+  }
+
+  function renderCohostEarnings(){
+    const box = document.getElementById('ceView');
+    if(!box || !CE.data) return;
+    const esc = escapeMessageHtml;
+    const hostSel = document.getElementById('ceHost');
+    const listSel = document.getElementById('ceListing');
+    const hosts = (CE.data.cohosting || []);
+    if(hostSel && hostSel.dataset.built !== '1'){
+      hostSel.innerHTML = `<option value="all">All hosts</option>`
+        + hosts.map(h => `<option value="${Number(h.hostId)}">${esc(h.hostName)}</option>`).join('');
+      hostSel.dataset.built = '1';
+    }
+    if(listSel){
+      const ls = ceListings();
+      listSel.innerHTML = `<option value="all">All listings</option>`
+        + ls.map(l => `<option value="${Number(l.id)}" ${String(CE.listingId) === String(l.id) ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
+      // Only one host is shown and they share a single property: the
+      // listing filter would be a control with nothing to choose.
+      listSel.disabled = ls.length < 2;
+    }
+
+    const rows = ceRows();
+    const paid = rows.filter(r => r.status === 'paid');
+    const total = paid.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+    const scope = (CE.hostId === 'all' ? 'all hosts' : esc((hosts.find(h => String(h.hostId) === String(CE.hostId)) || {}).hostName || 'this host'))
+      + (CE.listingId === 'all' ? '' : ' · ' + esc((ceListings().find(l => String(l.id) === String(CE.listingId)) || {}).name || ''));
+
+    box.innerHTML = `
+      <div class="hp-rating"><span class="hp-rating-score">${fmtGuest(total)}</span><span class="hp-rating-count">from ${paid.length} paid booking${paid.length === 1 ? '' : 's'} · ${scope}</span></div>
+      ${ceChart(rows)}
+      ${rows.length ? rows.map(r => `
+        <div class="hp-review">
+          <div class="hp-review-head">
+            <span class="hp-review-prop">${esc(r.listingName)} · ${esc(r.hostName)}</span>
+            <span class="hp-review-meta">${r.status === 'paid' ? '' : esc(r.status) + ' · '}${r.percent}% · ${fmtGuest(Number(r.amount) || 0)}</span>
+          </div>
+        </div>`).join('')
+        : `<p class="hp-empty">${(CE.data.earnings && (CE.data.earnings.rows || []).length)
+            ? 'Nothing earned here yet.'
+            : 'Nothing yet — your share is worked out on each booking once your commission is approved.'}</p>`}
+    `;
+    ceBindTooltip(box);
+  }
+
+  // Hover on every bar, the same affordance the host's charts have.
+  function ceBindTooltip(box){
+    let tip = document.getElementById('ceTip');
+    if(!tip){
+      tip = document.createElement('div');
+      tip.id = 'ceTip'; tip.className = 'an-tooltip';
+      document.body.appendChild(tip);
+    }
+    const hide = () => { tip.style.opacity = '0'; };
+    box.querySelectorAll('.ce-bar').forEach(el => {
+      el.addEventListener('mouseenter', () => { tip.textContent = el.getAttribute('data-tip'); tip.style.opacity = '1'; });
+      el.addEventListener('mousemove', (e) => {
+        tip.style.left = (e.clientX + 12) + 'px';
+        tip.style.top = (e.clientY - 34) + 'px';
+      });
+      el.addEventListener('mouseleave', hide);
+    });
+    box.addEventListener('mouseleave', hide);
+  }
+
   function ratingBit(listing){
     const n = Number(listing.review_count) || 0;
     if(!n || listing.rating == null) return '<span class="suite-rating-new">· New</span>';
@@ -4308,15 +4457,21 @@
   }
   function hostProfileEscape(e){ if(e.key === 'Escape') closeHostProfile(); }
 
+  // The same treatment the listing's reviews get, so a review reads the
+  // same way wherever it appears: the stars are the quick read and the
+  // number the precise one, with the property and month as quiet context.
   function hostReviewItemHtml(r){
     const esc = escapeMessageHtml;
     return `
       <div class="hp-review">
         <div class="hp-review-head">
-          <span class="hp-review-prop">${esc(r.property || '')}</span>
-          <span class="hp-review-meta">${r.score ? '★ ' + Number(r.score).toFixed(1) : ''}${r.score && r.month ? ' · ' : ''}${esc(formatReviewMonth(r.month))}</span>
+          <span class="rv-who">
+            <span class="rv-item-name">${esc(r.property || '')}</span>
+            <span class="rv-item-meta">${esc(formatReviewMonth(r.month))}</span>
+          </span>
+          ${r.score ? `<span class="rv-item-score">${starsHtml(r.score, 13)}<b>${Number(r.score).toFixed(1)}</b></span>` : ''}
         </div>
-        ${r.comment ? `<p>${esc(r.comment)}</p>` : ''}
+        ${r.comment ? `<p class="rv-item-text">${esc(r.comment)}</p>` : ''}
       </div>`;
   }
 
@@ -4787,14 +4942,11 @@
         ${list.length ? `
           <div class="hp-section">
             <h3 class="hp-title">What you have earned</h3>
-            <div class="hp-rating"><span class="hp-rating-score">${fmtGuest(Number(earnings.total) || 0)}</span><span class="hp-rating-count">from paid bookings</span></div>
-            ${(earnings.rows || []).length ? (earnings.rows || []).map(r => `
-              <div class="hp-review">
-                <div class="hp-review-head">
-                  <span class="hp-review-prop">${esc(r.listingName)} \u00b7 ${esc(r.hostName)}</span>
-                  <span class="hp-review-meta">${r.status === 'paid' ? '' : esc(r.status) + ' \u00b7 '}${r.percent}% \u00b7 ${fmtGuest(Number(r.amount) || 0)}</span>
-                </div>
-              </div>`).join('') : '<p class="hp-empty">Nothing yet \u2014 your share is worked out on each booking once your commission is approved.</p>'}
+            <div class="ce-filters">
+              <select class="ce-select" id="ceHost" aria-label="Which host"></select>
+              <select class="ce-select" id="ceListing" aria-label="Which listing"></select>
+            </div>
+            <div id="ceView"></div>
           </div>` : ''}
         ${list.length ? `
           <div class="hp-section">
@@ -4926,6 +5078,23 @@
         history.replaceState(null, '', 'index.html?view=cohost');
         render(r.ok ? 'Invitation declined.' : (r.data.error || 'Could not decline the invitation.'));
       });
+      // The earnings section: its own two filters and a chart, all
+      // reading the rows already fetched — changing either never goes
+      // back to the server.
+      CE.data = (mine && mine.data) || null;
+      const ceHost = body.querySelector('#ceHost');
+      const ceList = body.querySelector('#ceListing');
+      if(ceHost) ceHost.addEventListener('change', () => {
+        CE.hostId = ceHost.value;
+        // A listing pinned under the old host would describe a pair that
+        // does not exist, so it goes back to "all" whenever the host
+        // changes and the chosen listing is not one of theirs.
+        if(CE.listingId !== 'all' && !ceListings().some(l => String(l.id) === String(CE.listingId))) CE.listingId = 'all';
+        renderCohostEarnings();
+      });
+      if(ceList) ceList.addEventListener('change', () => { CE.listingId = ceList.value; renderCohostEarnings(); });
+      renderCohostEarnings();
+
       body.querySelectorAll('[data-cohost-open]').forEach(b => b.addEventListener('click', () => {
         const h = list.find(x => Number(x.hostId) === Number(b.getAttribute('data-cohost-open')));
         if(!h) return;
@@ -8712,18 +8881,71 @@
     return isNaN(d) ? '' : d.toLocaleDateString('en-IN', REVIEW_MONTH_FMT);
   }
   // One plain line: "Hygiene 5.0 · Communication 5.0 · …"
+  // ---- Reviews ----
+  //
+  // What each of these used to be: the summary's factor scores were one
+  // run-on line of text ("Cleanliness 4.8 · Communication 4.9 · Value
+  // 4.6 · Location 4.7"), which is five numbers a reader has to compare
+  // in their head; and every individual review threw its OWN factor
+  // scores away entirely, printing only a name, a month and "4.8 out of
+  // 5". The endpoint has always sent both.
+
+  // A score as five stars, exact rather than rounded: a full row of
+  // outlines with a filled row clipped over it at score/5 of the width.
+  // The number always sits beside it — the stars are the quick read, the
+  // number is the precise one, and neither is the only source.
+  function starsHtml(score, size){
+    const pct = Math.max(0, Math.min(100, (Number(score) / 5) * 100));
+    return `<span class="rv-stars" style="${size ? `font-size:${size}px;` : ''}" role="img"
+      aria-label="${Number(score).toFixed(2)} out of 5"><span class="rv-stars-off">★★★★★</span
+      ><span class="rv-stars-on" style="width:${pct.toFixed(1)}%">★★★★★</span></span>`;
+  }
+
+  // The summary's factors, as labelled bars. One measure per row, so
+  // they can be compared by length instead of by reading five decimals.
+  // One series and a number on every row, so the bar's colour carries no
+  // meaning of its own and needs none.
   function reviewFactorsHtml(factors){
-    return (factors || []).map(f => `${escapeMessageHtml(f.label)} ${Number(f.value).toFixed(1)}`).join(' &middot; ');
+    const list = factors || [];
+    if(!list.length) return '';
+    // The three cells go straight into the grid, with no per-row wrapper:
+    // a wrapper makes each ROW one grid item, so the track gets no column
+    // width and every bar ends up sized by its own content instead of by
+    // its score. Flat cells also line the labels and numbers up down the
+    // whole block, which is the point of showing them as bars.
+    return `<div class="rv-bars">` + list.map(f => {
+      const v = Number(f.value);
+      return `<span class="rv-bar-label">${escapeMessageHtml(f.label)}</span>`
+           + `<span class="rv-bar-track"><span class="rv-bar-fill" style="width:${((v / 5) * 100).toFixed(1)}%"></span></span>`
+           + `<span class="rv-bar-value">${v.toFixed(1)}</span>`;
+    }).join('') + `</div>`;
+  }
+
+  // One review's own factor scores, which were previously discarded.
+  // Quiet chips rather than five more bars: at this size the bars would
+  // out-weigh the words the guest actually wrote.
+  function reviewChipsHtml(factors){
+    const list = factors || [];
+    if(!list.length) return '';
+    return `<div class="rv-chips">` + list.map(f =>
+      `<span class="rv-chip">${escapeMessageHtml(f.label)} <b>${Number(f.value).toFixed(0)}</b></span>`).join('') + `</div>`;
   }
   function reviewItemHtml(r, withName){
-    const meta = [reviewMonthLabel(r.month), r.score ? Number(r.score).toFixed(1) + ' out of 5' : ''].filter(Boolean).join(' · ');
+    const name = String(r.name || 'Guest');
+    const initial = name.trim().charAt(0).toUpperCase() || 'G';
+    const month = reviewMonthLabel(r.month);
     return `
       <div class="rv-item">
         <div class="rv-item-head">
-          ${withName ? `<span class="rv-item-name">${escapeMessageHtml(r.name || 'Guest')}</span>` : ''}
-          ${meta ? `<span class="rv-item-meta">${withName ? ' &middot; ' : ''}${escapeMessageHtml(meta)}</span>` : ''}
+          ${withName ? `<span class="rv-avatar" aria-hidden="true">${escapeMessageHtml(initial)}</span>` : ''}
+          <span class="rv-who">
+            ${withName ? `<span class="rv-item-name">${escapeMessageHtml(name)}</span>` : ''}
+            ${month ? `<span class="rv-item-meta">${escapeMessageHtml(month)}</span>` : ''}
+          </span>
+          ${r.score ? `<span class="rv-item-score">${starsHtml(r.score, 13)}<b>${Number(r.score).toFixed(1)}</b></span>` : ''}
         </div>
-        <p class="rv-item-text">${escapeMessageHtml(r.comment || '')}</p>
+        ${r.comment ? `<p class="rv-item-text">${escapeMessageHtml(r.comment)}</p>` : ''}
+        ${reviewChipsHtml(r.factors)}
       </div>`;
   }
   // How many reviews each press of View more brings in. Five on opening
@@ -8757,8 +8979,9 @@
       slot.innerHTML = `
         <div class="listing-modal-section-title">Reviews</div>
         <div class="rv-summary">
-          <span class="rv-summary-score">${Number(sm.score).toFixed(2)} out of 5</span>
-          <span class="rv-summary-count"> &middot; ${sm.count} review${sm.count === 1 ? '' : 's'}</span>
+          <span class="rv-summary-score">${Number(sm.score).toFixed(2)}</span>
+          ${starsHtml(sm.score, 17)}
+          <span class="rv-summary-count">${sm.count} review${sm.count === 1 ? '' : 's'}</span>
         </div>
         <div class="rv-factors">${reviewFactorsHtml(sm.factors)}</div>
         <div class="rv-list"></div>

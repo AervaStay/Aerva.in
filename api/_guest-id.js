@@ -77,4 +77,22 @@ async function idSummary(sql, guestId) {
   };
 }
 
-module.exports = { emailConfirmed, hasPhone, bookingRequirements, assertCanBook, idSummary };
+// Kept so that _confirm-booking.js, which does
+//     const { markIdDeadlineIfMissing } = require('./_guest-id');
+// and calls it at the very end of confirmBooking, keeps working.
+//
+// This file used to drive an identity-document flow: a guest who paid
+// without a valid ID on their account was given a short deadline to add
+// one. That whole feature is gone — the host checks a government photo
+// ID at check-in, which is their duty under the law — so there is no
+// deadline to set and this does nothing.
+//
+// It is NOT removed, and must not be. Deleting the export does not fail
+// at import: destructuring a missing name just yields undefined, and the
+// call then throws "markIdDeadlineIfMissing is not a function" at the
+// end of confirmBooking — AFTER the booking has been written and the
+// guest charged. The booking would be saved and the guest told their
+// payment failed. Anything calling into this module must keep resolving.
+async function markIdDeadlineIfMissing() { /* no identity document is asked for any more */ }
+
+module.exports = { emailConfirmed, hasPhone, bookingRequirements, assertCanBook, idSummary, markIdDeadlineIfMissing };

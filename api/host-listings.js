@@ -469,20 +469,30 @@ async function handleCohostModes(req, res, accountId) {
       // newest first (the last 50), and the total.
       let earnings = { total: 0, rows: [] };
       try {
+        // listingId / hostId / month come back too, so the page can
+        // total and chart these by host and by listing without asking
+        // again. month is the BOOKING month (created_at), the same
+        // clock the host's own analytics uses — bucketing a co-host's
+        // share by arrival would put it in a month it was not earned in.
         const er = await sql`
-          SELECT s.amount, s.percent, o.arrival, o.departure, o.status, l.property_name, h.name AS host_name
+          SELECT s.amount, s.percent, o.arrival, o.departure, o.status,
+                 to_char(date_trunc('month', o.created_at), 'YYYY-MM') AS month,
+                 l.id AS listing_id, l.property_name,
+                 h.id AS host_id, h.name AS host_name
           FROM order_cohost_shares s
           JOIN orders o ON o.id = s.order_id
           JOIN listings l ON l.id = o.listing_id
           JOIN hosts h ON h.id = l.host_id
           WHERE s.cohost_guest_id = ${me.id}
-          ORDER BY o.arrival DESC NULLS LAST LIMIT 50
+          ORDER BY o.created_at DESC NULLS LAST LIMIT 400
         `;
         const tot = await sql`SELECT COALESCE(SUM(s.amount), 0)::int AS t FROM order_cohost_shares s JOIN orders o ON o.id = s.order_id WHERE s.cohost_guest_id = ${me.id} AND o.status = 'paid'`;
         earnings = {
           total: Number(tot[0] && tot[0].t) || 0,
           rows: er.map(r => ({ amount: Number(r.amount), percent: Number(r.percent), arrival: r.arrival, departure: r.departure,
-                               status: r.status, listingName: r.property_name, hostName: r.host_name }))
+                               status: r.status, month: r.month,
+                               listingId: r.listing_id, listingName: r.property_name,
+                               hostId: r.host_id, hostName: r.host_name }))
         };
       } catch (err) { console.error('co-host earnings failed:', err.message); }
       // My details (for the "Finish your details" section) and, per host,
