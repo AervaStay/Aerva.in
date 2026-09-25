@@ -4147,6 +4147,11 @@
     const priceLine = exp.price
       ? `<span class="suite-price-amount">${fmtGuest(Number(exp.price))}</span> <span class="suite-price-unit">${exp.experience_price_unit === 'per_person' ? 'per person' : 'per group'}</span>`
       : '<span class="suite-price-unit">Price on request</span>';
+    const durationText = exp.experience_duration_days > 1
+      ? exp.experience_duration_days + ' days'
+      : (exp.experience_duration_hours
+          ? exp.experience_duration_hours + (Number(exp.experience_duration_hours) === 1 ? ' hour' : ' hours')
+          : '');
     const hostedAtLine = exp.hosting_property_name
       ? `Hosted at ${exp.hosting_property_name}${exp.hosting_area ? ', ' + exp.hosting_area + ', ' + exp.hosting_city : exp.hosting_city ? ', ' + exp.hosting_city : ''}`
       // Without-stay experiences have no hosting property to borrow a
@@ -4177,21 +4182,9 @@
         ${likeButtonHtml(exp)}
       </div>
       <div class="suite-body">
-        <h3>${exp.property_name}</h3>
-        ${hostedAtLine ? `<div class="loc">${hostedAtLine}</div>` : ''}
-        ${ratingHtml(exp)}
-        ${(exp.experience_duration_days > 1 || exp.experience_duration_hours)
-          ? `<div class="suite-meta"><span>${exp.experience_duration_days > 1 ? exp.experience_duration_days + ' days' : exp.experience_duration_hours + (Number(exp.experience_duration_hours) === 1 ? ' hour' : ' hours')}</span></div>` : ''}
-        <div class="suite-foot">
-          <!-- Empty, but present: experience cards share a row with stay
-               cards, and the band only lines up across that row if every
-               card reserves the offer line. -->
-          <span class="suite-offer">${formatOfferShort(exp)}</span>
-          <div class="suite-foot-row">
-            <div class="suite-price"><span class="suite-price-line">${priceLine}</span></div>
-            <span class="suite-cta" aria-hidden="true">View details</span>
-          </div>
-        </div>
+        <h3>${escapeMessageHtml(exp.property_name)}</h3>
+        ${hostedAtLine ? `<div class="loc">${escapeMessageHtml(hostedAtLine)}${durationText ? ` &middot; ${escapeMessageHtml(durationText)}` : ''}</div>` : ''}
+        <div class="suite-line">${priceLine}${ratingBit(exp)}</div>
       </div>
     `;
     wireLikeButton(card);
@@ -4236,6 +4229,15 @@
   // "New to Aerva" rather than a zero or an empty star row — no reviews is
   // not a bad score, and rendering it as one would punish every new
   // listing on the page.
+  // The card's rating: a star and a number, sitting on the same line as
+  // the price. The fuller block below (ratingHtml) still runs on the
+  // listing page, where there is room for the review count.
+  function ratingBit(listing){
+    const n = Number(listing.review_count) || 0;
+    if(!n || listing.rating == null) return '<span class="suite-rating-new">· New</span>';
+    return `<span class="suite-rating">· <span class="suite-star">★</span>${Number(listing.rating).toFixed(2)}</span>`;
+  }
+
   function ratingHtml(listing){
     const n = Number(listing.review_count) || 0;
     if(!n || listing.rating == null) return '<div class="suite-rating-new">New to Aerva</div>';
@@ -5047,11 +5049,9 @@
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
     const promoOfferLine = formatPromotionOffer(listing);
-    // The card gets the SHORT offer; the listing page keeps the long one.
-    // The card version has to survive at a quarter of the row's width,
-    // and the percentage is already on the badge over the photo, so
-    // repeating it here only cost the room the saving needed.
-    const cardOffer = formatOfferShort(listing);
+    // The saving is shown by the badge over the photo and nowhere else
+    // on the card now — a second line repeating it was exactly the kind
+    // of detail that made these look busy.
     const priceLine = listing.nightly_rate
       ? `From <strong>${fmtGuest(Number(listing.nightly_rate))}</strong>/night`
       : 'Price on request';
@@ -5098,18 +5098,10 @@
     // to gauge what's included at a glance, without listing all of them
     // (which could be two dozen) and crowding the card.
     const amenitiesList = Array.isArray(listing.amenities) ? listing.amenities : [];
-    const AMENITIES_PREVIEW_COUNT = 3; // three reads at a glance; the rest are on the listing
-    // The tags and the "+N more" are kept apart so the pet policy below
-    // can be slotted between them — "+N more" has to stay last, or it
-    // reads as though it is counting the pets.
-    let amenityTagsHtml = '', amenityMoreHtml = '';
-    if(amenitiesList.length > 0){
-      const shown = amenitiesList.slice(0, AMENITIES_PREVIEW_COUNT);
-      const remaining = amenitiesList.length - shown.length;
-      amenityTagsHtml = shown.map(a => `<span class="amenity-tag">${a}</span>`).join('');
-      amenityMoreHtml = remaining > 0 ? `<span class="amenity-tag amenity-tag-more">+${remaining} more</span>` : '';
-    }
-
+    // Amenities are NOT on the card any more. Three pills plus a
+    // "+N more", a pet pill, a map link and a price band was more than a
+    // browsing eye reads — the full list is one tap away on the listing
+    // page, which is where someone comparing amenities actually is.
     // The host's explicit cover choice leads if one was set; otherwise
     // interior photos lead by default. Either way, the rest follow with
     // no duplicates.
@@ -5147,46 +5139,22 @@
       const km = haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(listing.latitude), Number(listing.longitude));
       distanceHtml = `<span>${km < 1 ? 'Less than 1 km' : Math.round(km) + ' km'} from you</span>`;
     }
-    const mapLinkHtml = (listing.latitude && listing.longitude)
-      ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="suite-map-link">View on map</a>`
-      : '';
-
-    // Pet policy — only shown when the host has actually set one via the
-    // dedicated Pet Policy section, never inferred from amenities.
-    //
-    // It rides in the SAME pill row as the amenities, ahead of the
-    // "+N more" tag, rather than on a line of its own underneath. On its
-    // own row it was the last thing on the card and read as an
-    // afterthought, when for anyone travelling with a dog it is the first
-    // thing they are looking for.
-    // Worded tight enough to stay on one line beside the amenities at a
-    // quarter of the row's width. Three or more species named in full
-    // ("Dog & Cat & Bird welcome · ₹1,200/pet") wrapped the pill onto a
-    // second line, which is what put it on a row of its own in the first
-    // place. The full policy is on the listing page.
-    let petTagHtml = '';
-    if(listing.pet_friendly === true){
-      const types = Array.isArray(listing.allowed_pet_types) ? listing.allowed_pet_types.filter(Boolean) : [];
-      const petTypes = (types.length && types.length <= 2) ? types.join(' & ') : 'Pets';
-      const petFeeNote = listing.pet_fee && Number(listing.pet_fee) > 0
-        ? ` · ₹${Number(listing.pet_fee).toLocaleString('en-IN')}/pet`
-        : ' · no fee';
-      petTagHtml = `<span class="amenity-tag amenity-tag-pet">🐾 ${petTypes}${petFeeNote}</span>`;
-    }
-    // Built here rather than above so the pet tag can sit inside it. A
-    // listing with a pet policy but no amenities still gets the row.
-    const pillRowHtml = (amenityTagsHtml || petTagHtml)
-      ? `<div class="amenity-tags">${amenityTagsHtml}${petTagHtml}${amenityMoreHtml}</div>`
-      : '';
-
     // Capacity/room availability reads as quiet metadata next to the
     // location, not as a fourth badge stacked down the photo. Four
     // stacked overlays covered most of the image and made the one badge
     // that genuinely matters — an active discount — compete with three
     // pieces of plain information.
     const capacityText = (listing.property_type === 'Resort' && listing.resort_room_count)
-      ? `${listing.resort_available_room_count || 0} of ${listing.resort_room_count} rooms · sleeps ${listing.resort_available_capacity || listing.resort_total_capacity || 0}`
-      : (Number(listing.max_guests) > 0 ? `Sleeps up to ${Number(listing.max_guests)}` : '');
+      ? `${listing.resort_available_room_count || 0} rooms · sleeps ${listing.resort_available_capacity || listing.resort_total_capacity || 0}`
+      : (() => {
+          // max_guests is a TEXT column and older listings hold "3–4" or
+          // "9+". Number() gives NaN for those, so the capacity simply
+          // vanished from the card — the same trap that had capacity
+          // unenforced at checkout (_pricing.js parseMaxGuests).
+          const nums = String(listing.max_guests || '').match(/\d+/g);
+          const n = nums ? Math.max(...nums.map(Number)) : 0;
+          return n > 0 ? `Sleeps ${n}` : '';
+        })();
 
     card.className = 'suite-card';
     card.style.transitionDelay = ((index || 0) % 8) * 60 + 'ms';
@@ -5207,27 +5175,16 @@
         ${likeButtonHtml(listing)}
       </div>
       <div class="suite-body">
-        <h3>${listing.property_name}</h3>
-        <div class="loc">${[formatCityArea(listing), listing.property_type].filter(Boolean).join(', ')}</div>
-        ${ratingHtml(listing)}
-        <div class="suite-meta">
-          ${capacityText ? `<span>${capacityText}</span>` : ''}
-          ${distanceHtml}
-          ${mapLinkHtml}
+        <h3>${escapeMessageHtml(listing.property_name)}</h3>
+        <div class="loc">${escapeMessageHtml([formatCityArea(listing), listing.property_type].filter(Boolean).join(', '))}${
+          capacityText ? ` &middot; ${escapeMessageHtml(capacityText)}` : ''}</div>
+        <div class="suite-line">
+          ${listing.nightly_rate
+            ? `<span class="suite-price-amount">${fmtGuest(Number(listing.nightly_rate))}</span><span class="suite-price-unit"> per night</span>`
+            : '<span class="suite-price-unit">Price on request</span>'}
+          ${ratingBit(listing)}
         </div>
-        ${pillRowHtml}
-        <div class="suite-foot">
-          <span class="suite-offer">${cardOffer}</span>
-          <div class="suite-foot-row">
-            <div class="suite-price">
-              ${listing.nightly_rate
-                ? `<span class="suite-price-from">From</span>
-                   <span class="suite-price-line"><span class="suite-price-amount">${fmtGuest(Number(listing.nightly_rate))}</span> <span class="suite-price-unit">per night</span></span>`
-                : '<span class="suite-price-line"><span class="suite-price-unit">Price on request</span></span>'}
-            </div>
-            <span class="suite-cta" aria-hidden="true">View details</span>
-          </div>
-        </div>
+        ${distanceHtml ? `<div class="suite-near">${distanceHtml}</div>` : ''}
       </div>
     `;
     const favBtn = card.querySelector('.fav-heart');

@@ -837,7 +837,6 @@
   .amenity-tag-more{color:var(--gold-deep); opacity:1; background:transparent; border-color:var(--line-dark);}
   /* Pushed to the bottom of the card so the price line sits on a
      consistent baseline across a row of cards of differing heights. */
-  .suite-foot{margin-top:auto; padding-top:14px;}
   .suite-card .price{font-size:15px; margin-top:0; color:var(--ink); opacity:1; line-height:1.3;}
   .suite-card .price strong{font-weight:600; font-size:18px;}
   .suite-card .offer{font-size:11.5px; letter-spacing:0.03em; color:var(--gold-deep); margin-top:4px; font-style:italic; font-family:'Bodoni Moda', serif;}
@@ -2447,14 +2446,15 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
    Narrower screens fall back through the existing breakpoints: two
    columns on a tablet, one on a phone. */
 .suite-grid{ grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:28px 22px; }
-.suite-card{
-  border:1px solid #ddd3c6; border-radius:12px;
-  box-shadow:0 1px 2px rgba(28,27,25,0.06), 0 10px 26px rgba(28,27,25,0.09);
-}
-.suite-card:hover{ transform:translateY(-3px); border-color:#c9b48e; box-shadow:0 2px 4px rgba(28,27,25,0.07), 0 16px 34px rgba(28,27,25,0.13); }
-.suite-card:focus-within{ border-color:var(--gold); }
+/* No frame and no shadow: the photo is the card. A bordered, shadowed
+   box around every listing is a lot of furniture for a grid of four, and
+   it competed with the photographs it was meant to present. */
+.suite-card{ border:none; border-radius:0; box-shadow:none; background:none; }
+.suite-card:hover{ transform:none; box-shadow:none; }
+.suite-card:focus-within{ outline:2px solid var(--gold); outline-offset:4px; border-radius:14px; }
 /* Full-strength photos: a short, light dark fade only behind the badges. */
-.suite-photo{ aspect-ratio:4/3; background:#e9e2d8; }
+.suite-photo{ aspect-ratio:1/1; background:#e9e2d8; border-radius:14px; overflow:hidden; }
+.suite-card:hover .suite-photo{ box-shadow:0 6px 20px rgba(28,27,25,0.16); }
 .suite-photo::before{
   height:72px;
   background:linear-gradient(180deg, rgba(20,18,15,0.34) 0%, rgba(20,18,15,0.14) 55%, rgba(20,18,15,0) 100%);
@@ -2474,9 +2474,20 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
 .suite-card h3{
   font-family:'Bodoni Moda', Georgia, serif; font-size:18.5px; font-weight:500; line-height:1.25; color:var(--ink);
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  /* Two lines are always reserved, whether or not the name needs them,
+     so the price sits at the same height on every card in a row. A name
+     is the one thing here worth wrapping rather than truncating, and
+     without the reservation a single long name knocked its whole row out
+     of line. */
+  min-height:2.5em;
 }
 .suite-card .loc{
   font-size:13.5px; letter-spacing:0; text-transform:none; color:var(--ink-2); opacity:1; margin-top:5px;
+  /* One line, truncated if need be. A resort's "Madikeri, Coorg, Resort
+     · 4 rooms · sleeps 15" wrapped onto a second line and pushed its
+     price below every other price in the row. Unlike the name, this is
+     detail rather than identity, so it can be cut. */
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 .suite-rating{ font-size:13.5px; margin-top:7px; color:var(--ink); }
 .suite-star{ color:var(--gold); font-size:14px; }
@@ -2499,48 +2510,25 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
    amenity. */
 .amenity-tag-pet{ background:#f3f5ef; color:#3f6b46; border-color:#dde6dc; }
 
-/* The price band: its own quiet panel, so price and the next step are
-   never lost among the details above. */
-/* margin-top:auto keeps the band on the bottom edge of every card, so
-   prices line up across a row whatever the details above them. The item
-   just before it keeps a fixed gap. */
-.suite-body > :nth-last-child(2){ margin-bottom:16px; }
-/* Every band is the same height on every card, discounted or not. The
-   offer is its own full-width line ABOVE the price row and is always
-   present — empty when there is no offer, but still holding its line.
-   Previously the offer was tucked inside the price column, which made
-   the band on a discounted card taller than its neighbours and left the
-   prices in a row sitting at different heights; at a quarter-width card
-   it also had nowhere near the room to sit on one line. */
-.suite-foot{
-  display:flex; flex-direction:column; gap:4px;
-  margin:auto -16px 0; padding:11px 16px 13px;
-  background:var(--surface-2); border-top:1px solid var(--hairline);
+/* One line under the photo carries the price and the rating together,
+   the way a listing reads when you are scanning a row of them. The card
+   used to end in a full-width price band with its own CTA button, above
+   a row of amenity pills and a pet pill — four separate things competing
+   under every photo. The amenities live on the listing page now, the
+   whole card has always been clickable so the button said nothing the
+   card did not, and with the band gone there is no band to keep level
+   across a row. */
+.suite-body{ padding:14px 4px 4px; }
+.suite-line{
+  display:flex; align-items:baseline; flex-wrap:wrap; gap:4px;
+  margin-top:5px; font-size:14px; color:var(--ink);
 }
-.suite-foot-row{ display:flex; align-items:flex-end; justify-content:space-between; gap:10px; }
-.suite-price{ display:flex; flex-direction:column; gap:0; min-width:0; }
-.suite-price-from{ font-size:12px; color:var(--ink-3); line-height:1.3; }
-.suite-price-line{ line-height:1.25; }
-.suite-price-amount{ font-size:19px; font-weight:600; color:var(--ink); letter-spacing:-0.01em; }
-/* "per night" takes its own line rather than sitting after the amount.
-   Beside it, a long price (₹1,50,000) wrapped where a short one did not,
-   so the band grew on exactly the expensive listings — the same uneven
-   row the reserved offer line above is there to prevent. On its own line
-   the block is the same three lines at every price. */
-.suite-price-unit{ display:block; font-size:13px; color:var(--ink-2); line-height:1.3; }
-/* min-height, not height: the reserved line for a card with no offer.
-   Clamped to one line so a long offer can never reintroduce the uneven
-   band this exists to prevent. */
-.suite-offer{
-  display:block; font-size:12.5px; line-height:1.3; min-height:1.3em; color:var(--ok);
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-}
-.suite-cta{
-  flex:none; font-size:13px; font-weight:500; color:var(--ink);
-  border:1px solid var(--ink); border-radius:8px; padding:7px 12px; white-space:nowrap;
-  transition:background .2s ease, color .2s ease;
-}
-.suite-card:hover .suite-cta{ background:var(--ink); color:#fff; }
+.suite-price-amount{ font-size:15px; font-weight:600; color:var(--ink); letter-spacing:-0.01em; }
+.suite-price-unit{ font-size:14px; color:var(--ink-2); font-weight:400; }
+.suite-near{ font-size:13px; color:var(--ink-3); margin-top:3px; }
+.suite-line .suite-rating{ font-size:14px; color:var(--ink); margin:0; display:inline; }
+.suite-line .suite-star{ font-size:13px; }
+.suite-line .suite-rating-new{ font-size:14px; color:var(--ink-3); margin:0; display:inline; }
 .suite-card--unavailable{ opacity:1; filter:none; }
 .suite-card--unavailable .suite-photo img{ filter:grayscale(35%) brightness(0.92); }
 .suite-card--unavailable .suite-check-availability{ font-size:13px; padding:9px 12px; border-radius:8px; letter-spacing:0; }
@@ -2595,7 +2583,6 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
   .suite-card h3{ font-size:20px; }
   .suite-price-amount{ font-size:20px; }
   .book-step-text{ font-size:17px; }
-  .suite-cta{ padding:8px 12px; }
 }
 @media (prefers-reduced-motion: reduce){
   .suite-card:hover{ transform:none; }
