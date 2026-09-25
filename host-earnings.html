@@ -100,15 +100,104 @@
     .an-select{flex:1 1 140px; max-width:none;}
     .an-tooltip{display:none;}
   }
-  .booking-row{background:white; border:1px solid #e0d5c0; padding:16px 20px; margin-bottom:10px;}
-  .booking-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
-  .booking-top h4{margin:0; font-size:14.5px; font-family:Georgia,serif;}
-  .booking-dates{font-size:12.5px; opacity:0.65;}
-  .booking-figures{display:flex; gap:24px; flex-wrap:wrap; font-size:12.5px; margin-top:8px;}
-  .booking-figures .figure-label{opacity:0.55; text-transform:uppercase; letter-spacing:0.05em; font-size:10px; display:block; margin-bottom:2px;}
-  .booking-figures .figure-value{font-size:14px;}
+  /* ---- Earnings table ----
+     Was one card per booking, which made the figures impossible to
+     compare: the same four numbers sat in a different place on screen in
+     every card, and there was no total anywhere. A table lines the money
+     up in columns and can foot itself. Everything that needs room to
+     breathe — the deposit, the cancellation form, the pets — moves into
+     a details row that opens under the booking it belongs to. */
+  .earn-scope{
+    display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;
+  }
+  .earn-scope .an-toggle{margin-bottom:0;}
+  .earn-scope-note{font-size:12px; opacity:0.6;}
+  .earn-scope-note b{font-weight:500; opacity:1;}
+  .earn-from-chart{
+    font-size:11.5px; padding:4px 10px; border-radius:3px;
+    background:#f5ecd7; color:#8a6c39; letter-spacing:0.03em;
+  }
+  .earn-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch;}
+  .earn-table{
+    width:100%; border-collapse:collapse; background:white;
+    border:1px solid #e0d5c0; font-size:13px; min-width:760px;
+  }
+  .earn-table th{
+    text-align:left; font-weight:400; font-size:10px; letter-spacing:0.06em;
+    text-transform:uppercase; opacity:0.55; padding:10px 12px;
+    border-bottom:1px solid #e0d5c0; white-space:nowrap;
+  }
+  .earn-table td{padding:11px 12px; border-bottom:1px solid #f0e6d6; vertical-align:top;}
+  .earn-table tbody tr:hover{background:#fdfaf5;}
+  .earn-table .num{text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;}
+  .earn-prop{font-family:Georgia,serif; font-size:14px; display:block;}
+  .earn-guest{font-size:11.5px; opacity:0.6;}
+  .earn-when{white-space:nowrap;}
+  .earn-when small{display:block; font-size:11px; opacity:0.55;}
   .payout-value{color:#3a7d44; font-weight:600;}
+  .earn-more{
+    background:none; border:1px solid #e0d5c0; color:#8a6c39; cursor:pointer;
+    font-family:inherit; font-size:11px; padding:3px 9px; white-space:nowrap;
+  }
+  .earn-more[aria-expanded="true"]{background:#1c1a17; color:#f4ebe3; border-color:#1c1a17;}
+  .earn-flag{font-size:11px; color:#8a6c39; display:block; margin-top:3px;}
+  .earn-detail > td{background:#fdfaf5; padding:4px 12px 16px;}
+  .earn-table tfoot td{
+    border-top:1px solid #e0d5c0; border-bottom:none; padding:12px;
+    font-size:13px; background:#fdfaf5;
+  }
+  .earn-table tfoot .foot-label{font-size:11px; letter-spacing:0.05em; text-transform:uppercase; opacity:0.6;}
+  /* A table cannot stay a table at phone width. Each row becomes its own
+     block, with the column heading carried down as a label. */
+  @media (max-width:760px){
+    .earn-table{min-width:0; border:none; background:none;}
+    .earn-table thead{position:absolute; left:-9999px;}
+    .earn-table tr{
+      display:block; background:white; border:1px solid #e0d5c0;
+      margin-bottom:10px; padding:12px 14px;
+    }
+    .earn-table td{display:block; border:none; padding:3px 0;}
+    .earn-table td.num{text-align:left;}
+    .earn-table td[data-label]::before{
+      content:attr(data-label) '  ';
+      font-size:10px; letter-spacing:0.05em; text-transform:uppercase; opacity:0.55;
+      display:inline-block; min-width:118px;
+    }
+    .earn-table td[data-label=""]::before{content:none;}
+    /* The details belong to the booking above them, so they stay inside
+       the same card rather than opening a second floating box. */
+    .earn-table tr.earn-detail{
+      border:1px solid #e0d5c0; border-top:none; margin-top:-10px; padding:0 14px 12px;
+    }
+    .earn-detail > td{background:none; padding:0;}
+    .earn-table tfoot tr{background:#fdfaf5;}
+    .earn-table td.is-blank{display:none;}
+  }
+  /* Moved with this section out of host-dashboard.html, where these rules
+     stayed behind — without them every dispute and cancellation form on
+     this page sat permanently open, and the button that should reveal one
+     appeared to do nothing on the first click. */
+  .dispute-btn{
+    background:none; border:1px solid #a3402f; color:#a3402f; padding:6px 14px;
+    font-size:13px; cursor:pointer; margin-top:8px; font-family:inherit;
+  }
+  .dispute-form{margin-top:10px; display:none;}
+  .dispute-form textarea{
+    width:100%; box-sizing:border-box; border:1px solid #ddd0bc; padding:8px 10px;
+    font-family:'Jost', sans-serif; font-size:14px; resize:vertical; margin-bottom:8px;
+  }
+  .dispute-note{font-size:13.5px; opacity:0.65; margin-top:6px;}
+  .dispute-reason-shown{font-size:14px; opacity:0.75; margin-top:6px; font-style:italic;}
+  .btn-small{
+    background:#1c1a17; color:#f4ebe3; border:none; padding:9px 18px; font-size:13px;
+    letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; font-family:inherit;
+  }
+  .btn-small:disabled{opacity:0.5; cursor:default;}
+  .verify-error{font-size:13.5px; color:#a3402f; margin-top:6px; display:none;}
   .deposit-row{margin-top:12px; padding-top:12px; border-top:1px solid #f0e6d6;}
+  /* Still used by the deposit block inside a details row. */
+  .figure-label{opacity:0.55; text-transform:uppercase; letter-spacing:0.05em; font-size:10px; display:block; margin-bottom:2px;}
+  .figure-value{font-size:14px;}
   .deposit-status-badge{font-size:10.5px; padding:3px 9px; border-radius:3px; text-transform:uppercase; letter-spacing:0.04em; margin-left:8px;}
   .deposit-status-held{background:#f5ecd7; color:#8a6c39;}
   .deposit-status-disputed{background:#f5e0da; color:#a3402f;}
@@ -219,21 +308,100 @@
       if(!res.ok) throw new Error('failed');
       const data = await res.json();
       renderComplianceNotices(data.complianceNotices || []);
-      renderBookings(Array.isArray(data.bookings) ? data.bookings : []);
+      allBookings = Array.isArray(data.bookings) ? data.bookings : [];
+      renderBookings();
     }catch(err){
       console.error('earnings load failed:', err);
       container.innerHTML = '<p class="empty">Could not load your bookings. Please refresh.</p>';
     }
   }
 
-  function renderBookings(bookings){
+  // ---- What the earnings table is showing ----
+  //
+  // Every booking the server sent, kept here so changing the period or
+  // clicking a month on a chart re-renders instantly and never refetches.
+  let allBookings = [];
+  // The default is ONE MONTH. A host opening this page wants to know what
+  // came in recently, not to scroll two years of history — and the money
+  // that matters is the money that just landed.
+  let earnScope = { kind:'period', months:1 };
+  const EARN_PERIODS = [[1,'1 month'],[3,'3 months'],[6,'6 months'],[12,'1 year'],[0,'All time']];
+  const openDetails = new Set();       // which bookings are expanded
+
+  // Bucketed by when the booking was PAID (created_at), which is the same
+  // clock the charts above use — so a month on a chart and a month in
+  // this table always mean the same thing. Bucketing by arrival here
+  // would put a row in a month its money never arrived in.
+  const earnMonthKey = (b) => String(b.created_at || '').slice(0, 7);
+
+  // The analytics filters sit above this table and describe the same
+  // bookings, so they apply here too: filter the chart to one listing and
+  // the earnings below follow. Listing type isn't on a booking row, so it
+  // comes from the listing list the analytics fetch already returned.
+  function earnListingType(listingId){
+    const l = (anData && anData.listings || []).find(x => String(x.id) === String(listingId));
+    return l ? l.type : 'stay';
+  }
+
+  function earnScopeLabel(){
+    if(earnScope.kind === 'month'){
+      return anMonthLabel(earnScope.month) + ' ' + earnScope.month.slice(0, 4);
+    }
+    if(earnScope.kind === 'year') return String(earnScope.year);
+    if(!earnScope.months) return 'all time';
+    return 'the last ' + (earnScope.months === 1 ? 'month' : earnScope.months + ' months');
+  }
+
+  function earnInScope(b){
+    const key = earnMonthKey(b);
+    if(earnScope.kind === 'month') return key === earnScope.month;
+    if(earnScope.kind === 'year')  return key.slice(0, 4) === String(earnScope.year);
+    if(!earnScope.months) return true;
+    // Rolling from today, not from the 1st — "1 month" on the 3rd of the
+    // month should not mean three days.
+    const from = new Date();
+    from.setMonth(from.getMonth() - earnScope.months);
+    return new Date(b.created_at) >= from;
+  }
+
+  function earnFiltered(){
+    return allBookings.filter(b => {
+      if(!earnInScope(b)) return false;
+      if(anType !== 'all' && earnListingType(b.listing_id) !== anType) return false;
+      if(anListingId !== 'all' && String(b.listing_id) !== String(anListingId)) return false;
+      if(anStatus !== 'all' && b.status !== anStatus) return false;
+      return true;
+    });
+  }
+
+  function renderBookings(){
     const container = document.getElementById('bookingsContainer');
-    if(!bookings.length){
+    const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
+
+    const periodBar = `<div class="earn-scope">
+      <div class="an-toggle">
+        ${EARN_PERIODS.map(([m, l]) =>
+          `<button type="button" data-earn-months="${m}" class="${earnScope.kind==='period' && earnScope.months===m ? 'on' : ''}">${l}</button>`).join('')}
+      </div>
+      ${earnScope.kind !== 'period'
+        ? `<span class="earn-from-chart">From the chart · ${anEsc(earnScopeLabel())}</span>`
+        : ''}
+    </div>`;
+
+    if(!allBookings.length){
       container.innerHTML = '<p class="empty">No bookings yet.</p>';
       return;
     }
-    const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
-    container.innerHTML = bookings.map(b => {
+    const bookings = earnFiltered();
+    if(!bookings.length){
+      const wider = earnScope.kind === 'period' && earnScope.months
+        ? ' Try a longer period above.' : '';
+      container.innerHTML = periodBar
+        + `<p class="empty">Nothing booked in ${anEsc(earnScopeLabel())}.${wider}</p>`;
+      return;
+    }
+
+    const rows = bookings.map(b => {
       const guestPaidForStay = Number(b.subtotal) + Number(b.gst);
       const dateRange = new Date(b.arrival).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) +
         ' – ' + new Date(b.departure).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -335,28 +503,96 @@
         ? `<div class="booking-dates" style="opacity:0.75;">🐾 ${animalBits.join(' · ')}</div>`
         : '';
 
+      // Everything that needs room — the deposit, the cancellation form,
+      // the animals coming — lives in a row that opens underneath. The
+      // markup is exactly what the cards used, so every button and form
+      // on it still works the way it always did.
+      const detailHtml = depositHtml + cancellationHtml + swapHtml + petTypesHtml;
+      const isOpen = openDetails.has(b.id);
+      // One quiet line so a host does not have to open every row to find
+      // the one that needs them.
+      const flag = b.deposit_status === 'disputed' ? 'Deposit under review'
+        : b.deposit_status === 'held' ? 'Deposit held'
+        : (Array.isArray(b.pet_types) && b.pet_types.length) ? '🐾 Bringing pets'
+        : '';
+      const myPayout = Number(b.payout_amount) - Number(b.cohost_share || 0);
+
       return `
-        <div class="booking-row">
-          <div class="booking-top">
-            <h4>${b.suite_name}</h4>
-            ${statusBadgeHtml(b.status)}
-          </div>
-          <div class="booking-dates">${dateRange} · ${b.nights} night${b.nights === 1 ? '' : 's'}${b.guests ? ' · ' + b.guests + ' guest' + (b.guests === 1 ? '' : 's') : ''}</div>
-          ${petTypesHtml}
-          <div class="booking-figures">
-            <div><span class="figure-label">Guest Paid (Stay)</span><span class="figure-value">${fmt(guestPaidForStay)}</span></div>
-            <div><span class="figure-label">Commission (${b.commission_rate}%)</span><span class="figure-value">− ${fmt(b.commission_amount)}</span></div>
-            ${Number(b.cohost_share) > 0
-              ? `<div><span class="figure-label">Co-host share</span><span class="figure-value">− ${fmt(b.cohost_share)}</span></div>
-                 <div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(Number(b.payout_amount) - Number(b.cohost_share))}</span></div>`
-              : `<div><span class="figure-label">Your Payout</span><span class="figure-value payout-value">${fmt(b.payout_amount)}</span></div>`}
-          </div>
-          ${depositHtml}
-          ${cancellationHtml}
-          ${swapHtml}
-        </div>
+        <tr>
+          <td data-label="">
+            <span class="earn-prop">${escA(b.suite_name)}</span>
+            ${b.guest_name ? `<span class="earn-guest">${escA(b.guest_name)}</span>` : ''}
+            ${flag ? `<span class="earn-flag">${flag}</span>` : ''}
+          </td>
+          <td data-label="Stay" class="earn-when">${dateRange}
+            <small>${b.nights} night${b.nights === 1 ? '' : 's'}${b.guests ? ' · ' + b.guests + ' guest' + (b.guests === 1 ? '' : 's') : ''}</small></td>
+          <td data-label="Guest paid" class="num">${fmt(guestPaidForStay)}</td>
+          <td data-label="Commission" class="num">− ${fmt(b.commission_amount)}<small style="display:block; opacity:0.5;">${b.commission_rate}%</small></td>
+          <td data-label="Co-host" class="num">${Number(b.cohost_share) > 0 ? '− ' + fmt(b.cohost_share) : '—'}</td>
+          <td data-label="Your payout" class="num payout-value">${fmt(myPayout)}</td>
+          <td data-label="Status">${statusBadgeHtml(b.status)}</td>
+          <td data-label="" class="${detailHtml.trim() ? '' : 'is-blank'}">${detailHtml.trim()
+            ? `<button type="button" class="earn-more" data-earn-toggle="${b.id}" aria-expanded="${isOpen}">${isOpen ? 'Hide' : 'Details'}</button>`
+            : ''}</td>
+        </tr>
+        ${detailHtml.trim() && isOpen
+          ? `<tr class="earn-detail"><td colspan="8">${detailHtml}</td></tr>`
+          : ''}
       `;
     }).join('');
+
+    // The point of a table: the bottom line, without a calculator.
+    const t = bookings.reduce((a, b) => ({
+      paid:   a.paid   + Number(b.subtotal) + Number(b.gst),
+      comm:   a.comm   + Number(b.commission_amount),
+      cohost: a.cohost + Number(b.cohost_share || 0),
+      payout: a.payout + Number(b.payout_amount) - Number(b.cohost_share || 0),
+      nights: a.nights + Number(b.nights || 0)
+    }), { paid:0, comm:0, cohost:0, payout:0, nights:0 });
+
+    // The chart defaults to confirmed bookings only, and this table
+    // follows it. A cancelled booking quietly vanishing would look like
+    // lost history, so say it is there and how to see it.
+    const hiddenByStatus = anStatus === 'paid'
+      ? allBookings.filter(b => earnInScope(b) && b.status !== 'paid'
+          && (anType === 'all' || earnListingType(b.listing_id) === anType)
+          && (anListingId === 'all' || String(b.listing_id) === String(anListingId))).length
+      : 0;
+
+    container.innerHTML = periodBar
+      + `<p class="earn-scope-note">Showing <b>${bookings.length} booking${bookings.length===1?'':'s'}</b> paid for in <b>${anEsc(earnScopeLabel())}</b>${anListingId !== 'all' || anType !== 'all' || anStatus !== 'paid' ? ' · matching the filters on the chart above' : ''}.`
+      + (hiddenByStatus ? ` ${hiddenByStatus} cancelled or refunded booking${hiddenByStatus===1?' is':'s are'} hidden — set the chart to “All bookings” to see ${hiddenByStatus===1?'it':'them'}.` : '')
+      + `</p>`
+      + `<div class="earn-scroll"><table class="earn-table">
+        <thead><tr>
+          <th>Booking</th><th>Stay</th><th class="num">Guest paid</th>
+          <th class="num">Commission</th><th class="num">Co-host</th>
+          <th class="num">Your payout</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr>
+          <td class="foot-label" data-label="">${bookings.length} booking${bookings.length===1?'':'s'}</td>
+          <td class="foot-label" data-label="">${t.nights} night${t.nights===1?'':'s'}</td>
+          <td class="num" data-label="Guest paid">${fmt(t.paid)}</td>
+          <td class="num" data-label="Commission">− ${fmt(t.comm)}</td>
+          <td class="num" data-label="Co-host">${t.cohost > 0 ? '− ' + fmt(t.cohost) : '—'}</td>
+          <td class="num payout-value" data-label="Total payout">${fmt(t.payout)}</td>
+          <td class="is-blank"></td><td class="is-blank"></td>
+        </tr></tfoot>
+      </table></div>`;
+
+    container.querySelectorAll('[data-earn-months]').forEach(el => el.addEventListener('click', () => {
+      earnScope = { kind:'period', months: Number(el.dataset.earnMonths) };
+      // The table is no longer following the chart, so the chart should
+      // not still be showing one month highlighted as if it were.
+      if(anSelectedMonth){ anSelectedMonth = null; anRender(); }
+      renderBookings();
+    }));
+    container.querySelectorAll('[data-earn-toggle]').forEach(el => el.addEventListener('click', () => {
+      const id = Number(el.dataset.earnToggle);
+      if(openDetails.has(id)) openDetails.delete(id); else openDetails.add(id);
+      renderBookings();
+    }));
   }
 
   function toggleDisputeForm(orderId){
@@ -805,28 +1041,43 @@
       // would silently produce an empty view with no obvious cause.
       const still = (anData.listings||[]).some(l => String(l.id)===String(anListingId) && (anType==='all'||l.type===anType));
       if(!still) anListingId = 'all';
-      anRender();
+      anRender(); renderBookings();
     }));
     box.querySelectorAll('[data-an-year]').forEach(b => b.addEventListener('click', () => {
       const v = b.dataset.anYear;
       anYear = v === 'compare' ? 'compare' : Number(v);
       if(anYear === 'compare') anSelectedMonth = null;
-      anRender();
+      // Asking the chart for a year is asking for that year's earnings.
+      // 'Compare' spans both, so it leaves the table where it was.
+      if(anYear !== 'compare') earnScope = { kind:'year', year: anYear };
+      anRender(); renderBookings();
     }));
     const sel = document.getElementById('anListingSelect');
-    if(sel) sel.addEventListener('change', () => { anListingId = sel.value; anRender(); });
+    if(sel) sel.addEventListener('change', () => { anListingId = sel.value; anRender(); renderBookings(); });
     const stSel = document.getElementById('anStatusSelect');
-    if(stSel) stSel.addEventListener('change', () => { anStatus = stSel.value; anRender(); });
+    if(stSel) stSel.addEventListener('change', () => { anStatus = stSel.value; anRender(); renderBookings(); });
     box.querySelectorAll('[data-an-metric]').forEach(b => b.addEventListener('click', () => {
+      // Payout vs bookings is how the bars are drawn, not which bookings
+      // they are — the table below is unchanged by it.
       anMetric = b.dataset.anMetric; anRender();
     }));
     anBindTooltip(box);
     const clr = document.getElementById('anClearMonth');
-    if(clr) clr.addEventListener('click', () => { anSelectedMonth = null; anRender(); });
+    if(clr) clr.addEventListener('click', () => {
+      anSelectedMonth = null;
+      earnScope = { kind:'year', year: anYear };
+      anRender(); renderBookings();
+    });
+    // Clicking a month on the chart is the main way into this page's
+    // detail: the bars answer "how much", the table underneath answers
+    // "from which bookings", and they should never disagree.
     box.querySelectorAll('svg [data-month]').forEach(el => el.addEventListener('click', () => {
       const m = el.getAttribute('data-month');
       anSelectedMonth = (anSelectedMonth === m) ? null : m;  // click again to clear
-      anRender();
+      earnScope = anSelectedMonth
+        ? { kind:'month', month: anSelectedMonth }
+        : { kind:'year', year: anYear };
+      anRender(); renderBookings();
     }));
   }
 
