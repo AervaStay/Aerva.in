@@ -141,6 +141,10 @@
   }
   .earn-more[aria-expanded="true"]{background:#1c1a17; color:#f4ebe3; border-color:#1c1a17;}
   .earn-flag{font-size:11px; color:#8a6c39; display:block; margin-top:3px;}
+  /* Money that fell through reads differently from money that came in:
+     never green, and never looking like a payout that is owed. */
+  .earn-cost{color:#a3402f;}
+  .earn-lost{color:#1c1a17; opacity:0.5;}
   .earn-detail > td{background:#fdfaf5; padding:4px 12px 16px;}
   .earn-table tfoot td{
     border-top:1px solid #e0d5c0; border-bottom:none; padding:12px;
@@ -328,11 +332,32 @@
   const EARN_PERIODS = [[1,'1 month'],[3,'3 months'],[6,'6 months'],[12,'1 year'],[0,'All time']];
   const openDetails = new Set();       // which bookings are expanded
 
+  // Money coming in and money that fell through are two different
+  // questions, and mixing them makes both harder to read: a cancelled
+  // booking has no payout to total up, and an earnings total that
+  // quietly included one would be wrong. So they are separate views
+  // with their own columns, rather than one table with a filter.
+  //
+  //   'earned'    — confirmed bookings. What you were paid.
+  //   'cancelled' — cancellations and refunds. What fell through, what
+  //                 it cost you, and whether the guest's money is
+  //                 actually back.
+  let earnView = 'earned';
+  const CANCELLED_STATUSES = ['cancelled', 'refunded'];
+
   // Bucketed by when the booking was PAID (created_at), which is the same
   // clock the charts above use — so a month on a chart and a month in
   // this table always mean the same thing. Bucketing by arrival here
   // would put a row in a month its money never arrived in.
-  const earnMonthKey = (b) => String(b.created_at || '').slice(0, 7);
+  // In the cancelled view the question changes from "what did I earn in
+  // this period" to "what fell through in this period", so a cancellation
+  // is placed by the day it was cancelled, not the day it was booked.
+  // The view is passed in rather than read from earnView, so the count on
+  // the "Cancelled & refunded" tab is worked out exactly the way that tab
+  // will work it out — a tab reading (2) that opens onto 3 rows is worse
+  // than no count at all.
+  const earnDateOf = (b, view) => (view === 'cancelled' && b.cancelled_at) ? b.cancelled_at : b.created_at;
+  const earnMonthKey = (b, view) => String(earnDateOf(b, view) || '').slice(0, 7);
 
   // The analytics filters sit above this table and describe the same
   // bookings, so they apply here too: filter the chart to one listing and
@@ -352,8 +377,8 @@
     return 'the last ' + (earnScope.months === 1 ? 'month' : earnScope.months + ' months');
   }
 
-  function earnInScope(b){
-    const key = earnMonthKey(b);
+  function earnInScope(b, view){
+    const key = earnMonthKey(b, view);
     if(earnScope.kind === 'month') return key === earnScope.month;
     if(earnScope.kind === 'year')  return key.slice(0, 4) === String(earnScope.year);
     if(!earnScope.months) return true;
@@ -361,24 +386,55 @@
     // month should not mean three days.
     const from = new Date();
     from.setMonth(from.getMonth() - earnScope.months);
-    return new Date(b.created_at) >= from;
+    return new Date(earnDateOf(b, view)) >= from;
   }
 
-  function earnFiltered(){
+  // The listing and type filters on the chart still apply to both views.
+  // The chart's STATUS filter does not: which view you are looking at
+  // decides that, and having two controls disagree about it would be
+  // worse than having one.
+  function earnFiltered(view){
+    const want = view || earnView;
     return allBookings.filter(b => {
-      if(!earnInScope(b)) return false;
+      if(!earnInScope(b, want)) return false;
       if(anType !== 'all' && earnListingType(b.listing_id) !== anType) return false;
       if(anListingId !== 'all' && String(b.listing_id) !== String(anListingId)) return false;
-      if(anStatus !== 'all' && b.status !== anStatus) return false;
-      return true;
+      return want === 'cancelled'
+        ? CANCELLED_STATUSES.includes(b.status)
+        : b.status === 'paid';
     });
+  }
+
+  // Refund amounts are stored in the charge currency's subunit, so a
+  // foreign booking's refund is not paise and must not get a ₹.
+  function earnRefundText(b){
+    const status = b.refund_status;
+    if(!status) return '—';
+    const word = { processed:'Refunded', pending:'Refund pending', creating:'Refund pending',
+                   new:'Refund pending', failed:'Refund failed' }[status] || status;
+    const cur = String(b.charge_currency || 'INR').toUpperCase();
+    const amt = Number(b.refund_amount_subunit) || 0;
+    if(!amt) return word;
+    const money = cur === 'INR'
+      ? '₹' + Math.round(amt / 100).toLocaleString('en-IN')
+      : (amt / 100).toFixed(2) + ' ' + cur;
+    return money + '<small style="display:block; opacity:0.6;">' + word + '</small>';
   }
 
   function renderBookings(){
     const container = document.getElementById('bookingsContainer');
     const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
 
+    const cancelled = earnView === 'cancelled';
+    // The count sits on the tab so a host can see there is something
+    // worth looking at without switching to it first.
+    const cancelledCount = earnFiltered('cancelled').length;
+
     const periodBar = `<div class="earn-scope">
+      <div class="an-toggle">
+        <button type="button" data-earn-view="earned" class="${cancelled ? '' : 'on'}">Earned</button>
+        <button type="button" data-earn-view="cancelled" class="${cancelled ? 'on' : ''}">Cancelled &amp; refunded${cancelledCount ? ` (${cancelledCount})` : ''}</button>
+      </div>
       <div class="an-toggle">
         ${EARN_PERIODS.map(([m, l]) =>
           `<button type="button" data-earn-months="${m}" class="${earnScope.kind==='period' && earnScope.months===m ? 'on' : ''}">${l}</button>`).join('')}
@@ -397,7 +453,9 @@
       const wider = earnScope.kind === 'period' && earnScope.months
         ? ' Try a longer period above.' : '';
       container.innerHTML = periodBar
-        + `<p class="empty">Nothing booked in ${anEsc(earnScopeLabel())}.${wider}</p>`;
+        + (cancelled
+          ? `<p class="empty">Nothing was cancelled or refunded in ${anEsc(earnScopeLabel())}.${wider}</p>`
+          : `<p class="empty">Nothing booked in ${anEsc(earnScopeLabel())}.${wider}</p>`);
       return;
     }
 
@@ -511,7 +569,10 @@
       const isOpen = openDetails.has(b.id);
       // One quiet line so a host does not have to open every row to find
       // the one that needs them.
-      const flag = b.deposit_status === 'disputed' ? 'Deposit under review'
+      const flag = cancelled
+        ? (b.refund_status === 'failed' ? '<span class="earn-cost">Refund failed</span>'
+          : b.cancellation_reason ? escA(String(b.cancellation_reason).slice(0, 60)) : '')
+        : b.deposit_status === 'disputed' ? 'Deposit under review'
         : b.deposit_status === 'held' ? 'Deposit held'
         : (Array.isArray(b.pet_types) && b.pet_types.length) ? '🐾 Bringing pets'
         : '';
@@ -526,10 +587,20 @@
           </td>
           <td data-label="Stay" class="earn-when">${dateRange}
             <small>${b.nights} night${b.nights === 1 ? '' : 's'}${b.guests ? ' · ' + b.guests + ' guest' + (b.guests === 1 ? '' : 's') : ''}</small></td>
+          ${cancelled ? `
+          <td data-label="Cancelled" class="earn-when">${b.cancelled_at ? new Date(b.cancelled_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', year:'numeric' }) : '—'}
+            <small>${b.cancelled_by === 'guest' ? 'by the guest' : b.cancelled_by === 'host' ? 'by you' : ''}</small></td>
+          <td data-label="Refund to guest" class="num">${earnRefundText(b)}</td>
+          <td data-label="Cost to you" class="num">${Number(b.coupon_cost) > 0
+            ? `<span class="earn-cost">− ${fmt(b.coupon_cost)}</span><small style="display:block; opacity:0.6;">guest coupon</small>`
+            : '—'}</td>
+          <td data-label="Not earned" class="num earn-lost">${fmt(myPayout)}</td>
+          ` : `
           <td data-label="Guest paid" class="num">${fmt(guestPaidForStay)}</td>
           <td data-label="Commission" class="num">− ${fmt(b.commission_amount)}<small style="display:block; opacity:0.5;">${b.commission_rate}%</small></td>
           <td data-label="Co-host" class="num">${Number(b.cohost_share) > 0 ? '− ' + fmt(b.cohost_share) : '—'}</td>
           <td data-label="Your payout" class="num payout-value">${fmt(myPayout)}</td>
+          `}
           <td data-label="Status">${statusBadgeHtml(b.status)}</td>
           <td data-label="" class="${detailHtml.trim() ? '' : 'is-blank'}">${detailHtml.trim()
             ? `<button type="button" class="earn-more" data-earn-toggle="${b.id}" aria-expanded="${isOpen}">${isOpen ? 'Hide' : 'Details'}</button>`
@@ -547,40 +618,63 @@
       comm:   a.comm   + Number(b.commission_amount),
       cohost: a.cohost + Number(b.cohost_share || 0),
       payout: a.payout + Number(b.payout_amount) - Number(b.cohost_share || 0),
-      nights: a.nights + Number(b.nights || 0)
-    }), { paid:0, comm:0, cohost:0, payout:0, nights:0 });
+      nights: a.nights + Number(b.nights || 0),
+      coupon: a.coupon + Number(b.coupon_cost || 0)
+    }), { paid:0, comm:0, cohost:0, payout:0, nights:0, coupon:0 });
+    // Refunds are only totalled when every one of them is in rupees —
+    // adding a paise figure to a foreign subunit would produce a number
+    // that means nothing.
+    const allInr = bookings.every(b => String(b.charge_currency || 'INR').toUpperCase() === 'INR');
+    const refundTotal = allInr
+      ? bookings.reduce((a, b) => a + (Number(b.refund_amount_subunit) || 0), 0) / 100
+      : null;
+    const anyRefundProblem = bookings.some(b => b.refund_status === 'failed');
 
-    // The chart defaults to confirmed bookings only, and this table
-    // follows it. A cancelled booking quietly vanishing would look like
-    // lost history, so say it is there and how to see it.
-    const hiddenByStatus = anStatus === 'paid'
-      ? allBookings.filter(b => earnInScope(b) && b.status !== 'paid'
-          && (anType === 'all' || earnListingType(b.listing_id) === anType)
-          && (anListingId === 'all' || String(b.listing_id) === String(anListingId))).length
-      : 0;
+    const filterNote = (anListingId !== 'all' || anType !== 'all')
+      ? ' · matching the filters on the chart above' : '';
+    const note = cancelled
+      ? `Showing <b>${bookings.length} cancelled or refunded booking${bookings.length===1?'':'s'}</b> from <b>${anEsc(earnScopeLabel())}</b>${filterNote}.`
+        + (anyRefundProblem ? ' <b class="earn-cost">A refund failed — please write to hello@aerva.in.</b>' : '')
+      : `Showing <b>${bookings.length} booking${bookings.length===1?'':'s'}</b> paid for in <b>${anEsc(earnScopeLabel())}</b>${filterNote}.`
+        + (cancelledCount ? ` ${cancelledCount} cancelled or refunded booking${cancelledCount===1?' is':'s are'} under “Cancelled &amp; refunded”.` : '');
+
+    const head = cancelled
+      ? `<th>Booking</th><th>Stay</th><th>Cancelled</th>
+         <th class="num">Refund to guest</th><th class="num">Cost to you</th>
+         <th class="num">Not earned</th><th>Status</th><th></th>`
+      : `<th>Booking</th><th>Stay</th><th class="num">Guest paid</th>
+         <th class="num">Commission</th><th class="num">Co-host</th>
+         <th class="num">Your payout</th><th>Status</th><th></th>`;
+
+    const foot = cancelled
+      ? `<td class="foot-label" data-label="">${bookings.length} booking${bookings.length===1?'':'s'}</td>
+         <td class="foot-label" data-label="">${t.nights} night${t.nights===1?'':'s'}</td>
+         <td class="is-blank"></td>
+         <td class="num" data-label="Refunded to guests">${refundTotal === null ? '—' : fmt(Math.round(refundTotal))}</td>
+         <td class="num earn-cost" data-label="Cost to you">${t.coupon > 0 ? '− ' + fmt(t.coupon) : '—'}</td>
+         <td class="num earn-lost" data-label="Total not earned">${fmt(t.payout)}</td>
+         <td class="is-blank"></td><td class="is-blank"></td>`
+      : `<td class="foot-label" data-label="">${bookings.length} booking${bookings.length===1?'':'s'}</td>
+         <td class="foot-label" data-label="">${t.nights} night${t.nights===1?'':'s'}</td>
+         <td class="num" data-label="Guest paid">${fmt(t.paid)}</td>
+         <td class="num" data-label="Commission">− ${fmt(t.comm)}</td>
+         <td class="num" data-label="Co-host">${t.cohost > 0 ? '− ' + fmt(t.cohost) : '—'}</td>
+         <td class="num payout-value" data-label="Total payout">${fmt(t.payout)}</td>
+         <td class="is-blank"></td><td class="is-blank"></td>`;
 
     container.innerHTML = periodBar
-      + `<p class="earn-scope-note">Showing <b>${bookings.length} booking${bookings.length===1?'':'s'}</b> paid for in <b>${anEsc(earnScopeLabel())}</b>${anListingId !== 'all' || anType !== 'all' || anStatus !== 'paid' ? ' · matching the filters on the chart above' : ''}.`
-      + (hiddenByStatus ? ` ${hiddenByStatus} cancelled or refunded booking${hiddenByStatus===1?' is':'s are'} hidden — set the chart to “All bookings” to see ${hiddenByStatus===1?'it':'them'}.` : '')
-      + `</p>`
+      + `<p class="earn-scope-note">${note}</p>`
       + `<div class="earn-scroll"><table class="earn-table">
-        <thead><tr>
-          <th>Booking</th><th>Stay</th><th class="num">Guest paid</th>
-          <th class="num">Commission</th><th class="num">Co-host</th>
-          <th class="num">Your payout</th><th>Status</th><th></th>
-        </tr></thead>
+        <thead><tr>${head}</tr></thead>
         <tbody>${rows}</tbody>
-        <tfoot><tr>
-          <td class="foot-label" data-label="">${bookings.length} booking${bookings.length===1?'':'s'}</td>
-          <td class="foot-label" data-label="">${t.nights} night${t.nights===1?'':'s'}</td>
-          <td class="num" data-label="Guest paid">${fmt(t.paid)}</td>
-          <td class="num" data-label="Commission">− ${fmt(t.comm)}</td>
-          <td class="num" data-label="Co-host">${t.cohost > 0 ? '− ' + fmt(t.cohost) : '—'}</td>
-          <td class="num payout-value" data-label="Total payout">${fmt(t.payout)}</td>
-          <td class="is-blank"></td><td class="is-blank"></td>
-        </tr></tfoot>
+        <tfoot><tr>${foot}</tr></tfoot>
       </table></div>`;
 
+    container.querySelectorAll('[data-earn-view]').forEach(el => el.addEventListener('click', () => {
+      earnView = el.dataset.earnView;
+      openDetails.clear();   // the rows are different rows now
+      renderBookings();
+    }));
     container.querySelectorAll('[data-earn-months]').forEach(el => el.addEventListener('click', () => {
       earnScope = { kind:'period', months: Number(el.dataset.earnMonths) };
       // The table is no longer following the chart, so the chart should
@@ -1055,7 +1149,7 @@
     const sel = document.getElementById('anListingSelect');
     if(sel) sel.addEventListener('change', () => { anListingId = sel.value; anRender(); renderBookings(); });
     const stSel = document.getElementById('anStatusSelect');
-    if(stSel) stSel.addEventListener('change', () => { anStatus = stSel.value; anRender(); renderBookings(); });
+    if(stSel) stSel.addEventListener('change', () => { anStatus = stSel.value; anRender(); });  // the table has its own Earned / Cancelled tabs
     box.querySelectorAll('[data-an-metric]').forEach(b => b.addEventListener('click', () => {
       // Payout vs bookings is how the bars are drawn, not which bookings
       // they are — the table below is unchanged by it.

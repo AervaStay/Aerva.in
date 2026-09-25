@@ -3768,6 +3768,39 @@
     return `${promo.name}: ${fmtGuest(rupees)} (${percent}%) off${minNightsNote}, through ${promo.endDate}`;
   }
 
+  // The one-line version for a listing CARD. Every card reserves this
+  // line whether or not it has an offer, so that the price band is the
+  // same height on every card in a row — a band that grew only on the
+  // discounted cards left the row looking broken, and the prices next to
+  // each other no longer lined up.
+  //
+  // Returns '' when there is nothing to say; the empty line still holds
+  // its height. A promotion wins over a standing discount, the same
+  // precedence the long version has on the listing page.
+  function formatOfferShort(listing){
+    const rate = Number(listing.nightly_rate || listing.price);
+    if(!rate) return '';
+    const promo = bestActivePromotion(listing);
+    let rupees = 0, minNights = 0;
+    if(promo){
+      const value = Number(promo.discountValue);
+      rupees = promo.discountType === 'percentage' ? Math.round(rate * (value / 100)) : value;
+      minNights = Number(promo.minNights) || 0;
+    } else if(listing.discount_type && listing.discount_value){
+      const value = Number(listing.discount_value);
+      const baselineNights = listing.discount_min_nights ? Number(listing.discount_min_nights) : 1;
+      const baselineTotal = rate * baselineNights;
+      if(!baselineTotal) return '';
+      rupees = listing.discount_type === 'percentage' ? Math.round(baselineTotal * (value / 100))
+             : listing.discount_type === 'flat' ? value : 0;
+      minNights = Number(listing.discount_min_nights) || 0;
+    }
+    if(!rupees) return '';
+    // "3+ nights" rather than "on stays of 3+ nights": the shorter form
+    // is the difference between fitting on one line and not.
+    return `Save ${fmtGuest(rupees)}${minNights > 1 ? ` · ${minNights}+ nights` : ''}`;
+  }
+
   // Straight-line ("as the crow flies") distance in km between two
   // coordinates — the Haversine formula. Deliberately computed client-side
   // rather than via Google's Distance Matrix API: it's free, instant, and
@@ -4150,8 +4183,14 @@
         ${(exp.experience_duration_days > 1 || exp.experience_duration_hours)
           ? `<div class="suite-meta"><span>${exp.experience_duration_days > 1 ? exp.experience_duration_days + ' days' : exp.experience_duration_hours + (Number(exp.experience_duration_hours) === 1 ? ' hour' : ' hours')}</span></div>` : ''}
         <div class="suite-foot">
-          <div class="suite-price"><span class="suite-price-line">${priceLine}</span></div>
-          <span class="suite-cta" aria-hidden="true">View details</span>
+          <!-- Empty, but present: experience cards share a row with stay
+               cards, and the band only lines up across that row if every
+               card reserves the offer line. -->
+          <span class="suite-offer">${formatOfferShort(exp)}</span>
+          <div class="suite-foot-row">
+            <div class="suite-price"><span class="suite-price-line">${priceLine}</span></div>
+            <span class="suite-cta" aria-hidden="true">View details</span>
+          </div>
         </div>
       </div>
     `;
@@ -5002,6 +5041,11 @@
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
     const promoOfferLine = formatPromotionOffer(listing);
+    // The card gets the SHORT offer; the listing page keeps the long one.
+    // The card version has to survive at a quarter of the row's width,
+    // and the percentage is already on the badge over the photo, so
+    // repeating it here only cost the room the saving needed.
+    const cardOffer = formatOfferShort(listing);
     const priceLine = listing.nightly_rate
       ? `From <strong>${fmtGuest(Number(listing.nightly_rate))}</strong>/night`
       : 'Price on request';
@@ -5049,13 +5093,15 @@
     // (which could be two dozen) and crowding the card.
     const amenitiesList = Array.isArray(listing.amenities) ? listing.amenities : [];
     const AMENITIES_PREVIEW_COUNT = 3; // three reads at a glance; the rest are on the listing
-    let amenitiesHtml = '';
+    // The tags and the "+N more" are kept apart so the pet policy below
+    // can be slotted between them — "+N more" has to stay last, or it
+    // reads as though it is counting the pets.
+    let amenityTagsHtml = '', amenityMoreHtml = '';
     if(amenitiesList.length > 0){
       const shown = amenitiesList.slice(0, AMENITIES_PREVIEW_COUNT);
       const remaining = amenitiesList.length - shown.length;
-      const tags = shown.map(a => `<span class="amenity-tag">${a}</span>`).join('');
-      const moreTag = remaining > 0 ? `<span class="amenity-tag amenity-tag-more">+${remaining} more</span>` : '';
-      amenitiesHtml = `<div class="amenity-tags">${tags}${moreTag}</div>`;
+      amenityTagsHtml = shown.map(a => `<span class="amenity-tag">${a}</span>`).join('');
+      amenityMoreHtml = remaining > 0 ? `<span class="amenity-tag amenity-tag-more">+${remaining} more</span>` : '';
     }
 
     // The host's explicit cover choice leads if one was set; otherwise
@@ -5099,18 +5145,33 @@
       ? `<a href="https://www.google.com/maps/search/?api=1&query=${listing.latitude},${listing.longitude}" target="_blank" rel="noopener" class="suite-map-link">View on map</a>`
       : '';
 
-    // Pet policy line — only shown when the host has actually set one via
-    // the dedicated Pet Policy section, never inferred from amenities.
-    let petPolicyHtml = '';
+    // Pet policy — only shown when the host has actually set one via the
+    // dedicated Pet Policy section, never inferred from amenities.
+    //
+    // It rides in the SAME pill row as the amenities, ahead of the
+    // "+N more" tag, rather than on a line of its own underneath. On its
+    // own row it was the last thing on the card and read as an
+    // afterthought, when for anyone travelling with a dog it is the first
+    // thing they are looking for.
+    // Worded tight enough to stay on one line beside the amenities at a
+    // quarter of the row's width. Three or more species named in full
+    // ("Dog & Cat & Bird welcome · ₹1,200/pet") wrapped the pill onto a
+    // second line, which is what put it on a row of its own in the first
+    // place. The full policy is on the listing page.
+    let petTagHtml = '';
     if(listing.pet_friendly === true){
-      const petTypes = Array.isArray(listing.allowed_pet_types) && listing.allowed_pet_types.length
-        ? listing.allowed_pet_types.join(' & ') + ' welcome'
-        : 'Pet-friendly';
+      const types = Array.isArray(listing.allowed_pet_types) ? listing.allowed_pet_types.filter(Boolean) : [];
+      const petTypes = (types.length && types.length <= 2) ? types.join(' & ') : 'Pets';
       const petFeeNote = listing.pet_fee && Number(listing.pet_fee) > 0
         ? ` · ₹${Number(listing.pet_fee).toLocaleString('en-IN')}/pet`
-        : ' · No pet fee';
-      petPolicyHtml = `<div class="amenity-tags"><span class="amenity-tag">${petTypes}${petFeeNote}</span></div>`;
+        : ' · no fee';
+      petTagHtml = `<span class="amenity-tag amenity-tag-pet">🐾 ${petTypes}${petFeeNote}</span>`;
     }
+    // Built here rather than above so the pet tag can sit inside it. A
+    // listing with a pet policy but no amenities still gets the row.
+    const pillRowHtml = (amenityTagsHtml || petTagHtml)
+      ? `<div class="amenity-tags">${amenityTagsHtml}${petTagHtml}${amenityMoreHtml}</div>`
+      : '';
 
     // Capacity/room availability reads as quiet metadata next to the
     // location, not as a fourth badge stacked down the photo. Four
@@ -5148,17 +5209,18 @@
           ${distanceHtml}
           ${mapLinkHtml}
         </div>
-        ${amenitiesHtml}
-        ${petPolicyHtml}
+        ${pillRowHtml}
         <div class="suite-foot">
-          <div class="suite-price">
-            ${listing.nightly_rate
-              ? `<span class="suite-price-from">From</span>
-                 <span class="suite-price-line"><span class="suite-price-amount">${fmtGuest(Number(listing.nightly_rate))}</span> <span class="suite-price-unit">per night</span></span>`
-              : '<span class="suite-price-line"><span class="suite-price-unit">Price on request</span></span>'}
-            ${promoOfferLine ? `<span class="suite-offer">${promoOfferLine}</span>` : (offerLine ? `<span class="suite-offer">${offerLine}</span>` : '')}
+          <span class="suite-offer">${cardOffer}</span>
+          <div class="suite-foot-row">
+            <div class="suite-price">
+              ${listing.nightly_rate
+                ? `<span class="suite-price-from">From</span>
+                   <span class="suite-price-line"><span class="suite-price-amount">${fmtGuest(Number(listing.nightly_rate))}</span> <span class="suite-price-unit">per night</span></span>`
+                : '<span class="suite-price-line"><span class="suite-price-unit">Price on request</span></span>'}
+            </div>
+            <span class="suite-cta" aria-hidden="true">View details</span>
           </div>
-          <span class="suite-cta" aria-hidden="true">View details</span>
         </div>
       </div>
     `;

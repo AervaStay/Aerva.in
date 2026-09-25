@@ -237,6 +237,18 @@
     background:white; border:1px dashed #ddd0bc; padding:9px; font-size:12.5px; letter-spacing:0.05em;
     text-transform:uppercase; cursor:pointer; width:100%; color:#8a6c39; margin-bottom:6px;
   }
+  /* The "you are a co-host" explanation that replaces a wrong empty
+     state on this page. */
+  .cohost-empty{ padding:26px 0; }
+  .cohost-empty-lead{ text-align:center; opacity:0.65; margin:0 0 18px; font-size:14px; }
+  .cohost-empty-row{
+    display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+    border:1px solid #e0d5c0; background:white; border-radius:10px;
+    padding:14px 18px; margin:0 auto 10px; max-width:620px;
+  }
+  .cohost-empty-row b{ font-family:Georgia,serif; font-weight:400; font-size:15.5px; display:block; }
+  .cohost-empty-row span{ font-size:12.5px; opacity:0.65; display:block; margin-top:3px; }
+  .cohost-empty-btn{ width:auto; margin:0; white-space:nowrap; text-decoration:none; text-align:center; }
   .sidebar-save-btn{
     background:#1c1a17; color:#f4ebe3; border:none; padding:11px; font-size:13.5px; letter-spacing:0.05em;
     text-transform:uppercase; cursor:pointer; width:100%; margin-top:18px;
@@ -1772,11 +1784,97 @@
     `;
   }
 
+  // Why this page is empty, when the reason is co-hosting.
+  //
+  // Co-host mode is a switch: until it is on, every request here asks for
+  // the account's own listings, and a co-host has none. The switch lives
+  // on the Co-hosting page, which is not where someone goes looking for
+  // listings to manage — so the honest thing is to say so here, and offer
+  // the switch, rather than leave them on a page that says they have
+  // nothing.
+  //
+  // Only runs when the page is already empty, so nothing is ever slower
+  // for a host with listings. Silent on failure: a guess about co-hosting
+  // is not worth replacing a correct empty state with an error.
+  async function explainEmptyForCohost(container){
+    if(!sessionToken) return;
+    const acting = (window.AervaCohost && window.AervaCohost.get && window.AervaCohost.get()) || null;
+    let data;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings?myCohosting=1', {
+        headers: { 'Authorization': 'Bearer ' + sessionToken }
+      });
+      if(!res.ok) return;
+      data = await res.json();
+    }catch(err){ return; }
+    const mine = Array.isArray(data && data.cohosting) ? data.cohosting : [];
+    if(!mine.length) return;   // not a co-host: the original message was right
+    const esc = (t) => String(t == null ? '' : t)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const missingOf = (hostId) => ((data.missingByHost || {})[hostId] || []);
+    const WORD = { phone:'your phone number', about:'a few words about you', commission:'your commission' };
+    // "a, b and c" — a bare comma list reads as broken English once
+    // there is more than one thing missing.
+    const listWords = (arr) => arr.length < 2 ? (arr[0] || '')
+      : arr.slice(0, -1).join(', ') + ' and ' + arr[arr.length - 1];
+
+    const cards = mine.map(c => {
+      const missing = missingOf(c.hostId);
+      const isActing = acting && String(acting.hostId) === String(c.hostId);
+      if(missing.length){
+        return `<div class="cohost-empty-row">
+          <div><b>${esc(c.hostName)}</b><span>Before you can work on these listings, ${esc(listWords(missing.map(m => WORD[m] || m)))} ${missing.length === 1 ? 'is' : 'are'} still needed.</span></div>
+          <a class="sidebar-add-btn cohost-empty-btn" href="index.html?view=cohost">Finish my details</a>
+        </div>`;
+      }
+      if(!c.listingCount){
+        return `<div class="cohost-empty-row">
+          <div><b>${esc(c.hostName)}</b><span>No listings have been shared with you yet. ${esc(c.hostName)} can add them from their Co-hosting page.</span></div>
+        </div>`;
+      }
+      if(isActing){
+        // Switched on already and still nothing: the listings exist but
+        // none are live, which is a different thing from having none.
+        return `<div class="cohost-empty-row">
+          <div><b>${esc(c.hostName)}</b><span>You co-host ${c.listingCount} listing${c.listingCount === 1 ? '' : 's'} here, but none are showing on this tab yet.</span></div>
+        </div>`;
+      }
+      return `<div class="cohost-empty-row">
+        <div><b>${esc(c.hostName)}</b><span>${c.listingCount} listing${c.listingCount === 1 ? '' : 's'} · ${c.access === 'full' ? 'Full access' : 'Limited access'}</span></div>
+        <button type="button" class="sidebar-add-btn cohost-empty-btn" data-cohost-open="${esc(String(c.hostId))}" data-cohost-name="${esc(c.hostName)}" data-cohost-access="${esc(c.access)}">Open these listings</button>
+      </div>`;
+    }).join('');
+
+    container.innerHTML = `<div class="cohost-empty">
+      <p class="cohost-empty-lead">You don't have listings of your own${acting ? '' : ', but you co-host for someone else'}.</p>
+      ${cards}
+    </div>`;
+
+    container.querySelectorAll('[data-cohost-open]').forEach(btn => btn.addEventListener('click', () => {
+      if(!window.AervaCohost || !window.AervaCohost.start) return;
+      window.AervaCohost.start({
+        hostId: Number(btn.dataset.cohostOpen),
+        hostName: btn.dataset.cohostName,
+        access: btn.dataset.cohostAccess
+      });
+      // A reload is what puts co-host mode on every request this page
+      // makes, rather than only the next one.
+      window.location.reload();
+    }));
+  }
+
   function renderListingsForCurrentTab(){
     const container = document.getElementById('listingsContainer');
     const allItems = [...currentListings, ...currentExperiences];
     if(!allItems.length){
+      // "You haven't listed anything yet" is the wrong answer for a
+      // co-host, and it was the one they got: this page only ever asks
+      // for the signed-in account's OWN listings unless co-host mode has
+      // been switched on, and an approved co-host who has not switched it
+      // on has no listings of their own. They were being told they had
+      // nothing to manage while managing someone's whole property.
       container.innerHTML = '<p class="empty">You haven\'t listed a property or experience yet.</p>';
+      explainEmptyForCohost(container);
       return;
     }
     const stays = currentListings.filter(l => currentListingsTab === 'active' ? l.status === 'approved' : l.status !== 'approved');
