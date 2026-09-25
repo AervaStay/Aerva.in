@@ -645,7 +645,11 @@ module.exports = async (req, res) => {
             const r = rooms[i];
             const roomName = typeof r.roomName === 'string' ? r.roomName.trim().slice(0, 100) : '';
             const maxOccupancy = Number(r.maxOccupancy);
-            const roomRate = Number(r.nightlyRate);
+            // Whole rupees: the column is numeric, but everything
+            // downstream (orders.subtotal and the rest) is an integer,
+            // so a fractional rate only ever became a rounding
+            // discrepancy between the quote and the stored booking.
+            const roomRate = Math.round(Number(r.nightlyRate));
             // A room missing a name, a real occupancy limit, or a real
             // price isn't meaningful to save — skipped rather than
             // failing the whole listing save over one incomplete row
@@ -757,7 +761,7 @@ module.exports = async (req, res) => {
               const r = rooms[i];
               const roomName = typeof r.roomName === 'string' ? r.roomName.trim().slice(0, 100) : '';
               const maxOccupancy = Number(r.maxOccupancy) || null;
-              const roomRate = Number(r.nightlyRate) || null;
+              const roomRate = Math.round(Number(r.nightlyRate)) || null;
               const description = typeof r.description === 'string' ? r.description.trim().slice(0, 500) : '';
               const isActive = r.isActive !== false;
               const photos = submittedRoomPhotoUrls(r);

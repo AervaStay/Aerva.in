@@ -18,6 +18,24 @@ const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
 const MAX_EXPERIENCES = 5; // same reasoning, for the experiences array
 const MAX_AMENITIES_PER_STAY = 15;
 
+// listings.max_guests and listings.bedrooms are TEXT columns. Newer
+// listings hold a bare number, but older ones hold what the old
+// submission form allowed — "3–4", "9+", "Up to 8". The largest number
+// in the value is the reading, matching what search has always done.
+// Returns null when there is no number at all, which callers must treat
+// as "unknown", never as zero.
+//
+// Lives here, and is exported, so there is ONE of it: get-listings.js had
+// the only copy and everything that priced or booked a stay used a plain
+// Number() instead, which is how capacity came to be enforced in search
+// but not at checkout.
+function parseMaxGuests(raw) {
+  if (!raw) return null;
+  const numbers = String(raw).match(/\d+/g);
+  if (!numbers) return null;
+  return Math.max(...numbers.map(Number));
+}
+
 function calculateNights(arrival, departure) {
   const arrivalDate = new Date(arrival);
   const departureDate = new Date(departure);
@@ -253,7 +271,17 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
       // but still genuinely limited by how many people can actually fit.
       // For a Resort this checks the SPECIFIC room's own capacity, not
       // any listing-level number (which isn't meaningful for a Resort).
-      const capacityLimit = room ? Number(room.max_occupancy) : Number(listing.max_guests);
+      // parseMaxGuests, not Number(). listings.max_guests is a TEXT
+      // column and older listings hold values like "3–4", "9+" or
+      // "Up to 8" rather than a bare number. Number("3–4") is NaN,
+      // NaN > 0 is false, and the whole check below was therefore
+      // SKIPPED for those listings — a four-person villa would accept a
+      // booking for fifty. Search never had the bug (get-listings.js has
+      // always parsed the same values properly), so such a listing turned
+      // up correctly in results and then went unchecked at checkout.
+      // listing_rooms.max_occupancy is a real integer, so it needs none
+      // of this.
+      const capacityLimit = room ? Number(room.max_occupancy) : parseMaxGuests(listing.max_guests);
       if (capacityLimit > 0 && guests > capacityLimit) {
         return {
           error: room
@@ -313,7 +341,15 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
         return { error: `Stay ${i + 1}: ${room ? (room.room_name || 'This room') : listing.property_name} was just booked for those dates. Please choose different dates.` };
       }
 
-      const rate = room ? Number(room.nightly_rate) : Number(listing.nightly_rate);
+      // Rounded, because Aerva deals in whole rupees: every money column
+      // on orders (subtotal, gst, total, commission_amount, payout_amount)
+      // is an integer. listing_rooms.nightly_rate is numeric and could
+      // hold 4999.50, which gave a subtotal of 14998.5 on a three-night
+      // stay — quoted to the guest with the paise, then SILENTLY ROUNDED
+      // to 14999 by Postgres on the way into orders.subtotal, so the
+      // record and the charge disagreed. listings.nightly_rate is already
+      // an integer column and never had the problem.
+      const rate = room ? Math.round(Number(room.nightly_rate)) : Number(listing.nightly_rate);
       const roomTotal = rate * nights;
       const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
       const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
@@ -493,5 +529,5 @@ module.exports = {
   EXTRA_GUEST_RATE, BASE_OCCUPANCY, BASE_COMMISSION_RATE, AMENITY_COMMISSION_RATE, GUEST_SERVICE_FEE_RATE,
   MAX_STAYS, MAX_EXPERIENCES, MAX_AMENITIES_PER_STAY,
   calculateNights, addDaysToDateStr, getNightsInRange, toDateStr, validateAndPriceAmenities,
-  discountAmountFor, calculateDiscount, priceStay, priceExperience
+  discountAmountFor, calculateDiscount, priceStay, priceExperience, parseMaxGuests
 };

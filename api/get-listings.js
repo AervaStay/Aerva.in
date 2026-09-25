@@ -75,9 +75,9 @@ const { reconcilePayments, processScheduledRefunds } = require('./_confirm-booki
 const { settleUnansweredRequests } = require('./_cancellations');
 const { heldListingIds } = require('./_booking-rules');
 const { expireChanges } = require('./_booking-changes');
-const { enforceIdDeadlines } = require('./_guest-id');
 const { releaseDueDeposits } = require('./_deposits');
 const { decryptField } = require('./_secure-fields');
+const { parseMaxGuests } = require('./_pricing');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { answeredQuestions, placesWithAerva } = require('./_profiles');
@@ -86,12 +86,8 @@ const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
 const sql = neon(process.env.DATABASE_URL);
 
-function parseMaxGuests(raw) {
-  if (!raw) return null;
-  const numbers = String(raw).match(/\d+/g);
-  if (!numbers) return null;
-  return Math.max(...numbers.map(Number));
-}
+// Now shared from _pricing.js, so search and checkout can never read the
+// same max_guests value differently — imported just below with the rest.
 
 // Normalizes a DATE column value to 'YYYY-MM-DD' whether the driver
 // returns it as a JS Date object or an already-formatted string — same
@@ -529,10 +525,6 @@ const JOBS = [
   // or the 24 hours to pay the difference have passed.
   { name: 'booking_changes_expiry', label: 'Close booking changes past their time limit', everyMinutes: 15,
     run: (c) => expireChanges(c.sql) },
-  // Paid bookings still without a valid ID proof at their deadline:
-  // cancelled and refunded in full (_guest-id.js).
-  { name: 'id_deadlines', label: 'Cancel and refund bookings still without a valid ID proof at their deadline', everyMinutes: 5,
-    run: (c) => enforceIdDeadlines(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'coupon_release', label: 'Release cancellation coupons (15 minutes after a cancellation)', everyMinutes: 5,
     run: (c) => releaseDueCoupons(c.sql, { force: true }) },
   { name: 'payouts', label: 'Payouts (5 PM on check-out day; retries every 4 hours; payout and refund status)', everyMinutes: 5,
