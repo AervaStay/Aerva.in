@@ -4759,6 +4759,12 @@
               <div>
                 <div class="cohost-host">${esc(h.hostName)}</div>
                 <div class="hp-meta">${esc(accessText(h))} \u00b7 ${h.listingCount} listing${h.listingCount === 1 ? '' : 's'}</div>
+                ${(h.listings || []).length
+                  ? `<div class="cohost-listings">${(h.listings || []).map(l =>
+                      `<span class="cohost-listing-tag${l.status === 'approved' ? '' : ' is-off'}">${esc(l.name)}${l.status === 'approved' ? '' : ' \u00b7 ' + esc(l.status)}</span>`).join('')}</div>`
+                  : (h.listingCount
+                      ? ''
+                      : `<div class="hp-meta cohost-none">No listings have been shared with you yet \u2014 ${esc(h.hostName)} can add them from their Co-hosting page.</div>`)}
                 <div class="hp-meta cohost-commission">${esc(commissionText(h))}</div>
                 <div class="cohost-propose">
                   <input type="number" min="0" max="100" step="0.01" placeholder="%" aria-label="Your share of the host's payout, in percent" data-cohost-pct="${Number(h.hostId)}">
@@ -12529,11 +12535,24 @@
           // with no listing gets their first one.
           // Today is a host's view, revealed on the same signal as the
           // rest of the host navigation.
-          if(data.guest.hasActiveListing === true){
+          if(data.guest.hasActiveListing === true || data.guest.isCohost === true){
             const todayTab = document.getElementById('catToday');
             if(todayTab) todayTab.style.display = '';
           }
-          if(data.guest.hasActiveListing === true){
+          // A co-host works on someone else's listings, so they need the
+          // same two pages a host does — but they own nothing, and both
+          // links hung off hasActiveListing, which only counts listings
+          // this account owns. The result was a co-host with three
+          // properties to manage and no way to open any of them: their
+          // menu offered Co-hosting, which describes the arrangement, and
+          // nothing that led to the properties themselves.
+          //
+          // Status stays out of it deliberately. It is the HOST's own
+          // verification and standing — PAN, bank details, their account
+          // health — which is theirs, not their co-host's, and the server
+          // sends a co-host no verification data at all.
+          const showsHostPages = data.guest.hasActiveListing === true || data.guest.isCohost === true;
+          if(showsHostPages){
             // .nav-account-menu a's CSS expects display:block (full-width,
             // stacked, with its own top/bottom padding) — display:inline
             // was silently breaking that spacing the whole time. Only
@@ -12541,17 +12560,17 @@
             // (My Collection, Status) sat right next to each other.
             myListingsLink.style.display = 'block';
             if(myListingsLinkMobile) myListingsLinkMobile.style.display = 'block';
-            const statusMenuLink = document.getElementById('statusMenuLink');
-            const statusMenuLinkMobile = document.getElementById('statusMenuLinkMobile');
-            if(statusMenuLink) statusMenuLink.style.display = 'block';
-            if(statusMenuLinkMobile) statusMenuLinkMobile.style.display = 'block';
-            // My Earnings sits under the same gate as Status — both are
-            // host-only pages, and neither has anything to show until a
-            // listing is actually live and taking bookings.
+            // My Earnings: a co-host's own share of what they help earn.
             const earningsMenuLink = document.getElementById('earningsMenuLink');
             const earningsMenuLinkMobile = document.getElementById('earningsMenuLinkMobile');
             if(earningsMenuLink) earningsMenuLink.style.display = 'block';
             if(earningsMenuLinkMobile) earningsMenuLinkMobile.style.display = 'block';
+          }
+          if(data.guest.hasActiveListing === true){
+            const statusMenuLink = document.getElementById('statusMenuLink');
+            const statusMenuLinkMobile = document.getElementById('statusMenuLinkMobile');
+            if(statusMenuLink) statusMenuLink.style.display = 'block';
+            if(statusMenuLinkMobile) statusMenuLinkMobile.style.display = 'block';
           }
           // Messages is available to every logged-in account now, not
           // just hosts — a guest-only account can still have an active

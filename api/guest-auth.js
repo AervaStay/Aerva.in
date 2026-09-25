@@ -335,6 +335,35 @@ module.exports = async (req, res) => {
         }
       }
 
+      // Does this account co-host for somebody, with at least one live
+      // listing in its scope? The header nav needs to know, because it
+      // gated My Collection and My Earnings on hasActiveListing alone —
+      // which is about listings this account OWNS. A co-host owns none,
+      // so both links were hidden and there was no route to the listings
+      // they had been given at all: the only host entry in their menu was
+      // Co-hosting, which describes the arrangement rather than the
+      // properties.
+      //
+      // Same fail-safe as above: a failure here hides the links for one
+      // page load rather than breaking the session.
+      let isCohost = false;
+      try {
+        const co = await sql`
+          SELECT 1 FROM cohosts c
+          -- cast spelled out, as elsewhere in this codebase (see the
+          -- unnest(...::int[]) in host-listings.js): listing_ids is an
+          -- integer[], and leaving the comparison to infer its type is
+          -- what turns a schema that is a shade different into a silent
+          -- "no operator: bigint = text" and a hidden menu.
+          JOIN listings l ON l.id = ANY(c.listing_ids::int[]) AND l.status = 'approved'
+          WHERE c.cohost_guest_id = ${guest.id} AND c.status = 'active'
+          LIMIT 1
+        `;
+        isCohost = co.length > 0;
+      } catch (err) {
+        console.error('co-host check failed (non-fatal):', err);
+      }
+
       // ---- Standing shown beside the name in the header ----
       // A host is also a guest, so one of the two has to win. The HOST
       // tier does: it is the one strangers judge a property by, and a host
@@ -460,7 +489,7 @@ module.exports = async (req, res) => {
         console.error('notifications failed (non-fatal):', err);
       }
 
-      return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing, tier, pendingReviews, notifications } });
+      return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing, isCohost, tier, pendingReviews, notifications } });
     } catch (err) {
       console.error('guest-auth (GET) error:', err);
       return res.status(500).json({ error: 'Could not verify your session.' });

@@ -316,7 +316,11 @@ async function cohostGate(req, res, accountId) {
       const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(q.guestProfileForOrder) || 0}`;
       listingId = o[0] ? o[0].listing_id : -1;
     }
-    else if (Object.keys(q).every(k => k === 'actingHost')) { mode = 'dashboard'; }
+    // bookingsPeriod is part of the dashboard, not a mode of its own: it
+    // only narrows which bookings come back, and trimForCohost still cuts
+    // them to this co-host's own listings. Left out of this list, a
+    // co-host clicking a month on the chart would be refused outright.
+    else if (Object.keys(q).every(k => k === 'actingHost' || k === 'bookingsPeriod')) { mode = 'dashboard'; }
     else return cohostDenied(res);
   } else if (req.method === 'POST') {
     const body = req.body || {};
@@ -387,6 +391,13 @@ function trimForCohost(ctx, mode, body) {
       listings: (body.listings || []).filter(l => inScope(l.id)).map(l => ({ ...l, manageLink: cohostManageLink(l.id, ctx.cohostId) })),
       hostBadge: body.hostBadge || null,
       bookings: seesBookings ? (body.bookings || []).filter(b => inScope(b.listing_id)) : [],
+      // Which period was fetched, so the co-host's page knows what it is
+      // holding. The counts are deliberately NOT carried over: they
+      // describe the host's whole list, and this one has been cut to
+      // the listings this co-host works on.
+      bookingsMeta: seesBookings && body.bookingsMeta
+        ? { period: body.bookingsMeta.period, truncated: false }
+        : { period: (body.bookingsMeta && body.bookingsMeta.period) || null, truncated: false },
       verification: null, // never shown to a co-host
       complianceNotices: (body.complianceNotices || []).filter(n => inScope(n.listingId))
         .map(n => ({ ...n, manageLink: cohostManageLink(n.listingId, ctx.cohostId) })),
@@ -482,11 +493,31 @@ async function handleCohostModes(req, res, accountId) {
       const myDetails = { phone: mine.phone || null, work: mine.profile_work || '', aboutMe: (aboutObj && aboutObj.about_me) || '' };
       const missingByHost = {};
       for (const r of active) missingByHost[r.host_id] = await cohostDetailsMissing(sql, me.id, r.host_id);
+
+      // WHICH listings, not just how many. An invitation names the
+      // properties it covers, and then accepting it replaced those names
+      // with a bare "3 listings" — so the moment a co-host actually had
+      // the access, the page stopped telling them what it was over.
+      // Fail-safe: the names are a nicety, the page must load without them.
+      const namesByCohost = {};
+      try {
+        const allIds = [...new Set(active.flatMap(r => (r.listing_ids || []).map(Number)))];
+        if (allIds.length) {
+          const ln = await sql`SELECT id, property_name, status FROM listings WHERE id = ANY(${allIds})`;
+          const byId = {};
+          ln.forEach(l => { byId[l.id] = { id: l.id, name: l.property_name, status: l.status }; });
+          for (const r of active) {
+            namesByCohost[r.id] = (r.listing_ids || []).map(Number).map(id => byId[id]).filter(Boolean);
+          }
+        }
+      } catch (err) { console.error('co-host listing names unavailable (non-fatal):', err.message); }
+
       res.status(200).json({ invitations, myDetails, missingByHost,
         cohosting: active.map(r => ({
           hostId: r.host_id, hostName: r.host_name || 'Host', access: r.access,
           permissions: r.access === 'full' ? COHOST_PERMISSIONS.map(p => p.key) : cleanPermissions(r.permissions),
           listingCount: (r.listing_ids || []).length,
+          listings: namesByCohost[r.id] || [],
           commissionPercent: r.commission_percent == null ? null : Number(r.commission_percent),
           proposedPercent: r.proposed_percent == null ? null : Number(r.proposed_percent),
           proposalStatus: r.proposal_status || null
@@ -3017,6 +3048,25 @@ module.exports = async (req, res) => {
     // subtotal + gst here already reflects what the guest paid for the
     // stay itself, before that split — payout_amount is what actually
     // lands with the host after commission.
+    // ?bookingsPeriod=YYYY or YYYY-MM asks for exactly that calendar
+    // period instead of the most recent handful.
+    //
+    // Without it, the earnings page could contradict its own charts. The
+    // charts aggregate EVERY order across a two-year window, while this
+    // list was capped at the hundred newest — so a host with more than a
+    // hundred bookings could click a month on the chart, see it report
+    // thirteen bookings, and be told "Nothing booked in MAY 2026" by the
+    // table directly underneath it. The month is fetched on demand now,
+    // so the two can never disagree.
+    //
+    // Bucketed with the same expression the analytics query uses
+    // (date_trunc on created_at), or the boundaries of a month would be
+    // drawn in two different places.
+    const rawPeriod = typeof req.query.bookingsPeriod === 'string' ? req.query.bookingsPeriod.trim() : '';
+    const bookingsPeriod = /^\d{4}(-(0[1-9]|1[0-2]))?$/.test(rawPeriod) ? rawPeriod : null;
+    const BOOKINGS_RECENT_LIMIT = 100;   // the default view: the newest few
+    const BOOKINGS_PERIOD_LIMIT = 600;   // one named month or year, in full
+    const bookingsLimit = bookingsPeriod ? BOOKINGS_PERIOD_LIMIT : BOOKINGS_RECENT_LIMIT;
     const bookings = await sql`
       SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.nights, o.guests,
              o.subtotal, o.discount_amount, o.gst,
@@ -3033,8 +3083,10 @@ module.exports = async (req, res) => {
       JOIN listings l ON o.listing_id = l.id
       LEFT JOIN guests g ON g.id = o.guest_id
       WHERE l.host_id = ${guest.host_id}
+        AND (${bookingsPeriod}::text IS NULL
+             OR to_char(date_trunc('month', o.created_at), 'YYYY-MM') LIKE ${bookingsPeriod}::text || '%')
       ORDER BY o.created_at DESC
-      LIMIT 100
+      LIMIT ${bookingsLimit}
     `;
     // Each booking's co-host shares, so the host sees what is theirs after
     // co-hosts. Separate and fail-safe: before migration_cohost_commission.sql
@@ -3268,7 +3320,17 @@ module.exports = async (req, res) => {
     const complianceNotices = await openFlagsForHost(sql, guest.host_id,
       (listingId) => `${SITE_BASE}/manage-listing.html?token=${createToken(listingId, 'manage-pricing', TWO_YEARS_MS)}`);
 
-    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, verification, complianceNotices, today });
+    // What this list actually covers, so the page never implies it is
+    // showing everything when it is not. `truncated` means there are
+    // older bookings beyond it.
+    const bookingsMeta = {
+      period: bookingsPeriod,
+      returned: bookings.length,
+      limit: bookingsLimit,
+      truncated: bookings.length >= bookingsLimit,
+      oldest: bookings.length ? bookings[bookings.length - 1].created_at : null
+    };
+    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, bookingsMeta, verification, complianceNotices, today });
   } catch (err) {
     console.error('host-listings error:', err);
     return res.status(500).json({ error: 'Could not load your listings.' });

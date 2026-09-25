@@ -2090,6 +2090,17 @@ body.hp-open{ overflow:hidden; }
 body.is-cohosting{ padding-bottom:70px; }
 
 .cohost-commission{ margin-top:4px; color:var(--gold-deep); }
+/* Which properties this co-host access is actually over. An invitation
+   names them; before this, accepting it replaced the names with a bare
+   count, so the page stopped saying what the access covered exactly when
+   it started to matter. */
+.cohost-listings{ display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.cohost-listing-tag{
+  font-size:12.5px; padding:3px 10px; border-radius:999px;
+  background:var(--surface-2); color:var(--ink-2); border:1px solid #ebe3d8;
+}
+.cohost-listing-tag.is-off{ opacity:0.6; font-style:italic; }
+.cohost-none{ margin-top:6px; }
 .cohost-propose{ display:flex; gap:8px; align-items:center; margin-top:10px; }
 .cohost-propose input{ width:90px; padding:9px 12px; border:1px solid var(--line-dark); border-radius:999px; font-family:'Jost', sans-serif; font-size:14px; }
 .cohost-propose .hp-more{ margin-top:0; }
