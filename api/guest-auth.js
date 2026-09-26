@@ -73,6 +73,7 @@ const { readInviteToken } = require('./_cohosts');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { normalizeToE164 } = require('./_phone-validation');
 const { sanitizeBody } = require('./_plain-text');
+const emailOtp = require('./_email-otp');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -285,7 +286,10 @@ async function sendPasswordResetEmail(guest, resetTok) {
     throw new Error('Reset email could not be sent. Please try again shortly.');
   }
 
-  const link = `${SITE_BASE}/guest-login.html?resetToken=${resetTok}`;
+  // The email rides along so the page can show which account is being
+  // reset and hand it to the browser's password manager with the new
+  // password; otherwise the saved (old) password keeps being autofilled.
+  const link = `${SITE_BASE}/guest-login.html?resetToken=${resetTok}&email=${encodeURIComponent(guest.email || '')}`;
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">Reset your password</h2>
@@ -901,28 +905,34 @@ module.exports = async (req, res) => {
   }
 
   // ---- Log in ----
+  // LOCKOUT. Five wrong passwords within 15 minutes lock the account (a
+  // successful login or a completed password reset starts the count again).
+  // While locked:
+  //   • a wrong password is refused with the locked message — and counts,
+  //     so guessing keeps the lock on;
+  //   • the RIGHT password is not enough on its own: a 6-digit code goes to
+  //     the account's email, and password + code signs in (which unlocks);
+  //   • resetting the password by email unlocks it with no code needed.
+  // Only wrong passwords count — not "email not verified" or a server error.
   if (mode === 'login') {
-    // Checked before touching the database for the real attempt — a
-    // failed-attempts count by email catches one attacker guessing a
-    // single account's password; a broader count by IP (regardless of
-    // which email, success or fail) catches one attacker spraying
-    // credentials across many different accounts from the same source.
-    const failedByEmail = await countRecentAttempts(sql, {
-      action: 'guest_login', windowMinutes: 15, byEmail: cleanEmail, onlyFailures: true
-    });
-    if (failedByEmail >= 5) {
-      return res.status(429).json({ error: 'Too many failed login attempts on this account. Please try again in 15 minutes, or reset your password.' });
-    }
+    const LOCK_AFTER = 5;
+    const LOCKED_MESSAGE = 'Your account has reached the maximum number of login attempts. Please try again after 15 minutes, or reset your password.';
     const attemptsByIp = await countRecentAttempts(sql, {
       action: 'guest_login', windowMinutes: 15, byIp: clientIp
     });
     if (attemptsByIp >= 20) {
       return res.status(429).json({ error: 'Too many attempts from this connection. Please try again in a few minutes.' });
     }
+    const failedCount = () => countRecentAttempts(sql, {
+      action: 'guest_login', windowMinutes: 15, byEmail: cleanEmail, onlyFailures: true,
+      reasons: ['wrong_password', 'no_such_account'],
+      sinceSuccessOf: ['guest_login', 'guest_password_reset_completed']
+    });
 
     try {
+      const locked = (await failedCount()) >= LOCK_AFTER;
       const rows = await sql`SELECT id, email, password_hash, name, phone, email_verified, account_type, host_id FROM guests WHERE email = ${cleanEmail}`;
-      const guest = rows[0];
+      let guest = rows[0];
 
       // Always run bcrypt.compare, even for a non-existent account — see
       // DUMMY_HASH above for why. This keeps response timing consistent
@@ -932,11 +942,49 @@ module.exports = async (req, res) => {
       if (!guest || !passwordMatches) {
         await logAudit(sql, {
           action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
-          metadata: { reason: !guest ? 'no_such_account' : 'wrong_password', ip: clientIp }
+          metadata: { reason: !guest ? 'no_such_account' : 'wrong_password', locked, ip: clientIp }
         });
+        // From the 5th wrong password on, say the account is locked. The same
+        // answer whether or not the email has an account.
+        if (locked || (await failedCount()) >= LOCK_AFTER) {
+          return res.status(429).json({ error: LOCKED_MESSAGE, locked: true });
+        }
         // The same message either way: a wrong guess at the password
         // should not confirm the email is right.
         return res.status(401).json({ error: 'Incorrect email or password.' });
+      }
+
+      if (locked) {
+        const code = String((req.body && req.body.otp) || '').trim();
+        if (!code) {
+          try {
+            await emailOtp.requestCode(sql, guest.email, { purpose: 'locked' });
+          } catch (e) {
+            // e.g. "please wait 40 seconds" — the code already sent still works.
+            return res.status(e.status || 500).json({ error: e.isUserFacing ? e.message : 'We could not send the code right now. Please try again.', otpRequired: true, maskedEmail: emailOtp.maskEmail(guest.email) });
+          }
+          await logAudit(sql, {
+            action: 'guest_login_otp_sent', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
+            targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
+          });
+          return res.status(200).json({
+            otpRequired: true, maskedEmail: emailOtp.maskEmail(guest.email),
+            message: `Your account is locked after too many wrong passwords. Your password is correct — to finish signing in, enter the 6-digit code we just sent to ${emailOtp.maskEmail(guest.email)}.`
+          });
+        }
+        const check = await emailOtp.checkCode(sql, guest.email, code);
+        if (!check.ok) {
+          await logAudit(sql, {
+            action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
+            targetType: 'guest', targetId: guest.id, metadata: { reason: 'wrong_login_code', ip: clientIp }
+          });
+          return res.status(401).json({ error: check.error, otpRequired: true, maskedEmail: emailOtp.maskEmail(guest.email) });
+        }
+        // The code proves the inbox, which is what verification checks too.
+        if (!guest.email_verified) {
+          await sql`UPDATE guests SET email_verified = TRUE WHERE id = ${guest.id}`;
+          guest = { ...guest, email_verified: true };
+        }
       }
 
       if (!guest.email_verified) {
@@ -953,7 +1001,7 @@ module.exports = async (req, res) => {
       const out = await signedIn(sql, guest);   // also un-pauses a paused account
       await logAudit(sql, {
         action: 'guest_login', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
-        targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
+        targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp, ...(locked ? { unlockedWithCode: true } : {}) }
       });
 
       return res.status(200).json(out);

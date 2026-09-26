@@ -44,7 +44,7 @@ function newCode() {
 function emailHtml(code, purpose) {
   return `<div style="font-family:sans-serif; max-width:440px;">
     <h2 style="font-family:Georgia,serif; margin:0 0 6px;">Your Aerva code</h2>
-    <p style="color:#4a453e; margin:0 0 16px;">${purpose === 'link' ? 'Use this to confirm your email address.' : purpose === 'change' ? 'Someone signed in to your Aerva account asked to change its email address. Use this code only if that was you.' : 'Use this to sign in to Aerva.'}</p>
+    <p style="color:#4a453e; margin:0 0 16px;">${purpose === 'link' ? 'Use this to confirm your email address.' : purpose === 'change' ? 'Someone signed in to your Aerva account asked to change its email address. Use this code only if that was you.' : purpose === 'locked' ? 'Your Aerva account was locked after too many wrong passwords. The right password has now been entered: use this code to finish signing in. If this was not you, reset your password straight away.' : 'Use this to sign in to Aerva.'}</p>
     <p style="font-size:30px; font-weight:600; letter-spacing:0.22em; margin:0 0 16px; color:#1c1b19;">${code}</p>
     <p style="font-size:13.5px; color:#6e675d; margin:0;">It expires in ${CODE_LIFETIME_MINUTES} minutes. If you did not ask for it, you can ignore this email — nobody can use it without your inbox.</p>
   </div>`;

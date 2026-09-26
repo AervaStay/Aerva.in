@@ -5530,6 +5530,7 @@
           document.getElementById('bookingLoginEmailDisplay').textContent = email;
           document.getElementById('bookingLoginError').style.display = 'none';
           document.getElementById('bookingLoginPassword').value = '';
+          hideBookingLoginOtp();
           document.getElementById('bookingLoginFormView').style.display = 'block';
           document.getElementById('bookingLoginPassword').focus();
         } else {
@@ -5555,25 +5556,63 @@
   document.getElementById('bookingLoginPassword').addEventListener('keydown', (e) => {
     if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('bookingLoginSubmitBtn').click(); }
   });
+  // Locked account (5 wrong passwords) + right password: the server emails
+  // a code, and password + code signs in.
+  function bookingOtpShown(){ return document.getElementById('bookingLoginOtpBlock').style.display !== 'none'; }
+  function showBookingLoginOtp(message){
+    const fresh = !bookingOtpShown();
+    if(message) document.getElementById('bookingLoginOtpNote').textContent = message;
+    document.getElementById('bookingLoginOtpBlock').style.display = 'block';
+    if(fresh || message) document.getElementById('bookingLoginOtp').value = '';
+    document.getElementById('bookingLoginOtp').focus();
+  }
+  function hideBookingLoginOtp(){
+    document.getElementById('bookingLoginOtpBlock').style.display = 'none';
+    document.getElementById('bookingLoginOtp').value = '';
+    document.getElementById('bookingLoginSubmitBtn').textContent = 'Log in';
+  }
+  document.getElementById('bookingLoginPassword').addEventListener('input', hideBookingLoginOtp);
+  document.getElementById('bookingLoginOtp').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('bookingLoginSubmitBtn').click(); }
+  });
+  let bookingResendCode = false;
+  document.getElementById('bookingLoginOtpResend').addEventListener('click', (e) => {
+    e.preventDefault();
+    bookingResendCode = true;
+    document.getElementById('bookingLoginSubmitBtn').click();
+  });
   document.getElementById('bookingLoginSubmitBtn').addEventListener('click', async () => {
     const password = document.getElementById('bookingLoginPassword').value;
     const errEl = document.getElementById('bookingLoginError');
     const btn = document.getElementById('bookingLoginSubmitBtn');
+    const resend = bookingResendCode; bookingResendCode = false;
     errEl.style.display = 'none';
     if(!password){
       errEl.textContent = 'Please enter your password.';
       errEl.style.display = 'block';
       return;
     }
+    const otp = (bookingOtpShown() && !resend) ? document.getElementById('bookingLoginOtp').value.trim() : '';
+    if(bookingOtpShown() && !resend && !/^\d{6}$/.test(otp)){
+      errEl.textContent = 'Enter the 6-digit code from your email.';
+      errEl.style.display = 'block';
+      return;
+    }
     btn.disabled = true;
     btn.textContent = 'Logging in…';
     try{
+      const body = { mode: 'login', email: bookingGateEmail, password };
+      if(otp) body.otp = otp;
       const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'login', email: bookingGateEmail, password })
+        body: JSON.stringify(body)
       });
       const data = await res.json();
-      if(!res.ok){
+      if(data.otpRequired){
+        showBookingLoginOtp(data.message);
+        if(!res.ok){ errEl.textContent = data.error || 'Could not log in.'; errEl.style.display = 'block'; }
+      } else if(!res.ok){
+        if(data.locked) hideBookingLoginOtp();
         errEl.textContent = data.error || 'Could not log in.';
         errEl.style.display = 'block';
       } else {
@@ -5591,7 +5630,7 @@
       errEl.style.display = 'block';
     }
     btn.disabled = false;
-    btn.textContent = 'Log in';
+    btn.textContent = bookingOtpShown() ? 'Verify and log in' : 'Log in';
   });
 
   document.getElementById('bookingSignupSubmitBtn').addEventListener('click', async () => {

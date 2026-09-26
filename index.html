@@ -1324,6 +1324,15 @@
           <label for="bookingLoginPassword">Password</label>
           <input type="password" id="bookingLoginPassword" autocomplete="current-password">
         </div>
+        <!-- Locked account + right password: the code emailed to the account. -->
+        <div id="bookingLoginOtpBlock" style="display:none; margin-top:14px;">
+          <p id="bookingLoginOtpNote" style="font-size:12.5px; background:#faf3e6; border:1px solid #ddc9a3; color:#8a6c39; padding:10px 12px; margin:0 0 14px;"></p>
+          <div class="field">
+            <label for="bookingLoginOtp">Code from your email</label>
+            <input type="text" id="bookingLoginOtp" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code">
+          </div>
+          <p style="font-size:12.5px; margin-top:8px;"><a href="#" id="bookingLoginOtpResend" style="color:var(--gold-deep);">Send a new code</a></p>
+        </div>
         <button type="button" class="btn" id="bookingLoginSubmitBtn" style="width:100%; margin-top:18px;">Log in</button>
         <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
         <p id="bookingLoginError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>

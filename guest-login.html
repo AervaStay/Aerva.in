@@ -87,13 +87,23 @@
     <form id="loginForm">
       <div class="field">
         <label for="loginEmail">Email</label>
-        <input id="loginEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+        <input id="loginEmail" type="email" placeholder="you@example.com" autocomplete="username" required>
       </div>
       <div class="field">
         <label for="loginPassword">Password</label>
         <input id="loginPassword" type="password" placeholder="Your password" autocomplete="current-password" required>
       </div>
+      <!-- Shown only when the account is locked (5 wrong passwords) and the
+           right password has now been entered: a code goes to the email. -->
+      <div id="loginOtpBlock" style="display:none;">
+        <p id="loginOtpNote" style="font-size:12.5px; background:#faf3e6; border:1px solid #ddc9a3; color:#8a6c39; padding:10px 12px; margin:0 0 16px;"></p>
+        <div class="field">
+          <label for="loginOtp">Code from your email</label>
+          <input id="loginOtp" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code">
+        </div>
+      </div>
       <button type="submit" class="btn" id="loginBtn">Log in</button>
+      <p class="switch-mode" id="loginOtpResendRow" style="display:none;"><button type="button" id="loginOtpResendBtn">Send a new code</button></p>
       <p class="error" id="loginError" style="display:none;"></p>
       <p class="error" id="socialError" style="display:none;"></p>
       <p class="switch-mode" id="resendVerificationRow" style="display:none;"><button type="button" id="resendVerificationBtn">Resend verification email</button></p>
@@ -153,6 +163,13 @@
     <h1>Choose a new password</h1>
     <p class="subtitle">Enter a new password for your account.</p>
     <form id="resetPasswordForm">
+      <!-- Tells the browser's password manager WHICH account the new
+           password belongs to. Without it the old saved password stays
+           and is autofilled at the next login. -->
+      <div class="field" id="resetEmailField" style="display:none;">
+        <label for="resetEmail">Account</label>
+        <input id="resetEmail" type="email" autocomplete="username" readonly>
+      </div>
       <div class="field">
         <label for="newPassword">New password</label>
         <input id="newPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" required>
@@ -382,6 +399,11 @@
 
     if(resetToken){
       pendingResetToken = resetToken;
+      const resetEmail = (params.get('email') || '').trim().toLowerCase();
+      if(resetEmail){
+        document.getElementById('resetEmail').value = resetEmail;
+        document.getElementById('resetEmailField').style.display = '';
+      }
       showOnly(resetPasswordState);
       return;
     }
@@ -482,36 +504,73 @@
       loginError.style.display = 'block';
       return;
     }
+    const otpShown = document.getElementById('loginOtpBlock').style.display !== 'none';
+    const otpValue = (e && e.resendCode) ? '' : (otpShown ? document.getElementById('loginOtp').value.trim() : '');
+    if(otpShown && !(e && e.resendCode) && !/^\d{6}$/.test(otpValue)){
+      loginError.textContent = 'Enter the 6-digit code from your email.';
+      loginError.style.display = 'block';
+      return;
+    }
+    const idleLabel = otpShown ? 'Verify and log in' : 'Log in';
 
     loginBtn.disabled = true;
     loginBtn.textContent = 'Logging in…';
 
     try{
+      const body = { mode: 'login', email: emailValue, password: passwordValue };
+      if(otpValue) body.otp = otpValue;
       const res = await fetch(API_BASE + '/api/guest-auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'login', email: emailValue, password: passwordValue })
+        body: JSON.stringify(body)
       });
       const data = await res.json();
-      if(res.ok){
+      if(res.ok && data.sessionToken){
         storeSession(data.sessionToken, data.guest);
         window.location.href = landingPageFor(data.guest);
+        return;
+      }
+      if(data.otpRequired){
+        showLoginOtp(data.message);
+        if(!res.ok){ loginError.textContent = data.error || 'Something went wrong. Please try again.'; loginError.style.display = 'block'; }
       } else {
+        if(data.locked) hideLoginOtp();
         loginError.textContent = data.error || 'Something went wrong. Please try again.';
         loginError.style.display = 'block';
         if(data.requiresVerification){
           pendingVerifyEmail = emailValue;
           resendRow.style.display = 'block';
         }
-        loginBtn.disabled = false;
-        loginBtn.textContent = 'Log in';
       }
     } catch(err){
       loginError.textContent = 'Something went wrong. Please try again.';
       loginError.style.display = 'block';
-      loginBtn.disabled = false;
-      loginBtn.textContent = 'Log in';
     }
+    loginBtn.disabled = false;
+    loginBtn.textContent = document.getElementById('loginOtpBlock').style.display !== 'none' ? 'Verify and log in' : idleLabel;
+  });
+
+  // Locked account, right password: ask for the emailed code.
+  function showLoginOtp(message){
+    const block = document.getElementById('loginOtpBlock');
+    if(message) document.getElementById('loginOtpNote').textContent = message;
+    const fresh = block.style.display === 'none';
+    block.style.display = '';
+    document.getElementById('loginOtpResendRow').style.display = 'block';
+    if(fresh || message){ document.getElementById('loginOtp').value = ''; }
+    document.getElementById('loginOtp').focus();
+  }
+  function hideLoginOtp(){
+    document.getElementById('loginOtpBlock').style.display = 'none';
+    document.getElementById('loginOtpResendRow').style.display = 'none';
+    document.getElementById('loginOtp').value = '';
+    document.getElementById('loginBtn').textContent = 'Log in';
+  }
+  // A different email or password means a different attempt: start over.
+  ['loginEmail', 'loginPassword'].forEach(id => document.getElementById(id).addEventListener('input', hideLoginOtp));
+  document.getElementById('loginOtpResendBtn').addEventListener('click', function(){
+    const ev = new Event('submit', { cancelable: true }); ev.resendCode = true;
+    document.getElementById('loginForm').dispatchEvent(ev);
   });
 
   document.getElementById('resendVerificationBtn').addEventListener('click', async function(){
@@ -828,6 +887,17 @@
         // One click both resets the password AND logs the guest in — same
         // convenience as the email-verification link (see guest-auth.js).
         storeSession(data.sessionToken, data.guest);
+        // Replace the password the browser has saved for this account, so
+        // the next login does not autofill the old one.
+        const savedFor = (data.guest && data.guest.email) || document.getElementById('resetEmail').value;
+        try{
+          if(savedFor && window.PasswordCredential && navigator.credentials && navigator.credentials.store){
+            await Promise.race([
+              navigator.credentials.store(new PasswordCredential({ id: savedFor, password: newPasswordValue })),
+              new Promise(r => setTimeout(r, 1500))
+            ]);
+          }
+        } catch(_){ /* not supported or declined — the password is still changed */ }
         window.location.href = landingPageFor(data.guest);
       } else if(res.status === 400 && /invalid or has expired/i.test(data.error || '')){
         document.getElementById('resetExpiredMsg').textContent = data.error;

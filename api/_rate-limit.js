@@ -25,7 +25,11 @@ function getClientIp(req) {
 // Fails OPEN (returns 0 / not-limited) on a DB error — a rate-limit
 // check itself breaking should never be what blocks someone from
 // logging in or booking.
-async function countRecentAttempts(sql, { action, windowMinutes, byActor = null, byEmail = null, byIp = null, onlyFailures = false }) {
+// sinceSuccessOf (an action, or a list of them): only count rows newer than
+// this actor's latest successful row of any of those actions.
+// reasons: only count rows whose metadata.reason is one of these. (e.g. a completed password reset wipes the slate for
+// failed logins, as the lockout message promises).
+async function countRecentAttempts(sql, { action, windowMinutes, byActor = null, byEmail = null, byIp = null, onlyFailures = false, sinceSuccessOf = null, reasons = null }) {
   const actor = byActor !== null ? byActor : byEmail;
   try {
     const rows = await sql`
@@ -35,6 +39,11 @@ async function countRecentAttempts(sql, { action, windowMinutes, byActor = null,
         AND (${onlyFailures} = false OR success = false)
         AND (${actor}::text IS NULL OR actor_identifier = ${actor})
         AND (${byIp}::text IS NULL OR metadata->>'ip' = ${byIp})
+        AND (${reasons ? [].concat(reasons) : null}::text[] IS NULL OR metadata->>'reason' = ANY(${reasons ? [].concat(reasons) : null}::text[]))
+        AND (${sinceSuccessOf ? [].concat(sinceSuccessOf) : null}::text[] IS NULL OR created_at > COALESCE((
+          SELECT max(r.created_at) FROM audit_log r
+          WHERE r.action = ANY(${sinceSuccessOf ? [].concat(sinceSuccessOf) : null}::text[]) AND r.success = true AND r.actor_identifier = ${actor}
+        ), '-infinity'::timestamptz))
     `;
     return Number(rows[0]?.count || 0);
   } catch (err) {
