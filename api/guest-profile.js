@@ -294,7 +294,8 @@ module.exports = async (req, res) => {
   let actingCtx = null; // set when a co-host works for a host (below)
   if (req.query && req.query.actingHost !== undefined) {
     const ctx = await resolveActingHost(sql, guestId, req.query.actingHost);
-    if (!ctx) return res.status(403).json({ error: 'You are not a co-host for this host, or your access has ended.' });
+    // cohostEnded tells the page to leave co-host mode by itself (aerva-cohost.js).
+    if (!ctx) return res.status(403).json({ error: 'You are not a co-host for this host, or your access has ended.', cohostEnded: true });
     const missingDetails = await cohostDetailsMissing(sql, guestId, ctx.hostId);
     if (missingDetails.length) return res.status(403).json({ error: DETAILS_REQUIRED_MESSAGE, detailsRequired: true, missing: missingDetails });
     const mode = req.method === 'GET' ? req.query.mode : (req.body || {}).mode;
