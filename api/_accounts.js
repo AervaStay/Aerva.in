@@ -15,12 +15,79 @@
 
 const DELETED_NAME = 'Deleted user';
 
+const { createToken } = require('./_approval-token');
+
+// Postgres "undefined column": the only error that means "this migration
+// has not run yet" rather than "the database is having a problem".
+const isMissingColumn = (err) => !!err && (err.code === '42703' || /column .* does not exist/i.test(String(err.message || '')));
+
 async function isAccountDeleted(sql, guestId) {
   if (!guestId) return false;
   try {
     const r = await sql`SELECT deleted_at FROM guests WHERE id = ${guestId}`;
     return !!(r[0] && r[0].deleted_at);
-  } catch (err) { return false; } // before migration_account_status.sql
+  } catch (err) {
+    // Before migration_account_status.sql the column is missing: nothing
+    // can have been deleted yet. Any other failure is treated as deleted
+    // (fail closed) — a database error must never let a deleted account act.
+    if (isMissingColumn(err)) return false;
+    console.error('isAccountDeleted check failed (refusing):', err.message);
+    return true;
+  }
+}
+
+// ---- Signing out everywhere ----
+// A guest session token is signed and stateless (see _approval-token.js),
+// so on its own it cannot be taken back. Each token therefore carries the
+// account's guests.session_version at the time it was issued ({ sv }), and
+// every request compares it with the current number. Raising the number
+// (bumpSessionVersion) ends every session the account has, on every
+// device. Tokens without sv are version 0, so sessions issued before
+// migration_session_version.sql keep working until the first bump.
+//
+// sessionStatus → 'ok' | 'revoked' (logged out, or no such account) |
+//                 'deleted' | 'error' (the check itself could not run).
+async function sessionStatus(sql, payload) {
+  if (!payload || payload.action !== 'guest-session' || !payload.listingId) return 'revoked';
+  try {
+    const r = (await sql`SELECT to_jsonb(g)->>'deleted_at' AS deleted_at, to_jsonb(g)->>'session_version' AS sv
+                         FROM guests g WHERE g.id = ${payload.listingId}`)[0];
+    if (!r) return 'revoked';
+    if (r.deleted_at) return 'deleted';
+    return (Number(payload.sv) || 0) === (Number(r.sv) || 0) ? 'ok' : 'revoked';
+  } catch (err) {
+    console.error('sessionStatus check failed:', err.message);
+    return 'error';
+  }
+}
+
+// The simple form for endpoints: true = refuse this request as not signed
+// in. Fails closed (a check that cannot run refuses).
+async function isSessionRevoked(sql, payload) {
+  return (await sessionStatus(sql, payload)) !== 'ok';
+}
+
+// A fresh 30-day (or lifetimeMs) session token under the account's
+// current version. Version 0 gives exactly the old token format.
+async function newSessionToken(sql, guestId, lifetimeMs) {
+  let sv = 0;
+  try {
+    const r = (await sql`SELECT to_jsonb(g)->>'session_version' AS sv FROM guests g WHERE g.id = ${guestId}`)[0];
+    sv = Number(r && r.sv) || 0;
+  } catch (err) { console.error('session version read failed (issuing version 0):', err.message); }
+  return createToken(guestId, 'guest-session', lifetimeMs, sv ? { sv } : null);
+}
+
+// Logs the account out everywhere. Returns the new version, or null when
+// it could not be raised (before the migration: nothing to raise).
+async function bumpSessionVersion(sql, guestId) {
+  try {
+    const r = await sql`UPDATE guests SET session_version = session_version + 1 WHERE id = ${guestId} RETURNING session_version`;
+    return r[0] ? Number(r[0].session_version) : null;
+  } catch (err) {
+    if (!isMissingColumn(err)) console.error('bumpSessionVersion failed:', err.message);
+    return null;
+  }
 }
 
 // What still stops this account being deleted (empty = none).
@@ -129,6 +196,7 @@ async function deleteAccount(sql, guestId) {
   await tryRun('ID proof', sql`UPDATE guests SET id_document_url = NULL, id_document_type = NULL, id_status = NULL, id_rejection_reason = NULL WHERE id = ${guestId}`);
   await tryRun('stay dispute text', sql`UPDATE stay_disputes SET details = NULL, evidence = '[]'::jsonb WHERE guest_id = ${guestId}`);
   await tryRun('mark deleted', sql`UPDATE guests SET deleted_at = now() WHERE id = ${guestId}`);
+  await bumpSessionVersion(sql, guestId);   // every open session ends now
   return { ok: true };
 }
 
@@ -156,4 +224,5 @@ async function reactivateIfPaused(sql, guestId) {
   }
 }
 
-module.exports = { isAccountDeleted, deletionBlockers, deleteAccount, reactivateIfPaused, DELETED_NAME };
+module.exports = { isAccountDeleted, deletionBlockers, deleteAccount, reactivateIfPaused, DELETED_NAME,
+                   sessionStatus, isSessionRevoked, newSessionToken, bumpSessionVersion };

@@ -23,8 +23,9 @@
 
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
+const { isSessionRevoked } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
-const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules');
+const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
 const { timezoneForAddress } = require('./_timezones');
 const { sanitizeBody } = require('./_plain-text');
 const { AGREEMENT_VERSION } = require('./_agreements');
@@ -62,7 +63,23 @@ const SITE_BASE = 'https://aerva.in';
 // SITE_BASE + '/api/...' 404s, since GitHub Pages has no idea what that
 // path is.
 const API_BASE = 'https://aerva-in.vercel.app';
-const ADMIN_EMAIL = 'hello@aerva.in';
+const ADMIN_EMAIL = process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in';
+
+// Max guests as the form offers it: a whole number, or "12+" for the top
+// option. Stored as text; readers use parseMaxGuests (_pricing.js), which
+// reads "12+" as 12. null = not a valid answer.
+function normalizeMaxGuests(raw) {
+  const t = String(raw == null ? '' : raw).trim();
+  if (/^\d{1,3}\+$/.test(t) && Number(t.slice(0, -1)) >= 1) return String(Number(t.slice(0, -1))) + '+';
+  const n = Number(t);
+  if (t && Number.isFinite(n) && n >= 1) return String(Math.floor(n));
+  return null;
+}
+
+// Everything a host typed is escaped before it goes into the admin's email.
+function escHtml(t) {
+  return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 // Resolves the hosts.id for a logged-in guest, creating and linking that
 // row the first time they list a property. Returns { hostId } on success,
@@ -103,7 +120,10 @@ async function getOrCreateHostForGuest(guest) {
   return { hostId };
 }
 
-async function sendAdminNotification(listing) {
+// changeNote: set when a LIVE (approved) experience was edited — its
+// photos or name changed and went live without review; the email says
+// what changed instead of "new submission".
+async function sendAdminNotification(listing, changeNote = null) {
   if (!process.env.RESEND_API_KEY) {
     console.warn('RESEND_API_KEY not set — skipping admin notification email.');
     return;
@@ -119,8 +139,8 @@ async function sendAdminNotification(listing) {
     if (!urls.length) return '';
     return `
       <p style="font-size:12px; opacity:0.6; margin:12px 0 4px;">${label}</p>
-      <div style="display:flex; gap:6px;">${urls.slice(0, 5).map(url =>
-        `<img src="${url}" width="90" height="90" style="object-fit:cover; border-radius:4px;">`
+      <div style="display:flex; gap:6px;">${urls.filter(isAervaBlobUrl).slice(0, 5).map(url =>
+        `<img src="${escHtml(url)}" width="90" height="90" style="object-fit:cover; border-radius:4px;">`
       ).join('')}</div>
     `;
   }
@@ -130,23 +150,24 @@ async function sendAdminNotification(listing) {
     : '<p style="font-size:12px; opacity:0.6;">No photos attached to this submission.</p>';
 
   const isExperienceListing = listing.listing_type === 'experience';
-  const typeLabel = isExperienceListing ? 'New experience submitted' : 'New listing submitted';
+  const typeLabel = changeNote ? 'Live experience changed — please check it' : isExperienceListing ? 'New experience submitted' : 'New listing submitted';
   const priceLabel = isExperienceListing
     ? `Price: ₹${listing.nightly_rate || 'not specified'}${listing.experience_price_unit === 'per_person' ? ' per person' : ' flat'}`
     : `Rate: ₹${listing.nightly_rate || 'not specified'}/night`;
   const hostingLine = isExperienceListing
-    ? `<p>Hosted at: listing #${listing.hosting_listing_id || 'not set'} · Category: ${listing.experience_category || 'not set'}</p>`
+    ? `<p>Hosted at: listing #${escHtml(listing.hosting_listing_id || 'not set')} · Category: ${escHtml(listing.experience_category || 'not set')}</p>`
     : '';
 
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">${typeLabel}</h2>
-      <p><strong>${listing.property_name}</strong>${listing.area ? ' — ' + listing.area + ', ' + listing.city : listing.city ? ' — ' + listing.city : ''}</p>
-      <p>Host: ${listing.host_name} (${listing.host_email}, ${listing.host_phone})</p>
+      ${changeNote ? `<p>${changeNote}</p>` : ''}
+      <p><strong>${escHtml(listing.property_name)}</strong>${listing.area ? ' — ' + escHtml(listing.area) + ', ' + escHtml(listing.city) : listing.city ? ' — ' + escHtml(listing.city) : ''}</p>
+      <p>Host: ${escHtml(listing.host_name)} (${escHtml(listing.host_email)}, ${escHtml(listing.host_phone)})</p>
       ${hostingLine}
-      <p>${priceLabel}</p>
+      <p>${escHtml(priceLabel)}</p>
       ${photoThumbnails}
-      <p style="white-space:pre-wrap;">${listing.description}</p>
+      <p style="white-space:pre-wrap;">${escHtml(listing.description)}</p>
       <div style="margin-top:24px;">
         <a href="${approveLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; margin-right:12px;">Approve</a>
         <a href="${rejectLink}" style="border:1px solid #a3402f; color:#a3402f; padding:12px 24px; text-decoration:none;">Reject</a>
@@ -164,7 +185,7 @@ async function sendAdminNotification(listing) {
     body: JSON.stringify({
       from: 'Aerva <hello@aerva.in>', // requires aerva.in verified in Resend — see below
       to: ADMIN_EMAIL,
-      subject: `New listing: ${listing.property_name}`,
+      subject: `${changeNote ? 'Listing changed' : 'New listing'}: ${listing.property_name}`,
       html
     })
   });
@@ -191,6 +212,8 @@ module.exports = async (req, res) => {
   if (!sessionPayload || sessionPayload.action !== 'guest-session') {
     return res.status(401).json({ error: 'Please log in to list a property.' });
   }
+  // Logged out everywhere, or the account deleted (fails closed).
+  if (await isSessionRevoked(sql, sessionPayload)) return res.status(401).json({ error: 'Please log in again.' });
   const guestId = sessionPayload.listingId; // generically-named token field — see host-auth.js note
 
   try {
@@ -257,7 +280,7 @@ module.exports = async (req, res) => {
     // verify it's really this host's own draft before touching it.
     let existingDraft = null;
     if (listingId) {
-      const rows = await sql`SELECT id, host_id, status, listing_type FROM listings WHERE id = ${listingId}`;
+      const rows = await sql`SELECT id, host_id, status, listing_type, property_name, exterior_photo_urls, interior_photo_urls, cover_photo_url FROM listings WHERE id = ${listingId}`;
       existingDraft = rows[0];
       if (!existingDraft || existingDraft.host_id !== hostId) {
         return res.status(403).json({ error: 'You do not have permission to edit this listing.' });
@@ -321,7 +344,7 @@ module.exports = async (req, res) => {
         if (dupe) {
           console.warn(`submit-listing rejected: likely duplicate of listing #${dupe.id} (${dupe.status})`);
           return res.status(409).json({
-            error: `This looks like a duplicate of your existing listing "${dupe.property_name}" (${dupe.status}) — same name, same configuration, and at least one identical photo. If this is meant to be a different listing (e.g. a different room configuration of the same property), please use a distinct name and at least one different photo. If you meant to edit the existing listing instead, use "Manage Price & Offers" from your dashboard.`
+            error: `This looks like a duplicate of your existing listing "${dupe.property_name}" (${dupe.status}) — same name, same configuration, and at least one identical photo. If this is meant to be a different listing (e.g. a different room configuration of the same property), please use a distinct name and at least one different photo. If you meant to edit the existing listing instead, use "Manage listing" from your dashboard.`
           });
         }
       }
@@ -444,8 +467,8 @@ module.exports = async (req, res) => {
         // stated capacity at all, undermining exactly the kind of
         // guest-count search filtering get-listings.js relies on.
         if (propertyType !== 'Resort') {
-          const maxGuestsNum = Number(maxGuests);
-          if (!maxGuests || isNaN(maxGuestsNum) || maxGuestsNum < 1) {
+          // "12+" is the form's top option — a valid answer, not an error.
+          if (!normalizeMaxGuests(maxGuests)) {
             return res.status(400).json({ error: 'Please select the maximum number of guests this property can accommodate.' });
           }
         }
@@ -481,9 +504,9 @@ module.exports = async (req, res) => {
           ? roomPhotos.filter(r => {
               if (!r || typeof r.roomName !== 'string' || !r.roomName.trim()) return false;
               if (r.isBedroom) {
-                return Array.isArray(r.urls) && r.urls.some(u => typeof u === 'string' && u.startsWith('https://'));
+                return Array.isArray(r.urls) && r.urls.some(isAervaBlobUrl);
               }
-              return typeof r.url === 'string' && r.url.startsWith('https://');
+              return isAervaBlobUrl(r.url);
             })
           : [];
         const MANDATORY_FIXED_SPACES = propertyType === 'Resort' ? [] : ['Kitchen', 'Washroom', 'Living Room'];
@@ -538,10 +561,10 @@ module.exports = async (req, res) => {
     // at 20 per category, matching MAX_LISTING_PHOTOS in aerva.html — this
     // is the real, enforced limit; the frontend cap is just UX, so this
     // one has to match it or extra photos would silently vanish on save.
+    // Aerva's own Blob store only (_listing-rules.js): any other address,
+    // "javascript:" above all, is dropped.
     function sanitizePhotoUrls(urls){
-      return Array.isArray(urls)
-        ? urls.filter(url => typeof url === 'string' && url.startsWith('https://')).slice(0, 20)
-        : [];
+      return aervaBlobUrlsOnly(urls, 20) || [];
     }
     const safeExteriorUrls = sanitizePhotoUrls(exteriorPhotoUrls);
     const safeInteriorUrls = sanitizePhotoUrls(interiorPhotoUrls);
@@ -549,7 +572,7 @@ module.exports = async (req, res) => {
     // (the UPDATE path below never touches this column) — interior-first,
     // matching the site's own display convention elsewhere. Previously
     // this was left NULL until a host manually chose one later in
-    // "Manage Price & Offers," which meant most listings had no cover
+    // "Manage listing," which meant most listings had no cover
     // photo at all for a long stretch after going live — breaking
     // anything that specifically wanted cover photos only (e.g. the
     // homepage hero slideshow). A host can still explicitly choose one
@@ -693,7 +716,7 @@ module.exports = async (req, res) => {
       const updated = await sql`
         UPDATE listings SET
           property_name = ${propertyName}, city = ${safeCity}, area = ${area || null}, property_type = ${propertyType || null},
-          bedrooms = ${bedrooms || null}, max_guests = ${maxGuests || null}, nightly_rate = ${rate},
+          bedrooms = ${bedrooms || null}, max_guests = ${normalizeMaxGuests(maxGuests)}, nightly_rate = ${rate},
           description = ${description || null}, amenities = ${JSON.stringify(amenities || [])}, services = ${JSON.stringify(services || [])},
           host_name = ${hostName || null}, host_phone = ${hostPhone || null},
           discount_type = ${discountType || null}, discount_value = ${discountValue ? Number(discountValue) : null},
@@ -743,7 +766,7 @@ module.exports = async (req, res) => {
           status, photo_hashes
         ) VALUES (
           ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
-          ${maxGuests || null}, ${rate},
+          ${normalizeMaxGuests(maxGuests)}, ${rate},
           ${description || null}, ${JSON.stringify(amenities || [])}, ${JSON.stringify(services || [])},
           ${hostName || null}, ${authenticatedHostEmail}, ${hostPhone || null}, ${hostId},
           ${discountType || null}, ${discountValue ? Number(discountValue) : null},
@@ -796,8 +819,8 @@ module.exports = async (req, res) => {
           .map(r => {
             if (!r || typeof r.roomName !== 'string' || !r.roomName.trim()) return null;
             const urls = r.isBedroom
-              ? (Array.isArray(r.urls) ? r.urls.filter(u => typeof u === 'string' && u.startsWith('https://')) : [])
-              : (typeof r.url === 'string' && r.url.startsWith('https://') ? [r.url] : []);
+              ? (Array.isArray(r.urls) ? r.urls.filter(isAervaBlobUrl) : [])
+              : (isAervaBlobUrl(r.url) ? [r.url] : []);
             if (!urls.length) return null;
             return { roomName: r.roomName.trim().slice(0, 100), urls };
           })
@@ -844,10 +867,10 @@ module.exports = async (req, res) => {
       // records regardless (they're still part of interior_photo_urls
       // above, just not this).
       const safeRoomPhotos = Array.isArray(roomPhotos)
-        ? roomPhotos.filter(r => r && r.isBedroom && typeof r.roomName === 'string' && r.roomName.trim() && Array.isArray(r.urls) && r.urls.some(u => typeof u === 'string' && u.startsWith('https://')))
+        ? roomPhotos.filter(r => r && r.isBedroom && typeof r.roomName === 'string' && r.roomName.trim() && Array.isArray(r.urls) && r.urls.some(isAervaBlobUrl))
           .map(r => ({
             roomName: r.roomName.trim().slice(0, 100),
-            urls: r.urls.filter(u => typeof u === 'string' && u.startsWith('https://')),
+            urls: r.urls.filter(isAervaBlobUrl),
             maxOccupancy: Number(r.maxOccupancy) > 0 ? Number(r.maxOccupancy) : null,
             price: Number(r.price) > 0 ? Number(r.price) : null
           }))
@@ -865,9 +888,35 @@ module.exports = async (req, res) => {
         action: 'listing_submitted', success: true, actorType: 'host', actorIdentifier: authenticatedHostEmail,
         targetType: 'listing', targetId: listing.id
       });
+      // A live (approved) experience edited here goes live at once. When
+      // its photos or name changed, the admin is told exactly that (and it
+      // is logged), so it gets looked at — see update-listing-pricing.js
+      // for the same rule on stays.
+      let changeNote = null;
+      if (existingDraft && existingDraft.status === 'approved') {
+        const oldPhotos = [...(existingDraft.exterior_photo_urls || []), ...(existingDraft.interior_photo_urls || [])];
+        const newPhotos = [...safeExteriorUrls, ...safeInteriorUrls];
+        const added = newPhotos.filter(u => !oldPhotos.includes(u));
+        const removed = oldPhotos.filter(u => !newPhotos.includes(u)).length;
+        const renamed = String(propertyName || '').trim() !== String(existingDraft.property_name || '').trim();
+        const coverChanged = (safeCoverPhotoUrl || null) !== (existingDraft.cover_photo_url || null);
+        const bits = [];
+        if (renamed) bits.push(`Name changed from "${escHtml(existingDraft.property_name)}" to "${escHtml(propertyName)}".`);
+        if (added.length) bits.push(`${added.length} new photo${added.length === 1 ? '' : 's'} added.`);
+        if (removed) bits.push(`${removed} photo${removed === 1 ? '' : 's'} removed.`);
+        if (coverChanged) bits.push('Cover photo changed.');
+        changeNote = bits.length ? bits.join(' ') : 'Details edited (no photo or name change).';
+        if (added.length || removed || renamed || coverChanged) {
+          await logAudit(sql, {
+            action: 'listing_photos_changed', success: true, actorType: 'host', actorIdentifier: authenticatedHostEmail,
+            targetType: 'listing', targetId: listing.id,
+            metadata: { photosAdded: added, photosRemoved: removed, coverChanged, ...(renamed ? { nameFrom: existingDraft.property_name, nameTo: propertyName } : {}) }
+          });
+        }
+      }
       // Best-effort — a failed notification email shouldn't fail the whole submission.
       try {
-        await sendAdminNotification(listing);
+        await sendAdminNotification(listing, changeNote);
       } catch (emailErr) {
         console.error('Admin notification email failed:', emailErr);
       }

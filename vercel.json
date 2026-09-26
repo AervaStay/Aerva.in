@@ -1,4 +1,8 @@
 {
+  "functions": {
+    "api/get-listings.js": { "maxDuration": 60 },
+    "api/get-pending-listings.js": { "maxDuration": 60 }
+  },
   "crons": [
     {
       "path": "/api/get-listings?refreshCurrencyRates=1",

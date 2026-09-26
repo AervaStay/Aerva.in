@@ -4,7 +4,9 @@
 // approach as everywhere else (see _approval-token.js): a guest's browser
 // stores a signed session token, never their actual password.
 //
-//   POST { mode: 'signup', email, password, name?, phone? }
+//   POST { mode: 'signup', email, password, name?, phone?, consent: true }
+//     consent: the Terms of Service and Privacy Policy tick. Refused
+//     without it; version, time and IP are saved on the account (DPDP).
 //     Creates a new guest account, UNVERIFIED. Does not log them in —
 //     instead sends a verification email with a 24-hour link. The
 //     password is hashed with bcrypt before it ever touches the database
@@ -19,16 +21,19 @@
 //     got lost.
 //
 //   POST { mode: 'forgot-password', email }
-//     Sends a password reset link if an account exists for this email —
-//     but responds with the same success message either way, so this
-//     can't be used to check which emails have Aerva accounts.
+//     Sends a password reset link if an account exists for this email,
+//     and responds with the same success message either way. That is not
+//     an account-existence secret: 'check-email' (used by the booking
+//     gate) and 'signup' (409) both say whether an email is registered —
+//     the owner's decision, for a kinder booking flow. Rate limits are the
+//     protection against harvesting.
 //
 //   POST { mode: 'reset-password', resetToken, newPassword }
 //     Sets a new password using a link from the forgot-password email,
 //     then logs the guest in immediately (same "one click, verified AND
 //     logged in" convenience as the email-verification link below).
 //
-//   POST { mode: 'google', idToken }
+//   POST { mode: 'google', idToken | accessToken, consent? }
 //     Verifies a Google Sign-In credential (see _social-auth.js) and
 //     logs the guest in, creating an account on first sign-in. Looked up
 //     first by google_id, then by email — a guest who already has an
@@ -36,6 +41,12 @@
 //     onto it) rather than a duplicate second account. Google's own
 //     attestation of the email is trusted, so the account is marked
 //     email_verified immediately, no separate verification email needed.
+//     Creating a NEW account this way needs consent: true, like sign-up
+//     (an existing account just signs in). If the matched account's email
+//     was never verified, whoever registered it never proved the inbox:
+//     its password and phone are cleared and its sessions ended before
+//     Google is linked, so a pre-registered account cannot be kept by
+//     someone else.
 //
 //   GET  ?token=<verifyToken>
 //     Called when a guest clicks the link in their verification email.
@@ -50,7 +61,7 @@
 const bcrypt = require('bcryptjs');
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
-const { isAccountDeleted, reactivateIfPaused } = require('./_accounts');
+const { isAccountDeleted, reactivateIfPaused, sessionStatus, newSessionToken, bumpSessionVersion } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
@@ -71,6 +82,10 @@ const RESET_LINK_LIFETIME_MS = 60 * 60 * 1000; // 1 hour — shorter than email 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SITE_BASE = 'https://aerva.in';
+// The Terms of Service / Privacy Policy a new account agrees to. Kept in
+// step by hand with TERMS_VERSION in guest-login.html (and with
+// AERVA_POLICIES.version / .updated in aerva-policies.js).
+const TERMS_VERSION = '1.0 (26 September 2026)';
 // Same lifetime host-listings.js gives a manage link, so the one in the
 // bell behaves exactly like the one on the dashboard.
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
@@ -88,6 +103,71 @@ function safeGuest(guest) {
   return { id: guest.id, email: guest.email, name: guest.name, phone: guest.phone, accountType: guest.account_type };
 }
 
+// Whether this account has a LIVE listing — not merely whether it has ever
+// submitted one — and whether it co-hosts one. Sent with every sign-in, not
+// only the session check, so the sign-in page can send a host (or co-host)
+// straight to Today instead of the Suites page. Never throws: a failure
+// here hides host navigation for one page load, it never blocks a sign-in.
+//
+// Deliberately not restricted to listing_type = 'stay'. An approved
+// experience is a live listing too, and its host has real bookings,
+// earnings and messages to manage.
+async function hostFlags(sql, guest) {
+  let hasActiveListing = false, isCohost = false;
+  let hostId = guest.host_id;
+  try {
+    if (hostId === undefined) hostId = ((await sql`SELECT host_id FROM guests WHERE id = ${guest.id}`)[0] || {}).host_id;
+    if (hostId) {
+      const live = await sql`SELECT 1 FROM listings WHERE host_id = ${hostId} AND status = 'approved' LIMIT 1`;
+      hasActiveListing = live.length > 0;
+    }
+  } catch (err) {
+    console.error('hasActiveListing check failed (non-fatal):', err);
+  }
+  // Does this account co-host for somebody, with at least one live listing
+  // in its scope? My Collection and My Earnings hang off this as well as
+  // hasActiveListing — a co-host owns no listings, so without it they had
+  // no route to the properties they were given at all.
+  try {
+    const co = await sql`
+      SELECT 1 FROM cohosts c
+      -- cast spelled out, as elsewhere in this codebase (see the
+      -- unnest(...::int[]) in host-listings.js): listing_ids is an
+      -- integer[], and leaving the comparison to infer its type is
+      -- what turns a schema that is a shade different into a silent
+      -- "no operator: bigint = text" and a hidden menu.
+      JOIN listings l ON l.id = ANY(c.listing_ids::int[]) AND l.status = 'approved'
+      WHERE c.cohost_guest_id = ${guest.id} AND c.status = 'active'
+      LIMIT 1
+    `;
+    isCohost = co.length > 0;
+  } catch (err) {
+    console.error('co-host check failed (non-fatal):', err);
+  }
+  return { hasActiveListing, isCohost };
+}
+
+// What every successful sign-in answers with: a session under the account's
+// current session_version (see _accounts.js) and the account, with its
+// host flags. Also un-pauses a paused account (logging in brings it back).
+async function signedIn(sql, guest) {
+  await reactivateIfPaused(sql, guest.id);
+  const sessionToken = await newSessionToken(sql, guest.id, SESSION_LIFETIME_MS);
+  return { sessionToken, guest: { ...safeGuest(guest), ...(await hostFlags(sql, guest)) } };
+}
+
+// A new account's agreement to the Terms and Privacy Policy. Saved
+// separately from the INSERT so sign-up still works before
+// migration_session_version.sql adds the columns.
+async function recordConsent(sql, guestId, ip) {
+  try {
+    await sql`UPDATE guests SET consent_version = ${TERMS_VERSION}, consent_at = now(), consent_ip = ${ip || null} WHERE id = ${guestId}`;
+  } catch (err) {
+    console.error('consent not recorded (run migration_session_version.sql):', err.message);
+  }
+}
+const consentGiven = (body) => !!body && (body.consent === true || body.consent === 'true');
+
 // Shared by the 'google' mode below. Three cases, checked in order:
 //   1. A guest already has this Google id on file (google_id) — just log
 //      them in, nothing to change.
@@ -99,25 +179,47 @@ function safeGuest(guest) {
 //      proved the guest owns that inbox.
 //   3. No match at all — create a brand-new account, marked verified
 //      immediately (same reasoning as the link case).
-async function findOrLinkSocialGuest(sql, { providerId, email, name }) {
-  const byProviderId = await sql`SELECT id, email, name, phone, account_type FROM guests WHERE google_id = ${providerId}`;
+async function findOrLinkSocialGuest(sql, { providerId, email, name, consent, ip }) {
+  const byProviderId = await sql`SELECT id, email, name, phone, account_type, host_id FROM guests WHERE google_id = ${providerId}`;
   if (byProviderId[0]) return byProviderId[0];
 
   if (email) {
-    const byEmail = await sql`SELECT id, email, name, phone, account_type FROM guests WHERE email = ${email}`;
-    if (byEmail[0]) {
+    const byEmail = await sql`SELECT id, email, name, phone, account_type, host_id, email_verified,
+                                     to_jsonb(guests)->>'email_verified_at' AS email_verified_at
+                              FROM guests WHERE lower(btrim(email)) = ${String(email).trim().toLowerCase()}`;
+    const found = byEmail[0];
+    if (found) {
+      // Someone registered this email without ever proving the inbox
+      // (signed up, never clicked the link). Google has just proved it
+      // belongs to THIS person, so that registration was not theirs to
+      // keep: its password and phone go, and any session it has ends,
+      // before Google is linked. A verified account links as before.
+      if (!found.email_verified && !found.email_verified_at) {
+        await sql`UPDATE guests SET password_hash = NULL, phone = NULL WHERE id = ${found.id}`;
+        try { await sql`UPDATE guests SET phone_verified = false WHERE id = ${found.id}`; } catch (e) { /* before migration_session_version.sql */ }
+        await bumpSessionVersion(sql, found.id);
+        await logAudit(sql, { action: 'guest_unverified_account_claimed', success: true, actorType: 'guest', actorIdentifier: email,
+          targetType: 'guest', targetId: found.id, metadata: { provider: 'google', ip } });
+      }
       const linked = await sql`
         UPDATE guests SET google_id = ${providerId}, email_verified = TRUE, name = COALESCE(name, ${name})
-        WHERE id = ${byEmail[0].id} RETURNING id, email, name, phone, account_type
+        WHERE id = ${found.id} RETURNING id, email, name, phone, account_type, host_id
       `;
+      try { await sql`UPDATE guests SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = ${found.id}`; } catch (e) { /* column not added */ }
       return linked[0];
     }
   }
 
+  // A brand-new account: the same consent sign-up asks for.
+  if (!consent) {
+    throw Object.assign(new Error('To create your Aerva account, please tick the box to agree to the Terms of Service and Privacy Policy, then continue with Google again.'),
+      { isUserFacing: true, status: 400, needsConsent: true });
+  }
   const inserted = await sql`
     INSERT INTO guests (email, name, google_id, email_verified) VALUES (${email}, ${name}, ${providerId}, TRUE)
-    RETURNING id, email, name, phone, account_type
+    RETURNING id, email, name, phone, account_type, host_id
   `;
+  await recordConsent(sql, inserted[0].id, ip);
   return inserted[0];
 }
 
@@ -264,20 +366,22 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'This verification link is invalid or has expired. Please request a new one.' });
       }
       try {
+        // A deleted account can never come back through an old link.
+        if (await isAccountDeleted(sql, payload.listingId)) return res.status(401).json({ error: 'This account has been deleted.', deleted: true });
         const rows = await sql`
           UPDATE guests SET email_verified = TRUE WHERE id = ${payload.listingId}
-          RETURNING id, email, name, phone, account_type
+          RETURNING id, email, name, phone, account_type, host_id
         `;
         const guest = rows[0];
         if (!guest) return res.status(404).json({ error: 'Account not found.' });
+        try { await sql`UPDATE guests SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = ${guest.id}`; } catch (e) { /* column not added */ }
 
-        await reactivateIfPaused(sql, guest.id);   // logging in un-pauses a paused account
-      const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+        const out = await signedIn(sql, guest);   // also un-pauses a paused account
         await logAudit(sql, {
           action: 'guest_email_verified', success: true, actorType: 'guest', actorIdentifier: guest.email,
           targetType: 'guest', targetId: guest.id
         });
-        return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
+        return res.status(200).json(out);
       } catch (err) {
         console.error('guest-auth (verify) error:', err);
         return res.status(500).json({ error: 'Could not verify your email right now. Please try again.' });
@@ -292,77 +396,34 @@ module.exports = async (req, res) => {
     if (!payload || payload.action !== 'guest-session') {
       return res.status(401).json({ error: 'Please log in again.' });
     }
-    // A deleted account can never be used again, even from an open browser.
-    if (await isAccountDeleted(sql, payload.listingId)) return res.status(401).json({ error: 'This account has been deleted.', deleted: true });
+    // A deleted account can never be used again, even from an open browser;
+    // and a session ended from elsewhere (password reset, email change,
+    // pause, "log out of all devices") is over here too. A check that
+    // cannot run answers 503, so a database hiccup never signs anyone out.
+    {
+      const st = await sessionStatus(sql, payload);
+      if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.', deleted: true });
+      if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
+      if (st !== 'ok') return res.status(503).json({ error: 'Could not check your session right now.' });
+    }
 
     try {
       // Reuses the generically-named "listingId" field from
       // _approval-token.js — same pattern as host-auth.js, here it holds
       // a guest's id instead.
-      const rows = await sql`SELECT id, email, name, phone, account_type, host_id FROM guests WHERE id = ${payload.listingId}`;
+      const rows = await sql`SELECT id, email, name, phone, account_type, host_id, profile_photo_url FROM guests WHERE id = ${payload.listingId}`;
       const guest = rows[0];
       if (!guest) return res.status(401).json({ error: 'Please log in again.' });
+      // A session that is still valid is the person being back: a paused
+      // account un-pauses, the same as logging in. (Pausing ends every
+      // session, so only a sign-in made after the pause gets here.)
+      await reactivateIfPaused(sql, guest.id);
 
-      // Whether this account has a LIVE listing — not merely whether it
-      // has ever submitted one. account_type flips to 'guest_host' the
-      // moment a property is submitted, so gating the host-only nav on
-      // that showed My Collection / Status / My Earnings to someone whose
-      // only listing was still pending review, or had been rejected:
-      // three pages with nothing to show and no explanation why.
-      //
-      // Deliberately not restricted to listing_type = 'stay'. An approved
-      // experience is a live listing too, and its host has real bookings,
-      // earnings and messages to manage.
-      //
-      // Only computed on this session check, which is what the nav
-      // renders from. Cheap: an EXISTS that stops at the first row, and
-      // skipped entirely for the common case of an account with no host
-      // record at all.
-      let hasActiveListing = false;
-      if (guest.host_id) {
-        try {
-          const live = await sql`
-            SELECT 1 FROM listings
-            WHERE host_id = ${guest.host_id} AND status = 'approved'
-            LIMIT 1
-          `;
-          hasActiveListing = live.length > 0;
-        } catch (err) {
-          // A failure here must not log anyone out. Falling back to false
-          // hides the host nav for one page load rather than breaking the
-          // session; the links are reachable again on the next check.
-          console.error('hasActiveListing check failed (non-fatal):', err);
-        }
-      }
-
-      // Does this account co-host for somebody, with at least one live
-      // listing in its scope? The header nav needs to know, because it
-      // gated My Collection and My Earnings on hasActiveListing alone —
-      // which is about listings this account OWNS. A co-host owns none,
-      // so both links were hidden and there was no route to the listings
-      // they had been given at all: the only host entry in their menu was
-      // Co-hosting, which describes the arrangement rather than the
-      // properties.
-      //
-      // Same fail-safe as above: a failure here hides the links for one
-      // page load rather than breaking the session.
-      let isCohost = false;
-      try {
-        const co = await sql`
-          SELECT 1 FROM cohosts c
-          -- cast spelled out, as elsewhere in this codebase (see the
-          -- unnest(...::int[]) in host-listings.js): listing_ids is an
-          -- integer[], and leaving the comparison to infer its type is
-          -- what turns a schema that is a shade different into a silent
-          -- "no operator: bigint = text" and a hidden menu.
-          JOIN listings l ON l.id = ANY(c.listing_ids::int[]) AND l.status = 'approved'
-          WHERE c.cohost_guest_id = ${guest.id} AND c.status = 'active'
-          LIMIT 1
-        `;
-        isCohost = co.length > 0;
-      } catch (err) {
-        console.error('co-host check failed (non-fatal):', err);
-      }
+      // Host navigation (My Collection, My Earnings, Today): see hostFlags.
+      // account_type flips to 'guest_host' the moment a property is
+      // submitted, so it is not used — a pending or rejected listing has
+      // nothing to show.
+      const { hasActiveListing, isCohost } = await hostFlags(sql, guest);
 
       // ---- Standing shown beside the name in the header ----
       // A host is also a guest, so one of the two has to win. The HOST
@@ -489,7 +550,8 @@ module.exports = async (req, res) => {
         console.error('notifications failed (non-fatal):', err);
       }
 
-      return res.status(200).json({ guest: { ...safeGuest(guest), hasActiveListing, isCohost, tier, pendingReviews, notifications } });
+      return res.status(200).json({ guest: { ...safeGuest(guest), profile_photo_url: guest.profile_photo_url || null,
+        hasActiveListing, isCohost, tier, pendingReviews, notifications } });
     } catch (err) {
       console.error('guest-auth (GET) error:', err);
       return res.status(500).json({ error: 'Could not verify your session.' });
@@ -507,10 +569,10 @@ module.exports = async (req, res) => {
   // deliberately-vague "incorrect email or password" if they pick
   // wrong), the checkout flow asks for email first, checks here, then
   // shows either the password field or the signup fields accordingly.
-  // Doesn't meaningfully expose anything signup itself doesn't already
-  // reveal (its own 409 "email already exists" response already tells
-  // an attacker the same fact) — just surfaces it earlier and kinder,
-  // for the person actually trying to book something.
+  // This DOES tell anyone whether an email is registered — as signup's
+  // own 409 does. That is the owner's decision (a kinder booking flow);
+  // the forgot-password and resend answers being the same either way do
+  // not undo it. The rate limit below is the protection against harvesting.
   //
   // Rate limited by IP only (there's no "account" to lock out here,
   // just a lookup) — caps how fast one source can harvest which emails
@@ -560,16 +622,15 @@ module.exports = async (req, res) => {
     if (resendsForEmail >= 3 || resendsForIp >= 15) {
       // Same generic success response as everywhere else in this mode —
       // silently not sending another one rather than revealing a limit
-      // was hit, so this still can't be used to confirm the account exists.
+      // was hit.
       return res.status(200).json({ success: true });
     }
     try {
       const rows = await sql`SELECT id, email, email_verified FROM guests WHERE email = ${cleanEmail}`;
       const guest = rows[0];
-      // Deliberately the same success response whether or not the account
-      // exists or is already verified — same reasoning as login's
-      // identical error message, so this can't be used to probe which
-      // emails are registered.
+      // The same success response whether or not the account exists or is
+      // already verified. (Not a secret kept: check-email and signup say
+      // whether an email is registered — see the top of this file.)
       //
       // Logged EVERY time now (success reflects whether a real email
       // actually went out), not just on a real send — that's what makes
@@ -618,23 +679,30 @@ module.exports = async (req, res) => {
       return res.status(200).json({ success: true });
     }
     try {
-      const rows = await sql`SELECT id, email FROM guests WHERE email = ${cleanEmail}`;
+      const rows = await sql`SELECT id, email, to_jsonb(guests)->>'session_version' AS sv FROM guests WHERE email = ${cleanEmail} AND deleted_at IS NULL`;
       const guest = rows[0];
-      // Same anti-enumeration pattern as resend-verification above: this
-      // response is identical whether or not an account exists, so
-      // nobody can use "forgot password" to check which emails have
-      // Aerva accounts. Only the guest who actually owns that inbox ever
-      // learns the real answer, by whether an email shows up. Logged
-      // either way now, same reasoning as resend-verification, so the
-      // per-IP probing count above actually means something.
+      // The response is identical whether or not an account exists, and
+      // takes about as long (see the wait below) — though, as noted at the
+      // top of this file, check-email and signup already say whether an
+      // email is registered, so this is courtesy and hardening rather than
+      // a secret kept. Logged either way, same reasoning as
+      // resend-verification, so the per-IP probing count above means
+      // something.
       if (guest) {
-        const resetTok = createToken(guest.id, 'guest-password-reset', RESET_LINK_LIFETIME_MS);
+        // Carries the account's session version: the reset raises it, so
+        // a link works once — a second click (or a copy someone else
+        // holds) is refused as expired.
+        const sv = Number(guest.sv) || 0;
+        const resetTok = createToken(guest.id, 'guest-password-reset', RESET_LINK_LIFETIME_MS, { sv });
         await sendPasswordResetEmail(guest, resetTok);
         await logAudit(sql, {
           action: 'guest_password_reset_requested', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
           targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
         });
       } else {
+        // Roughly the time a real send takes, so the answer's timing does
+        // not say "no account" either.
+        await new Promise(r => setTimeout(r, 250 + Math.floor(Math.random() * 300)));
         await logAudit(sql, {
           action: 'guest_password_reset_requested', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
           metadata: { reason: 'no_such_account', ip: clientIp }
@@ -661,25 +729,33 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
     }
     try {
+      // A deleted account can never act again; a link already used (the
+      // session version has moved on since it was sent) is spent.
+      const st = await sessionStatus(sql, { action: 'guest-session', listingId: payload.listingId, sv: payload.sv });
+      if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.', deleted: true });
+      if (st === 'error') return res.status(503).json({ error: 'Could not reset your password right now. Please try again.' });
+      if (st !== 'ok') return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
       const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
       const rows = await sql`
-        UPDATE guests SET password_hash = ${passwordHash} WHERE id = ${payload.listingId}
-        RETURNING id, email, name, phone, account_type
+        UPDATE guests SET password_hash = ${passwordHash} WHERE id = ${payload.listingId} AND deleted_at IS NULL
+        RETURNING id, email, name, phone, account_type, host_id
       `;
       const guest = rows[0];
       if (!guest) return res.status(404).json({ error: 'Account not found.' });
+      // Every other session ends: whoever else was signed in (the reason
+      // people reset a password) is signed out everywhere.
+      await bumpSessionVersion(sql, guest.id);
 
       // Log the guest straight in, same convenience as the email-verify
       // link — one click both resets the password AND signs them in,
       // rather than making them turn around and log in again immediately
-      // with the password they just set.
-      await reactivateIfPaused(sql, guest.id);   // logging in un-pauses a paused account
-      const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+      // with the password they just set. (Also un-pauses a paused account.)
+      const out = await signedIn(sql, guest);
       await logAudit(sql, {
         action: 'guest_password_reset_completed', success: true, actorType: 'guest', actorIdentifier: guest.email,
         targetType: 'guest', targetId: guest.id
       });
-      return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
+      return res.status(200).json(out);
     } catch (err) {
       console.error('guest-auth (reset-password) error:', err);
       return res.status(500).json({ error: 'Could not reset your password right now. Please try again.' });
@@ -700,15 +776,16 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: verified.error });
     }
     try {
-      const guest = await findOrLinkSocialGuest(sql, { providerId: verified.googleId, email: verified.email, name: verified.name });
-      await reactivateIfPaused(sql, guest.id);   // logging in un-pauses a paused account
-      const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+      const guest = await findOrLinkSocialGuest(sql, { providerId: verified.googleId, email: verified.email, name: verified.name,
+                                                       consent: consentGiven(req.body), ip: clientIp });
+      const out = await signedIn(sql, guest);   // also un-pauses a paused account
       await logAudit(sql, {
         action: 'guest_login', success: true, actorType: 'guest', actorIdentifier: verified.email,
-        targetType: 'guest', targetId: guest.id, metadata: { provider: 'google' }
+        targetType: 'guest', targetId: guest.id, metadata: { provider: 'google', ip: clientIp }
       });
-      return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
+      return res.status(200).json(out);
     } catch (err) {
+      if (err.needsConsent) return res.status(400).json({ error: err.message, needsConsent: true, termsVersion: TERMS_VERSION });
       console.error('guest-auth (google) error:', err);
       await logAudit(sql, {
         action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: verified.email,
@@ -729,6 +806,11 @@ module.exports = async (req, res) => {
 
   // ---- Sign up ----
   if (mode === 'signup') {
+    // The Terms of Service and Privacy Policy must be agreed to, by a tick
+    // the person makes themselves (DPDP). Existing accounts are unaffected.
+    if (!consentGiven(req.body)) {
+      return res.status(400).json({ error: 'Please tick the box to agree to the Terms of Service and Privacy Policy.', needsConsent: true, termsVersion: TERMS_VERSION });
+    }
     // By IP only — there's no existing account to rate-limit against yet
     // (that's the whole point of signup), so this caps how many NEW
     // accounts one source can spam-create rather than protecting an
@@ -773,7 +855,7 @@ module.exports = async (req, res) => {
             action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
             metadata: { reason: 'phone_already_registered', ip: clientIp }
           });
-          return res.status(409).json({ error: 'An account already uses this phone number. Try logging in with your phone instead.' });
+          return res.status(409).json({ error: 'An account already uses this phone number. Log in to that account, or leave the phone blank and add it later.' });
         }
       }
 
@@ -783,6 +865,7 @@ module.exports = async (req, res) => {
         RETURNING id, email, name, phone, account_type
       `;
       const guest = inserted[0];
+      await recordConsent(sql, guest.id, clientIp);
 
       const verifyTok = createToken(guest.id, 'guest-email-verify', VERIFY_LINK_LIFETIME_MS);
       try {
@@ -838,7 +921,7 @@ module.exports = async (req, res) => {
     }
 
     try {
-      const rows = await sql`SELECT id, email, password_hash, name, phone, email_verified, account_type FROM guests WHERE email = ${cleanEmail}`;
+      const rows = await sql`SELECT id, email, password_hash, name, phone, email_verified, account_type, host_id FROM guests WHERE email = ${cleanEmail}`;
       const guest = rows[0];
 
       // Always run bcrypt.compare, even for a non-existent account — see
@@ -851,8 +934,8 @@ module.exports = async (req, res) => {
           action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
           metadata: { reason: !guest ? 'no_such_account' : 'wrong_password', ip: clientIp }
         });
-        // Deliberately the same message either way — never reveal
-        // whether the email itself is registered.
+        // The same message either way: a wrong guess at the password
+        // should not confirm the email is right.
         return res.status(401).json({ error: 'Incorrect email or password.' });
       }
 
@@ -867,14 +950,13 @@ module.exports = async (req, res) => {
         });
       }
 
-      await reactivateIfPaused(sql, guest.id);   // logging in un-pauses a paused account
-      const sessionToken = createToken(guest.id, 'guest-session', SESSION_LIFETIME_MS);
+      const out = await signedIn(sql, guest);   // also un-pauses a paused account
       await logAudit(sql, {
         action: 'guest_login', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
         targetType: 'guest', targetId: guest.id, metadata: { ip: clientIp }
       });
 
-      return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
+      return res.status(200).json(out);
     } catch (err) {
       console.error('guest-auth (login) error:', err);
       await logAudit(sql, {

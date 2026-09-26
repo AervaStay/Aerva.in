@@ -165,7 +165,7 @@ const userError = (message, status) => Object.assign(new Error(message), { isUse
 // or throws a user-facing error. Before the table exists: no holds, no error.
 async function takeHolds(sql, stays, { guestKey, ip }) {
   if (!stays.length || !(await holdsReady(sql))) return { ids: [], expiresAt: null };
-  await sql`UPDATE booking_holds SET released = true WHERE released = false AND expires_at < now()`;
+  await markExpired(sql);
   await sql`DELETE FROM booking_holds WHERE released = true AND created_at < now() - interval '2 days'`;
 
   // 5 attempts per guest per listing per 24 hours.
@@ -196,11 +196,14 @@ async function takeHolds(sql, stays, { guestKey, ip }) {
     if (err && err.code === '23P01') {
       // Whose payment is running — this guest's own (another tab or a
       // second tap), or someone else's. Either way: no second checkout.
-      const s = stays[0];
-      const live = (await sql`SELECT guest_key, GREATEST(0, ceil(extract(epoch FROM expires_at - now())))::int AS secs FROM booking_holds
-                              WHERE released = false AND expires_at > now() AND listing_id = ${s.listingId}
-                                AND COALESCE(room_id, 0) = ${s.roomId || 0}
-                                AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date LIMIT 1`)[0];
+      let live = null;
+      for (const s of stays) {
+        live = (await sql`SELECT guest_key, GREATEST(0, ceil(extract(epoch FROM expires_at - now())))::int AS secs FROM booking_holds
+                          WHERE released = false AND expires_at > now() AND listing_id = ${s.listingId}
+                            AND COALESCE(room_id, 0) = ${s.roomId || 0}
+                            AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date LIMIT 1`)[0] || null;
+        if (live) break;
+      }
       if (live && live.guest_key === guestKey) {
         throw userError(`Your payment for these dates is already open. Finish it there, or wait ${live.secs} seconds and try again.`, 409);
       }
@@ -222,25 +225,37 @@ async function holdStatus(sql, razorpayOrderId) {
                          FROM booking_holds WHERE razorpay_order_id = ${razorpayOrderId}`;
   if (!rows.length) return { active: false, reason: 'released' };
   if (rows.some(r => r.released)) return { active: false, reason: 'released' };
-  if (rows.some(r => r.expired)) { await releaseHolds(sql, { razorpayOrderId }); return { active: false, reason: 'expired' }; }
+  if (rows.some(r => r.expired)) { await releaseHolds(sql, { razorpayOrderId, reason: 'expired' }); return { active: false, reason: 'expired' }; }
   let changed = [];
   try {
     const since = rows.reduce((m, r) => (r.created_at < m ? r.created_at : m), rows[0].created_at);
     changed = await sql`SELECT id FROM listings WHERE id = ANY(${rows.map(r => r.listing_id)}) AND price_changed_at > ${since}`;
   } catch (err) { /* price_changed_at not added yet */ }
-  if (changed.length) { await releaseHolds(sql, { razorpayOrderId }); return { active: false, reason: 'price_changed' }; }
+  if (changed.length) { await releaseHolds(sql, { razorpayOrderId, reason: 'price_changed' }); return { active: false, reason: 'price_changed' }; }
   return { active: true, secondsLeft: Math.min(...rows.map(r => r.secs)) };
 }
 
 // At payment confirmation: was this payment completed inside its window?
-// A payment for a window that was cancelled, closed or timed out is not a
-// booking. Orders made before windows existed (no hold was ever taken) are
-// left to the other checks.
+// A payment for a window that was cancelled or closed by the guest, or
+// closed because the host changed a price, is not a booking. A window that
+// simply ran out of time (timed out on the page, or swept as expired) still
+// counts if the payment reached us within CONFIRM_GRACE_SECONDS of its end —
+// lateness is decided by the clock, not by the released flag. A release
+// with no known reason (before migration_checkout_carts.sql, or from an
+// older caller) is treated the old, strict way. Orders made before windows
+// existed (no hold was ever taken) are left to the other checks.
+const RELEASES_WITHIN_GRACE = ['expired', 'paid'];
 async function holdValidForConfirmation(sql, razorpayOrderId, { heldAtCheckout }) {
   if (!heldAtCheckout || !(await holdsReady(sql))) return { ok: true };
-  const rows = await sql`SELECT released, (now() > expires_at + make_interval(secs => ${CONFIRM_GRACE_SECONDS})) AS late
+  const rows = await sql`SELECT released, to_jsonb(booking_holds)->>'released_reason' AS released_reason,
+                                (now() > expires_at + make_interval(secs => ${CONFIRM_GRACE_SECONDS})) AS late
                          FROM booking_holds WHERE razorpay_order_id = ${razorpayOrderId}`;
-  if (!rows.length || rows.some(r => r.released)) return { ok: false, reason: 'The payment window had already been closed or cancelled.' };
+  if (!rows.length) return { ok: false, reason: 'The payment window had already been closed or cancelled.' };
+  if (rows.some(r => r.released && !RELEASES_WITHIN_GRACE.includes(r.released_reason))) {
+    return { ok: false, reason: rows.some(r => r.released_reason === 'price_changed')
+      ? 'The host changed the price while the payment window was open, so the payment window had been closed.'
+      : 'The payment window had already been closed or cancelled.' };
+  }
   if (rows.some(r => r.late)) return { ok: false, reason: `The payment was completed after the ${HOLD_SECONDS}-second payment window had ended.` };
   return { ok: true };
 }
@@ -249,12 +264,28 @@ async function attachHolds(sql, ids, razorpayOrderId) {
   if (!ids || !ids.length) return;
   await sql`UPDATE booking_holds SET razorpay_order_id = ${razorpayOrderId} WHERE id = ANY(${ids})`;
 }
-// Never throws.
-async function releaseHolds(sql, { ids = null, razorpayOrderId = null }) {
+// Never throws. reason: why the window closed — 'closed' (the guest closed
+// or cancelled it, or the payment failed), 'expired' (ran out of time),
+// 'price_changed', 'paid', 'conflict', 'error'. Recorded only once, and
+// only once migration_checkout_carts.sql has added the column.
+const RELEASE_REASONS = ['closed', 'expired', 'price_changed', 'paid', 'conflict', 'error'];
+async function releaseHolds(sql, { ids = null, razorpayOrderId = null, reason = null }) {
+  const why = RELEASE_REASONS.includes(reason) ? reason : null;
   try {
-    if (ids && ids.length) await sql`UPDATE booking_holds SET released = true WHERE id = ANY(${ids}) AND released = false`;
-    if (razorpayOrderId) await sql`UPDATE booking_holds SET released = true WHERE razorpay_order_id = ${razorpayOrderId} AND released = false`;
+    try {
+      if (ids && ids.length) await sql`UPDATE booking_holds SET released = true, released_reason = COALESCE(released_reason, ${why}) WHERE id = ANY(${ids}) AND released = false`;
+      if (razorpayOrderId) await sql`UPDATE booking_holds SET released = true, released_reason = COALESCE(released_reason, ${why}) WHERE razorpay_order_id = ${razorpayOrderId} AND released = false`;
+    } catch (err) {
+      // Before migration_checkout_carts.sql: no released_reason column.
+      if (ids && ids.length) await sql`UPDATE booking_holds SET released = true WHERE id = ANY(${ids}) AND released = false`;
+      if (razorpayOrderId) await sql`UPDATE booking_holds SET released = true WHERE razorpay_order_id = ${razorpayOrderId} AND released = false`;
+    }
   } catch (err) { /* table not there yet */ }
+}
+// Windows whose time is up, released as 'expired' (not as closed by the guest).
+async function markExpired(sql) {
+  try { await sql`UPDATE booking_holds SET released = true, released_reason = COALESCE(released_reason, 'expired') WHERE released = false AND expires_at < now()`; }
+  catch (err) { await sql`UPDATE booking_holds SET released = true WHERE released = false AND expires_at < now()`; }
 }
 // Homes (not resort rooms) held by someone else for dates overlapping
 // [arrival, departure). For search results. Never throws.
@@ -285,3 +316,4 @@ module.exports.attachHolds = attachHolds;
 module.exports.releaseHolds = releaseHolds;
 module.exports.heldListingIds = heldListingIds;
 module.exports.heldRoomIds = heldRoomIds;
+module.exports.RELEASE_REASONS = RELEASE_REASONS;

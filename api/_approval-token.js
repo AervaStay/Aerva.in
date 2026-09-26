@@ -12,7 +12,11 @@ const crypto = require('crypto');
 const SECRET = process.env.APPROVAL_TOKEN_SECRET;
 const TOKEN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — default, used by approve/reject links
 
-function createToken(listingId, action, lifetimeMs = TOKEN_LIFETIME_MS) {
+// `extra` (optional) adds fields to the signed payload — a guest session
+// carries its account's session_version as { sv } (see _accounts.js). The
+// three original fields always win, and a token made without extra is
+// byte-for-byte the old format, so every token already out there verifies.
+function createToken(listingId, action, lifetimeMs = TOKEN_LIFETIME_MS, extra = null) {
   if (!SECRET) {
     // This is the exact failure that used to surface as a cryptic
     // "key argument must be of type string..." error — logging it
@@ -20,7 +24,8 @@ function createToken(listingId, action, lifetimeMs = TOKEN_LIFETIME_MS) {
     // instead of a generic crypto internals message.
     throw new Error('APPROVAL_TOKEN_SECRET environment variable is not set in Vercel.');
   }
-  const payload = { listingId, action, exp: Date.now() + lifetimeMs };
+  const base = { listingId, action, exp: Date.now() + lifetimeMs };
+  const payload = extra && typeof extra === 'object' ? { ...extra, ...base } : base;
   const payloadStr = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto.createHmac('sha256', SECRET).update(payloadStr).digest('base64url');
   return `${payloadStr}.${signature}`;

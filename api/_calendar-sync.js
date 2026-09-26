@@ -17,26 +17,87 @@
 // https only, public internet only (no private / internal addresses, checked
 // again on every redirect), 8-second timeout, 2 MB limit. A failed sync
 // keeps the previous dates — it never silently unblocks anything.
+//
+// DNS rebinding: the address is checked at the moment of connecting (the
+// request's own DNS lookup goes through safeLookup below), so a name that
+// answers "public" to the check and "169.254.169.254" to the connection
+// is refused too.
 
 const dns = require('dns').promises;
 const net = require('net');
+const https = require('https');
 const crypto = require('crypto');
 
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_EVENTS = 1500;
 
-function isPrivateIp(ip) {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+function isPrivateIpv4(ip) {
+  const [a, b, c] = ip.split('.').map(Number);
+  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224
+    || (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113);
+}
+
+// An IPv6 address as 16 bytes, or null. Handles "::" shortening and a
+// dotted IPv4 tail ("::ffff:1.2.3.4").
+function ipv6Bytes(ip) {
+  let v = String(ip).toLowerCase().split('%')[0];
+  if (!net.isIPv6(v)) return null;
+  let tail = [];
+  const dotted = v.match(/(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    tail = dotted[1].split('.').map(Number);
+    const hex = ((tail[0] << 8) | tail[1]).toString(16) + ':' + ((tail[2] << 8) | tail[3]).toString(16);
+    v = v.slice(0, -dotted[1].length) + hex;
   }
-  const v = ip.toLowerCase();
-  if (v === '::1' || v === '::') return true;
-  if (v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80')) return true;
-  const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  return mapped ? isPrivateIp(mapped[1]) : false;
+  const [head, rest] = v.split('::');
+  const h = head ? head.split(':') : [];
+  const r = rest !== undefined ? (rest ? rest.split(':') : []) : [];
+  const groups = rest !== undefined ? [...h, ...Array(8 - h.length - r.length).fill('0'), ...r] : h;
+  if (groups.length !== 8) return null;
+  const out = [];
+  for (const g of groups) { const n = parseInt(g || '0', 16); out.push(n >> 8, n & 255); }
+  return out;
+}
+
+function isPrivateIp(ip) {
+  if (net.isIPv4(ip)) return isPrivateIpv4(ip);
+  const b = ipv6Bytes(ip);
+  if (!b) return true; // not an address we understand: refuse
+  const v4 = (i) => `${b[i]}.${b[i + 1]}.${b[i + 2]}.${b[i + 3]}`;
+  const zeros = (from, to) => b.slice(from, to).every(x => x === 0);
+  // ::  and  ::1
+  if (zeros(0, 15) && (b[15] === 0 || b[15] === 1)) return true;
+  // IPv4-mapped ::ffff:a.b.c.d (also written ::ffff:a9fe:a9fe)
+  if (zeros(0, 10) && b[10] === 255 && b[11] === 255) return isPrivateIpv4(v4(12));
+  // IPv4-compatible ::a.b.c.d (deprecated, still routable on some stacks)
+  if (zeros(0, 12)) return isPrivateIpv4(v4(12));
+  // NAT64 64:ff9b::/96 (well-known) and 64:ff9b:1::/48 (local use)
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) {
+    return zeros(4, 12) ? isPrivateIpv4(v4(12)) : true;
+  }
+  // 6to4 2002:a.b.c.d::/16 carries an IPv4 address
+  if (b[0] === 0x20 && b[1] === 0x02) return isPrivateIpv4(v4(2));
+  // Teredo 2001::/32, documentation 2001:db8::/32 — never a calendar
+  if (b[0] === 0x20 && b[1] === 0x01 && ((b[2] === 0 && b[3] === 0) || (b[2] === 0x0d && b[3] === 0xb8))) return true;
+  // unique-local fc00::/7, link-local fe80::/10, site-local fec0::/10, multicast ff00::/8
+  if ((b[0] & 0xfe) === 0xfc || (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) || (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) || b[0] === 0xff) return true;
+  return false;
+}
+
+// Used as the request's own DNS lookup: resolves the name and refuses the
+// connection if ANY answer is private. This is what closes DNS rebinding —
+// the checked address is the one connected to.
+function safeLookup(hostname, options, cb) {
+  if (typeof options === 'function') { cb = options; options = {}; }
+  dns.lookup(hostname, { all: true }).then(addrs => {
+    if (!addrs.length) return cb(Object.assign(new Error('not found'), { code: 'ENOTFOUND' }));
+    if (addrs.some(a => isPrivateIp(a.address))) return cb(Object.assign(new Error('private address'), { code: 'EPRIVATE' }));
+    if (options && options.all) return cb(null, addrs);
+    return cb(null, addrs[0].address, addrs[0].family);
+  }, err => cb(err));
 }
 
 // Throws a plain-language Error if the address may not be fetched.
@@ -53,28 +114,53 @@ async function assertSafeUrl(raw) {
   return u;
 }
 
+// One GET over https, connecting only to an address safeLookup approved.
+// Resolves { status, location, text }. Never follows redirects itself.
+function httpsGetChecked(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, {
+      method: 'GET', lookup: safeLookup, timeout: FETCH_TIMEOUT_MS,
+      headers: { 'Accept': 'text/calendar, text/plain, */*', 'User-Agent': 'Aerva-Calendar-Sync/1.0' }
+    }, res => {
+      const status = res.statusCode || 0;
+      const location = res.headers.location || null;
+      if (status >= 300 && status < 400) { res.resume(); return resolve({ status, location, text: '' }); }
+      if (Number(res.headers['content-length'] || 0) > MAX_BYTES) { res.destroy(); return reject(new Error('That calendar is too large.')); }
+      const chunks = []; let size = 0;
+      res.on('data', c => {
+        size += c.length;
+        if (size > MAX_BYTES) { res.destroy(); reject(new Error('That calendar is too large.')); return; }
+        chunks.push(c);
+      });
+      res.on('end', () => resolve({ status, location, text: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', () => reject(new Error('The calendar could not be reached.')));
+    });
+    // A hard stop for the whole request, not just idle time.
+    const timer = setTimeout(() => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })), FETCH_TIMEOUT_MS);
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })));
+    req.on('error', e => {
+      clearTimeout(timer);
+      reject(new Error(e.code === 'ETIMEDOUT' ? 'The calendar took too long to respond.'
+        : e.code === 'EPRIVATE' ? 'That is not a valid calendar link.'
+        : e.code === 'ENOTFOUND' ? 'That link’s website could not be found.'
+        : 'The calendar could not be reached.'));
+    });
+    req.on('close', () => clearTimeout(timer));
+    req.end();
+  });
+}
+
 // Fetch a calendar, following up to 3 redirects, re-checking each one.
 async function fetchCalendarText(raw) {
   let url = await assertSafeUrl(raw);
   for (let hop = 0; hop < 4; hop++) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-    let res;
-    try {
-      res = await fetch(url.toString(), { redirect: 'manual', signal: ctrl.signal, headers: { 'Accept': 'text/calendar, text/plain, */*', 'User-Agent': 'Aerva-Calendar-Sync/1.0' } });
-    } catch (e) {
-      clearTimeout(timer);
-      throw new Error(e.name === 'AbortError' ? 'The calendar took too long to respond.' : 'The calendar could not be reached.');
-    }
-    clearTimeout(timer);
-    if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-      url = await assertSafeUrl(new URL(res.headers.get('location'), url).toString());
+    const res = await httpsGetChecked(url);
+    if (res.status >= 300 && res.status < 400 && res.location) {
+      url = await assertSafeUrl(new URL(res.location, url).toString());
       continue;
     }
-    if (!res.ok) throw new Error(`The calendar link returned an error (${res.status}). Check the link.`);
-    const len = Number(res.headers.get('content-length') || 0);
-    if (len > MAX_BYTES) throw new Error('That calendar is too large.');
-    const text = await res.text();
+    if (res.status < 200 || res.status >= 300) throw new Error(`The calendar link returned an error (${res.status}). Check the link.`);
+    const text = res.text;
     if (text.length > MAX_BYTES) throw new Error('That calendar is too large.');
     if (!/BEGIN:VCALENDAR/i.test(text)) throw new Error('That link is not a calendar (iCal) link.');
     return text;
@@ -153,13 +239,32 @@ async function syncFeed(sql, feed, decryptField) {
     const starts = events.map(e => e.start);
     const ends = events.map(e => e.end);
     const reason = `Booked on ${String(feed.name || 'another site').slice(0, 60)}`;
-    await sql`DELETE FROM listing_blocked_dates WHERE source_feed_id = ${feed.id}`;
-    if (events.length) {
-      await sql`
-        INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason, source_feed_id)
-        SELECT ${feed.listing_id}, ${feed.room_id}, s, e, ${reason}, ${feed.id}
-        FROM unnest(${starts}::date[], ${ends}::date[]) AS t(s, e)
-      `;
+    // Replace this feed's dates in one step: if the insert fails, the old
+    // dates must still be there (a failed sync never unblocks anything).
+    if (typeof sql.transaction === 'function') {
+      // Neon's HTTP driver runs these as a single transaction.
+      const steps = [sql`DELETE FROM listing_blocked_dates WHERE source_feed_id = ${feed.id}`];
+      if (events.length) {
+        steps.push(sql`
+          INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason, source_feed_id)
+          SELECT ${feed.listing_id}, ${feed.room_id}, s, e, ${reason}, ${feed.id}
+          FROM unnest(${starts}::date[], ${ends}::date[]) AS t(s, e)
+        `);
+      }
+      await sql.transaction(steps);
+    } else {
+      // No transactions available: add the new rows FIRST, then remove the
+      // old ones by id — a failure part-way leaves dates blocked, not open.
+      const old = await sql`SELECT id FROM listing_blocked_dates WHERE source_feed_id = ${feed.id}`;
+      if (events.length) {
+        await sql`
+          INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason, source_feed_id)
+          SELECT ${feed.listing_id}, ${feed.room_id}, s, e, ${reason}, ${feed.id}
+          FROM unnest(${starts}::date[], ${ends}::date[]) AS t(s, e)
+        `;
+      }
+      const oldIds = old.map(r => r.id);
+      if (oldIds.length) await sql`DELETE FROM listing_blocked_dates WHERE id = ANY(${oldIds}) AND source_feed_id = ${feed.id}`;
     }
     await sql`UPDATE calendar_feeds SET last_synced_at = now(), last_status = 'ok', last_error = NULL, event_count = ${events.length} WHERE id = ${feed.id}`;
     return { ok: true, events: events.length };
@@ -192,4 +297,4 @@ async function syncStaleFeeds(sql, decryptField, { listingIds = null, maxAgeMinu
   }
 }
 
-module.exports = { assertSafeUrl, fetchCalendarText, parseIcs, buildIcs, newToken, syncFeed, syncStaleFeeds, isPrivateIp };
+module.exports = { assertSafeUrl, fetchCalendarText, parseIcs, buildIcs, newToken, syncFeed, syncStaleFeeds, isPrivateIp, safeLookup, ipv6Bytes };

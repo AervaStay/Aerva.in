@@ -238,9 +238,14 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
       }
 
       const nights = calculateNights(s.arrival, s.departure);
+      // Whole people only: 2.5 guests would slip under the extra-guest
+      // charge and the capacity check alike.
       const guests = Number(s.guests);
-      if (!nights || nights <= 0 || !guests || guests < 1) {
-        return { error: `Stay ${i + 1}: invalid dates or guest count` };
+      if (!nights || nights <= 0) {
+        return { error: `Stay ${i + 1}: invalid dates` };
+      }
+      if (!Number.isInteger(guests) || guests < 1) {
+        return { error: `Stay ${i + 1}: please choose the number of guests.` };
       }
       // Dates must be real calendar dates, and not in the past on the
       // property's clock — except a late-night booking: between 12:00 AM and
@@ -254,7 +259,7 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
         return { error: `Stay ${i + 1}: check-in cannot be in the past. Please choose today or a later date.` };
       }
 
-      // A stay must include at least one adult (18+) — children and
+      // A stay must include at least one adult (18 or over) — children and
       // infants can't be the sole guest(s) on a booking. Enforced here,
       // not just via the guest-count stepper's floor on the frontend
       // (index.html's lgCounts), since that's a UI convenience a direct
@@ -262,8 +267,8 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
       // can't verify anyone's real age; like every booking platform, it
       // relies on the guest accurately representing their party.
       const adults = Number(s.adults);
-      if (!adults || adults < 1) {
-        return { error: `Stay ${i + 1}: at least one adult (18+) guest is required — children or infants can't book a stay on their own.` };
+      if (!Number.isInteger(adults) || adults < 1 || adults > guests) {
+        return { error: `Stay ${i + 1}: at least one adult (18 or over) is required — children can't book a stay on their own.` };
       }
 
       // A stay is a single physical unit (a villa, a studio, a room) —
@@ -354,11 +359,9 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
       const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
       const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
       const beforeDiscount = roomTotal + extraTotal;
-      const promoRows = await sql`
-        SELECT discount_type, discount_value, min_nights, start_date, end_date, is_active
-        FROM listing_promotions
-        WHERE listing_id = ${listing.id} AND is_active = TRUE
-      `;
+      // A promotion set on one resort room applies to that room only; one
+      // with no room (room_id NULL) applies to the whole listing.
+      const promoRows = await activePromotions(sql, listing.id, room ? room.id : null);
       const discountAmount = calculateDiscount(listing, nights, s.arrival, beforeDiscount, promoRows);
 
       // Amenities are priced fresh from the database and are never
@@ -472,6 +475,31 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
       } };
 }
 
+// The listing's active promotions that can apply to this room (or, with
+// roomId null, to the listing as a whole). Before listing_promotions had a
+// room_id column every promotion was listing-wide, as the fallback reads.
+async function activePromotions(sql, listingId, roomId, { onlyCurrent = false } = {}) {
+  try {
+    return await sql`
+      SELECT discount_type, discount_value, min_nights, start_date, end_date, is_active, room_id
+      FROM listing_promotions
+      WHERE listing_id = ${listingId} AND is_active = TRUE
+        AND (room_id IS NULL OR room_id = ${roomId}::int)
+        AND (${onlyCurrent} = false OR end_date > CURRENT_DATE)
+    `;
+  } catch (err) {
+    return await sql`
+      SELECT discount_type, discount_value, min_nights, start_date, end_date, is_active
+      FROM listing_promotions
+      WHERE listing_id = ${listingId} AND is_active = TRUE
+        AND (${onlyCurrent} = false OR end_date > CURRENT_DATE)
+    `;
+  }
+}
+
+// Experiences with no stated group size are capped at this many guests.
+const MAX_EXPERIENCE_GUESTS = 50;
+
 // Prices one experience. ex: { listingId, date, guests }. i: its position.
 // Moved from create-order.js; the season check now compares real dates
 // (the database returns DATE columns as Date objects, which a text
@@ -483,7 +511,7 @@ async function priceExperience(sql, ex, i) {
   const rows = await sql`
     SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate, timezone,
            experience_available_from, experience_available_until, experience_duration_days,
-           discount_type, discount_value, discount_min_nights
+           discount_type, discount_value, discount_min_nights, max_guests
     FROM listings
     WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
   `;
@@ -505,23 +533,27 @@ async function priceExperience(sql, ex, i) {
     LIMIT 1
   `;
   if (blocked[0]) return { error: `Experience ${i + 1}: ${experience.property_name} isn't available for those dates.` };
-  const guests = Number(ex.guests) || 1;
-  if (guests < 1) return { error: `Experience ${i + 1}: invalid guest count` };
+  // Whole people, at least one, and no more than the experience takes
+  // (its max_guests if the host set one, otherwise MAX_EXPERIENCE_GUESTS).
+  const guests = (ex.guests == null || ex.guests === '') ? 1 : Number(ex.guests);
+  if (!Number.isInteger(guests) || guests < 1) return { error: `Experience ${i + 1}: please choose the number of guests.` };
+  const guestCap = parseMaxGuests(experience.max_guests) || MAX_EXPERIENCE_GUESTS;
+  if (guests > guestCap) return { error: `Experience ${i + 1}: ${experience.property_name} takes up to ${guestCap} guests.` };
   const price = Number(experience.nightly_rate);
   const subtotalBeforeDiscount = experience.experience_price_unit === 'per_person' ? price * guests : price;
-  const promos = await sql`
-    SELECT is_active, discount_type, discount_value, min_nights, start_date, end_date
-    FROM listing_promotions
-    WHERE listing_id = ${ex.listingId} AND is_active = TRUE AND end_date > CURRENT_DATE
-  `;
-  const subtotal = subtotalBeforeDiscount - calculateDiscount(experience, durationDays, ex.date, subtotalBeforeDiscount, promos);
+  const promos = await activePromotions(sql, ex.listingId, null, { onlyCurrent: true });
+  const discountAmount = calculateDiscount(experience, durationDays, ex.date, subtotalBeforeDiscount, promos);
+  const subtotal = subtotalBeforeDiscount - discountAmount;
   const commissionRate = BASE_COMMISSION_RATE;
   const commissionAmount = Math.round(subtotal * (commissionRate / 100));
   const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
   const expTax = experienceGst(subtotal);
   return { detail: {
     listingId: experience.id, suite: experience.property_name, date: ex.date, endDate: endDateExclusive, durationDays, guests,
-    subtotal, commissionRate, commissionAmount, guestServiceFee, gst: expTax.gst, gstRate: expTax.rate
+    subtotal, commissionRate, commissionAmount, guestServiceFee, gst: expTax.gst, gstRate: expTax.rate,
+    // broken out for the guest-facing summary
+    priceUnit: experience.experience_price_unit === 'per_person' ? 'per_person' : 'group', unitPrice: price,
+    subtotalBeforeDiscount, discountAmount
   } };
 }
 
@@ -529,5 +561,6 @@ module.exports = {
   EXTRA_GUEST_RATE, BASE_OCCUPANCY, BASE_COMMISSION_RATE, AMENITY_COMMISSION_RATE, GUEST_SERVICE_FEE_RATE,
   MAX_STAYS, MAX_EXPERIENCES, MAX_AMENITIES_PER_STAY,
   calculateNights, addDaysToDateStr, getNightsInRange, toDateStr, validateAndPriceAmenities,
-  discountAmountFor, calculateDiscount, priceStay, priceExperience, parseMaxGuests
+  discountAmountFor, calculateDiscount, priceStay, priceExperience, parseMaxGuests,
+  activePromotions, MAX_EXPERIENCE_GUESTS
 };

@@ -118,24 +118,44 @@ async function decideDispute(sql, razorpay, { disputeId, refund, note = '', admi
   try {
     const nights = Math.max(1, Number(o.nights) || 1);
     const departure = new Date(dateStr(o.departure) + 'T00:00:00Z'), raised = new Date(dateStr(d.raised_date) + 'T00:00:00Z');
-    const refundNights = Math.min(nights, Math.max(0, Math.round((departure - raised) / 86400000)));
+    // Nights an earlier upheld report on this stay already refunded (always
+    // the last nights of the stay) are never refunded again.
+    let before = 0;
+    try { before = Number((await sql`SELECT COALESCE(SUM(nights_refunded), 0)::int AS n FROM stay_disputes WHERE order_id = ${o.id} AND status = 'refunded' AND id <> ${disputeId}`)[0].n) || 0; } catch (e) { before = 0; }
+    before = Math.min(nights, before);
+    const refundNights = Math.max(0, Math.min(nights, Math.max(0, Math.round((departure - raised) / 86400000))) - before);
     if (!refundNights) throw userError('There are no nights left to refund after the day this was raised.');
     const share = refundNights / nights;
-    const bookingBack = Math.round(Number(o.subtotal) * share);
+    // What the guest actually paid for this row (allocatePaid): the part of
+    // the booking price paid by coupon comes back as a coupon; cash never
+    // reaches the security deposit, which is settled on its own.
+    const paid = (await paidByOrderRow(sql, o.razorpay_order_id))[o.id] || { paid: Math.round(Number(o.total) || 0), couponAbsorbed: 0 };
+    const subtotal = Math.round(Number(o.subtotal) || 0);
+    const absorbed = Math.max(0, Math.min(subtotal, Math.round(Number(paid.couponAbsorbed) || 0)));
+    const couponBack = Math.round(absorbed * share);
+    const bookingCash = Math.round((subtotal - absorbed) * share);
     const gstBack = Math.round(Number(o.gst) * share);
     const feeBack = Math.round(Number(o.guest_service_fee) * share);
-    const total = bookingBack + gstBack + feeBack;
-    const commissionKept = Math.round(Number(o.commission_amount) * (1 - share));
-    const hostPayout = Number(o.subtotal) - bookingBack - commissionKept;
-    // Cash as far as the booking's payments allow; a part paid by coupon comes back as a coupon.
-    const r = await refundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: total, kindBase: `dispute-${disputeId}` });
+    const cashCap = Math.max(0, Math.round(Number(paid.paid) || 0) - Math.round(Number(o.deposit_amount) || 0));
+    const cash = Math.min(bookingCash + gstBack + feeBack, cashCap);
+    const total = cash + couponBack;
+    // The host keeps the nights used. The booking's commission and payout
+    // now cover the nights not yet refunded (an earlier upheld report may
+    // have reduced them): they shrink to the nights still kept.
+    const kept = (nights - before - refundNights) / (nights - before);
+    const commissionKept = Math.round(Number(o.commission_amount) * kept);
+    const hostPayout = Math.max(0, Math.round((Number(o.payout_amount) + Number(o.commission_amount)) * kept) - commissionKept);
+    // Cash as far as the booking's payments allow; the coupon part (and any
+    // cash no payment has left) comes back as a coupon.
+    const r = await refundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: cash, kindBase: `dispute-${disputeId}` });
+    r.shortfallInr = (r.shortfallInr || 0) + couponBack;
     if (r.shortfallInr > 0) await returnCouponValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: r.shortfallInr, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
     await sql`UPDATE orders SET commission_amount = ${commissionKept}, payout_amount = ${hostPayout} WHERE id = ${o.id}`;
     try { await sql`UPDATE order_cohost_shares SET amount = round(${hostPayout}::numeric * percent / 100) WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
     await sql`UPDATE stay_disputes SET status = 'refunded', nights_refunded = ${refundNights}, refund_amount = ${total} WHERE id = ${disputeId}`;
     await logAudit(sql, { action: 'stay_dispute_decided', success: true, actorType: 'admin', actorIdentifier: adminLabel, targetType: 'order', targetId: o.id,
       metadata: { disputeId, refund: true, refundNights, total, hostPayout } });
-    const nightsUsed = nights - refundNights;
+    const nightsUsed = nights - before - refundNights;
     await postThreadMessage(sql, o.id, 'host', `Aerva has decided the reported problem in the guest’s favour: ${refundNights} night${refundNights === 1 ? '' : 's'} refunded (${inr(total)}). The host is paid for the ${nightsUsed} night${nightsUsed === 1 ? '' : 's'} used.`);
     await email(o.guest_email, `Refund for your stay at ${o.property_name}`,
       `<h2 style="font-family:Georgia,serif;">Your report was upheld</h2><p>${refundNights} night${refundNights === 1 ? '' : 's'}, from the day you reported the problem to check-out, are refunded: <strong>${inr(total)}</strong>${r.shortfallInr ? ` (${inr(r.shortfallInr)} of it as a coupon)` : ''}.</p>${note ? `<p>${esc(note)}</p>` : ''}`);

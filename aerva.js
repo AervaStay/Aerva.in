@@ -48,7 +48,7 @@
   }, { threshold: 0.15 });
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 
-  // ---- Reserve form: multiple stays, date validation + live pricing ----
+  // ---- Pricing constants (display only; the server decides the charge) ----
   const SUITES_API_BASE = 'https://aerva-in.vercel.app';
   const EXTRA_GUEST_RATE = 1500;
   const BASE_OCCUPANCY = 2;
@@ -87,20 +87,10 @@
   const GUEST_SERVICE_FEE_RATE = 8;
 
   // Populated once approved listings are fetched (see initSite() near the
-  // bottom of this script) — both the Suites section and the Reserve form's
-  // "Home" dropdown are built from this same real data, not hardcoded names.
+  // bottom of this script) — the Suites section is built from this real
+  // data, not hardcoded names.
   let approvedListings = [];
   let listingsById = {};
-
-  const stayRowsEl = document.getElementById('stayRows');
-  const addStayBtn = document.getElementById('addStayBtn');
-  const summaryEl = document.getElementById('priceSummary');
-  const summaryLinesEl = document.getElementById('summaryLines');
-  const paymentEl = document.getElementById('paymentSection');
-  const submitBtn = document.getElementById('reserveSubmitBtn');
-  const MAX_STAYS = 5;
-  let rowCount = 0;
-  let currentBookingTotal = 0;
 
   const fmt = (n) => '₹' + n.toLocaleString('en-IN');
 
@@ -281,261 +271,6 @@
     if(btnMobile) btnMobile.textContent = currentCurrency;
   }
 
-  // Arrival must be at least tomorrow — no same-day bookings. Departure's
-  // own absolute floor (before any arrival is picked) is one day further
-  // still, since it always has to land after whatever arrival ends up being.
-  const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return toLocalDateStr(d); })();
-  const dayAfterTomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return toLocalDateStr(d); })();
-
-  function buildSuiteOptionsHtml(){
-    if(approvedListings.length === 0){
-      return '<option value="">No stays available right now</option>';
-    }
-    return approvedListings.map(l => `<option value="${l.id}">${l.property_name}</option>`).join('');
-  }
-
-  function buildStayRow(index){
-    const row = document.createElement('div');
-    row.className = 'stay-row';
-    row.dataset.index = index;
-
-    const guestOptions = [1,2,3,4,5,6].map(n =>
-      `<option value="${n}"${n===2?' selected':''}>${n} Guest${n===1?'':'s'}</option>`
-    ).join('');
-
-    row.innerHTML = `
-      <div class="stay-row-head">
-        <div class="eyebrow">Stay ${index + 1}</div>
-        <button type="button" class="removeStayBtn" style="display:none;">Remove</button>
-      </div>
-      <div class="field">
-        <label>Home</label>
-        <select class="stayRow-suite" name="stay_${index}_suite">${buildSuiteOptionsHtml()}</select>
-      </div>
-      <div class="form-row">
-        <div class="field">
-          <label>Arrival</label>
-          <input type="date" class="stayRow-arrival" name="stay_${index}_arrival" min="${tomorrowStr}" autocomplete="off" required>
-        </div>
-        <div class="field">
-          <label>Departure</label>
-          <input type="date" class="stayRow-departure" name="stay_${index}_departure" min="${dayAfterTomorrowStr}" autocomplete="off" required>
-        </div>
-      </div>
-      <div class="field">
-        <label>Guests</label>
-        <select class="stayRow-guests" name="stay_${index}_guests">${guestOptions}</select>
-      </div>
-      <p class="stayRow-error" style="display:none;"></p>
-      <div class="stayRow-amenities"></div>
-      <div class="stayRow-subtotal"></div>
-    `;
-    return row;
-  }
-
-  function addStayRow(){
-    if(stayRowsEl.children.length >= MAX_STAYS) return;
-    const row = buildStayRow(rowCount);
-    rowCount++;
-    stayRowsEl.appendChild(row);
-    // Defensive: some browsers autofill/remember date values across similar
-    // fields on the same page. Force these blank regardless of that.
-    row.querySelector('.stayRow-arrival').value = '';
-    row.querySelector('.stayRow-departure').value = '';
-    wireRow(row);
-    updateRemoveButtons();
-    refreshSuiteAvailability();
-    updatePricing();
-  }
-
-  function updateRemoveButtons(){
-    const rows = stayRowsEl.querySelectorAll('.stay-row');
-    rows.forEach(r => {
-      const btn = r.querySelector('.removeStayBtn');
-      btn.style.display = rows.length > 1 ? 'inline-block' : 'none';
-    });
-    addStayBtn.style.display = rows.length >= MAX_STAYS ? 'none' : 'block';
-  }
-
-  // Once a property is picked in one stay, it's disabled as an option in every
-  // other stay's dropdown — a guest can't book the same home twice.
-  function refreshSuiteAvailability(){
-    const rows = Array.from(stayRowsEl.querySelectorAll('.stay-row'));
-    const selectEls = rows.map(r => r.querySelector('.stayRow-suite'));
-    const chosen = selectEls.map(sel => sel.value);
-
-    selectEls.forEach((sel, idx) => {
-      Array.from(sel.options).forEach(opt => {
-        if(!opt.value){ opt.disabled = false; return; } // "No stays available" placeholder
-        const chosenElsewhere = chosen.some((val, j) => j !== idx && val === opt.value);
-        opt.disabled = chosenElsewhere;
-      });
-    });
-  }
-
-  function wireRow(row){
-    const arrivalEl = row.querySelector('.stayRow-arrival');
-    const departureEl = row.querySelector('.stayRow-departure');
-    const guestsEl = row.querySelector('.stayRow-guests');
-    const suiteEl = row.querySelector('.stayRow-suite');
-    const removeBtn = row.querySelector('.removeStayBtn');
-
-    function syncDepartureMin(){
-      if(arrivalEl.value){
-        const next = new Date(arrivalEl.value);
-        next.setDate(next.getDate() + 1);
-        const nextStr = next.toISOString().split('T')[0];
-        departureEl.min = nextStr;
-        // Auto-fill departure to the next day so a guest doesn't have to
-        // make a second trip into the calendar — but never overwrite a
-        // departure date they've already deliberately chosen, unless it's
-        // no longer valid against the new arrival date.
-        if(!departureEl.value || departureEl.value <= arrivalEl.value){
-          departureEl.value = nextStr;
-        }
-      } else {
-        departureEl.min = dayAfterTomorrowStr;
-      }
-    }
-
-    ['input','change'].forEach(evt => {
-      arrivalEl.addEventListener(evt, () => { syncDepartureMin(); renderStayAmenities(row); updatePricing(); });
-      departureEl.addEventListener(evt, () => { renderStayAmenities(row); updatePricing(); });
-    });
-    // Note: we deliberately do NOT auto-open the departure calendar here.
-    // Doing so via showPicker() steals keyboard focus away from the arrival
-    // field the moment the browser considers its value "complete enough" —
-    // which can fire mid-keystroke while someone is still typing (e.g. the
-    // year), corrupting what they were entering. Auto-filling departure to
-    // the next day (in syncDepartureMin above) is the safe convenience;
-    // opening the calendar automatically is not.
-    guestsEl.addEventListener('change', updatePricing);
-    suiteEl.addEventListener('change', () => { refreshSuiteAvailability(); renderStayAmenities(row); updatePricing(); });
-
-    removeBtn.addEventListener('click', () => {
-      row.remove();
-      updateRemoveButtons();
-      refreshSuiteAvailability();
-      updatePricing();
-    });
-  }
-
-  function readRow(row){
-    const listingId = row.querySelector('.stayRow-suite').value;
-    const listing = listingsById[listingId] || null;
-    return {
-      row,
-      listingId,
-      listing,
-      suiteName: listing ? listing.property_name : '',
-      arrival: row.querySelector('.stayRow-arrival').value,
-      departure: row.querySelector('.stayRow-departure').value,
-      guests: parseInt(row.querySelector('.stayRow-guests').value, 10),
-      errorEl: row.querySelector('.stayRow-error'),
-      subtotalEl: row.querySelector('.stayRow-subtotal'),
-      selectedAmenities: row.selectedAmenities || {}
-    };
-  }
-
-  // Applies a listing's own discount, if the stay's length qualifies —
-  // this is the "validate against what the owner actually shared" part.
-  // Every night of a stay as 'YYYY-MM-DD' strings — matches the same
-  // convention create-order.js uses server-side, so what the guest sees
-  // and picks here lines up exactly with what gets validated at checkout.
-  function getNightsInRange(arrival, departure){
-    const nights = [];
-    if(!arrival || !departure) return nights;
-    let d = new Date(arrival);
-    const end = new Date(departure);
-    while(d < end){
-      nights.push(d.toISOString().split('T')[0]);
-      d.setDate(d.getDate() + 1);
-    }
-    return nights;
-  }
-
-  // Renders the paid-amenity picker for one stay row, based on its
-  // current listing + date range. Selections live on the row element
-  // itself (row.selectedAmenities, keyed by amenity id → Set of dates) so
-  // they survive re-renders as dates/guests change elsewhere in the form.
-  function renderStayAmenities(row){
-    const s = readRow(row);
-    const container = row.querySelector('.stayRow-amenities');
-    if(!row.selectedAmenities) row.selectedAmenities = {};
-
-    if(!s.listing || !s.arrival || !s.departure){
-      container.innerHTML = '';
-      return;
-    }
-
-    const nights = getNightsInRange(s.arrival, s.departure);
-    const paidAmenities = Array.isArray(s.listing.paid_amenities) ? s.listing.paid_amenities : [];
-
-    // Drop any selections that no longer make sense — the listing changed,
-    // or the stay's dates shrank past a previously-selected night.
-    const validAmenityIds = new Set(paidAmenities.map(a => String(a.id)));
-    Object.keys(row.selectedAmenities).forEach(aid => {
-      if(!validAmenityIds.has(aid)){
-        delete row.selectedAmenities[aid];
-      } else {
-        const kept = new Set([...row.selectedAmenities[aid]].filter(d => nights.includes(d)));
-        if(kept.size === 0) delete row.selectedAmenities[aid];
-        else row.selectedAmenities[aid] = kept;
-      }
-    });
-
-    if(paidAmenities.length === 0 || nights.length === 0){
-      container.innerHTML = '';
-      return;
-    }
-
-    const rows = paidAmenities.map(a => {
-      const excludedWeekdays = Array.isArray(a.excludedWeekdays) ? a.excludedWeekdays : [];
-      const availableNights = nights.filter(n =>
-        (!a.availableFrom || n >= a.availableFrom) &&
-        (!a.availableUntil || n <= a.availableUntil) &&
-        !excludedWeekdays.includes(new Date(n + 'T00:00:00').getDay())
-      );
-      if(availableNights.length === 0) return '';
-
-      const selected = row.selectedAmenities[a.id] || new Set();
-      const chips = availableNights.map(n => {
-        const isChecked = selected.has(n);
-        const label = new Date(n + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
-        return `<label class="amenity-night-chip${isChecked ? ' checked' : ''}"><input type="checkbox" data-amenity-id="${a.id}" data-date="${n}" ${isChecked ? 'checked' : ''}> ${label}</label>`;
-      }).join('');
-
-      const subtotal = selected.size * Number(a.price);
-      const subtotalText = selected.size > 0
-        ? `${selected.size} night${selected.size === 1 ? '' : 's'} selected — ${fmt(subtotal)}`
-        : 'Tap nights to add this';
-
-      return `
-        <div class="stay-amenity-row">
-          <div class="stay-amenity-head"><strong>${a.name}</strong><span>${fmt(Number(a.price))}/night</span></div>
-          <div class="amenity-night-chips">${chips}</div>
-          <div class="stay-amenity-subtotal">${subtotalText}</div>
-        </div>
-      `;
-    }).join('');
-
-    const disclaimer = rows ? `<p style="font-size:11px; opacity:0.55; margin-top:8px; line-height:1.5;">Paid amenities are available on the dates shown only, and are subject to weather, local circumstances, national holidays, and other factors outside the host's control. If a selected amenity can't be fulfilled, the host will provide a refund for that amenity.</p>` : '';
-    container.innerHTML = rows ? `<div class="eyebrow" style="margin-top:16px; margin-bottom:2px;">Paid Amenities</div>${rows}${disclaimer}` : '';
-
-    container.querySelectorAll('input[type="checkbox"][data-amenity-id]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const aid = cb.dataset.amenityId;
-        const date = cb.dataset.date;
-        if(!row.selectedAmenities[aid]) row.selectedAmenities[aid] = new Set();
-        if(cb.checked) row.selectedAmenities[aid].add(date);
-        else row.selectedAmenities[aid].delete(date);
-        if(row.selectedAmenities[aid].size === 0) delete row.selectedAmenities[aid];
-        renderStayAmenities(row);
-        updatePricing();
-      });
-    });
-  }
-
   // Mirrors create-order.js's own calculateDiscount exactly — a stay can
   // be eligible for the listing's single "standing" discount AND/OR any
   // number of date-scoped promotions (get-listings.js's active_promotions,
@@ -575,258 +310,15 @@
     return 0;
   }
 
-  function updatePricing(){
-    const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow);
-    let allValid = true;
-    let grandSubtotal = 0;
-    let grandGstDisplay = 0;
-    let grandGuestServiceFee = 0;
-    const lines = [];
-
-    stays.forEach(s => { s.errorEl.style.display = 'none'; s.subtotalEl.textContent = ''; });
-
-    stays.forEach((s, i) => {
-      if(!s.listingId){
-        s.errorEl.textContent = 'Please select a home for this stay.';
-        s.errorEl.style.display = 'block';
-        allValid = false;
-        return;
-      }
-      if(!s.arrival || !s.departure){
-        allValid = false;
-        return;
-      }
-      const nights = Math.round((new Date(s.departure) - new Date(s.arrival)) / (1000*60*60*24));
-      if(nights <= 0){
-        s.errorEl.textContent = 'Departure must be after arrival for this stay.';
-        s.errorEl.style.display = 'block';
-        allValid = false;
-        return;
-      }
-
-      for(let j = 0; j < i; j++){
-        const other = stays[j];
-        if(other.listingId && other.listingId === s.listingId){
-          s.errorEl.textContent = `Stay ${j+1} already selects ${s.suiteName} — pick a different home for this stay.`;
-          s.errorEl.style.display = 'block';
-          allValid = false;
-          return;
-        }
-      }
-
-      const listing = s.listing;
-      const rate = listing && listing.nightly_rate ? Number(listing.nightly_rate) : 0;
-      if(!rate){
-        s.errorEl.textContent = `${s.suiteName} doesn't have a nightly rate set yet — please enquire directly instead.`;
-        s.errorEl.style.display = 'block';
-        allValid = false;
-        return;
-      }
-
-      const roomTotal = rate * nights;
-      const extraGuests = Math.max(s.guests - BASE_OCCUPANCY, 0);
-      const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
-      const beforeDiscount = roomTotal + extraTotal;
-      const discount = calculateDiscount(listing, nights, s.arrival, beforeDiscount);
-      const discountAmount = discount.amount;
-
-      // Amenities are priced client-side here only for display — the real,
-      // trusted total is recalculated server-side in create-order.js from
-      // the same selections, never taken from this number directly.
-      let amenityTotal = 0;
-      let amenityNightCount = 0;
-      const paidAmenities = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
-      Object.entries(s.selectedAmenities).forEach(([aid, datesSet]) => {
-        const amenity = paidAmenities.find(a => String(a.id) === String(aid));
-        if(amenity){
-          amenityTotal += Number(amenity.price) * datesSet.size;
-          amenityNightCount += datesSet.size;
-        }
-      });
-
-      const staySubtotal = beforeDiscount - discountAmount + amenityTotal;
-
-      grandSubtotal += staySubtotal;
-      grandGstDisplay += stayGstFor(beforeDiscount - discountAmount, nights, amenityTotal).gst;
-
-      // This IS shown to the guest — it's their own fee, added to what
-      // they pay. Host commission (a completely separate rate, deducted
-      // from the host's payout) is never computed or shown here — guests
-      // and hosts each see only their own side of this, never the other's.
-      const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
-      grandGuestServiceFee += guestServiceFee;
-
-      const discountNote = discountAmount > 0 ? ` (−${fmt(discountAmount)} ${discount.name ? discount.name.toLowerCase() : 'offer'})` : '';
-      const extraGuestNote = extraGuests > 0 ? ` + ${extraGuests} extra guest${extraGuests===1?'':'s'} (${fmt(extraTotal)})` : '';
-      const amenityNote = amenityNightCount > 0 ? ` + amenities (${fmt(amenityTotal)})` : '';
-      s.subtotalEl.textContent = `${nights} night${nights===1?'':'s'} (${fmt(roomTotal)})${extraGuestNote}${discountNote}${amenityNote} — ${fmt(staySubtotal)}`;
-
-      lines.push(`<div class="sum-row"><span>${s.suiteName} (${nights} night${nights===1?'':'s'})</span><span>${fmt(staySubtotal)}</span></div>`);
-    });
-
-    if(!allValid || stays.length === 0 || grandSubtotal === 0){
-      summaryEl.style.display = 'none';
-      paymentEl.style.display = 'none';
-      submitBtn.disabled = !allValid && stays.some(s => s.arrival && s.departure);
-      currentBookingTotal = 0;
-      return;
-    }
-
-    submitBtn.disabled = false;
-    const gst = grandGstDisplay;
-    const total = grandSubtotal + gst + grandGuestServiceFee;
-
-    summaryLinesEl.innerHTML = lines.join('');
-    document.getElementById('sumGstRow').style.display = gst > 0 ? 'flex' : 'none';
-    document.getElementById('sumGst').textContent = fmt(gst);
-    document.getElementById('sumServiceFeeRow').style.display = grandGuestServiceFee > 0 ? 'flex' : 'none';
-    document.getElementById('sumServiceFee').textContent = fmt(grandGuestServiceFee);
-    document.getElementById('sumTotal').textContent = fmt(total);
-
-    summaryEl.style.display = 'block';
-    paymentEl.style.display = 'block';
-    currentBookingTotal = total;
-  }
-
-  function initReserveForm(){
-    // The old multi-property "Reserve" flow was removed (Resort listings
-    // with independently bookable rooms replace that need) — this whole
-    // function is now a safe no-op rather than being deleted outright,
-    // since several of its neighboring functions (calculateDiscount,
-    // getNightsInRange, fmtGuest, etc.) are genuinely still used
-    // elsewhere in this file and weren't safe to remove alongside it.
-    if(!stayRowsEl) return;
-    if(approvedListings.length === 0){
-      stayRowsEl.innerHTML = '<div class="suites-empty" style="text-align:left; padding:0;">No stays are available to book online right now. Check back shortly.</div>';
-      addStayBtn.style.display = 'none';
-      submitBtn.disabled = true;
-      return;
-    }
-    addStayRow();
-  }
-
-  if(addStayBtn) addStayBtn.addEventListener('click', addStayRow);
-
   // ---- Razorpay checkout (secure: order created server-side) ----
-  const RAZORPAY_KEY_ID = 'rzp_test_TRBdgq9nPS2wfy'; // public Key ID only — safe to expose
+  // The public Key ID comes back from create-order.js with each order
+  // (keyId), from the server's own settings — never written in here.
   const API_BASE = 'https://aerva-in.vercel.app'; // your deployed api/ functions
 
-  document.getElementById('reserveForm') && document.getElementById('reserveForm').addEventListener('submit', async function(e){
-    e.preventDefault();
-
-    if(!currentBookingTotal){
-      updatePricing();
-      return;
-    }
-
-    if(!guestAuthToken()){
-      requireLoginForBooking(() => document.getElementById('reserveForm').requestSubmit());
-      return;
-    }
-
-    const stays = Array.from(stayRowsEl.querySelectorAll('.stay-row')).map(readRow).map(s => ({
-      listingId: s.listingId, suite: s.suiteName, arrival: s.arrival, departure: s.departure, guests: s.guests,
-      selectedAmenities: Object.entries(s.selectedAmenities).map(([amenityId, datesSet]) => ({
-        amenityId: Number(amenityId), dates: [...datesSet]
-      }))
-    }));
-
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Preparing payment…';
-
-    let order;
-    try{
-      const orderRes = await fetch(API_BASE + '/api/create-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-        body: JSON.stringify({
-          stays: stays,
-          email: document.getElementById('email').value
-        })
-      });
-      if(!orderRes.ok) throw new Error('Order creation failed');
-      order = await orderRes.json();
-    } catch(err){
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Reserve & Pay';
-      alert('Could not start payment. Please try again in a moment.');
-      return;
-    }
-
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Reserve & Pay';
-
-    const stayDescription = stays.length === 1
-      ? stays[0].suite
-      : stays.length + ' stays (' + stays.map(s => s.suite).join(', ') + ')';
-
-    const options = {
-      key: RAZORPAY_KEY_ID,
-      order_id: order.orderId,   // amount/currency come from the order itself — cannot be edited client-side
-      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
-      amount: order.amount,
-      currency: order.currency,
-      name: 'Aerva',
-      description: stayDescription,
-      prefill: {
-        email: document.getElementById('email').value
-      },
-      theme: { color: '#a9884f' },
-      // Reorders what's already enabled on your Razorpay account — does not
-      // turn on methods that aren't enabled there. UPI first, since it's the
-      // most-used method for Indian guests; everything else keeps its default order.
-      config: {
-        display: {
-          sequence: ['upi', 'card', 'netbanking', 'wallet'],
-          preferences: { show_default_blocks: true }
-        }
-      },
-      handler: async function(response){
-        aervaCheckoutSucceeded();
-        // Verify server-side before telling the guest they're booked.
-        try{
-          const verifyRes = await fetch(API_BASE + '/api/verify-payment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(response)
-          });
-          const verifyData = await verifyRes.json();
-          if(verifyData.verified){
-            document.querySelector('.confirm').style.display = 'block';
-            document.querySelector('.confirm').textContent =
-              'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm availability for each stay and follow up by email shortly.';
-          } else {
-            alert((verifyData && verifyData.message) || 'We could not verify this payment. Please contact us before assuming your booking is confirmed.');
-          }
-        } catch(err){
-          alert('Payment went through, but we could not confirm it automatically. Please email us your payment ID.');
-        }
-      },
-      modal: {
-        ondismiss: function(){ aervaEndCheckout('closed'); }
-      }
-    };
-
-    if(typeof Razorpay === 'undefined'){
-      alert('Payment gateway did not load. Please check your connection and try again.');
-      return;
-    }
-    const rzp = new Razorpay(options);
-    rzp.on('payment.failed', function(response){
-      alert('Payment failed: ' + response.error.description);
-    });
-    rzp.open();
-  });
-
   // ---- List Your Property form ----
-  // Submits via Formspree — a form-to-email service, so photos and the full
-  // submission still land in your inbox for review, same as before.
-  // TODO: replace with your real Formspree endpoint (see README-LISTING-FORM.md).
-  const LISTING_FORM_ENDPOINT = 'https://formspree.io/f/xdenjdyq';
+  // Saved through api/submit-listing.js, which also emails the admin.
 
-  // Structured fields (everything except photos) also get saved to your Neon
-  // database, so they're queryable and can later power the Suites section directly.
-  // TODO: replace with your deployed Vercel backend URL (same one used for Razorpay).
+  // The deployed api/ functions (same backend as API_BASE above).
   const LISTINGS_API_BASE = 'https://aerva-in.vercel.app';
 
   const listingForm = document.getElementById('listingForm');
@@ -1553,7 +1045,7 @@
     function renderFreeResults(places){
       if(!places.length){ closeDropdown(); return; }
       dropdownEl.innerHTML = places.map((p, i) => `
-        <button type="button" class="place-suggest-item" data-index="${i}">${p.formatted_address}</button>
+        <button type="button" class="place-suggest-item" data-index="${i}">${escapeMessageHtml(p.formatted_address)}</button>
       `).join('');
       dropdownEl.style.display = 'block';
       dropdownEl.querySelectorAll('.place-suggest-item').forEach(btn => {
@@ -1568,7 +1060,7 @@
     function renderGooglePredictions(predictions){
       if(!predictions.length){ closeDropdown(); return; }
       dropdownEl.innerHTML = predictions.map(p => `
-        <button type="button" class="place-suggest-item" data-place-id="${p.place_id}">${p.description}</button>
+        <button type="button" class="place-suggest-item" data-place-id="${escapeMessageHtml(p.place_id)}">${escapeMessageHtml(p.description)}</button>
       `).join('');
       dropdownEl.style.display = 'block';
       dropdownEl.querySelectorAll('.place-suggest-item').forEach(btn => {
@@ -1722,13 +1214,13 @@
         if(freePlaces.length){
           html += freePlaces.map((p, i) => `
             <button type="button" class="place-suggest-item" data-type="free-place" data-index="${i}">
-              ${p.formatted_address}
+              ${escapeMessageHtml(p.formatted_address)}
             </button>
           `).join('');
         } else if(googlePredictions.length){
           html += googlePredictions.map(p => `
-            <button type="button" class="place-suggest-item" data-type="google-place" data-place-id="${p.place_id}">
-              ${p.description}
+            <button type="button" class="place-suggest-item" data-type="google-place" data-place-id="${escapeMessageHtml(p.place_id)}">
+              ${escapeMessageHtml(p.description)}
             </button>
           `).join('');
         }
@@ -1859,7 +1351,7 @@
         const item = document.createElement('div');
         item.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
         item.innerHTML = `
-          <img src="${url}" alt="${photo.file ? photo.file.name : 'Photo'}">
+          <img src="${url}" alt="${escapeMessageHtml(photo.file ? photo.file.name : 'Photo')}">
           <span class="photo-order-badge">${idx + 1}</span>
           <button type="button" class="photo-remove-btn" data-action="remove" aria-label="Remove this photo">×</button>
           <button type="button" class="photo-cover-btn" data-action="cover" aria-label="Set as cover photo" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
@@ -2161,7 +1653,7 @@
       bedroomEditorHtml = `
         <div style="width:100%;">
           ${tabBarHtml}
-          <input type="text" data-room-name-input style="border:none; background:none; padding:0; width:100%; font-size:16.5px; font-weight:600; color:var(--ink); font-family:'Jost', sans-serif;" value="${activeRoom.name}" maxlength="40">
+          <input type="text" data-room-name-input style="border:none; background:none; padding:0; width:100%; font-size:16.5px; font-weight:600; color:var(--ink); font-family:'Jost', sans-serif;" value="${escapeMessageHtml(activeRoom.name)}" maxlength="40">
           <div class="guest-row-sub">Required — at least one photo, anywhere below. Tap the name above to rename it, e.g. Suite, Deluxe, Standard.</div>
           ${isResort ? `
             <div style="display:flex; gap:10px; margin-top:10px;">
@@ -2181,7 +1673,7 @@
               <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Copies this room's whole set of photos (including anything already sorted into Washroom/Living Room/Balcony) onto whichever rooms you check below, replacing anything already there for that room.</p>
               ${otherBedrooms.map(other => `
                 <label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; cursor:pointer;">
-                  <input type="checkbox" data-clone-target="${roomSpaceRows.indexOf(other)}" style="width:auto;"> ${other.name}
+                  <input type="checkbox" data-clone-target="${roomSpaceRows.indexOf(other)}" style="width:auto;"> ${escapeMessageHtml(other.name)}
                 </label>
               `).join('')}
               <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Copy this listing</button>
@@ -2199,7 +1691,7 @@
       return `
         <div class="guest-row" data-room-idx="${idx}" style="align-items:flex-start;">
           <div class="guest-row-text" style="flex:1; min-width:0; margin-right:12px;">
-            <div class="guest-row-title">${room.name}</div>
+            <div class="guest-row-title">${escapeMessageHtml(room.name)}</div>
             <div class="guest-row-sub">${room.mandatory ? 'Required' : 'Optional'}</div>
           </div>
           ${roomPhotoBoxHtml(previewSrc, '+ Photo', 'data-room-photo-pick', 'data-room-photo-remove')}
@@ -2358,7 +1850,9 @@
     } else {
       label.textContent = 'Bedrooms';
       input.placeholder = 'e.g. 4 — enter 0 for a studio';
-      hint.textContent = "You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.";
+      // Same wording as the hint in index.html, so it does not change when
+      // the property type is switched back from Resort.
+      hint.textContent = 'Add at least one photo for each bedroom below. For a studio, enter 0 and add a photo of the sleeping area as Bedroom 1.';
       priceRow.style.display = '';
       priceInput.required = true;
       priceResortNote.style.display = 'none';
@@ -2479,7 +1973,9 @@
       async function attempt(){
         const compressed = await compressImage(file);
         const [uploaded, hash] = await Promise.all([
-          upload(compressed.name, compressed, { access: 'public', handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload' }),
+          upload(compressed.name, compressed, { access: 'public', handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload',
+            // blob-upload.js hands a token only to a signed-in caller.
+            clientPayload: JSON.stringify({ purpose: 'listing-photo', token: safeStorage.get('aerva_guest_session') || '' }) }),
           computeFileHash(compressed)
         ]);
         return { url: uploaded.url, hash };
@@ -2885,34 +2381,8 @@
         return;
       }
 
-      // Full submission succeeded — now try the (best-effort) email notice.
-      try{
-        const formData = new FormData();
-        formData.append('Property Name', document.getElementById('listPropertyName').value);
-        formData.append('City', document.getElementById('listCity').value);
-        formData.append('Area', document.getElementById('listArea').value);
-        formData.append('Property Type', document.getElementById('listType').value);
-        formData.append('Bedrooms', document.getElementById('listBedrooms').value);
-        formData.append('Max Guests', document.getElementById('listGuests').value);
-        formData.append('Expected Nightly Rate', document.getElementById('listPrice').value);
-        formData.append('Description', document.getElementById('listDescription').value);
-        collectCheckedValues('Amenities').forEach(v => formData.append('Amenities', v));
-        collectCheckedValues('Services').forEach(v => formData.append('Services', v));
-        formData.append('Pet Friendly', petFriendlyYes.checked ? 'Yes' : 'No');
-        if(petFriendlyYes.checked){
-          formData.append('Max Pets Allowed', document.getElementById('listMaxPets').value);
-          collectCheckedValues('PetTypes').forEach(v => formData.append('Pet Types', v));
-          formData.append('Pet Fee', document.getElementById('listPetFee').value);
-        }
-        formData.append('Host Name', document.getElementById('listHostName').value);
-        formData.append('Phone', document.getElementById('listHostPhone').value);
-        formData.append('Host Email', hostSessionEmail || '');
-        formData.append('Photos', 'See admin notification email or database — not attached here (Formspree free plan doesn\'t support file uploads).');
-
-        await fetch(LISTING_FORM_ENDPOINT, { method: 'POST', body: formData, headers: { 'Accept': 'application/json' } });
-      } catch(notifyErr){
-        console.warn('Formspree notification failed (non-fatal — listing is already saved):', notifyErr);
-      }
+      // The admin is emailed by api/submit-listing.js itself (Resend), so
+      // nothing else is sent from the browser.
 
       // Fully done — now it's safe to reset everything for a fresh listing.
       confirmEl.style.display = 'block';
@@ -3164,7 +2634,7 @@
       // column existed).
       const approved = (data.listings || []).filter(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay'));
       select.innerHTML = '<option value="">— Select one of your live listings —</option>' +
-        approved.map(l => `<option value="${l.id}">${l.property_name}${l.city ? ' (' + l.city + ')' : ''}</option>`).join('');
+        approved.map(l => `<option value="${escapeMessageHtml(l.id)}">${escapeMessageHtml(l.property_name)}${l.city ? ' (' + escapeMessageHtml(l.city) + ')' : ''}</option>`).join('');
       const noteEl = document.getElementById('expHostingListingNote');
       if(noteEl){
         if(approved.length === 0){
@@ -3368,7 +2838,8 @@
         for(const file of files){
           const result = await upload(file.name, file, {
             access: 'public',
-            handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload'
+            handleUploadUrl: LISTINGS_API_BASE + '/api/blob-upload',
+            clientPayload: JSON.stringify({ purpose: 'listing-photo', token: safeStorage.get('aerva_guest_session') || '' })
           });
           expPhotoUrls.push(result.url);
         }
@@ -3667,8 +3138,11 @@
       return '';
     }
 
-    const minNightsNote = listing.discount_min_nights ? ` on stays of ${listing.discount_min_nights}+ nights` : '';
-    return `${fmtGuest(rupees)} (${percent}%) off${minNightsNote}`;
+    // Plain wording: "10% off when you stay 7 nights or more".
+    const n = Number(listing.discount_min_nights) || 0;
+    const minNightsNote = n > 1 ? ` when you stay ${n} nights or more` : '';
+    const amount = listing.discount_type === 'percentage' ? `${percent}%` : fmtGuest(rupees);
+    return `${amount} off${minNightsNote}`;
   }
 
   // Picks whichever currently-running promotion (see get-listings.js's
@@ -3764,8 +3238,11 @@
       rupees = value;
       percent = Math.round((value / rate) * 100);
     }
-    const minNightsNote = promo.minNights ? ` on stays of ${promo.minNights}+ nights` : '';
-    return `${promo.name}: ${fmtGuest(rupees)} (${percent}%) off${minNightsNote}, through ${promo.endDate}`;
+    const n = Number(promo.minNights) || 0;
+    const minNightsNote = n > 1 ? ` when you stay ${n} nights or more` : '';
+    const amount = promo.discountType === 'percentage' ? `${percent}%` : fmtGuest(rupees);
+    // Shown as HTML: the promotion name is the host's own text.
+    return `${escapeMessageHtml(promo.name)}: ${amount} off${minNightsNote}, until ${escapeMessageHtml(promo.endDate)}`;
   }
 
   // The one-line version for a listing CARD. Every card reserves this
@@ -3929,7 +3406,7 @@
       },
       function(err){
         btn.disabled = false;
-        setNearMeLabel(btn, 'Near Me');
+        setNearMeLabel(btn, 'Near me');
         // err.code: 1 = permission denied, 2 = position unavailable
         // (e.g. no GPS/network signal), 3 = timed out. Distinguishing
         // these means the message actually points at the real fix
@@ -4134,9 +3611,9 @@
     if(allPhotos.length === 0){
       photoHtml = `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
     } else if(allPhotos.length === 1){
-      photoHtml = `<img src="${allPhotos[0]}" alt="${exp.property_name}" loading="lazy" ${imgFallback}>`;
+      photoHtml = `<img src="${escapeMessageHtml(allPhotos[0])}" alt="${escapeMessageHtml(exp.property_name)}" loading="lazy" ${imgFallback}>`;
     } else {
-      const slides = allPhotos.map(url => `<img src="${url}" alt="${exp.property_name}" loading="lazy" ${imgFallback}>`).join('');
+      const slides = allPhotos.map(url => `<img src="${escapeMessageHtml(url)}" alt="${escapeMessageHtml(exp.property_name)}" loading="lazy" ${imgFallback}>`).join('');
       const dots = allPhotos.map(() => '<span></span>').join('');
       photoHtml = `
         <div class="suite-photo-slider">${slides}</div>
@@ -4174,7 +3651,7 @@
           ${exp.experience_type === 'with_stay'
             ? `<span class="suite-badge suite-badge-stay">Includes a Stay</span>`
             : ''}
-          ${exp.experience_category ? `<span class="suite-badge">${exp.experience_category}</span>` : ''}
+          ${exp.experience_category ? `<span class="suite-badge">${escapeMessageHtml(exp.experience_category)}</span>` : ''}
           ${exp.experience_tier && exp.experience_tier.label
             ? `<span class="suite-badge prop-badge prop-${escapeMessageHtml(exp.experience_tier.key)}">${escapeMessageHtml(exp.experience_tier.label)}</span>`
             : ''}
@@ -4384,14 +3861,14 @@
   function ratingBit(listing){
     const n = Number(listing.review_count) || 0;
     if(!n || listing.rating == null) return '<span class="suite-rating-new">· New</span>';
-    return `<span class="suite-rating">· <span class="suite-star">★</span>${Number(listing.rating).toFixed(2)}</span>`;
+    return `<span class="suite-rating">· <span class="suite-star">★</span>${Number(listing.rating).toFixed(1)}</span>`;
   }
 
   function ratingHtml(listing){
     const n = Number(listing.review_count) || 0;
     if(!n || listing.rating == null) return '<div class="suite-rating-new">New to Aerva</div>';
     const r = Number(listing.rating);
-    return `<div class="suite-rating"><span class="suite-star">\u2605</span>${r.toFixed(2)}<span class="suite-rating-count">(${n})</span></div>`;
+    return `<div class="suite-rating"><span class="suite-star">\u2605</span>${r.toFixed(1)}<span class="suite-rating-count">(${n})</span></div>`;
   }
 
   // Property standing. At most two pills: the rung, plus one flag. The
@@ -4551,7 +4028,7 @@
     const rating = p.rating && p.rating.count > 0 ? p.rating : null;
     const ratingHtml = rating ? `
       <div class="hp-rating">
-        <span class="hp-rating-score">${Number(rating.score).toFixed(2)}</span>
+        <span class="hp-rating-score">${Number(rating.score).toFixed(1)}</span>
         <span class="hp-rating-stars" aria-hidden="true">${[1,2,3,4,5].map(i => `<span class="${i <= Math.round(rating.score) ? 'on' : ''}">★</span>`).join('')}</span>
         <span class="hp-rating-count">${rating.count} review${rating.count === 1 ? '' : 's'}</span>
       </div>` : '';
@@ -4702,7 +4179,10 @@
     //
     // Other params are preserved rather than replaced wholesale with
     // 'index.html', so a refresh keeps whatever else the page was showing.
+    const titleBeforeCohost = document.title === 'Co-hosting — Aerva' ? 'Aerva — Stay Elegant' : document.title;
+    document.title = 'Co-hosting — Aerva';
     const closeCohostCenter = () => {
+      document.title = titleBeforeCohost;
       ov.classList.remove('is-open');
       document.body.classList.remove('hp-open');
       document.removeEventListener('keydown', cohostCenterEscape);
@@ -5185,7 +4665,7 @@
 
     const scoreBlock = rated ? `
       <div class="ts-score">
-        <div class="ts-score-num">${Number(listing.rating).toFixed(2)}</div>
+        <div class="ts-score-num">${Number(listing.rating).toFixed(1)}</div>
         <div class="ts-score-stars">${stars}</div>
         <div class="ts-score-count">${n} review${n === 1 ? '' : 's'}</div>
       </div>` : '';
@@ -5203,7 +4683,7 @@
     // what the PROPERTY earned sits here, what the HOST earned sits beside
     // their name under "Hosted by".
     const badgeBlock = badges.length
-      ? `<div class="ts-badge-group"><span class="ts-badge-caption">This property</span><div class="ts-badges">${badges.join('')}</div></div>`
+      ? `<div class="ts-badge-group"><span class="ts-badge-caption">${o.type === 'experience' ? 'This experience' : 'This property'}</span><div class="ts-badges">${badges.join('')}</div></div>`
       : '';
     const placeBlock = placeName || placeAddress ? `
       <div class="ts-place">
@@ -5314,9 +4794,9 @@
     if(allPhotos.length === 0){
       photoHtml = `<div class="suite-photo-placeholder"><span>${initial}</span></div>`;
     } else if(allPhotos.length === 1){
-      photoHtml = `<img src="${allPhotos[0]}" alt="${listing.property_name}" loading="lazy" ${imgFallback}>`;
+      photoHtml = `<img src="${escapeMessageHtml(allPhotos[0])}" alt="${escapeMessageHtml(listing.property_name)}" loading="lazy" ${imgFallback}>`;
     } else {
-      const slides = allPhotos.map(url => `<img src="${url}" alt="${listing.property_name}" loading="lazy" ${imgFallback}>`).join('');
+      const slides = allPhotos.map(url => `<img src="${escapeMessageHtml(url)}" alt="${escapeMessageHtml(listing.property_name)}" loading="lazy" ${imgFallback}>`).join('');
       const dots = allPhotos.map(() => '<span></span>').join('');
       photoHtml = `
         <div class="suite-photo-slider">${slides}</div>
@@ -5986,6 +5466,8 @@
   // guest never has to guess which one applies to them.
   let bookingLoginSuccessCallback = null;
   let bookingGateEmail = '';
+  // Must match TERMS_VERSION in api/guest-auth.js and guest-login.html.
+  const TERMS_VERSION = '1.0 (26 September 2026)';
 
   function requireLoginForBooking(onSuccess){
     if(guestAuthToken()){ onSuccess(); return; }
@@ -6056,6 +5538,8 @@
           document.getElementById('bookingSignupSuccessMsg').style.display = 'none';
           document.getElementById('bookingSignupName').value = '';
           document.getElementById('bookingSignupPassword').value = '';
+          const gateConsent = document.getElementById('bookingSignupConsent');
+          if(gateConsent) gateConsent.checked = false;
           document.getElementById('bookingSignupFormView').style.display = 'block';
           document.getElementById('bookingSignupName').focus();
         }
@@ -6118,17 +5602,28 @@
     const btn = document.getElementById('bookingSignupSubmitBtn');
     errEl.style.display = 'none';
     successEl.style.display = 'none';
-    if(!password){
-      errEl.textContent = 'Please choose a password.';
+    if(!password || password.length < 8){
+      errEl.textContent = 'Please choose a password of at least 8 characters.';
       errEl.style.display = 'block';
       return;
     }
+    // The server refuses a sign-up without this tick (DPDP consent).
+    const consentBox = document.getElementById('bookingSignupConsent');
+    const consentRow = document.getElementById('bookingSignupConsentRow');
+    if(consentBox && !consentBox.checked){
+      errEl.textContent = 'Please tick the box to agree to the Terms of Service and Privacy Policy.';
+      errEl.style.display = 'block';
+      if(consentRow) consentRow.classList.add('needs');
+      consentBox.focus();
+      return;
+    }
+    if(consentRow) consentRow.classList.remove('needs');
     btn.disabled = true;
     btn.textContent = 'Creating account…';
     try{
       const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'signup', email: bookingGateEmail, password, name })
+        body: JSON.stringify({ mode: 'signup', email: bookingGateEmail, password, name, consent: true, termsVersion: TERMS_VERSION })
       });
       const data = await res.json();
       if(!res.ok){
@@ -6378,7 +5873,8 @@
         try{
           const { upload } = await import('https://esm.sh/@vercel/blob/client');
           const result = await upload('profile.jpg', photoFile, {
-            access: 'public', handleUploadUrl: SUITES_API_BASE + '/api/blob-upload'
+            access: 'public', handleUploadUrl: SUITES_API_BASE + '/api/blob-upload',
+            clientPayload: JSON.stringify({ purpose: 'profile-photo', token: guestAuthToken() || '' })
           });
           const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
             method: 'PATCH',
@@ -6470,8 +5966,16 @@
     const unread = notes.filter(n => !seen.includes(n.id)).length;
     countEl.textContent = unread > 9 ? '9+' : String(unread);
     countEl.style.display = unread ? 'block' : 'none';
+    // The phone menu shows the same list (index.html #mobileNotifList).
+    const mobileList = document.getElementById('mobileNotifList');
+    const mobileCount = document.getElementById('mobileNotifCount');
+    if(mobileCount){
+      mobileCount.textContent = unread > 9 ? '9+' : String(unread);
+      mobileCount.style.display = unread ? 'inline-block' : 'none';
+    }
     if(!notes.length){
       list.innerHTML = '<p class="nav-notif-empty">Nothing needs your attention right now.</p>';
+      if(mobileList) mobileList.innerHTML = list.innerHTML;
       return;
     }
     list.innerHTML = notes.map(n =>
@@ -6482,9 +5986,13 @@
         <div class="nav-notif-body">${escapeMessageHtml(n.body || '')}</div>
         ${n.due ? `<div class="nav-notif-due">${escapeMessageHtml(n.due)}</div>` : ''}
       </a>`).join('');
-    list.querySelectorAll('.nav-notif-item').forEach(el => {
+    if(mobileList) mobileList.innerHTML = list.innerHTML;
+    [list, mobileList].filter(Boolean).forEach(box => box.querySelectorAll('.nav-notif-item').forEach(el => {
       el.addEventListener('click', (e) => {
         navMarkRead(el.dataset.notif);
+        // From the phone menu: close the menu first.
+        const scrim = document.getElementById('mobileNavScrim');
+        if(box === mobileList && scrim && scrim.classList.contains('is-open')) scrim.click();
         // A review notice opens the review form straight away rather than
         // dropping someone on My Bookings to find the booking themselves.
         const orderId = Number(el.dataset.reviewOrder);
@@ -6498,8 +6006,17 @@
           });
         }
       });
-    });
+    }));
   }
+  (function wireMobileNotifications(){
+    const toggle = document.getElementById('mobileNotifToggle');
+    const list = document.getElementById('mobileNotifList');
+    if(!toggle || !list) return;
+    toggle.addEventListener('click', () => {
+      list.hidden = !list.hidden;
+      toggle.setAttribute('aria-expanded', String(!list.hidden));
+    });
+  })();
   (function wireNavBell(){
     const bell = document.getElementById('navBell');
     const panel = document.getElementById('navNotifPanel');
@@ -6901,24 +6418,27 @@
         // once a conversation exists).
         const localToday = String(b.local_today || '').slice(0, 10);
         const upcoming = b.status === 'paid' && (!localToday || String(b.departure).slice(0, 10) >= localToday);
+        // A paid stay whose check-out day has passed (in the listing's own
+        // timezone — local_today comes from the server) is Completed.
+        const completed = b.status === 'paid' && !!localToday && String(b.departure).slice(0, 10) < localToday;
         // Stays can be changed before check-in and during the stay (the
         // server applies the midnight-before-check-out limit exactly).
         const ch = b.open_change;
         const changeHtml = !upcoming ? ''
           : ch && ch.status === 'pending' ? `<span class="booking-request-note">Change requested · waiting for your host <a href="#" data-withdraw-change="${ch.id}" style="color:var(--gold-text); margin-left:6px;">Withdraw</a></span>`
-          : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="margin-top:10px; min-height:44px; padding:10px 18px;">Pay ₹${Number(ch.difference).toLocaleString('en-IN')} to confirm your change</button>`
-          : `<button type="button" class="filter-clear" data-change-booking="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-left:8px;">Change booking</button>`;
+          : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="min-height:44px; padding:10px 18px;">Pay ₹${Number(ch.difference).toLocaleString('en-IN')} to confirm your change</button>`
+          : `<button type="button" class="filter-clear" data-change-booking="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Change booking</button>`;
         const codeHtml = b.confirmation_code && b.status === 'paid'
           ? `<div class="confirm-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${escapeMessageHtml(b.confirmation_code)}">Copy</button></div>`
           : '';
         const inStay = !!localToday && (b.listing_type || 'stay') === 'stay' && String(b.arrival).slice(0, 10) <= localToday && localToday < String(b.departure).slice(0, 10);
-        const reportHtml = inStay ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-left:8px;">Report a problem</button>` : '';
+        const reportHtml = inStay ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Report a problem</button>` : '';
         const requestHtml = !upcoming ? ''
           : b.cancel_request_status === 'pending' ? '<span class="booking-request-note">Cancellation requested · waiting for the host</span>'
           : b.cancel_request_status === 'declined' ? '<span class="booking-request-note">Cancellation request declined by the host</span>'
-          : `<button type="button" class="filter-clear" data-policy-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-left:8px;">Request cancellation</button>`;
+          : `<button type="button" class="filter-clear" data-policy-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Request cancellation</button>`;
         const chatBtnHtml = (b.status === 'paid' || b.status === 'cancelled')
-          ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}" style="margin-top:10px;">${b.status === 'paid' ? 'Message Host' : 'View messages'}</button>`
+          ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">${upcoming ? 'Message host' : 'View messages'}</button>`
           : '';
         // Only 'open' gets a button. The other states are shown as plain
         // text where they are worth explaining, and silently where they
@@ -6944,8 +6464,9 @@
           <div class="listing-card booking-card" data-booking="${b.id}" style="margin-bottom:14px; cursor:pointer;">
             <div class="listing-info">
               <h3>${escapeMessageHtml(b.suite_name || '')}</h3>
-              <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(b.status)}</div>
-              ${codeHtml}${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}
+              <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(completed ? 'completed' : b.status)}</div>
+              ${codeHtml}
+              <div class="booking-actions">${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}</div>
             </div>
           </div>
         `;
@@ -7004,9 +6525,9 @@
   }
 
   function statusBadgeHtmlGuest(status){
-    const label = status === 'paid' ? 'Confirmed' : status === 'refunded' ? 'Refunded' : status === 'cancelled' ? 'Cancelled' : status;
+    const label = status === 'paid' ? 'Confirmed' : status === 'completed' ? 'Completed' : status === 'refunded' ? 'Refunded' : status === 'cancelled' ? 'Cancelled' : status;
     const color = status === 'paid' ? '#3a7d44' : '#8a7f6c';
-    return `<span style="color:${color}; text-transform:uppercase; font-size:11px; letter-spacing:0.06em;">${label}</span>`;
+    return `<span style="color:${color}; text-transform:uppercase; font-size:11px; letter-spacing:0.06em;">${escapeMessageHtml(label)}</span>`;
   }
 
   let chatCurrentConversationId = null;
@@ -7028,7 +6549,7 @@
       });
       const data = await res.json();
       if(!res.ok){
-        document.getElementById('chatMessagesContainer').innerHTML = `<p class="suites-empty">${data.error || 'Could not open this conversation.'}</p>`;
+        document.getElementById('chatMessagesContainer').innerHTML = `<p class="suites-empty">${escapeMessageHtml(data.error || 'Could not open this conversation.')}</p>`;
         return;
       }
       chatCurrentConversationId = data.conversationId;
@@ -7080,7 +6601,7 @@
       const data = await res.json();
       const templates = data.templates || [];
       if(!templates.length){ row.innerHTML = ''; return; }
-      row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${t.body}</button>`).join('');
+      row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${escapeMessageHtml(t.body)}" style="white-space:nowrap; flex:0 0 auto;">${escapeMessageHtml(t.body)}</button>`).join('');
       row.querySelectorAll('[data-template]').forEach(btn => {
         btn.addEventListener('click', () => {
           document.getElementById('chatInput').value = btn.dataset.template;
@@ -7220,7 +6741,10 @@
       .catch(() => {}); // Non-fatal — badge just keeps its last known value.
   }
 
+  let titleBeforeInbox = null;
   function openInboxOverlay(){
+    if(titleBeforeInbox === null) titleBeforeInbox = document.title;
+    document.title = 'Messages — Aerva';
     document.getElementById('inboxOverlay').classList.add('open');
     document.body.style.overflow = 'hidden';
     loadInboxConversations();
@@ -7229,6 +6753,7 @@
     document.getElementById('inboxOverlay').classList.remove('open');
     document.getElementById('inboxPanel').classList.remove('details-open', 'chat-open');
     document.body.style.overflow = '';
+    if(titleBeforeInbox !== null){ document.title = titleBeforeInbox; titleBeforeInbox = null; }
     refreshMessagesBadge(); // catches any reads that happened while it was open
   }
   document.getElementById('hostMessagesIcon').addEventListener('click', (e) => {
@@ -7274,9 +6799,9 @@
     if(conv.booking_status === 'cancelled') return { label: 'Cancelled', cls: 'tag-cancelled' };
     const today = new Date().toISOString().split('T')[0];
     if(today > conv.departure) return { label: 'Completed', cls: 'tag-completed' };
-    if(today === conv.arrival) return { label: 'Check-in Today', cls: 'tag-today' };
-    if(today > conv.arrival) return { label: 'Hosting Now', cls: 'tag-hosting' };
-    return { label: 'Upcoming Stay', cls: 'tag-upcoming' };
+    if(today === conv.arrival) return { label: 'Check-in today', cls: 'tag-today' };
+    if(today > conv.arrival) return { label: conv.my_role === 'host' ? 'Hosting now' : 'Staying now', cls: 'tag-hosting' };
+    return { label: 'Upcoming stay', cls: 'tag-upcoming' };
   }
   function inboxDateRangeLabel(conv){
     if(!conv.arrival || !conv.departure) return '';
@@ -7307,7 +6832,9 @@
       inboxConversations = data.conversations || [];
       renderInboxConversationList();
     } catch(err){
-      listEl.innerHTML = '<p style="padding:20px 22px; font-size:13px; color:#a3402f;">Could not load your conversations right now.</p>';
+      listEl.innerHTML = '<p style="padding:20px 22px; font-size:13px; color:#a3402f;">Could not load your conversations right now.'
+        + (err && err.message && err.message !== 'Failed to load' ? ' <span style="display:block; margin-top:6px; color:#6e675d;">' + escapeMessageHtml(err.message) + '</span>' : '') + '</p>';
+      console.error('Inbox failed to load:', err);
     }
   }
 
@@ -7325,6 +6852,7 @@
       listEl.innerHTML = `<p style="padding:20px 22px; font-size:13px; opacity:0.6;">${inboxConversations.length ? 'No conversations match.' : 'No conversations yet — these open automatically once you message a host, or a guest with a confirmed booking messages you.'}</p>`;
       return;
     }
+    const inboxHasBothRoles = inboxConversations.some(c => c.my_role === 'host') && inboxConversations.some(c => c.my_role !== 'host');
     listEl.innerHTML = items.map(c => {
       const tag = inboxStatusTag(c);
       const name = c.counterpart_name || c.guest_email;
@@ -7332,15 +6860,17 @@
       // "Hosting" / "Guest" — which hat applies to THIS specific thread,
       // since the same account can be the host on one conversation and
       // just a guest on another (see my_role, computed server-side).
-      const roleLabel = c.my_role === 'host' ? 'Hosting' : 'Guest';
+      // Only worth saying on an account that is on both sides; a
+      // guest-only account just sees its trips.
+      const roleLabel = !inboxHasBothRoles ? '' : c.my_role === 'host' ? 'You\u2019re hosting' : 'You\u2019re the guest';
       return `
         <div class="inbox-conv-card${c.id === inboxCurrentConversationId ? ' active' : ''}" data-conv-id="${c.id}">
-          ${thumb ? `<img class="inbox-conv-thumb" src="${thumb}" alt="">` : `<div class="inbox-conv-thumb"></div>`}
+          ${thumb ? `<img class="inbox-conv-thumb" src="${escapeMessageHtml(thumb)}" alt="">` : `<div class="inbox-conv-thumb"></div>`}
           <div class="inbox-conv-info">
             <div class="inbox-conv-topline">
               <span class="inbox-status-tag ${tag.cls}">${tag.label}</span>
-              <span style="opacity:0.5;">·</span>
-              <span style="opacity:0.6;">${roleLabel}</span>
+              ${roleLabel ? `<span style="opacity:0.5;">·</span>
+              <span style="opacity:0.6;">${roleLabel}</span>` : ''}
               <span>${inboxDateRangeLabel(c)}</span>
             </div>
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
@@ -7349,12 +6879,12 @@
                    counterpart's name, since with repeat guests/hosts or
                    multiple properties, the name alone doesn't say which
                    booking a message is actually referring to. -->
-              <div class="inbox-conv-name">${c.property_name || 'Aerva'}</div>
+              <div class="inbox-conv-name">${escapeMessageHtml(c.property_name || 'Aerva')}</div>
               <span class="inbox-conv-time">${inboxRelativeTime(c.last_message_at)}</span>
             </div>
-            <div class="inbox-conv-counterpart">${roleLabel === 'Hosting' ? 'Guest' : 'Host'}: ${name}</div>
+            <div class="inbox-conv-counterpart">${roleLabel === 'Hosting' ? 'Guest' : 'Host'}: ${escapeMessageHtml(name || '')}</div>
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-              <div class="inbox-conv-preview">${c.last_message || 'No messages yet'}</div>
+              <div class="inbox-conv-preview">${escapeMessageHtml(c.last_message || 'No messages yet')}</div>
               ${Number(c.unread_count) > 0 ? '<span class="inbox-conv-unread-dot"></span>' : ''}
             </div>
           </div>
@@ -7588,7 +7118,7 @@
         <p style="font-size:15px; margin:0 0 10px;">${escapeMessageHtml(data.guest && data.guest.name || 'Guest')}</p>
         ${sm.count ? `
           <div class="rv-summary">
-            ${sm.score ? `<span class="rv-summary-score">${Number(sm.score).toFixed(2)} out of 5</span> &middot; ` : ''}
+            ${sm.score ? `<span class="rv-summary-score">${Number(sm.score).toFixed(1)} out of 5</span> &middot; ` : ''}
             <span class="rv-summary-count">${sm.count} review${sm.count === 1 ? '' : 's'} from hosts</span>
           </div>
           <div class="rv-factors">${reviewFactorsHtml(sm.factors)}</div>
@@ -7732,7 +7262,7 @@
       // title is purely cosmetic here.
       row.innerHTML = templates.map(t => {
         const label = t.title || (t.body.length > 40 ? t.body.slice(0, 40) + '…' : t.body);
-        return `<button type="button" class="filter-clear" data-template="${t.body.replace(/"/g, '&quot;')}" style="white-space:nowrap; flex:0 0 auto;">${label}</button>`;
+        return `<button type="button" class="filter-clear" data-template="${escapeMessageHtml(t.body)}" style="white-space:nowrap; flex:0 0 auto;">${escapeMessageHtml(label)}</button>`;
       }).join('');
       row.querySelectorAll('[data-template]').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -7961,7 +7491,7 @@
         select.innerHTML = '<option value="">You don\'t have any properties yet</option>';
         return;
       }
-      select.innerHTML = inboxGuidanceListings.map(l => `<option value="${l.id}">${l.property_name}</option>`).join('');
+      select.innerHTML = inboxGuidanceListings.map(l => `<option value="${escapeMessageHtml(l.id)}">${escapeMessageHtml(l.property_name)}</option>`).join('');
       document.getElementById('inboxGuidanceTextarea').value = inboxGuidanceListings[0].guest_guidance || '';
     } catch(err){
       select.innerHTML = '<option value="">Could not load your properties</option>';
@@ -8418,7 +7948,7 @@
   function buildPhotoCollageHtml(photos, altText, listingId){
     if(!photos.length) return '';
     if(photos.length === 1){
-      return `<div class="photo-collage-single" data-lightbox-photos data-listing-id="${listingId}"><img src="${photos[0]}" alt="${altText}" loading="lazy" data-lightbox-index="0"></div>`;
+      return `<div class="photo-collage-single" data-lightbox-photos data-listing-id="${listingId}"><img src="${escapeMessageHtml(photos[0])}" alt="${escapeMessageHtml(altText)}" loading="lazy" data-lightbox-index="0"></div>`;
     }
     const shown = photos.slice(0, 4);
     const remaining = photos.length - shown.length;
@@ -8427,7 +7957,7 @@
       const overlay = (isLastVisible && remaining > 0)
         ? `<div class="photo-collage-more-overlay">+${remaining} photo${remaining === 1 ? '' : 's'}</div>`
         : '';
-      return `<div class="photo-collage-tile" data-lightbox-index="${i}"><img src="${url}" alt="${altText}" loading="lazy">${overlay}</div>`;
+      return `<div class="photo-collage-tile" data-lightbox-index="${i}"><img src="${escapeMessageHtml(url)}" alt="${escapeMessageHtml(altText)}" loading="lazy">${overlay}</div>`;
     }).join('');
     return `<div class="photo-collage" data-lightbox-photos data-listing-id="${listingId}">${tiles}</div>`;
   }
@@ -8460,7 +7990,7 @@
       window.roomPhotosForLightbox[lightboxId] = photos;
       html += `
         <div style="margin-bottom:18px;">
-          <div style="font-size:12.5px; font-weight:600; margin-bottom:8px;">${room.roomName || 'Room'}</div>
+          <div style="font-size:12.5px; font-weight:600; margin-bottom:8px;">${escapeMessageHtml(room.roomName || 'Room')}</div>
           ${buildPhotoCollageHtml(photos, room.roomName || listing.property_name, lightboxId)}
         </div>
       `;
@@ -8662,7 +8192,7 @@
     const paidAmenities = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
     const paidAmenitiesHtml = paidAmenities.length
       ? `<div class="listing-modal-section-title">Paid Amenities</div>
-         ${paidAmenities.map(a => `<div class="listing-modal-paid-amenity"><span>${a.name}</span><span>${fmt(Number(a.price))}/night</span></div>`).join('')}
+         ${paidAmenities.map(a => `<div class="listing-modal-paid-amenity"><span>${escapeMessageHtml(a.name)}</span><span>${fmt(Number(a.price))}/night</span></div>`).join('')}
          <p style="font-size:11.5px; opacity:0.55; margin-top:6px;">Availability and exact dates confirmed at booking.</p>`
       : '';
 
@@ -8730,19 +8260,24 @@
                 <p class="step-help">Your name and the number of guests go to your host; we send your confirmation to this email.</p>
                 <div class="field">
                   <label for="resortBookFirstName">First name <span style="color:#a3402f;">*</span></label>
-                <input id="resortBookFirstName" type="text" placeholder="As on your ID" autocomplete="given-name" required>
+                <input id="resortBookFirstName" type="text" placeholder="First name" autocomplete="given-name" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="resortBookLastName">Last name <span style="color:#a3402f;">*</span></label>
-                <input id="resortBookLastName" type="text" placeholder="As on your ID" autocomplete="family-name" required>
+                <input id="resortBookLastName" type="text" placeholder="Last name" autocomplete="family-name" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="resortBookEmail">Email <span style="color:#a3402f;">*</span></label>
-                  <input id="resortBookEmail" type="email" placeholder="you@email.com" required>
+                  <input id="resortBookEmail" type="email" placeholder="you@email.com" autocomplete="email" required>
                 </div>
                 <div class="field" style="margin-top:12px;">
                   <label for="resortBookPhone">Mobile number <span style="color:#a3402f;">*</span></label>
-                  <input id="resortBookPhone" type="tel" placeholder="10-digit mobile number" required>
+                  <input id="resortBookPhone" type="tel" placeholder="10-digit mobile number" autocomplete="tel" required>
+                </div>
+                <div class="field" style="margin-top:12px;">
+                  <label for="resortCouponCode">Coupon code <span class="label-hint">(optional — log in to use one)</span></label>
+                  <input id="resortCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
+                  <p class="coupon-rule">Coupons cover the booking price only. Service fee, GST and any deposit are charged in full. Any unused coupon balance is not refunded.</p>
                 </div>
                 <button type="button" class="btn solid" id="resortBookNowBtn" style="width:100%; margin-top:6px;">Continue to payment</button>
                 ${PAY_NOTE_HTML}
@@ -8754,7 +8289,7 @@
               <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
               <div id="resortPhotosContainer" data-listing-id="${listing.id}"></div>
               <div class="listing-reviews" data-reviews-for="${listing.id}"></div>
-              <p class="desc" style="margin-top:16px;">${listing.description}</p>
+              <p class="desc" style="margin-top:16px;">${escapeMessageHtml(listing.description)}</p>
             </div>
             <div class="listing-col-map">
               <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
@@ -8793,7 +8328,7 @@
             <div class="guest-row" style="border:none; padding-top:4px;">
               <div class="guest-row-text">
                 <div class="guest-row-title">Adults</div>
-                <div class="guest-row-sub">Ages 13 or above</div>
+                <div class="guest-row-sub">18 or over</div>
               </div>
               <div class="guest-stepper">
                 <button type="button" class="guest-step-btn" data-lg-type="adults" data-lg-action="dec" aria-label="Decrease adults">−</button>
@@ -8805,7 +8340,7 @@
             <div class="guest-row">
               <div class="guest-row-text">
                 <div class="guest-row-title">Children</div>
-                <div class="guest-row-sub">Ages 2–12</div>
+                <div class="guest-row-sub">Ages 2–17</div>
               </div>
               <div class="guest-stepper">
                 <button type="button" class="guest-step-btn" data-lg-type="children" data-lg-action="dec" aria-label="Decrease children">−</button>
@@ -8849,19 +8384,19 @@
               <p class="step-help">Your name and the number of guests go to your host; we send your confirmation to this email.</p>
               <div class="field">
                 <label for="listingBookFirstName">First name <span style="color:#a3402f;">*</span></label>
-                <input id="listingBookFirstName" type="text" placeholder="As on your ID" autocomplete="given-name" required>
+                <input id="listingBookFirstName" type="text" placeholder="First name" autocomplete="given-name" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="listingBookLastName">Last name <span style="color:#a3402f;">*</span></label>
-                <input id="listingBookLastName" type="text" placeholder="As on your ID" autocomplete="family-name" required>
+                <input id="listingBookLastName" type="text" placeholder="Last name" autocomplete="family-name" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="listingBookEmail">Email <span style="color:#a3402f;">*</span></label>
-                <input id="listingBookEmail" type="email" placeholder="you@email.com" required>
+                <input id="listingBookEmail" type="email" placeholder="you@email.com" autocomplete="email" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="listingBookPhone">Mobile number <span style="color:#a3402f;">*</span></label>
-                <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" required>
+                <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" autocomplete="tel" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="listingCouponCode">Coupon code <span class="label-hint">(optional — log in to use one)</span></label>
@@ -8878,7 +8413,7 @@
             <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
             ${photosHtml}
             <div class="listing-reviews" data-reviews-for="${listing.id}"></div>
-            <p class="desc" style="margin-top:16px;">${listing.description}</p>
+            <p class="desc" style="margin-top:16px;">${escapeMessageHtml(listing.description)}</p>
           </div>
           <div class="listing-col-map">
             <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
@@ -8922,7 +8457,7 @@
   function starsHtml(score, size){
     const pct = Math.max(0, Math.min(100, (Number(score) / 5) * 100));
     return `<span class="rv-stars" style="${size ? `font-size:${size}px;` : ''}" role="img"
-      aria-label="${Number(score).toFixed(2)} out of 5"><span class="rv-stars-off">★★★★★</span
+      aria-label="${Number(score).toFixed(1)} out of 5"><span class="rv-stars-off">★★★★★</span
       ><span class="rv-stars-on" style="width:${pct.toFixed(1)}%">★★★★★</span></span>`;
   }
 
@@ -9004,7 +8539,7 @@
       slot.innerHTML = `
         <div class="listing-modal-section-title">Reviews</div>
         <div class="rv-summary">
-          <span class="rv-summary-score">${Number(sm.score).toFixed(2)}</span>
+          <span class="rv-summary-score">${Number(sm.score).toFixed(1)}</span>
           ${starsHtml(sm.score, 17)}
           <span class="rv-summary-count">${sm.count} review${sm.count === 1 ? '' : 's'}</span>
         </div>
@@ -9048,6 +8583,7 @@
       renderResortBookingCalendar(listing);
       renderRoomAwarePhotos(listing, []);
       document.getElementById('resortBookNowBtn').addEventListener('click', () => handleResortBookNow(listing));
+      aervaPrefillBooking();
       return;
     }
     loadListingExperiences(listing);
@@ -9058,6 +8594,7 @@
     // never worked before now.
     renderAvailabilityCalendar(listing);
     document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
+    aervaPrefillBooking();
   }
 
   // "This property also offers…" — with-stay experiences hosted at this
@@ -9099,6 +8636,18 @@
     const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1 };
     const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
 
+    // An "Includes a Stay" experience added here takes place during the
+    // stay being booked: its nights (one per day) are nights of this stay,
+    // so it must start on a day that leaves them all inside the stay. The
+    // server checks the same (create-order.js) and charges the nights once.
+    const expDays = (exp) => Math.max(1, Number(exp.experience_duration_days) || 1);
+    const lastStartFor = (exp) => dates.arrival && dates.departure ? aervaAddDays(dates.departure, -expDays(exp)) : '';
+    if(selected){
+      const exp = withStay.find(e => String(e.id) === String(selected.listingId));
+      const last = exp ? lastStartFor(exp) : '';
+      if(selected.date && dates.arrival && (selected.date < dates.arrival || (last && selected.date > last))) selected.date = last >= dates.arrival ? dates.arrival : '';
+      if(!selected.date && dates.arrival && last >= dates.arrival) selected.date = dates.arrival;
+    }
     const withStayHtml = withStay.length ? `
       <div class="listing-modal-section-title">This Property Also Offers</div>
       ${withStay.map(exp => {
@@ -9106,22 +8655,26 @@
         const priceLine = exp.price
           ? `${fmtGuest(Number(exp.price))}${exp.experience_price_unit === 'per_person' ? ' / person' : ' / group'}`
           : 'Price on request';
+        const days = expDays(exp);
+        const last = lastStartFor(exp);
+        const fits = !dates.arrival || !dates.departure || last >= dates.arrival;
         return `
           <div class="listing-modal-paid-amenity" style="align-items:flex-start; flex-direction:column; gap:8px; padding:12px 0;">
             <label style="display:flex; align-items:center; gap:8px; cursor:pointer; width:100%;">
               <input type="checkbox" class="lg-experience-checkbox" data-experience-id="${exp.id}" ${isChecked ? 'checked' : ''}>
-              <span style="flex:1;"><strong>${exp.property_name}</strong> — ${priceLine}</span>
+              <span style="flex:1;"><strong>${escapeMessageHtml(exp.property_name)}</strong> — ${priceLine}</span>
             </label>
             ${isChecked ? `
-              <div style="display:flex; gap:10px; padding-left:26px; width:100%; box-sizing:border-box;">
-                <input type="date" class="lg-experience-date" data-experience-id="${exp.id}"
-                  value="${selected.date || dates.arrival || ''}"
-                  min="${dates.arrival || ''}" max="${dates.departure || ''}"
+              <p style="font-size:12px; opacity:0.7; margin:0; padding-left:26px;">Includes ${days} night${days === 1 ? '' : 's'} here, covered by your stay. ${fits ? 'Choose the day it starts, and how many are joining.' : `Your stay is too short for it — choose at least ${days} night${days === 1 ? '' : 's'}.`}</p>
+              ${fits ? `<div style="display:flex; gap:10px; padding-left:26px; width:100%; box-sizing:border-box;">
+                <input type="date" class="lg-experience-date" data-experience-id="${exp.id}" aria-label="Day the experience starts"
+                  value="${selected.date || ''}"
+                  min="${dates.arrival || ''}" max="${last || ''}"
                   style="flex:1; padding:8px; font-size:13px; border:1px solid var(--line-dark);">
-                <input type="number" class="lg-experience-guests" data-experience-id="${exp.id}" min="1"
+                <input type="number" class="lg-experience-guests" data-experience-id="${exp.id}" min="1" max="50" step="1" inputmode="numeric" aria-label="Guests joining"
                   value="${selected.guests || counts.adults || 1}"
                   style="width:70px; padding:8px; font-size:13px; border:1px solid var(--line-dark);" title="Guests">
-              </div>
+              </div>` : ''}
             ` : ''}
           </div>
         `;
@@ -9132,7 +8685,7 @@
       <div class="listing-modal-section-title">Also Nearby</div>
       ${withoutStay.map(exp => `
         <div class="listing-modal-paid-amenity">
-          <span><a href="index.html?experience=${exp.id}" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">${exp.property_name}</a></span>
+          <span><a href="index.html?experience=${exp.id}" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">${escapeMessageHtml(exp.property_name)}</a></span>
           <span>${exp.price ? fmtGuest(Number(exp.price)) + (exp.experience_price_unit === 'per_person' ? '/person' : '/group') : ''}</span>
         </div>
       `).join('')}
@@ -9158,12 +8711,14 @@
       input.addEventListener('change', () => {
         const sel = renderAvailabilityCalendar._lgSelectedExperience[listing.id];
         if(sel) sel.date = input.value;
+        updateListingPriceSummary(listing, dates.arrival, dates.departure);
       });
     });
     container.querySelectorAll('.lg-experience-guests').forEach(input => {
       input.addEventListener('change', () => {
         const sel = renderAvailabilityCalendar._lgSelectedExperience[listing.id];
-        if(sel) sel.guests = Math.max(1, Number(input.value) || 1);
+        // Whole people, 1 to 50 (the server holds the experience's own limit).
+        if(sel) sel.guests = Math.min(50, Math.max(1, Math.floor(Number(input.value)) || 1));
         updateListingPriceSummary(listing, dates.arrival, dates.departure);
       });
     });
@@ -9197,8 +8752,8 @@
   // Vercel's Hobby-plan serverless function limit). Days the guest can
   // actually pick, exactly like the homepage's date picker — arrival
   // first click, departure second — plus a guest count and a live price
-  // summary using the same formula the reserve form itself uses, so what
-  // shows here always matches what checkout would actually charge.
+  // summary, which the server's own quote replaces (updateListingPriceSummary),
+  // so what shows here is what checkout charges.
   async function renderAvailabilityCalendar(listing){
     const container = document.getElementById('availabilityCalendar');
     if(!container) return;
@@ -9491,7 +9046,9 @@
     // space do. Not applied to a Resort: its real capacity lives
     // per-room, not on the listing itself, so there's no single ceiling
     // to check against here.
-    const listingMaxGuests = (listing.property_type !== 'Resort') ? Number(listing.max_guests) : null;
+    // max_guests is free text ("3–4", "9+"): the largest number in it is
+    // the limit, as the server reads it (parseMaxGuests in api/_pricing.js).
+    const listingMaxGuests = (listing.property_type !== 'Resort') ? aervaParseMaxGuests(listing.max_guests) : null;
     container.parentElement.querySelectorAll('.guest-step-btn[data-lg-type]').forEach(btn => {
       btn.addEventListener('click', () => {
         const type = btn.dataset.lgType;
@@ -9549,12 +9106,8 @@
     }
   }
 
-  // Mirrors updatePricing()'s formula exactly (room + extra-guest charge,
-  // discount, guest service fee, pet fee) so the number shown here always
-  // matches what checkout would actually charge — see updatePricing() for
-  // the same math applied to the (currently hidden) multi-stay reserve form.
-  // Same dated-amenity picker as the reserve form's renderStayAmenities —
-  // night-by-night checkboxes for each paid amenity, respecting its own
+  // The dated-amenity picker: night-by-night checkboxes for each paid
+  // amenity, respecting its own
   // availability window and excluded weekdays. Selections live in
   // renderAvailabilityCalendar._lgAmenities, read by both the price
   // summary and the actual booking request.
@@ -9609,7 +9162,7 @@
 
       return `
         <div class="stay-amenity-row">
-          <div class="stay-amenity-head"><strong>${a.name}</strong><span>${fmt(Number(a.price))}/night</span></div>
+          <div class="stay-amenity-head"><strong>${escapeMessageHtml(a.name)}</strong><span>${fmt(Number(a.price))}/night</span></div>
           <div class="amenity-night-chips">${chips}</div>
           <div class="stay-amenity-subtotal">${subtotalText}</div>
         </div>
@@ -9677,9 +9230,8 @@
     const chargeableServiceAnimals = Math.max(0, (counts.serviceAnimals || 0) - 1);
     const serviceAnimalFee = chargeableServiceAnimals > 0 && listing.pet_fee ? Number(listing.pet_fee) * chargeableServiceAnimals : 0;
 
-    // Amenities are priced client-side here only for display — same as
-    // updatePricing() — the real, trusted total is recalculated
-    // server-side in create-order.js from the same selections.
+    // Amenities are priced client-side here only for an instant estimate —
+    // the server's quote (create-order.js, quoteOnly) replaces it.
     let amenityTotal = 0;
     let amenityNightCount = 0;
     const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
@@ -9700,7 +9252,7 @@
     const rows = [];
     rows.push(`<div class="sum-row"><span>${fmtGuest(rate)} × ${nights} night${nights === 1 ? '' : 's'}</span><span>${fmtGuest(roomTotal)}</span></div>`);
     if(extraGuests > 0) rows.push(`<div class="sum-row"><span>${extraGuests} extra guest${extraGuests === 1 ? '' : 's'}</span><span>${fmtGuest(extraTotal)}</span></div>`);
-    if(discountAmount > 0) rows.push(`<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discountAmount)}</span></div>`);
+    if(discountAmount > 0) rows.push(`<div class="sum-row"><span>${escapeMessageHtml(discount.name || 'Offer applied')}</span><span>−${fmtGuest(discountAmount)}</span></div>`);
     if(petFeeAmount > 0) rows.push(`<div class="sum-row"><span>Pet fee (${counts.pets} × ${fmtGuest(Number(listing.pet_fee))})</span><span>${fmtGuest(petFeeAmount)}</span></div>`);
     // The first service/support animal is free; any more are charged at
     // the pet fee, shown as their own line so the guest sees why.
@@ -9755,28 +9307,63 @@
 
     summaryEl.innerHTML = `
       ${bookStep(3, 'Check your total')}
-      ${rows.join('')}
-      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);">
-        <span>Total</span><span>${fmtGuest(grandTotalInr)}</span>
+      <div class="quote-body">
+        ${rows.join('')}
+        <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);">
+          <span>Total</span><span>${fmtGuest(grandTotalInr)}</span>
+        </div>
+        ${inrNote}
+        <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">Checking the exact total…</p>
       </div>
-      ${inrNote}
-      <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">This is a live estimate for these dates and guests — the exact amount is confirmed at checkout.</p>
       <p style="font-size:12px; opacity:0.75; margin-top:10px; padding-top:10px; border-top:1px solid var(--line-dark);"><strong>Cancellation:</strong> ${cancellationPolicyText(listing.cancellation_policy)}</p>
     `;
     summaryEl.style.display = 'block';
     if(actionEl) actionEl.style.display = 'block';
+
+    // The estimate above appears at once; the server's own price (the one
+    // charged, api/create-order.js quoteOnly) replaces it a moment later.
+    const quoteBody = summaryEl.querySelector('.quote-body');
+    aervaQuote('listing', listingCartPayload(listing)).then(q => {
+      if(q && quoteBody.isConnected) quoteBody.innerHTML = aervaQuoteBodyHtml(q);
+    }).catch(err => {
+      if(!quoteBody.isConnected) return;
+      if(err && err.fromServer) quoteBody.innerHTML = aervaQuoteErrorHtml(err);
+      else { const note = quoteBody.querySelector('p:last-child'); if(note) note.textContent = 'We could not check the exact total just now. It is shown again before you pay.'; }
+    });
   }
 
-  // Same checkout flow as the (currently hidden) multi-stay reserve form
-  // — same create-order → Razorpay → verify-payment sequence, same
-  // RAZORPAY_KEY_ID/API_BASE constants — just triggered from this page
-  // directly for a single stay, so a guest never has to leave the
-  // listing they're looking at to actually book it.
+  // What this stay page is booking, in the shape create-order.js takes —
+  // the same for the price quote and for the payment itself.
+  function listingCartPayload(listing){
+    const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
+    const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
+    const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
+    const petTypes = counts.pets > 0 ? ((renderAvailabilityCalendar._lgPetTypeSelections || {})[listing.id] || []) : [];
+    const serviceTypes = counts.serviceAnimals > 0 ? ((renderAvailabilityCalendar._lgServiceAnimalSelections || {})[listing.id] || []) : [];
+    const selectedExperience = (renderAvailabilityCalendar._lgSelectedExperience || {})[listing.id] || null;
+    return {
+      stays: [{
+        listingId: listing.id, arrival: dates.arrival, departure: dates.departure,
+        guests: counts.adults + counts.children, adults: counts.adults,
+        pets: counts.pets, petTypes, serviceAnimals: serviceTypes.map(type => ({ type })),
+        youngLitterCount: counts.youngLitter > 0 ? counts.youngLitter : 0,
+        selectedAmenities: Object.entries(selectedAmenities).map(([amenityId, datesSet]) => ({ amenityId: Number(amenityId), dates: [...datesSet] }))
+      }],
+      experiences: selectedExperience && selectedExperience.date
+        ? [{ listingId: selectedExperience.listingId, date: selectedExperience.date, guests: selectedExperience.guests || 1 }]
+        : []
+    };
+  }
+
+  // Checkout for a single stay (and any experience added to it): the
+  // create-order → Razorpay → verify-payment sequence, with the Razorpay
+  // key taken from the order create-order.js returns.
   async function handleListingBookNow(listing){
     const errorEl = document.getElementById('listingBookError');
     const confirmEl = document.getElementById('listingBookConfirm');
     const btn = document.getElementById('listingBookNowBtn');
     errorEl.style.display = 'none';
+    errorEl.style.color = '#a3402f';
     confirmEl.style.display = 'none';
 
     if(!guestAuthToken()){
@@ -9803,7 +9390,10 @@
     // collecting it here and prefilling it below means that step is
     // already filled in rather than stopping the guest mid-payment to
     // ask for it themselves.
-    const phone = document.getElementById('listingBookPhone').value.trim().replace(/\D/g, '');
+    // The number exactly as typed goes to the server, which saves it to the
+    // account if it has none (create-order.js); Razorpay gets the digits.
+    const phoneTyped = document.getElementById('listingBookPhone').value.trim();
+    const phone = phoneTyped.replace(/\D/g, '');
     if(!phone || phone.length < 10){
       errorEl.textContent = 'Please enter a valid mobile number.';
       errorEl.style.display = 'block';
@@ -9811,22 +9401,16 @@
     }
 
     const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
-    const guests = counts.adults + counts.children;
     // The guest-count stepper already never lets adults drop below 1
     // (see the min:1 rule near LG_MAX), but this checks it explicitly
     // too — a stay can't be booked by children/infants alone, and the
     // server enforces this for real (see create-order.js); this is just
     // a faster, clearer message than waiting on a round trip.
     if(counts.adults < 1){
-      errorEl.textContent = 'At least one adult (18+) must be part of the group to book this stay.';
+      errorEl.textContent = 'At least one adult (18 or over) must be part of the group to book this stay.';
       errorEl.style.display = 'block';
       return;
     }
-    const selectedAmenities = (renderAvailabilityCalendar._lgAmenities || {})[listing.id] || {};
-    const selectedAmenitiesPayload = Object.entries(selectedAmenities).map(([amenityId, datesSet]) => ({
-      amenityId: Number(amenityId), dates: [...datesSet]
-    }));
-
     // Bringing a pet requires saying what kind — one dropdown per pet
     // slot (see renderPetTypeSlots), so this is always exactly one type
     // per billable pet, never a looser "at least one kind checked."
@@ -9836,10 +9420,9 @@
       errorEl.style.display = 'block';
       return;
     }
-    let petTypes = [];
     if(counts.pets > 0){
       const modalRoot = document.getElementById('listingModalBody');
-      petTypes = (renderAvailabilityCalendar._lgPetTypeSelections || {})[listing.id] || [];
+      const petTypes = (renderAvailabilityCalendar._lgPetTypeSelections || {})[listing.id] || [];
       if(petTypes.length !== counts.pets){
         const petTypesError = (modalRoot || document).querySelector('#lgPetTypesError');
         if(petTypesError) petTypesError.style.display = 'block';
@@ -9852,7 +9435,6 @@
     // Service/support animals — never counted or charged, only offered
     // on pet-friendly listings (see the booking-modal markup). Types come
     // from the same per-slot picker pattern as billable pets above.
-    let serviceAnimals = [];
     if(counts.serviceAnimals > 0){
       const modalRoot = document.getElementById('listingModalBody');
       const types = (renderAvailabilityCalendar._lgServiceAnimalSelections || {})[listing.id] || [];
@@ -9863,22 +9445,18 @@
         errorEl.style.display = 'block';
         return;
       }
-      serviceAnimals = types.map(type => ({ type }));
     }
-    const youngLitterCount = counts.youngLitter > 0 ? counts.youngLitter : 0;
 
     // If the guest checked a with-stay experience add-on, it needs a
     // date before it can be booked — same requirement create-order.js
     // enforces server-side.
     const selectedExperience = (renderAvailabilityCalendar._lgSelectedExperience || {})[listing.id] || null;
     if(selectedExperience && !selectedExperience.date){
-      errorEl.textContent = 'Please pick a date for the experience you added.';
+      errorEl.textContent = 'Please pick the day the experience you added starts, or untick it.';
       errorEl.style.display = 'block';
       return;
     }
-    const selectedExperiencesPayload = selectedExperience
-      ? [{ listingId: selectedExperience.listingId, date: selectedExperience.date, guests: selectedExperience.guests || 1 }]
-      : [];
+    const cart = listingCartPayload(listing);
 
     btn.disabled = true;
     btn.textContent = 'Preparing payment…';
@@ -9889,8 +9467,8 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
         body: JSON.stringify({
-          stays: [{ listingId: listing.id, arrival: dates.arrival, departure: dates.departure, guests, adults: counts.adults, pets: counts.pets, petTypes, serviceAnimals, youngLitterCount, selectedAmenities: selectedAmenitiesPayload }],
-          experiences: selectedExperiencesPayload,
+          stays: cart.stays,
+          experiences: cart.experiences,
           email,
           // Only takes effect if this currency is admin-enabled for direct
           // international charging server-side (see create-order.js) —
@@ -9898,7 +9476,7 @@
           preferredCurrency: currentCurrency,
           couponCode: document.getElementById('listingCouponCode').value.trim() || undefined,
           pricesSeen: aervaPricesSeen([listing]),
-          phone,
+          phone: phoneTyped,
           firstName: (document.getElementById('listingBookFirstName') || {}).value,
           lastName: (document.getElementById('listingBookLastName') || {}).value
         })
@@ -9916,7 +9494,7 @@
           btn.disabled = false; btn.textContent = 'Continue to payment';
           return;
         }
-        throw new Error(errData.error || 'Could not start payment. Please try again.');
+        throw new Error(errData.error || 'We could not start your payment. Please try again.');
       }
       order = await orderRes.json();
       if(order.couponDiscount > 0){
@@ -9930,7 +9508,7 @@
     } catch(err){
       btn.disabled = false;
       btn.textContent = 'Continue to payment';
-      errorEl.textContent = err.message || 'Could not start payment. Please try again.';
+      errorEl.textContent = err.message || 'We could not start your payment. Please try again.';
       errorEl.style.display = 'block';
       return;
     }
@@ -9943,9 +9521,15 @@
       errorEl.style.display = 'block';
       return;
     }
+    if(!order.keyId){
+      aervaReleaseHold(order.orderId, 'closed');
+      errorEl.textContent = 'Payment is not available right now. Nothing has been charged. Please try again in a few minutes.';
+      errorEl.style.display = 'block';
+      return;
+    }
 
     const options = {
-      key: RAZORPAY_KEY_ID,
+      key: order.keyId,
       order_id: order.orderId,   // amount/currency come from the order itself — cannot be edited client-side
       timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
       amount: order.amount,
@@ -9969,16 +9553,9 @@
             body: JSON.stringify(response)
           });
           const verifyData = await verifyRes.json();
-          if(verifyData.verified){
-            confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm availability and follow up by email shortly.';
-            confirmEl.style.display = 'block';
-          } else {
-            errorEl.textContent = (verifyData && verifyData.message) || 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
-            errorEl.style.display = 'block';
-          }
+          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn });
         } catch(err){
-          errorEl.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.';
-          errorEl.style.display = 'block';
+          aervaShowPaymentResult({ pending: true, message: 'Your payment was received, but we could not confirm the booking on this page. We will email you within a few minutes — please do not pay again. Payment ID: ' + response.razorpay_payment_id }, { confirmEl, errorEl, btn });
         }
       },
       modal: { ondismiss: function(){ aervaEndCheckout('closed'); } }
@@ -9992,16 +9569,13 @@
 
   // ---- Resort booking: pick dates once, then choose which room(s) —
   // each room independently priced and independently available (see
-  // create-order.js's dedicated resort-room branch). Deliberately
-  // simpler than the regular stay flow above: no pets, no paid
-  // amenities, no extra-guest pricing — a hotel-style room doesn't carry
-  // any of those single-unit concerns. Guest count per room defaults to
-  // that room's own max occupancy (no separate guest-count picker here,
-  // matching the "keep it property-wise" simplification — a guest
-  // choosing a room that sleeps 4 is understood to be booking it for up
-  // to 4, not asked to additionally specify a smaller number).
+  // create-order.js's dedicated resort-room branch). No pets or paid
+  // amenities here. Each room is booked for the number of guests chosen
+  // for it (1 up to what the room sleeps): above 2 guests a room carries
+  // the same extra-guest charge as any stay (api/_pricing.js).
   let resortSelectedRooms = {};
   let resortPolicy = 'flexible'; // the resort being booked; set in renderResortRooms
+  let resortListing = null;
 
   async function renderResortBookingCalendar(listing){
     const container = document.getElementById('resortBookCalendar');
@@ -10009,9 +9583,10 @@
     let resortArrival = '';
     let resortDeparture = '';
     let selectingStart = true;
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const minIso = toLocalDateStr(tomorrow);
+    // The earliest night a guest can book, on the PROPERTY's clock — today,
+    // or last night between 12:00 AM and 6:00 AM (same rule as stays and
+    // api/_booking-rules.js).
+    const minIso = aervaEarliestArrival((listing && listing.timezone) || 'Asia/Kolkata');
     const minDateObj = new Date(minIso + 'T00:00:00');
     let viewYear = minDateObj.getFullYear();
     let viewMonth = minDateObj.getMonth();
@@ -10078,8 +9653,15 @@
     renderMonth();
   }
 
+  // Guests for a room when it is first picked: 2, or fewer if it sleeps fewer.
+  function resortDefaultGuests(room){
+    const max = Math.max(1, Number(room.maxOccupancy) || 1);
+    return Math.min(BASE_OCCUPANCY, max);
+  }
+
   async function renderResortRooms(listing, arrival, departure){
     resortPolicy = listing && listing.cancellation_policy === 'firm' ? 'firm' : 'flexible';
+    resortListing = listing;
     const container = document.getElementById('resortRoomsList');
     const promptEl = document.getElementById('resortDatesPrompt');
     if(promptEl) promptEl.style.display = 'none';
@@ -10107,65 +9689,85 @@
     }));
 
     const nights = nightsNeeded.length;
-    container.innerHTML = roomsWithAvailability.map(room => `
-      <label style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--line-dark); cursor:${room.available ? 'pointer' : 'default'}; opacity:${room.available ? '1' : '0.45'};">
-        ${room.coverPhotoUrl
-          ? `<img src="${room.coverPhotoUrl}" alt="" style="width:64px; height:52px; object-fit:cover; border-radius:4px; flex:0 0 auto;">`
-          : `<span style="width:64px; height:52px; flex:0 0 auto; background:var(--cream-deep); border-radius:4px;"></span>`}
-        <input type="checkbox" data-room-id="${room.id}" ${room.available ? '' : 'disabled'} style="width:auto;">
-        <span style="flex:1; min-width:0;">
-          <strong style="display:block; font-size:14px;">${room.roomName}</strong>
-          <span style="font-size:12px; opacity:0.65;">Sleeps up to ${room.maxOccupancy} · ${fmt(Number(room.price))}/night${room.available ? '' : ' · Not available these dates'}</span>
-        </span>
-      </label>
-    `).join('');
+    container.innerHTML = roomsWithAvailability.map(room => {
+      const max = Math.max(1, Number(room.maxOccupancy) || 1);
+      const options = Array.from({ length: max }, (_, i) => i + 1)
+        .map(n => `<option value="${n}"${n === resortDefaultGuests(room) ? ' selected' : ''}>${n} guest${n === 1 ? '' : 's'}</option>`).join('');
+      return `
+      <div class="resort-room" style="padding:10px 0; border-bottom:1px solid var(--line-dark); opacity:${room.available ? '1' : '0.45'};">
+        <label style="display:flex; align-items:center; gap:12px; cursor:${room.available ? 'pointer' : 'default'};">
+          ${room.coverPhotoUrl
+            ? `<img src="${escapeMessageHtml(room.coverPhotoUrl)}" alt="" style="width:64px; height:52px; object-fit:cover; border-radius:4px; flex:0 0 auto;">`
+            : `<span style="width:64px; height:52px; flex:0 0 auto; background:var(--cream-deep); border-radius:4px;"></span>`}
+          <input type="checkbox" data-room-id="${room.id}" ${room.available ? '' : 'disabled'} style="width:auto;">
+          <span style="flex:1; min-width:0;">
+            <strong style="display:block; font-size:14px;">${escapeMessageHtml(room.roomName || 'Room')}</strong>
+            <span style="font-size:12px; opacity:0.65;">Sleeps up to ${max} · ${fmtGuest(Number(room.price))}/night${room.available ? '' : ' · Not available these dates'}</span>
+          </span>
+        </label>
+        <div class="resort-room-guests" data-guests-for="${room.id}" style="display:none; margin:8px 0 0 88px;">
+          <label for="resortGuests${room.id}" style="font-size:12.5px; margin-right:8px;">Guests in this room</label>
+          <select id="resortGuests${room.id}" data-room-guests="${room.id}" style="padding:6px 8px; font-size:14px; border:1px solid var(--line-dark);">${options}</select>
+          ${max > BASE_OCCUPANCY ? `<p style="font-size:11.5px; opacity:0.6; margin:4px 0 0;">Above ${BASE_OCCUPANCY} guests, ${fmtGuest(EXTRA_GUEST_RATE)} per extra guest per night.</p>` : ''}
+        </div>
+      </div>`;
+    }).join('');
 
     container.querySelectorAll('[data-room-id]').forEach(cb => {
       cb.addEventListener('change', () => {
         const room = roomsWithAvailability.find(r => String(r.id) === cb.dataset.roomId);
-        if(cb.checked) resortSelectedRooms[room.id] = { ...room, arrival, departure, nights };
+        const guestsBox = container.querySelector(`[data-guests-for="${room.id}"]`);
+        const guestsSel = container.querySelector(`[data-room-guests="${room.id}"]`);
+        if(cb.checked) resortSelectedRooms[room.id] = { ...room, arrival, departure, nights, guests: Number(guestsSel.value) || resortDefaultGuests(room) };
         else delete resortSelectedRooms[room.id];
+        if(guestsBox) guestsBox.style.display = cb.checked ? 'block' : 'none';
         updateResortPriceSummary();
         renderRoomAwarePhotos(listing, Object.keys(resortSelectedRooms).map(Number));
       });
     });
+    container.querySelectorAll('[data-room-guests]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const picked = resortSelectedRooms[sel.dataset.roomGuests];
+        if(picked){ picked.guests = Number(sel.value) || 1; updateResortPriceSummary(); }
+      });
+    });
   }
 
+  // One stays[] entry per selected room — each becomes its own order row
+  // (create-order.js), with that room's own guest count. adults: 1 — the
+  // resort form does not split adults from children; the person booking,
+  // signed in with a confirmed email and phone, is the adult on the booking.
+  function resortCartStays(listing){
+    return Object.values(resortSelectedRooms).map(r => ({
+      listingId: listing.id, roomId: r.id, arrival: r.arrival, departure: r.departure, guests: r.guests, adults: 1
+    }));
+  }
+
+  // The total shown is the server's own price for these rooms and guests
+  // (create-order.js, quoteOnly): room rates, extra guests, offers, GST,
+  // the guest service fee and any deposit — exactly what is charged.
   function updateResortPriceSummary(){
     const summaryEl = document.getElementById('resortPriceSummary');
     const actionEl = document.getElementById('resortBookingAction');
     if(!summaryEl || !actionEl) return;
     const selected = Object.values(resortSelectedRooms);
-    if(!selected.length){
+    if(!selected.length || !resortListing){
+      aervaQuoteSeq.resort = (aervaQuoteSeq.resort || 0) + 1; // any quote on its way is no longer wanted
       summaryEl.style.display = 'none';
       actionEl.style.display = 'none';
       return;
     }
-    const rows = selected.map(r => {
-      const cost = Number(r.price) * r.nights;
-      return `<div class="sum-row"><span>${escapeMessageHtml(r.roomName || '')} × ${r.nights} night${r.nights === 1 ? '' : 's'}</span><span>${fmtGuest(cost)}</span></div>`;
-    }).join('');
-    const subtotal = selected.reduce((sum, r) => sum + Number(r.price) * r.nights, 0);
-    const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
-    // Each room is its own unit for GST, so rooms at different rates can
-    // fall in different bands.
-    const roomTaxes = selected.map(r => stayGstFor(Number(r.price) * r.nights, r.nights, 0));
-    const gst = roomTaxes.reduce((a, t) => a + t.gst, 0);
-    const rates = [...new Set(roomTaxes.map(t => t.rate))];
-    const gstRow = gst > 0
-      ? `<div class="sum-row"><span>${rates.length === 1 ? `GST (${rates[0]}%)` : 'GST'}</span><span>${fmtGuest(gst)}</span></div>`
-      : '';
-    const total = subtotal + gst + guestServiceFee;
     summaryEl.innerHTML = `
       ${bookStep(3, 'Check your total')}
-      ${rows}
-      ${gstRow}
-      <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
-      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
+      <div class="quote-body"><p style="font-size:12.5px; opacity:0.6;">Working out your total…</p></div>
       <p style="font-size:12px; opacity:0.75; margin-top:10px; padding-top:10px; border-top:1px solid var(--line-dark);"><strong>Cancellation:</strong> ${cancellationPolicyText(resortPolicy)}</p>
     `;
     summaryEl.style.display = 'block';
     actionEl.style.display = 'block';
+    const quoteBody = summaryEl.querySelector('.quote-body');
+    aervaQuote('resort', { stays: resortCartStays(resortListing) }).then(q => {
+      if(q && quoteBody.isConnected) quoteBody.innerHTML = aervaQuoteBodyHtml(q);
+    }).catch(err => { if(quoteBody.isConnected) quoteBody.innerHTML = aervaQuoteErrorHtml(err); });
   }
 
   async function handleResortBookNow(listing){
@@ -10173,6 +9775,7 @@
     const confirmEl = document.getElementById('resortBookConfirm');
     const btn = document.getElementById('resortBookNowBtn');
     errorEl.style.display = 'none';
+    errorEl.style.color = '#a3402f';
     confirmEl.style.display = 'none';
 
     if(!guestAuthToken()){
@@ -10191,7 +9794,10 @@
       errorEl.style.display = 'block';
       return;
     }
-    const phone = document.getElementById('resortBookPhone').value.trim().replace(/\D/g, '');
+    // The number exactly as typed goes to the server, which saves it to the
+    // account if it has none (create-order.js); Razorpay gets the digits.
+    const phoneTyped = document.getElementById('resortBookPhone').value.trim();
+    const phone = phoneTyped.replace(/\D/g, '');
     if(!phone || phone.length < 10){
       errorEl.textContent = 'Please enter a valid mobile number.';
       errorEl.style.display = 'block';
@@ -10201,32 +9807,13 @@
     btn.disabled = true;
     btn.textContent = 'Preparing payment…';
 
-    // One stays[] entry per selected room — each becomes its own order
-    // row server-side (see create-order.js's resort branch), which is
-    // also what makes independent per-room payouts fall out naturally
-    // from the existing order structure, same as any other multi-item
-    // booking.
-    //
-    // adults: 1 is a deliberate simplification, not a real headcount —
-    // the Resort flow doesn't currently collect an adults/children
-    // breakdown per room the way a regular villa booking does (see
-    // renderAvailabilityCalendar's guest stepper). create-order.js
-    // requires at least one adult per stay purely as a safety check
-    // against a booking made entirely of children/infants; since a
-    // guest can only reach this point already logged in with a verified
-    // email and phone, they're already established as the adult making
-    // the booking. This satisfies that check correctly without needing
-    // to build a full per-room guest breakdown UI just for this.
-    const stays = selected.map(r => ({
-      listingId: listing.id, roomId: r.id, arrival: r.arrival, departure: r.departure, guests: r.maxOccupancy, adults: 1
-    }));
-
     let order;
     try{
       const orderRes = await fetch(API_BASE + '/api/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-        body: JSON.stringify({ stays, email, preferredCurrency: currentCurrency, pricesSeen: aervaPricesSeen([listing]), phone,
+        body: JSON.stringify({ stays: resortCartStays(listing), email, preferredCurrency: currentCurrency, pricesSeen: aervaPricesSeen([listing]), phone: phoneTyped,
+          couponCode: ((document.getElementById('resortCouponCode') || {}).value || '').trim() || undefined,
           firstName: (document.getElementById('resortBookFirstName') || {}).value, lastName: (document.getElementById('resortBookLastName') || {}).value })
       });
       if(!orderRes.ok){
@@ -10242,13 +9829,18 @@
           btn.disabled = false; btn.textContent = 'Continue to payment';
           return;
         }
-        throw new Error(errData.error || 'Could not start payment. Please try again.');
+        throw new Error(errData.error || 'We could not start your payment. Please try again.');
       }
       order = await orderRes.json();
+      if(order.couponDiscount > 0){
+        confirmEl.textContent = `Coupon applied: ${fmt(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
+          + (order.couponForfeited > 0 ? ` ${fmt(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
+        confirmEl.style.display = 'block';
+      }
     } catch(err){
       btn.disabled = false;
       btn.textContent = 'Continue to payment';
-      errorEl.textContent = err.message || 'Could not start payment. Please try again.';
+      errorEl.textContent = err.message || 'We could not start your payment. Please try again.';
       errorEl.style.display = 'block';
       return;
     }
@@ -10261,9 +9853,15 @@
       errorEl.style.display = 'block';
       return;
     }
+    if(!order.keyId){
+      aervaReleaseHold(order.orderId, 'closed');
+      errorEl.textContent = 'Payment is not available right now. Nothing has been charged. Please try again in a few minutes.';
+      errorEl.style.display = 'block';
+      return;
+    }
 
     const options = {
-      key: RAZORPAY_KEY_ID,
+      key: order.keyId,
       order_id: order.orderId,
       timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
       amount: order.amount,
@@ -10280,16 +9878,9 @@
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(response)
           });
           const verifyData = await verifyRes.json();
-          if(verifyData.verified){
-            confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our stay team will confirm and follow up by email shortly.';
-            confirmEl.style.display = 'block';
-          } else {
-            errorEl.textContent = (verifyData && verifyData.message) || 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
-            errorEl.style.display = 'block';
-          }
+          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn });
         } catch(err){
-          errorEl.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.';
-          errorEl.style.display = 'block';
+          aervaShowPaymentResult({ pending: true, message: 'Your payment was received, but we could not confirm the booking on this page. We will email you within a few minutes — please do not pay again. Payment ID: ' + response.razorpay_payment_id }, { confirmEl, errorEl, btn });
         }
       },
       modal: { ondismiss: function(){ aervaEndCheckout('closed'); } }
@@ -10329,10 +9920,12 @@
     // form) — when present, constrains which dates a guest can even pick
     // in the first place, same as a listing's booked-date greying-out,
     // just expressed as native min/max rather than a custom calendar.
-    const tomorrowIso = toLocalDateStr(new Date(Date.now() + 86400000));
+    // Today on the experience's own clock is the earliest day (as for
+    // stays and resorts; the server checks the same, api/_pricing.js).
+    const todayIso = aervaEarliestArrival(exp.timezone || 'Asia/Kolkata');
     const availableFromIso = exp.experience_available_from ? String(exp.experience_available_from).slice(0, 10) : null;
     const availableUntilIso = exp.experience_available_until ? String(exp.experience_available_until).slice(0, 10) : null;
-    const bookDateMin = (availableFromIso && availableFromIso > tomorrowIso) ? availableFromIso : tomorrowIso;
+    const bookDateMin = (availableFromIso && availableFromIso > todayIso) ? availableFromIso : todayIso;
     // A host-set "Available Until" date that's already in the past, or
     // earlier than the earliest bookable date, would otherwise disable
     // EVERY day on the calendar with no warning to anyone — every date
@@ -10373,8 +9966,8 @@
         ${hostingPhotosHtml ? `<div style="margin-bottom:16px;">${hostingPhotosHtml}</div>` : ''}
         <div class="exp-stay-card-head">
           <div>
-            <h4>${exp.hosting_property_name}</h4>
-            <div class="exp-stay-card-loc">${exp.hosting_area ? exp.hosting_area + ', ' + exp.hosting_city : (exp.hosting_city || '')}</div>
+            <h4>${escapeMessageHtml(exp.hosting_property_name)}</h4>
+            <div class="exp-stay-card-loc">${escapeMessageHtml(exp.hosting_area ? exp.hosting_area + ', ' + exp.hosting_city : (exp.hosting_city || ''))}</div>
           </div>
           ${hostingIsBookable ? `<div class="exp-stay-card-price">From <strong>${fmtGuest(Number(exp.hosting_nightly_rate))}</strong>/night</div>` : ''}
         </div>
@@ -10417,15 +10010,15 @@
           <div class="exp-logistics-item">
             <div class="exp-logistics-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">${item.icon}</svg></div>
             <div>
-              <div class="exp-logistics-label">${item.label}</div>
-              <div class="exp-logistics-value">${item.value}</div>
+              <div class="exp-logistics-label">${escapeMessageHtml(item.label)}</div>
+              <div class="exp-logistics-value">${escapeMessageHtml(item.value)}</div>
             </div>
           </div>
         `).join('')}
       </div>
     `;
     const refundPolicyHtml = exp.experience_refund_policy ? `
-      <p style="font-size:12.5px; opacity:0.75; margin-top:6px; padding-top:14px; border-top:1px solid var(--line-dark);"><strong>If you don't reach the meeting point:</strong> ${exp.experience_refund_policy}</p>
+      <p style="font-size:12.5px; opacity:0.75; margin-top:6px; padding-top:14px; border-top:1px solid var(--line-dark);"><strong>If you don't reach the meeting point:</strong> ${escapeMessageHtml(exp.experience_refund_policy)}</p>
     ` : '';
     const logisticsHtml = `
       <div class="listing-modal-section-title">Good to Know</div>
@@ -10447,7 +10040,7 @@
 
     const instructionsHtml = exp.experience_instructions ? `
       <div class="listing-modal-section-title">Instructions</div>
-      <p style="font-size:13.5px; line-height:1.8; opacity:0.85; white-space:pre-wrap;">${exp.experience_instructions}</p>
+      <p style="font-size:13.5px; line-height:1.8; opacity:0.85; white-space:pre-wrap;">${escapeMessageHtml(exp.experience_instructions)}</p>
     ` : '';
 
     // Kept visually distinct (its own bordered box, not just another
@@ -10456,7 +10049,7 @@
     const specialInstructionsHtml = exp.experience_special_instructions ? `
       <div class="listing-modal-section-title">Special Instructions</div>
       <div style="border:1px solid var(--line-dark); background:var(--cream-deep); padding:14px 16px; font-size:13px; line-height:1.7; opacity:0.9;">
-        ${exp.experience_special_instructions}
+        ${escapeMessageHtml(exp.experience_special_instructions)}
       </div>
     ` : '';
 
@@ -10473,7 +10066,7 @@
         ${listingStandingHtml(exp, { type: 'experience', subtitle: [exp.experience_category, durationLine].filter(Boolean).join(' · '), withStay: exp.experience_type === 'with_stay' })}
         <div class="listing-three-col">
           <div class="listing-col-booking">
-            ${bookStep(1, 'Choose your date')}
+            ${bookStep(1, (exp.experience_duration_days && exp.experience_duration_days > 1) ? 'Choose the day it starts' : 'Choose your date')}
             <div class="field">
               <div id="expBookCalendar" data-min="${bookDateMin}" data-max="${bookDateMax || ''}">
                 <p style="font-size:13px; opacity:0.6;">Loading calendar…</p>
@@ -10501,19 +10094,19 @@
               <p class="step-help">Your name and the number of guests go to your host; we send your confirmation to this email.</p>
               <div class="field">
                 <label for="expBookFirstName">First name <span style="color:#a3402f;">*</span></label>
-                <input id="expBookFirstName" type="text" placeholder="As on your ID" autocomplete="given-name" required>
+                <input id="expBookFirstName" type="text" placeholder="First name" autocomplete="given-name" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="expBookLastName">Last name <span style="color:#a3402f;">*</span></label>
-                <input id="expBookLastName" type="text" placeholder="As on your ID" autocomplete="family-name" required>
+                <input id="expBookLastName" type="text" placeholder="Last name" autocomplete="family-name" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="expBookEmail">Email <span style="color:#a3402f;">*</span></label>
-                <input id="expBookEmail" type="email" placeholder="you@email.com" required>
+                <input id="expBookEmail" type="email" placeholder="you@email.com" autocomplete="email" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="expBookPhone">Mobile number <span style="color:#a3402f;">*</span></label>
-                <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" required>
+                <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" autocomplete="tel" required>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label for="expCouponCode">Coupon code <span class="label-hint">(optional — log in to use one)</span></label>
@@ -10533,11 +10126,11 @@
             <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
             ${photosHtml}
             <div class="listing-reviews" data-reviews-for="${exp.id}"></div>
-            <p class="desc" style="margin-top:16px;">${exp.description}</p>
+            <p class="desc" style="margin-top:16px;">${escapeMessageHtml(exp.description)}</p>
           </div>
           <div class="listing-col-map">
             <div class="listing-modal-section-title" style="margin-top:16px;">Location</div>
-            ${!exp.hosting_property_name && (exp.formatted_address || exp.city) ? `<p class="loc" style="margin-bottom:10px; text-transform:none; letter-spacing:normal; font-size:13px; opacity:0.8;">📍 ${exp.formatted_address || exp.city}</p>` : ''}
+            ${!exp.hosting_property_name && (exp.formatted_address || exp.city) ? `<p class="loc" style="margin-bottom:10px; text-transform:none; letter-spacing:normal; font-size:13px; opacity:0.8;">📍 ${escapeMessageHtml(exp.formatted_address || formatCityArea(exp))}</p>` : ''}
             ${(exp.latitude && exp.longitude) ? `
               <div class="listing-map-embed" id="expMapEmbed"></div>
               <div style="margin-top:8px;">${mapLinkHtml}</div>
@@ -10553,32 +10146,26 @@
     `;
   }
 
-  // A real visual calendar for booking an experience — same month-grid
-  // pattern as renderAvailabilityCalendar (stays), and now genuinely the
-  // SAME interaction too: two clicks pick a start and end date, exactly
-  // like a stay's arrival/departure. This used to auto-compute the end
-  // date from the host's fixed experience_duration_days, letting the
-  // guest only ever pick a single start date — that's a real product
-  // decision to change (guests choosing their own range instead of a
-  // host-fixed length), not a bug fix. create-order.js now prices this
-  // as price × days, an interim assumption pending a real "per day"
-  // pricing model — see the comment there.
+  // A visual calendar for booking an experience — the same month grid as
+  // stays. One tap picks the day: the host sets how long the experience
+  // runs (experience_duration_days), so a multi-day experience shows its
+  // end day worked out from that, exactly as the server prices and records
+  // it (api/_pricing.js: one date in, the end from the host's duration).
+  function expDurationDays(exp){
+    return exp.experience_duration_days && Number(exp.experience_duration_days) > 1 ? Number(exp.experience_duration_days) : 1;
+  }
   async function renderExpBookingCalendar(exp){
     const container = document.getElementById('expBookCalendar');
     if(!container) return;
     const minIso = container.dataset.min;
     const maxIso = container.dataset.max || null;
+    const days = expDurationDays(exp);
 
-    // A with_stay experience is tied to a real property (hosting_listing_id)
-    // — booking the experience is supposed to also reserve that stay, so
-    // its own booked/blocked nights need to grey out here too, not just
-    // the experience listing's own (which mostly has none, since
-    // experiences don't track per-date capacity the way stays do). This
-    // used to not exist at all: an experience could show as bookable on
-    // dates where the actual property was already fully booked by
-    // someone else, since nothing here ever checked the linked stay.
+    // A with_stay experience includes nights at a real property
+    // (hosting_listing_id), one per day: that home's booked and blocked
+    // nights make a start day unavailable when any of its nights is taken.
     const occupiedNights = new Set();
-    if(exp.hosting_listing_id){
+    if(exp.hosting_listing_id && exp.experience_type === 'with_stay'){
       try{
         const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(exp.hosting_listing_id));
         if(res.ok){
@@ -10593,50 +10180,25 @@
       }
     }
 
-    let expArrival = '';
-    let expDeparture = '';
-    let expSelectingStart = true;
-    let viewYear, viewMonth;
+    let expStart = '';
     const minDateObj = new Date(minIso + 'T00:00:00');
-    viewYear = minDateObj.getFullYear();
-    viewMonth = minDateObj.getMonth();
+    let viewYear = minDateObj.getFullYear();
+    let viewMonth = minDateObj.getMonth();
 
-    function rangeOverlapsOccupiedNights(startIso, endIso){
-      if(!occupiedNights.size) return false;
-      return getNightsInRangeClient(startIso, endIso).some(n => occupiedNights.has(n));
+    // Can the experience start on this day? Every one of its days must be
+    // inside the host's window, and every included night free.
+    function startAllowed(iso){
+      if(iso < minIso) return false;
+      const lastDay = aervaAddDays(iso, days - 1);
+      if(maxIso && lastDay > maxIso) return false;
+      return !getNightsInRangeClient(iso, aervaAddDays(iso, days)).some(n => occupiedNights.has(n));
     }
 
     function handleExpDayClick(iso){
-      if(expSelectingStart || !expArrival){
-        expArrival = iso;
-        expDeparture = '';
-        expSelectingStart = false;
-      } else if(iso <= expArrival){
-        // Picked an earlier (or same) date as the second click — start a
-        // fresh selection from here instead, same convention the stay
-        // calendar uses.
-        expArrival = iso;
-        expDeparture = '';
-        expSelectingStart = false;
-      } else if(rangeOverlapsOccupiedNights(expArrival, iso)){
-        // The stay portion isn't free across the whole span the guest
-        // just tried to select — caught here, before any date even
-        // makes it into the booking form, rather than only failing at
-        // the final "Book Experience" click or (worse) at payment.
-        const warningEl = document.getElementById('expFitWarning');
-        if(warningEl){
-          warningEl.textContent = "The stay included with this experience isn't available for the full range you selected. Please choose different dates.";
-          warningEl.style.display = 'block';
-        }
-        expArrival = iso;
-        expDeparture = '';
-        expSelectingStart = false;
-      } else {
-        expDeparture = iso;
-        expSelectingStart = true;
-      }
-      document.getElementById('expBookDate').value = expArrival;
-      document.getElementById('expBookEndDate').value = expDeparture;
+      expStart = iso;
+      document.getElementById('expBookDate').value = expStart;
+      // Last day of the experience (inclusive), for display only.
+      document.getElementById('expBookEndDate').value = aervaAddDays(expStart, days - 1);
       updateExperiencePriceSummary(exp);
       renderMonth();
     }
@@ -10648,24 +10210,23 @@
       const isMinMonth = viewYear === minDateObj.getFullYear() && viewMonth === minDateObj.getMonth();
       const maxDateObj = maxIso ? new Date(maxIso + 'T00:00:00') : null;
       const isMaxMonth = maxDateObj && viewYear === maxDateObj.getFullYear() && viewMonth === maxDateObj.getMonth();
+      const endIso = expStart ? aervaAddDays(expStart, days - 1) : '';
 
       let cellsHtml = '';
       for(let i = 0; i < startWeekday; i++) cellsHtml += '<div class="calendar-day empty"></div>';
       for(let day = 1; day <= daysInMonth; day++){
         const iso = toLocalDateStr(new Date(viewYear, viewMonth, day));
-        const isDisabled = iso < minIso || (maxIso && iso > maxIso) || occupiedNights.has(iso);
         let classes = 'calendar-day';
-        if(isDisabled) classes += ' disabled';
-        if(iso === expArrival || iso === expDeparture) classes += ' selected-start';
-        else if(expArrival && expDeparture && iso > expArrival && iso < expDeparture) classes += ' in-range';
+        if(!startAllowed(iso)) classes += ' disabled';
+        if(iso === expStart || (days > 1 && iso === endIso)) classes += ' selected-start';
+        else if(expStart && days > 1 && iso > expStart && iso < endIso) classes += ' in-range';
         cellsHtml += `<div class="${classes}" data-exp-date="${iso}">${day}</div>`;
       }
 
-      const rangeNoteHtml = expArrival && expDeparture
-        ? `<p style="font-size:12px; margin-top:10px;"><strong>${new Date(expArrival + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} – ${new Date(expDeparture + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</strong></p>`
-        : expArrival
-        ? `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Now pick your end date.</p>`
-        : `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">Pick your dates to see the price and continue booking.</p>`;
+      const fmtDay = (iso, withYear) => new Date(iso + 'T00:00:00').toLocaleDateString('en-IN', withYear ? { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' } : { weekday: 'short', month: 'short', day: 'numeric' });
+      const noteHtml = expStart
+        ? `<p style="font-size:12px; margin-top:10px;"><strong>${days > 1 ? `${fmtDay(expStart)} – ${fmtDay(endIso, true)} (${days} days)` : fmtDay(expStart, true)}</strong></p>`
+        : `<p style="font-size:11.5px; opacity:0.6; margin-top:10px;">${days > 1 ? `Tap the day it starts. It runs for ${days} days.` : 'Tap a day to see the price.'}</p>`;
 
       container.innerHTML = `
         <div class="calendar-month-panel" style="max-width:320px; padding:0;">
@@ -10678,7 +10239,7 @@
             <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
           </div>
           <div class="calendar-grid">${cellsHtml}</div>
-          ${rangeNoteHtml}
+          ${noteHtml}
         </div>
       `;
 
@@ -10703,92 +10264,35 @@
     renderMonth();
   }
 
+  // The most guests an experience takes: its own max_guests when the host
+  // set one, otherwise 50 — the same limit the server applies.
+  function expGuestCap(exp){ return aervaParseMaxGuests(exp.max_guests) || 50; }
+
+  // The total shown is the server's own price (create-order.js, quoteOnly):
+  // the experience, any offer, and — for one that includes a stay — the
+  // nights at the home, with GST, the guest service fee and any deposit.
   function updateExperiencePriceSummary(exp){
     const summaryEl = document.getElementById('expPriceSummary');
     const fitWarningEl = document.getElementById('expFitWarning');
     if(!summaryEl) return;
-    const guests = Number(document.getElementById('expGuestsCount').textContent) || 1;
-    const price = exp.price ? Number(exp.price) : 0;
-    const startDate = document.getElementById('expBookDate') ? document.getElementById('expBookDate').value : '';
-    const endDate = document.getElementById('expBookEndDate') ? document.getElementById('expBookEndDate').value : '';
-    if(!price || !startDate || !endDate){
-      summaryEl.style.display = 'none';
-      if(fitWarningEl) fitWarningEl.style.display = 'none';
-      return;
-    }
-    // The range is the guest's AVAILABILITY window, not "how many days
-    // of this experience they're buying" — price stays the fixed
-    // package rate regardless of how many days are selected. What the
-    // range determines is whether this experience's own fixed duration
-    // can even fit inside it (see the hours check below), same
-    // reasoning and formula as create-order.js's authoritative version.
-    const days = Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1;
-    const requiredHours = (exp.experience_duration_days && exp.experience_duration_days > 1)
-      ? exp.experience_duration_days * (Number(exp.experience_duration_hours) || 24)
-      : (Number(exp.experience_duration_hours) || 24);
-    const availableHours = days * 24;
-    if(requiredHours > availableHours){
-      summaryEl.style.display = 'none';
-      if(fitWarningEl){
-        fitWarningEl.textContent = `This experience needs about ${requiredHours} hours — your selected dates only give it ${availableHours}. Please select a longer range.`;
-        fitWarningEl.style.display = 'block';
-      }
-      return;
-    }
     if(fitWarningEl) fitWarningEl.style.display = 'none';
-
-    const subtotalBeforeDiscount = exp.experience_price_unit === 'per_person' ? price * guests : price;
-    // Same discount logic stays use — mirrors calculateDiscount exactly.
-    // durationDays stands in for "nights" purely for the promotion's own
-    // minNights gate; not related to the days/hours fit-check above.
-    const durationDays = exp.experience_duration_days && exp.experience_duration_days > 1 ? exp.experience_duration_days : 1;
-    const discount = calculateDiscount(exp, durationDays, startDate, subtotalBeforeDiscount);
-    const expSubtotal = subtotalBeforeDiscount - discount.amount;
-
-    // A with_stay experience also reserves and charges for the linked
-    // property (see create-order.js) — shown here as an ESTIMATE using
-    // that property's plain nightly rate (no promotions applied
-    // client-side, unlike the experience's own price above), so the
-    // guest sees a total that's actually close to what they'll be
-    // charged, rather than only the experience's own price with the
-    // stay silently added at checkout with no warning beforehand.
-    let hostingSubtotal = 0;
-    let hostingRowHtml = '';
-    if(exp.experience_type === 'with_stay' && exp.hosting_listing_id && exp.hosting_nightly_rate){
-      hostingSubtotal = Number(exp.hosting_nightly_rate) * days;
-      hostingRowHtml = `<div class="sum-row"><span>Stay at ${exp.hosting_property_name || 'the property'} × ${days} night${days === 1 ? '' : 's'}</span><span>${fmtGuest(hostingSubtotal)}</span></div>`;
+    const guests = Number(document.getElementById('expGuestsCount').textContent) || 1;
+    const startDate = document.getElementById('expBookDate') ? document.getElementById('expBookDate').value : '';
+    if(!exp.price || !startDate){
+      aervaQuoteSeq.experience = (aervaQuoteSeq.experience || 0) + 1;
+      summaryEl.style.display = 'none';
+      return;
     }
-
-    const subtotal = expSubtotal + hostingSubtotal;
-    const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
-    const expGst = experienceGstFor(expSubtotal).gst;
-    const hostingGst = hostingSubtotal > 0 ? stayGstFor(hostingSubtotal, days, 0).gst : 0;
-    const gstTotal = expGst + hostingGst;
-    const gstRowHtml = gstTotal > 0
-      ? `<div class="sum-row"><span>${hostingGst > 0 ? 'GST' : `GST (${GST_EXPERIENCE_RATE}%)`}</span><span>${fmtGuest(gstTotal)}</span></div>`
-      : '';
-    const total = subtotal + gstTotal + guestServiceFee;
-    const inrNote = currentCurrency !== 'INR'
-      ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ${fmt(total)} (Indian Rupees) — shown in ${currentCurrency} at today's rate. Your bank or card network sets the actual exchange rate and may apply its own fees; Aerva is not responsible for any difference between this estimate and what your bank charges.</p>`
-      : '';
-    const discountRowHtml = discount.amount > 0
-      ? `<div class="sum-row"><span>${discount.name || 'Offer applied'}</span><span>−${fmtGuest(discount.amount)}</span></div>`
-      : '';
-    const rateLine = exp.experience_price_unit === 'per_person'
-      ? `${fmtGuest(price)} × ${guests} guest${guests === 1 ? '' : 's'}`
-      : 'Package price';
     summaryEl.innerHTML = `
       ${bookStep(3, 'Check your total')}
-      <div class="sum-row"><span>${rateLine}</span><span>${fmtGuest(subtotalBeforeDiscount)}</span></div>
-      ${discountRowHtml}
-      ${hostingRowHtml}
-      ${gstRowHtml}
-      <div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee)}</span></div>
-      <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(total)}</span></div>
-      ${inrNote}
+      <div class="quote-body"><p style="font-size:12.5px; opacity:0.6;">Working out your total…</p></div>
       <p style="font-size:12px; opacity:0.75; margin-top:10px; padding-top:10px; border-top:1px solid var(--line-dark);"><strong>Cancellation:</strong> ${cancellationPolicyText(exp.cancellation_policy)}</p>
     `;
     summaryEl.style.display = 'block';
+    const quoteBody = summaryEl.querySelector('.quote-body');
+    aervaQuote('experience', { experiences: [{ listingId: exp.id, date: startDate, guests }] }).then(q => {
+      if(q && quoteBody.isConnected) quoteBody.innerHTML = aervaQuoteBodyHtml(q);
+    }).catch(err => { if(quoteBody.isConnected) quoteBody.innerHTML = aervaQuoteErrorHtml(err); });
   }
 
   async function handleExperienceBookNow(exp){
@@ -10796,6 +10300,7 @@
     const confirmEl = document.getElementById('expBookConfirm');
     const btn = document.getElementById('expBookNowBtn');
     errorEl.style.display = 'none';
+    errorEl.style.color = '#a3402f';
     confirmEl.style.display = 'none';
 
     if(!guestAuthToken()){
@@ -10803,24 +10308,11 @@
       return;
     }
 
+    // One date: the day it starts. The end comes from the host's own
+    // duration, on the server as on this page.
     const date = document.getElementById('expBookDate').value;
-    const endDate = document.getElementById('expBookEndDate').value;
-    if(!date || !endDate){
-      errorEl.textContent = 'Please choose both a start and end date for this experience.';
-      errorEl.style.display = 'block';
-      return;
-    }
-    // Same fit-check updateExperiencePriceSummary already ran (and
-    // create-order.js will re-check authoritatively) — repeated here so
-    // clicking "Book Experience" gives a clear reason rather than just
-    // failing at the server with no context, if this is ever reached
-    // with a too-short range still selected.
-    const days = Math.round((new Date(endDate) - new Date(date)) / (1000 * 60 * 60 * 24)) + 1;
-    const requiredHours = (exp.experience_duration_days && exp.experience_duration_days > 1)
-      ? exp.experience_duration_days * (Number(exp.experience_duration_hours) || 24)
-      : (Number(exp.experience_duration_hours) || 24);
-    if(requiredHours > days * 24){
-      errorEl.textContent = `This experience needs about ${requiredHours} hours — your selected dates only give it ${days * 24}. Please select a longer range.`;
+    if(!date){
+      errorEl.textContent = 'Please choose a date first.';
       errorEl.style.display = 'block';
       return;
     }
@@ -10830,7 +10322,10 @@
       errorEl.style.display = 'block';
       return;
     }
-    const phone = document.getElementById('expBookPhone').value.trim().replace(/\D/g, '');
+    // The number exactly as typed goes to the server, which saves it to the
+    // account if it has none (create-order.js); Razorpay gets the digits.
+    const phoneTyped = document.getElementById('expBookPhone').value.trim();
+    const phone = phoneTyped.replace(/\D/g, '');
     if(!phone || phone.length < 10){
       errorEl.textContent = 'Please enter a valid mobile number.';
       errorEl.style.display = 'block';
@@ -10847,12 +10342,12 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
         body: JSON.stringify({
-          experiences: [{ listingId: exp.id, date, endDate, guests }],
+          experiences: [{ listingId: exp.id, date, guests }],
           email,
           preferredCurrency: currentCurrency,
           couponCode: document.getElementById('expCouponCode').value.trim() || undefined,
           pricesSeen: aervaPricesSeen([exp]),
-          phone,
+          phone: phoneTyped,
           firstName: (document.getElementById('expBookFirstName') || {}).value,
           lastName: (document.getElementById('expBookLastName') || {}).value
         })
@@ -10870,7 +10365,7 @@
           btn.disabled = false; btn.textContent = 'Continue to payment';
           return;
         }
-        throw new Error(errData.error || 'Could not start payment. Please try again.');
+        throw new Error(errData.error || 'We could not start your payment. Please try again.');
       }
       order = await orderRes.json();
       if(order.couponDiscount > 0){
@@ -10881,7 +10376,7 @@
     } catch(err){
       btn.disabled = false;
       btn.textContent = 'Continue to payment';
-      errorEl.textContent = err.message || 'Could not start payment. Please try again.';
+      errorEl.textContent = err.message || 'We could not start your payment. Please try again.';
       errorEl.style.display = 'block';
       return;
     }
@@ -10894,9 +10389,15 @@
       errorEl.style.display = 'block';
       return;
     }
+    if(!order.keyId){
+      aervaReleaseHold(order.orderId, 'closed');
+      errorEl.textContent = 'Payment is not available right now. Nothing has been charged. Please try again in a few minutes.';
+      errorEl.style.display = 'block';
+      return;
+    }
 
     const options = {
-      key: RAZORPAY_KEY_ID,
+      key: order.keyId,
       order_id: order.orderId,
       timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
       amount: order.amount,
@@ -10917,16 +10418,9 @@
             body: JSON.stringify(response)
           });
           const verifyData = await verifyRes.json();
-          if(verifyData.verified){
-            confirmEl.textContent = 'Payment received (ID: ' + response.razorpay_payment_id + '). Our team will confirm and follow up by email shortly.';
-            confirmEl.style.display = 'block';
-          } else {
-            errorEl.textContent = (verifyData && verifyData.message) || 'We could not verify this payment. Please contact us before assuming your booking is confirmed.';
-            errorEl.style.display = 'block';
-          }
+          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn });
         } catch(err){
-          errorEl.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.';
-          errorEl.style.display = 'block';
+          aervaShowPaymentResult({ pending: true, message: 'Your payment was received, but we could not confirm the booking on this page. We will email you within a few minutes — please do not pay again. Payment ID: ' + response.razorpay_payment_id }, { confirmEl, errorEl, btn });
         }
       },
       modal: { ondismiss: function(){ aervaEndCheckout('closed'); } }
@@ -10935,7 +10429,8 @@
     const rzp = new Razorpay(options);
     rzp.on('payment.failed', function(response){ aervaEndCheckout('failed'); });
     rzp.open();
-    aervaWatchCheckout(rzp, order, errorEl);
+    // An experience on its own holds no dates from anyone else.
+    aervaWatchCheckout(rzp, order, errorEl, { holdsDates: exp.experience_type === 'with_stay' });
   }
 
   // Opens the experience's detail view inline, as a modal — same shell
@@ -10969,13 +10464,14 @@
       updateExperiencePriceSummary(exp);
     });
     document.getElementById('expGuestsInc').addEventListener('click', () => {
-      const next = Math.min(50, Number(guestsCountEl.textContent) + 1);
+      const next = Math.min(expGuestCap(exp), Number(guestsCountEl.textContent) + 1);
       guestsCountEl.textContent = next;
       updateExperiencePriceSummary(exp);
     });
     renderExpBookingCalendar(exp);
     document.getElementById('expBookNowBtn').addEventListener('click', () => handleExperienceBookNow(exp));
     updateExperiencePriceSummary(exp);
+    aervaPrefillBooking();
   }
 
   function showExperienceDetailPage(exp){
@@ -10986,7 +10482,12 @@
     if(expSection) expSection.style.display = 'none';
     document.getElementById('experienceFullViewBody').innerHTML = buildExperienceDetailHtml(exp);
     document.getElementById('experienceFullView').style.display = 'block';
-    document.title = exp.property_name + ' — Aerva Experience';
+    document.title = exp.property_name + ' — Aerva';
+    // The header tab shows where this page belongs.
+    const suitesTab = document.getElementById('catSuites');
+    const expTab = document.getElementById('catExperience');
+    if(suitesTab) suitesTab.classList.remove('active');
+    if(expTab) expTab.classList.add('active');
 
     const mapEl = document.getElementById('expMapEmbed');
     if(mapEl && exp.latitude && exp.longitude){
@@ -11004,13 +10505,14 @@
       updateExperiencePriceSummary(exp);
     });
     document.getElementById('expGuestsInc').addEventListener('click', () => {
-      const next = Math.min(50, Number(guestsCountEl.textContent) + 1);
+      const next = Math.min(expGuestCap(exp), Number(guestsCountEl.textContent) + 1);
       guestsCountEl.textContent = next;
       updateExperiencePriceSummary(exp);
     });
     renderExpBookingCalendar(exp);
     document.getElementById('expBookNowBtn').addEventListener('click', () => handleExperienceBookNow(exp));
     updateExperiencePriceSummary(exp);
+    aervaPrefillBooking();
   }
   // Smooth in-page return instead of a full reload — the plain
   // href="index.html"/"index.html?view=experiences" fallback still
@@ -11064,7 +10566,7 @@
 
     document.getElementById('bookingViewBody').innerHTML = `
       <h2 class="bk-title">${esc(b.suite_name || 'Your booking')}</h2>
-      <p class="bk-sub">${esc(statusWordGuest(b.status))}${listing ? ' · ' + esc(formatCityArea(listing)) : ''}</p>
+      <p class="bk-sub">${esc(statusWordGuest(b.status === 'paid' && b.local_today && String(b.departure).slice(0, 10) < String(b.local_today).slice(0, 10) ? 'completed' : b.status))}${listing ? ' · ' + esc(formatCityArea(listing)) : ''}</p>
       <div class="bk-facts">
         ${isExp
           ? `<div><span>Date</span><strong>${esc(day(b.arrival))}</strong></div>`
@@ -11107,7 +10609,7 @@
   }
 
   function statusWordGuest(status){
-    return status === 'paid' ? 'Confirmed' : status === 'cancelled' ? 'Cancelled' : status === 'refunded' ? 'Refunded' : String(status || '');
+    return status === 'paid' ? 'Confirmed' : status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Cancelled' : status === 'refunded' ? 'Refunded' : String(status || '');
   }
 
   // ---- Profile ----
@@ -11125,7 +10627,7 @@
   // on its way out (below), and the server refuses it without the current
   // version too (create-order.js, submit-listing.js). Text and version come
   // from aerva-policies.js, the same source as the Policies page.
-  const BOOKING_BUTTONS = '#listingBookNowBtn, #resortBookNowBtn, #expBookNowBtn, #reserveSubmitBtn';
+  const BOOKING_BUTTONS = '#listingBookNowBtn, #resortBookNowBtn, #expBookNowBtn';
   const LISTING_BUTTONS = '#listingSubmitBtn, #expSubmitBtn';
   function agreementBoxHtml(kind){
     const A = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements;
@@ -11177,10 +10679,17 @@
     window.fetch = function(input, init){
       try{
         const url = typeof input === 'string' ? input : (input && input.url) || '';
-        const isBooking = url.indexOf('/api/create-order') !== -1;
+        const isOrderApi = url.indexOf('/api/create-order') !== -1;
         const isListing = url.indexOf('/api/submit-listing') !== -1;
-        if((isBooking || isListing) && init && typeof init.body === 'string'){
+        if((isOrderApi || isListing) && init && typeof init.body === 'string'){
           const body = JSON.parse(init.body);
+          // Only an actual booking needs the agreement: a request that pays
+          // for stays or experiences. Price quotes, the payment-window
+          // checks, releasing a hold and paying for an accepted change all
+          // use the same endpoint and pass straight through.
+          const hasItems = (Array.isArray(body.stays) && body.stays.length > 0) || (Array.isArray(body.experiences) && body.experiences.length > 0);
+          const isBooking = isOrderApi && hasItems && !body.quoteOnly;
+          if(isOrderApi && !isBooking) return originalFetch(input, init);
           const version = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements && window.AERVA_POLICIES.agreements.version;
           if(isBooking){
             if(!agreementTicked(lastAgreementButton)) return refuse('Please tick the booking agreement to continue.');
@@ -11427,6 +10936,34 @@
     btn.disabled = false; btn.textContent = 'Save';
   }
 
+  // Log out of all devices (api/guest-profile.js ends every session of
+  // this account), then clear this browser's copy and go home.
+  (function wireLogoutAll(){
+    const btn = document.getElementById('profileLogoutAll');
+    if(!btn) return;
+    btn.addEventListener('click', async () => {
+      const msg = document.getElementById('profileLogoutAllMsg');
+      if(!confirm('Log out of Aerva on every device, including this one?')) return;
+      btn.disabled = true; btn.textContent = 'Logging out…'; msg.textContent = '';
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ mode: 'logoutAllDevices' })
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok && res.status !== 401) throw new Error(data.error || 'Could not log out everywhere. Please try again.');
+        if(typeof window.aervaClearGuestSession === 'function') window.aervaClearGuestSession();
+        else safeStorage.remove('aerva_guest_session');
+        window.location.href = 'index.html';
+      }catch(err){
+        msg.textContent = err.message || 'Could not log out everywhere. Please try again.';
+        msg.style.color = '#8a2b2b';
+        btn.disabled = false; btn.textContent = 'Log out of all devices';
+      }
+    });
+  })();
+
   // ---- Today (hosts) ----
   // Who is arriving, who is leaving, who is staying on, at this host's own
   // properties. Everything comes from host-listings.js, which works it out
@@ -11640,10 +11177,14 @@
       renderResortBookingCalendar(listing);
       renderRoomAwarePhotos(listing, []);
       document.getElementById('resortBookNowBtn').addEventListener('click', () => handleResortBookNow(listing));
+      aervaPrefillBooking();
       return;
     }
+    // Same add-on experiences as the booking modal ("This Property Also Offers").
+    loadListingExperiences(listing);
     renderAvailabilityCalendar(listing);
     document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
+    aervaPrefillBooking();
   }
 
   document.getElementById('listingModalClose').addEventListener('click', closeListingDetail);
@@ -11708,7 +11249,7 @@
       if(recents.length === 0) return;
       dropdown.innerHTML = '<div class="place-suggest-heading">Recent Searches</div>' +
         recents.map((r, i) => `
-          <button type="button" class="place-suggest-item" data-recent-index="${i}">${r.text}</button>
+          <button type="button" class="place-suggest-item" data-recent-index="${i}">${escapeMessageHtml(r.text)}</button>
         `).join('');
       dropdown.style.display = 'block';
       dropdown.querySelectorAll('[data-recent-index]').forEach(btn => {
@@ -12245,8 +11786,8 @@
     listEl.innerHTML = rows.slice(0, 8).map(r => `
       <div class="exp-row">
         <div class="exp-time">${fmt(Number(r.price))}/night</div>
-        <h3>${r.name}</h3>
-        <p>${r.description ? r.description + ' — ' : ''}Available at ${r.listingName}.</p>
+        <h3>${escapeMessageHtml(r.name)}</h3>
+        <p>${r.description ? escapeMessageHtml(r.description) + ' — ' : ''}Available at ${escapeMessageHtml(r.listingName)}.</p>
       </div>
     `).join('');
   }
@@ -12358,11 +11899,9 @@
       listingsById = {};
       document.getElementById('suitesContainer').innerHTML =
         '<div class="suites-empty">Could not load homes right now. Please refresh, or check back shortly.</div>';
-      initReserveForm();
       return;
     }
     applyFiltersAndRender();
-    initReserveForm();
 
     // Experiences are now needed immediately for the combined "All" view
     // (not just when the guest specifically opens the Experience filter),
@@ -12410,14 +11949,17 @@
       document.body.classList.remove('showing-hero');
       document.getElementById('suites').style.display = 'none';
       document.getElementById('add-listing').style.display = 'block';
+      document.title = 'List your property — Aerva';
     } else if(requestedView === 'list-experience'){
       document.body.classList.remove('showing-hero');
       document.getElementById('suites').style.display = 'none';
       document.getElementById('list-experience').style.display = 'block';
+      document.title = 'List your experience — Aerva';
     } else if(requestedView === 'my-bookings'){
       document.body.classList.remove('showing-hero');
       document.getElementById('suites').style.display = 'none';
       document.getElementById('my-bookings').style.display = 'block';
+      document.title = 'My Bookings — Aerva';
       loadMyBookings();
     } else if(requestedView === 'suites'){
       setCategoryFilter('suites');
@@ -12488,6 +12030,10 @@
     // italicized accent word (see .hero-headline em), matching the
     // premium hero treatment; textContent would silently strip that
     // styling out every time the filter switches.
+    document.title = filter === 'experiences' ? 'Aerva Experience — Aerva' : 'Suites — Aerva';
+    // The grid's heading names the tab it belongs to.
+    const availableHeadingEl = document.getElementById('availableHeading');
+    if(availableHeadingEl) availableHeadingEl.textContent = filter === 'experiences' ? 'Aerva Experience' : 'Suites';
     if(filter === 'suites'){
       eyebrowEl.textContent = 'Where You Stay';
       headingEl.innerHTML = 'Homes, personally <em>chosen</em>.';
@@ -12686,6 +12232,36 @@
       // next on this device.
       safeStorage.remove('aerva_clone_listing');
       safeStorage.remove('aerva_clone_with_photos');
+      // Co-host mode belongs to the person who started it.
+      safeStorage.remove('aerva_acting_host');
+      safeStorage.remove('aerva_pending_cohost_invite');
+      // Which notifications were read, and cached co-host conversations,
+      // belong to this account — not to whoever logs in next here.
+      safeStorage.remove('aerva_notifications_read');
+      try{ sessionStorage.removeItem('aerva_cohost_convs'); }catch(e){}
+    }
+
+    window.aervaClearGuestSession = clearGuestSession;
+
+    // The session check itself could not run (server busy, 503, network):
+    // keep the session and show the logged-in state from what this browser
+    // already knows, then try once more a little later.
+    let sessionRetried = false;
+    function showCachedLoggedIn(){
+      const cachedName = safeStorage.get('aerva_guest_name') || safeStorage.get('aerva_guest_email') || '';
+      const greeting = 'Hi, ' + (cachedName || 'there');
+      if(guestNameDisplay) guestNameDisplay.textContent = greeting;
+      if(guestLoginLink) guestLoginLink.style.display = 'none';
+      if(guestAccountBox) guestAccountBox.style.display = 'inline-flex';
+      if(guestNameDisplayMobile){
+        guestNameDisplayMobile.textContent = greeting;
+        if(guestLoginLinkMobile) guestLoginLinkMobile.style.display = 'none';
+        if(guestAccountBoxMobile) guestAccountBoxMobile.style.display = 'flex';
+      }
+      if(!sessionRetried){
+        sessionRetried = true;
+        setTimeout(checkGuestSession, 8000);
+      }
     }
 
     async function checkGuestSession(){
@@ -12712,6 +12288,7 @@
           showReviewReminder(Number(data.guest.pendingReviews) || 0);
           renderNavNotifications(data.guest.notifications || []);
           const greeting = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
+          if(data.guest.name) safeStorage.set('aerva_guest_name', data.guest.name);
           guestNameDisplay.textContent = greeting;
           guestLoginLink.style.display = 'none';
           guestAccountBox.style.display = 'inline-flex';
@@ -12771,6 +12348,11 @@
             if(earningsMenuLink) earningsMenuLink.style.display = 'block';
             if(earningsMenuLinkMobile) earningsMenuLinkMobile.style.display = 'block';
           }
+          // Account Settings: a host's settings (payouts, verification) live
+          // on the host dashboard; everyone else's account is their profile.
+          if(data.guest.hasActiveListing === true || data.guest.accountType === 'guest_host'){
+            document.querySelectorAll('.account-settings-link').forEach(a => { a.href = 'host-dashboard.html?openProfile=1'; });
+          }
           if(data.guest.hasActiveListing === true){
             const statusMenuLink = document.getElementById('statusMenuLink');
             const statusMenuLinkMobile = document.getElementById('statusMenuLinkMobile');
@@ -12814,7 +12396,7 @@
                 }
                 const photoUrl = profileData.guest.profilePhotoUrl;
                 const initial = (profileData.guest.name || data.guest.email || '?').trim().charAt(0).toUpperCase();
-                const avatarInner = photoUrl ? `<img src="${photoUrl}" alt="Profile photo">` : initial;
+                const avatarInner = photoUrl ? `<img src="${escapeMessageHtml(photoUrl)}" alt="Profile photo">` : escapeMessageHtml(initial);
                 ['navAvatarCircle', 'navAvatarCircleMobile'].forEach(id => {
                   const el = document.getElementById(id);
                   if(el) el.innerHTML = avatarInner;
@@ -12825,14 +12407,18 @@
             // Not critical — the avatar just falls back to "?" and the
             // location-detected/default currency stays.
           }
-        } else {
+        } else if(res.status === 401){
           // Token expired or invalid — quietly fall back to showing
-          // "Log In" rather than an error; the guest just logs in again.
+          // "Log in" rather than an error; the guest just logs in again.
           clearGuestSession();
+        } else {
+          // 503 or similar: the check couldn't run, the session may be fine.
+          showCachedLoggedIn();
         }
       } catch(err){
         // Network hiccup — leave storage alone so a temporary outage
         // doesn't force an unnecessary re-login on the next page load.
+        showCachedLoggedIn();
       }
     }
 
@@ -12936,6 +12522,115 @@ function aervaEarliestArrival(zone){
   }catch(e){ return toLocalDateStr(new Date()); }
 }
 
+// ---- Small booking helpers ----
+// listings.max_guests is free text ("4", "3–4", "9+"): the largest number
+// in it is the limit — the same reading as parseMaxGuests in api/_pricing.js.
+function aervaParseMaxGuests(raw){
+  const numbers = String(raw == null ? '' : raw).match(/\d+/g);
+  return numbers ? Math.max(...numbers.map(Number)) : null;
+}
+// 'YYYY-MM-DD' + n days (n may be negative).
+function aervaAddDays(iso, n){
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// ---- The price quote: what checkout will charge, from the server ----
+// api/create-order.js with quoteOnly prices a booking exactly as it would
+// charge it, and changes nothing (no payment, no held dates). The booking
+// pages show this, so the total a guest sees is the total they pay.
+const aervaQuoteSeq = {};
+function aervaQuote(slot, body){
+  const n = (aervaQuoteSeq[slot] = (aervaQuoteSeq[slot] || 0) + 1);
+  const headers = { 'Content-Type': 'application/json' };
+  return fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST', headers,
+      body: JSON.stringify(Object.assign({}, body, { quoteOnly: true })) })
+    .then(async r => {
+      const d = await r.json().catch(() => ({}));
+      if(aervaQuoteSeq[slot] !== n) return null;                 // a newer quote was asked for
+      if(!r.ok) throw Object.assign(new Error(d.error || 'We could not work out the price just now.'), { fromServer: r.status < 500 });
+      return d;
+    }, err => { if(aervaQuoteSeq[slot] !== n) return null; throw err; });
+}
+// The quote's lines as summary rows. Amounts go through fmtGuest, so a
+// guest browsing in another currency sees them converted like every price.
+function aervaQuoteRowsHtml(q){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const lines = (q && q.lines) || [];
+  const many = new Set(lines.filter(l => l.item).map(l => l.item)).size > 1;
+  return lines.map(l => {
+    const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    let label = l.label;
+    if(l.kind === 'room') label = (many ? l.item + ': ' : '') + `${fmtGuest(l.rate)} × ${plural(l.nights, 'night')}`;
+    else if(l.kind === 'experience') label = l.perPerson ? `${many ? l.item + ': ' : ''}${fmtGuest(l.unitPrice)} × ${plural(l.guests, 'guest')}` : l.item;
+    else if(many && l.item) label = l.item + ': ' + l.label;
+    const amount = Number(l.amount) || 0;
+    const shown = l.kind === 'service' && amount === 0 ? 'No charge' : (amount < 0 ? '−' + fmtGuest(-amount) : fmtGuest(amount));
+    return `<div class="sum-row"${l.kind === 'deposit' ? ' style="opacity:0.7;"' : ''}><span>${esc(label)}</span><span>${shown}</span></div>`;
+  }).join('');
+}
+// Rows, the total, and (in another currency) what is actually charged.
+function aervaQuoteBodyHtml(q){
+  const inrNote = currentCurrency !== 'INR'
+    ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ₹${Number(q.total).toLocaleString('en-IN')} (Indian Rupees) — shown in ${currentCurrency} at today's rate. Your bank or card network sets the actual exchange rate and may apply its own fees; Aerva is not responsible for any difference between this estimate and what your bank charges.</p>`
+    : '';
+  return `${aervaQuoteRowsHtml(q)}
+    <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(Number(q.total) || 0)}</span></div>
+    ${inrNote}
+    <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">This is the total you pay. Any coupon is taken off at payment.</p>`;
+}
+function aervaQuoteErrorHtml(err){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return `<p class="quote-error" style="font-size:13px; color:#a3402f; margin:6px 0 0;">${esc(err && err.fromServer ? err.message : 'We could not work out the price just now. Please check your connection and try again.')}</p>`;
+}
+
+// ---- Your details: filled in from the signed-in account ----
+// Name, email and mobile number, so a guest never types them twice. Only
+// empty fields are filled; nothing the guest typed is replaced.
+let aervaPrefillPromise = null;
+function aervaPrefillBooking(){
+  const token = (typeof guestAuthToken === 'function') ? guestAuthToken() : null;
+  if(!token) return;
+  if(!aervaPrefillPromise){
+    aervaPrefillPromise = fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ prefill: true }) })
+      .then(r => r.ok ? r.json() : {}).catch(() => ({}));
+  }
+  aervaPrefillPromise.then(d => {
+    if(!d) return;
+    const phoneLocal = String(d.phone || '').replace(/^\+91(?=[6-9]\d{9}$)/, '');
+    ['listingBook', 'resortBook', 'expBook'].forEach(prefix => {
+      const put = (suffix, value) => { const el = document.getElementById(prefix + suffix); if(el && !el.value && value) el.value = value; };
+      put('FirstName', d.firstName); put('LastName', d.lastName); put('Email', d.email); put('Phone', phoneLocal);
+    });
+  });
+}
+
+// ---- After payment: what the guest is told ----
+// verify-payment.js answers with the booking's confirmation code(s).
+function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn }){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  errorEl.style.display = 'none';
+  if(verifyData && verifyData.verified){
+    const codes = Array.isArray(verifyData.confirmationCodes) ? verifyData.confirmationCodes : [];
+    const codeHtml = codes.length === 1
+      ? ` Your confirmation code is <strong>${esc(codes[0].code)}</strong> — show it at check-in.`
+      : codes.length > 1 ? ' Your confirmation codes: ' + codes.map(c => `<strong>${esc(c.code)}</strong> (${esc(c.item)})`).join(', ') + '.' : '';
+    confirmEl.innerHTML = `<strong>Booking confirmed.</strong>${codeHtml} We have emailed you the details.`;
+    confirmEl.style.display = 'block';
+    // Paid: the button stays off, so the same booking is never paid twice.
+    if(btn){ btn.disabled = true; btn.textContent = 'Booked'; }
+    return;
+  }
+  const pending = verifyData && verifyData.pending;
+  errorEl.style.color = pending ? '#1c1b19' : '#a3402f';
+  errorEl.textContent = (verifyData && verifyData.message) || 'We could not confirm this payment. Please contact us at hello@aerva.in before booking again.';
+  errorEl.style.display = 'block';
+  // Paid but still being confirmed: paying again would pay twice.
+  if(pending && btn){ btn.disabled = true; btn.textContent = 'Payment received'; }
+}
+
 // ---- Booking steps: a numbered heading for each stage of booking ----
 // Booking is a real sequence, so it is numbered: guests of any age can see
 // where they are and what comes next.
@@ -12950,12 +12645,15 @@ const PAY_NOTE_HTML = '<p class="pay-note">You pay securely on the next screen b
 // window is still open (timed out? host changed a price?). Closing the
 // window, a failed payment, or the timer running out ends it at once and
 // releases the dates. Only a payment made inside the window becomes a booking.
-let aervaCheckout = null; // { rzp, orderId, msgEl, tick, poll, bar }
-function aervaWatchCheckout(rzp, order, msgEl){
+let aervaCheckout = null; // { rzp, orderId, msgEl, tick, poll, bar, holdsDates }
+// opts.holdsDates: false for a payment that holds no dates (an experience
+// on its own), so the messages never talk about released dates.
+function aervaWatchCheckout(rzp, order, msgEl, opts){
   aervaStopCheckout();
   if(!order || !order.orderId) return;
   const seconds = Number(order.holdSeconds) || 0;
-  const state = { rzp, orderId: order.orderId, msgEl, left: seconds };
+  const holdsDates = !(opts && opts.holdsDates === false);
+  const state = { rzp, orderId: order.orderId, msgEl, left: seconds, holdsDates };
   aervaCheckout = state;
   if(!seconds) return; // no window was opened (older server): nothing to time
   const bar = document.createElement('div');
@@ -12968,7 +12666,7 @@ function aervaWatchCheckout(rzp, order, msgEl){
   state.bar = bar;
   const paint = () => {
     const m = Math.floor(state.left / 60), sec = String(state.left % 60).padStart(2, '0');
-    bar.textContent = `Pay within ${m}:${sec} — dates held for you`;
+    bar.textContent = `Pay within ${m}:${sec}` + (state.holdsDates ? ' — dates held for you' : '');
     bar.style.background = state.left <= 20 ? '#a3402f' : '#1c1b19';
   };
   paint();
@@ -13001,15 +12699,24 @@ function aervaEndCheckout(reason){
   if(!state) return;
   aervaStopCheckout();
   try{ state.rzp && state.rzp.close && state.rzp.close(); }catch(e){}
-  aervaReleaseHold(state.orderId);
+  // The server is told why: a window the guest closed can never become a
+  // booking; one whose time ran out still can if the payment was already
+  // on its way (15 seconds' grace, api/_booking-rules.js).
+  if(reason === 'closed' || reason === 'failed' || reason === 'expired') aervaReleaseHold(state.orderId, reason);
+  const released = state.holdsDates ? ' Your dates have been released.' : '';
   const messages = {
-    closed: 'Payment cancelled. Your dates have been released.',
-    failed: 'The payment did not go through, so nothing was booked. Your dates have been released.',
-    expired: 'The 90-second payment window has ended and your dates have been released. You can start again.',
-    released: 'This payment was cancelled and your dates have been released.',
+    closed: 'Payment cancelled. Nothing was booked.' + released,
+    failed: 'The payment did not go through, so nothing was booked.' + released,
+    expired: 'The 90-second payment window has ended, so nothing was booked.' + released + ' You can start again.',
+    released: 'This payment was cancelled, so nothing was booked.' + released,
     price_changed: 'Prices have been changed recently. Tap Continue to payment to see the new price.'
   };
-  if(state.msgEl){ state.msgEl.textContent = messages[reason] || messages.released; state.msgEl.style.display = 'block'; }
+  // Information, not an error: shown in the page's normal text colour.
+  if(state.msgEl){
+    state.msgEl.textContent = messages[reason] || messages.released;
+    state.msgEl.style.color = reason === 'failed' ? '#a3402f' : '#1c1b19';
+    state.msgEl.style.display = 'block';
+  }
 }
 
 // ---- "Prices have been changed recently" ----
@@ -13027,6 +12734,7 @@ function aervaShowPriceChange(msgEl, data, btn){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const inr = (n) => (n < 0 ? '−' : '') + '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
   msgEl.style.display = 'block';
+  msgEl.style.color = '#1c1b19';
   msgEl.innerHTML = `<div class="price-changed">
       <p class="price-changed-title">Prices have been changed recently. The new price is below.</p>
       ${(data.lines || []).map(l => `<div class="sum-row"><span>${esc(l.label)}</span><span>${inr(l.amount)}</span></div>`).join('')}
@@ -13042,11 +12750,11 @@ function aervaShowPriceChange(msgEl, data, btn){
 
 // ---- Release the payment window's hold on the dates ----
 // (api/create-order.js releaseHold). Best effort: the hold expires on its own.
-function aervaReleaseHold(orderId){
+function aervaReleaseHold(orderId, reason){
   if(!orderId) return;
   try{
     fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ releaseHold: orderId }), keepalive: true }).catch(function(){});
+      body: JSON.stringify({ releaseHold: orderId, reason: reason || 'closed' }), keepalive: true }).catch(function(){});
   }catch(e){}
 }
 
@@ -13063,27 +12771,33 @@ async function aervaUploadFiles(files, payload){
   const out = [];
   for(const f of files){
     if(f.size > 8 * 1024 * 1024) throw new Error(`"${f.name}" is larger than 8 MB.`);
-    const r = await upload(f.name, f, { access: 'public', handleUploadUrl: SUITES_API_BASE + '/api/blob-upload', clientPayload: payload });
+    const r = await upload(f.name, f, { access: 'public', handleUploadUrl: SUITES_API_BASE + '/api/blob-upload',
+      clientPayload: JSON.stringify({ purpose: payload, token: guestAuthToken() || '' }) });
     out.push(r.url);
   }
   return out;
 }
 
-// ---- Phone number and ID proof, required to book (api/_guest-id.js) ----
+// ---- Confirmed email and phone number, required to book (api/_guest-id.js) ----
+// No ID proof is asked for: the host checks photo ID at check-in.
 // Opens where the booking message shows, asks only for what is missing,
 // then continues to payment by pressing the same button again.
 function aervaShowNeeds(msgEl, data, btn){
   const needs = data.needs || [];
   if(needs.includes('login')){
     msgEl.style.display = 'block';
+    msgEl.style.color = '#1c1b19';
     msgEl.innerHTML = `<div class="price-changed"><p class="price-changed-title">Please log in to book</p>
       <p style="margin:0 0 10px;">Every booking needs an Aerva account: one email address and one mobile number.</p>
       <a class="btn solid" href="guest-login.html?next=${encodeURIComponent(location.href)}" style="width:100%;">Log in or create an account</a></div>`;
     return;
   }
-  aervaIdPanel(msgEl, { needs, message: data.error, onDone: () => { msgEl.style.display = 'none'; msgEl.innerHTML = ''; if(btn) btn.click(); } });
+  // The number typed in the booking form is filled in here for the guest.
+  const col = btn && btn.closest ? btn.closest('.listing-col-booking') : null;
+  const typed = col && col.querySelector('input[type="tel"]') ? col.querySelector('input[type="tel"]').value.trim() : '';
+  aervaIdPanel(msgEl, { needs, message: data.error, phone: typed, onDone: () => { msgEl.style.display = 'none'; msgEl.innerHTML = ''; if(btn) btn.click(); } });
 }
-async function aervaIdPanel(host, { needs = ['email'], message = '', onDone } = {}){
+async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, phone = '' } = {}){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // An account is ONE email address and ONE phone number. The email is
   // confirmed by a code sent to it (api/_email-otp.js) — email costs
@@ -13099,6 +12813,7 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone } = 
   if(!askEmail && !askPhone){ if(typeof onDone === 'function') onDone(); return; }
 
   host.style.display = 'block';
+  host.style.color = '#1c1b19';
   host.innerHTML = `<div class="price-changed">
     <p class="price-changed-title">${esc(message || 'Confirm your details to book')}</p>
     ${askEmail ? `<label class="payout-label" for="otpEmail">Email address</label>
@@ -13108,12 +12823,16 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone } = 
       <div id="otpStep2" hidden>
         <label class="payout-label" for="otpCode" style="margin-top:12px; display:block;">Enter the code</label>
         <input id="otpCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 8px; border:1px solid #d9cfc2; border-radius:8px; font-size:18px; letter-spacing:0.18em;">
+        <div id="otpReauth" hidden>
+          <label class="payout-label" for="otpReauthInput" id="otpReauthLabel" style="display:block;"></label>
+          <input id="otpReauthInput" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 8px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
+        </div>
         <button type="button" class="btn solid" id="otpConfirm" style="width:100%;">Confirm email</button>
         <button type="button" class="filter-clear" id="otpAgain" style="margin-top:8px;">Send it again</button>
       </div>` : ''}
     ${askPhone ? `<div id="phoneStep"${askEmail ? ' hidden' : ''}>
       <label class="payout-label" for="needPhone"${askEmail ? ' style="margin-top:14px; display:block;"' : ''}>Mobile number</label>
-      <input id="needPhone" type="tel" inputmode="tel" placeholder="10-digit mobile number" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 6px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
+      <input id="needPhone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(phone || '')}" placeholder="10-digit mobile number" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 6px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
       <p class="id-note">Your host uses this to reach you about your stay.</p>
       <button type="button" class="btn solid" id="phoneSave" style="width:100%;">Save and continue</button>
     </div>` : ''}
@@ -13156,9 +12875,42 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone } = 
       const btn = e.currentTarget;
       const code = host.querySelector('#otpCode').value.trim();
       if(!code) return say('Enter the code from your email.', true);
+      // Changing the sign-in email also needs the current password, or a
+      // code sent to the current address (api/guest-profile.js answers
+      // { reauth } to say which); the field appears once asked for.
+      const reauthBox = host.querySelector('#otpReauth');
+      const reauthInput = host.querySelector('#otpReauthInput');
+      const body = { mode: 'emailOtpVerify', email: host.querySelector('#otpEmail').value.trim(), code };
+      if(!reauthBox.hidden && reauthInput.value.trim()){
+        if(reauthBox.dataset.kind === 'password') body.currentPassword = reauthInput.value;
+        else body.currentEmailCode = reauthInput.value.trim();
+      }
       btn.disabled = true; btn.textContent = 'Checking…'; say('');
-      const { ok, d } = await post({ mode: 'emailOtpVerify', email: host.querySelector('#otpEmail').value.trim(), code });
-      if(!ok){ btn.disabled = false; btn.textContent = 'Confirm email'; return say(d.error || 'That code did not match.', true); }
+      const { ok, d } = await post(body);
+      if(!ok){
+        btn.disabled = false; btn.textContent = 'Confirm email';
+        if(d.reauth === 'password' || d.reauth === 'currentEmailCode'){
+          const isPw = d.reauth === 'password';
+          if(reauthBox.dataset.kind !== d.reauth){
+            reauthBox.dataset.kind = d.reauth;
+            reauthInput.value = '';
+            reauthInput.type = isPw ? 'password' : 'text';
+            reauthInput.autocomplete = isPw ? 'current-password' : 'one-time-code';
+            reauthInput.inputMode = isPw ? 'text' : 'numeric';
+            reauthInput.maxLength = isPw ? 200 : 6;
+            reauthInput.placeholder = isPw ? '' : '6-digit code';
+            host.querySelector('#otpReauthLabel').textContent = isPw
+              ? 'Your current password'
+              : 'Code sent to your current address' + (d.sentTo ? ' (' + d.sentTo + ')' : '');
+          }
+          reauthBox.hidden = false;
+          reauthInput.focus();
+        }
+        return say(d.error || 'That code did not match.', true);
+      }
+      // A changed sign-in email signs out every other device; this one gets
+      // a fresh session so it stays logged in.
+      if(d.sessionToken) safeStorage.set('aerva_guest_session', d.sessionToken);
       btn.textContent = 'Confirmed';
       finish();
     });
@@ -13262,8 +13014,8 @@ async function openChangeBooking(orderId, listingName){
     ${isStay ? `<label class="payout-label" for="chOut">Check-out</label>
     <input id="chOut" type="date" value="${esc(o.current.departure)}" style="${field}">` : ''}
     ${bookStep(2, 'Who is coming')}
-    ${num('chAdults', 'Adults (13 or above)', Math.max(1, o.current.guests), 1, maxG)}
-    ${num('chChildren', 'Children (2–12)', 0, 0, maxG)}
+    ${num('chAdults', 'Adults (18 or over)', Math.max(1, o.current.guests), 1, maxG)}
+    ${num('chChildren', 'Children (2–17)', 0, 0, maxG)}
     ${o.limits.petFriendly ? num('chPets', 'Pets', o.current.pets, 0, o.limits.maxPets != null ? o.limits.maxPets : 5)
       + (o.limits.petTypes.length ? `<div id="chPetTypes" style="margin:-4px 0 12px;">${o.limits.petTypes.map(t => `<label style="margin-right:14px; font-size:15px;"><input type="checkbox" value="${esc(t)}"${o.current.petTypes.includes(t) ? ' checked' : ''}> ${esc(t)}</label>`).join('')}</div>` : '') : ''}
     ${o.limits.amenities.length ? `${bookStep(3, 'Add-ons')}<div id="chAmenities">${o.limits.amenities.map(a => `<label style="display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #eee; font-size:15px;"><span><input type="checkbox" value="${a.id}"${o.current.amenityIds.includes(a.id) ? ' checked' : ''}> ${esc(a.name)}</span><span>${inr(a.price)} a night</span></label>`).join('')}</div>` : ''}
@@ -13324,8 +13076,9 @@ async function aervaPayChange(changeId, btn){
   }catch(err){ note.textContent = err.message; if(btn){ btn.disabled = false; btn.textContent = label; } return; }
   if(btn){ btn.disabled = false; btn.textContent = label; }
   if(typeof Razorpay === 'undefined'){ note.textContent = 'Payment gateway did not load. Please check your connection and try again.'; return; }
+  if(!order.keyId){ note.textContent = 'Payment is not available right now. Please try again in a few minutes.'; return; }
   const rzp = new Razorpay({
-    key: RAZORPAY_KEY_ID, order_id: order.orderId, amount: order.amount, currency: order.currency,
+    key: order.keyId, order_id: order.orderId, amount: order.amount, currency: order.currency,
     timeout: order.holdSeconds || undefined, name: 'Aerva', description: order.description || 'Booking change',
     theme: { color: '#a9884f' },
     handler: async function(response){
@@ -13333,7 +13086,7 @@ async function aervaPayChange(changeId, btn){
       try{
         const v = await fetch(SUITES_API_BASE + '/api/verify-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(response) });
         const d = await v.json();
-        note.style.color = d.verified ? '#2f6b3a' : '#a3402f';
+        note.style.color = d.verified || d.pending ? '#2f6b3a' : '#a3402f';
         note.textContent = d.verified ? 'Payment received. Your booking has been changed — we have emailed you the details.' : (d.message || 'We could not confirm this payment. Please contact us.');
         if(typeof loadMyBookings === 'function') setTimeout(loadMyBookings, 1500);
       }catch(e){ note.textContent = 'Payment went through, but we could not confirm it automatically. Please email us your payment ID.'; }
@@ -13342,7 +13095,7 @@ async function aervaPayChange(changeId, btn){
   });
   rzp.on('payment.failed', function(){ aervaEndCheckout('failed'); });
   rzp.open();
-  aervaWatchCheckout(rzp, order, note);
+  aervaWatchCheckout(rzp, order, note, { holdsDates: !!order.holdSeconds });
 }
 
 // ---- Guest: request a cancellation ----

@@ -3,8 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Aerva — Listing Review</title>
+<title>Admin — Aerva</title>
 <meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
+<!-- Only what this page actually loads: its own files, Leaflet (unpkg),
+     Google Fonts, the API, map tiles, and listing photos from Aerva's own
+     Blob storage. Anything a host typed that slipped past escaping still
+     cannot load or send anything anywhere else. -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'unsafe-inline' https://unpkg.com;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com;
+  font-src https://fonts.gstatic.com;
+  img-src 'self' data: blob: https://*.public.blob.vercel-storage.com https://*.tile.openstreetmap.org https://unpkg.com;
+  connect-src 'self' https://aerva-in.vercel.app;
+  frame-src 'none';
+  object-src 'none';
+  base-uri 'self';
+  form-action 'self';
+">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -19,12 +36,13 @@
   body{font-family:sans-serif; background:#ffffff; color:#1c1a17; margin:0; padding:100px 20px 40px;}
   .wrap{max-width:720px; margin:0 auto;}
   #mainView{max-width:1060px;}
-  h1{font-family:Georgia,serif; font-size:26px; margin-bottom:24px;}
+  h1,h2,h3,h4{font-family:'Bodoni Moda',serif; font-weight:500;}
+  h1{font-size:26px; margin-bottom:24px;}
   #gate{max-width:360px; margin:80px auto; text-align:center;}
   #gate input{width:100%; padding:12px; font-size:15px; box-sizing:border-box; border:1px solid #ccc; margin-bottom:12px;}
   #gate button{width:100%; padding:12px; background:#1c1a17; color:#f4eadc; border:none; font-size:14px; cursor:pointer;}
   .listing{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:16px;}
-  .listing h3{margin:0 0 6px 0; font-family:Georgia,serif;}
+  .listing h3{margin:0 0 6px 0; font-family:'Bodoni Moda',serif; font-weight:500;}
   .meta{font-size:13px; opacity:0.65; margin-bottom:10px;}
   .desc{font-size:14px; line-height:1.6; margin-bottom:14px;}
   .tag-group{margin-bottom:10px; font-size:13px;}
@@ -40,6 +58,7 @@
     width:160px; height:160px; object-fit:cover; border-radius:4px; border:1px solid #e0d5c0;
     flex:0 0 auto; scroll-snap-align:start;
   }
+  .photo-row .photo-odd{flex:0 0 auto; align-self:center; font-size:12.5px; color:#a3402f; padding:6px 10px; border:1px dashed #d9b3a8; border-radius:4px;}
   .photo-row::-webkit-scrollbar{height:6px;}
   .photo-row::-webkit-scrollbar-thumb{background:#e0d5c0; border-radius:3px;}
   .actions button{padding:9px 20px; font-size:13px; border:none; cursor:pointer; margin-right:10px;}
@@ -87,14 +106,25 @@
   .admin-content{flex:1 1 auto; min-width:0;}
   /* Narrow screens: back to a wrapping row, which is the right shape there. */
   @media (max-width:880px){
-    .admin-layout{flex-direction:column; gap:14px;}
+    /* stretch, not flex-start: a column of flex-start items is as wide as
+       its widest unbreakable content, which pushed the page sideways. */
+    .admin-layout{flex-direction:column; align-items:stretch; gap:14px;}
     .admin-sidebar{position:static; flex:1 1 auto; width:100%;}
     .admin-sidebar-nav{flex-direction:row; flex-wrap:wrap;}
     .admin-sidebar .tab-btn{width:auto;}
     .admin-refresh-btn{width:auto;}
   }
   .deposit-section{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:20px;}
-  .deposit-section h3{margin:0 0 6px 0; font-family:Georgia,serif; font-size:17px;}
+  /* Host-typed text (a long email, a pasted link) must wrap inside its
+     card instead of pushing the page wider than a phone screen. */
+  .listing, .dispute-card, .deposit-section, .process-results, .meta, .address-line{overflow-wrap:anywhere;}
+  input, select, textarea{max-width:100%; box-sizing:border-box;}
+  @media (max-width:600px){
+    body{padding-left:16px; padding-right:16px;}
+    .listing, .deposit-section{padding:16px;}
+    .audit-filters #auditQ{min-width:0; flex:1 1 200px;}
+  }
+  .deposit-section h3{margin:0 0 6px 0; font-family:'Bodoni Moda',serif; font-weight:500; font-size:17px;}
   .deposit-section p{font-size:13px; opacity:0.7; margin:0 0 14px;}
   .sim-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px;}
   .sim-grid label{display:flex; flex-direction:column; gap:4px; font-size:12px; opacity:0.8;}
@@ -105,7 +135,7 @@
   }
   .process-btn:disabled{opacity:0.5; cursor:default;}
   .dispute-card{border:1px solid #e0d5c0; padding:16px; margin-bottom:12px; background:#fffdf9;}
-  .dispute-card h4{margin:0 0 4px; font-family:Georgia,serif; font-size:15px;}
+  .dispute-card h4{margin:0 0 4px; font-family:'Bodoni Moda',serif; font-weight:500; font-size:15px;}
   .dispute-meta{font-size:12.5px; opacity:0.65; margin-bottom:8px;}
   .dispute-reason-box{background:#f4eadc; padding:10px 12px; font-size:13px; margin-bottom:12px; border-radius:3px;}
   .resolve-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
@@ -143,6 +173,7 @@
     font-family:'Jost', sans-serif; font-size:9.5px; letter-spacing:0.22em;
     font-weight:400; text-transform:uppercase; color:var(--gold-deep);
   }
+  @media (max-width:600px){ .header-wrap{padding:0 16px;} }
 
   .audit-filters{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:14px 0 18px; font-size:14px; }
   .audit-filters select, .audit-filters input{ padding:9px 11px; border:1px solid #d9cfc2; border-radius:8px; font-size:14px; font-family:inherit; }
@@ -154,7 +185,7 @@
   .audit-table .audit-who{ text-transform:capitalize; font-weight:600; }
   .audit-table .audit-details{ font-family:ui-monospace, Menlo, monospace; font-size:12.5px; opacity:0.75; word-break:break-word; max-width:420px; }
   .audit-table tr.audit-failed td{ background:#fbf1ef; }
-  .pol-h{ font-family:Georgia,serif; font-weight:normal; margin:34px 0 8px; }
+  .pol-h{ margin:34px 0 8px; }
   .pol-sec{ padding:14px 18px; border:1px solid #e6dccd; border-radius:10px; margin:10px 0; }
   .pol-sec h3{ margin:0 0 8px; font-size:17px; }
   .pol-sec ul{ margin:0; padding-left:20px; }
@@ -377,18 +408,21 @@
   </div>
 
   <div id="payoutsView" style="display:none;">
-    <h2 style="font-family:Georgia,serif; font-weight:normal;">Co-host payout details to review</h2>
+    <h2>Co-host payout details to review</h2>
     <p style="opacity:0.7; font-size:14px;">PAN, GSTIN and bank account a co-host has entered. A co-host is only paid while these are approved.</p>
     <div id="payoutProfilesList"><p style="opacity:0.6;">Loading…</p></div>
     <p id="autoPayoutLine" style="margin-top:28px; font-size:14.5px; font-weight:600;"></p>
-    <h2 style="font-family:Georgia,serif; font-weight:normal; margin-top:28px;">Refunds</h2>
-    <p style="opacity:0.7; font-size:14px;">Refunds start automatically and are checked with Razorpay until confirmed. Only failed ones need you: Retry re-checks Razorpay first, so nothing is refunded twice.</p>
+    <h2 style="margin-top:28px;">Refunds</h2>
+    <p style="opacity:0.7; font-size:14px;">Refunds start automatically and are checked with Razorpay until confirmed. Only failed ones, or ones not started after 10 minutes, need you: Retry re-checks Razorpay first, so nothing is refunded twice.</p>
     <div id="refundsList"><p style="opacity:0.6;">Loading…</p></div>
     <p id="couponForfeitLine" style="margin-top:8px; font-size:14.5px;"></p>
-    <h2 style="font-family:Georgia,serif; font-weight:normal; margin-top:40px;">Cancellation coupons to deduct from hosts</h2>
+    <h2 style="margin-top:40px;">Security deposit compensation</h2>
+    <p style="opacity:0.7; font-size:14px;">What a host is paid from a guest’s deposit after a dispute is decided. Paid on its own, separate from the booking payout.</p>
+    <div id="depositPayoutsList"><p style="opacity:0.6;">Loading…</p></div>
+    <h2 style="margin-top:40px;">Cancellation coupons to deduct from hosts</h2>
     <p style="opacity:0.7; font-size:14px;">When a host or co-host cancels without paying for the guest’s 10% coupon, the coupon still goes to the guest and whoever cancelled owes the amount: from the host’s next payout, or from the co-host’s own share. Deduct it, then mark it recovered. Over 6 months unrecovered: decide whether to chase it or write it off.</p>
     <div id="penaltiesList"><p style="opacity:0.6;">Loading…</p></div>
-    <h2 style="font-family:Georgia,serif; font-weight:normal; margin-top:40px;">Booking payouts</h2>
+    <h2 style="margin-top:40px;">Booking payouts</h2>
     <p style="opacity:0.7; font-size:14px;">The 200 most recent paid bookings: the host payout (after Aerva’s commission), each co-host’s share, and what the host keeps, with where each is paid. “Hold” means that person’s bank details are not approved yet.</p>
     <div id="payoutsList"><p style="opacity:0.6;">Loading…</p></div>
   </div>
@@ -400,13 +434,10 @@
       <h3 style="margin-top:34px;">Stay disputes</h3>
       <p style="font-size:13.5px; opacity:0.75; max-width:760px;">A guest reported a problem during the stay. Give the host’s account more weight: refund only when the guest’s evidence stands and the host cannot justify. A refund covers the nights from the day it was raised to check-out; the host is paid for the nights used. The host’s payout is held until you decide.</p>
       <div id="stayDisputesList"><p style="opacity:0.6;">Loading…</p></div>
-      <h3 style="margin-top:34px;">Guest ID proofs to review</h3>
-      <p style="font-size:13.5px; opacity:0.75; max-width:760px;">Every booking needs a valid ID. Rejecting an ID gives the guest a short deadline on their upcoming bookings; without a new valid ID they are cancelled and refunded in full.</p>
-      <div id="guestIdsList"><p style="opacity:0.6;">Loading…</p></div>
     </div>
 
     <div id="auditView" style="display:none;">
-    <h2 style="font-family:Georgia,serif; font-weight:normal;">Audit log</h2>
+    <h2>Audit log</h2>
     <div class="audit-filters">
       <select id="auditWho">
         <option value="admin-table">Admin actions (with IP &amp; device)</option>
@@ -445,15 +476,15 @@
     </div>
 
     <div class="deposit-section">
-      <h3>Run the sweep now</h3>
-      <p>For when you do not want to wait for tonight. Safe to run repeatedly: it only ever publishes what is already due and prompts a guest once, so running it twice in a row does nothing the second time.</p>
+      <h3>Run all due jobs now</h3>
+      <p>Runs every job above that is due right now — including payouts, refunds and deposit refunds — exactly as the 5-minute pinger would. Safe to repeat: a job that already ran, or is running, is skipped.</p>
 
       <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:6px;">
-        <button type="button" class="process-btn" id="runSweepBtn" onclick="runBatchSweep(false)">Run sweep</button>
-        <button type="button" class="process-btn" id="runSweepForceBtn" onclick="runBatchSweep(true)">Run sweep and recompute all badges</button>
+        <button type="button" class="process-btn" id="runSweepBtn" onclick="runBatchSweep(false)">Run all due jobs now</button>
+        <button type="button" class="process-btn" id="runSweepForceBtn" onclick="runBatchSweep(true)">Also re-run the daily jobs and recompute all badges</button>
       </div>
       <p style="font-size:12.5px; opacity:0.7; margin:0;">
-        The second button also re-rates every host, guest and property immediately, instead of waiting for the next quarterly date. Use it after a deploy, or when you need a badge visible today — not as a routine.
+        The second button also runs today's daily jobs again and re-rates every host, guest and property now instead of on the next quarterly date. Running it again in the same quarter gives the same badges. Use it after a deploy, or when you need a badge visible today — not as a routine.
       </p>
       <div class="process-results" id="batchResults"></div>
     </div>
@@ -470,6 +501,9 @@
         <button type="button" class="process-btn" id="runComplianceBtn" onclick="runComplianceCheck()">Run This Check</button>
       </div>
       <div class="process-results" id="complianceRunResults"></div>
+      <p style="margin:18px 0 8px;">Deadlines are enforced every day by the daily job. To take down listings whose deadline has already passed right now:</p>
+      <button type="button" class="process-btn" id="enforceComplianceBtn" onclick="enforceComplianceNow()">Block overdue listings now</button>
+      <div class="process-results" id="enforceComplianceResults"></div>
     </div>
 
     <div class="deposit-section">
@@ -672,12 +706,28 @@
     showLoginForm();
   }
 
+  // Ends this admin's sessions on every device (a lost laptop, a shared
+  // computer), this one included.
+  async function signOutEverywhere(){
+    if(!confirm('Sign out of the admin page on every device, including this one?')) return;
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ adminSignOutEverywhere: true }) });
+      const d = await res.json().catch(() => ({}));
+      if(!res.ok && res.status !== 401){ alert(d.error || 'Could not sign out everywhere.'); return; }
+      logout();
+      const el = document.getElementById('loginError');
+      el.textContent = 'Signed out on every device.';
+      el.style.display = 'block';
+    }catch(err){ alert('Could not reach the server. Please try again.'); }
+  }
+
   function enterAdmin(){
     document.getElementById('gate').style.display = 'none';
     document.getElementById('mainView').style.display = 'block';
     const greeting = document.getElementById('adminGreeting');
-    greeting.innerHTML = (currentAdmin ? 'Logged in as ' + (currentAdmin.name || currentAdmin.email) : '') +
-      ' — <a href="#" onclick="logout(); return false;" style="color:#8a6c39;">Log out</a>';
+    greeting.innerHTML = (currentAdmin ? 'Logged in as ' + escAdmin(currentAdmin.name || currentAdmin.email) : '') +
+      ' — <a href="#" onclick="logout(); return false;" style="color:#8a6c39;">Log out</a>' +
+      ' · <a href="#" onclick="signOutEverywhere(); return false;" style="color:#8a6c39;">Sign out everywhere</a>';
     loadListings();
   }
 
@@ -712,7 +762,7 @@
       // catch block below as a generic, unhelpful "check API_BASE"
       // message — masking the actual, specific reason this failed.
       if(!res.ok){
-        container.innerHTML = `<p class="error">Could not load listings: ${data.error || `server returned ${res.status}`}. If this mentions a column or table, a database migration likely hasn't been run yet.</p>`;
+        container.innerHTML = `<p class="error">Could not load listings: ${escAdmin(data.error || `server returned ${res.status}`)}. If this mentions a column or table, a database migration likely hasn't been run yet.</p>`;
         return;
       }
       renderListings(data.listings || []);
@@ -726,7 +776,7 @@
       renderRoomChangeRequests(data.roomChangeRequests);
     } catch(err){
       console.error('loadListings failed:', err);
-      container.innerHTML = `<p class="error">Could not load listings — ${err.message || 'unknown error'}. Check API_BASE and the browser console for details.</p>`;
+      container.innerHTML = `<p class="error">Could not load listings — ${escAdmin(err.message || 'unknown error')}. Check API_BASE and the browser console for details.</p>`;
     }
   }
 
@@ -766,12 +816,13 @@
     container.innerHTML = requests.map(r => {
       const isNewRoomProposal = r.pending_changes && Object.prototype.hasOwnProperty.call(r.pending_changes, 'newRoomIntendedActive');
       const currentPhotos = [r.cover_photo_url, ...(Array.isArray(r.photo_urls) ? r.photo_urls.map(p => p && p.url) : [])].filter(Boolean);
-      const roomSummary = (name, occ, rate, active, photos) => `
+      const roomSummary = (name, occ, rate, active, photos, description) => `
         <div style="border:1px solid #ddd0bc; padding:10px 12px; margin-top:8px; border-radius:4px;">
           <strong>${escAdmin(name || 'Untitled room')}</strong>
-          <span style="opacity:0.7;"> — sleeps up to ${occ || '—'} · ₹${rate || '—'}/night${active === false ? ' · inactive' : ''}</span>
+          <span style="opacity:0.7;"> — sleeps up to ${escAdmin(occ || '—')} · ₹${escAdmin(rate || '—')}/night${active === false ? ' · inactive' : ''}</span>
+          ${description ? `<div style="font-size:13px; margin-top:6px; white-space:pre-wrap;">${escAdmin(description)}</div>` : ''}
           <div class="photo-row" style="margin-top:6px;">
-            ${photos.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Room photo"></a>`).join('')}
+            ${photos.length ? photos.map(url => photoHtml(url, 'Room photo')).join('') : '<span style="font-size:12.5px; opacity:0.6;">No photos</span>'}
           </div>
         </div>
       `;
@@ -779,33 +830,36 @@
         ? `
           <div style="margin-top:14px;">
             <div class="photo-group-label">New Room Proposal (not yet live)</div>
-            ${roomSummary(r.room_name, r.max_occupancy, r.nightly_rate, r.pending_changes.newRoomIntendedActive, currentPhotos)}
+            ${roomSummary(r.room_name, r.max_occupancy, r.nightly_rate, r.pending_changes.newRoomIntendedActive, currentPhotos, r.description)}
           </div>
         `
         : (() => {
             const p = r.pending_changes || {};
-            const proposedPhotos = Array.isArray(p.photos) ? p.photos.map(ph => ph && ph.url).filter(Boolean) : [];
+            // Staged by update-listing-pricing.js as coverPhotoUrl (the
+            // first photo) plus photoUrls [{ url }] for the rest.
+            const proposedPhotos = [p.coverPhotoUrl, ...(Array.isArray(p.photoUrls) ? p.photoUrls.map(ph => ph && ph.url) : [])]
+              .filter(u => typeof u === 'string' && u);
             return `
               <div style="display:flex; gap:24px; margin-top:14px; flex-wrap:wrap;">
-                <div style="flex:1; min-width:280px;">
+                <div style="flex:1 1 240px; min-width:0;">
                   <div class="photo-group-label">Currently Live</div>
-                  ${roomSummary(r.room_name, r.max_occupancy, r.nightly_rate, r.is_active, currentPhotos)}
+                  ${roomSummary(r.room_name, r.max_occupancy, r.nightly_rate, r.is_active, currentPhotos, r.description)}
                 </div>
-                <div style="flex:1; min-width:280px;">
+                <div style="flex:1 1 240px; min-width:0;">
                   <div class="photo-group-label">Proposed Change</div>
-                  ${roomSummary(p.roomName, p.maxOccupancy, p.nightlyRate, p.isActive, proposedPhotos)}
+                  ${roomSummary(p.roomName, p.maxOccupancy, p.nightlyRate, p.isActive, proposedPhotos, p.description)}
                 </div>
               </div>
             `;
           })();
       return `
-        <div class="listing" id="roomChange-${r.room_id}">
+        <div class="listing" id="roomChange-${Number(r.room_id)}">
           <h3>${escAdmin(r.property_name)}${isNewRoomProposal ? ' <span style="font-size:11px; opacity:0.6; text-transform:uppercase;">— New Room</span>' : ' <span style="font-size:11px; opacity:0.6; text-transform:uppercase;">— Room Edit</span>'}</h3>
           <div class="meta">${r.area ? escAdmin(r.area) + ', ' : ''}${escAdmin(r.city)} · ${escAdmin(r.host_name)} (${escAdmin(r.host_email)}, ${escAdmin(r.host_phone)})</div>
           ${comparisonHtml}
           <div class="actions" style="margin-top:16px;">
-            <button class="approve-btn" onclick="decideRoomChange(${r.room_id}, 'approve_room')">Approve</button>
-            <button class="reject-btn" onclick="decideRoomChange(${r.room_id}, 'reject_room')">Reject</button>
+            <button class="approve-btn" onclick="decideRoomChange(${Number(r.room_id)}, 'approve_room')">Approve</button>
+            <button class="reject-btn" onclick="decideRoomChange(${Number(r.room_id)}, 'reject_room')">Reject</button>
           </div>
         </div>
       `;
@@ -845,9 +899,9 @@
     if (!Array.isArray(urls) || urls.length === 0) return '';
     return `
       <div class="photo-group">
-        <div class="photo-group-label">${label}</div>
+        <div class="photo-group-label">${escAdmin(label)}</div>
         <div class="photo-row">
-          ${urls.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${label} photo"></a>`).join('')}
+          ${urls.map(url => photoHtml(url, label + ' photo')).join('')}
         </div>
       </div>
     `;
@@ -880,6 +934,7 @@
       return `<p class="address-line" style="color:#a3402f;">⚠ No rooms have been provided yet for this Resort (declared: ${declaredNum}) — nothing here for a guest to book if approved as-is.</p>`;
     }
     const rows = pendingRoomPhotos.map(r => {
+      r = r || {};
       const urls = Array.isArray(r.urls) ? r.urls.filter(u => typeof u === 'string' && u.trim()) : [];
       const missing = [];
       if (!urls.length) missing.push('at least one photo');
@@ -887,11 +942,11 @@
       if (!(Number(r.price) > 0)) missing.push('price');
       return `
         <div style="border:1px solid #ddd0bc; padding:10px 12px; margin-top:8px; border-radius:4px;">
-          <strong>${r.roomName || 'Untitled room'}</strong>
-          <span style="opacity:0.7;"> — sleeps up to ${r.maxOccupancy || '—'} · ₹${r.price || '—'}/night</span>
+          <strong>${escAdmin(r.roomName || 'Untitled room')}</strong>
+          <span style="opacity:0.7;"> — sleeps up to ${escAdmin(r.maxOccupancy || '—')} · ₹${escAdmin(r.price || '—')}/night</span>
           ${missing.length ? `<div style="color:#a3402f; font-size:12.5px; margin-top:4px;">⚠ Missing: ${missing.join(', ')}</div>` : ''}
           <div class="photo-row" style="margin-top:6px;">
-            ${urls.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Room photo"></a>`).join('')}
+            ${urls.map(url => photoHtml(url, 'Room photo')).join('')}
           </div>
         </div>
       `;
@@ -912,8 +967,8 @@
     if (!Array.isArray(items) || items.length === 0) return '';
     return `
       <div class="tag-group">
-        <span class="tag-group-label">${label}:</span>
-        ${items.map(item => `<span class="admin-tag">${item}</span>`).join('')}
+        <span class="tag-group-label">${escAdmin(label)}:</span>
+        ${items.map(item => `<span class="admin-tag">${escAdmin(item)}</span>`).join('')}
       </div>
     `;
   }
@@ -930,11 +985,11 @@
         ? '<span class="admin-tag" style="background:#e6dcc9;">EXPERIENCE</span> '
         : '';
       const metaLine = isExperience
-        ? `${typeTag}${l.experience_category || 'Uncategorized'} · ₹${l.nightly_rate || '—'}${l.experience_price_unit === 'per_person' ? ' per person' : ' flat'}${l.experience_duration_hours ? ' · ' + l.experience_duration_hours + 'h' : ''} · Hosted at: ${l.hosting_property_name || 'not set'} · ${l.host_name} (${l.host_email}, ${l.host_phone})`
-        : `${l.area ? escAdmin(l.area) + ', ' : ''}${escAdmin(l.city)} · <strong>${l.property_type || 'Property type not set'}</strong>${l.property_type === 'Resort' ? ` · ${l.bedrooms || 0} rooms declared` : ''} · ₹${l.nightly_rate || '—'}/night · ${escAdmin(l.host_name)} (${escAdmin(l.host_email)}, ${escAdmin(l.host_phone)})`;
+        ? `${typeTag}${escAdmin(l.experience_category || 'Uncategorized')} · ₹${escAdmin(l.nightly_rate || '—')}${l.experience_price_unit === 'per_person' ? ' per person' : ' flat'}${l.experience_duration_hours ? ' · ' + escAdmin(l.experience_duration_hours) + 'h' : ''} · Hosted at: ${escAdmin(l.hosting_property_name || 'not set')} · ${escAdmin(l.host_name)} (${escAdmin(l.host_email)}, ${escAdmin(l.host_phone)})`
+        : `${l.area ? escAdmin(l.area) + ', ' : ''}${escAdmin(l.city)} · <strong>${escAdmin(l.property_type || 'Property type not set')}</strong>${l.property_type === 'Resort' ? ` · ${escAdmin(l.bedrooms || 0)} rooms declared` : ''} · ₹${escAdmin(l.nightly_rate || '—')}/night · ${escAdmin(l.host_name)} (${escAdmin(l.host_email)}, ${escAdmin(l.host_phone)})`;
       const addressHtml = (!isExperience && l.formatted_address) ? `
-        <p class="address-line">📍 ${escAdmin(l.formatted_address)}${l.pincode ? ` — PIN ${l.pincode}` : ' — <span style="color:#a3402f;">no pincode on file</span>'}${(l.latitude && l.longitude) ? ` — <a href="https://www.google.com/maps?q=${l.latitude},${l.longitude}" target="_blank" rel="noopener">Open in Google Maps</a>` : ''}</p>
-        ${(l.latitude && l.longitude) ? `<div class="listing-map-preview" id="listingMap-${l.id}" data-lat="${l.latitude}" data-lng="${l.longitude}"></div>` : ''}
+        <p class="address-line">📍 ${escAdmin(l.formatted_address)}${l.pincode ? ` — PIN ${escAdmin(l.pincode)}` : ' — <span style="color:#a3402f;">no pincode on file</span>'}${hasCoords(l) ? ` — <a href="https://www.google.com/maps?q=${Number(l.latitude)},${Number(l.longitude)}" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>` : ''}</p>
+        ${hasCoords(l) ? `<div class="listing-map-preview" id="listingMap-${Number(l.id)}"></div>` : ''}
       ` : (!isExperience ? '<p class="address-line" style="color:#a3402f;">⚠ No location was set for this listing — worth checking with the host before approving.</p>' : '');
       const roomsHtml = (!isExperience && l.property_type === 'Resort') ? roomBreakdownHtml(l.pending_room_photos, l.bedrooms) : '';
       // Loud and impossible to miss on purpose — a host resubmitting a
@@ -945,17 +1000,17 @@
       // issues already documented in the original rejection reason.
       const cloneAlertHtml = l.cloned_from_status === 'rejected' ? `
         <div style="background:#a3402f; color:#fff; padding:10px 14px; margin:10px 0; border-radius:4px; font-weight:600;">
-          ⚠ This is a resubmission (cloned) of a PREVIOUSLY REJECTED listing — "${l.cloned_from_property_name || 'Untitled'}".
-          ${l.cloned_from_rejection_reason ? `Original rejection reason: "${l.cloned_from_rejection_reason}"` : 'No rejection reason was recorded for the original.'}
+          ⚠ This is a resubmission (cloned) of a PREVIOUSLY REJECTED listing — "${escAdmin(l.cloned_from_property_name || 'Untitled')}".
+          ${l.cloned_from_rejection_reason ? `Original rejection reason: "${escAdmin(l.cloned_from_rejection_reason)}"` : 'No rejection reason was recorded for the original.'}
           Check whether that issue was actually addressed before approving.
         </div>
       ` : '';
       return `
-      <div class="listing" id="listing-${l.id}">
+      <div class="listing" id="listing-${Number(l.id)}">
         <h3>${escAdmin(l.property_name)}</h3>
         ${cloneAlertHtml}
         <div class="meta">${metaLine}</div>
-        <div class="meta" style="opacity:0.6;">Submitted ${fmtDate(l.created_at)}</div>
+        <div class="meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(l.created_at))}</div>
         ${addressHtml}
         <div class="desc">${escAdmin(l.description)}</div>
         ${tagListHtml('Amenities', l.amenities)}
@@ -963,12 +1018,12 @@
         ${photoThumbnailsHtml('Exterior', l.exterior_photo_urls)}
         ${l.property_type === 'Resort' ? roomsHtml : photoThumbnailsHtml('Interior', l.interior_photo_urls)}
         <div class="actions">
-          <button class="approve-btn" onclick="decide(${l.id}, 'approve')">Approve</button>
-          <button class="reject-btn" onclick="showRejectPanel(${l.id})">Reject</button>
+          <button class="approve-btn" onclick="decide(${Number(l.id)}, 'approve')">Approve</button>
+          <button class="reject-btn" onclick="showRejectPanel(${Number(l.id)})">Reject</button>
         </div>
-        <div class="reject-panel" id="rejectPanel-${l.id}">
-          <label for="rejectReason-${l.id}">Reason (shown to the host by email)</label>
-          <select id="rejectReason-${l.id}" onchange="toggleRejectOtherField(${l.id})">
+        <div class="reject-panel" id="rejectPanel-${Number(l.id)}">
+          <label for="rejectReason-${Number(l.id)}">Reason (shown to the host by email)</label>
+          <select id="rejectReason-${Number(l.id)}" onchange="toggleRejectOtherField(${Number(l.id)})">
             <option value="">Choose a reason…</option>
             <option value="Photos are unclear, low quality, or don't show enough of the property.">Photos are unclear or insufficient</option>
             <option value="Some required details are missing or incomplete (description, pricing, amenities, etc.).">Missing or incomplete details</option>
@@ -979,11 +1034,11 @@
             <option value="This listing doesn't currently meet Aerva's quality standards.">Doesn't meet quality standards</option>
             <option value="__other__">Other (specify below)</option>
           </select>
-          <textarea id="rejectOtherReason-${l.id}" placeholder="Describe the reason for rejecting this listing…" style="display:none;"></textarea>
-          <p class="error" id="rejectError-${l.id}" style="display:none;"></p>
+          <textarea id="rejectOtherReason-${Number(l.id)}" placeholder="Describe the reason for rejecting this listing…" style="display:none;"></textarea>
+          <p class="error" id="rejectError-${Number(l.id)}" style="display:none;"></p>
           <div class="reject-panel-actions">
-            <button type="button" class="reject-confirm-btn" onclick="confirmReject(${l.id})">Reject &amp; Notify Host</button>
-            <button type="button" class="reject-cancel-btn" onclick="hideRejectPanel(${l.id})">Cancel</button>
+            <button type="button" class="reject-confirm-btn" onclick="confirmReject(${Number(l.id)})">Reject &amp; Notify Host</button>
+            <button type="button" class="reject-cancel-btn" onclick="hideRejectPanel(${Number(l.id)})">Cancel</button>
           </div>
         </div>
       </div>
@@ -994,8 +1049,8 @@
     // coordinates — done after innerHTML is set, since the container
     // divs don't exist until then.
     listings.forEach(l => {
-      if(l.latitude && l.longitude){
-        const el = document.getElementById('listingMap-' + l.id);
+      if(hasCoords(l)){
+        const el = document.getElementById('listingMap-' + Number(l.id));
         if(el) initListingMapPreview(el, l.latitude, l.longitude, l.property_name);
       }
     });
@@ -1005,6 +1060,10 @@
   // created once and left as-is (unlike manage-listing.html's single
   // reusable map, these cards aren't edited in place, so no update/reuse
   // logic is needed here).
+  function hasCoords(l){
+    return l && l.latitude != null && l.longitude != null && Number.isFinite(Number(l.latitude)) && Number.isFinite(Number(l.longitude)) && !(Number(l.latitude) === 0 && Number(l.longitude) === 0);
+  }
+
   function initListingMapPreview(container, lat, lng, label){
     if(!window.L) return;
     const position = [Number(lat), Number(lng)];
@@ -1014,7 +1073,7 @@
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19
     }).addTo(map);
-    L.marker(position).addTo(map).bindPopup(label);
+    L.marker(position).addTo(map).bindPopup(escAdmin(label)); // popups are HTML
   }
 
   function showRejectPanel(listingId){
@@ -1054,12 +1113,13 @@
       if(res.ok){
         document.getElementById('listing-' + listingId).remove();
       } else {
+        const data = await res.json().catch(() => ({}));
         if(action === 'reject'){
           const errorEl = document.getElementById('rejectError-' + listingId);
-          errorEl.textContent = 'Could not reject this listing. Please try again.';
+          errorEl.textContent = data.error || 'Could not reject this listing. Please try again.';
           errorEl.style.display = 'block';
         } else {
-          alert('Could not update this listing. Please try again.');
+          alert(data.error || 'Could not update this listing. Please try again.');
         }
       }
     } catch(err){
@@ -1125,7 +1185,7 @@
             + '<td style="padding:4px 6px; border-top:1px solid #eee;">' + escAdmin(r.tier ? r.tier.label : '\u2014')
               + (r.flag ? ' <span style="opacity:0.7;">+ ' + escAdmin(r.flag.label) + '</span>' : '') + '</td>'
             + '<td style="padding:4px 6px; border-top:1px solid #eee; white-space:nowrap;">'
-              + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:12px;" onclick=\'loadProperty(' + JSON.stringify(r).replace(/'/g, "&#39;") + ')\'>Load</button> '
+              + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:12px;" onclick="loadProperty(' + escAdmin(JSON.stringify(r)) + ')">Load</button> '
               + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:12px;" onclick="propertyHistory(' + Number(r.id) + ', &#39;listing&#39;)">History</button>'
             + '</td></tr>').join('')
         + '</table>';
@@ -1285,6 +1345,32 @@
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
+  // Only a real http(s) address may go into an href or src. Anything else
+  // (javascript:, data:, a relative path) becomes '#', so a link a host
+  // supplied can never run code in this page when clicked. The result is
+  // escaped for use inside an attribute.
+  function safeUrl(u){
+    try{
+      const x = new URL(String(u || ''));
+      return (x.protocol === 'https:' || x.protocol === 'http:') ? escAdmin(x.href) : '#';
+    }catch(e){ return '#'; }
+  }
+  // Photos are shown only from Aerva's own Blob storage (the page's
+  // Content-Security-Policy allows no other image host). Anything else is
+  // listed as a plain link, which is itself worth noticing when reviewing.
+  function isBlobPhoto(u){
+    try{
+      const x = new URL(String(u || ''));
+      return x.protocol === 'https:' && /\.public\.blob\.vercel-storage\.com$/.test(x.hostname);
+    }catch(e){ return false; }
+  }
+  function photoHtml(url, alt){
+    if(isBlobPhoto(url)) return `<a href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer"><img src="${safeUrl(url)}" alt="${escAdmin(alt || 'Photo')}"></a>`;
+    const href = safeUrl(url);
+    return href === '#'
+      ? '<span class="photo-odd">Not a web address</span>'
+      : `<a class="photo-odd" href="${href}" target="_blank" rel="noopener noreferrer">Photo on another site ↗</a>`;
+  }
   async function loadReviewPolicy(){
     const body = document.getElementById('policyBody');
     const conf = document.getElementById('policyConflicts');
@@ -1360,8 +1446,8 @@
   }
 
   // ---- Batch jobs ----
-  // The sweep normally runs itself at 02:00 UTC, authenticated by
-  // CRON_SECRET, which can never be put in this page: anyone opening the
+  // Jobs normally run from the 5-minute pinger and the daily cron,
+  // authenticated by CRON_SECRET, which can never be put in this page: anyone opening the
   // admin tool would be able to read it. The admin's own session
   // authorises this instead, exactly as it does every other action here
   // (see isAdminAuthorized in api/get-listings.js).
@@ -1376,12 +1462,14 @@
     const bits = Object.entries(r).filter(([k, v]) => typeof v === 'number' && v > 0).slice(0, 4).map(([k, v]) => k + ': ' + v);
     return bits.length ? bits.join(' · ') : 'nothing to do';
   }
+  let jobLabels = null; // job name → label, for the Run-now readout
   async function loadJobs(){
     const box = document.getElementById('jobsList');
     try{
       const res = await fetch(API_BASE + '/api/get-listings?jobStatus=1', { headers: authHeaders() });
       const d = await res.json();
       if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load jobs.') + '</p>'; return; }
+      jobLabels = {}; (d.jobs || []).forEach(j => { jobLabels[j.name] = j.label; });
       box.innerHTML = d.jobs.map(j => `
         <div style="padding:12px 0; border-bottom:1px solid #eee;${j.lastOk === false ? ' border-left:3px solid #a3402f; padding-left:10px;' : ''}">
           <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;">
@@ -1444,7 +1532,9 @@
     const btn = document.getElementById(force ? 'runSweepForceBtn' : 'runSweepBtn');
     const other = document.getElementById(force ? 'runSweepBtn' : 'runSweepForceBtn');
     const out = document.getElementById('batchResults');
-    if(force && !confirm('This re-rates every host, guest and property right now, instead of waiting for the next quarterly review. Continue?')) return;
+    if(!confirm(force
+      ? 'This runs every due job (payouts included), runs the daily jobs again and re-rates every host, guest and property now. Continue?'
+      : 'This runs every job that is due now, including payouts and refunds. Continue?')) return;
     const label = btn.textContent;
     btn.disabled = true; other.disabled = true; btn.textContent = 'Running…';
     out.innerHTML = '';
@@ -1458,20 +1548,21 @@
       } else if(!res.ok){
         out.innerHTML = '<div class="error">' + escAdmin(d.error || ('Server returned ' + res.status)) + '</div>';
       } else {
-        const t = d.tierChanges || {};
-        const line = (text) => '<div>' + text + '</div>';
+        // get-listings answers { ran: [{ job, result, affectedCount }],
+        // failed: [{ job, error }], skipped: [name] } — one line per job.
+        const name = (n) => escAdmin((jobLabels && jobLabels[n]) || n);
+        const ran = d.ran || [], failed = d.failed || [], skipped = d.skipped || [];
         out.innerHTML =
-          '<div class="success">Sweep finished ' + escAdmin(new Date().toLocaleString('en-IN')) + '.</div>'
-          + line('Reviews published because both sides reviewed: <strong>' + Number(d.publishedPaired || 0) + '</strong>')
-          + line('Reviews published because the 15-day window closed: <strong>' + Number(d.publishedLapsed || 0) + '</strong>')
-          + line('Guests prompted to review: <strong>' + Number(d.prompted || 0) + '</strong>')
-          + (d.tierChanges
-              ? line('Badges changed — properties <strong>' + Number(t.listing || 0) + '</strong>, hosts <strong>'
-                  + Number(t.host || 0) + '</strong>, guests <strong>' + Number(t.guest || 0) + '</strong>')
-              : d.corrections
-                ? line('Admin corrections applied: <strong>' + escAdmin(typeof d.corrections === 'string' ? d.corrections : (d.corrections.requests + ' request(s)')) + '</strong>')
-                : line('Badges were not recalculated — that happens on the quarterly dates, or with the second button.'))
-          + line('<span style="opacity:0.7;">Next quarterly review: ' + escAdmin(d.nextReview || '—') + '</span>');
+          '<div class="success">Finished ' + escAdmin(new Date().toLocaleString('en-IN')) + ' — '
+            + ran.length + ' ran, ' + failed.length + ' failed' + (skipped.length ? ', ' + skipped.length + ' left for the next run (time limit)' : '') + '.</div>'
+          + (ran.length || failed.length ? '' : '<div style="opacity:0.7;">Nothing was due.</div>')
+          + ran.map(r => '<div>' + name(r.job) + ' · <span style="color:#3a7d44;">OK</span> · '
+              + Number(r.affectedCount || 0) + ' ' + (Number(r.affectedCount) === 1 ? 'person' : 'people') + ' affected'
+              + (r.result && typeof r.result === 'object' ? ' <span style="opacity:0.6;">(' + escAdmin(jobSummary(r.result)) + ')</span>' : '') + '</div>').join('')
+          + failed.map(f => '<div style="color:#a3402f;">' + name(f.job) + ' · FAILED: ' + escAdmin(f.error || 'unknown error')
+              + (f.affectedCount ? ' · ' + Number(f.affectedCount) + ' affected' : '') + '</div>').join('')
+          + (skipped.length ? '<div style="opacity:0.7;">Not reached: ' + skipped.map(name).join(', ') + '</div>' : '');
+        loadJobs();
       }
     }catch(err){
       out.innerHTML = '<div class="error">Could not reach the server. Please try again.</div>';
@@ -1527,7 +1618,7 @@
 
   // ---- Payouts tab: co-host payout details, and who is owed what ----
   function payInr(n){ return '₹' + Number(n || 0).toLocaleString('en-IN'); }
-  function payDate(d){ return d ? String(d).slice(0, 10) : '—'; }
+  function payDate(d){ return d ? escAdmin(String(d).slice(0, 10)) : '—'; }
   function payeeLine(p){
     if(!p || !p.account) return '<span style="color:#a3402f;">No bank details yet — Hold</span>';
     return escAdmin(p.holder || '') + ' · ' + escAdmin(p.account) + ' · ' + escAdmin(p.ifsc || '')
@@ -1559,12 +1650,24 @@
         : 'Automatic payouts: OFF (RazorpayX not set up). At 5 PM on check-out day each payout appears here as Not sent: send it by hand, then Mark paid.';
       window.__autoPayouts = !!data.automaticPayouts;
       const rfs = data.refunds || [];
+      // A refund written down but not started within 10 minutes was
+      // interrupted; the server allows a retry for it, same as a failed one.
+      // Kinds can carry the payment id ("cancellation:pay_…").
+      const refundKindLabel = k => { const b = String(k || '').split(':')[0];
+        return b === 'cancellation' ? 'Cancellation refund' : b === 'deposit' ? 'Deposit refund' : b === 'deposit_dispute' ? 'Deposit (dispute) refund' : b === 'change' ? 'Booking change refund' : b.startsWith('dispute-') ? 'Stay dispute refund' : 'Refund'; };
+      const stuck = r => r.status === 'new' && r.createdAt && (Date.now() - new Date(r.createdAt).getTime()) > 10 * 60 * 1000;
       document.getElementById('refundsList').innerHTML = rfs.length ? rfs.map(r => `
-        <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;${r.status === 'failed' ? ' border-left:3px solid #a3402f;' : ''}">
-          <strong>${escAdmin(r.listing || '')}</strong> · booking #${Number(r.orderId)} · ${escAdmin(r.kind === 'cancellation' ? 'Cancellation refund' : r.kind === 'deposit' ? 'Deposit refund' : 'Deposit (dispute) refund')} · ${escAdmin(r.currency)} ${Number(r.amount).toLocaleString('en-IN')}
-          <div style="margin-top:4px; ${r.status === 'failed' ? 'color:#a3402f;' : 'opacity:0.75;'}">${r.status === 'failed' ? 'Failed: ' + escAdmin(r.failure || 'not refunded') + ' · attempts ' + Number(r.attempts) : 'In progress: waiting for Razorpay to confirm'}</div>
-          ${r.status === 'failed' ? `<button class="approve-btn" style="margin-top:8px;" onclick="retryRefund(${Number(r.id)})">Retry refund</button>` : ''}
+        <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;${r.status === 'failed' || stuck(r) ? ' border-left:3px solid #a3402f;' : ''}">
+          <strong>${escAdmin(r.listing || '')}</strong> · booking #${Number(r.orderId)} · ${escAdmin(refundKindLabel(r.kind))} · ${escAdmin(r.currency)} ${Number(r.amount).toLocaleString('en-IN')}
+          <div style="margin-top:4px; ${r.status === 'failed' || stuck(r) ? 'color:#a3402f;' : 'opacity:0.75;'}">${r.status === 'failed' ? 'Failed: ' + escAdmin(r.failure || 'not refunded') + ' · attempts ' + Number(r.attempts) : stuck(r) ? 'Not started: interrupted before reaching Razorpay (since ' + payDate(r.createdAt) + ')' : 'In progress: waiting for Razorpay to confirm'}</div>
+          ${r.status === 'failed' || stuck(r) ? `<button class="approve-btn" style="margin-top:8px;" onclick="retryRefund(${Number(r.id)})">Retry refund</button>` : ''}
         </div>`).join('') : '<p style="opacity:0.6;">No refunds waiting. All refunds are confirmed by Razorpay.</p>';
+      const dps = data.depositPayouts || [];
+      document.getElementById('depositPayoutsList').innerHTML = dps.length ? dps.map(p => `
+        <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;${p.status === 'failed' || p.status === 'due' ? ' border-left:3px solid #a3402f;' : ''}">
+          <strong>${escAdmin(p.listing || '')}</strong> · booking #${Number(p.orderId)} · host <strong>${escAdmin(p.hostName || '')}</strong> · <strong>${payInr(p.net)}</strong>
+          ${depositPayoutControl(p)}
+        </div>`).join('') : '<p style="opacity:0.6;">No deposit compensation payouts.</p>';
       const pens = data.penalties || [];
       document.getElementById('penaltiesList').innerHTML = pens.length ? pens.map(p => `
         <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;${p.overSixMonths ? ' border-left:3px solid #a3402f;' : ''}">
@@ -1588,13 +1691,13 @@
           ${payoutControl(o.orderId, 'host', null, o.hostPaid, o.penaltyToDeduct)}
         </div>`).join('') : '<p style="opacity:0.6;">No paid bookings yet.</p>';
     }catch(err){
-      profilesEl.innerHTML = listEl.innerHTML = '<p style="color:#a3402f;">' + escAdmin(err.message) + '</p>';
+      profilesEl.innerHTML = listEl.innerHTML = document.getElementById('depositPayoutsList').innerHTML = '<p style="color:#a3402f;">' + escAdmin(err.message) + '</p>';
     }
   }
   // Mark paid: record a payout sent by hand; the host / co-host is emailed
   // and notified on the website with the payout summary.
   function payoutControl(orderId, payee, guestId, paid, owed){
-    const tdsNote = paid && paid.tds ? ` · TDS ${payInr(paid.tds)} (${paid.tdsRate}%${paid.panFurnished ? '' : ', no PAN'})` : '';
+    const tdsNote = paid && paid.tds ? ` · TDS ${payInr(paid.tds)} (${Number(paid.tdsRate) || 0}%${paid.panFurnished ? '' : ', no PAN'})` : '';
     if(paid && paid.status === 'sent') return `<div style="color:#3a7d44; font-size:13.5px;">✓ Paid ${payDate(paid.sentAt)} · ${payInr(paid.net)}${tdsNote} · Ref ${escAdmin(paid.reference || '')}</div>`;
     if(paid && paid.status === 'processing') return `<div style="color:#8a6c39; font-size:13.5px;">Sending via RazorpayX · ${payInr(paid.net)}${tdsNote}</div>`;
     const auto = !!window.__autoPayouts;
@@ -1620,6 +1723,36 @@
         ${hostOnly}
         <button class="approve-btn" onclick="markPayoutPaid(${Number(orderId)}, '${payee}', ${guestId ? Number(guestId) : 'null'}, '${key}')">Confirm, notify ${payee === 'host' ? 'host' : 'co-host'}</button>
       </div></div>`;
+  }
+  // A deposit compensation payout: Retry (RazorpayX) or Mark paid by hand,
+  // with the same rules as a booking payout.
+  function depositPayoutControl(p){
+    if(p.status === 'sent') return `<div style="color:#3a7d44; font-size:13.5px;">✓ Paid ${payDate(p.sentAt)} · Ref ${escAdmin(p.reference || '')}</div>`;
+    if(p.status === 'processing') return '<div style="color:#8a6c39; font-size:13.5px;">Sending via RazorpayX</div>';
+    const auto = !!window.__autoPayouts;
+    const status = p.status === 'failed'
+      ? `<div style="color:#a3402f; font-size:13.5px;">Failed at the bank: ${escAdmin(p.failure || 'not received')} · attempts ${Number(p.attempts) || 0}</div>`
+      : `<div style="color:#a3402f; font-size:13.5px;">Not sent yet${p.failure ? ': ' + escAdmin(p.failure) : ''}</div>`;
+    const retry = auto ? `<button class="approve-btn" onclick="retryPayout(${Number(p.id)})">Retry payout</button>` : '';
+    if(auto && p.autoEligible) return `${status}<div style="margin:6px 0 4px;">${retry}</div>`;
+    const key = 'dep-' + Number(p.id);
+    const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+    return `${status}<div style="margin:6px 0 4px;">${retry}
+      <button class="approve-btn" onclick="document.getElementById('pay-${key}').style.display='flex'">Mark paid (sent by hand)</button>
+      <div id="pay-${key}" style="display:none; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+        <input id="payRef-${key}" placeholder="Bank reference (UTR)" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:200px; max-width:100%;">
+        <label style="font-size:13px;">Arriving by <input id="payBy-${key}" type="date" value="${soon}" style="padding:7px; border:1px solid #ccc; border-radius:6px;"></label>
+        <button class="approve-btn" onclick="markDepositPayoutPaid(${Number(p.orderId)}, '${key}')">Confirm, notify host</button>
+      </div></div>`;
+  }
+  async function markDepositPayoutPaid(orderId, key){
+    const reference = document.getElementById('payRef-' + key).value.trim();
+    if(!reference){ alert('Enter the bank reference (UTR).'); return; }
+    const body = { markPayoutPaid: { orderId, payee: 'host', kind: 'deposit', reference, arrivingBy: document.getElementById('payBy-' + key).value } };
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok){ alert(data.error || 'Could not record this payout.'); return; }
+    loadPayouts();
   }
   async function retryPayout(id){
     if(!confirm('Retry this payout? RazorpayX is checked first, so it is never paid twice.')) return;
@@ -1764,7 +1897,7 @@
     document.getElementById('tabAuditBtn').classList.toggle('active', tab === 'audit');
     document.getElementById('tabTrustBtn').classList.toggle('active', tab === 'trust');
     document.getElementById('trustView').style.display = tab === 'trust' ? 'block' : 'none';
-    if(tab === 'trust'){ loadFeedback(); loadStayDisputes(); loadGuestIds(); }
+    if(tab === 'trust'){ loadFeedback(); loadStayDisputes(); }
     document.getElementById('tabPoliciesBtn').classList.toggle('active', tab === 'policies');
     document.getElementById('listingsView').style.display = tab === 'listings' ? 'block' : 'none';
     document.getElementById('liveView').style.display = tab === 'live' ? 'block' : 'none';
@@ -1839,12 +1972,12 @@
       });
       const data = await res.json();
       if(!res.ok){
-        resultsEl.innerHTML = `<div class="error">${data.error || 'Could not process deposits.'}</div>`;
+        resultsEl.innerHTML = `<div class="error">${escAdmin(data.error || 'Could not process deposits.')}</div>`;
       } else if(data.processed === 0){
         resultsEl.innerHTML = '<div class="empty" style="padding:10px 0;">No deposits are currently eligible for refund.</div>';
       } else {
         resultsEl.innerHTML = data.results.map(r =>
-          `<div class="${r.success ? 'success' : 'error'}">Order #${r.orderId}: ${r.success ? 'refunded successfully' : 'failed — ' + r.error}</div>`
+          `<div class="${r.success ? 'success' : 'error'}">Order #${Number(r.orderId)}: ${r.success ? 'refunded successfully' : 'failed — ' + escAdmin(r.error)}</div>`
         ).join('');
       }
     } catch(err){
@@ -1880,26 +2013,26 @@
       let actions = '';
       if(l.status === 'approved'){
         actions = `
-          <button type="button" class="reject-btn" onclick="promptListingStatus(${l.id}, 'block')">Block</button>
-          <button type="button" class="reject-btn" onclick="blockForPhoneInPhoto(${l.id})" title="A listing photo shows a phone number: block at once">Block: phone number in photo</button>
-          <button type="button" class="reject-btn" onclick="promptListingStatus(${l.id}, 'remove')">Remove</button>
+          <button type="button" class="reject-btn" onclick="promptListingStatus(${Number(l.id)}, 'block')">Block</button>
+          <button type="button" class="reject-btn" onclick="blockForPhoneInPhoto(${Number(l.id)})" title="A listing photo shows a phone number: block at once">Block: phone number in photo</button>
+          <button type="button" class="reject-btn" onclick="promptListingStatus(${Number(l.id)}, 'remove')">Remove</button>
         `;
       } else if(l.status === 'blocked'){
         actions = `
-          <button type="button" class="approve-btn" onclick="setListingStatus(${l.id}, 'unblock')">Unblock</button>
-          <button type="button" class="reject-btn" onclick="promptListingStatus(${l.id}, 'remove')">Remove</button>
+          <button type="button" class="approve-btn" onclick="setListingStatus(${Number(l.id)}, 'unblock')">Unblock</button>
+          <button type="button" class="reject-btn" onclick="promptListingStatus(${Number(l.id)}, 'remove')">Remove</button>
         `;
       } else if(l.status === 'removed'){
-        actions = `<button type="button" class="approve-btn" onclick="setListingStatus(${l.id}, 'restore')">Restore</button>`;
+        actions = `<button type="button" class="approve-btn" onclick="setListingStatus(${Number(l.id)}, 'restore')">Restore</button>`;
       }
       return `
-        <div class="dispute-card" id="liveListing-${l.id}">
-          <h4>${escAdmin(l.property_name)} <span style="opacity:0.6; font-weight:400;">— ${statusLabel}</span></h4>
+        <div class="dispute-card" id="liveListing-${Number(l.id)}">
+          <h4>${escAdmin(l.property_name)} <span style="opacity:0.6; font-weight:400;">— ${escAdmin(statusLabel)}</span></h4>
           <div class="dispute-meta">${escAdmin(l.city)} · ${escAdmin(l.host_name)} (${escAdmin(l.host_email)})</div>
-          <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(l.created_at)}</div>
+          <div class="dispute-meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(l.created_at))}</div>
           ${reasonLine}
           <div class="resolve-row">${actions}</div>
-          <span id="liveListingError-${l.id}" class="error"></span>
+          <span id="liveListingError-${Number(l.id)}" class="error"></span>
         </div>
       `;
     }).join('');
@@ -1924,8 +2057,8 @@
     setListingStatus(listingId, 'block', PHONE_IN_PHOTO_REASON);
   }
 
-  // ---- Guest Safety tab: stay disputes and guest ID proofs ----
-  const fileLinks = (list) => (list || []).map((u, i) => `<a href="${escAdmin(u)}" target="_blank" rel="noopener" style="margin-right:10px;">File ${i + 1}</a>`).join('') || '<span style="opacity:0.6;">none</span>';
+  // ---- Guest Safety tab: stay disputes ----
+  const fileLinks = (list) => (Array.isArray(list) ? list : []).map((u, i) => `<a href="${safeUrl(u)}" target="_blank" rel="noopener noreferrer" style="margin-right:10px;">File ${i + 1}</a>`).join('') || '<span style="opacity:0.6;">none</span>';
   async function loadFeedback(){
     const box = document.getElementById('feedbackList');
     try{
@@ -1979,32 +2112,6 @@
     if(refund) alert(`Refunded ${d.refundNights} night(s): ₹${Number(d.total).toLocaleString('en-IN')}. Host is paid ₹${Number(d.hostPayout).toLocaleString('en-IN')}.`);
     loadStayDisputes();
   }
-  async function loadGuestIds(){
-    const box = document.getElementById('guestIdsList');
-    try{
-      const res = await fetch(API_BASE + '/api/get-pending-listings?guestIds=1', { headers: authHeaders() });
-      const d = await res.json();
-      if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
-      if(!d.ids.length){ box.innerHTML = '<p style="opacity:0.7;">No IDs waiting for review.</p>'; return; }
-      box.innerHTML = d.ids.map(x => `
-        <div style="border:1px solid #e6ded3; border-radius:10px; padding:12px 16px; margin-bottom:10px; font-size:14px;">
-          <strong>${escAdmin(x.name || 'Guest')}</strong> · ${escAdmin(x.email)} · ${escAdmin(x.phone || 'no phone')} · ${escAdmin((d.types || {})[x.type] || x.type)}
-          · ${x.url ? `<a href="${escAdmin(x.url)}" target="_blank" rel="noopener">Open ID</a>` : '<span style="color:#a3402f;">unreadable — check DATA_ENCRYPTION_KEY</span>'}
-          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button type="button" class="approve-btn" onclick="reviewGuestId(${Number(x.guestId)}, true)">Verify</button>
-            <button type="button" class="reject-btn" onclick="reviewGuestId(${Number(x.guestId)}, false)">Reject</button>
-          </div>
-        </div>`).join('');
-    }catch(e){ box.innerHTML = '<p>Could not load IDs.</p>'; }
-  }
-  async function reviewGuestId(guestId, approve){
-    let reason = '';
-    if(!approve){ reason = prompt('Why is this ID not accepted? The guest sees this.', 'The photo is not clear enough to read. Please upload a clear photo or PDF of a valid government ID.'); if(reason === null) return; }
-    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ reviewGuestId: { guestId, approve, reason } }) });
-    const d = await res.json().catch(() => ({}));
-    if(!res.ok){ alert(d.error || 'Could not save.'); return; }
-    loadGuestIds();
-  }
 
   async function setListingStatus(listingId, action, reason){
     const errorEl = document.getElementById(`liveListingError-${listingId}`);
@@ -2036,19 +2143,19 @@
     const panel = document.createElement('div');
     panel.id = 'idPurgePanel';
     panel.style.cssText = 'margin:0 0 20px; padding:14px 16px; border:1px solid #e6dccd; border-left:3px solid #a9884f; border-radius:10px; font-size:14px;';
-    panel.innerHTML = 'Aadhaar documents and PAN card images are erased as soon as you approve or reject them. PAN and bank account numbers are kept, encrypted. '
+    panel.innerHTML = 'Aadhaar documents and PAN card images are erased as soon as you approve or reject them. Guest ID proofs are no longer collected; any uploaded earlier are erased by this button too. PAN and bank account numbers are kept, encrypted. '
       + '<button type="button" class="approve-btn" id="idPurgeBtn" style="margin-left:8px;">Erase reviewed documents &amp; encrypt stored numbers</button> <span id="idPurgeResult"></span>';
     container.parentNode.insertBefore(panel, container);
     document.getElementById('idPurgeBtn').addEventListener('click', async () => {
-      if(!confirm('Permanently delete every Aadhaar document and PAN card image that has already been reviewed, and encrypt any PAN or bank number still stored readable? Statuses are kept.')) return;
+      if(!confirm('Permanently delete every Aadhaar document and PAN card image that has already been reviewed, every guest ID proof uploaded before September 2026, and encrypt any PAN or bank number still stored readable? Statuses are kept.')) return;
       const out = document.getElementById('idPurgeResult');
       out.textContent = 'Erasing…';
       try{
         const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ purgeReviewedIdDocuments: true }) });
         const d = await res.json();
         if(!res.ok) throw new Error(d.error || 'Failed');
-        out.textContent = `Erased ${d.aadhaar} Aadhaar document(s) and ${d.pan} PAN card image(s); encrypted ${d.encrypted} record(s)`
-          + (d.failed ? ` — ${d.failed} file(s) could not be deleted yet: ` + (d.failures || []).map(f => `host #${f.hostId} ${f.field} (${f.reason})`).join('; ') + '. Try again later.' : '.');
+        out.textContent = `Erased ${d.aadhaar} Aadhaar document(s), ${d.pan} PAN card image(s) and ${d.guestIds || 0} guest ID proof(s); encrypted ${d.encrypted} record(s)`
+          + (d.failed ? ` — ${d.failed} file(s) could not be deleted yet: ` + (d.failures || []).map(f => `${f.guestId ? 'guest #' + f.guestId : 'host #' + f.hostId} ${f.field} (${f.reason})`).join('; ') + '. Try again later.' : '.');
       }catch(err){ out.textContent = err.message; }
     });
   }
@@ -2076,44 +2183,44 @@
     }
     container.innerHTML = verifications.map(v => {
       const aadhaarBlock = v.aadhaar_status === 'pending_review' ? `
-        <div class="dispute-card" id="verify-${v.id}-aadhaar">
+        <div class="dispute-card" id="verify-${Number(v.id)}-aadhaar">
           <h4>${escAdmin(v.name || v.email)} — Aadhaar</h4>
           <div class="dispute-meta">${escAdmin(v.email)}${v.phone ? ' · ' + escAdmin(v.phone) : ''}</div>
-          <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(v.aadhaar_submitted_at)}</div>
-          <p><a href="${v.aadhaar_document_url}" target="_blank" rel="noopener">Open the uploaded document ↗</a></p>
+          <div class="dispute-meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(v.aadhaar_submitted_at))}</div>
+          <p>${v.aadhaar_document_url ? `<a href="${safeUrl(v.aadhaar_document_url)}" target="_blank" rel="noopener noreferrer">Open the uploaded document ↗</a>` : '<span style="opacity:0.6;">No document on file</span>'}</p>
           <div class="resolve-row">
-            <button type="button" class="approve-btn" onclick="decideVerification(${v.id}, 'aadhaar', 'approve')">Approve</button>
-            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${v.id}, 'aadhaar')">Reject</button>
+            <button type="button" class="approve-btn" onclick="decideVerification(${Number(v.id)}, 'aadhaar', 'approve')">Approve</button>
+            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${Number(v.id)}, 'aadhaar')">Reject</button>
           </div>
-          <span id="verifyError-${v.id}-aadhaar" class="error"></span>
+          <span id="verifyError-${Number(v.id)}-aadhaar" class="error"></span>
         </div>
       ` : '';
       const bankBlock = v.bank_status === 'pending_review' ? `
-        <div class="dispute-card" id="verify-${v.id}-bank">
+        <div class="dispute-card" id="verify-${Number(v.id)}-bank">
           <h4>${escAdmin(v.name || v.email)} — Bank Details</h4>
           <div class="dispute-meta">${escAdmin(v.email)}${v.phone ? ' · ' + escAdmin(v.phone) : ''}</div>
-          <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(v.bank_submitted_at)}</div>
-          <p>Account holder: ${v.bank_account_holder_name || '—'}<br>
-             Account ending: ••••${v.bank_account_number ? v.bank_account_number.slice(-4) : '—'}<br>
-             IFSC: ${v.bank_ifsc || '—'}</p>
+          <div class="dispute-meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(v.bank_submitted_at))}</div>
+          <p>Account holder: ${escAdmin(v.bank_account_holder_name || '—')}<br>
+             Account: ${escAdmin(v.bank_account_number || '—')}<br>
+             IFSC: ${escAdmin(v.bank_ifsc || '—')}</p>
           <div class="resolve-row">
-            <button type="button" class="approve-btn" onclick="decideVerification(${v.id}, 'bank', 'approve')">Approve</button>
-            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${v.id}, 'bank')">Reject</button>
+            <button type="button" class="approve-btn" onclick="decideVerification(${Number(v.id)}, 'bank', 'approve')">Approve</button>
+            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${Number(v.id)}, 'bank')">Reject</button>
           </div>
-          <span id="verifyError-${v.id}-bank" class="error"></span>
+          <span id="verifyError-${Number(v.id)}-bank" class="error"></span>
         </div>
       ` : '';
       const panBlock = v.pan_status === 'pending_review' ? `
-        <div class="dispute-card" id="verify-${v.id}-pan">
+        <div class="dispute-card" id="verify-${Number(v.id)}-pan">
           <h4>${escAdmin(v.name || v.email)} — PAN</h4>
           <div class="dispute-meta">${escAdmin(v.email)}${v.phone ? ' · ' + escAdmin(v.phone) : ''}</div>
-          <div class="dispute-meta" style="opacity:0.6;">Submitted ${fmtDate(v.pan_submitted_at)}</div>
-          <p>PAN: <strong>${escAdmin(v.pan_number || '—')}</strong>${v.pan_document_url ? ` · <a href="${escAdmin(v.pan_document_url)}" target="_blank" rel="noopener">Open the uploaded card ↗</a>` : ''}</p>
+          <div class="dispute-meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(v.pan_submitted_at))}</div>
+          <p>PAN: <strong>${escAdmin(v.pan_number || '—')}</strong>${v.pan_document_url ? ` · <a href="${safeUrl(v.pan_document_url)}" target="_blank" rel="noopener noreferrer">Open the uploaded card ↗</a>` : ''}</p>
           <div class="resolve-row">
-            <button type="button" class="approve-btn" onclick="decideVerification(${v.id}, 'pan', 'approve')">Approve</button>
-            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${v.id}, 'pan')">Reject</button>
+            <button type="button" class="approve-btn" onclick="decideVerification(${Number(v.id)}, 'pan', 'approve')">Approve</button>
+            <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${Number(v.id)}, 'pan')">Reject</button>
           </div>
-          <span id="verifyError-${v.id}-pan" class="error"></span>
+          <span id="verifyError-${Number(v.id)}-pan" class="error"></span>
         </div>
       ` : '';
       return aadhaarBlock + panBlock + bankBlock;
@@ -2147,10 +2254,10 @@
       if(h.aadhaar_status === 'rejected') items.push({ h, field: 'aadhaar', label: 'Aadhaar', reason: h.aadhaar_rejection_reason });
       if(h.pan_status === 'rejected') items.push({ h, field: 'pan', label: 'PAN', reason: h.pan_rejection_reason });
     });
-    box.innerHTML = '<h3 style="font-family:Georgia,serif; font-weight:normal;">Rejected — waiting for a new upload</h3>'
+    box.innerHTML = '<h3>Rejected — waiting for a new upload</h3>'
       + (items.length ? items.map(i => `
         <div class="dispute-card" id="rejected-${Number(i.h.id)}-${i.field}">
-          <h4>${escAdmin(i.h.name || i.h.email)} — ${i.label}</h4>
+          <h4>${escAdmin(i.h.name || i.h.email)} — ${escAdmin(i.label)}</h4>
           <div class="dispute-meta">Rejected: ${escAdmin(i.reason || '—')}</div>
           <div class="resolve-row"><button type="button" class="approve-btn" onclick="reopenIdVerification(${Number(i.h.id)}, '${i.field}')">Allow re-upload</button></div>
           <span id="rejectedError-${Number(i.h.id)}-${i.field}" class="error"></span>
@@ -2216,15 +2323,15 @@
       const dateRange = new Date(d.arrival).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) +
         ' – ' + new Date(d.departure).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' });
       return `
-        <div class="dispute-card" id="dispute-${d.id}">
+        <div class="dispute-card" id="dispute-${Number(d.id)}">
           <h4>${escAdmin(d.suite_name)} — ${fmt(d.deposit_amount)} deposit</h4>
-          <div class="dispute-meta">${dateRange} · Host: ${escAdmin(d.host_name)} (${escAdmin(d.host_email)}) · Guest: ${escAdmin(d.guest_email)}</div>
+          <div class="dispute-meta">${escAdmin(dateRange)} · Host: ${escAdmin(d.host_name)} (${escAdmin(d.host_email)}) · Guest: ${escAdmin(d.guest_email)}</div>
           <div class="dispute-reason-box">"${escAdmin(d.dispute_reason)}"</div>
           <div class="resolve-row">
             <label style="font-size:12.5px;">Compensate host ₹</label>
-            <input type="number" id="compensation-${d.id}" min="0" max="${d.deposit_amount}" placeholder="0">
-            <button type="button" class="resolve-btn" onclick="resolveDispute(${d.id}, ${d.deposit_amount})">Resolve</button>
-            <span id="resolveError-${d.id}" class="error"></span>
+            <input type="number" id="compensation-${Number(d.id)}" min="0" max="${Number(d.deposit_amount)}" placeholder="0">
+            <button type="button" class="resolve-btn" onclick="resolveDispute(${Number(d.id)}, ${Number(d.deposit_amount)})">Resolve</button>
+            <span id="resolveError-${Number(d.id)}" class="error"></span>
           </div>
         </div>
       `;
@@ -2249,7 +2356,14 @@
       });
       const data = await res.json();
       if(res.ok){
-        document.getElementById('dispute-' + orderId).remove();
+        // Resolved, but something needs a hand (e.g. the host's
+        // compensation payout could not be created): keep it on screen.
+        if(data.warning){
+          const card = document.getElementById('dispute-' + orderId);
+          card.innerHTML = '<h4>Dispute resolved — action needed</h4><p class="error" style="display:block;">' + escAdmin(data.warning) + '</p>';
+        } else {
+          document.getElementById('dispute-' + orderId).remove();
+        }
       } else {
         errorEl.textContent = data.error || 'Could not resolve this dispute.';
       }
@@ -2277,16 +2391,32 @@
       });
       const data = await res.json();
       if(res.ok){
-        resultsEl.innerHTML = `<div class="success">Checked every listing — ${data.affectedCount} currently fail this requirement (${data.newlyFlagged} newly flagged just now; the rest were already flagged from an earlier run).</div>`;
+        resultsEl.innerHTML = `<div class="success">Checked every listing — ${Number(data.affectedCount) || 0} currently fail this requirement (${Number(data.newlyFlagged) || 0} newly flagged just now; the rest were already flagged from an earlier run).</div>`;
         loadComplianceFlags();
       } else {
-        resultsEl.innerHTML = `<div class="error">${data.error || 'Could not run this check.'}</div>`;
+        resultsEl.innerHTML = `<div class="error">${escAdmin(data.error || 'Could not run this check.')}</div>`;
       }
     } catch(err){
       resultsEl.innerHTML = '<div class="error">Could not reach the server — please try again.</div>';
     }
     btn.disabled = false;
     btn.textContent = 'Run This Check';
+  }
+
+  async function enforceComplianceNow(){
+    if(!confirm('Hide every listing whose compliance deadline has passed? Their hosts are told why.')) return;
+    const btn = document.getElementById('enforceComplianceBtn');
+    const out = document.getElementById('enforceComplianceResults');
+    btn.disabled = true; out.innerHTML = '';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ enforceCompliance: true }) });
+      const d = await res.json().catch(() => ({}));
+      out.innerHTML = res.ok
+        ? '<div class="success">Checked ' + (Number(d.checked) || 0) + ' overdue flag(s); ' + (Number(d.blocked) || 0) + ' listing(s) blocked.</div>'
+        : '<div class="error">' + escAdmin(d.error || 'Could not enforce deadlines.') + '</div>';
+      if(res.ok) loadComplianceFlags();
+    }catch(err){ out.innerHTML = '<div class="error">Could not reach the server — please try again.</div>'; }
+    btn.disabled = false;
   }
 
   async function loadComplianceFlags(){
@@ -2297,7 +2427,7 @@
       });
       const data = await res.json().catch(() => ({}));
       if(!res.ok){
-        container.innerHTML = `<p class="error">Could not load compliance flags: ${data.error || `server returned ${res.status}`}.</p>`;
+        container.innerHTML = `<p class="error">Could not load compliance flags: ${escAdmin(data.error || `server returned ${res.status}`)}.</p>`;
         return;
       }
       renderComplianceFlags(data.flags || []);
@@ -2318,11 +2448,11 @@
         ? '<span style="color:#a3402f; font-weight:600;">Auto-Blocked</span>'
         : deadlinePassed
         ? '<span style="color:#a3402f;">Deadline passed — will be blocked shortly</span>'
-        : `Due ${fmtDate(f.deadline)}`;
+        : `Due ${escAdmin(fmtDate(f.deadline))}`;
       return `
-        <div class="dispute-card" id="complianceFlag-${f.id}">
-          <h4>${escAdmin(f.property_name)} <span style="opacity:0.6; font-weight:400;">— ${f.listing_status}</span></h4>
-          <div class="dispute-meta">${escAdmin(f.host_email)} · flagged ${fmtDate(f.created_at)}</div>
+        <div class="dispute-card" id="complianceFlag-${Number(f.id)}">
+          <h4>${escAdmin(f.property_name)} <span style="opacity:0.6; font-weight:400;">— ${escAdmin(f.listing_status)}</span></h4>
+          <div class="dispute-meta">${escAdmin(f.host_email)} · flagged ${escAdmin(fmtDate(f.created_at))}</div>
           <p style="font-size:13px; margin:8px 0;">${escAdmin(f.message)}</p>
           <div class="dispute-meta">${statusLabel}</div>
         </div>

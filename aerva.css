@@ -37,6 +37,9 @@
     *{animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; scroll-behavior:auto !important;}
   }
   h1,h2,h3,.display{ font-family:'Bodoni Moda', serif; font-weight:500; letter-spacing:0.01em; }
+  /* Form controls do not inherit the page font by default (they fell back
+     to the system Arial). */
+  button, input, select, textarea{ font-family:inherit; }
   a{color:inherit; text-decoration:none;}
   .wrap{max-width:var(--maxw); margin:0 auto; padding:0 40px;}
   .eyebrow{
@@ -1691,11 +1694,14 @@
   .mobile-nav-panel{
     position:fixed; top:0; right:0; bottom:0; width:min(320px, 84vw);
     background:var(--cream); z-index:150; padding:100px 32px 40px;
-    box-shadow:-8px 0 40px rgba(0,0,0,0.18);
-    transform:translateX(100%); transition:transform .35s ease;
+    /* Shadow only while open: a closed panel sits just off-screen and its
+       shadow used to show as a grey edge down the right of every page. */
+    box-shadow:none;
+    transform:translateX(100%); transition:transform .35s ease, box-shadow .35s ease, visibility 0s linear .35s;
+    visibility:hidden;
     display:flex; flex-direction:column; gap:26px; overflow-y:auto;
   }
-  .mobile-nav-panel.is-open{ transform:translateX(0); }
+  .mobile-nav-panel.is-open{ transform:translateX(0); box-shadow:-8px 0 40px rgba(0,0,0,0.18); visibility:visible; transition:transform .35s ease, box-shadow .35s ease; }
   .mobile-nav-panel a{
     font-size:15px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink);
   }
@@ -2667,7 +2673,7 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
 }
 .confirm-code-copy:hover{ background:#f3e6d0; }
 
-/* ---- ID proof: see what is being uploaded, and what is on file ---- */
+/* ---- Identity documents (host verification): what is being uploaded, and what is on file ---- */
 .id-note{ font-size:13.5px; line-height:1.5; color:var(--ink-3); margin:0 0 10px; }
 .id-warn{ color:var(--alert); }
 .id-preview{ display:flex; align-items:center; gap:12px; margin:8px 0 10px; padding:10px; background:#fff; border:1px solid #e6ded3; border-radius:10px; }
@@ -2709,3 +2715,101 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
 .review-window{ font-size:13px; color:var(--ink-3); }
 .review-window.is-soon{ color:#a3402f; font-weight:500; }
 .review-note{ font-size:13px; color:var(--ink-3); margin-left:8px; }
+
+/* ================= Polish (Sept 2026 browser review) ================= */
+
+/* The star divider belongs to the home/browse page only. On every other
+   view it sat between the header and the content as ~140px of blank. */
+body:not(.showing-hero) .divider-strip{ display:none; }
+/* Inner views: content starts ~40px under the fixed header (75px tall on
+   desktop, ~103px on a phone with the category row). The home hero keeps
+   its own spacing (#suites sets padding-top:0 inline). */
+body:not(.showing-hero) section.pad,
+body:not(.showing-hero) #add-listing.pad{ padding-top:116px; }
+@media (max-width:900px){
+  body:not(.showing-hero) section.pad,
+  body:not(.showing-hero) #add-listing.pad{ padding-top:132px; }
+}
+
+/* "Back to all homes" and similar text links: one line, a normal-sized arrow. */
+a.link{
+  display:inline-flex; align-items:center; gap:8px; white-space:nowrap;
+  font-size:13px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink);
+  min-height:44px;
+}
+a.link svg{ width:18px; height:18px; flex:0 0 auto; stroke:currentColor; }
+a.link:hover{ color:var(--gold-deep); }
+.suite-card a.link{ min-height:0; }
+
+/* Header: the bell's count no longer runs into the avatar, and the camera
+   badge sits off the initial instead of covering it. */
+.nav-bell-btn{ margin-right:10px; padding:10px; margin-top:-6px; margin-bottom:-6px; }
+.nav-bell-count{ top:2px; right:0; }
+.nav-avatar-camera{ width:13px; height:13px; right:-6px; bottom:-5px; border-width:1px; }
+.nav-avatar-camera svg{ width:7px; height:7px; }
+.nav-account-trigger{ gap:10px; }
+
+/* Headings: one family and weight across index views. */
+#suites h2, #suites h3, .section-head h2, .browse-row-head h3,
+.policies-title, .profile-name, .today-heading, .bk-title,
+.inbox-list-header h2, .suite-body h3, .booking-card h3{
+  font-family:'Bodoni Moda', serif; font-weight:500;
+}
+
+/* Tap targets on the booking path: bigger hit areas, same look. */
+.cal-nav{ position:relative; }
+.cal-nav::after{ content:''; position:absolute; inset:-8px; }
+.pill-search .date-range-btn{ padding:15px 0; margin:-15px 0; min-height:44px; }
+#guestLoginLink, #guestLoginLinkMobile{ display:inline-block; padding:13px 4px; margin:-13px -4px; }
+.filter-bg-dots{ gap:0; bottom:-2px; }
+.filter-bg-dots button{
+  position:relative; width:24px; height:44px; border:none; background:transparent;
+}
+.filter-bg-dots button::before{
+  content:''; position:absolute; left:50%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px;
+  border-radius:50%; border:1px solid rgba(255,255,255,0.7); box-sizing:border-box;
+  transition:background .25s ease;
+}
+.filter-bg-dots button.is-active{ background:transparent; }
+.filter-bg-dots button.is-active::before{ background:#fff; }
+
+/* Phone menu: notifications, same list as the header bell. */
+.mobile-notif-toggle{
+  display:flex; align-items:center; gap:8px; background:none; border:none; padding:0; cursor:pointer;
+  font-size:15px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink); text-align:left;
+}
+.mobile-notif-list{ margin:-10px 0 0; border:1px solid var(--line-dark); border-radius:8px; background:#fff; overflow:hidden; }
+.mobile-notif-list .nav-notif-item{ text-transform:none; letter-spacing:normal; }
+
+/* Messages on a phone: the close button gets its own row above the list,
+   so it no longer sits on top of the search and settings icons. */
+@media (max-width:760px){
+  .inbox-panel{ padding-top:48px; }
+  .inbox-close-btn{ top:2px; right:6px; width:44px; height:44px; font-size:28px; opacity:0.75; }
+  .inbox-list-header{ padding-top:6px; }
+  .inbox-list-pane{ border-right:none; }
+}
+
+/* My Bookings: the actions share one left edge, wrap as a group and are
+   easy to tap. */
+.booking-actions{ display:flex; flex-wrap:wrap; align-items:center; gap:4px 20px; margin-top:8px; }
+.booking-actions > .filter-clear,
+.booking-actions .review-open > .filter-clear{ min-height:44px; display:inline-flex; align-items:center; padding:0; margin:0; }
+.booking-actions .review-open{ margin:0; gap:10px; }
+.booking-actions .review-note{ margin-left:0; }
+.booking-actions .booking-request-note{ margin-top:0; }
+.booking-actions .btn{ margin:0; }
+
+/* Sign-up tick in the booking login gate (same as guest-login.html). */
+.gate-consent{ display:flex; gap:10px; align-items:flex-start; margin:16px 0 0; font-size:13px; line-height:1.55; cursor:pointer; text-align:left; }
+.gate-consent input{ width:22px; height:22px; margin:0; flex:0 0 auto; accent-color:var(--ink); cursor:pointer; }
+.gate-consent a{ color:inherit; text-decoration:underline; text-underline-offset:2px; }
+.gate-consent.needs{ outline:2px solid #a3402f; outline-offset:6px; border-radius:2px; }
+
+/* Profile: log out of all devices. */
+.profile-logout-all{ min-height:44px; }
+
+/* Footer: one rule between the links and the bottom line — the two rules
+   with margins on both sides left an empty band between them. */
+footer .foot-top{ padding-bottom:40px; margin-bottom:0; }
+footer .foot-bottom{ margin-top:0; }

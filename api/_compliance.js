@@ -23,7 +23,7 @@ const COMPLIANCE_DEADLINE_DAYS = 15;
 const COMPLIANCE_CHECKS = {
   max_guests_required: {
     label: 'Max Guests is missing',
-    message: 'Please set a valid "Max Guests" value for this listing from Manage Price & Offers — this is now required for every non-Resort stay.',
+    message: 'Please set a valid "Max Guests" value for this listing from Manage listing — this is now required for every non-Resort stay.',
     deadlineDays: COMPLIANCE_DEADLINE_DAYS,
     // Finds every listing across the platform currently failing this
     // requirement — used by the admin-triggered scan.
@@ -31,7 +31,10 @@ const COMPLIANCE_CHECKS = {
       const rows = await sql`
         SELECT id FROM listings
         WHERE status = 'approved' AND listing_type = 'stay' AND property_type != 'Resort'
-          AND (max_guests IS NULL OR trim(max_guests::text) = '' OR trim(max_guests::text) !~ '^[0-9]+$' OR trim(max_guests::text)::int <= 0)
+          -- A CASE, so the ::int cast only ever sees digits ("12+" counts as 12).
+          AND (CASE WHEN trim(COALESCE(max_guests::text, '')) ~ '^[0-9]{1,6}[+]?$'
+                    THEN rtrim(trim(max_guests::text), '+')::int <= 0
+                    ELSE true END)
       `;
       return rows.map(r => r.id);
     },
@@ -43,7 +46,8 @@ const COMPLIANCE_CHECKS = {
       const raw = listing.max_guests;
       if (raw === null || raw === undefined) return false;
       const trimmed = String(raw).trim();
-      return /^[0-9]+$/.test(trimmed) && Number(trimmed) > 0;
+      // "12+" is the listing form's top option and counts as valid.
+      return /^[0-9]+\+?$/.test(trimmed) && Number(trimmed.replace(/\+$/, '')) > 0;
     }
   }
 };

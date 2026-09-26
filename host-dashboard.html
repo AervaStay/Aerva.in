@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Collection — Aerva</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <meta name="robots" content="noindex, nofollow">
 <style>
   body{font-family:'Jost', sans-serif; background:#ffffff; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
@@ -394,7 +395,7 @@
   }
   .photo-editor-zoom{display:flex; align-items:center; gap:10px; font-size:13px; letter-spacing:0.04em; text-transform:uppercase; opacity:0.7; margin-bottom:14px;}
   .photo-editor-zoom input{flex:1 1 auto;}
-  .photo-editor-filters{display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; margin-bottom:16px;}
+  .photo-editor-filters{display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; margin-bottom:16px; touch-action:pan-x;}
   .photo-filter-btn{
     flex:0 0 auto; background:none; border:1px solid #ddd0bc; border-radius:8px; cursor:pointer;
     padding:6px 6px 5px; font-family:'Jost', sans-serif; font-size:12px; letter-spacing:0.04em;
@@ -675,6 +676,32 @@
   .ch-proposal{ margin-top:8px; font-size:14px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .ch-link{ width:100%; font-size:12.5px; padding:8px 10px; border:1px solid #e6dccd; border-radius:8px; margin-top:6px; }
   /* Co-host mode: the owner's own controls are not theirs to use. */
+  /* ---- Phones (Sept 2026) ----
+     The sidebar used to stay a sticky, fixed-height scroll box under
+     900px, which hid its Save button below the fold of a box inside the
+     page. It is part of the page now. Listing cards stack: photo, then
+     the text at full width, then every action in one wrapping row. */
+  @media (max-width:900px){
+    .listing-sidebar{ position:static; max-height:none; overflow:visible; }
+  }
+  @media (max-width:600px){
+    .listing-card{ flex-direction:column; align-items:stretch !important; gap:12px; }
+    .listing-card .listing-thumb, .listing-card .listing-thumb-placeholder{ width:100%; height:140px; object-fit:cover; }
+    .listing-card .listing-info{ min-width:0; width:100%; }
+    .listing-card .listing-info h3{ overflow-wrap:anywhere; }
+    .listing-card .card-actions{ flex-direction:row !important; flex-wrap:wrap; align-items:center !important; gap:10px 18px !important; }
+    .listing-card .card-actions .manage-link{ min-height:36px; display:inline-flex; align-items:center; }
+    /* Seven columns on a phone leave ~44px a day: prices shrink and clip
+       rather than spill out of the cell. */
+    .cal-day{ padding:1px; border-radius:8px; }
+    .cal-day-date{ font-size:11px; }
+    .cal-day-price{ font-size:10.5px; letter-spacing:-0.02em; max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:clip; }
+    .cal-day-guest{ font-size:9.5px; }
+  }
+  .sidebar-list-row.is-imported{ color:#6e675d; }
+  .card-action-btn{ cursor:pointer; font-family:inherit; }
+  .cal-day--imported{ background:repeating-linear-gradient(135deg, #f1efec 0 6px, #e8e3db 6px 12px); }
+
   body.is-cohosting #cohostSection, body.is-cohosting .add-listing-link, body.is-cohosting #verificationBanner,
   body.is-cohosting a.manage-link[href="null"], body.is-cohosting button.manage-link[onclick*="cloneListing"]{ display:none !important; }
 </style>
@@ -902,7 +929,7 @@
             </div>
           </div>
         </div>
-        <p style="font-size:12px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked or promoted date to remove it.</p>
+        <p class="cal-howto" style="font-size:12px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Tap a date, then tap another to choose a range. Tap a blocked or promoted date to remove it.</p>
         <div id="sbBlockedList"></div>
         <div id="sbPromotionsList"></div>
 
@@ -1008,7 +1035,7 @@
               </div>
             </div>
           </div>
-          <p style="font-size:12px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Click a date, or click-drag a range. Click an already-blocked or promoted date to remove it.</p>
+          <p class="cal-howto" style="font-size:12px; opacity:0.6; margin-top:-6px; margin-bottom:10px;">Tap a date, then tap another to choose a range. Tap a blocked or promoted date to remove it.</p>
           <div id="expBlockedList"></div>
           <div id="expPromotionsList"></div>
 
@@ -1135,10 +1162,12 @@
         <div style="font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:#8a6c39; margin-bottom:10px;">Account</div>
         <div id="hostingControl"></div>
         <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+          <button type="button" id="logoutAllBtn" style="background:none; border:1px solid #d9cfc2; border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;">Log out of all devices</button>
           <button type="button" id="pauseAccountBtn" style="background:none; border:1px solid #d9cfc2; border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;">Pause account</button>
           <button type="button" id="deleteAccountBtn" style="background:none; border:1px solid #a3402f; color:#a3402f; border-radius:999px; padding:9px 16px; cursor:pointer; font:inherit;">Delete account</button>
         </div>
         <p style="font-size:13px; color:#6e675d; line-height:1.6; margin:10px 0 0; max-width:62ch;">
+          <strong>Log out of all devices</strong> signs this account out everywhere, this device included.
           <strong>Pause</strong> hides your listings and takes no new bookings. Nothing is erased, and logging in again brings it all back.
           <strong>Delete</strong> erases your personal details for good and cannot be undone. Bookings already paid for go ahead either way.
         </p>
@@ -1147,7 +1176,7 @@
 
       <!-- ---- Payment Options ---- -->
       <div class="profile-tab-panel" id="profilePanelPayment" style="display:none;">
-        <div class="profile-warning">Changing your bank details will re-trigger PAN and Aadhaar verification, since a payout account change is exactly the kind of thing worth double-checking. Your PAN and Aadhaar documents themselves stay the same — just reviewed again.</div>
+        <div class="profile-warning">Changing your bank details will re-trigger PAN and Aadhaar verification, since a payout account change is exactly the kind of thing worth double-checking. Only the verification result is kept — the documents themselves are not stored.</div>
         <div class="settings-row" style="border-bottom:none;">
           <div class="settings-row-main">
             <div class="settings-row-label">Bank Account</div>
@@ -1330,12 +1359,36 @@
 
 <script>
   const API_BASE = 'https://aerva-in.vercel.app';
-  const RAZORPAY_KEY_ID = 'rzp_test_TRBdgq9nPS2wfy'; // public Key ID only — safe to expose, same key used everywhere else
+  // localStorage can throw (Safari private mode, blocked storage): every
+  // read and write on this page goes through these.
+  const safeStorage = {
+    get(key){ try { return localStorage.getItem(key); } catch(e){ return null; } },
+    set(key, value){ try { localStorage.setItem(key, value); return true; } catch(e){ return false; } },
+    remove(key){ try { localStorage.removeItem(key); } catch(e){ /* no-op */ } }
+  };
+  // Anything a guest, host or admin typed is escaped before it becomes
+  // page markup — a guest named <img onerror=…> must stay plain text.
+  function escH(t){
+    return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  }
+  // Only Aerva's own photo store goes into an <img src>.
+  function safeImgSrc(u){
+    return (typeof u === 'string' && /^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\/[^\s"'<>]+$/i.test(u)) ? u : '';
+  }
+  // ₹18,500 — Indian digit grouping.
+  function inrText(n){ const v = Number(n); return Number.isFinite(v) && v > 0 ? '₹' + Math.round(v).toLocaleString('en-IN') : '₹—'; }
+  // Plain words for a listing's status on its card.
+  const STATUS_WORDS = { approved: 'Approved', pending: 'Awaiting review', draft: 'Draft', rejected: 'Rejected', deactivated: 'Paused', removed: 'Removed', blocked: 'Blocked — needs a fix' };
   // Single login — same session used across the whole site (see
   // guest-auth.js / guest-phone-auth.js). There's no separate host
   // account/session to check for anymore.
-  const sessionToken = localStorage.getItem('aerva_guest_session');
-  const hostEmail = localStorage.getItem('aerva_guest_email');
+  const sessionToken = safeStorage.get('aerva_guest_session');
+  const hostEmail = safeStorage.get('aerva_guest_email');
+  // Every upload names its purpose and carries the session, so
+  // blob-upload.js knows who is uploading (it refuses anything else).
+  function uploadClientPayload(purpose){
+    return JSON.stringify({ purpose: purpose || 'photo', token: safeStorage.get('aerva_guest_session') || sessionToken || '' });
+  }
 
   // Declared early (before any function that reads them gets called) —
   // let bindings aren't usable before their own declaration line runs,
@@ -1355,14 +1408,15 @@
   updateProfileAvatar();
 
   document.getElementById('logoutBtn').addEventListener('click', () => {
-    localStorage.removeItem('aerva_guest_session');
-    localStorage.removeItem('aerva_guest_email');
-    localStorage.removeItem('aerva_guest_name');
+    safeStorage.remove('aerva_guest_session');
+    safeStorage.remove('aerva_guest_email');
+    safeStorage.remove('aerva_guest_name');
     window.location.href = 'guest-login.html';
   });
 
   function statusBadgeHtml(status){
-    return `<span class="status-badge status-${status}">${status}</span>`;
+    const key = String(status || '').replace(/[^a-z_]/gi, '');
+    return `<span class="status-badge status-${key}">${escH(STATUS_WORDS[key] || status || '')}</span>`;
   }
   // Pause the whole account (guest-profile.js, mode 'deactivateAccount').
   // Reversible: logging in again restores the account and the listings
@@ -1407,6 +1461,7 @@
       body: JSON.stringify({ setListingActive: { listingId, active } }) });
     const data = await res.json().catch(() => ({}));
     if(!res.ok){ alert(data.error || 'Could not do this right now.'); return; }
+    if(data.warning) alert(data.warning);
     loadListings();
   }
 
@@ -1432,7 +1487,7 @@
     const p = currentGuestProfile || {};
     const email = document.getElementById('feedbackEmail');
     const phone = document.getElementById('feedbackPhone');
-    if(email && !email.value) email.value = p.email || localStorage.getItem('aerva_guest_email') || '';
+    if(email && !email.value) email.value = p.email || safeStorage.get('aerva_guest_email') || '';
     if(phone && !phone.value) phone.value = p.phone || '';
   }
 
@@ -1516,7 +1571,7 @@
     const approved = currentListings.filter(l => l.status === 'approved');
     const currentValue = select.value;
     select.innerHTML = '<option value="">— Select one of your live listings —</option>' +
-      approved.map(l => `<option value="${l.id}">${l.property_name}${l.city ? ' (' + l.city + ')' : ''}</option>`).join('');
+      approved.map(l => `<option value="${Number(l.id)}">${escH(l.property_name)}${l.city ? ' (' + escH(l.city) + ')' : ''}</option>`).join('');
     if(approved.some(l => String(l.id) === currentValue)) select.value = currentValue;
 
     const noteEl = document.getElementById('expHostingListingNote');
@@ -1701,19 +1756,28 @@
   function buildDashboardCard(item, isExperience){
     const interiorPhotos = Array.isArray(item.interior_photo_urls) ? item.interior_photo_urls : [];
     const exteriorPhotos = Array.isArray(item.exterior_photo_urls) ? item.exterior_photo_urls : [];
-    const leadPhoto = item.cover_photo_url || interiorPhotos[0] || exteriorPhotos[0];
+    const leadPhoto = safeImgSrc(item.cover_photo_url || interiorPhotos[0] || exteriorPhotos[0]);
     const thumbHtml = leadPhoto
-      ? `<img class="listing-thumb" src="${leadPhoto}" alt="${item.property_name}">`
-      : `<div class="listing-thumb-placeholder">${(item.property_name || '?').charAt(0).toUpperCase()}</div>`;
+      ? `<img class="listing-thumb" src="${escH(leadPhoto)}" alt="${escH(item.property_name)}">`
+      : `<div class="listing-thumb-placeholder">${escH((item.property_name || '?').charAt(0).toUpperCase())}</div>`;
     const rejectionNoteHtml = (item.status === 'rejected' && item.rejection_reason)
-      ? `<p style="font-size:14px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${item.rejection_reason}</p>`
+      ? `<p style="font-size:14px; color:#a3402f; margin:4px 0 0; max-width:420px;">Rejected: ${escH(item.rejection_reason)}</p>`
       : '';
+    const itemId = Number(item.id);
+    // Actions carry their listing in data-* attributes and are handled by
+    // one listener on the list (see listingsContainer's click handler) —
+    // never a name pasted into an onclick string.
+    const ownerActions = window.AervaCohostActive ? '' : [
+      item.status === 'approved' ? `<button type="button" class="manage-link card-action-btn" style="color:#a3402f;" data-card-action="deactivate" data-id="${itemId}">Deactivate</button>` : '',
+      item.status === 'deactivated' ? `<button type="button" class="manage-link card-action-btn" data-card-action="reactivate" data-id="${itemId}">Reactivate</button>` : '',
+      ['approved', 'deactivated', 'rejected'].includes(item.status) ? `<button type="button" class="manage-link card-action-btn" style="color:#a3402f;" data-card-action="remove" data-id="${itemId}" data-name="${escH(item.property_name || '')}">Remove</button>` : ''
+    ].join('');
 
     if(isExperience){
       const editUrl = `index.html?view=list-experience&edit=${item.id}`;
       const stayNote = item.experience_type === 'with_stay' ? 'Includes a stay' : 'Experience only';
       const calendarHintHtml = item.status === 'approved'
-        ? `<p class="calendar-hint">📅 Click to manage price, dates &amp; promotions</p>`
+        ? `<p class="calendar-hint">Select to manage price, dates &amp; promotions</p>`
         : item.status === 'pending'
         ? `<p class="calendar-hint calendar-hint-muted">Awaiting review — editing unlocks once that's complete</p>`
         : `<p class="calendar-hint calendar-hint-muted">Calendar unlocks once approved</p>`;
@@ -1726,28 +1790,32 @@
         ? `<span class="manage-link" style="opacity:0.5; cursor:default;" title="This experience is still awaiting its first review.">Awaiting Review</span>`
         : `<a class="manage-link" href="${editUrl}">Manage</a>`;
       return `
-        <div class="listing-card" data-href="${item.status === 'pending' ? '' : editUrl}" data-experience-id="${item.id}" data-status="${item.status}" data-listing-type="experience" style="cursor:${item.status === 'pending' ? 'default' : 'pointer'};">
+        <div class="listing-card" data-href="${item.status === 'pending' ? '' : editUrl}" data-experience-id="${itemId}" data-status="${escH(item.status)}" data-listing-type="experience" style="cursor:${item.status === 'pending' ? 'default' : 'pointer'};">
           ${thumbHtml}
           <div class="listing-info">
-            <h3>${item.property_name || '(Untitled)'} <span style="font-size:12px; opacity:0.5; text-transform:uppercase; letter-spacing:0.04em;">Experience</span></h3>
-            <div class="listing-meta">${stayNote} · ₹${item.nightly_rate || '—'}${item.experience_price_unit === 'per_person' ? '/person' : ''} ${statusBadgeHtml(item.status)}</div>
+            <h3>${escH(item.property_name || '(Untitled)')} <span style="font-size:12px; opacity:0.5; text-transform:uppercase; letter-spacing:0.04em;">Experience</span></h3>
+            <div class="listing-meta">${stayNote} · ${inrText(item.nightly_rate)}${item.experience_price_unit === 'per_person' ? '/person' : ''} ${statusBadgeHtml(item.status)}</div>
             ${rejectionNoteHtml}
             ${calendarHintHtml}
           </div>
-          <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
+          <div class="card-actions" style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
             ${experienceActionHtml}
+            ${ownerActions}
           </div>
         </div>
       `;
     }
 
-    const actionHref = (item.status === 'draft' || item.status === 'rejected') ? `index.html?view=list-property&edit=${item.id}` : item.manageLink;
+    // The manage link is built by our own server; still, only a link to the
+    // manage page is ever put in an href.
+    const manageHref = (typeof item.manageLink === 'string' && /^(https:\/\/aerva\.in\/)?manage-listing\.html\?token=[\w.\-~%]+$/.test(item.manageLink)) ? item.manageLink : '';
+    const actionHref = (item.status === 'draft' || item.status === 'rejected') ? `index.html?view=list-property&edit=${itemId}` : manageHref;
     const actionLink = item.status === 'draft'
-      ? `<a class="manage-link" href="index.html?view=list-property&edit=${item.id}">Continue Editing</a>`
+      ? `<a class="manage-link" href="index.html?view=list-property&edit=${itemId}">Continue Editing</a>`
       : item.status === 'rejected'
-      ? `<a class="manage-link" href="index.html?view=list-property&edit=${item.id}">Edit &amp; Resubmit</a>`
-      : `<a class="manage-link" href="${item.manageLink}">Manage</a>`;
-    const cloneLink = `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); cloneListing(${item.id})">Clone</button>`;
+      ? `<a class="manage-link" href="index.html?view=list-property&edit=${itemId}">Edit &amp; Resubmit</a>`
+      : `<a class="manage-link" href="${escH(manageHref || 'null')}">Manage</a>`;
+    const cloneLink = `<button type="button" class="manage-link card-action-btn" onclick="event.stopPropagation(); cloneListing(${itemId})">Clone</button>`;
     // A Resort has no calendar here at all — only Manage and Clone.
     // Its availability is per-ROOM, and this sidebar is built around one
     // calendar for one bookable unit, so a resort could only ever be
@@ -1760,25 +1828,23 @@
     const calendarHintHtml = isResort
       ? ''
       : item.status === 'approved'
-      ? `<p class="calendar-hint">📅 Click to manage price, dates, promotions &amp; amenities</p>`
+      ? `<p class="calendar-hint">Select to manage price, dates, promotions &amp; amenities</p>`
       : item.status === 'pending'
       ? `<p class="calendar-hint calendar-hint-muted">Calendar &amp; promotions unlock once approved</p>`
       : '';
     return `
-      <div class="listing-card" data-href="${actionHref}" data-listing-id="${item.id}" data-status="${item.status}" data-listing-type="stay" data-calendar="${isResort ? 'off' : 'on'}" style="cursor:pointer;">
+      <div class="listing-card" data-href="${escH(actionHref)}" data-listing-id="${itemId}" data-status="${escH(item.status)}" data-listing-type="stay" data-calendar="${isResort ? 'off' : 'on'}" style="cursor:pointer;">
         ${thumbHtml}
         <div class="listing-info">
-          <h3>${item.property_name || '(Untitled draft)'}</h3>
-          <div class="listing-meta">${item.city || 'No city yet'} · ₹${item.nightly_rate || '—'}/night ${statusBadgeHtml(item.status)}</div>
+          <h3>${escH(item.property_name || '(Untitled draft)')}</h3>
+          <div class="listing-meta">${escH(item.city || 'No city yet')} · ${inrText(item.nightly_rate)}/night ${statusBadgeHtml(item.status)}</div>
           ${rejectionNoteHtml}
           ${calendarHintHtml}
         </div>
-        <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
+        <div class="card-actions" style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
           ${actionLink}
           ${cloneLink}
-          ${item.status === 'approved' && !window.AervaCohostActive ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0; color:#a3402f;" onclick="event.stopPropagation(); setListingActive(${Number(item.id)}, false)">Deactivate</button>` : ''}
-          ${item.status === 'deactivated' && !window.AervaCohostActive ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0;" onclick="event.stopPropagation(); setListingActive(${Number(item.id)}, true)">Reactivate</button>` : ''}
-          ${['approved', 'deactivated', 'rejected'].includes(item.status) && !window.AervaCohostActive ? `<button type="button" class="manage-link" style="background:none; border:none; cursor:pointer; font:inherit; padding:0; color:#a3402f;" onclick="event.stopPropagation(); removeListing(${Number(item.id)}, '${String(item.property_name || '').replace(/'/g, "\\'").replace(/</g, '')}')">Remove</button>` : ''}
+          ${ownerActions}
         </div>
       </div>
     `;
@@ -1924,8 +1990,11 @@
     // property (different room count, etc.), where the original's
     // exterior shots may not even apply.
     const withPhotos = confirm('Clone this listing WITH its existing exterior photos?\n\nOK = carry over the exterior photos (still editable/removable after).\nCancel = start with a blank photo gallery instead.\n\nEverything else about the listing is copied either way, and room/interior photos always need re-uploading regardless of this choice.');
-    localStorage.setItem('aerva_clone_listing', JSON.stringify(listing));
-    localStorage.setItem('aerva_clone_with_photos', withPhotos ? '1' : '0');
+    if(!safeStorage.set('aerva_clone_listing', JSON.stringify(listing))){
+      alert('Your browser is blocking saved data (private mode?), so the listing can\'t be copied. Please try in a normal window.');
+      return;
+    }
+    safeStorage.set('aerva_clone_with_photos', withPhotos ? '1' : '0');
     window.location.href = 'index.html?view=list-property&clone=1';
   }
 
@@ -1955,7 +2024,7 @@
     const photoUrl = currentGuestProfile && currentGuestProfile.profilePhotoUrl;
     const displayName = (currentGuestProfile && currentGuestProfile.name) || (currentVerification && currentVerification.hostName) || hostEmail || '';
     const initial = displayName ? displayName.trim().charAt(0).toUpperCase() : '?';
-    const innerHtml = photoUrl ? `<img src="${photoUrl}" alt="Profile photo">` : initial;
+    const innerHtml = photoUrl ? `<img src="${escH(photoUrl)}" alt="Profile photo">` : escH(initial);
     const verified = isFullyVerified(currentVerification);
 
     ['profileAvatarCircle', 'profileModalAvatarCircle'].forEach(id => {
@@ -2055,9 +2124,9 @@
           <strong>Step 1: PAN Verification</strong>
           <span class="verify-status verify-status-${v.panStatus}">${verifyStatusLabel(v.panStatus)}</span>
         </div>
-        ${v.panStatus === 'rejected' && v.panRejectionReason ? `<p class="verify-rejection-note">${v.panRejectionReason}</p>` : ''}
+        ${v.panStatus === 'rejected' && v.panRejectionReason ? `<p class="verify-rejection-note">${escH(v.panRejectionReason)}</p>` : ''}
         ${v.panSubmitted
-          ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + v.panNumberMasked + '. ' : ''}Submitted — this can't be changed here. Contact hello@aerva.in if it needs to be updated.</p>`
+          ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + escH(v.panNumberMasked) + '. ' : ''}Submitted — this can't be changed here. Contact hello@aerva.in if it needs to be updated.</p>`
           : `
             <input type="text" id="panNumberInput" placeholder="PAN number, e.g. ABCDE1234F" style="text-transform:uppercase;">
             <input type="file" id="panFileInput" accept="image/*,.pdf">
@@ -2071,7 +2140,7 @@
           <strong>Step 2: Aadhaar Verification</strong>
           <span class="verify-status verify-status-${v.aadhaarStatus}">${verifyStatusLabel(v.aadhaarStatus)}</span>
         </div>
-        ${v.aadhaarStatus === 'rejected' && v.aadhaarRejectionReason ? `<p class="verify-rejection-note">${v.aadhaarRejectionReason}</p>` : ''}
+        ${v.aadhaarStatus === 'rejected' && v.aadhaarRejectionReason ? `<p class="verify-rejection-note">${escH(v.aadhaarRejectionReason)}</p>` : ''}
         ${v.aadhaarSubmitted
           ? `<p class="verify-locked-note">Submitted — this can't be changed here. Contact hello@aerva.in if it needs to be updated.</p>`
           : `
@@ -2086,8 +2155,8 @@
           <strong>Step 3: Bank Account Verification</strong>
           <span class="verify-status verify-status-${v.bankStatus}">${verifyStatusLabel(v.bankStatus)}</span>
         </div>
-        ${v.bankStatus === 'rejected' && v.bankRejectionReason ? `<p class="verify-rejection-note">${v.bankRejectionReason}</p>` : ''}
-        <p class="verify-locked-note">${v.bankAccountNumberMasked ? 'Account on file: ' + v.bankAccountNumberMasked + '. ' : 'No bank details on file yet. '}Manage this under the <a href="#" id="goToPaymentTabLink" style="color:#8a6c39;">Payment Options</a> tab.</p>
+        ${v.bankStatus === 'rejected' && v.bankRejectionReason ? `<p class="verify-rejection-note">${escH(v.bankRejectionReason)}</p>` : ''}
+        <p class="verify-locked-note">${v.bankAccountNumberMasked ? 'Account on file: ' + escH(v.bankAccountNumberMasked) + '. ' : 'No bank details on file yet. '}Manage this under the <a href="#" id="goToPaymentTabLink" style="color:#8a6c39;">Payment Options</a> tab.</p>
       </div>
 
       <p style="margin:14px 0 0; font-size:13.5px; opacity:0.65;">Payouts are held until all three steps show Approved.</p>
@@ -2121,14 +2190,13 @@
         this.textContent = 'Uploading…';
         try{
           const { upload } = await import('https://esm.sh/@vercel/blob/client');
-          // Same clientPayload string used for Aadhaar — its only job is
-          // telling blob-upload.js to allow PDFs (not just images) for
-          // host verification documents, and that applies equally to a
-          // scanned/e-PAN download.
+          // Same purpose as Aadhaar — it tells blob-upload.js to allow
+          // PDFs (not just images) for host verification documents, and
+          // that applies equally to a scanned/e-PAN download.
           const result = await upload(file.name, file, {
             access: 'public',
             handleUploadUrl: API_BASE + '/api/blob-upload',
-            clientPayload: 'aadhaar-verification'
+            clientPayload: uploadClientPayload('aadhaar-verification')
           });
           const res = await fetch(API_BASE + '/api/host-listings', {
             method: 'POST',
@@ -2172,7 +2240,7 @@
           const result = await upload(file.name, file, {
             access: 'public',
             handleUploadUrl: API_BASE + '/api/blob-upload',
-            clientPayload: 'aadhaar-verification'
+            clientPayload: uploadClientPayload('aadhaar-verification')
           });
           const res = await fetch(API_BASE + '/api/host-listings', {
             method: 'POST',
@@ -2509,7 +2577,8 @@
       const { upload } = await import('https://esm.sh/@vercel/blob/client');
       const result = await upload(file.name, file, {
         access: 'public',
-        handleUploadUrl: API_BASE + '/api/blob-upload'
+        handleUploadUrl: API_BASE + '/api/blob-upload',
+        clientPayload: uploadClientPayload('profile-photo')
       });
       const res = await fetch(API_BASE + '/api/guest-profile', {
         method: 'PATCH',
@@ -2671,7 +2740,7 @@
     const fill = (id, val) => { const el = document.getElementById(id); if(el && !el.value) el.value = val || ''; };
     set('profileNameDisplay',  p.name  || 'Not provided');
     set('profilePhoneDisplay', p.phone || 'Not provided');
-    set('profileEmailValue',   p.email || localStorage.getItem('aerva_guest_email') || '—');
+    set('profileEmailValue',   p.email || safeStorage.get('aerva_guest_email') || '—');
     fill('profileName',  p.name);
     fill('profilePhone', p.phone);
   }
@@ -2701,7 +2770,7 @@
   function markNotifRead(id){
     try{
       const seen = notifRead();
-      if(!seen.includes(id)){ seen.push(id); localStorage.setItem(NOTIF_READ_KEY, JSON.stringify(seen.slice(-200))); }
+      if(!seen.includes(id)){ seen.push(id); safeStorage.set(NOTIF_READ_KEY, JSON.stringify(seen.slice(-200))); }
     }catch(e){}
   }
   function renderNotifications(notices){
@@ -2785,9 +2854,9 @@
         headers: { 'Authorization': 'Bearer ' + sessionToken }
       });
       if(res.status === 401){
-        localStorage.removeItem('aerva_guest_session');
-        localStorage.removeItem('aerva_guest_email');
-        localStorage.removeItem('aerva_guest_name');
+        safeStorage.remove('aerva_guest_session');
+        safeStorage.remove('aerva_guest_email');
+        safeStorage.remove('aerva_guest_name');
         window.location.href = 'guest-login.html';
         return;
       }
@@ -2828,6 +2897,17 @@
   // selectExperienceForCalendar). Anything not approved just goes
   // straight to its edit page.
   document.getElementById('listingsContainer').addEventListener('click', (e) => {
+    // Deactivate / Reactivate / Remove on a card: the listing comes from
+    // the button's data-* attributes, never from markup-built strings.
+    const act = e.target.closest('[data-card-action]');
+    if(act){
+      e.stopPropagation();
+      const id = Number(act.dataset.id);
+      if(act.dataset.cardAction === 'deactivate') setListingActive(id, false);
+      else if(act.dataset.cardAction === 'reactivate') setListingActive(id, true);
+      else if(act.dataset.cardAction === 'remove') removeListing(id, act.dataset.name || '');
+      return;
+    }
     if(e.target.closest('a.manage-link')) return;
     const card = e.target.closest('.listing-card');
     if(!card || !card.dataset.href) return;
@@ -2947,7 +3027,15 @@
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
-  function sbTodayStr(){ const t = new Date(); t.setHours(0,0,0,0); return sbToDateStr(t); }
+  // The property's own today, from the server (update-listing-pricing
+  // returns it with the listing) — not this browser's clock, which can be
+  // a day off for a host abroad. Falls back to the browser only until a
+  // listing has loaded.
+  let sbServerToday = null;
+  function sbTodayStr(){
+    if(sbServerToday) return sbServerToday;
+    const t = new Date(); t.setHours(0,0,0,0); return sbToDateStr(t);
+  }
   function sbInRange(dateStr, rangeStart, rangeEnd){ return dateStr >= rangeStart && dateStr < rangeEnd; }
   function sbNextDay(dateStr){ const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + 1); return sbToDateStr(d); }
 
@@ -2963,29 +3051,29 @@
   function findBookingForListingDate(listingId, dateStr){
     return allHostBookings.find(b =>
       b.listing_id === listingId && b.status !== 'cancelled' &&
-      sbInRange(dateStr, sbToDateStr(new Date(b.arrival)), sbToDateStr(new Date(b.departure)))
+      sbInRange(dateStr, String(b.arrival || '').slice(0, 10), String(b.departure || '').slice(0, 10))
     );
   }
 
   function showBookingDetailsPopup(booking){
-    const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN');
-    const arrival = new Date(booking.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-    const departure = new Date(booking.departure).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-    const statusColors = { paid: '#3a7d44', refunded: '#8a6c39', cancelled: '#a3402f' };
+    const fmt = (n) => '₹' + (Number(n) || 0).toLocaleString('en-IN');
+    const ymd = (v) => new Date(String(v || '').slice(0, 10) + 'T00:00:00');
+    const arrival = ymd(booking.arrival).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    const departure = ymd(booking.departure).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     document.getElementById('bookingDetailsBody').innerHTML = `
-      <h3 style="font-family:Georgia,serif; font-size:19px; margin-bottom:4px;">${booking.guest_name || booking.guest_email}</h3>
-      <p style="font-size:14px; opacity:0.6; margin-bottom:20px;">${booking.suite_name}</p>
+      <h3 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:19px; margin-bottom:4px;">${escH(booking.guest_name || booking.guest_email)}</h3>
+      <p style="font-size:14px; opacity:0.6; margin-bottom:20px;">${escH(booking.suite_name)}</p>
 
       <div class="settings-row" style="border-bottom:1px solid #e0d5c0;">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Dates</div>
-          <div class="settings-row-value">${arrival} → ${departure} (${booking.nights} night${booking.nights === 1 ? '' : 's'})</div>
+          <div class="settings-row-value">${arrival} → ${departure} (${Number(booking.nights) || 0} night${Number(booking.nights) === 1 ? '' : 's'})</div>
         </div>
       </div>
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Guests</div>
-          <div class="settings-row-value">${booking.guests}</div>
+          <div class="settings-row-value">${escH(booking.guests)}</div>
         </div>
       </div>
       <div class="settings-row">
@@ -3003,13 +3091,13 @@
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Status</div>
-          <div class="settings-row-value"><span class="status-badge status-${booking.status}">${booking.status}</span></div>
+          <div class="settings-row-value"><span class="status-badge status-${escH(booking.status)}">${escH(booking.status)}</span></div>
         </div>
       </div>
       <div class="settings-row" style="border-bottom:none;">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Contact</div>
-          <div class="settings-row-value">${booking.guest_email}</div>
+          <div class="settings-row-value">${escH(booking.guest_email)}</div>
         </div>
       </div>
     `;
@@ -3070,21 +3158,27 @@
       sbDiscountDescription = l.discount_description;
       sbSecurityDeposit = l.security_deposit;
 
+      if(data.today) sbServerToday = data.today;
+      // importedFrom: dates booked on another site (calendar sync). Shown
+      // read-only; the server never saves them from here.
       sbBlockedDateRows = (data.blockedDates || []).map(b => ({
         id: b.id, startDate: b.start_date ? b.start_date.slice(0, 10) : '',
-        endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || ''
+        endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || '',
+        importedFrom: b.imported_from || null
       }));
       // Snapshot of the ids this page loaded. Sent back on save so the
       // server only deletes rows this page actually saw — a block added
       // on the Status page in the meantime is left alone instead of
       // being wiped by a full-replace save.
       sbBlockedLoadedIds = sbBlockedDateRows.map(b => b.id).filter(Boolean);
+      // roomId round-trips so a room's promotion keeps its room on save.
       sbPromotionRows = (data.promotions || []).map(p => ({
-        id: p.id, name: p.name, discountType: p.discount_type, discountValue: Number(p.discount_value),
+        id: p.id, roomId: p.room_id == null ? null : p.room_id, name: p.name, discountType: p.discount_type, discountValue: Number(p.discount_value),
         minNights: p.min_nights || null,
         startDate: p.start_date ? p.start_date.slice(0, 10) : '', endDate: p.end_date ? p.end_date.slice(0, 10) : '',
         isActive: p.is_active
       }));
+      sbPromotionLoadedIds = sbPromotionRows.map(p => p.id).filter(Boolean);
       sbAmenityRows = (data.paidAmenities || []).map(a => ({
         id: a.id, name: a.name, description: a.description, price: a.price,
         availableFrom: a.available_from || '', availableUntil: a.available_until || '',
@@ -3096,15 +3190,10 @@
       sbRenderAmenitiesList();
       sbRenderCalendar();
 
-      // Real bookings, for shading the calendar — public endpoint, no
-      // auth needed, same one the guest-facing calendar reads from.
-      try{
-        const bookedRes = await fetch(API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
-        const bookedData = await bookedRes.json();
-        sbBookedRanges = bookedData.bookedRanges || [];
-      } catch(err){
-        sbBookedRanges = [];
-      }
+      // Real bookings, for shading the calendar. From the same owner
+      // load above (the public ?availabilityFor answers only for approved
+      // listings, so a paused or blocked listing would show none).
+      sbBookedRanges = Array.isArray(data.bookedRanges) ? data.bookedRanges : [];
       sbRenderCalendar();
     } catch(err){
       document.getElementById('sidebarContent').innerHTML = '<p style="font-size:14px; color:#a3402f;">Could not load this listing\'s details. Please refresh and try again.</p>';
@@ -3114,11 +3203,20 @@
   // ---- Blocked-dates calendar ----
   let sbBlockedDateRows = [];
   let sbBlockedLoadedIds = [];
+  let sbPromotionLoadedIds = [];
   let sbCalMonth = new Date(); sbCalMonth.setDate(1); sbCalMonth.setHours(0,0,0,0);
   let sbCalSelStart = null, sbCalSelEnd = null, sbCalDragging = false;
 
+  // A host's own block wins over an imported one on the same night, so
+  // the host can still act on what is theirs.
   function sbBlockedRowFor(dateStr){
-    return sbBlockedDateRows.find(b => b.startDate && b.endDate && sbInRange(dateStr, b.startDate, b.endDate));
+    const hits = sbBlockedDateRows.filter(b => b.startDate && b.endDate && sbInRange(dateStr, b.startDate, b.endDate));
+    return hits.find(b => !b.importedFrom) || hits[0];
+  }
+  // Dates booked on another site can only be freed there.
+  function importedBlockNotice(block){
+    const site = block.importedFrom || 'another site';
+    alert(`These dates are booked on ${site}. Free them on ${site} and they reopen here at the next calendar sync.`);
   }
 
   // ============================================================
@@ -3181,6 +3279,7 @@
   }
 
   let expPromotionRows = [];
+  let expPromotionLoadedIds = [];
   let expCalMonth = new Date(); expCalMonth.setDate(1); expCalMonth.setHours(0,0,0,0);
   let expCalSelStart = null, expCalSelEnd = null, expCalDragging = false;
   let expCalBlockedLoadedIds = [];
@@ -3220,17 +3319,20 @@
       expCalCity = l.city;
       expCalArea = l.area;
 
+      if(data.today) sbServerToday = data.today;
       expCalBlockedDateRows = (data.blockedDates || []).map(b => ({
         id: b.id, startDate: b.start_date ? b.start_date.slice(0, 10) : '',
-        endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || ''
+        endDate: b.end_date ? b.end_date.slice(0, 10) : '', reason: b.reason || '',
+        importedFrom: b.imported_from || null
       }));
       expCalBlockedLoadedIds = expCalBlockedDateRows.map(b => b.id).filter(Boolean);
       expPromotionRows = (data.promotions || []).map(p => ({
-        id: p.id, name: p.name, discountType: p.discount_type, discountValue: Number(p.discount_value),
-        minNights: null,
+        id: p.id, roomId: p.room_id == null ? null : p.room_id, name: p.name, discountType: p.discount_type, discountValue: Number(p.discount_value),
+        minNights: p.min_nights || null,
         startDate: p.start_date ? p.start_date.slice(0, 10) : '', endDate: p.end_date ? p.end_date.slice(0, 10) : '',
         isActive: p.is_active
       }));
+      expPromotionLoadedIds = expPromotionRows.map(p => p.id).filter(Boolean);
       expRenderBlockedList();
       expRenderPromotionsList();
       expRenderCalendar();
@@ -3240,7 +3342,8 @@
   }
 
   function expCalBlockedRowFor(dateStr){
-    return expCalBlockedDateRows.find(b => b.startDate && b.endDate && sbInRange(dateStr, b.startDate, b.endDate));
+    const hits = expCalBlockedDateRows.filter(b => b.startDate && b.endDate && sbInRange(dateStr, b.startDate, b.endDate));
+    return hits.find(b => !b.importedFrom) || hits[0];
   }
   function expRenderCalendar(){
     const grid = document.getElementById('expCalGrid');
@@ -3272,17 +3375,17 @@
       else if(blockedRow) cls += ' cal-day--blocked';
       const title = promoRow
         ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
-        : (blockedRow ? `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}` : '');
+        : (blockedRow ? (blockedRow.importedFrom ? `Booked on ${blockedRow.importedFrom}` : `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}`) : '');
       let priceOrGuestHtml = '';
       let cellTitle = title;
       if(booking){
-        const shortName = (booking.guest_name || booking.guest_email.split('@')[0]).split(' ')[0];
-        priceOrGuestHtml = `<span class="cal-day-guest">${shortName}</span>`;
+        const shortName = String(booking.guest_name || String(booking.guest_email || '').split('@')[0] || 'Booked').split(' ')[0];
+        priceOrGuestHtml = `<span class="cal-day-guest">${escH(shortName)}</span>`;
         cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
       } else if(!isPast){
         priceOrGuestHtml = `<span class="cal-day-price">${formatCompactPrice(expComputePriceForDate(dateStr))}</span>`;
       }
-      html += `<div class="${cls}" data-date="${dateStr}" title="${cellTitle}"><span class="cal-day-date">${day}</span>${priceOrGuestHtml}</div>`;
+      html += `<div class="${cls}${blockedRow && blockedRow.importedFrom && !promoRow ? ' cal-day--imported' : ''}" data-date="${dateStr}" title="${escH(cellTitle)}"><span class="cal-day-date">${day}</span>${priceOrGuestHtml}</div>`;
     }
     grid.innerHTML = html;
     grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
@@ -3387,6 +3490,7 @@
       return;
     }
     const existingBlock = expCalBlockedRowFor(dateStr);
+    if(existingBlock && existingBlock.importedFrom){ importedBlockNotice(existingBlock); return; }
     if(existingBlock){
       // A block is a RANGE — removing it outright reopens every date in
       // it. The host chooses the scope, same as the Status page.
@@ -3449,9 +3553,12 @@
   function expRenderBlockedList(){
     const list = document.getElementById('expBlockedList');
     if(!expCalBlockedDateRows.length){ list.innerHTML = ''; return; }
-    list.innerHTML = expCalBlockedDateRows.map((b, idx) => `
+    list.innerHTML = expCalBlockedDateRows.map((b, idx) => b.importedFrom ? `
+      <div class="sidebar-list-row is-imported">
+        ${escH(b.startDate)} to ${escH(b.endDate)} — Booked on ${escH(b.importedFrom)}
+      </div>` : `
       <div class="sidebar-list-row">
-        ${b.startDate} to ${b.endDate}${b.reason ? ' — ' + b.reason : ''}
+        ${escH(b.startDate)} to ${escH(b.endDate)}${b.reason ? ' — ' + escH(b.reason) : ''}
         <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
       </div>
     `).join('');
@@ -3498,7 +3605,7 @@
       const discountLabel = p.discountType === 'flat' ? `₹${p.discountValue} off` : `${p.discountValue}% off`;
       return `
         <div class="sidebar-list-row">
-          <strong>${p.name}</strong><br>${p.startDate} to ${p.endDate} — ${discountLabel}
+          <strong>${escH(p.name)}</strong><br>${escH(p.startDate)} to ${escH(p.endDate)} — ${escH(discountLabel)}
           <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
         </div>
       `;
@@ -3536,9 +3643,10 @@
           experiencePriceUnit: newPriceUnit,
           city: expCalCity,
           area: expCalArea,
-          blockedDates: expCalBlockedDateRows,
+          blockedDates: expCalBlockedDateRows.filter(b => !b.importedFrom),
           blockedDatesLoadedIds: expCalBlockedLoadedIds,
-          promotions: expPromotionRows
+          promotions: expPromotionRows,
+          promotionsLoadedIds: expPromotionLoadedIds
         })
       });
       const data = await res.json();
@@ -3611,7 +3719,7 @@
       else if(blockedRow) cls += ' cal-day--blocked';
       const title = promoRow
         ? `${promoRow.name} — ${promoRow.discountType === 'flat' ? '₹' + promoRow.discountValue + ' off' : promoRow.discountValue + '% off'}${alsoBlocked ? ' (blocked — not actually bookable)' : ''}`
-        : (blockedRow ? `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}` : '');
+        : (blockedRow ? (blockedRow.importedFrom ? `Booked on ${blockedRow.importedFrom}` : `Blocked${blockedRow.reason ? ' — ' + blockedRow.reason : ''}`) : '');
       // A booked cell shows who's staying, right on the calendar. Every
       // other cell shows the actual price for that date instead
       // (promo-discounted if one applies, shown directly as a real
@@ -3624,14 +3732,14 @@
       if(booked && sbListingId != null){
         const booking = findBookingForListingDate(sbListingId, dateStr);
         if(booking){
-          const shortName = (booking.guest_name || booking.guest_email.split('@')[0]).split(' ')[0];
-          priceOrGuestHtml = `<span class="cal-day-guest">${shortName}</span>`;
+          const shortName = String(booking.guest_name || String(booking.guest_email || '').split('@')[0] || 'Booked').split(' ')[0];
+          priceOrGuestHtml = `<span class="cal-day-guest">${escH(shortName)}</span>`;
           cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
         }
       } else if(!isPast){
         priceOrGuestHtml = `<span class="cal-day-price">${formatCompactPrice(sbComputePriceForDate(dateStr))}</span>`;
       }
-      html += `<div class="${cls}" data-date="${dateStr}" title="${cellTitle}"><span class="cal-day-date">${day}</span>${priceOrGuestHtml}</div>`;
+      html += `<div class="${cls}${blockedRow && blockedRow.importedFrom && !promoRow ? ' cal-day--imported' : ''}" data-date="${dateStr}" title="${escH(cellTitle)}"><span class="cal-day-date">${day}</span>${priceOrGuestHtml}</div>`;
     }
     grid.innerHTML = html;
     grid.querySelectorAll('.cal-day:not(.cal-day--empty):not(.cal-day--past):not(.cal-day--booked)').forEach(cell => {
@@ -3788,6 +3896,7 @@
       return;
     }
     const existingBlock = sbBlockedRowFor(dateStr);
+    if(existingBlock && existingBlock.importedFrom){ importedBlockNotice(existingBlock); return; }
     if(existingBlock){
       // A block is a RANGE — removing it outright reopens every date in
       // it. The host chooses the scope, same as the Status page.
@@ -3901,9 +4010,12 @@
   function sbRenderBlockedList(){
     const list = document.getElementById('sbBlockedList');
     if(!sbBlockedDateRows.length){ list.innerHTML = ''; return; }
-    list.innerHTML = sbBlockedDateRows.map((b, idx) => `
+    list.innerHTML = sbBlockedDateRows.map((b, idx) => b.importedFrom ? `
+      <div class="sidebar-list-row is-imported">
+        ${escH(b.startDate)} to ${escH(b.endDate)} — Booked on ${escH(b.importedFrom)}
+      </div>` : `
       <div class="sidebar-list-row">
-        ${b.startDate} to ${b.endDate}${b.reason ? ' — ' + b.reason : ''}
+        ${escH(b.startDate)} to ${escH(b.endDate)}${b.reason ? ' — ' + escH(b.reason) : ''}
         <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
       </div>
     `).join('');
@@ -3922,7 +4034,7 @@
       const discountLabel = p.discountType === 'flat' ? `₹${p.discountValue} off` : `${p.discountValue}% off`;
       return `
         <div class="sidebar-list-row">
-          <strong>${p.name}</strong><br>${p.startDate} to ${p.endDate} — ${discountLabel}${p.minNights ? `, ${p.minNights}+ nights` : ''}
+          <strong>${escH(p.name)}</strong><br>${escH(p.startDate)} to ${escH(p.endDate)} — ${escH(discountLabel)}${p.minNights ? `, ${Number(p.minNights)}+ nights` : ''}
           <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
         </div>
       `;
@@ -3942,8 +4054,8 @@
     if(!sbAmenityRows.length){ list.innerHTML = ''; return; }
     list.innerHTML = sbAmenityRows.map((a, idx) => `
       <div class="sidebar-list-row">
-        <input type="text" data-field="name" data-idx="${idx}" placeholder="Name, e.g. Airport pickup" value="${a.name || ''}" style="width:100%; margin-bottom:6px; padding:6px; font-size:14px; border:1px solid #ccc;">
-        <input type="number" data-field="price" data-idx="${idx}" placeholder="Price (₹)" value="${a.price || ''}" min="0" style="width:100%; margin-bottom:6px; padding:6px; font-size:14px; border:1px solid #ccc;">
+        <input type="text" data-field="name" data-idx="${idx}" placeholder="Name, e.g. Airport pickup" value="${escH(a.name || '')}" style="width:100%; margin-bottom:6px; padding:6px; font-size:14px; border:1px solid #ccc;">
+        <input type="number" data-field="price" data-idx="${idx}" placeholder="Price (₹)" value="${escH(a.price || '')}" min="0" style="width:100%; margin-bottom:6px; padding:6px; font-size:14px; border:1px solid #ccc;">
         <button type="button" class="remove-row-btn" data-remove-idx="${idx}">Remove</button>
       </div>
     `).join('');
@@ -3994,9 +4106,10 @@
           discountMinNights: sbDiscountMinNights,
           discountDescription: sbDiscountDescription,
           securityDeposit: sbSecurityDeposit,
-          blockedDates: sbBlockedDateRows,
+          blockedDates: sbBlockedDateRows.filter(b => !b.importedFrom),
           blockedDatesLoadedIds: sbBlockedLoadedIds,
           promotions: sbPromotionRows,
+          promotionsLoadedIds: sbPromotionLoadedIds,
           paidAmenities: sbAmenityRows.filter(a => a.name && a.price)
         })
       });
@@ -4049,7 +4162,8 @@
       for(const file of files){
         const result = await upload(file.name, file, {
           access: 'public',
-          handleUploadUrl: API_BASE + '/api/blob-upload'
+          handleUploadUrl: API_BASE + '/api/blob-upload',
+          clientPayload: uploadClientPayload('listing-photo')
         });
         expPhotoUrls.push(result.url);
       }
@@ -4346,7 +4460,7 @@
           <button type="button" class="ch-btn" id="chCancel">Cancel</button>
         </div>
       </div>
-      <div class="ch-msg" id="chMsg">${message || ''}</div>`;
+      <div class="ch-msg" id="chMsg">${message || ''}</div>`; // callers pass already-escaped text (see load())
 
     const form = section.querySelector('#chForm');
     const permsBox = section.querySelector('#chPerms');
@@ -4513,14 +4627,51 @@
         const r = await fetch(API + '/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ mode: 'deleteAccount', confirm: 'DELETE' }) });
         const d = await r.json().catch(() => ({}));
         if(!r.ok){ panel.querySelector('#deleteMsg').textContent = (d.blockers && d.blockers.join(' ')) || d.error || 'Could not delete your account.'; return; }
-        ['aerva_guest_session', 'aerva_guest_email', 'aerva_guest_name', 'aerva_acting_host', 'aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches', 'aerva_notifications_read']
-          .forEach(k => { try{ localStorage.removeItem(k); }catch(e){} });
+        clearThisAccount(true);
         alert('Your account has been deleted.');
         window.location.href = 'index.html';
       });
     });
   }
-  const start = () => { loadHosting(); wireDelete(); };
+  // The guest id inside the session token (its first part is plain
+  // base64url JSON). Only used to find this account's own saved lists.
+  function tokenGuestId(){
+    try{
+      const part = String(token || '').split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+      const p = JSON.parse(atob(part + '==='.slice((part.length + 3) % 4)));
+      return p && p.listingId != null ? String(p.listingId) : null;
+    }catch(e){ return null; }
+  }
+  // Everything this browser keeps for this account. withLists: also the
+  // account's own recently viewed / saved / searched lists (aerva.js keys
+  // them '<key>:<guestId>'), used when the account is deleted.
+  function clearThisAccount(withLists){
+    const id = withLists ? tokenGuestId() : null;
+    ['aerva_guest_session', 'aerva_guest_email', 'aerva_guest_name', 'aerva_acting_host', 'aerva_pending_cohost_invite', 'aerva_notifications_read',
+     'aerva_clone_listing', 'aerva_clone_with_photos', 'aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches']
+      .concat(id ? ['aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches'].map(k => k + ':' + id) : [])
+      .forEach(k => { try{ localStorage.removeItem(k); }catch(e){} });
+    try{ sessionStorage.removeItem('aerva_cohost_convs'); }catch(e){}
+  }
+  function wireLogoutAll(){
+    const btn = document.getElementById('logoutAllBtn');
+    if(!btn) return;
+    btn.addEventListener('click', async () => {
+      if(!confirm('Log out of all devices? You will need to log in again everywhere, including here.')) return;
+      btn.disabled = true; btn.textContent = 'Logging out…';
+      try{
+        const r = await fetch(API + '/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ mode: 'logoutAllDevices' }) });
+        const d = await r.json().catch(() => ({}));
+        // 401: this session had already ended — log out here all the same.
+        if(!r.ok && r.status !== 401) throw new Error(d.error || 'Could not log out of all devices. Please try again.');
+        clearThisAccount(false);
+        window.location.href = 'index.html';
+      }catch(err){
+        alert(err.message); btn.disabled = false; btn.textContent = 'Log out of all devices';
+      }
+    });
+  }
+  const start = () => { loadHosting(); wireDelete(); wireLogoutAll(); };
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
 </script>

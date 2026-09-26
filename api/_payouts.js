@@ -32,7 +32,9 @@ async function loadPayoutSummary(sql, payoutId) {
     WHERE p.id = ${Number(payoutId) || 0}
   `)[0];
   if (!r) return null;
-  const lines = r.payee_type === 'host'
+  const lines = r.kind === 'deposit'
+    ? [['Security deposit compensation', Number(r.gross)]]
+    : r.payee_type === 'host'
     ? [['Booking earnings', Number(r.gross)], ['Aerva commission', -Number(r.commission)], ['Co-host share', -Number(r.cohost_shares)]]
     : [['Co-host share', Number(r.gross)]]; // co-hosts: TDS only, no other deductions
   if (Number(r.deductions) > 0) lines.push(['Cancellation coupons deducted', -Number(r.deductions)]);
@@ -135,15 +137,32 @@ async function planPayouts(sql, orderId) {
                        FROM order_cohost_shares s JOIN guests g ON g.id = s.cohost_guest_id LEFT JOIN cohost_payout_profiles p ON p.guest_id = s.cohost_guest_id
                        WHERE s.order_id = ${orderId}`;
   } catch (e) { shares = []; }
-  const coTotal = shares.reduce((t, x) => t + Number(x.amount), 0);
   const commission = Number(o.commission_amount) || 0;
   const gross = (Number(o.payout_amount) || 0) + commission;
+  // Co-host shares can never add up to more than the host's part after
+  // commission: if they would (shares of 100% or more), they are scaled
+  // down to fit, so no one is paid money the booking did not earn.
+  const hostPart = Math.max(0, gross - commission);
+  const coAsked = shares.reduce((t, x) => t + Number(x.amount), 0);
+  if (coAsked > hostPart && coAsked > 0) {
+    const f = hostPart / coAsked;
+    shares.forEach(x => { x.amount = Math.floor(Number(x.amount) * f * 100) / 100; });
+  }
+  const coTotal = round2(shares.reduce((t, x) => t + Number(x.amount), 0));
   const hostPan = !!o.host_pan && o.host_pan_status !== 'rejected';
   const hostRate = hostPan ? TDS_WITH_PAN() : TDS_WITHOUT_PAN();
-  const tds = round2((gross - coTotal) * hostRate / 100);
-  let available = round2(gross - commission - coTotal - tds);
+  // The host's net is never below zero: TDS is at most what is left.
+  const beforeTds = Math.max(0, round2(gross - commission - coTotal));
+  const tds = Math.min(beforeTds, round2(Math.max(0, gross - coTotal) * hostRate / 100));
+  let available = Math.max(0, round2(beforeTds - tds));
   let owed = [];
-  try { owed = await sql`SELECT id, amount FROM host_penalties WHERE host_id = ${o.host_id} AND payer_guest_id IS NULL AND status = 'owed' ORDER BY created_at`; } catch (e) { owed = []; }
+  // A coupon owed is deducted from ONE payout: those already listed on
+  // another booking's payout that has not been sent yet are left out.
+  try {
+    owed = await sql`SELECT id, amount FROM host_penalties hp WHERE hp.host_id = ${o.host_id} AND hp.payer_guest_id IS NULL AND hp.status = 'owed'
+                       AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.status IN ('due', 'processing', 'failed') AND p.order_id <> ${orderId} AND hp.id = ANY(p.deducted_penalty_ids))
+                     ORDER BY hp.created_at`;
+  } catch (e) { owed = []; }
   const deducted = [];
   let deductions = 0;
   for (const pn of owed) { if (deductions + Number(pn.amount) <= available) { deductions += Number(pn.amount); deducted.push(pn.id); } }
@@ -174,6 +193,13 @@ async function planPayouts(sql, orderId) {
 // Returns [{ row, plan }] for rows created now.
 async function createPayoutRows(sql, orderId) {
   const created = [];
+  // Not while a cancellation or change holds the booking: its amounts are
+  // about to change (_cancellations.js claimForCancellation).
+  try {
+    const busy = await sql`SELECT 1 FROM orders o WHERE o.id = ${orderId} AND (to_jsonb(o)->>'cancel_claim') IS NOT NULL
+                             AND (to_jsonb(o)->>'cancel_claimed_at')::timestamptz > now() - interval '10 minutes'`;
+    if (busy.length) return created;
+  } catch (e) { /* before migration_cancellation_policy.sql */ }
   for (const plan of await planPayouts(sql, orderId)) {
     const r = await sql`
       INSERT INTO payouts (order_id, payee_type, host_id, payee_guest_id, status, gross, commission, cohost_shares, deductions, deducted_penalty_ids, tds, tds_rate, pan_furnished, net, bank_label, auto_eligible)
@@ -183,6 +209,43 @@ async function createPayoutRows(sql, orderId) {
     if (r[0]) created.push({ row: r[0], plan });
   }
   return created;
+}
+
+// ---------------------------------------------------------------------
+// Security deposit compensation (Admin → resolve a disputed deposit).
+// The part of a deposit Aerva decides goes to the host is paid as its OWN
+// payout row (payouts.kind = 'deposit', sql/migration_payout_kinds.sql),
+// next to the booking's payout: the booking's payout may already be sent,
+// and its figures (commission, TDS) stay exactly as they were. Paid in full:
+// no commission, no deductions, no TDS (it is compensation for damage, not
+// a sale; see OWNER DECISIONS). Sent like any payout: automatically with
+// RazorpayX (retried every 4 hours), or by hand (Mark paid, kind 'deposit').
+// One per booking (unique index). Returns the row, or null if not created.
+async function depositPayee(sql, hostId) {
+  const { decryptField, maskAccount } = require('./_secure-fields');
+  const h = (await sql`SELECT id, name, bank_account_holder_name, bank_account_number, bank_ifsc, bank_status, razorpayx_fund_account_id, pan_number, pan_status
+                       FROM hosts WHERE id = ${hostId}`)[0];
+  if (!h) return null;
+  const email = ((await sql`SELECT email FROM guests WHERE host_id = ${hostId} ORDER BY id LIMIT 1`)[0] || {}).email || null;
+  return {
+    payeeType: 'host', hostId: h.id, payeeGuestId: null, email, name: h.name, panFurnished: !!h.pan_number && h.pan_status !== 'rejected',
+    bankLabel: [h.bank_account_holder_name, maskAccount(h.bank_account_number)].filter(Boolean).join(' · '),
+    bank: { ready: h.bank_status === 'verified' && !!h.bank_account_number && !!h.bank_ifsc, holder: h.bank_account_holder_name, account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, fundAccountId: h.razorpayx_fund_account_id, table: 'hosts', key: h.id }
+  };
+}
+async function createDepositCompensationPayout(sql, { orderId, amount }) {
+  const net = round2(Number(amount) || 0);
+  if (!(net > 0)) return null;
+  const o = (await sql`SELECT o.id, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
+  if (!o) return null;
+  const payee = await depositPayee(sql, o.host_id);
+  if (!payee) return null;
+  const r = await sql`
+    INSERT INTO payouts (order_id, payee_type, host_id, payee_guest_id, status, gross, commission, cohost_shares, deductions, deducted_penalty_ids, tds, tds_rate, pan_furnished, net, bank_label, auto_eligible, kind)
+    VALUES (${orderId}, 'host', ${o.host_id}, NULL, 'due', ${net}, 0, 0, 0, ${[]}, 0, 0, ${payee.panFurnished}, ${net}, ${payee.bankLabel || null}, ${razorpayxReady()}, 'deposit')
+    ON CONFLICT DO NOTHING RETURNING *
+  `;
+  return r[0] || (await sql`SELECT * FROM payouts WHERE order_id = ${orderId} AND payee_type = 'host' AND kind = 'deposit'`)[0] || null;
 }
 
 async function razorpayx(method, path, body, idempotencyKey) {
@@ -223,7 +286,9 @@ async function attemptPayout(sql, payoutId, { by = 'automatic' } = {}) {
       if (live.status === 'processed') await markPayoutSent(sql, row.id, { reference: live.utr || live.id, by: 'RazorpayX' });
       return 'adopted';
     }
-    const plan = (await planPayouts(sql, row.order_id)).find(p => p.payeeType === row.payee_type && (p.payeeGuestId || 0) === (row.payee_guest_id || 0));
+    const plan = row.kind === 'deposit'
+      ? await depositPayee(sql, row.host_id)
+      : (await planPayouts(sql, row.order_id)).find(p => p.payeeType === row.payee_type && (p.payeeGuestId || 0) === (row.payee_guest_id || 0));
     if (!plan || !plan.bank.ready) return back('due', 'Waiting for approved bank details');
     let fa = plan.bank.fundAccountId;
     if (!fa) {
@@ -288,7 +353,8 @@ async function pollRazorpayX(sql) {
 }
 
 // The scheduler (every run of get-listings ?runSchedules=1, the daily cron
-// and site traffic). Never throws.
+// and site traffic). Throws when something failed, so the run is recorded
+// as failed (Admin → Scheduled jobs) — after doing everything it could.
 //   • bookings whose check-out day has reached 5 PM locally get their
 //     payouts, sent at once;
 //   • payouts left behind ('due') are retried every 4 hours;
@@ -296,50 +362,59 @@ async function pollRazorpayX(sql) {
 const RETRY_HOURS = 4;
 async function runAutoPayouts(sql, { deadlineMs = 7000, razorpay = null } = {}) {
   const started = Date.now();
-  const out = { created: 0, attempted: 0, retried: 0, due: 0 };
+  const out = { created: 0, attempted: 0, retried: 0, due: 0, failed: 0 };
+  const errors = [];
+  // A booking's payout (not a deposit compensation) — before
+  // migration_payout_kinds.sql every row is one.
+  const orders = await sql`
+    SELECT o.id FROM orders o JOIN listings l ON l.id = o.listing_id
+    CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata')) AS local_now) lt
+    WHERE (o.status = 'paid' OR (o.status = 'cancelled' AND (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE AND o.payout_amount > 0))
+      AND o.departure IS NOT NULL
+      AND o.departure >= lt.local_now::date - 30
+      AND (o.departure < lt.local_now::date OR (o.departure = lt.local_now::date AND extract(hour from lt.local_now) >= ${PAYOUT_HOUR}))
+      AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.order_id = o.id AND p.payee_type = 'host' AND COALESCE(to_jsonb(p)->>'kind', 'booking') = 'booking')
+    ORDER BY o.departure LIMIT 100
+  `;
+  // A booking with an open stay dispute is held until Aerva decides
+  // (_stay-disputes.js): its payout may shrink to the nights used.
+  let held = new Set();
   try {
-    const orders = await sql`
-      SELECT o.id FROM orders o JOIN listings l ON l.id = o.listing_id
-      CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata')) AS local_now) lt
-      WHERE (o.status = 'paid' OR (o.status = 'cancelled' AND (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE AND o.payout_amount > 0))
-        AND o.departure IS NOT NULL
-        AND o.departure >= lt.local_now::date - 30
-        AND (o.departure < lt.local_now::date OR (o.departure = lt.local_now::date AND extract(hour from lt.local_now) >= ${PAYOUT_HOUR}))
-        AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.order_id = o.id AND p.payee_type = 'host')
-      ORDER BY o.departure LIMIT 100
-    `;
-    // A booking with an open stay dispute is held until Aerva decides
-    // (_stay-disputes.js): its payout may shrink to the nights used.
-    let held = new Set();
+    const ids = orders.map(o => o.id);
+    if (ids.length) held = new Set((await sql`SELECT order_id FROM stay_disputes WHERE order_id = ANY(${ids}) AND status IN ('open', 'host_responded')`).map(r => r.order_id));
+  } catch (err) { /* stay_disputes not created yet */ }
+  // Each booking on its own: one that fails never holds back the others,
+  // and is reported (Admin → Scheduled jobs) instead of passing as done.
+  for (const o of orders) {
+    if (Date.now() - started > deadlineMs) break;
+    if (held.has(o.id)) continue;
     try {
-      const ids = orders.map(o => o.id);
-      if (ids.length) held = new Set((await sql`SELECT order_id FROM stay_disputes WHERE order_id = ANY(${ids}) AND status IN ('open', 'host_responded')`).map(r => r.order_id));
-    } catch (err) { /* stay_disputes not created yet */ }
-    for (const o of orders) {
-      if (Date.now() - started > deadlineMs) break;
-      if (held.has(o.id)) continue;
       for (const { row } of await createPayoutRows(sql, o.id)) {
         out.created++;
         if (Number(row.net) === 0) { await markPayoutSent(sql, row.id, { reference: 'Nothing to pay', by: 'automatic' }); continue; }
         if (!razorpayxReady()) { out.due++; continue; }
         await attemptPayout(sql, row.id); out.attempted++;
       }
+    } catch (err) {
+      out.failed++;
+      errors.push(`booking #${o.id}: ${String(err.message || err).slice(0, 120)}`);
+      console.error('payout not created for booking', o.id, err);
     }
-    // Left behind: retried every 4 hours (only payouts created while
-    // automatic payouts were on; others may have been paid by hand).
-    if (razorpayxReady()) {
-      const left = await sql`SELECT id FROM payouts WHERE status = 'due' AND auto_eligible = true
-                               AND (last_attempt_at IS NULL OR last_attempt_at < now() - make_interval(hours => ${RETRY_HOURS})) ORDER BY id LIMIT 50`;
-      for (const r of left) { if (Date.now() - started > deadlineMs) break; await attemptPayout(sql, r.id); out.retried++; }
-    }
-    Object.assign(out, await pollRazorpayX(sql));
-    if (razorpay) out.refunds = await require('./_refunds').pollRefunds(sql, razorpay);
-  } catch (err) {
-    console.error('runAutoPayouts skipped:', err.message);
-    out.skipped = true;
   }
+  // Left behind: retried every 4 hours (only payouts created while
+  // automatic payouts were on; others may have been paid by hand).
+  if (razorpayxReady()) {
+    const left = await sql`SELECT id FROM payouts WHERE status = 'due' AND auto_eligible = true
+                             AND (last_attempt_at IS NULL OR last_attempt_at < now() - make_interval(hours => ${RETRY_HOURS})) ORDER BY id LIMIT 50`;
+    for (const r of left) { if (Date.now() - started > deadlineMs) break; await attemptPayout(sql, r.id); out.retried++; }
+  }
+  Object.assign(out, await pollRazorpayX(sql));
+  if (razorpay) out.refunds = await require('./_refunds').pollRefunds(sql, razorpay);
+  // Recorded as a failed run, with the bookings it could not pay.
+  if (errors.length) throw new Error(`Payouts could not be created for ${errors.length} booking${errors.length === 1 ? '' : 's'} (${out.created} created): ${errors.join('; ')}`.slice(0, 480));
   return out;
 }
 
 module.exports = { loadPayoutSummary, payoutEmailHtml, sendPayoutEmail, recentPayoutNotifications, inr,
-  planPayouts, createPayoutRows, markPayoutSent, runAutoPayouts, attemptPayout, pollRazorpayX, razorpayxReady, PAYOUT_HOUR, RETRY_HOURS };
+  planPayouts, createPayoutRows, markPayoutSent, runAutoPayouts, attemptPayout, pollRazorpayX, razorpayxReady, PAYOUT_HOUR, RETRY_HOURS,
+  createDepositCompensationPayout };

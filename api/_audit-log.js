@@ -19,9 +19,10 @@ async function logAudit(sql, { action, success, actorType, actorIdentifier = nul
   } catch (err) {
     console.error('audit_log write failed:', action, err);
   }
-  // Every admin action is ALSO written to admin_audit_log: append-only at
-  // the database level (see migration_admin_audit_log.sql — updates and
-  // deletes are refused by a trigger), with the admin's id, IP and device.
+  // Every admin action is ALSO written to admin_audit_log, with the admin's
+  // id, IP and device. Both logs are append-only at the database level once
+  // sql/migration_audit_log_protection.sql has run: a trigger refuses any
+  // update, delete or truncate.
   // Separate try: a problem here never blocks the action or the main log.
   if (actorType === 'admin') {
     try {

@@ -19,17 +19,19 @@ const userError = (message, status = 400, extra = {}) => Object.assign(new Error
 
 async function guestRow(sql, guestId) {
   try {
-    return (await sql`SELECT id, email, name, phone, deleted_at,
+    return (await sql`SELECT id, email, name, phone, deleted_at, email_verified,
                              to_jsonb(guests)->>'email_verified_at' AS email_verified_at,
                              to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name
                       FROM guests WHERE id = ${guestId}`)[0] || null;
   } catch (err) {
     // Before migration_email_otp.sql: the columns are not there yet.
-    return (await sql`SELECT id, email, name, phone, deleted_at FROM guests WHERE id = ${guestId}`)[0] || null;
+    return (await sql`SELECT id, email, name, phone, deleted_at, email_verified FROM guests WHERE id = ${guestId}`)[0] || null;
   }
 }
 
-function emailConfirmed(g) { return !!(g && String(g.email || '').trim() && g.email_verified_at); }
+// Confirmed by the code (email_verified_at), or earlier by the sign-up link
+// or Google (email_verified) — either proves the inbox is theirs.
+function emailConfirmed(g) { return !!(g && String(g.email || '').trim() && (g.email_verified_at || g.email_verified === true)); }
 function hasPhone(g) { return !!(g && String(g.phone || '').trim()); }
 
 // What the account still needs: [] when it is ready to book.

@@ -74,7 +74,7 @@ async function tierHistoryFor(sql, subjectType, subjectId, limit = 50) {
 //
 // Badges otherwise move only on a quarterly review day. An admin revert is
 // the exception: the badge it affected is corrected within 48 hours (in
-// practice at the next daily sweep, 02:00 UTC) by re-running the LAST
+// practice at the next daily job, from 03:00 India time) by re-running the LAST
 // quarterly review for just the affected subjects, with the reverted
 // review left out. Nobody else's badge moves.
 //

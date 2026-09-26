@@ -61,18 +61,48 @@ const IMPACT = {
     return rows.map(r => ({ ...guestOf(r), what: `Coupon of ${inr(r.amount)} released` }));
   }),
 
-  // Payouts created or sent to hosts and co-hosts.
-  payouts: (sql, since) => safe(async () => {
+  // Everything one payouts run does: payouts created, sent or attempted
+  // (first try or a 4-hourly retry), payouts the bank failed (found by
+  // polling RazorpayX — the status changed since the snapshot taken before
+  // the run), and refunds whose status Razorpay confirmed or failed.
+  payouts: (sql, since, before) => safe(async () => {
+    const was = (before && before.payouts) || {};
+    const openIds = Object.keys(was).map(Number);
     const rows = await sql`
-      SELECT p.payee_type, p.net, p.status, o.suite_name, h.name AS host_name, hg.email AS host_email, cg.name AS co_name, cg.email AS co_email
+      SELECT p.id, p.payee_type, p.net, p.status, p.failure_reason, p.attempts, p.created_at, p.last_attempt_at, p.sent_at,
+             o.suite_name, h.name AS host_name, hg.email AS host_email, cg.name AS co_name, cg.email AS co_email
       FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id
       LEFT JOIN LATERAL (SELECT email FROM guests WHERE host_id = p.host_id ORDER BY id LIMIT 1) hg ON true
       LEFT JOIN guests cg ON cg.id = p.payee_guest_id
-      WHERE p.created_at >= ${since} OR p.sent_at >= ${since}`;
-    const label = { due: 'waiting to be sent', processing: 'being sent', sent: 'sent', failed: 'failed', cancelled: 'cancelled' };
-    return rows.map(r => r.payee_type === 'cohost'
-      ? { who: 'Co-host', name: r.co_name || 'Co-host', email: r.co_email || '', what: `Payout ${inr(r.net)} ${label[r.status] || r.status}: ${r.suite_name}` }
-      : { who: 'Host', name: r.host_name || 'Host', email: r.host_email || '', what: `Payout ${inr(r.net)} ${label[r.status] || r.status}: ${r.suite_name}` });
+      WHERE p.created_at >= ${since} OR p.sent_at >= ${since} OR p.last_attempt_at >= ${since}
+         OR p.id = ANY(${openIds}::int[])`;
+    const label = { due: 'waiting to be sent', processing: 'being sent', sent: 'sent', failed: 'FAILED at the bank', cancelled: 'cancelled' };
+    const out = [];
+    rows.forEach(r => {
+      const prior = was[r.id];
+      const touched = new Date(r.created_at) >= new Date(since) || (r.sent_at && new Date(r.sent_at) >= new Date(since))
+        || (r.last_attempt_at && new Date(r.last_attempt_at) >= new Date(since));
+      if (!touched && (prior === undefined || prior === r.status)) return; // untouched and unchanged
+      const retried = r.last_attempt_at && new Date(r.last_attempt_at) >= new Date(since) && Number(r.attempts) > 1;
+      const what = `Payout ${inr(r.net)} ${label[r.status] || r.status}${retried ? ` (attempt ${Number(r.attempts)})` : ''}`
+        + `${r.status === 'failed' && r.failure_reason ? ' — ' + r.failure_reason : ''}: ${r.suite_name}`;
+      out.push(r.payee_type === 'cohost'
+        ? { who: 'Co-host', name: r.co_name || 'Co-host', email: r.co_email || '', what }
+        : { who: 'Host', name: r.host_name || 'Host', email: r.host_email || '', what });
+    });
+    // Refunds Razorpay settled during this run (pollRefunds stamps
+    // last_checked_at on every check; only a changed status is news).
+    const wasRefund = (before && before.refunds) || null;
+    const refunds = await sql`
+      SELECT r.id, r.kind, r.amount, r.status, r.failure_reason, o.suite_name, o.guest_email, g.name AS guest_name
+      FROM refunds r JOIN orders o ON o.id = r.order_id LEFT JOIN guests g ON g.id = o.guest_id
+      WHERE r.last_checked_at >= ${since} AND r.status IN ('processed', 'failed')`;
+    const kind = { cancellation: 'Cancellation refund', deposit: 'Deposit refund', deposit_dispute: 'Deposit refund (dispute)' };
+    refunds.forEach(r => {
+      if (wasRefund && wasRefund[r.id] === r.status) return; // already settled before this run
+      out.push({ ...guestOf(r), what: `${kind[r.kind] || 'Refund'} of ${inr(Number(r.amount) / 100)} ${r.status === 'processed' ? 'confirmed by Razorpay' : 'FAILED — retry in Refunds'}: ${r.suite_name}` });
+    });
+    return out;
   }),
 
   // Scheduled host messages sent to guests.
@@ -180,21 +210,31 @@ const IMPACT = {
     return rows.map(r => ({ ...guestOf(r), what: `Change request closed (time limit): ${r.suite_name}` }));
   }),
 
-  // Bookings cancelled because no valid ID proof was added in time.
-  id_deadlines: (sql, since) => safe(async () => {
-    const rows = await sql`
-      SELECT a.metadata, o.suite_name, o.guest_email, g.name AS guest_name
-      FROM audit_log a JOIN orders o ON o.id = a.target_id LEFT JOIN guests g ON g.id = o.guest_id
-      WHERE a.created_at >= ${since} AND a.action = 'booking_cancelled_no_id'`;
-    return rows.map(r => ({ ...guestOf(r), what: `Cancelled (no valid ID in time), refunded ${inr((r.metadata || {}).refundedInr)}: ${r.suite_name}` }));
-  }),
-
   currency_rates: async () => []
 };
 
-async function impactFor(sql, jobName, since) {
-  const fn = IMPACT[jobName];
-  return fn ? dedupe(await fn(sql, since)) : [];
+// State some jobs need from just BEFORE they run, to tell what changed.
+// Only payouts: a payout the bank fails is marked failed by polling with
+// no timestamp of its own, so it is found by comparing statuses.
+const BEFORE = {
+  payouts: async (sql) => {
+    const payouts = {}, refunds = {};
+    const p = await sql`SELECT id, status FROM payouts WHERE status IN ('due', 'processing', 'failed')`;
+    p.forEach(r => { payouts[r.id] = r.status; });
+    const f = await sql`SELECT id, status FROM refunds WHERE status IN ('new', 'creating', 'pending', 'failed')`;
+    f.forEach(r => { refunds[r.id] = r.status; });
+    return { payouts, refunds };
+  }
+};
+async function impactBefore(sql, jobName) {
+  const fn = BEFORE[jobName];
+  if (!fn) return null;
+  try { return await fn(sql); } catch (err) { console.error('job impact snapshot skipped:', err.message); return null; }
 }
 
-module.exports = { impactFor };
+async function impactFor(sql, jobName, since, before = null) {
+  const fn = IMPACT[jobName];
+  return fn ? dedupe(await fn(sql, since, before)) : [];
+}
+
+module.exports = { impactFor, impactBefore, IMPACT_JOBS: () => Object.keys(IMPACT).filter(k => !k.startsWith('_')) };

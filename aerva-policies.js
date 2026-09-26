@@ -11,19 +11,19 @@
 // admin tool.
 window.AERVA_POLICIES = {
   version: '1.0',
-  updated: '22 September 2026',
+  updated: '26 September 2026',
   contact: 'hello@aerva.in',
 
   // Shown before payment (guest) and before listing (host). The version is
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-09f',
+    version: '2026-09g',
     guest: {
       title: 'Booking agreement',
       points: [
         'Your booking is an agreement between you and the host. Aerva is the platform that connects you and takes payment.',
-        'You: give true details of every guest and pet, keep a phone number and a valid ID proof on your account, carry ID, follow the house rules and the law, and pay for any damage you or your guests cause.',
+        'You: give true details of every guest and pet, keep a confirmed email and a phone number on your account, carry a government photo ID for every adult guest to show the host at check-in, follow the house rules and the law, and pay for any damage you or your guests cause.',
         'Your booking is confirmed only when payment completes within the 90-second payment window. A payment that does not match the booking amount, or completes after the window, is not a booking and is refunded.',
         'Cancellations and changes are requests to the host through Aerva Messages, under the refund policy shown before you pay. Problems during the stay are reported through Aerva with evidence; Aerva decides.',
         'The host: provides the home or experience as described, keeps it safe and clean, and follows local laws.',
@@ -42,7 +42,7 @@ window.AERVA_POLICIES = {
       title: 'Host agreement',
       points: [
         'Each booking is an agreement between you and the guest. Aerva is the platform that connects you and takes payment.',
-        'You: list accurately, keep your property safe, clean and legal, hold every registration your area requires, report foreign guests on Form III within 24 hours, and honour every confirmed booking.',
+        'You: list accurately, keep your property safe, clean and legal, hold every registration your area requires, check a government photo ID for every adult guest at check-in, report foreign guests on Form III within 24 hours, and honour every confirmed booking.',
         'Keep a phone number on your account and listing. Listing photos must not show phone numbers or any other contact details; a listing with such a photo is blocked immediately.',
         'Answer guests’ cancellation and change requests in Aerva Messages. When a guest reports a problem during a stay, give your side; your payout for that booking is held until Aerva decides.',
         'The guest: follows your house rules and the law, and pays for damage they cause.',
@@ -178,7 +178,6 @@ window.AERVA_POLICIES = {
     sections: [
       { id: 'collect', title: 'What Aerva collects', points: [
         'Details you give: name, email, phone, profile, bookings, messages and reviews.',
-        'From guests: an ID proof, required to book. Only Aerva sees it; hosts see only that an ID is on file. It is kept until you replace it or delete your account.',
         'Photos and documents you send as evidence when reporting a problem with a stay.',
         'From hosts and co-hosts: verification results, PAN, bank details and listing details.',
         'Payment references. Card and UPI details are handled by the payment provider, not Aerva.',
@@ -246,7 +245,7 @@ window.AERVA_POLICIES = {
         'A guest service fee of 8% of the booking price is added to your total and shown before you pay.'
       ]},
       { title: 'Hosts', points: [
-        'Aerva’s commission is 10% of the stay price and 5% of paid amenities. It is deducted from your payout.'
+        'Aerva’s commission is 10% of the stay price and 5% of paid amenities and pet fees. It is deducted from your payout.'
       ]},
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',
@@ -338,9 +337,9 @@ window.AERVA_POLICIES = {
     ]},
     { id: 'booking-requirements', title: 'Booking Requirements', summary: 'What every guest needs to book, and late-night bookings.', sections: [
       { title: 'To book', points: [
-        'An Aerva account, with your phone number and a valid ID proof of the guest booking: Aadhaar, passport, driving licence, voter ID or PAN card. Guests from outside India use a passport.',
-        'If a booking is paid but no valid ID is on your account (for example, it was removed or not accepted), add a valid ID by the time shown in My Bookings. Otherwise the booking is cancelled and everything paid is refunded in full.',
-        'Aerva may review any ID and ask for a new one.'
+        'An Aerva account with a confirmed email address and a mobile number.',
+        'Your name, mobile number and the number of guests are shared with the host.',
+        'Carry a government photo ID for every adult guest. The host checks it at check-in. Guests from outside India carry their passport.'
       ]},
       { title: 'Late-night bookings', points: [
         'Between 12:00 AM and 6:00 AM, where the property is, you may still book the night that has already begun. It counts as the previous day’s night, with check-out that day or later. Once booked, you may check in straight away.'
@@ -527,7 +526,7 @@ window.AERVA_POLICIES = {
     ]},
     { title: 'How Aerva stores sensitive data', points: [
       'Aadhaar: document deleted on approve or reject; only the status is kept. Aadhaar numbers are never collected.',
-      'Guest ID proof: file address stored encrypted; only admins open it (Guest Safety tab). Erased when the account is deleted.',
+      'Guest ID proof: no longer collected. The host checks a government photo ID at check-in. Files uploaded before this change are erased from ID Verifications, or when the account is deleted.',
       'PAN: card image deleted on review; number kept encrypted (AES-256-GCM, key in Vercel).',
       'Bank account and co-host GSTIN: kept encrypted.',
       'Audit log: every admin, host, co-host and system action is recorded and never deleted.'
@@ -547,9 +546,10 @@ window.AERVA_POLICIES = {
   openItems: [
     'Add the Grievance Officer’s name and designation to the Complaints section (required by the E-Commerce Rules).',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',
-    'Have the lawyer review agreements 2026-09f: ID proof requirement and cancellation for a missing ID, the 90-second payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
+    'Have the lawyer review agreements 2026-09g: ID checked by the host at check-in (not by Aerva), the 90-second payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
+    'Erase the guest ID proofs uploaded before September 2026: Admin → ID Verifications → “Erase reviewed documents & encrypt stored numbers”.',
     'Confirm with the CA how GST is treated on the part of a booking price kept after a guest cancels.',
-    'TDS under section 194-O is not yet deducted from payouts. Confirm the rate with the CA before real payouts.',
+    'Payouts deduct TDS under section 194-O at 0.1% with a PAN and 5% without. Confirm these rates with the CA before real payouts.',
     'Remind hosts to file Form III when a foreign guest books (not built).',
     'Aadhaar and PAN files waiting for review sit in public storage until reviewed. Review them promptly.',
     'Privacy policy is published (Aerva Privacy). Add a consent tick to sign-up that links to it (DPDP Rules).',

@@ -1,7 +1,11 @@
 // /api/approve-listing.js
 // Three ways in:
 //   GET  ?token=...(action=approve)  — clicked "Approve" in the admin
-//                                       email. Instant, same as before.
+//                                       email. Shows a confirmation page
+//                                       with one button; nothing changes
+//                                       until that button POSTs back
+//                                       (mail scanners open links, they
+//                                       don't press buttons).
 //   GET  ?token=...(action=reject)   — clicked "Reject" in the admin
 //                                       email. Shows a short form asking
 //                                       for a reason FIRST — rejection
@@ -11,6 +15,12 @@
 //   POST { token, reason }           — submitted from that reason form.
 //                                       Finalizes the rejection and emails
 //                                       the host with the specific reason.
+//   POST { token } (approve token)   — the confirmation page's button.
+//
+// Every one of these acts ONLY on a listing that is still pending. An
+// emailed link stays valid for 7 days, so without that check an old link
+// could approve a listing an admin had since rejected (or reject a live
+// one), any number of times.
 //   POST { listingId, action, reason? } with header x-admin-secret
 //                                     — clicked a button on admin.html
 //                                       instead. reason is optional here.
@@ -25,6 +35,8 @@ const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken, secretMatches } = require('./_approval-token');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
+const { countRecentAttempts, getClientIp } = require('./_rate-limit');
+const { findNameClashInPincode } = require('./_listing-rules');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -35,8 +47,16 @@ const SITE_BASE = 'https://aerva.in';
 const API_BASE = 'https://aerva-in.vercel.app';
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
+// Everything dropped into the pages below is escaped: a property name is
+// host-typed text, and these pages are opened by an admin.
+function esc(t) {
+  return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// title and message are plain text.
 function htmlPage(title, message, isError) {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
+  title = esc(title); message = esc(message);
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="robots" content="noindex"><title>${title}</title>
   <style>
     body{font-family:'Jost',sans-serif;background:#f4eadc;color:#1c1a17;
       display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;}
@@ -70,7 +90,7 @@ function rejectionReasonPage(listing, token) {
   </style></head>
   <body><div class="box">
     <div id="formState">
-      <h1>Reject "${listing.property_name}"</h1>
+      <h1>Reject "${esc(listing.property_name)}"</h1>
       <p class="subtitle">This note goes directly to the host by email, so please make it specific and actionable — e.g. "Exterior photos are too dark, please retake in daylight" rather than just "photos need work."</p>
       <label for="reason">Reason for the host</label>
       <textarea id="reason" placeholder="What needs to change before this can be approved?"></textarea>
@@ -79,7 +99,7 @@ function rejectionReasonPage(listing, token) {
     </div>
     <div id="confirmState" class="confirm">
       <h1>Listing rejected</h1>
-      <p>"${listing.property_name}" has been marked as rejected, and the host has been emailed the reason.</p>
+      <p>"${esc(listing.property_name)}" has been marked as rejected, and the host has been emailed the reason.</p>
     </div>
   </div>
   <script>
@@ -98,7 +118,7 @@ function rejectionReasonPage(listing, token) {
         var res = await fetch('${API_BASE}/api/approve-listing', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: '${token}', reason: reason })
+          body: JSON.stringify({ token: ${JSON.stringify(String(token))}, reason: reason })
         });
         if(res.ok){
           document.getElementById('formState').style.display = 'none';
@@ -119,6 +139,30 @@ function rejectionReasonPage(listing, token) {
     });
   </script>
   </body></html>`;
+}
+
+// The page an emailed "Approve" link opens. Approving needs this button:
+// a GET must never change anything, because mail scanners and link
+// previews open every link in an email before the admin does.
+function approveConfirmPage(listing, token) {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="robots" content="noindex"><title>Approve Listing</title>
+  <style>
+    body{font-family:'Jost',sans-serif;background:#f4eadc;color:#1c1a17;
+      display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px;box-sizing:border-box;text-align:center;}
+    .box{max-width:440px;width:100%;}
+    h1{font-family:'Bodoni Moda',serif;font-size:24px;margin-bottom:8px;}
+    p{opacity:0.75;line-height:1.6;}
+    .btn{background:#1c1a17;color:#f4eadc;border:none;padding:14px 28px;font-size:12px;
+      letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;width:100%;margin-top:16px;}
+  </style></head>
+  <body><div class="box">
+    <h1>Approve "${esc(listing.property_name)}"?</h1>
+    <p>The listing goes live for guests at once and the host is emailed.</p>
+    <form method="POST" action="${API_BASE}/api/approve-listing">
+      <input type="hidden" name="token" value="${esc(token)}">
+      <button class="btn" type="submit">Approve &amp; Go Live</button>
+    </form>
+  </div></body></html>`;
 }
 
 async function sendHostApprovalEmail(listing, { needsRoomSetup = false } = {}) {
@@ -169,11 +213,11 @@ async function sendHostApprovalEmail(listing, { needsRoomSetup = false } = {}) {
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">Your listing is live on Aerva</h2>
-      <p><strong>${listing.property_name}</strong> is now approved and visible to guests.</p>
+      <p><strong>${esc(listing.property_name)}</strong> is now approved and visible to guests.</p>
       ${badgeAnnouncement}
       ${resortRoomsReminder}
       <p>${listing.property_type === 'Resort' ? 'Use this link to update room pricing, add more rooms, or set up an offer' : "Whenever you'd like to change your nightly rate or set up an offer, use this link"} — it's yours to keep and reuse anytime:</p>
-      <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">${needsRoomSetup ? 'Add Your Rooms' : (listing.property_type === 'Resort' ? 'Manage Your Rooms' : 'Manage Price & Offers')}</a></p>
+      <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">${needsRoomSetup ? 'Add Your Rooms' : (listing.property_type === 'Resort' ? 'Manage Your Rooms' : 'Manage listing')}</a></p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, contact hello@aerva.in for a new one.</p>
     </div>
   `;
@@ -202,9 +246,9 @@ async function sendHostRejectionEmail(listing) {
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">About your listing submission</h2>
-      <p><strong>${listing.property_name}</strong> wasn't approved this time. Here's why:</p>
+      <p><strong>${esc(listing.property_name)}</strong> wasn't approved this time. Here's why:</p>
       <div style="background:#faf3e6; border-left:3px solid #a3402f; padding:14px 18px; margin:16px 0;">
-        <p style="margin:0; white-space:pre-wrap;">${listing.rejection_reason}</p>
+        <p style="margin:0; white-space:pre-wrap;">${esc(listing.rejection_reason)}</p>
       </div>
       <p>Once you've made those changes and submitted them, we'll review your listing again and send you an update.</p>
       <p><a href="${SITE_BASE}/host-dashboard.html" style="color:#8a6c39;">Go to your dashboard</a> to edit and resubmit this listing.</p>
@@ -227,15 +271,33 @@ async function sendHostRejectionEmail(listing) {
   });
 }
 
+// Only a PENDING listing is ever approved or rejected here: the status
+// check is part of the UPDATE itself, so two clicks (or an old emailed
+// link) can never decide the same listing twice. Returns the listing, or
+// null when nothing was changed — whyNot(listingId) then says why.
 async function applyDecision(listingId, action, reason = null, actor = { actorIdentifier: 'email approval link' }) {
   if (action !== 'approve' && action !== 'reject') {
     throw new Error('Invalid action');
   }
   const newStatus = action === 'approve' ? 'approved' : 'rejected';
 
+  // One property name per pincode (_listing-rules.js; Resorts exempt).
+  // Checked again here: another listing may have taken the name while this
+  // one waited for review. Refused with a message for the admin.
+  if (action === 'approve') {
+    const cur = (await sql`SELECT property_name, pincode, property_type, listing_type FROM listings WHERE id = ${listingId} AND status = 'pending'`)[0];
+    if (cur && (cur.listing_type || 'stay') === 'stay') {
+      const clash = await findNameClashInPincode(sql, { propertyName: cur.property_name, pincode: cur.pincode, propertyType: cur.property_type, excludeListingId: Number(listingId) });
+      if (clash) {
+        throw Object.assign(new Error(`Not approved: listing #${clash.id} (${clash.status}) in ${String(cur.pincode).trim()} already uses the name "${String(cur.property_name).trim()}". Ask the host to rename this one, or reject one of the two.`),
+          { isUserFacing: true, status: 409, code: 'NAME_CLASH' });
+      }
+    }
+  }
+
   const result = await sql`
     UPDATE listings SET status = ${newStatus}, rejection_reason = ${action === 'reject' ? reason : null}
-    WHERE id = ${listingId}
+    WHERE id = ${listingId} AND status = 'pending'
     RETURNING id, property_name, status, host_email, host_id, rejection_reason, property_type, pending_room_photos, listing_type
   `;
   const listing = result[0] || null;
@@ -336,6 +398,12 @@ async function applyDecision(listingId, action, reason = null, actor = { actorId
   return listing;
 }
 
+// Why applyDecision changed nothing: { notFound } or { status }.
+async function whyNot(listingId) {
+  const rows = await sql`SELECT property_name, status FROM listings WHERE id = ${listingId}`;
+  return rows[0] ? { status: rows[0].status, name: rows[0].property_name } : { notFound: true };
+}
+
 // Applies or discards a SINGLE room's staged change (see
 // update-listing-pricing.js, which stages per-room now, not per-
 // listing) — a room-level decision, separate from approving the
@@ -392,13 +460,31 @@ async function applyRoomChangeDecision(roomId, action, reason = null, actor = { 
     // host nothing; this way manage-listing.html can show exactly which
     // room was rejected and why, and the host can either fix it and
     // resubmit or remove it themselves once they've seen the reason.
+    //
+    // An edited room goes back to exactly how it was before the edit.
+    // Staging switches it off while under review, so its state from
+    // before is only known if the staged change recorded it (wasActive).
+    // Without that, is_active is left as it is: switching on a room the
+    // host had taken off sale would open it to bookings they never meant
+    // to take.
+    const p = room.pending_changes || {};
+    const restoreActive = isNewRoomProposal ? false
+      : (typeof p.wasActive === 'boolean' ? p.wasActive : null);
     await sql`
       UPDATE listing_rooms SET
         pending_changes = NULL, pending_review = FALSE, pending_since = NULL,
-        is_active = ${isNewRoomProposal ? false : true},
+        is_active = COALESCE(${restoreActive}::boolean, is_active),
         last_rejection_reason = ${reason || null}, last_rejected_at = now()
       WHERE id = ${room.id}
     `;
+    // A room switched back on counts toward the listing's card price again.
+    if (restoreActive) {
+      const cheapest = await sql`
+        SELECT MIN(nightly_rate) AS min_rate FROM listing_rooms
+        WHERE listing_id = ${room.listing_id} AND is_active = TRUE AND nightly_rate IS NOT NULL
+      `;
+      await sql`UPDATE listings SET nightly_rate = ${cheapest[0].min_rate} WHERE id = ${room.listing_id}`;
+    }
   }
 
   await logAudit(sql, {
@@ -408,6 +494,29 @@ async function applyRoomChangeDecision(roomId, action, reason = null, actor = { 
     metadata: { listingId: room.listing_id, isNewRoom: isNewRoomProposal, reason: reason || null }
   });
   return room;
+}
+
+// Wrong x-admin-secret guesses allowed per 15 minutes: per address, and
+// in total (so spreading guesses over many addresses does not help).
+const SECRET_WINDOW_MINUTES = 15;
+const SECRET_MAX_PER_IP = 5;
+const SECRET_MAX_TOTAL = 30;
+
+// An admin session is a signed token, so on its own it cannot be taken
+// back. It stops working here when the admin account is deleted, or when
+// its session_version (migration_admin_session_version.sql) is raised —
+// tokens carry the version they were issued under as { sv }; tokens
+// without one are version 0. Before that migration the column is simply
+// absent and every existing admin's version is 0. Fails closed.
+async function adminSessionActive(payload) {
+  try {
+    const rows = await sql`SELECT to_jsonb(a)->>'session_version' AS sv FROM admins a WHERE a.id = ${Number(payload.listingId) || 0}`;
+    if (!rows[0]) return false;
+    return (Number(payload.sv) || 0) === (Number(rows[0].sv) || 0);
+  } catch (err) {
+    console.error('admin session check failed (refusing):', err.message);
+    return false;
+  }
 }
 
 module.exports = async (req, res) => {
@@ -424,41 +533,35 @@ module.exports = async (req, res) => {
   // ---- Path 1: email magic link ----
   if (req.method === 'GET') {
     res.setHeader('Content-Type', 'text/html');
+    // Tokens in the URL must not travel on to other sites.
+    res.setHeader('Referrer-Policy', 'no-referrer');
     const token = req.query.token;
     const payload = token ? verifyToken(token) : null;
 
-    if (!payload) {
+    if (!payload || (payload.action !== 'approve' && payload.action !== 'reject')) {
       return res.status(400).send(htmlPage(
         'Link expired or invalid',
-        'This approval link is no longer valid — it may have already been used, or it\'s more than 7 days old. Use the admin page instead to review this listing.',
+        'This link is no longer valid — it may be more than 7 days old. Use the admin page instead to review this listing.',
         true
       ));
     }
 
     try {
-      // Approve is still instant — only reject needs a reason first.
-      if (payload.action === 'approve') {
-        const listing = await applyDecision(payload.listingId, 'approve', null, { actorIdentifier: 'email approval link', ...requestContext(req) });
-        if (!listing) {
-          return res.status(404).send(htmlPage('Listing not found', 'This listing may have already been removed.', true));
-        }
-        return res.status(200).send(htmlPage('Listing approved', `"${listing.property_name}" is now approved and live.`, false));
-      }
-
-      // Reject: show the reason form instead of rejecting immediately.
-      // Look the listing up without changing anything yet.
+      // Nothing is changed by opening the link — approve and reject both
+      // show a page first. Look the listing up without changing anything.
       const rows = await sql`SELECT id, property_name, status FROM listings WHERE id = ${payload.listingId}`;
       const listing = rows[0];
       if (!listing) {
         return res.status(404).send(htmlPage('Listing not found', 'This listing may have already been removed.', true));
       }
       if (listing.status !== 'pending') {
-        return res.status(400).send(htmlPage(
+        return res.status(409).send(htmlPage(
           'Already reviewed',
-          `"${listing.property_name}" is already marked as ${listing.status} — no action needed.`,
+          `"${listing.property_name}" is already ${listing.status}. Nothing was changed.`,
           true
         ));
       }
+      if (payload.action === 'approve') return res.status(200).send(approveConfirmPage(listing, token));
       return res.status(200).send(rejectionReasonPage(listing, token));
     } catch (err) {
       console.error('approve-listing (GET) error:', err);
@@ -466,11 +569,31 @@ module.exports = async (req, res) => {
     }
   }
 
-  // ---- Path 2: reason form submission (token-based, from the page above) ----
+  // ---- Path 2: a token-carrying POST (reject reason form, or approve button) ----
   if (req.method === 'POST' && req.body && req.body.token) {
+    const { token, reason } = req.body;
+    const payload = verifyToken(token);
+
+    // The approve confirmation page: a plain form post, answered with a page.
+    if (payload && payload.action === 'approve') {
+      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      try {
+        const listing = await applyDecision(payload.listingId, 'approve', null, { actorIdentifier: 'email approval link', ...requestContext(req) });
+        if (!listing) {
+          const why = await whyNot(payload.listingId);
+          if (why.notFound) return res.status(404).send(htmlPage('Listing not found', 'This listing may have already been removed.', true));
+          return res.status(409).send(htmlPage('Already reviewed', `"${why.name}" is already ${why.status}. Nothing was changed.`, true));
+        }
+        return res.status(200).send(htmlPage('Listing approved', `"${listing.property_name}" is now approved and live.`, false));
+      } catch (err) {
+        if (err.code === 'NAME_CLASH') return res.status(409).send(htmlPage('Not approved', err.message, true));
+        console.error('approve-listing (POST approve token) error:', err);
+        return res.status(500).send(htmlPage('Something went wrong', 'Please try again from the admin page.', true));
+      }
+    }
+
     try {
-      const { token, reason } = req.body;
-      const payload = verifyToken(token);
       if (!payload || payload.action !== 'reject') {
         return res.status(400).json({ error: 'This link is no longer valid. Please use the admin page instead.' });
       }
@@ -479,8 +602,12 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'Please enter a reason before rejecting — the host needs to know what to fix.' });
       }
       const listing = await applyDecision(payload.listingId, 'reject', cleanReason, { actorIdentifier: 'email approval link', ...requestContext(req) });
-      if (!listing) return res.status(404).json({ error: 'Listing not found' });
-      return res.status(200).json({ success: true, listing });
+      if (!listing) {
+        const why = await whyNot(payload.listingId);
+        if (why.notFound) return res.status(404).json({ error: 'Listing not found' });
+        return res.status(409).json({ error: `Already reviewed — this listing is ${why.status}. Nothing was changed.` });
+      }
+      return res.status(200).json({ success: true, listing: { id: listing.id, status: listing.status } });
     } catch (err) {
       console.error('approve-listing (POST token) error:', err);
       return res.status(500).json({ error: 'Could not reject the listing right now. Please try again.' });
@@ -496,21 +623,51 @@ module.exports = async (req, res) => {
     const authHeader = req.headers['authorization'] || '';
     const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     const sessionPayload = sessionToken ? verifyToken(sessionToken) : null;
-    const hasValidSession = sessionPayload && sessionPayload.action === 'admin-session';
-    const hasValidSecret = secretMatches(adminSecret, process.env.ADMIN_SECRET);
+    const hasValidSession = !!(sessionPayload && sessionPayload.action === 'admin-session' && await adminSessionActive(sessionPayload));
+
+    // The shared secret can be guessed at, so wrong guesses are counted
+    // (audit_log) and a caller that keeps guessing is turned away before
+    // the secret is even compared.
+    let hasValidSecret = false;
+    if (adminSecret) {
+      const ip = getClientIp(req);
+      const [fromIp, fromAll] = await Promise.all([
+        countRecentAttempts(sql, { action: 'admin_secret_failed', windowMinutes: SECRET_WINDOW_MINUTES, byIp: ip, onlyFailures: true }),
+        countRecentAttempts(sql, { action: 'admin_secret_failed', windowMinutes: SECRET_WINDOW_MINUTES, onlyFailures: true })
+      ]);
+      if (fromIp >= SECRET_MAX_PER_IP || fromAll >= SECRET_MAX_TOTAL) {
+        return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
+      }
+      hasValidSecret = secretMatches(adminSecret, process.env.ADMIN_SECRET);
+      if (!hasValidSecret) {
+        await logAudit(sql, { action: 'admin_secret_failed', success: false, actorType: 'system', actorIdentifier: 'approve-listing',
+          metadata: { ip, userAgent: requestContext(req).userAgent } });
+      }
+    }
     if (!hasValidSession && !hasValidSecret) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
     try {
-      const { listingId, roomId, action, reason } = req.body;
-      const actor = await adminContext(sql, req, sessionPayload, hasValidSecret);
-      const result = (action === 'approve_room' || action === 'reject_room')
-        ? await applyRoomChangeDecision(roomId, action, reason || null, actor)
-        : await applyDecision(listingId, action, reason || null, actor);
-      if (!result) return res.status(404).json({ error: 'Listing or room not found' });
+      const { listingId, roomId, action, reason } = req.body || {};
+      const actor = await adminContext(sql, req, hasValidSession ? sessionPayload : null, hasValidSecret);
+      if (action === 'approve_room' || action === 'reject_room') {
+        const room = await applyRoomChangeDecision(roomId, action, reason || null, actor);
+        if (!room) return res.status(404).json({ error: 'This room change was already reviewed or withdrawn.' });
+        return res.status(200).json({ success: true, listing: room });
+      }
+      if (action !== 'approve' && action !== 'reject') return res.status(400).json({ error: 'Unknown action.' });
+      // The admin page only ever approves or rejects a PENDING listing;
+      // live listings are blocked or removed from the Live Listings tab.
+      const result = await applyDecision(listingId, action, reason || null, actor);
+      if (!result) {
+        const why = await whyNot(listingId);
+        if (why.notFound) return res.status(404).json({ error: 'Listing not found' });
+        return res.status(409).json({ error: `Already reviewed — this listing is ${why.status}. Refresh to see the current list.` });
+      }
       return res.status(200).json({ success: true, listing: result });
     } catch (err) {
+      if (err.code === 'NAME_CLASH') return res.status(409).json({ error: err.message });
       console.error('approve-listing (POST) error:', err);
       return res.status(500).json({ error: 'Could not update listing' });
     }

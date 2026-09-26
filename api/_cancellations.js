@@ -24,7 +24,7 @@
 
 const crypto = require('crypto');
 const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refunds');
-const { convertInrToForeignSubunit } = require('./_currency');
+const { refundSubunitForInr } = require('./_currency');
 const { logAudit } = require('./_audit-log');
 const { paidByOrderRow, dateStr, daysBeforeCheckIn } = require('./_booking-rules');
 
@@ -230,6 +230,25 @@ async function releaseClaim(sql, ids, token) {
   catch (err) { console.error('releaseClaim failed:', err.message); }
 }
 
+// Payouts of these bookings not sent yet are removed (they are planned
+// again from the booking's new amounts by _payouts.js). A payout already
+// sent, or being sent, is refused: the host must never be paid twice for
+// money the guest gets back. Same rule as host cancellations
+// (host-listings.js assertNoPayoutSent). A deposit-compensation payout
+// (payouts.kind = 'deposit') is not the booking's payout and is kept.
+async function clearUnsentPayouts(sql, ids) {
+  let rows;
+  try { rows = await sql`SELECT id, status FROM payouts WHERE order_id = ANY(${ids}) AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`; }
+  catch (err) { return; } // before migration_payouts.sql
+  const sent = () => Object.assign(new Error('The host payout for this booking has already been sent, so it cannot be cancelled here. Please contact hello@aerva.in.'), { isUserFacing: true, status: 409 });
+  if (rows.some(r => !['due', 'failed'].includes(r.status))) throw sent();
+  if (!rows.length) return;
+  await sql`DELETE FROM payouts WHERE order_id = ANY(${ids}) AND status IN ('due', 'failed') AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`;
+  // One claimed for sending in the same moment is still there: refused.
+  const left = await sql`SELECT 1 FROM payouts WHERE order_id = ANY(${ids}) AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking' LIMIT 1`;
+  if (left.length) throw sent();
+}
+
 // Cancels a booking (and its linked half) at `pct`, refunding through
 // _refunds.js. by: 'guest' (a fixed tier) | 'host_decision' | 'timeout'.
 // Returns { ok, refundCash, couponBack } or throws a user-facing error.
@@ -260,39 +279,76 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   const splits = new Map(rows.map(r => [Number(r.id), splitRow(r, (paid[r.id] || {}).couponAbsorbed, percent)]));
   const ids = rows.map(r => Number(r.id));
   const claim = await claimForCancellation(sql, ids);
-  const done = [];
+  let done = [];
+  const refundIds = new Map();
   try {
-    for (const r of rows) {
-      const s = splits.get(Number(r.id));
-      const currency = r.charge_currency || 'INR';
-      const amount = currency === 'INR' ? s.refundCash * 100 : await convertInrToForeignSubunit(sql, s.refundCash, currency);
-      if (!amount && s.refundCash > 0) throw Object.assign(new Error(`No exchange rate available to refund this ${currency} booking right now. Please try again shortly.`), { isUserFacing: true, status: 502 });
-      // One refund per booking, ever (_refunds.js: unique per booking and purpose).
-      // A booking changed with an extra payment is refunded across all its payments.
-      const refund = await hasChangePayments(sql, r.id)
-        ? { id: (await refundAcrossPayments(sql, razorpay, { orderId: r.id, amountInr: s.refundCash, kindBase: 'cancellation' })).firstRefundId }
-        : await safeRefund(sql, razorpay, { orderId: r.id, paymentId: r.razorpay_payment_id, amountSubunit: amount || 0, kind: 'cancellation' });
-      // Only the holder of the claim can cancel the booking.
-      const flipped = await sql`
-        UPDATE orders SET status = 'cancelled', cancellation_reason = ${reason}, cancelled_at = now(),
-          deposit_status = CASE WHEN deposit_status IN ('held', 'disputed') THEN 'refunded' ELSE deposit_status END,
-          deposit_refund_id = ${refund.id},
-          commission_amount = ${s.commission}, payout_amount = ${s.hostPayout},
-          refund_percent = ${percent}, payout_on_cancel = ${s.hostPayout > 0},
-          cancel_claim = NULL, cancel_claimed_at = NULL
-        WHERE id = ${r.id} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}
-        RETURNING id`;
-      if (!flipped.length) continue;
-      done.push(r);
-      try { await sql`UPDATE order_cohost_shares SET amount = round(${s.hostPayout}::numeric * percent / 100) WHERE order_id = ${r.id}`; }
-      catch (err) { /* no co-host shares table */ }
-      await logAudit(sql, { action: 'booking_cancelled_by_guest', success: true, actorType: 'system', actorIdentifier: String(main.guest_id || ''),
-        targetType: 'order', targetId: r.id, metadata: { percent, by, refundCash: s.refundCash, couponBack: s.couponBack, hostPayout: s.hostPayout, policy: policyKey(main.policy) } });
+    // The host is never paid for what the guest gets back: a payout already
+    // sent (or being sent) stops the cancellation; one not sent yet is
+    // removed and planned again from the new amounts (_payouts.js).
+    await clearUnsentPayouts(sql, ids);
+    // 1. Every refund first. A linked pair is only cancelled when BOTH
+    // halves are refunded; a failure leaves both booked, with the failed
+    // refund in Admin → Refunds, and a retry finds what was already
+    // refunded instead of refunding it again (_refunds.js).
+    try {
+      for (const r of rows) {
+        const s = splits.get(Number(r.id));
+        const currency = r.charge_currency || 'INR';
+        // One refund per booking, ever (_refunds.js: unique per booking and purpose).
+        // A booking changed with an extra payment is refunded across all its payments.
+        let refund;
+        if (await hasChangePayments(sql, r.id)) {
+          refund = { id: (await refundAcrossPayments(sql, razorpay, { orderId: r.id, amountInr: s.refundCash, kindBase: 'cancellation' })).firstRefundId };
+        } else {
+          // Foreign currency: the same share of what was captured, never today's rate.
+          const amount = currency === 'INR' ? s.refundCash * 100 : await refundSubunitForInr(sql, { razorpayOrderId: r.razorpay_order_id, amountInr: s.refundCash, currency });
+          if (!amount && s.refundCash > 0) throw Object.assign(new Error(`There is no record of the amount charged in ${currency} for this booking, so it cannot be refunded automatically. Please contact hello@aerva.in.`), { isUserFacing: true, status: 502 });
+          refund = await safeRefund(sql, razorpay, { orderId: r.id, paymentId: r.razorpay_payment_id, amountSubunit: amount || 0, kind: 'cancellation' });
+        }
+        refundIds.set(Number(r.id), refund.id || null);
+      }
+    } catch (err) {
+      if (refundIds.size) {
+        await logAudit(sql, { action: 'guest_cancellation_refund_incomplete', success: false, actorType: 'system', targetType: 'order', targetId: main.id,
+          metadata: { ids, refunded: [...refundIds.keys()], percent, by, error: String(err.message || err).slice(0, 300) } });
+      }
+      throw err;
     }
-    if (!done.length) throw Object.assign(new Error('This booking has already been cancelled.'), { isUserFacing: true, status: 409 });
+    // 2. Then every row flipped in ONE statement: both halves of a pair are
+    // cancelled together or not at all. Only the holder of the claim can.
+    const cols = rows.map(r => { const s = splits.get(Number(r.id)); return { id: Number(r.id), commission: s.commission, payout: s.hostPayout, refundId: refundIds.get(Number(r.id)) }; });
+    done = await sql`
+      UPDATE orders o SET status = 'cancelled', cancellation_reason = ${reason}, cancelled_at = now(),
+        deposit_status = CASE WHEN o.deposit_status IN ('held', 'disputed') THEN 'refunded' ELSE o.deposit_status END,
+        deposit_refund_id = v.refund_id,
+        commission_amount = v.commission, payout_amount = v.payout,
+        refund_percent = ${percent}, payout_on_cancel = (v.payout > 0),
+        cancel_claim = NULL, cancel_claimed_at = NULL
+      FROM unnest(${cols.map(c => c.id)}::int[], ${cols.map(c => c.commission)}::int[], ${cols.map(c => c.payout)}::int[], ${cols.map(c => c.refundId)}::text[])
+           AS v(id, commission, payout, refund_id)
+      WHERE o.id = v.id AND o.status = 'paid' AND o.cancel_claim IS NOT DISTINCT FROM ${claim}
+        AND (SELECT count(*) FROM orders x WHERE x.id = ANY(${ids}) AND x.status = 'paid' AND x.cancel_claim IS NOT DISTINCT FROM ${claim}) = ${ids.length}
+      RETURNING o.id`;
+    done = rows.filter(r => done.some(d => Number(d.id) === Number(r.id)));
+    if (!done.length) {
+      if (refundIds.size) await logAudit(sql, { action: 'guest_cancellation_refund_incomplete', success: false, actorType: 'system', targetType: 'order', targetId: main.id,
+        metadata: { ids, refunded: [...refundIds.keys()], percent, by, error: 'refunded, but the booking changed before it could be cancelled' } });
+      throw Object.assign(new Error('This booking has already been cancelled.'), { isUserFacing: true, status: 409 });
+    }
   } catch (err) {
     await releaseClaim(sql, ids, claim);
     throw err;
+  }
+  // A payout planned from the old amounts in the moment before the claim
+  // took hold is removed too; it is planned again from the new ones.
+  try { await clearUnsentPayouts(sql, ids); }
+  catch (err) { await logAudit(sql, { action: 'payout_sent_for_cancelled_booking', success: false, actorType: 'system', targetType: 'order', targetId: main.id, metadata: { ids, error: err.message } }); }
+  for (const r of done) {
+    const s = splits.get(Number(r.id));
+    try { await sql`UPDATE order_cohost_shares SET amount = round(${s.hostPayout}::numeric * percent / 100) WHERE order_id = ${r.id}`; }
+    catch (err) { /* no co-host shares table */ }
+    await logAudit(sql, { action: 'booking_cancelled_by_guest', success: true, actorType: 'system', actorIdentifier: String(main.guest_id || ''),
+      targetType: 'order', targetId: r.id, metadata: { percent, by, refundCash: s.refundCash, couponBack: s.couponBack, hostPayout: s.hostPayout, policy: policyKey(main.policy) } });
   }
 
   const sum = (k) => done.reduce((t, r) => t + splits.get(Number(r.id))[k], 0);
@@ -486,5 +542,5 @@ module.exports = {
   POLICIES, HOST_DECISION_TIMEOUT_HOURS, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, REQUEST_REASONS,
   policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
   claimForCancellation, releaseClaim, guestGetsBackFor, claimRequest, unclaimRequest, postThreadMessage, hostOption, createCancellationRequest, cancellationCard,
-  cancellationQuote, executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, settleUnansweredRequests
+  cancellationQuote, executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
 };

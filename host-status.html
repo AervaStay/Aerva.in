@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Status — Aerva</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <meta name="robots" content="noindex, nofollow">
 <style>
   body{font-family:'Jost', sans-serif; background:#ffffff; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased;}
@@ -14,7 +15,7 @@
   }
   .back-home:hover{opacity:1;}
   .top-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;}
-  h1{font-family:Georgia,serif; font-size:26px; margin:0;}
+  h1{font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:26px; margin:0;}
   .logout-btn{background:none; border:1px solid #ddd0bc; padding:8px 16px; font-size:12px; cursor:pointer; color:#1c1a17;}
 
   /* Same table-based sticky-first-column approach as manage-listing.html's
@@ -194,6 +195,11 @@
   .status-cal-cell .cal-day-price{ font-size:12px; }
   .status-cal-cell .cal-day-guest{ font-size:12px; text-transform:none; letter-spacing:0; }
   .status-legend{ font-size:13px; color:#4a453e; }
+  /* Booked on another site (calendar sync): read-only, striped. */
+  .status-cal-cell.is-blocked.is-imported{ background:repeating-linear-gradient(135deg, #f1efec 0 6px, #e8e3db 6px 12px); }
+  .status-intro{ font-size:14px; line-height:1.6; color:#4a453e; max-width:70ch; margin:-4px 0 16px; padding-left:20px; }
+  .status-intro li{ margin:2px 0; }
+  .bookings-scroll{ overflow-x:auto; -webkit-overflow-scrolling:touch; touch-action:pan-x pan-y; }
   .status-legend span span{ border:1px solid #ddd3c6 !important; }
   /* Buttons: gold rather than near-black. */
 
@@ -212,7 +218,10 @@
     <button class="logout-btn" id="logoutBtn">Log Out</button>
   </div>
 
-  <p style="font-size:14px; line-height:1.6; color:#4a453e; max-width:70ch; margin:-4px 0 16px;">Every approved stay. Choose the dates to look at — up to one year of history — and tick the states you want to stand out. A Resort's rooms each get their own row here — no need to open the listing separately to see per-room availability. Each square shows the real price for that date (discounted if a promotion applies), or the guest's name if it's booked. Tap a date to open its panel. Keep tapping more dates in the SAME row and the range grows with each tap — the panel stays open and updates as you go. Tap an already-blocked or promoted date to remove it — a real guest booking can't be changed here.</p>
+  <ul class="status-intro">
+    <li>Each square shows that night's price, or the guest's name if it's booked. A Resort shows one row per room.</li>
+    <li>Tap an open night to block it or run a promotion; tap more nights in the same row to widen the range. Tap a blocked or promoted night to remove it.</li>
+  </ul>
   <div class="status-controls">
     <div class="status-filters">
       <span class="status-filters-title">Show</span>
@@ -327,6 +336,14 @@
     window.location.href = 'guest-login.html';
   });
 
+  // Everything a guest, host or other site typed is escaped before it
+  // goes into the page — a guest named <img onerror=…> must stay text.
+  function esc(t){
+    return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  }
+  // Only a plain phone number goes into a tel: link.
+  function telHref(p){ return 'tel:' + String(p || '').replace(/[^\d+]/g, ''); }
+
   function formatCompactPrice(n){
     n = Number(n) || 0;
     if(n >= 100000) return '₹' + (n / 100000).toFixed(1).replace(/\.0$/, '') + 'L';
@@ -343,7 +360,7 @@
       });
       const data = await res.json();
       if(!res.ok){
-        wrap.innerHTML = `<p class="error" style="padding:16px;">${data.error || 'Could not load the status calendar.'}</p>`;
+        wrap.innerHTML = `<p class="error" style="padding:16px;">${esc(data.error || 'Could not load the status calendar.')}</p>`;
         return;
       }
       lastStatusData = data;
@@ -536,6 +553,11 @@
 
   function formatDateShort(d){
     return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  }
+  // "22 Sep 2026" — how every full date on this page reads.
+  function formatDateLong(d){
+    if(!d) return '—';
+    return new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
   }
 
   // Expands an inclusive date range into every date it covers, so the
@@ -881,16 +903,16 @@
   function showPromoDetail(idx){
     const p = window.statusPromoLookup[idx];
     if(!p) return;
-    const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-    const discountLabel = p.promoDiscountType === 'flat' ? `₹${p.promoDiscountValue} off` : `${p.promoDiscountValue}% off`;
+    const fmtDate = formatDateLong;
+    const discountLabel = p.promoDiscountType === 'flat' ? `₹${Number(p.promoDiscountValue).toLocaleString('en-IN')} off` : `${Number(p.promoDiscountValue)}% off`;
     document.getElementById('promoDetailContent').innerHTML = `
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Promotion Applied</p>
-      <p style="font-size:16px; font-weight:600; margin:0 0 12px;">${p.promoName}</p>
-      <p style="margin:4px 0;"><strong>Applies to:</strong> ${p.label}</p>
-      <p style="margin:4px 0;"><strong>Discount:</strong> ${discountLabel}</p>
+      <p style="font-size:16px; font-weight:600; margin:0 0 12px;">${esc(p.promoName)}</p>
+      <p style="margin:4px 0;"><strong>Applies to:</strong> ${esc(p.label)}</p>
+      <p style="margin:4px 0;"><strong>Discount:</strong> ${esc(discountLabel)}</p>
       <p style="margin:4px 0;"><strong>Price:</strong> ₹${Number(p.basePrice).toLocaleString('en-IN')} → ₹${Number(p.price).toLocaleString('en-IN')}</p>
       <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(p.promoStartDate)} – ${fmtDate(utcToYmd(new Date(ymdToUTC(p.promoEndDate).getTime() - 86400000)))}</p>
-      ${p.promoMinNights ? `<p style="margin:4px 0;"><strong>Minimum nights:</strong> ${p.promoMinNights}</p>` : ''}
+      ${p.promoMinNights ? `<p style="margin:4px 0;"><strong>Minimum nights:</strong> ${Number(p.promoMinNights)}</p>` : ''}
     `;
     // The status endpoint names the id promoId (see dayPricing in
     // host-listings.js); this read promotionId, so both buttons sent
@@ -992,31 +1014,31 @@
     const all = [];
     (data.rows || []).forEach(row => (row.bookings || []).forEach(b => all.push({ ...b, label: row.label })));
     all.sort((x, y) => (x.start_date < y.start_date ? 1 : x.start_date > y.start_date ? -1 : 0)); // newest first
-    const rangeText = `${data.startDate} to ${data.endDate || data.startDate}`;
+    const rangeText = `${formatDateLong(data.startDate)} and ${formatDateLong(data.endDate || data.startDate)}`;
     if(!all.length){
       box.innerHTML = `<h2 class="bookings-head">Bookings in this range</h2><p style="color:#6e675d; font-size:14px;">No bookings between ${rangeText}.</p>`;
       return;
     }
     const money = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
-    const fmt = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    const fmt = formatDateLong;
     const earned = all.reduce((t, b) => t + (Number(b.payout_amount) || 0), 0);
     box.innerHTML = `
       <h2 class="bookings-head">Bookings in this range</h2>
       <p style="color:#6e675d; font-size:13.5px; margin:0 0 12px;">${all.length} booking${all.length === 1 ? '' : 's'} between ${rangeText} · your payouts total ${money(earned)} before TDS</p>
-      <div style="overflow-x:auto;"><table class="bookings-table">
+      <div class="bookings-scroll"><table class="bookings-table">
         <thead><tr><th>When</th><th>Code</th><th>Listing</th><th>Guest</th><th>Dates</th><th>Guests</th><th>Guest paid</th><th>Your payout</th><th>Deposit</th></tr></thead>
         <tbody>${all.map(b => {
           const when = bookingWhen(b, data.today);
           return `<tr>
             <td><span class="when-pill when-${when.replace(' ', '-')}">${when}</span></td>
-            <td>${b.confirmation_code ? `<span class="code-cell">${b.confirmation_code}</span>` : '<span class="sub">—</span>'}</td>
-            <td>${b.label || '—'}</td>
-            <td>${b.guest_name || b.guest_email || '—'}${b.guest_phone ? `<br><span class="sub"><a href="tel:${b.guest_phone}">${b.guest_phone}</a></span>` : ''}${b.guest_email ? `<br><span class="sub"><a href="mailto:${b.guest_email}">${b.guest_email}</a></span>` : ''}</td>
-            <td>${fmt(b.start_date)} – ${fmt(b.end_date)}<br><span class="sub">${b.nights || ''} night${b.nights === 1 ? '' : 's'}</span></td>
-            <td>${b.guests || '—'}</td>
+            <td>${b.confirmation_code ? `<span class="code-cell">${esc(b.confirmation_code)}</span>` : '<span class="sub">—</span>'}</td>
+            <td>${esc(b.label || '—')}</td>
+            <td>${esc(b.guest_name || b.guest_email || '—')}${b.guest_phone ? `<br><span class="sub"><a href="${esc(telHref(b.guest_phone))}">${esc(b.guest_phone)}</a></span>` : ''}${b.guest_email ? `<br><span class="sub"><a href="mailto:${encodeURIComponent(b.guest_email)}">${esc(b.guest_email)}</a></span>` : ''}</td>
+            <td>${fmt(b.start_date)} – ${fmt(b.end_date)}<br><span class="sub">${Number(b.nights) || ''} night${Number(b.nights) === 1 ? '' : 's'}</span></td>
+            <td>${esc(b.guests || '—')}</td>
             <td>${money(b.total)}</td>
             <td>${money(b.payout_amount)}</td>
-            <td>${Number(b.deposit_amount) ? money(b.deposit_amount) + '<br><span class="sub">' + depositLabel(b.deposit_status) + '</span>' : '—'}</td>
+            <td>${Number(b.deposit_amount) ? money(b.deposit_amount) + '<br><span class="sub">' + esc(depositLabel(b.deposit_status)) + '</span>' : '—'}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>`;
@@ -1041,6 +1063,7 @@
     const fmtDay = (d) => d.toLocaleDateString('en-IN', { day: 'numeric' });
     const fmtWeekday = (d) => d.toLocaleDateString('en-IN', { weekday: 'narrow' });
     const statusLabel = { available: 'Available — tap to start a selection', booked: 'Booked (real guest)', blocked: 'Blocked by you — tap to remove' };
+    window.statusImportedLookup = [];
 
     const headerCells = days.map(d => `<th>${fmtWeekday(d)}<br>${fmtDay(d)}</th>`).join('');
     // Lookup-by-index for row/booking/promo data — a guest email, label,
@@ -1072,9 +1095,19 @@
           const idx = window.statusBookingLookup.length;
           window.statusBookingLookup.push({ label: row.label, ...(booking || {}) });
           clickAttr = ` onclick="showStatusBookingDetail(${idx})" style="cursor:pointer;"`;
-          const shortName = booking && booking.guest_email ? booking.guest_email.split('@')[0] : 'Booked';
-          innerHtml = `<span class="cal-day-guest">${shortName}</span>`;
-          cellTitle = `${row.label} — ${dateStr}: ${booking ? booking.guest_email : 'Booked'}`;
+          const shortName = booking && booking.guest_name ? String(booking.guest_name).split(' ')[0]
+            : booking && booking.guest_email ? booking.guest_email.split('@')[0] : 'Booked';
+          innerHtml = `<span class="cal-day-guest">${esc(shortName)}</span>`;
+          cellTitle = `${row.label} — ${dateStr}: ${booking ? (booking.guest_name || booking.guest_email || 'Booked') : 'Booked'}`;
+        } else if(status === 'blocked' && row.dayImportedFrom && row.dayImportedFrom[i]){
+          // Booked on another site and brought in by calendar sync. Only
+          // that site can free it, so it opens a read-only note.
+          const site = row.dayImportedFrom[i];
+          const impIdx = window.statusImportedLookup.length;
+          window.statusImportedLookup.push({ label: row.label, site, dateStr });
+          clickAttr = ` onclick="showImportedDetail(${impIdx})" style="cursor:pointer;"`;
+          innerHtml = pricing.price ? `<span class="cal-day-price">${formatCompactPrice(pricing.price)}</span>` : '';
+          cellTitle = `${row.label} — ${dateStr}: Booked on ${site}`;
         } else if(status === 'blocked'){
           clickAttr = ` onclick="onBlockedCellClick(window.statusRowLookup[${rowIdx}], '${dateStr}')" style="cursor:pointer;"`;
           // The price still shows on a blocked night, struck through — the
@@ -1107,9 +1140,10 @@
         if(isPast && status !== 'booked') { clickAttr = ''; cellTitle = `${row.label} — ${dateStr}: ${status === 'blocked' ? 'Blocked (past)' : 'Past date'}`; }
         else if(isPast) { cellTitle = `${row.label} — ${dateStr}: past booking — tap for details`; }
         const kind = status === 'booked' ? 'booked' : status === 'blocked' ? 'blocked' : (promoClass ? 'promo' : 'open');
-        return `<td class="status-cal-cell is-${status}${promoClass}${selectingClass}${isToday ? ' is-today' : ''}${isPast ? ' is-past' : ''}" data-kind="${kind}" title="${cellTitle}"${clickAttr}>${innerHtml}</td>`;
+        const importedClass = (status === 'blocked' && row.dayImportedFrom && row.dayImportedFrom[i]) ? ' is-imported' : '';
+        return `<td class="status-cal-cell is-${status}${promoClass}${importedClass}${selectingClass}${isToday ? ' is-today' : ''}${isPast ? ' is-past' : ''}" data-kind="${kind}" title="${esc(cellTitle)}"${clickAttr}>${innerHtml}</td>`;
       }).join('');
-      return `<tr><td class="status-cal-listing-cell">${row.label}</td>${cells}</tr>`;
+      return `<tr><td class="status-cal-listing-cell" title="${esc(row.label)}">${esc(row.label)}</td>${cells}</tr>`;
     }).join('');
 
     wrap.innerHTML = `
@@ -1123,22 +1157,35 @@
   function showStatusBookingDetail(idx){
     const b = window.statusBookingLookup[idx];
     if(!b) return;
-    const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+    const fmtDate = formatDateLong;
     document.getElementById('statusBookingDetailContent').innerHTML = `
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Booking Detail</p>
-      <p style="font-size:16px; font-weight:600; margin:0 0 8px;">${b.label || 'Booking'}</p>
+      <p style="font-size:16px; font-weight:600; margin:0 0 8px;">${esc(b.label || 'Booking')}</p>
       ${b.confirmation_code ? `<p style="margin:0 0 12px; padding:8px 10px; background:#f6efe3; border:1px solid #e0cda8; border-radius:8px;">
         <span style="font-size:12.5px; color:#6b5222;">Confirmation code</span><br>
-        <strong style="font-size:17px; letter-spacing:0.05em;">${b.confirmation_code}</strong></p>` : ''}
-      <p style="margin:4px 0;"><strong>Guest:</strong> ${b.guest_name || (b.guest_email || '—')}${b.guest_id_on_file ? ' <span style="color:#2f6b3a; font-size:12.5px;">· ID on file</span>' : ''}</p>
-      ${b.guest_email ? `<p style="margin:4px 0;"><strong>Email:</strong> <a href="mailto:${b.guest_email}" style="color:#7c6030;">${b.guest_email}</a></p>` : ''}
-      ${b.guest_phone ? `<p style="margin:4px 0;"><strong>Phone:</strong> <a href="tel:${b.guest_phone}" style="color:#7c6030;">${b.guest_phone}</a></p>` : ''}
-      <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}${b.nights ? ` (${b.nights} night${b.nights === 1 ? '' : 's'})` : ''} <span style="color:#6e675d;">· ${bookingWhen(b)}</span></p>
-      ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${b.guests}</p>` : ''}
+        <strong style="font-size:17px; letter-spacing:0.05em;">${esc(b.confirmation_code)}</strong></p>` : ''}
+      <p style="margin:4px 0;"><strong>Guest:</strong> ${esc(b.guest_name || (b.guest_email || '—'))}</p>
+      ${b.guest_email ? `<p style="margin:4px 0;"><strong>Email:</strong> <a href="mailto:${encodeURIComponent(b.guest_email)}" style="color:#7c6030;">${esc(b.guest_email)}</a></p>` : ''}
+      ${b.guest_phone ? `<p style="margin:4px 0;"><strong>Phone:</strong> <a href="${esc(telHref(b.guest_phone))}" style="color:#7c6030;">${esc(b.guest_phone)}</a></p>` : ''}
+      <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}${b.nights ? ` (${Number(b.nights)} night${Number(b.nights) === 1 ? '' : 's'})` : ''} <span style="color:#6e675d;">· ${bookingWhen(b)}</span></p>
+      ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${esc(b.guests)}</p>` : ''}
       ${b.total ? `<p style="margin:4px 0;"><strong>Guest paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
       ${b.payout_amount ? `<p style="margin:4px 0;"><strong>Your payout:</strong> ₹${Number(b.payout_amount).toLocaleString('en-IN')} <span style="color:#6e675d; font-size:12.5px;">before TDS</span></p>` : ''}
       ${Number(b.deposit_amount) ? `<p style="margin:4px 0;"><strong>Deposit:</strong> ₹${Number(b.deposit_amount).toLocaleString('en-IN')} · ${depositLabel(b.deposit_status)}</p>` : ''}
-      ${b.created_at ? `<p style="margin:4px 0; color:#6e675d; font-size:12.5px;">Booked on ${fmtDate(String(b.created_at).slice(0, 10))}${b.razorpay_order_id ? ` · Ref ${b.razorpay_order_id}` : ''}</p>` : ''}
+      ${b.created_at ? `<p style="margin:4px 0; color:#6e675d; font-size:12.5px;">Booked on ${fmtDate(String(b.created_at).slice(0, 10))}${b.razorpay_order_id ? ` · Ref ${esc(b.razorpay_order_id)}` : ''}</p>` : ''}
+    `;
+    openPopover(document.getElementById('statusBookingDetailOverlay'), lastClickedCell);
+  }
+
+  // A night booked on another site (calendar sync) — read-only.
+  function showImportedDetail(idx){
+    const x = (window.statusImportedLookup || [])[idx];
+    if(!x) return;
+    document.getElementById('statusBookingDetailContent').innerHTML = `
+      <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">${esc(x.label)}</p>
+      <p style="font-size:16px; font-weight:600; margin:0 0 8px;">Booked on ${esc(x.site)}</p>
+      <p style="margin:4px 0;">${formatDateLong(x.dateStr)} is taken on your ${esc(x.site)} calendar, so guests can't book it here.</p>
+      <p style="margin:4px 0; color:#6e675d; font-size:12.5px;">To free it, change it on ${esc(x.site)}. It reopens here at the next calendar sync.</p>
     `;
     openPopover(document.getElementById('statusBookingDetailOverlay'), lastClickedCell);
   }

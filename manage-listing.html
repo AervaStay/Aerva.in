@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Manage Your Listing — Aerva</title>
+<title>Manage listing — Aerva</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <meta name="robots" content="noindex, nofollow">
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <style>
@@ -14,7 +15,7 @@
     color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:28px;
   }
   .back-home:hover{opacity:1;}
-  h1{font-family:Georgia,serif; font-size:24px; margin-bottom:6px;}
+  h1{font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin-bottom:6px;}
   .subtitle{opacity:0.65; font-size:14px; margin-bottom:32px;}
   .field{display:flex; flex-direction:column; gap:6px; margin-bottom:20px;}
   label{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c;}
@@ -151,7 +152,7 @@
   .room-card-fields{flex:1; min-width:0; display:flex; flex-direction:column; gap:10px;}
   .room-name-input{
     border:none; border-bottom:1px solid #ddd0bc; background:none; padding:2px 0 8px;
-    font-family:Georgia,serif; font-size:19px; color:#1c1a17; width:100%;
+    font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:19px; color:#1c1a17; width:100%;
   }
   .room-name-input:focus{outline:none; border-color:#8a6c39;}
   .room-card-numbers{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
@@ -250,7 +251,7 @@
 <body>
 
 <div class="wrap">
-  <a href="host-dashboard.html" class="back-home">&larr; Back to Your Listings</a>
+  <a href="host-dashboard.html" class="back-home">&larr; Back to My Collection</a>
   <div id="loadingState" class="loading">Loading your listing…</div>
 
   <div id="formState" style="display:none;">
@@ -479,7 +480,7 @@
       <div class="eyebrow" style="margin-top:24px;">Paid Amenities <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(guests pay extra to add these at checkout)</span></div>
       <div id="paidAmenitiesList"></div>
       <button type="button" class="add-paid-amenity-btn" id="addPaidAmenityBtn">+ Add a Paid Amenity</button>
-      <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">A one-time fee per stay, not per night. Leave the date fields blank for an amenity that's available year-round.</p>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:8px; margin-bottom:24px;">Charged per night the guest chooses it. Leave the date fields blank for an amenity that's available year-round.</p>
     </div>
 
     <div class="mgmt-tab-panel" id="mgmtTabCheckin">
@@ -524,14 +525,12 @@
       <div id="checkinInstructionsPreview" style="background:#f4ebe3; border:1px solid #ddd0bc; padding:14px; font-size:13px; line-height:1.7; white-space:pre-wrap; margin-bottom:16px;"></div>
 
       <div class="eyebrow" style="margin-top:0;">Scheduling</div>
-      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:10px;">Send the preview above automatically — no template needed, it just uses whatever's currently filled in when it fires. Timed options need something checking every few minutes to fire accurately, which isn't available on the current plan yet, so only immediate sending works right now.</p>
+      <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:10px;">Send the preview above to the guest automatically, using whatever is filled in at the time.</p>
       <div class="field" style="margin-bottom:24px;">
         <label for="checkinScheduleTrigger">When should this send?</label>
         <select id="checkinScheduleTrigger">
           <option value="">Don't send automatically</option>
           <option value="on_booking_confirmed">The moment a guest confirms their booking</option>
-          <option value="before_checkin" disabled>1 day before check-in, at a set time — coming soon</option>
-          <option value="on_checkin_day" disabled>On the day of check-in, at a set time — coming soon</option>
         </select>
       </div>
     </div>
@@ -543,8 +542,9 @@
   </div>
 
   <div id="notFoundState" style="display:none;">
-    <h1>Link not valid</h1>
-    <p class="subtitle">This link may have expired or is incorrect. Contact hello@aerva.in if you need a new one.</p>
+    <h1 id="notFoundHeading">Link not valid</h1>
+    <p class="subtitle" id="notFoundMessage">This link may have expired or is incorrect. Open Manage from My Collection to get a fresh one, or contact hello@aerva.in.</p>
+    <button type="button" id="notFoundRetry" style="display:none; margin-top:12px; padding:10px 18px; border:1px solid #ddd0bc; background:#fff; border-radius:999px; cursor:pointer; font-family:inherit;">Try again</button>
   </div>
 
   <div id="pendingState" style="display:none;">
@@ -555,6 +555,11 @@
 
 <script>
   const API_BASE = 'https://aerva-in.vercel.app';
+  // Anything a host, guest or admin typed is escaped before it becomes
+  // page markup.
+  function escM(t){
+    return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  }
 
   // ---- Leaflet/OpenStreetMap location preview (testing this here only —
   // see the CSS/head comment for why) ----
@@ -743,6 +748,9 @@
 
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
+  // Uploads carry this page's manage link token (blob-upload.js refuses
+  // an upload that doesn't say who is uploading).
+  const uploadClientPayload = () => JSON.stringify({ purpose: 'listing-photo', token: token || '' });
 
   const loadingState = document.getElementById('loadingState');
   const formState = document.getElementById('formState');
@@ -871,7 +879,7 @@
         const el = document.createElement('div');
         el.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
         el.innerHTML = `
-          <img src="${url}" alt="">
+          <img src="${escM(url)}" alt="">
           <span class="photo-order-badge">${idx + 1}</span>
           <button type="button" data-action="remove" class="photo-remove-btn" aria-label="Remove">×</button>
           <button type="button" data-action="cover" class="photo-cover-btn" aria-label="Set as cover" title="Set as cover photo">${isCover ? '★' : '☆'}</button>
@@ -925,7 +933,8 @@
             const compressed = await compressImage(item.file);
             const result = await upload(compressed.name, compressed, {
               access: 'public',
-              handleUploadUrl: API_BASE + '/api/blob-upload'
+              handleUploadUrl: API_BASE + '/api/blob-upload',
+              clientPayload: uploadClientPayload()
             });
             urls.push(result.url);
             // A newly-uploaded photo that was chosen as cover needs its
@@ -965,17 +974,17 @@
       ).join('');
       el.innerHTML = `
         <div class="row-line">
-          <input type="text" placeholder="Name, e.g. Private Chef" data-field="name" value="${row.name || ''}">
-          <input type="number" min="1" placeholder="₹ price/night" data-field="price" value="${row.price || ''}">
+          <input type="text" placeholder="Name, e.g. Private Chef" data-field="name" value="${escM(row.name || '')}">
+          <input type="number" min="1" placeholder="₹ price/night" data-field="price" value="${escM(row.price || '')}">
         </div>
         <div class="date-line">
           <div>
             <label>Available From</label>
-            <input type="date" data-field="availableFrom" value="${row.availableFrom || ''}">
+            <input type="date" data-field="availableFrom" value="${escM(row.availableFrom || '')}">
           </div>
           <div>
             <label>Available Until</label>
-            <input type="date" data-field="availableUntil" value="${row.availableUntil || ''}">
+            <input type="date" data-field="availableUntil" value="${escM(row.availableUntil || '')}">
           </div>
         </div>
         <div>
@@ -1109,8 +1118,8 @@
       el.className = 'paid-amenity-row';
       el.innerHTML = `
         <div class="row-line" style="grid-template-columns:1fr 1fr;">
-          <input type="text" placeholder="Field name, e.g. Parking" data-field="label" value="${row.label || ''}">
-          <input type="text" placeholder="Value, e.g. Spot 12 in the driveway" data-field="value" value="${row.value || ''}">
+          <input type="text" placeholder="Field name, e.g. Parking" data-field="label" value="${escM(row.label || '')}">
+          <input type="text" placeholder="Value, e.g. Spot 12 in the driveway" data-field="value" value="${escM(row.value || '')}">
         </div>
         <button type="button" class="remove-amenity-btn" data-action="remove">Remove this field</button>
       `;
@@ -1186,7 +1195,7 @@
       // only lingers until the host actually acts on it.
       const rejectedBannerHtml = (!isPending && room.lastRejectionReason) ? `
         <div style="background:#fdece8; border:1px solid #e0a99c; padding:10px 12px; margin-bottom:12px; border-radius:4px;">
-          <p style="font-size:12.5px; margin:0; color:#a3402f;"><strong>Your last change to this room was rejected:</strong> ${room.lastRejectionReason}</p>
+          <p style="font-size:12.5px; margin:0; color:#a3402f;"><strong>Your last change to this room was rejected:</strong> ${escM(room.lastRejectionReason)}</p>
         </div>
       ` : '';
       el.innerHTML = `
@@ -1194,18 +1203,18 @@
           ${pendingBannerHtml}
           ${rejectedBannerHtml}
           <div class="room-card-fields" style="margin-bottom:12px;">
-            <input type="text" class="room-name-input" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${room.roomName || ''}" ${isPending ? 'disabled' : ''}>
+            <input type="text" class="room-name-input" placeholder="Room name, e.g. Garden Cottage" data-room-field="roomName" value="${escM(room.roomName || '')}" ${isPending ? 'disabled' : ''}>
             <div class="room-card-numbers">
               <div class="room-card-number-field">
                 <label>Max Guests</label>
-                <input type="number" min="1" placeholder="—" data-room-field="maxOccupancy" value="${room.maxOccupancy || ''}" ${isPending ? 'disabled' : ''}>
+                <input type="number" min="1" placeholder="—" data-room-field="maxOccupancy" value="${escM(room.maxOccupancy || '')}" ${isPending ? 'disabled' : ''}>
               </div>
               <div class="room-card-number-field">
                 <label>Price / Night (₹)</label>
-                <input type="number" min="1" placeholder="—" data-room-field="nightlyRate" value="${room.nightlyRate || ''}" ${isPending ? 'disabled' : ''}>
+                <input type="number" min="1" placeholder="—" data-room-field="nightlyRate" value="${escM(room.nightlyRate || '')}" ${isPending ? 'disabled' : ''}>
               </div>
             </div>
-            <textarea rows="2" class="room-description-input" placeholder="Description (optional)" data-room-field="description" ${isPending ? 'disabled' : ''}>${room.description || ''}</textarea>
+            <textarea rows="2" class="room-description-input" placeholder="Description (optional)" data-room-field="description" ${isPending ? 'disabled' : ''}>${escM(room.description || '')}</textarea>
           </div>
           ${roomGalleryHtml(room, idx)}
           ${room.photos.length && !isPending ? `
@@ -1215,7 +1224,7 @@
                 <p style="font-size:12px; opacity:0.7; margin:0 0 8px;">Copies these exact photos onto whichever rooms you check below, replacing anything already there for that room.</p>
                 ${otherRooms.map(other => `
                   <label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0; cursor:pointer;">
-                    <input type="checkbox" data-clone-target="${roomRows.indexOf(other)}" style="width:auto;"> ${other.roomName || 'Untitled room'}
+                    <input type="checkbox" data-clone-target="${roomRows.indexOf(other)}" style="width:auto;"> ${escM(other.roomName || 'Untitled room')}
                   </label>
                 `).join('')}
                 <button type="button" class="btn solid" data-clone-apply style="margin-top:10px; width:auto; padding:8px 18px; font-size:11px;">Clone Now</button>
@@ -1411,7 +1420,7 @@
           continue;
         }
         const compressed = await compressImage(photo.file);
-        const uploaded = await upload(compressed.name, compressed, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        const uploaded = await upload(compressed.name, compressed, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload', clientPayload: uploadClientPayload() });
         cache.set(photo.file, uploaded.url);
         photo.url = uploaded.url;
         photo.file = null;
@@ -1475,9 +1484,9 @@
       return `
         <div class="checkin-photo-slot">
           <div class="checkin-photo-slot-box" data-slot-pick="${i}">
-            ${previewSrc ? `<img src="${previewSrc}" alt="">` : '<span>+ Add Photo</span>'}
+            ${previewSrc ? `<img src="${escM(previewSrc)}" alt="">` : '<span>+ Add Photo</span>'}
           </div>
-          <input type="text" placeholder="Caption, e.g. Parking Spot" value="${slot.caption || ''}" data-slot-caption="${i}">
+          <input type="text" placeholder="Caption, e.g. Parking Spot" value="${escM(slot.caption || '')}" data-slot-caption="${i}">
           ${previewSrc ? `<button type="button" class="checkin-photo-remove-btn" data-slot-remove="${i}">Remove photo</button>` : ''}
         </div>
       `;
@@ -1531,7 +1540,7 @@
       if(slot.file){
         const { upload } = await import('https://esm.sh/@vercel/blob/client');
         const compressed = await compressImage(slot.file);
-        const uploaded = await upload(compressed.name, compressed, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload' });
+        const uploaded = await upload(compressed.name, compressed, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload', clientPayload: uploadClientPayload() });
         result.push({ caption: slot.caption || '', url: uploaded.url });
       } else if(slot.url){
         result.push({ caption: slot.caption || '', url: slot.url });
@@ -1651,7 +1660,14 @@
     }
     try{
       const res = await fetch(API_BASE + '/api/update-listing-pricing?token=' + encodeURIComponent(token));
-      if(!res.ok) throw new Error('Invalid link');
+      // 400 = the link itself is bad or expired; anything else (500, 404…)
+      // is our problem, and the host should be told to try again, not
+      // that their link is wrong.
+      if(!res.ok){
+        const err = new Error('load failed');
+        err.kind = res.status === 400 ? 'link' : 'server';
+        throw err;
+      }
       const data = await res.json();
       const l = data.listing;
 
@@ -1679,7 +1695,7 @@
         const pricingFormEl = document.getElementById('pricingForm');
         const banner = document.createElement('div');
         banner.style.cssText = 'background:#fdece8; border:1px solid #e0a99c; padding:14px 16px; margin-bottom:20px; border-radius:4px;';
-        banner.innerHTML = `<p style="font-size:13.5px; margin:0; color:#a3402f;"><strong>This listing is temporarily hidden from guests:</strong> ${l.admin_status_reason || 'An outstanding requirement needs to be fixed.'} It'll go back live automatically as soon as this is fixed and saved.</p>`;
+        banner.innerHTML = `<p style="font-size:13.5px; margin:0; color:#a3402f;"><strong>This listing is temporarily hidden from guests:</strong> ${escM(l.admin_status_reason || 'An outstanding requirement needs to be fixed.')} It'll go back live automatically as soon as this is fixed and saved.</p>`;
         pricingFormEl.parentElement.insertBefore(banner, pricingFormEl);
       }
 
@@ -1688,7 +1704,8 @@
       document.getElementById('listingCity').value = l.city || '';
       document.getElementById('listingArea').value = l.area || '';
       document.getElementById('listPincode').value = l.pincode || '';
-      document.getElementById('maxGuests').value = l.max_guests || '';
+      // "12+" (the listing form's top option) fills the number box as 12.
+      document.getElementById('maxGuests').value = String(l.max_guests || '').replace(/\+$/, '');
       if(l.latitude && l.longitude){
         document.getElementById('listLatitude').value = l.latitude;
         document.getElementById('listLongitude').value = l.longitude;
@@ -1842,6 +1859,13 @@
       formState.style.display = 'block';
     } catch(err){
       loadingState.style.display = 'none';
+      if(!err || err.kind !== 'link'){
+        document.getElementById('notFoundHeading').textContent = 'Could not load your listing';
+        document.getElementById('notFoundMessage').textContent = 'Something went wrong on our side, or the connection dropped. Your link is fine — please try again in a moment.';
+        const retry = document.getElementById('notFoundRetry');
+        retry.style.display = 'inline-block';
+        retry.onclick = () => { notFoundState.style.display = 'none'; loadingState.style.display = 'block'; loadListing(); };
+      }
       notFoundState.style.display = 'block';
     }
   }
@@ -1978,7 +2002,7 @@
       const res = await fetch(API_BASE + '/api/update-listing-pricing?token=' + encodeURIComponent(token) + '&roomCalendar=1');
       const data = await res.json();
       if(!res.ok){
-        wrap.innerHTML = `<p style="padding:16px; color:#a3402f; font-size:13px;">${data.error || 'Could not load the calendar.'}</p>`;
+        wrap.innerHTML = `<p style="padding:16px; color:#a3402f; font-size:13px;">${escM(data.error || 'Could not load the calendar.')}</p>`;
         return;
       }
       renderRoomCalendar(data);
@@ -2000,7 +2024,8 @@
       d.setUTCDate(d.getUTCDate() + i);
       days.push(d);
     }
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // The calendar starts on the property's own today (server-side).
+    const todayStr = data.startDate || new Date().toISOString().slice(0, 10);
     const fmtDay = (d) => d.toLocaleDateString('en-IN', { day: 'numeric' });
     const fmtWeekday = (d) => d.toLocaleDateString('en-IN', { weekday: 'narrow' });
 
@@ -2033,9 +2058,9 @@
           window.roomCalBookingLookup.push({ roomName: room.roomName, ...range });
           clickAttr = ` onclick="showBookingDetail(${idx})" style="cursor:pointer;"`;
         }
-        return `<td class="room-cal-cell is-${range.type}${isToday ? ' is-today' : ''}" title="${room.roomName} — ${dateStr}: ${range.label}"${clickAttr}></td>`;
+        return `<td class="room-cal-cell is-${range.type}${isToday ? ' is-today' : ''}" title="${escM(room.roomName)} — ${dateStr}: ${escM(range.label)}"${clickAttr}></td>`;
       }).join('');
-      return `<tr><td class="room-cal-room-cell">${room.roomName || 'Untitled room'}</td>${cells}</tr>`;
+      return `<tr><td class="room-cal-room-cell">${escM(room.roomName || 'Untitled room')}</td>${cells}</tr>`;
     }).join('');
 
     wrap.innerHTML = `
@@ -2052,10 +2077,10 @@
     const fmtDate = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     document.getElementById('bookingDetailContent').innerHTML = `
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Booking Detail</p>
-      <p style="font-size:16px; font-weight:600; margin:0 0 12px;">${b.roomName || 'Room'}</p>
-      <p style="margin:4px 0;"><strong>Guest:</strong> ${b.guestEmail || b.label || '—'}</p>
+      <p style="font-size:16px; font-weight:600; margin:0 0 12px;">${escM(b.roomName || 'Room')}</p>
+      <p style="margin:4px 0;"><strong>Guest:</strong> ${escM(b.guestEmail || b.label || '—')}</p>
       <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start)} – ${fmtDate(b.end)}${b.nights ? ` (${b.nights} night${b.nights === 1 ? '' : 's'})` : ''}</p>
-      ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${b.guests}</p>` : ''}
+      ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${escM(b.guests)}</p>` : ''}
       ${b.total ? `<p style="margin:4px 0;"><strong>Total paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
     `;
     document.getElementById('bookingDetailOverlay').style.display = 'flex';
@@ -2173,7 +2198,18 @@
       else { add.disabled = false; add.textContent = 'Add calendar'; }
     });
     const sync = section.querySelector('#csSync');
-    if(sync) sync.addEventListener('click', async () => { sync.disabled = true; sync.textContent = 'Syncing…'; await act({ action: 'syncNow' }, 'Synced.'); });
+    if(sync) sync.addEventListener('click', async () => {
+      sync.disabled = true; sync.textContent = 'Syncing…';
+      const r = await act({ action: 'syncNow' }, null);
+      if(r){
+        const all = r.total != null && r.synced === r.total;
+        render(r, r.synced == null ? 'Still syncing — check back in a minute.'
+          : all ? 'Synced.' : `${r.synced} of ${r.total} calendars synced. See the error beside the others.`);
+      } else {
+        // act() already showed what went wrong; give the button back.
+        sync.disabled = false; sync.textContent = 'Sync now';
+      }
+    });
   }
 
   async function act(payload, okMsg){

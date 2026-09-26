@@ -97,7 +97,12 @@
       '<nav class="ah-panel" id="ahPanel" aria-label="Menu">' +
         '<a href="guest-login.html" id="ahLoginMobile">Log In</a>' +
         '<span id="ahAccountMobile" hidden style="display:flex; flex-direction:column; gap:16px;">' +
-          '<a href="index.html?view=messages">Messages</a>' + menuLinks() +
+          '<a href="index.html?view=messages">Messages</a>' +
+          // Phones have no bell (the right-hand cluster is hidden), so the
+          // same notifications open here, in the menu.
+          '<button type="button" class="ah-panel-btn" id="ahNotifMobileBtn" aria-expanded="false">Notifications <span class="ah-panel-count" id="ahBellCountMobile" hidden></span></button>' +
+          '<div class="ah-notif-inline" id="ahNotifListMobile" hidden></div>' +
+          menuLinks() +
         '</span>' +
       '</nav>';
     return header;
@@ -106,9 +111,12 @@
   function menuLinks(){
     return '<a href="index.html?view=profile">Profile</a>' +
       '<a href="index.html?view=my-bookings">My Bookings</a>' +
-      '<a href="host-dashboard.html" class="ah-host-only" hidden>My Collection</a>' +
+      // My Collection and My Earnings: hosts with a live listing, and active
+      // co-hosts (the listings they were given live there). Status is the
+      // host's own verification, so hosts only — as on index.html.
+      '<a href="host-dashboard.html" class="ah-host-only" data-ah-cohost hidden>My Collection</a>' +
       '<a href="host-status.html" class="ah-host-only" hidden>Status</a>' +
-      '<a href="host-earnings.html" class="ah-host-only" hidden>My Earnings</a>' +
+      '<a href="host-earnings.html" class="ah-host-only" data-ah-cohost hidden>My Earnings</a>' +
       '<a href="index.html?view=cohost">Co-hosting</a>' +
       '<a href="host-dashboard.html?openProfile=1" data-ah-settings>Account Settings</a>' +
       '<hr>' +
@@ -128,8 +136,10 @@
 
   function logout(){
     // Same keys index.html clears, so a log out here is a log out everywhere.
-    ['aerva_guest_session','aerva_guest_email','aerva_guest_name','aerva_clone_listing','aerva_clone_with_photos']
+    // The notifications already seen belong to this account, not the device.
+    ['aerva_guest_session','aerva_guest_email','aerva_guest_name','aerva_clone_listing','aerva_clone_with_photos','aerva_acting_host','aerva_pending_cohost_invite', NOTIF_READ_KEY]
       .forEach(store.remove);
+    try{ sessionStorage.removeItem('aerva_cohost_convs'); }catch(e){}
     window.location.href = 'index.html';
   }
 
@@ -140,13 +150,21 @@
   }
 
   function renderNotifications(items){
-    var list = document.getElementById('ahNotifList');
-    var count = document.getElementById('ahBellCount');
     var notes = Array.isArray(items) ? items : [];
     var seen = readIds();
     var unread = notes.filter(function(n){ return seen.indexOf(n.id) < 0; }).length;
-    count.textContent = unread > 9 ? '9+' : String(unread);
-    count.hidden = !unread;
+    ['ahBellCount', 'ahBellCountMobile'].forEach(function(id){
+      var count = document.getElementById(id);
+      if(!count) return;
+      count.textContent = unread > 9 ? '9+' : String(unread);
+      count.hidden = !unread;
+    });
+    ['ahNotifList', 'ahNotifListMobile'].forEach(function(id){
+      var list = document.getElementById(id);
+      if(list) fillNotifications(list, notes, seen);
+    });
+  }
+  function fillNotifications(list, notes, seen){
     if(!notes.length){
       list.innerHTML = '<p class="ah-notif-empty">Nothing needs your attention right now.</p>';
       return;
@@ -178,9 +196,14 @@
     var tier = document.getElementById('ahTier');
     if(guest.tier && guest.tier.label){ tier.textContent = guest.tier.label; tier.hidden = false; }
     // Host-only links appear once the account has a live listing — the
-    // same rule index.html applies (hasActiveListing from guest-auth).
+    // same rule index.html applies (hasActiveListing from guest-auth) — and
+    // My Collection, My Earnings and Today for an active co-host too.
     var isHost = guest.hasActiveListing === true;
-    document.querySelectorAll('#ahHeader .ah-host-only, #ahToday').forEach(function(el){ el.hidden = !isHost; });
+    var isCohost = guest.isCohost === true;
+    document.querySelectorAll('#ahHeader .ah-host-only').forEach(function(el){
+      el.hidden = !(isHost || (isCohost && el.hasAttribute('data-ah-cohost')));
+    });
+    document.getElementById('ahToday').hidden = !(isHost || isCohost);
     document.getElementById('ahLogin').hidden = true;
     document.getElementById('ahLoginMobile').hidden = true;
     document.getElementById('ahAccount').hidden = false;
@@ -265,6 +288,12 @@
         var trigger = document.getElementById('hostProfileTrigger');
         if(trigger){ e.preventDefault(); document.getElementById('ahMenu').classList.remove('is-open'); trigger.click(); }
       });
+    });
+    var mobileNotifBtn = document.getElementById('ahNotifMobileBtn');
+    mobileNotifBtn.addEventListener('click', function(){
+      var list = document.getElementById('ahNotifListMobile');
+      list.hidden = !list.hidden;
+      mobileNotifBtn.setAttribute('aria-expanded', list.hidden ? 'false' : 'true');
     });
     var toggle = document.getElementById('ahToggle');
     toggle.addEventListener('click', function(){

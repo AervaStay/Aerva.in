@@ -70,4 +70,16 @@ function safeZone(zone) {
   return KNOWN_ZONES.has(z) ? z : DEFAULT_TIMEZONE;
 }
 
-module.exports = { COUNTRY_TIMEZONES, DEFAULT_TIMEZONE, timezoneForAddress, safeZone };
+// Today's date (YYYY-MM-DD) on the property's own calendar. A host in
+// India opening the calendar at 2am IST is already on the next day,
+// while the server (UTC) is still on the previous one.
+function localTodayIn(zone, now = new Date()) {
+  try {
+    // en-CA formats as YYYY-MM-DD.
+    return new Intl.DateTimeFormat('en-CA', { timeZone: safeZone(zone), year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  } catch (e) {
+    return now.toISOString().slice(0, 10);
+  }
+}
+
+module.exports = { COUNTRY_TIMEZONES, DEFAULT_TIMEZONE, timezoneForAddress, safeZone, localTodayIn };

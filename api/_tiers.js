@@ -500,6 +500,26 @@ const CADENCES = {
   quarterly: { perYear: 4, windowPeriods: 4 }   // 4 periods = 12 months
 };
 
+// Review dates are India dates. The daily job starts at 03:00 India time,
+// which is 21:30 UTC the day before, so a UTC date would put the 1 October
+// review on 30 September. istDay(now) is `now` shifted by +5:30: read its
+// getUTC* fields and you get the date and hour in India.
+const IST_OFFSET_MS = 330 * 60 * 1000;
+function istDay(now) {
+  return new Date((now ? new Date(now) : new Date()).getTime() + IST_OFFSET_MS);
+}
+
+// When the review period containing `now` began (1 Jan, 1 Apr, 1 Jul or
+// 1 Oct at 00:00 India time), as an ISO timestamp. The standing a subject
+// held going into that period's review is read as of this moment.
+function reviewPeriodStart(now, cadence) {
+  const d = istDay(now);
+  const cad = CADENCES[cadence] ? cadence : 'annual';
+  const monthsPer = 12 / CADENCES[cad].perYear;
+  const m = Math.floor(d.getUTCMonth() / monthsPer) * monthsPer;
+  return new Date(Date.UTC(d.getUTCFullYear(), m, 1) - IST_OFFSET_MS).toISOString();
+}
+
 // Period keys are sortable strings: "2026" annually, "2026-Q3" quarterly.
 function periodKey(year, index, cadence) {
   return cadence === 'quarterly' ? `${year}-Q${index + 1}` : String(year);
@@ -518,7 +538,7 @@ function periodsBetween(fromYear, fromIdx, toYear, toIdx, cadence) {
 
 // The period that most recently ENDED — the one the latest review judged.
 function assessmentPeriod(now, cadence) {
-  const d = now || new Date();
+  const d = istDay(now);
   const per = CADENCES[cadence].perYear;
   const idx = Math.floor(d.getUTCMonth() / (12 / per));  // 0-based
   return idx === 0
@@ -577,6 +597,7 @@ function reviewTiers(ladder, statsByPeriod, moneyField, now, cadence) {
   const cad = CADENCES[cadence] ? cadence : 'annual';
   const win = CADENCES[cad].windowPeriods;
   const today = now || new Date();
+  const todayIst = istDay(today);
   const assessed = assessmentPeriod(today, cad);
   const stats = statsByPeriod || {};
 
@@ -608,8 +629,8 @@ function reviewTiers(ladder, statsByPeriod, moneyField, now, cadence) {
   // would award if it closed today. Turns the review from a nasty
   // surprise into something the person can still act on.
   const per = CADENCES[cad].perYear;
-  const curIdx = Math.floor(today.getUTCMonth() / (12 / per));
-  const current = periodsBetween(today.getUTCFullYear(), curIdx, today.getUTCFullYear(), curIdx, cad)[0];
+  const curIdx = Math.floor(todayIst.getUTCMonth() / (12 / per));
+  const current = periodsBetween(todayIst.getUTCFullYear(), curIdx, todayIst.getUTCFullYear(), curIdx, cad)[0];
   const provWindow = [];
   let py = current.year, pi = current.index;
   for (let k = 0; k < win; k++) {
@@ -634,21 +655,20 @@ function reviewTiers(ladder, statsByPeriod, moneyField, now, cadence) {
 }
 
 // Is `now` the first day of a review period? Quarterly: 1 Jan, 1 Apr,
-// 1 Jul, 1 Oct. Annual: 1 Jan. UTC on purpose — the sweep runs at 02:00
-// UTC (07:30 IST), so the UTC date and the Indian date always agree at
-// that hour. Used by get-listings.js's review sweep to decide whether to
-// recompute standing today; it imported these before they existed, which
-// made every sweep throw straight after publishing.
+// 1 Jul, 1 Oct. Annual: 1 Jan. The India date (see istDay): the daily job
+// is claimed from 03:00 India time, when the UTC date is still the day
+// before. Used by get-listings.js's review sweep to decide whether to
+// recompute standing today.
 function isReviewDay(now, cadence) {
-  const d = now || new Date();
+  const d = istDay(now);
   const cad = CADENCES[cadence] ? cadence : 'annual';
   const monthsPer = 12 / CADENCES[cad].perYear;
   return d.getUTCDate() === 1 && d.getUTCMonth() % monthsPer === 0;
 }
 
-// The next review day strictly AFTER `now`, as YYYY-MM-DD.
+// The next review day strictly AFTER `now` (India date), as YYYY-MM-DD.
 function nextReviewDate(now, cadence) {
-  const d = now || new Date();
+  const d = istDay(now);
   const cad = CADENCES[cadence] ? cadence : 'annual';
   const monthsPer = 12 / CADENCES[cad].perYear;
   let y = d.getUTCFullYear();
@@ -1053,7 +1073,7 @@ module.exports = {
   reviewScore, weakestFactor,
   guestTier, hostTier, nextTierProgress, mergeStats,
   assessmentYear, assessmentPeriod, reviewTiers, describeLadders,
-  isReviewDay, nextReviewDate, tierByKey, applyDecayCap,
+  isReviewDay, nextReviewDate, tierByKey, applyDecayCap, reviewPeriodStart,
   PROPERTY_TIERS, PROPERTY_FLAGS, propertyTier, propertyFlag, propertyCutoffs,
   cityCutoffs, cutoffsForCity, MIN_CITY_POOL,
   EXPERIENCE_TIERS, EXPERIENCE_FACTORS, experienceTier,

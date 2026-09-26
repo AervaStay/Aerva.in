@@ -26,6 +26,8 @@
 // host manually clicking a template into the chat box) — kept in sync
 // by hand since this is a separate serverless file with no shared
 // module system to import from the frontend.
+const { redactContactInfo } = require('./_redact');
+
 function fmtDay(iso) {
   if (!iso) return null;
   const d = new Date(String(iso).slice(0, 10) + 'T00:00:00Z');
@@ -183,11 +185,33 @@ async function conversationFor(sql, order) {
   return inserted[0].id;
 }
 
-async function postHostMessage(sql, conversationId, text) {
+// original_text is what was resolved; display_text what the guest sees.
+async function postHostMessage(sql, conversationId, text, displayText = text, wasRedacted = false) {
   await sql`
     INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
-    VALUES (${conversationId}, 'host', ${text}, ${text}, false)
+    VALUES (${conversationId}, 'host', ${text}, ${displayText}, ${wasRedacted})
   `;
+}
+
+// A template goes out under the host's name with no one pressing send, so
+// it passes the same contact filter as a typed message (_redact.js) —
+// except the host's own check-in details the placeholders put in (WiFi,
+// access code, address, map link, check-in steps and photos), which are
+// meant for the guest. So the text the HOST wrote (the template and the
+// Description tab's guidance) is filtered first, and the placeholders are
+// filled in afterwards.
+function resolveTemplateForSend(body, data) {
+  const bodyCheck = redactContactInfo(body);
+  const guidanceCheck = data.guestGuidance ? redactContactInfo(data.guestGuidance) : { displayText: data.guestGuidance, wasRedacted: false };
+  return {
+    original: resolveTemplateText(body, data),
+    display: resolveTemplateText(bodyCheck.displayText, { ...data, guestGuidance: guidanceCheck.displayText }),
+    wasRedacted: bodyCheck.wasRedacted || (guidanceCheck.wasRedacted && /@guidance/i.test(body))
+  };
+}
+async function postTemplate(sql, conversationId, body, data) {
+  const t = resolveTemplateForSend(body, data);
+  await postHostMessage(sql, conversationId, t.original, t.display, t.wasRedacted);
 }
 
 // Claim (template, booking) once. Returns true only for the first caller.
@@ -245,7 +269,7 @@ async function sendBookingConfirmedTemplates(sql, order) {
     const conversationId = await conversationFor(sql, ctx.order);
     for (const t of applicable) {
       if (!(await claimSend(sql, t.id, ctx.order.id))) continue;
-      await postHostMessage(sql, conversationId, resolveTemplateText(t.body, ctx.data));
+      await postTemplate(sql, conversationId, t.body, ctx.data);
     }
     // The built-in check-in instructions auto-send (Manage → Check-in).
     if (ctx.order.auto_send_checkin_instructions) {
@@ -347,7 +371,7 @@ async function sendTimedTemplates(sql, { orderId = null, deadlineMs = 7000 } = {
       const ctx = await loadBookingContext(sql, row.order_id);
       if (!ctx) continue;
       const conversationId = await conversationFor(sql, ctx.order);
-      await postHostMessage(sql, conversationId, resolveTemplateText(row.body, ctx.data));
+      await postTemplate(sql, conversationId, row.body, ctx.data);
       out.sent++;
     } catch (err) {
       out.failed++;
@@ -387,7 +411,7 @@ async function sendScheduledTemplates(sql, { deadlineMs = 7000 } = {}) {
         const ctx = await loadBookingContext(sql, row.order_id);
         if (!ctx) continue;
         const conversationId = await conversationFor(sql, ctx.order);
-        await postHostMessage(sql, conversationId, resolveTemplateText(row.body, ctx.data));
+        await postTemplate(sql, conversationId, row.body, ctx.data);
         out.sent++;
       } catch (err) {
         out.failed++;
@@ -401,4 +425,4 @@ async function sendScheduledTemplates(sql, { deadlineMs = 7000 } = {}) {
   return out;
 }
 
-module.exports = { resolveTemplateText, buildCheckinInstructionsText, buildCheckinStepsText, sendBookingConfirmedTemplates, sendScheduledTemplates, sendTimedTemplates, timedSendWindow, parseClock, zonedToUtc, loadBookingContext };
+module.exports = { resolveTemplateText, resolveTemplateForSend, buildCheckinInstructionsText, buildCheckinStepsText, sendBookingConfirmedTemplates, sendScheduledTemplates, sendTimedTemplates, timedSendWindow, parseClock, zonedToUtc, loadBookingContext };

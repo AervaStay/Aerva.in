@@ -44,7 +44,7 @@ function newCode() {
 function emailHtml(code, purpose) {
   return `<div style="font-family:sans-serif; max-width:440px;">
     <h2 style="font-family:Georgia,serif; margin:0 0 6px;">Your Aerva code</h2>
-    <p style="color:#4a453e; margin:0 0 16px;">${purpose === 'link' ? 'Use this to confirm your email address.' : 'Use this to sign in to Aerva.'}</p>
+    <p style="color:#4a453e; margin:0 0 16px;">${purpose === 'link' ? 'Use this to confirm your email address.' : purpose === 'change' ? 'Someone signed in to your Aerva account asked to change its email address. Use this code only if that was you.' : 'Use this to sign in to Aerva.'}</p>
     <p style="font-size:30px; font-weight:600; letter-spacing:0.22em; margin:0 0 16px; color:#1c1b19;">${code}</p>
     <p style="font-size:13.5px; color:#6e675d; margin:0;">It expires in ${CODE_LIFETIME_MINUTES} minutes. If you did not ask for it, you can ignore this email — nobody can use it without your inbox.</p>
   </div>`;
@@ -124,7 +124,38 @@ async function checkCode(sql, rawEmail, rawCode) {
   return { ok: true, email };
 }
 
+// "ab•••@gmail.com" — enough for the owner to recognise, not a full address.
+function maskEmail(e) {
+  const [user, domain] = normalizeEmail(e).split('@');
+  if (!domain) return '';
+  return `${user.slice(0, 2)}\u2022\u2022\u2022@${domain}`;
+}
+
+// Tells the OLD address that the account's email was changed, so a change
+// the owner did not make does not go unnoticed. Best effort: never throws.
+async function sendEmailChangedNotice(oldEmail, newEmail) {
+  const to = normalizeEmail(oldEmail);
+  if (!looksLikeEmail(to) || !process.env.RESEND_API_KEY) return false;
+  const html = `<div style="font-family:sans-serif; max-width:440px;">
+    <h2 style="font-family:Georgia,serif; margin:0 0 6px;">Your Aerva email was changed</h2>
+    <p style="color:#4a453e; margin:0 0 12px;">The email address on your Aerva account is now <strong>${maskEmail(newEmail)}</strong>. Messages and sign-in will use the new address from now on.</p>
+    <p style="font-size:13.5px; color:#6e675d; margin:0;">If you did not do this, write to hello@aerva.in straight away and we will lock the account.</p>
+  </div>`;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to, subject: 'Your Aerva email address was changed', html })
+    });
+    if (!res.ok) console.error('email-changed notice refused:', res.status);
+    return res.ok;
+  } catch (err) {
+    console.error('email-changed notice failed:', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   CODE_LIFETIME_MINUTES, MAX_ATTEMPTS, RESEND_WAIT_SECONDS,
-  normalizeEmail, looksLikeEmail, requestCode, checkCode
+  normalizeEmail, looksLikeEmail, requestCode, checkCode, maskEmail, sendEmailChangedNotice
 };

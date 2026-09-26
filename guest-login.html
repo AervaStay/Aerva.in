@@ -3,11 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Log In — Aerva</title>
+<title>Log in — Aerva</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <style>
   body{font-family:'Jost', sans-serif; background:#ffffff; color:#1c1a17; margin:0; padding:60px 20px; -webkit-font-smoothing:antialiased;}
   .wrap{max-width:400px; margin:0 auto; text-align:center;}
-  h1{font-family:Georgia,serif; font-size:26px; margin-bottom:8px;}
+  h1{font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:28px; margin-bottom:8px;}
   .subtitle{opacity:0.65; font-size:14px; margin-bottom:32px;}
   .field{display:flex; flex-direction:column; gap:6px; margin-bottom:20px; text-align:left;}
   label{font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:#8a7f6c;}
@@ -24,20 +25,30 @@
   .error{font-size:13px; color:#a3402f; margin-top:16px; text-align:left;}
   .loading{opacity:0.6; padding:40px 0;}
   .switch-mode{font-size:13px; opacity:0.7; margin-top:24px;}
+  /* Small text links keep a 44px tall tap target (older and younger
+     guests on phones), without changing how the line looks. */
   .switch-mode button{
     background:none; border:none; color:#8a6c39; text-decoration:underline;
-    cursor:pointer; font-family:'Jost', sans-serif; font-size:13px; padding:0;
+    cursor:pointer; font-family:'Jost', sans-serif; font-size:13px; padding:0 2px;
+    min-height:44px; display:inline-flex; align-items:center; vertical-align:middle;
   }
+  .switch-mode{margin-top:12px;}
   .back-home{
-    display:inline-block; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
-    color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:28px;
+    display:inline-flex; align-items:center; min-height:44px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
+    color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:16px;
   }
+  .consent{display:flex; gap:10px; align-items:flex-start; text-align:left; font-size:13px; line-height:1.55; margin:0 0 18px; color:#1c1a17; cursor:pointer;}
+  .consent input{width:22px; height:22px; margin:0; flex:0 0 auto; accent-color:#1c1a17; cursor:pointer;}
+  .consent a, .terms-note a{color:inherit; text-decoration:underline; text-underline-offset:2px; display:inline-block; padding:12px 0; margin:-12px 0;}
+  .consent-hint{display:block; font-size:12px; color:#6e675d; margin-top:2px;}
+  .consent.needs{outline:2px solid #a3402f; outline-offset:6px; border-radius:2px;}
+  .google-block{display:none;}
+  .google-block.is-ready{display:block;}
   .back-home:hover{opacity:1;}
 
   .social-buttons{display:flex; flex-direction:column; gap:10px; margin-bottom:20px;}
   .divider-below{margin:26px 0 18px;}
   .terms-note{font-size:12px; line-height:1.6; opacity:0.7; margin:14px 0 0; text-align:center;}
-  .terms-note a{color:inherit; text-decoration:underline; text-underline-offset:2px;}
   /* Google as a square tile, centred under Log In. */
   .social-buttons{align-items:center;}
   .social-tile{width:60px; height:60px; border-radius:14px; border:1px solid #dcdcdc; background:#fff;
@@ -80,14 +91,25 @@
       </div>
       <div class="field">
         <label for="loginPassword">Password</label>
-        <input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password" required>
+        <input id="loginPassword" type="password" placeholder="Your password" autocomplete="current-password" required>
       </div>
-      <button type="submit" class="btn" id="loginBtn">Log In</button>
+      <button type="submit" class="btn" id="loginBtn">Log in</button>
       <p class="error" id="loginError" style="display:none;"></p>
       <p class="error" id="socialError" style="display:none;"></p>
       <p class="switch-mode" id="resendVerificationRow" style="display:none;"><button type="button" id="resendVerificationBtn">Resend verification email</button></p>
     </form>
+    <!-- Shown only once the Google tile can actually work (see
+         initGoogleSignIn): an "or" with nothing under it is confusing. -->
+    <div class="google-block" id="googleBlock">
     <div class="divider divider-below"><span>or</span></div>
+    <!-- A NEW account made with Google agrees to the same terms as sign-up;
+         an existing account just signs in. guest-auth.js refuses to create
+         one without this tick. -->
+    <label class="consent" id="googleConsentRow">
+      <input type="checkbox" id="googleConsent">
+      <span>I agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.
+        <span class="consent-hint">Needed only when you create a new account with Google.</span></span>
+    </label>
     <div class="social-buttons">
       <button type="button" id="googleSignInBtn" class="social-tile" aria-label="Continue with Google" title="Continue with Google" style="display:none;">
         <svg viewBox="0 0 48 48" width="30" height="30" aria-hidden="true">
@@ -98,7 +120,7 @@
         </svg>
       </button>
     </div>
-    <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+    </div>
     <p class="switch-mode"><button type="button" id="showForgotPassword">Forgot your password?</button></p>
     <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
     <!-- Phone login is built and working (guest-phone-auth.js + the screens
@@ -108,46 +130,46 @@
   </div>
 
   <div id="forgotPasswordState" style="display:none;">
-    <h1>Reset Your Password</h1>
+    <h1>Reset your password</h1>
     <p class="subtitle">Enter your email and we'll send you a link to set a new password.</p>
     <form id="forgotPasswordForm">
       <div class="field">
         <label for="forgotEmail">Email</label>
         <input id="forgotEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
       </div>
-      <button type="submit" class="btn" id="forgotPasswordBtn">Send Reset Link</button>
+      <button type="submit" class="btn" id="forgotPasswordBtn">Send reset link</button>
       <p class="error" id="forgotPasswordError" style="display:none;"></p>
     </form>
     <p class="switch-mode"><button type="button" id="backToLoginFromForgot">Back to log in</button></p>
   </div>
 
   <div id="forgotSentState" style="display:none;">
-    <h1>Check Your Email</h1>
+    <h1>Check your email</h1>
     <p class="subtitle" id="forgotSentSubtitle">If an account exists for that email, we've sent a link to reset your password. It's valid for 1 hour.</p>
     <p class="switch-mode"><button type="button" id="backToLoginFromForgotSent">Back to log in</button></p>
   </div>
 
   <div id="resetPasswordState" style="display:none;">
-    <h1>Choose a New Password</h1>
+    <h1>Choose a new password</h1>
     <p class="subtitle">Enter a new password for your account.</p>
     <form id="resetPasswordForm">
       <div class="field">
-        <label for="newPassword">New Password</label>
+        <label for="newPassword">New password</label>
         <input id="newPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" required>
       </div>
-      <button type="submit" class="btn" id="resetPasswordBtn">Set New Password</button>
+      <button type="submit" class="btn" id="resetPasswordBtn">Set new password</button>
       <p class="error" id="resetPasswordError" style="display:none;"></p>
     </form>
   </div>
 
   <div id="resetExpiredState" style="display:none;">
-    <h1>Link Expired</h1>
+    <h1>Link expired</h1>
     <p class="subtitle" id="resetExpiredMsg">This password reset link is no longer valid. Please request a new one.</p>
-    <button class="btn" id="requestNewResetBtn">Request a New Link</button>
+    <button class="btn" id="requestNewResetBtn">Request a new link</button>
   </div>
 
   <div id="signupState" style="display:none;">
-    <h1>Create Your Account</h1>
+    <h1>Create your account</h1>
     <p class="subtitle">Save your details for faster booking next time.</p>
     <form id="signupForm">
       <div class="field">
@@ -173,15 +195,19 @@
         <label for="signupPassword">Password</label>
         <input id="signupPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" required>
       </div>
-      <button type="submit" class="btn" id="signupBtn">Create Account</button>
-      <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+      <!-- Required: an account is only made with this tick (DPDP). -->
+      <label class="consent" id="signupConsentRow">
+        <input type="checkbox" id="signupConsent">
+        <span>I agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
+      </label>
+      <button type="submit" class="btn" id="signupBtn">Create account</button>
       <p class="error" id="signupError" style="display:none;"></p>
     </form>
     <p class="switch-mode">Already have an account? <button type="button" id="showLogin">Log in</button></p>
   </div>
 
   <div id="checkEmailState" style="display:none;">
-    <h1>Check Your Email</h1>
+    <h1>Check your email</h1>
     <p class="subtitle" id="checkEmailSubtitle">We sent a verification link to your inbox. Click it to finish creating your account.</p>
     <p class="error" id="checkEmailWarning" style="display:none;"></p>
     <p class="switch-mode"><button type="button" id="resendFromCheckEmailBtn">Resend the email</button></p>
@@ -189,25 +215,29 @@
   </div>
 
   <div id="phoneRequestState" style="display:none;">
-    <h1>Log In With Phone</h1>
+    <h1>Log in with phone</h1>
     <p class="subtitle">We'll text you a one-time code.</p>
     <form id="phoneRequestForm">
       <div class="field">
-        <label for="phoneNumber">Phone Number</label>
+        <label for="phoneNumber">Phone number</label>
         <div style="display:flex; gap:8px;">
           <select id="phoneNumberCountry" style="flex:0 0 auto;"></select>
           <input id="phoneNumber" type="tel" inputmode="numeric" placeholder="Number" autocomplete="tel" style="flex:1;" required>
         </div>
       </div>
-      <button type="submit" class="btn" id="phoneRequestBtn">Send Code</button>
-      <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+      <label class="consent" id="phoneConsentRow">
+        <input type="checkbox" id="phoneConsent">
+        <span>I agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.
+          <span class="consent-hint">Needed only when this number is new to Aerva.</span></span>
+      </label>
+      <button type="submit" class="btn" id="phoneRequestBtn">Send code</button>
       <p class="error" id="phoneRequestError" style="display:none;"></p>
     </form>
     <p class="switch-mode"><button type="button" id="showLoginFromPhone">Log in with email instead</button></p>
   </div>
 
   <div id="phoneVerifyState" style="display:none;">
-    <h1>Enter Your Code</h1>
+    <h1>Enter your code</h1>
     <p class="subtitle" id="phoneVerifySubtitle">We texted a code to your phone.</p>
     <form id="phoneVerifyForm">
       <div class="field">
@@ -230,6 +260,17 @@
 <script>
   const API_BASE = 'https://aerva-in.vercel.app';
   const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  // The Terms of Service / Privacy Policy a new account agrees to — the
+  // same string as TERMS_VERSION in api/guest-auth.js (kept in step by hand).
+  const TERMS_VERSION = '1.0 (26 September 2026)';
+
+  // localStorage throws in Safari Private Browsing (and when storage is
+  // blocked): never let that stop someone signing in.
+  const store = {
+    get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+    set(k, v){ try{ localStorage.setItem(k, v); }catch(e){} },
+    remove(k){ try{ localStorage.removeItem(k); }catch(e){} }
+  };
 
   // ---- Google sign-in setup ----
   // From Google Cloud Console → APIs & Services → Credentials →
@@ -257,10 +298,19 @@
   const resetPasswordState = document.getElementById('resetPasswordState');
   const resetExpiredState = document.getElementById('resetExpiredState');
 
+  // The tab title follows the screen, so "Create account" is not labelled
+  // "Log in".
+  const TITLES = new Map([
+    [signupState, 'Create account'], [checkEmailState, 'Check your email'],
+    [forgotPasswordState, 'Reset your password'], [forgotSentState, 'Check your email'],
+    [resetPasswordState, 'Choose a new password'], [resetExpiredState, 'Link expired'],
+    [phoneRequestState, 'Log in with phone'], [phoneVerifyState, 'Enter your code']
+  ]);
   function showOnly(el){
     [checkingState, loginState, signupState, phoneRequestState, phoneVerifyState, checkEmailState,
      forgotPasswordState, forgotSentState, resetPasswordState, resetExpiredState].forEach(s => s.style.display = 'none');
     el.style.display = 'block';
+    document.title = (TITLES.get(el) || 'Log in') + ' — Aerva';
   }
 
   function storeSession(sessionToken, guest){
@@ -270,9 +320,9 @@
     // token is sent to /api/guest-auth (GET) to check it's still valid
     // and log the guest back in automatically, without asking for their
     // password again.
-    localStorage.setItem('aerva_guest_session', sessionToken);
-    localStorage.setItem('aerva_guest_email', guest.email || '');
-    localStorage.setItem('aerva_guest_name', guest.name || '');
+    store.set('aerva_guest_session', sessionToken);
+    store.set('aerva_guest_email', guest.email || '');
+    store.set('aerva_guest_name', guest.name || '');
   }
 
   // Remembers the email between "signup" and "check your email" / resend,
@@ -292,13 +342,15 @@
   // 3. A stored session token — check it's still valid, auto-login if so.
   // 4. Neither — show the plain login form.
   // Where a person goes after signing in. A host with something to run —
-  // a stay or an experience — lands on their dashboard, which opens on
-  // Today. Everyone else lands on the site itself.
+  // a live stay or experience — or an active co-host lands on Today, which
+  // lives on the main site (index.html?view=today; My Collection no longer
+  // has it). Everyone else lands on Suites. Every sign-in answer carries
+  // hasActiveListing and isCohost (guest-auth.js).
   function landingPageFor(guest){
     // Arrived from a co-host invitation: back to it (it is accepted and the
     // host's listings open — see openCohostCenter in aerva.js).
-    try{ if(localStorage.getItem('aerva_pending_cohost_invite')) return 'index.html?view=cohost'; }catch(e){}
-    return (guest && (guest.hasActiveListing === true || guest.host_id)) ? 'host-dashboard.html' : 'index.html';
+    if(store.get('aerva_pending_cohost_invite')) return 'index.html?view=cohost';
+    return (guest && (guest.hasActiveListing === true || guest.isCohost === true)) ? 'index.html?view=today' : 'index.html';
   }
 
   // Opened from a co-host invitation (index.html sends ?invite=1&mode=…):
@@ -363,7 +415,7 @@
     // signup verification). Backing out now (closing the tab, hitting
     // back) leaves the original account exactly as it was.
     if(switchAccount){
-      const currentEmail = localStorage.getItem('aerva_guest_email');
+      const currentEmail = store.get('aerva_guest_email');
       if(currentEmail){
         const switchNote = document.getElementById('switchAccountNote');
         if(switchNote){
@@ -375,7 +427,7 @@
       return;
     }
 
-    const existingToken = localStorage.getItem('aerva_guest_session');
+    const existingToken = store.get('aerva_guest_session');
     if(!existingToken){
       showEntry();
       return;
@@ -386,15 +438,19 @@
       });
       if(res.ok){
         // Session still valid — already logged in, send straight through,
-        // to the dashboard for a host.
+        // to Today for a host.
         const me = await res.json().catch(() => null);
         window.location.href = landingPageFor(me && me.guest);
         return;
       }
-      // Token expired or invalid — clear it and fall through to login.
-      localStorage.removeItem('aerva_guest_session');
-      localStorage.removeItem('aerva_guest_email');
-      localStorage.removeItem('aerva_guest_name');
+      // Token expired, invalid or signed out everywhere (401) — clear it and
+      // fall through to login. Any other answer (the check could not run)
+      // leaves it alone, so a hiccup never signs anyone out.
+      if(res.status === 401){
+        store.remove('aerva_guest_session');
+        store.remove('aerva_guest_email');
+        store.remove('aerva_guest_name');
+      }
       showEntry();
     } catch(err){
       showEntry();
@@ -448,13 +504,13 @@
           resendRow.style.display = 'block';
         }
         loginBtn.disabled = false;
-        loginBtn.textContent = 'Log In';
+        loginBtn.textContent = 'Log in';
       }
     } catch(err){
       loginError.textContent = 'Something went wrong. Please try again.';
       loginError.style.display = 'block';
       loginBtn.disabled = false;
-      loginBtn.textContent = 'Log In';
+      loginBtn.textContent = 'Log in';
     }
   });
 
@@ -510,6 +566,14 @@
       signupError.style.display = 'block';
       return;
     }
+    const consentBox = document.getElementById('signupConsent');
+    if(!consentBox.checked){
+      signupError.textContent = 'Please tick the box to agree to the Terms of Service and Privacy Policy.';
+      signupError.style.display = 'block';
+      document.getElementById('signupConsentRow').classList.add('needs');
+      consentBox.focus();
+      return;
+    }
 
     signupBtn.disabled = true;
     signupBtn.textContent = 'Creating account…';
@@ -518,7 +582,7 @@
       const res = await fetch(API_BASE + '/api/guest-auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'signup', email: emailValue, password: passwordValue, name: nameValue, phone: phoneValue })
+        body: JSON.stringify({ mode: 'signup', email: emailValue, password: passwordValue, name: nameValue, phone: phoneValue, consent: true, termsVersion: TERMS_VERSION })
       });
       const data = await res.json();
       if(res.ok){
@@ -536,13 +600,13 @@
         signupError.textContent = data.error || 'Something went wrong. Please try again.';
         signupError.style.display = 'block';
         signupBtn.disabled = false;
-        signupBtn.textContent = 'Create Account';
+        signupBtn.textContent = 'Create account';
       }
     } catch(err){
       signupError.textContent = 'Something went wrong. Please try again.';
       signupError.style.display = 'block';
       signupBtn.disabled = false;
-      signupBtn.textContent = 'Create Account';
+      signupBtn.textContent = 'Create account';
     }
   });
 
@@ -635,7 +699,7 @@
       phoneRequestError.style.display = 'block';
     }
     phoneRequestBtn.disabled = false;
-    phoneRequestBtn.textContent = 'Send Code';
+    phoneRequestBtn.textContent = 'Send code';
   });
 
   document.getElementById('phoneVerifyForm').addEventListener('submit', async function(e){
@@ -658,7 +722,7 @@
       const res = await fetch(API_BASE + '/api/guest-phone-auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'verify', phone: pendingPhoneNumber, code: codeValue })
+        body: JSON.stringify({ mode: 'verify', phone: pendingPhoneNumber, code: codeValue, consent: document.getElementById('phoneConsent').checked, termsVersion: TERMS_VERSION })
       });
       const data = await res.json();
       if(res.ok){
@@ -733,7 +797,7 @@
       forgotError.style.display = 'block';
     }
     forgotBtn.disabled = false;
-    forgotBtn.textContent = 'Send Reset Link';
+    forgotBtn.textContent = 'Send reset link';
   });
 
   // ---- Reset password: set the new password using the emailed token ----
@@ -772,13 +836,13 @@
         resetError.textContent = data.error || 'Something went wrong. Please try again.';
         resetError.style.display = 'block';
         resetBtn.disabled = false;
-        resetBtn.textContent = 'Set New Password';
+        resetBtn.textContent = 'Set new password';
       }
     } catch(err){
       resetError.textContent = 'Something went wrong. Please try again.';
       resetError.style.display = 'block';
       resetBtn.disabled = false;
-      resetBtn.textContent = 'Set New Password';
+      resetBtn.textContent = 'Set new password';
     }
   });
 
@@ -813,6 +877,7 @@
     });
     const tile = document.getElementById('googleSignInBtn');
     tile.style.display = 'inline-flex';
+    document.getElementById('googleBlock').classList.add('is-ready');   // the "or" and the tick come with it
     tile.addEventListener('click', () => {
       tile.disabled = true;
       googleTokenClient.requestAccessToken({ prompt: 'select_account' });
@@ -826,20 +891,33 @@
     if(el){ el.textContent = msg; el.style.display = 'block'; }
   }
 
+  // A new account needs the tick. If Google comes back for an email Aerva
+  // does not know yet and the box was not ticked, the same Google answer is
+  // kept for a moment: ticking the box then finishes without a second pop-up.
+  let pendingGoogleResponse = null;
   async function handleGoogleCredential(response){
     const socialError = document.getElementById('socialError');
     socialError.style.display = 'none';
+    const consent = document.getElementById('googleConsent').checked;
     try{
+      const payload = response.accessToken ? { mode: 'google', accessToken: response.accessToken } : { mode: 'google', idToken: response.credential };
+      payload.consent = consent;
+      payload.termsVersion = TERMS_VERSION;
       const res = await fetch(API_BASE + '/api/guest-auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(response.accessToken ? { mode: 'google', accessToken: response.accessToken } : { mode: 'google', idToken: response.credential })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if(res.ok){
+        pendingGoogleResponse = null;
         storeSession(data.sessionToken, data.guest);
         window.location.href = landingPageFor(data.guest);
       } else {
+        if(data.needsConsent){
+          pendingGoogleResponse = response;
+          document.getElementById('googleConsentRow').classList.add('needs');
+        }
         socialError.textContent = data.error || 'Could not sign in with Google. Please try again.';
         socialError.style.display = 'block';
       }
@@ -848,6 +926,15 @@
       socialError.style.display = 'block';
     }
   }
+
+  document.getElementById('googleConsent').addEventListener('change', function(){
+    if(!this.checked) return;
+    document.getElementById('googleConsentRow').classList.remove('needs');
+    if(pendingGoogleResponse){ const r = pendingGoogleResponse; pendingGoogleResponse = null; handleGoogleCredential(r); }
+  });
+  document.getElementById('signupConsent').addEventListener('change', function(){
+    if(this.checked) document.getElementById('signupConsentRow').classList.remove('needs');
+  });
 
   // The library loads async — poll briefly rather than assuming it's
   // ready by the time this script runs. Stops as soon as it's

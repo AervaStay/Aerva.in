@@ -28,6 +28,7 @@
     },
     stop: function(){
       try{ localStorage.removeItem(KEY); }catch(e){}
+      try{ sessionStorage.removeItem('aerva_cohost_convs'); }catch(e){}
       // Take the bar away at once: the Co-hosting page redraws in place
       // rather than reloading, so nothing else would remove it.
       try{
@@ -50,6 +51,22 @@
     try{ return init && typeof init.body === 'string' ? JSON.parse(init.body) : null; }catch(e){ return null; }
   }
 
+  // The conversations that belong to the host being helped: the ones the
+  // routed myConversations answer lists. A co-host is also a guest with
+  // trips of their own, and those threads must go out as themselves —
+  // routed as the host they would be refused ("not a listing you
+  // co-host"). Kept for this tab (sessionStorage) so a reload remembers.
+  var HOST_CONVS_KEY = 'aerva_cohost_convs';
+  var hostConvIds = {};
+  try{ (JSON.parse(sessionStorage.getItem(HOST_CONVS_KEY) || '[]') || []).forEach(function(id){ hostConvIds[String(id)] = true; }); }catch(e){}
+  function rememberHostConvs(list){
+    hostConvIds = {};
+    (list || []).forEach(function(c){ if(c && c.id != null) hostConvIds[String(c.id)] = true; });
+    try{ sessionStorage.setItem(HOST_CONVS_KEY, JSON.stringify(Object.keys(hostConvIds))); }catch(e){}
+  }
+  // Modes that name one conversation: routed only when it is the host's.
+  var PER_CONVERSATION = ['conversationMessages', 'hostConversationMessages', 'send', 'conversationTemplates'];
+
   var originalFetch = window.fetch ? window.fetch.bind(window) : null;
   if(originalFetch){
     window.fetch = function(input, init){
@@ -61,9 +78,20 @@
           var u = new URL(url, window.location.href);
           var body = bodyJson(init);
           var route = true;
+          var isConversationList = false;
           if(isProfileApi){
             var mode = u.searchParams.get('mode') || (body && body.mode);
             route = MESSAGE_MODES.indexOf(mode) !== -1 || TEMPLATE_MODES.indexOf(mode) !== -1;
+            if(route && PER_CONVERSATION.indexOf(mode) !== -1){
+              var convId = u.searchParams.get('conversationId') || (body && body.conversationId);
+              if(body && body.role === 'guest') route = false;            // their own trip
+              else if(body && body.role === 'host') route = true;         // host side, e.g. Today
+              else route = !!hostConvIds[String(convId)];
+            }
+            // Translating is plain text in, text out — the same for anyone
+            // signed in, so it never needs (or needs permission to be) routed.
+            if(mode === 'translate') route = false;
+            isConversationList = route && mode === 'myConversations';
           } else {
             // Managing co-hosts, or one's own co-hosting, is never done
             // "as" someone else.
@@ -77,9 +105,15 @@
           }
         }
       }catch(e){ /* anything odd: send the request untouched */ }
-      // Details still pending (phone, about, commission): the server refuses
-      // to act for the host; send the co-host to the Co-hosting tab to finish.
+      var listRequest = !!isConversationList;
       return originalFetch(input, init).then(function(r){
+        try{
+          if(listRequest && r && r.ok){
+            r.clone().json().then(function(d){ if(d && Array.isArray(d.conversations)) rememberHostConvs(d.conversations); }).catch(function(){});
+          }
+        }catch(e){}
+        // Details still pending (phone, about, commission): the server refuses
+        // to act for the host; send the co-host to the Co-hosting tab to finish.
         try{
           if(r && r.status === 403 && read() && window.location.search.indexOf('view=cohost') === -1){
             r.clone().json().then(function(d){ if(d && d.detailsRequired) window.location.href = 'index.html?view=cohost'; }).catch(function(){});

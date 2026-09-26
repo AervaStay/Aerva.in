@@ -127,6 +127,19 @@
 .ah-panel.is-open{ display:flex; }
 .ah-panel a{ font-size:13px; letter-spacing:0.1em; text-transform:uppercase; }
 .ah-panel hr{ border:none; border-top:1px solid var(--ah-line); margin:2px 0; width:100%; }
+/* Notifications inside the phone menu (there is no bell on phones). */
+.ah-panel-btn{
+  display:flex; align-items:center; gap:8px; background:none; border:none; padding:0; cursor:pointer; text-align:left;
+  font-family:inherit; color:inherit; font-size:14.5px; letter-spacing:0.1em; text-transform:uppercase;
+}
+.ah-panel-count{
+  min-width:17px; height:17px; padding:0 4px; border-radius:999px; background:#a3402f; color:#fff;
+  font-size:10.5px; line-height:17px; text-align:center; letter-spacing:0;
+}
+.ah-notif-inline{ border:1px solid var(--ah-line); border-radius:10px; overflow:hidden; }
+.ah-notif-inline .ah-notif-item:first-child{ border-top:none; }
+.ah-notif-inline .ah-notif-empty{ padding:12px 16px; }
+.ah-panel .ah-notif-item{ text-transform:none; letter-spacing:0; }
 
 @media (max-width:1100px){
   .ah-cats{ gap:18px; }

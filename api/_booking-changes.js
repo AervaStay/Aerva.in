@@ -29,10 +29,10 @@
 // together; refunds go through _refunds.js (one per booking, payment and
 // purpose, checked with Razorpay).
 
-const { priceStay, priceExperience } = require('./_pricing');
+const { priceStay, priceExperience, parseMaxGuests } = require('./_pricing');
 const { localMidnightMs, dateStr, takeHolds, attachHolds, releaseHolds, holdValidForConfirmation, HOLD_SECONDS } = require('./_booking-rules');
 const { claimForCancellation, releaseClaim, postThreadMessage, returnCouponValue } = require('./_cancellations');
-const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refunds');
+const { safeRefund, refundAcrossPayments, hasChangePayments, planRefundAcrossPayments, dropPlannedRefunds } = require('./_refunds');
 const { logAudit } = require('./_audit-log');
 
 const AWAITING_PAYMENT_HOURS = 24;
@@ -93,6 +93,13 @@ async function loadBooking(sql, orderId) {
   return o;
 }
 
+// A fresh quote still matches the saved change. Compared in whole rupees
+// on both sides (the columns are integers; a deposit may have paise).
+function sameTotals(fresh, saved) {
+  return Math.round(Number(fresh.newTotal)) === Math.round(Number(saved.new_total))
+    && Math.round(Number(fresh.oldTotal)) === Math.round(Number(saved.old_total));
+}
+
 // Midnight at the start of check-out day (for an experience, its last day),
 // on the property's clock.
 function beforeCutoff(o) {
@@ -123,7 +130,8 @@ async function changeOptions(sql, orderId, guestId) {
       amenityIds: o.amenityIds, total: o.totalNow
     },
     limits: o.kind === 'stay' ? {
-      maxGuests: Number(o.max_guests) > 0 ? Number(o.max_guests) : null,
+      // max_guests is text ("3–4", "12+"): the highest number is the cap.
+      maxGuests: parseMaxGuests(o.max_guests) > 0 ? parseMaxGuests(o.max_guests) : null,
       petFriendly: o.pet_friendly === true, maxPets: o.max_pets_allowed != null ? Number(o.max_pets_allowed) : null,
       petTypes: Array.isArray(o.allowed_pet_types) ? o.allowed_pet_types : [], petFee: Number(o.pet_fee) || 0,
       amenities: amenities.map(a => ({ id: a.id, name: a.name, price: Number(a.price) }))
@@ -162,7 +170,8 @@ async function quoteChange(sql, orderId, guestId, input) {
       if (sp.error) throw userError(sp.error.replace(/^Stay 1: /, ''));
       st = sp.detail;
     }
-    const newTotal = x.subtotal + x.gst + x.guestServiceFee + (st ? st.subtotal + st.gst + st.guestServiceFee + st.depositAmount : 0);
+    // Whole rupees, as stored (a listing's deposit may have paise).
+    const newTotal = Math.round(x.subtotal + x.gst + x.guestServiceFee + (st ? st.subtotal + st.gst + st.guestServiceFee + Number(st.depositAmount) : 0));
     if (arrival !== o.arrivalStr) parts.push(`Date: ${niceDate(o.arrivalStr)} → ${niceDate(arrival)}${o.kind === 'pair' ? ' (with the included stay)' : ''}`);
     if (x.guests !== Number(o.guests)) parts.push(`Guests: ${o.guests} → ${x.guests}`);
     return { booking: o, kind: o.kind,
@@ -187,7 +196,8 @@ async function quoteChange(sql, orderId, guestId, input) {
   const priced = await priceStay(sql, s, 0, { excludeOrderId: o.id });
   if (priced.error) throw userError(priced.error.replace(/^Stay 1: /, ''));
   const q = priced.detail;
-  const newTotal = q.subtotal + q.gst + q.guestServiceFee + q.depositAmount;
+  // Whole rupees, as stored (a listing's deposit may have paise).
+  const newTotal = Math.round(q.subtotal + q.gst + q.guestServiceFee + Number(q.depositAmount));
   if (arrival !== o.arrivalStr || departure !== o.departureStr) parts.push(`Dates: ${niceDate(o.arrivalStr)} – ${niceDate(o.departureStr)} → ${niceDate(arrival)} – ${niceDate(departure)}`);
   if (guests !== Number(o.guests)) parts.push(`Guests: ${o.guests} → ${guests}`);
   const oldPets = Array.isArray(o.pet_types) ? o.pet_types.length : 0;
@@ -230,7 +240,7 @@ async function withdrawChange(sql, { changeId, guestId }) {
   const r = await sql`UPDATE booking_changes SET status = 'withdrawn', decided_at = now()
                       WHERE id = ${changeId} AND guest_id = ${guestId} AND status IN ('pending', 'awaiting_payment') RETURNING order_id, razorpay_order_id`;
   if (!r.length) throw userError('This change can no longer be withdrawn.', 409);
-  if (r[0].razorpay_order_id) await releaseHolds(sql, { razorpayOrderId: r[0].razorpay_order_id });
+  if (r[0].razorpay_order_id) await releaseHolds(sql, { razorpayOrderId: r[0].razorpay_order_id, reason: 'closed' });
   await postThreadMessage(sql, r[0].order_id, 'guest', 'I have withdrawn my change request.');
   return { ok: true };
 }
@@ -248,23 +258,18 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
   const input = change.requested;
   const ids = [o.id].concat(o.stayRow ? [o.stayRow.id] : []);
   const claim = await claimForCancellation(sql, ids);
-  // Writes one stay row from a priced stay detail.
-  const writeStay = async (orderId, d, arrival, departure) => {
+  const refundOwed = Number(change.difference) < 0 ? Math.round(-Number(change.difference)) : 0;
+  const kindBase = `change-${change.id}`;
+  // The values one stay row takes from a priced stay detail.
+  const stayValues = (d) => {
     const commission = Number(d.baseCommission) + Number(d.amenityCommission);
     let releaseAt = null;
-    if (d.depositAmount > 0) { const x = new Date(departure + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
-    const up = await sql`
-      UPDATE orders SET arrival = ${arrival}, departure = ${departure}, nights = ${d.nights}, guests = ${d.guests},
-        subtotal = ${d.subtotal}, discount_amount = ${d.discountAmount || 0}, gst = ${d.gst}, guest_service_fee = ${d.guestServiceFee},
-        total = ${d.subtotal + d.gst + d.guestServiceFee + d.depositAmount},
-        commission_rate = ${d.subtotal > 0 ? Number(((commission / d.subtotal) * 100).toFixed(2)) : 0},
-        commission_amount = ${commission}, payout_amount = ${d.subtotal - commission},
-        deposit_amount = ${d.depositAmount}, deposit_status = ${d.depositAmount > 0 ? 'held' : 'none'}, deposit_release_at = ${releaseAt},
-        pet_types = ${JSON.stringify(d.petTypes || [])}, service_animal_types = ${JSON.stringify(d.serviceAnimals || [])}, young_litter_count = ${Number(d.youngLitterCount) || 0},
-        cancel_claim = NULL, cancel_claimed_at = NULL
-      WHERE id = ${orderId} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}
-      RETURNING id`;
-    if (!up.length) throw userError('This booking changed while the change was being made. Please try again.', 409);
+    if (d.depositAmount > 0) { const x = new Date(input.departure + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
+    return { commission, releaseAt, total: Math.round(d.subtotal + d.gst + d.guestServiceFee + Number(d.depositAmount)),
+             rate: d.subtotal > 0 ? Number(((commission / d.subtotal) * 100).toFixed(2)) : 0 };
+  };
+  // What follows the stay row itself: its add-ons and co-host shares.
+  const afterStay = async (orderId, d, commission) => {
     try {
       await sql`DELETE FROM order_amenities WHERE order_id = ${orderId}`;
       for (const a of (d.amenities || [])) {
@@ -274,16 +279,54 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
     } catch (err) { console.error('order_amenities not updated:', err.message); }
     try { await sql`UPDATE order_cohost_shares SET amount = round(${d.subtotal - commission}::numeric * percent / 100) WHERE order_id = ${orderId}`; } catch (e) { /* none */ }
   };
+  let plan = null;
   try {
+    // Lower total: the refund owed is written down BEFORE the booking
+    // changes (refunds rows, _refunds.js). If anything stops after the
+    // change is made, the refund is still on record for Admin → Refunds.
+    if (refundOwed > 0) {
+      plan = await planRefundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: refundOwed, kindBase });
+      await logAudit(sql, { action: 'booking_change_refund_planned', success: true, actorType: 'system', targetType: 'order', targetId: o.id,
+        metadata: { changeId: change.id, refundOwed, cashPlanned: plan.plannedInr, couponPart: plan.shortfallInr } });
+    }
     try {
-      if (q.kind === 'experience' || q.kind === 'pair') {
-        // For a pair the nights move first: they are the part another
-        // booking could have taken (orders_no_double_booking).
-        if (q.kind === 'pair') await writeStay(q.stayOrderId, q.stay, input.arrival, input.departure);
+      if (q.kind === 'pair') {
+        // Both halves in ONE statement: either both change or neither does.
+        // The nights are the part another booking could have taken
+        // (orders_no_double_booking); if they are gone, nothing changes.
+        const d = q.stay, x = q.experience, v = stayValues(d);
+        const up = (await sql`
+          WITH ok AS (SELECT count(*) = 2 AS ok FROM orders WHERE id IN (${q.stayOrderId}, ${o.id}) AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}),
+          s AS (
+            UPDATE orders SET arrival = ${input.arrival}, departure = ${input.departure}, nights = ${d.nights}, guests = ${d.guests},
+              subtotal = ${d.subtotal}, discount_amount = ${d.discountAmount || 0}, gst = ${d.gst}, guest_service_fee = ${d.guestServiceFee},
+              total = ${v.total}, commission_rate = ${v.rate}, commission_amount = ${v.commission}, payout_amount = ${d.subtotal - v.commission},
+              deposit_amount = ${d.depositAmount}, deposit_status = ${d.depositAmount > 0 ? 'held' : 'none'}, deposit_release_at = ${v.releaseAt},
+              pet_types = ${JSON.stringify(d.petTypes || [])}, service_animal_types = ${JSON.stringify(d.serviceAnimals || [])}, young_litter_count = ${Number(d.youngLitterCount) || 0},
+              cancel_claim = NULL, cancel_claimed_at = NULL
+            WHERE id = ${q.stayOrderId} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim} AND (SELECT ok FROM ok)
+            RETURNING id),
+          e AS (
+            UPDATE orders SET arrival = ${x.date}, departure = ${x.endDate}, nights = ${x.durationDays}, guests = ${x.guests},
+              subtotal = ${x.subtotal}, gst = ${x.gst}, guest_service_fee = ${x.guestServiceFee}, total = ${Math.round(x.subtotal + x.gst + x.guestServiceFee)},
+              commission_rate = ${x.commissionRate}, commission_amount = ${x.commissionAmount}, payout_amount = ${x.subtotal - x.commissionAmount},
+              cancel_claim = NULL, cancel_claimed_at = NULL
+            WHERE id = ${o.id} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim} AND (SELECT ok FROM ok)
+            RETURNING id)
+          SELECT (SELECT count(*) FROM s)::int AS s, (SELECT count(*) FROM e)::int AS e`)[0];
+        if (!up || (up.s === 0 && up.e === 0)) throw userError('This booking changed while the change was being made. Please try again.', 409);
+        if (up.s !== 1 || up.e !== 1) {
+          // Cannot happen while the claim is held; recorded loudly if it ever does.
+          await logAudit(sql, { action: 'booking_change_half_applied', success: false, actorType: 'system', targetType: 'order', targetId: o.id,
+            metadata: { changeId: change.id, stayUpdated: up.s, experienceUpdated: up.e } });
+        }
+        await afterStay(q.stayOrderId, d, v.commission);
+        try { await sql`UPDATE order_cohost_shares SET amount = round(${x.subtotal - x.commissionAmount}::numeric * percent / 100) WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
+      } else if (q.kind === 'experience') {
         const x = q.experience;
         const up = await sql`
           UPDATE orders SET arrival = ${x.date}, departure = ${x.endDate}, nights = ${x.durationDays}, guests = ${x.guests},
-            subtotal = ${x.subtotal}, gst = ${x.gst}, guest_service_fee = ${x.guestServiceFee}, total = ${x.subtotal + x.gst + x.guestServiceFee},
+            subtotal = ${x.subtotal}, gst = ${x.gst}, guest_service_fee = ${x.guestServiceFee}, total = ${Math.round(x.subtotal + x.gst + x.guestServiceFee)},
             commission_rate = ${x.commissionRate}, commission_amount = ${x.commissionAmount}, payout_amount = ${x.subtotal - x.commissionAmount},
             cancel_claim = NULL, cancel_claimed_at = NULL
           WHERE id = ${o.id} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}
@@ -291,7 +334,18 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
         if (!up.length) throw userError('This booking changed while the change was being made. Please try again.', 409);
         try { await sql`UPDATE order_cohost_shares SET amount = round(${x.subtotal - x.commissionAmount}::numeric * percent / 100) WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
       } else {
-        await writeStay(o.id, q, input.arrival, input.departure);
+        const d = q, v = stayValues(d);
+        const up = await sql`
+          UPDATE orders SET arrival = ${input.arrival}, departure = ${input.departure}, nights = ${d.nights}, guests = ${d.guests},
+            subtotal = ${d.subtotal}, discount_amount = ${d.discountAmount || 0}, gst = ${d.gst}, guest_service_fee = ${d.guestServiceFee},
+            total = ${v.total}, commission_rate = ${v.rate}, commission_amount = ${v.commission}, payout_amount = ${d.subtotal - v.commission},
+            deposit_amount = ${d.depositAmount}, deposit_status = ${d.depositAmount > 0 ? 'held' : 'none'}, deposit_release_at = ${v.releaseAt},
+            pet_types = ${JSON.stringify(d.petTypes || [])}, service_animal_types = ${JSON.stringify(d.serviceAnimals || [])}, young_litter_count = ${Number(d.youngLitterCount) || 0},
+            cancel_claim = NULL, cancel_claimed_at = NULL
+          WHERE id = ${o.id} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}
+          RETURNING id`;
+        if (!up.length) throw userError('This booking changed while the change was being made. Please try again.', 409);
+        await afterStay(o.id, d, v.commission);
       }
     } catch (err) {
       if (err && err.code === '23P01') throw userError('The new dates are no longer available.', 409);
@@ -302,30 +356,42 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
     if (!applied.length) throw userError('This change has already been handled.', 409);
   } catch (err) {
     await releaseClaim(sql, ids, claim);
+    // The change was not made: the refund written down for it is not owed.
+    if (plan) await dropPlannedRefunds(sql, { orderId: o.id, kindBase });
     throw err;
   }
   await releaseClaim(sql, ids, claim);
 
   // Lower total: the full difference back — in cash as far as the booking's
   // payments allow, the rest (a part that was paid by coupon) as a coupon.
-  let refundedInr = 0, couponBack = 0;
-  if (change.difference < 0) {
-    const r = await refundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: -change.difference, kindBase: `change-${change.id}` });
-    refundedInr = r.refundedInr;
-    if (r.shortfallInr > 0) {
-      await returnCouponValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: r.shortfallInr, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
+  // A refund that fails now stays on record as failed in Admin → Refunds.
+  let refundedInr = 0, couponBack = 0, refundFailed = false;
+  if (refundOwed > 0) {
+    try {
+      const r = await refundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: refundOwed, kindBase });
+      refundedInr = r.refundedInr;
       couponBack = r.shortfallInr;
+    } catch (err) {
+      refundFailed = true;
+      couponBack = plan ? plan.shortfallInr : 0;
+      refundedInr = refundOwed - couponBack;
+      console.error('change refund failed (Admin → Refunds can retry):', change.id, err.message);
+      await logAudit(sql, { action: 'booking_change_refund_failed', success: false, actorType: 'system', targetType: 'order', targetId: o.id,
+        metadata: { changeId: change.id, refundOwed, error: String(err.message || err).slice(0, 300) } });
     }
+    if (couponBack > 0) await returnCouponValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: couponBack, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
   }
   await logAudit(sql, { action: 'booking_change_applied', success: true, actorType: 'system', targetType: 'order', targetId: o.id,
-    metadata: { changeId: change.id, difference: change.difference, refundedInr, couponBack, paymentId, summary: change.summary } });
-  const money = change.difference > 0 ? `Paid: ${inr(change.difference)}.` : change.difference < 0 ? `Refund: ${inr(refundedInr)}${couponBack ? ` plus ${inr(couponBack)} as a coupon` : ''}.` : '';
+    metadata: { changeId: change.id, difference: change.difference, refundedInr, couponBack, refundFailed, paymentId, summary: change.summary } });
+  const money = change.difference > 0 ? `Paid: ${inr(change.difference)}.`
+    : change.difference < 0 ? `Refund: ${inr(refundedInr)}${couponBack ? ` plus ${inr(couponBack)} as a coupon` : ''}.${refundFailed ? ' The refund is delayed; Aerva is sending it and will follow up.' : ''}` : '';
   await postThreadMessage(sql, o.id, 'host', `Booking changed. ${change.summary}. ${money}`.trim());
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
   const body = `<p><strong>${esc(o.property_name)}</strong></p><p>${esc(change.summary)}</p><p>New ${o.kind === 'stay' ? 'dates' : 'date'}: ${esc(niceDate(input.arrival))}${o.kind === 'stay' ? ' – ' + esc(niceDate(input.departure)) : ''}</p>`;
   await email(o.guest_email, `Your booking at ${o.property_name} has been changed`, `<h2 style="font-family:Georgia,serif;">Your booking has been changed</h2>${body}${money ? `<p>${esc(money)}</p>` : ''}`);
   await email(host && host.email, `Booking changed: ${o.property_name}`, `<h2 style="font-family:Georgia,serif;">A booking has been changed</h2>${body}`);
-  return { ok: true, refundedInr, couponBack };
+  if (refundFailed) await email(process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `Change refund failed: booking #${o.id}`, `<p>Change #${change.id} was applied, but the refund of ${inr(refundOwed - couponBack)} failed. Retry it in Admin → Refunds.</p>`);
+  return { ok: true, refundedInr, couponBack, refundFailed };
 }
 
 // ---------------------------------------------------------------------
@@ -354,7 +420,7 @@ async function respondChange(sql, razorpay, { changeId, accept, hostId, accountI
     await postThreadMessage(sql, change.order_id, 'host', `This change can no longer be made (${err.message}). Please send a new request if you still need it.`);
     throw userError(`This change can no longer be made: ${err.message}`, 409);
   }
-  if (fresh.newTotal !== change.new_total || fresh.oldTotal !== change.old_total) {
+  if (!sameTotals(fresh, change)) {
     await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId}`;
     await postThreadMessage(sql, change.order_id, 'host', 'Prices have changed since this request was sent, so it has closed. Please send a new change request to see the new price.');
     throw userError('Prices have changed since the guest asked, so this request has closed. The guest has been asked to send a new one.', 409);
@@ -383,7 +449,7 @@ async function startChangePayment(sql, razorpay, { changeId, guestId, ip }) {
     throw userError(`The ${AWAITING_PAYMENT_HOURS} hours to pay for this change have passed. Please send a new change request.`, 409);
   }
   const fresh = await quoteChange(sql, c.order_id, guestId, c.requested);
-  if (fresh.newTotal !== c.new_total || fresh.oldTotal !== c.old_total) {
+  if (!sameTotals(fresh, c)) {
     await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId} AND status = 'awaiting_payment'`;
     throw userError('Prices have been changed recently, so this change has closed. Please send a new change request to see the new price.', 409);
   }
@@ -399,7 +465,7 @@ async function startChangePayment(sql, razorpay, { changeId, guestId, ip }) {
       amount: c.difference * 100, currency: 'INR', receipt: `aerva_change_${c.id}_${Date.now()}`,
       notes: { type: 'booking_change', changeId: String(c.id), orderId: String(o.id), email: o.guest_email, guestId: String(guestId), held: held.ids.length ? '1' : '' }
     });
-  } catch (err) { await releaseHolds(sql, { ids: held.ids }); throw err; }
+  } catch (err) { await releaseHolds(sql, { ids: held.ids, reason: 'error' }); throw err; }
   await attachHolds(sql, held.ids, order.id);
   await sql`UPDATE booking_changes SET razorpay_order_id = ${order.id} WHERE id = ${c.id}`;
   await logAudit(sql, { action: 'booking_change_order_created', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: o.id,
@@ -413,24 +479,46 @@ async function confirmChangePayment(sql, razorpay, { order, payment, razorpayOrd
   const changeId = Number(order.notes.changeId);
   const c = (await sql`SELECT * FROM booking_changes WHERE id = ${changeId}`)[0];
   const refundNow = async (reason) => {
-    const o = c ? (await sql`SELECT id FROM orders WHERE id = ${c.order_id}`)[0] : null;
-    if (o) await safeRefund(sql, razorpay, { orderId: o.id, paymentId: razorpayPaymentId, amountSubunit: Number(payment.amount), kind: `change-pay-${changeId}` }).catch(e => console.error('change refund failed:', e.message));
+    const orderId = c ? c.order_id : (Number(order.notes && order.notes.orderId) || null);
+    const o = orderId ? (await sql`SELECT id FROM orders WHERE id = ${orderId}`)[0] : null;
+    const kind = `change-pay-${changeId}`;
+    let refunded = false, error = null;
+    if (o) {
+      try {
+        await safeRefund(sql, razorpay, { orderId: o.id, paymentId: razorpayPaymentId, amountSubunit: Number(payment.amount), kind });
+        refunded = true;
+      } catch (e) {
+        error = String(e.message || e).slice(0, 300);
+        console.error('change refund failed (Admin → Refunds can retry):', error);
+        // safeRefund leaves its row as failed; if it could not even write
+        // one, it is written here, so Admin → Refunds always shows it.
+        try {
+          await sql`INSERT INTO refunds (order_id, kind, razorpay_payment_id, amount, status, failure_reason)
+                    VALUES (${o.id}, ${kind}, ${razorpayPaymentId}, ${Math.round(Number(payment.amount))}, 'failed', ${error})
+                    ON CONFLICT (order_id, kind) DO NOTHING`;
+        } catch (e2) { console.error('failed change refund not recorded:', e2.message); }
+      }
+    } else error = 'No booking found for this change payment.';
     if (c) await sql`UPDATE booking_changes SET status = 'failed', razorpay_payment_id = ${razorpayPaymentId} WHERE id = ${changeId} AND status = 'awaiting_payment'`;
-    await releaseHolds(sql, { razorpayOrderId });
-    await logAudit(sql, { action: 'booking_change_payment_refunded', success: true, actorType: 'system', targetType: 'order', targetId: c ? c.order_id : null, metadata: { changeId, reason } });
-    if (c) await postThreadMessage(sql, c.order_id, 'host', `The change was not made: ${reason} The payment is being refunded in full.`);
-    return { status: 'conflict', message: `${reason} The change was not made, and your payment is being refunded in full.` };
+    await releaseHolds(sql, { razorpayOrderId, reason: 'conflict' });
+    await logAudit(sql, { action: refunded ? 'booking_change_payment_refunded' : 'booking_change_payment_refund_failed', success: refunded, actorType: 'system',
+      targetType: 'order', targetId: orderId, metadata: { changeId, reason, razorpayPaymentId, amount: Number(payment.amount), error } });
+    if (!refunded) await email(process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `Change payment refund failed: ${razorpayPaymentId}`,
+      `<p>Change #${changeId} was not made and its payment (${esc(razorpayPaymentId)}) could not be refunded automatically: ${esc(error)}</p><p>Retry it in Admin → Refunds.</p>`);
+    const how = refunded ? 'your payment is being refunded in full.' : 'your payment will be refunded in full. The refund is delayed; Aerva has been alerted and will follow up.';
+    if (c) await postThreadMessage(sql, c.order_id, 'host', `The change was not made: ${reason} ${refunded ? 'The payment is being refunded in full.' : 'The payment will be refunded in full; the refund is delayed and Aerva is following up.'}`);
+    return { status: 'conflict', message: `${reason} The change was not made, and ${how}` };
   };
   if (!c || c.status !== 'awaiting_payment') return refundNow('This change was no longer waiting for payment.');
   // Amount paid must equal the difference, and prices must not have moved.
   if (Number(payment.amount) !== Number(order.amount) || Number(order.amount) !== c.difference * 100) {
-    return scheduleChangeRefund(sql, { c, razorpayOrderId, razorpayPaymentId, amountInr: Math.round(Number(payment.amount) / 100), reason: 'The amount paid did not match the amount due for this change.' });
+    return scheduleChangeRefund(sql, { c, razorpayOrderId, razorpayPaymentId, amountInr: Math.round(Number(payment.amount) / 100), reason: 'The amount paid did not match the amount due for this change.', holdReason: 'error' });
   }
   let fresh;
   try { fresh = await quoteChange(sql, c.order_id, null, c.requested); }
   catch (err) { return refundNow(err.message); }
-  if (fresh.newTotal !== c.new_total || fresh.oldTotal !== c.old_total) {
-    return scheduleChangeRefund(sql, { c, razorpayOrderId, razorpayPaymentId, amountInr: c.difference, reason: 'The price changed while the payment was being made, so the amount paid no longer matches.' });
+  if (!sameTotals(fresh, c)) {
+    return scheduleChangeRefund(sql, { c, razorpayOrderId, razorpayPaymentId, amountInr: c.difference, reason: 'The price changed while the payment was being made, so the amount paid no longer matches.', holdReason: 'price_changed' });
   }
   const win = await holdValidForConfirmation(sql, razorpayOrderId, { heldAtCheckout: order.notes.held === '1' });
   if (!win.ok) return refundNow(win.reason);
@@ -439,18 +527,18 @@ async function confirmChangePayment(sql, razorpay, { order, payment, razorpayOrd
   } catch (err) {
     return refundNow(err.isUserFacing ? err.message : 'The change could not be applied.');
   }
-  await releaseHolds(sql, { razorpayOrderId });
+  await releaseHolds(sql, { razorpayOrderId, reason: 'paid' });
   return { status: 'confirmed', change: true };
 }
 
-async function scheduleChangeRefund(sql, { c, razorpayOrderId, razorpayPaymentId, amountInr, reason }) {
+async function scheduleChangeRefund(sql, { c, razorpayOrderId, razorpayPaymentId, amountInr, reason, holdReason = 'conflict' }) {
   try {
     await sql`INSERT INTO scheduled_refunds (razorpay_order_id, razorpay_payment_id, order_ids, charge_currency, amount_inr, reason, due_at, refund_kind)
               VALUES (${razorpayOrderId}, ${razorpayPaymentId}, ${[c.order_id]}, 'INR', ${amountInr}, ${reason}, now() + interval '1 day', ${'change-pay-' + c.id})
               ON CONFLICT (razorpay_order_id) DO NOTHING`;
   } catch (err) { console.error('change refund not scheduled:', err.message); }
   await sql`UPDATE booking_changes SET status = 'failed', razorpay_payment_id = ${razorpayPaymentId} WHERE id = ${c.id} AND status = 'awaiting_payment'`;
-  await releaseHolds(sql, { razorpayOrderId });
+  await releaseHolds(sql, { razorpayOrderId, reason: holdReason });
   await postThreadMessage(sql, c.order_id, 'host', `The change was not made: ${reason} The payment will be refunded in full tomorrow.`);
   return { status: 'conflict', message: `${reason} The change was not made, and ${inr(amountInr)} will be refunded in full tomorrow.` };
 }
@@ -480,7 +568,7 @@ async function expireChanges(sql) {
     if (!pastCutoff && !payLapsed) continue;
     const done = await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${r.id} AND status = ${r.status} RETURNING id`;
     if (!done.length) continue;
-    if (r.razorpay_order_id) await releaseHolds(sql, { razorpayOrderId: r.razorpay_order_id });
+    if (r.razorpay_order_id) await releaseHolds(sql, { razorpayOrderId: r.razorpay_order_id, reason: 'expired' });
     await postThreadMessage(sql, r.order_id, 'host', pastCutoff ? 'The change request has closed: check-out day has begun.' : `The change request has closed: the difference was not paid within ${AWAITING_PAYMENT_HOURS} hours. The booking stays as it was.`);
     out.expired++;
   }

@@ -51,9 +51,22 @@ module.exports = async (req, res) => {
       razorpayOrderId: razorpay_order_id, razorpayPaymentId: razorpay_payment_id, source: 'browser'
     });
 
+    // The booking's confirmation code(s), shown on the page straight away:
+    // [{ item, code }]. A repeat call reads them back from the booking.
+    const codesFor = async () => {
+      try {
+        return (await sql`SELECT suite_name, confirmation_code FROM orders
+                          WHERE razorpay_order_id = ${razorpay_order_id} AND status = 'paid' AND confirmation_code IS NOT NULL ORDER BY id`)
+          .map(r => ({ item: r.suite_name, code: r.confirmation_code }));
+      } catch (err) { return []; }
+    };
     switch (result.status) {
-      case 'confirmed': return res.status(200).json({ verified: true });
-      case 'duplicate': return res.status(200).json({ verified: true, alreadyConfirmed: true });
+      case 'confirmed': return res.status(200).json({ verified: true, confirmationCodes: result.confirmationCodes || [] });
+      case 'duplicate': {
+        // Already recorded — by an earlier call, or by the reconcile job.
+        const codes = await codesFor();
+        return res.status(200).json({ verified: true, alreadyConfirmed: true, confirmationCodes: codes });
+      }
       // Dates or coupon taken by another payment: nothing is booked and
       // the guest is refunded in full. `message` is what the page shows.
       case 'conflict': return res.status(200).json({ verified: false, refunded: true, message: result.message });

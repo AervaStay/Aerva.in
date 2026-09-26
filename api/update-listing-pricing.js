@@ -32,8 +32,8 @@
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { readCohostManageToken } = require('./_cohosts');
-const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules');
-const { timezoneForAddress } = require('./_timezones');
+const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
+const { timezoneForAddress, localTodayIn } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { resolveSatisfiedComplianceFlags } = require('./_compliance');
 const { sanitizeBody } = require('./_plain-text');
@@ -55,6 +55,48 @@ const sql = neon(process.env.DATABASE_URL);
 // the autocomplete suggests.
 function hasNonLatinScript(str) {
   return /[^\u0000-\u024F\s]/.test(str);
+}
+
+// Max guests as the listing form offers it: a whole number, or "12+" for
+// the top option. Stored as text (the column is TEXT); every reader uses
+// parseMaxGuests (_pricing.js), which reads "12+" as 12. null = not valid.
+function normalizeMaxGuests(raw) {
+  const t = String(raw == null ? '' : raw).trim();
+  if (/^\d{1,3}\+$/.test(t) && Number(t.slice(0, -1)) >= 1) return String(Number(t.slice(0, -1))) + '+';
+  const n = Number(t);
+  if (t && Number.isFinite(n) && n >= 1) return String(Math.floor(n));
+  return null;
+}
+
+// Photos and the name are what a guest judges a listing by, and they go
+// live straight away on an approved listing. Until there is a proper
+// re-review step, the admin is told every time they change, so a bad
+// photo (a phone number, someone else's property) is seen within hours.
+async function notifyAdminOfListingChange(listingId, listingName, hostEmail, changes, actorType) {
+  try {
+    await logAudit(sql, { action: 'listing_photos_changed', success: true, actorType, actorIdentifier: hostEmail || null,
+      targetType: 'listing', targetId: listingId, metadata: changes });
+  } catch (err) { console.error('listing change audit failed:', err.message); }
+  if (!process.env.RESEND_API_KEY) return;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const lines = [];
+  if (changes.nameFrom !== undefined) lines.push(`Name: "${esc(changes.nameFrom)}" → "${esc(changes.nameTo)}"`);
+  if (changes.photosAdded && changes.photosAdded.length) {
+    lines.push(`New photos (${changes.photosAdded.length}):<br>` + changes.photosAdded.map(u => `<a href="${esc(u)}">${esc(u)}</a>`).join('<br>'));
+  }
+  if (changes.photosRemoved) lines.push(`Photos removed: ${Number(changes.photosRemoved)}`);
+  if (changes.coverChanged) lines.push('Cover photo changed.');
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: 'Aerva <hello@aerva.in>', to: process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in',
+        subject: `Listing changed: ${String(listingName || 'listing #' + listingId).slice(0, 80)}`,
+        html: `<div style="font-family:sans-serif; max-width:560px;"><p>Listing #${Number(listingId)} (<strong>${esc(listingName)}</strong>) was changed by ${esc(actorType)} ${esc(hostEmail || '')}. It is live — please check it.</p><p>${lines.join('</p><p>')}</p></div>`
+      })
+    });
+  } catch (err) { console.error('listing change email failed:', err.message); }
 }
 
 // Two kinds of Manage link: the host's own ('manage-pricing'), and a
@@ -178,7 +220,7 @@ module.exports = async (req, res) => {
   // rest of the page.
   if (req.method === 'GET' && req.query.roomCalendar === '1') {
     try {
-      const listingRows = await sql`SELECT id, property_name, property_type FROM listings WHERE id = ${listingId}`;
+      const listingRows = await sql`SELECT id, property_name, property_type, timezone FROM listings WHERE id = ${listingId}`;
       const listing = listingRows[0];
       if (!listing) return res.status(404).json({ error: 'This listing could not be found.' });
       if (listing.property_type !== 'Resort') {
@@ -192,8 +234,8 @@ module.exports = async (req, res) => {
       `;
 
       const DAYS = 30;
-      const startDate = new Date();
-      startDate.setUTCHours(0, 0, 0, 0);
+      // Starts on the property's own today, not the server's (UTC).
+      const startDate = new Date(localTodayIn(listing.timezone) + 'T00:00:00Z');
       const endDate = new Date(startDate);
       endDate.setUTCDate(endDate.getUTCDate() + DAYS);
       const startStr = startDate.toISOString().slice(0, 10);
@@ -244,7 +286,7 @@ module.exports = async (req, res) => {
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                experience_price_unit, commission_rate,
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
-               auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason,
+               auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason, timezone,
                COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy
         FROM listings WHERE id = ${listingId}
       `;
@@ -261,15 +303,22 @@ module.exports = async (req, res) => {
       // the dashboard treat a "Room 2 is blocked" row as if the whole
       // listing were blocked, and its full-replace save could then
       // delete or flatten them.
+      // Rows imported by calendar sync carry imported_from (the linked
+      // calendar's name): the pages show them read-only ("Booked on …")
+      // and the save below never touches them.
       const blockedDates = await sql`
-        SELECT id, start_date, end_date, reason
-        FROM listing_blocked_dates
-        WHERE listing_id = ${listingId} AND room_id IS NULL
-        ORDER BY start_date ASC
+        SELECT b.id, b.start_date, b.end_date, b.reason,
+               CASE WHEN b.source_feed_id IS NULL THEN NULL ELSE COALESCE(f.name, 'another site') END AS imported_from
+        FROM listing_blocked_dates b
+        LEFT JOIN calendar_feeds f ON f.id = b.source_feed_id
+        WHERE b.listing_id = ${listingId} AND b.room_id IS NULL
+        ORDER BY b.start_date ASC
       `;
 
+      // room_id is returned so a room's promotion keeps its room when the
+      // page saves it back.
       const promotions = await sql`
-        SELECT id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active
+        SELECT id, room_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active
         FROM listing_promotions WHERE listing_id = ${listingId} ORDER BY start_date ASC
       `;
 
@@ -286,7 +335,23 @@ module.exports = async (req, res) => {
         FROM listing_rooms WHERE listing_id = ${listingId} ORDER BY sort_order ASC, created_at ASC
       `;
 
-      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions, customFields, rooms });
+      // Booked nights (and nights being paid for right now), dates only,
+      // for shading the owner's calendars. get-listings ?availabilityFor
+      // only answers for approved listings, and a paused or blocked
+      // listing still has its bookings.
+      const toDay = (v) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v || '').slice(0, 10);
+      const bookedRanges = (await sql`
+        SELECT arrival, departure FROM orders
+        WHERE listing_id = ${listingId} AND status = 'paid' AND departure >= CURRENT_DATE - 400
+        ORDER BY arrival ASC
+      `).map(r => ({ arrival: toDay(r.arrival), departure: toDay(r.departure) }));
+      try {
+        (await sql`SELECT arrival, departure FROM booking_holds WHERE listing_id = ${listingId} AND room_id IS NULL AND released = false AND expires_at > now()`)
+          .forEach(r => bookedRanges.push({ arrival: toDay(r.arrival), departure: toDay(r.departure) }));
+      } catch (err) { /* holds table not created yet */ }
+
+      // The property's own today, for the page's calendars.
+      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions, customFields, rooms, bookedRanges, today: localTodayIn(listing.timezone) });
     } catch (err) {
       console.error('update-listing-pricing (GET) error:', err);
       return res.status(500).json({ error: 'Could not load your listing right now. Please try again.' });
@@ -323,7 +388,10 @@ module.exports = async (req, res) => {
         if (isNewRoomProposal) {
           await sql`DELETE FROM listing_rooms WHERE id = ${room.id}`;
         } else {
-          await sql`UPDATE listing_rooms SET pending_changes = NULL, pending_review = FALSE, pending_since = NULL, is_active = TRUE WHERE id = ${room.id}`;
+          // Back to how it was before the edit (wasActive); older staged
+          // edits without it go back on, as before.
+          const wasActive = typeof (room.pending_changes || {}).wasActive === 'boolean' ? room.pending_changes.wasActive : true;
+          await sql`UPDATE listing_rooms SET pending_changes = NULL, pending_review = FALSE, pending_since = NULL, is_active = ${wasActive} WHERE id = ${room.id}`;
         }
         await logAudit(sql, {
           action: 'room_change_cancelled', success: true, actorType: 'host', actorIdentifier: hostRows[0] ? hostRows[0].host_email : null,
@@ -337,7 +405,11 @@ module.exports = async (req, res) => {
               latitude, longitude, formattedAddress, city, area, pincode, maxGuests,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
-              customFields, autoSendCheckinInstructions, checkinPhotos, rooms, bedrooms, cancellationPolicy } = req.body || {};
+              customFields, autoSendCheckinInstructions, checkinPhotos, rooms, bedrooms, cancellationPolicy, promotionsLoadedIds } = req.body || {};
+      // "Sent" means the key is in the request at all. A page that saves
+      // only part of the form (the dashboard's calendar sidebar, the
+      // experience calendar) must never wipe what it didn't send.
+      const sent = (k) => Object.prototype.hasOwnProperty.call(req.body || {}, k) && req.body[k] !== undefined;
 
       const rate = nightlyRate ? Number(nightlyRate) : null;
       if (!rate || rate <= 0) {
@@ -388,7 +460,7 @@ module.exports = async (req, res) => {
       }
 
       const before = await sql`
-        SELECT nightly_rate, exterior_photo_urls, interior_photo_urls,
+        SELECT nightly_rate, exterior_photo_urls, interior_photo_urls, cover_photo_url, property_name,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                property_type, bedrooms, status, rooms_pending_review, status_before_compliance_block
         FROM listings WHERE id = ${listingId}
@@ -412,17 +484,12 @@ module.exports = async (req, res) => {
       }
       const rateChanged = Number(before[0].nightly_rate) !== rate;
 
-      // Same defensive pattern as submit-listing.js — only real Blob URLs
-      // are accepted. undefined (not []) means "not sent this time, leave
-      // as-is" — a price-only save from this same page shouldn't silently
-      // wipe out the photo arrays.
-      function sanitizePhotoUrls(urls){
-        return Array.isArray(urls)
-          ? urls.filter(url => typeof url === 'string' && url.startsWith('https://')).slice(0, 20)
-          : undefined;
-      }
-      const safeExteriorUrls = sanitizePhotoUrls(exteriorPhotoUrls);
-      const safeInteriorUrls = sanitizePhotoUrls(interiorPhotoUrls);
+      // Only Aerva's own Blob URLs are accepted (_listing-rules.js) — any
+      // other address, "javascript:" above all, is dropped. undefined (not
+      // []) means "not sent this time, leave as-is" — a price-only save
+      // from this same page shouldn't silently wipe out the photo arrays.
+      const safeExteriorUrls = aervaBlobUrlsOnly(exteriorPhotoUrls, 20);
+      const safeInteriorUrls = aervaBlobUrlsOnly(interiorPhotoUrls, 20);
 
       // Validate the cover choice against whatever the photo arrays will
       // actually be after this save — freshly updated ones if provided,
@@ -432,8 +499,12 @@ module.exports = async (req, res) => {
       // didn't happen to repeat it.
       const effectiveExterior = safeExteriorUrls !== undefined ? safeExteriorUrls : (before[0].exterior_photo_urls || []);
       const effectiveInterior = safeInteriorUrls !== undefined ? safeInteriorUrls : (before[0].interior_photo_urls || []);
-      const safeCoverUrl = (typeof coverPhotoUrl === 'string' && [...effectiveExterior, ...effectiveInterior].includes(coverPhotoUrl))
-        ? coverPhotoUrl
+      // Cover not sent: the current cover stays, as long as it is still
+      // one of the listing's photos after this save.
+      const effectiveAll = [...effectiveExterior, ...effectiveInterior];
+      const coverCandidate = sent('coverPhotoUrl') ? coverPhotoUrl : before[0].cover_photo_url;
+      const safeCoverUrl = (typeof coverCandidate === 'string' && isAervaBlobUrl(coverCandidate) && effectiveAll.includes(coverCandidate))
+        ? coverCandidate
         : null;
 
       // Same bounds-check pattern as submit-listing.js. undefined (not
@@ -462,10 +533,13 @@ module.exports = async (req, res) => {
         ? (petFriendly === true && petFee ? Number(petFee) : null)
         : before[0].pet_fee;
 
-      // Security deposit — always sent fresh from the manage-listing form
-      // (like the discount fields above), so this simply overwrites rather
-      // than needing the same "not sent at all" handling pet policy needs.
-      const finalSecurityDeposit = securityDeposit && Number(securityDeposit) > 0 ? Number(securityDeposit) : null;
+      // Security deposit and the listing-wide discount: changed only when
+      // the save sends them. Sent empty/0/null clears them (the Manage
+      // page's own way of removing a deposit or discount).
+      const finalSecurityDeposit = sent('securityDeposit')
+        ? (securityDeposit && Number(securityDeposit) > 0 ? Number(securityDeposit) : null)
+        : before[0].security_deposit;
+      const discountSent = sent('discountType') || sent('discountValue') || sent('discountMinNights') || sent('discountDescription');
 
       // Guest-info fields — used to fill in @checkin/@checkout/@wifiname/
       // @wifipassword/@accesscode when a host inserts a quick-reply
@@ -488,12 +562,15 @@ module.exports = async (req, res) => {
       // manage-listing.html form always submits its complete current
       // state for this field, so an empty array here genuinely means
       // "no check-in photos," not "wasn't touched this time."
+      // Not sent at all (a calendar-only save): left exactly as it is.
       const safeCheckinPhotos = Array.isArray(checkinPhotos)
         ? checkinPhotos
-            .filter(p => p && typeof p.url === 'string' && p.url.trim())
+            .filter(p => p && typeof p.url === 'string' && isAervaBlobUrl(p.url.trim()))
             .slice(0, 3)
             .map(p => ({ caption: typeof p.caption === 'string' ? p.caption.trim().slice(0, 80) : '', url: p.url.trim() }))
-        : [];
+        : undefined;
+      const autoSendSent = autoSendCheckinInstructions === true || autoSendCheckinInstructions === false;
+      const safeMaxGuests = (maxGuests !== undefined && maxGuests !== null && String(maxGuests).trim()) ? normalizeMaxGuests(maxGuests) : null;
 
       // Declared room count — same "Bedrooms" field submitted at listing
       // creation, relabeled "Number of Rooms" for a Resort (see
@@ -515,10 +592,10 @@ module.exports = async (req, res) => {
           timezone = COALESCE(${typeof formattedAddress === 'string' && formattedAddress.trim() ? timezoneForAddress(formattedAddress) : null}, timezone),
           city = ${safeCity}, area = ${safeArea},
           bedrooms = ${finalBedrooms},
-          discount_type = ${discountType || null},
-          discount_value = ${discountValue ? Number(discountValue) : null},
-          discount_min_nights = ${discountMinNights ? Number(discountMinNights) : null},
-          discount_description = ${discountDescription || null},
+          discount_type = CASE WHEN ${discountSent} THEN ${discountType || null} ELSE discount_type END,
+          discount_value = CASE WHEN ${discountSent} THEN ${discountValue ? Number(discountValue) : null}::numeric ELSE discount_value END,
+          discount_min_nights = CASE WHEN ${discountSent} THEN ${discountMinNights ? Number(discountMinNights) : null}::int ELSE discount_min_nights END,
+          discount_description = CASE WHEN ${discountSent} THEN ${discountDescription || null} ELSE discount_description END,
           exterior_photo_urls = COALESCE(${safeExteriorUrls ? JSON.stringify(safeExteriorUrls) : null}, exterior_photo_urls),
           interior_photo_urls = COALESCE(${safeInteriorUrls ? JSON.stringify(safeInteriorUrls) : null}, interior_photo_urls),
           cover_photo_url = ${safeCoverUrl},
@@ -528,7 +605,7 @@ module.exports = async (req, res) => {
           longitude = COALESCE(${safeLng ?? null}, longitude),
           formatted_address = COALESCE(${formattedAddress || null}, formatted_address),
           pincode = COALESCE(${typeof pincode === 'string' && pincode.trim() ? pincode.trim().slice(0, 20) : null}, pincode),
-          max_guests = COALESCE(${(maxGuests !== undefined && maxGuests !== null && String(maxGuests).trim() && Number(maxGuests) > 0) ? String(Math.floor(Number(maxGuests))) : null}, max_guests),
+          max_guests = COALESCE(${safeMaxGuests}, max_guests),
           pet_friendly = ${finalPetFriendly}, max_pets_allowed = ${finalMaxPets},
           allowed_pet_types = ${JSON.stringify(finalPetTypes)}, pet_fee = ${finalPetFee},
           security_deposit = ${finalSecurityDeposit},
@@ -538,8 +615,8 @@ module.exports = async (req, res) => {
           wifi_name = COALESCE(${safeWifiName ?? null}, wifi_name),
           wifi_password = COALESCE(${safeWifiPassword ?? null}, wifi_password),
           access_code = COALESCE(${safeAccessCode ?? null}, access_code),
-          auto_send_checkin_instructions = ${autoSendCheckinInstructions === true},
-          checkin_photos = ${JSON.stringify(safeCheckinPhotos)}
+          auto_send_checkin_instructions = CASE WHEN ${autoSendSent} THEN ${autoSendCheckinInstructions === true} ELSE auto_send_checkin_instructions END,
+          checkin_photos = COALESCE(${safeCheckinPhotos !== undefined ? JSON.stringify(safeCheckinPhotos) : null}::jsonb, checkin_photos)
         WHERE id = ${listingId}
         RETURNING id, property_name, host_email, max_guests
       `;
@@ -669,8 +746,10 @@ module.exports = async (req, res) => {
             // photo becomes cover_photo_url (what shows on cards/search
             // results); the rest live in photo_urls for that room's own
             // detail view.
+            // Aerva Blob URLs only (_listing-rules.js) — the admin page shows
+            // these as links, so anything else must never be stored.
             const safeUrls = Array.isArray(r.photos)
-              ? r.photos.filter(p => p && typeof p.url === 'string' && p.url.trim()).map(p => p.url.trim())
+              ? r.photos.filter(p => p && isAervaBlobUrl(p.url)).map(p => p.url.trim())
               : [];
             const coverPhotoUrl = safeUrls[0] || null;
             const photoUrls = safeUrls.slice(1).map(url => ({ url }));
@@ -744,8 +823,9 @@ module.exports = async (req, res) => {
             `;
             const currentById = new Map(currentRoomsForCompare.map(r => [r.id, r]));
             function submittedRoomPhotoUrls(r){
+              // Aerva Blob URLs only — see the first-time branch above.
               return Array.isArray(r.photos)
-                ? r.photos.filter(p => p && typeof p.url === 'string' && p.url.trim()).map(p => p.url.trim())
+                ? r.photos.filter(p => p && isAervaBlobUrl(p.url)).map(p => p.url.trim())
                 : [];
             }
             function currentRoomPhotoUrls(r){
@@ -800,7 +880,9 @@ module.exports = async (req, res) => {
                 // actually looks like right now.
                 await sql`
                   UPDATE listing_rooms SET
-                    pending_changes = ${JSON.stringify({ roomName, maxOccupancy, nightlyRate: roomRate, description, isActive, coverPhotoUrl, photoUrls })},
+                    pending_changes = ${JSON.stringify({ roomName, maxOccupancy, nightlyRate: roomRate, description, isActive, coverPhotoUrl, photoUrls,
+                      // how the room was before review switched it off — a rejection restores it (approve-listing.js)
+                      wasActive: cur.is_active === true || cur.is_active === 't' })},
                     pending_review = TRUE, pending_since = now(), is_active = FALSE,
                     last_rejection_reason = NULL, last_rejected_at = NULL
                   WHERE id = ${Number(r.id)} AND listing_id = ${listingId}
@@ -928,7 +1010,9 @@ module.exports = async (req, res) => {
         try {
           // Only listing-level rows are in scope — a per-room block made
           // on the Status page is never touched by this save.
-          const existingRows = await sql`SELECT id FROM listing_blocked_dates WHERE listing_id = ${listingId} AND room_id IS NULL`;
+          // Imported rows (calendar sync, source_feed_id set) are the other
+          // site's bookings: never updated, deleted or re-inserted here.
+          const existingRows = await sql`SELECT id FROM listing_blocked_dates WHERE listing_id = ${listingId} AND room_id IS NULL AND source_feed_id IS NULL`;
           const existingIds = new Set(existingRows.map(r => r.id));
           const submittedIds = new Set();
 
@@ -953,12 +1037,18 @@ module.exports = async (req, res) => {
             if (!startDate || !endDate || endDate <= startDate) continue;
             const reason = typeof b.reason === 'string' ? b.reason.trim().slice(0, 200) || null : null;
 
+            if (b.importedFrom) continue; // shown read-only; never saved
             if (b.id && existingIds.has(Number(b.id))) {
               await sql`
                 UPDATE listing_blocked_dates SET start_date = ${startDate}, end_date = ${endDate}, reason = ${reason}
-                WHERE id = ${Number(b.id)} AND listing_id = ${listingId} AND room_id IS NULL
+                WHERE id = ${Number(b.id)} AND listing_id = ${listingId} AND room_id IS NULL AND source_feed_id IS NULL
               `;
               submittedIds.add(Number(b.id));
+            } else if (b.id) {
+              // An id that isn't one of this listing's own manual blocks: an
+              // imported row, or one removed elsewhere since the page
+              // loaded. Re-inserting it would turn it into a manual block.
+              continue;
             } else {
               const inserted = await sql`
                 INSERT INTO listing_blocked_dates (listing_id, start_date, end_date, reason)
@@ -973,7 +1063,7 @@ module.exports = async (req, res) => {
             !submittedIds.has(id) && (loadedIds === null || loadedIds.has(id))
           );
           if (idsToDelete.length) {
-            await sql`DELETE FROM listing_blocked_dates WHERE id = ANY(${idsToDelete}) AND listing_id = ${listingId}`;
+            await sql`DELETE FROM listing_blocked_dates WHERE id = ANY(${idsToDelete}) AND listing_id = ${listingId} AND source_feed_id IS NULL`;
           }
         } catch (blockedErr) {
           console.error('Blocked dates sync failed:', blockedErr);
@@ -991,6 +1081,17 @@ module.exports = async (req, res) => {
           const existingRows = await sql`SELECT id FROM listing_promotions WHERE listing_id = ${listingId}`;
           const existingIds = new Set(existingRows.map(r => r.id));
           const submittedIds = new Set();
+          // Same stale-overwrite guard as blocked dates: only promotions
+          // this page loaded may be deleted — one added on the Status page
+          // since then survives. (Older pages don't send the list.)
+          const promoLoadedIds = Array.isArray(promotionsLoadedIds)
+            ? new Set(promotionsLoadedIds.map(Number).filter(Number.isFinite))
+            : null;
+          // A room promotion keeps its room: roomId must be one of this
+          // listing's rooms; anything else means the whole listing.
+          const roomIdRows = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${listingId}`;
+          const validRoomIds = new Set(roomIdRows.map(r => Number(r.id)));
+          const roomOf = (p) => (p.roomId != null && validRoomIds.has(Number(p.roomId))) ? Number(p.roomId) : null;
 
           for (const p of promotions) {
             const name = typeof p.name === 'string' ? p.name.trim().slice(0, 100) : '';
@@ -1002,31 +1103,56 @@ module.exports = async (req, res) => {
             const minNights = p.minNights ? Number(p.minNights) : null;
             const isActive = p.isActive !== false;
 
+            // room_id changes only when the page sends roomId (older pages
+            // don't, and must not flatten a room promotion to the listing).
+            const roomIdSent = Object.prototype.hasOwnProperty.call(p, 'roomId');
             if (p.id && existingIds.has(Number(p.id))) {
               await sql`
                 UPDATE listing_promotions SET
                   name = ${name}, discount_type = ${discType}, discount_value = ${discValue},
-                  min_nights = ${minNights}, start_date = ${startDate}, end_date = ${endDate}, is_active = ${isActive}
+                  min_nights = ${minNights}, start_date = ${startDate}, end_date = ${endDate}, is_active = ${isActive},
+                  room_id = CASE WHEN ${roomIdSent} THEN ${roomOf(p)}::int ELSE room_id END
                 WHERE id = ${Number(p.id)} AND listing_id = ${listingId}
               `;
               submittedIds.add(Number(p.id));
+            } else if (p.id) {
+              // Removed elsewhere since this page loaded — not brought back.
+              continue;
             } else {
               const inserted = await sql`
-                INSERT INTO listing_promotions (listing_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
-                VALUES (${listingId}, ${name}, ${discType}, ${discValue}, ${minNights}, ${startDate}, ${endDate}, ${isActive})
+                INSERT INTO listing_promotions (listing_id, room_id, name, discount_type, discount_value, min_nights, start_date, end_date, is_active)
+                VALUES (${listingId}, ${roomOf(p)}, ${name}, ${discType}, ${discValue}, ${minNights}, ${startDate}, ${endDate}, ${isActive})
                 RETURNING id
               `;
               submittedIds.add(inserted[0].id);
             }
           }
 
-          const idsToDelete = [...existingIds].filter(id => !submittedIds.has(id));
+          const idsToDelete = [...existingIds].filter(id =>
+            !submittedIds.has(id) && (promoLoadedIds === null || promoLoadedIds.has(id))
+          );
           if (idsToDelete.length) {
             await sql`DELETE FROM listing_promotions WHERE id = ANY(${idsToDelete}) AND listing_id = ${listingId}`;
           }
         } catch (promoErr) {
           console.error('Promotions sync failed:', promoErr);
           promotionsError = 'Your other changes saved, but promotions could not be updated. Please try again.';
+        }
+      }
+
+      // Photos or name changed on a live (approved) listing: tell the admin
+      // (see notifyAdminOfListingChange). Never fails the save.
+      if (before[0].status === 'approved') {
+        const oldPhotos = [...(before[0].exterior_photo_urls || []), ...(before[0].interior_photo_urls || [])];
+        const newPhotos = [...effectiveExterior, ...effectiveInterior];
+        const added = newPhotos.filter(u => !oldPhotos.includes(u));
+        const removed = oldPhotos.filter(u => !newPhotos.includes(u)).length;
+        const coverChanged = (safeCoverUrl || null) !== (before[0].cover_photo_url || null) && !!safeCoverUrl;
+        const renamed = safeName && safeName !== String(before[0].property_name || '').trim();
+        if (added.length || removed || coverChanged || renamed) {
+          const changes = { photosAdded: added, photosRemoved: removed, coverChanged };
+          if (renamed) { changes.nameFrom = before[0].property_name; changes.nameTo = safeName; }
+          await notifyAdminOfListingChange(listingId, listing.property_name, listing.host_email, changes, access.isCohost ? 'cohost' : 'host');
         }
       }
 

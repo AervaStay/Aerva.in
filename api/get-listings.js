@@ -21,9 +21,10 @@
 //   ?arrival=...&departure=... — only listings with no existing paid
 //                                booking that overlaps this date range
 //                                (both must be given together)
-//   ?availabilityFor=<id>   — a completely different mode: ignores every
-//                              other param and returns only that one
-//                              listing's booked date ranges, for the
+//   ?availabilityFor=<id>[&roomId=<id>] — a completely different mode:
+//                              ignores every other param and returns only
+//                              that live listing's (or room's) booked and
+//                              blocked date ranges — dates only — for the
 //                              listing page's availability calendar. Kept
 //                              in this file rather than its own /api
 //                              endpoint to stay under Vercel's Hobby-plan
@@ -61,11 +62,12 @@
 const { neon } = require('@neondatabase/serverless');
 const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
         propertyCutoffs, PROPERTY_TIERS, experienceTier, EXPERIENCE_FACTORS,
-        cityCutoffs, cutoffsForCity, isReviewDay, nextReviewDate } = require('./_tiers');
+        cityCutoffs, cutoffsForCity, isReviewDay, nextReviewDate, reviewPeriodStart } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
         tierByKey, applyDecayCap } = require('./_tiers');
 const { verifyToken, secretMatches } = require('./_approval-token');
+const { isSessionRevoked } = require('./_accounts');
 const { buildIcs, syncStaleFeeds } = require('./_calendar-sync');
 const { sendScheduledTemplates } = require('./_template-scheduling');
 const { releaseDueCoupons } = require('./_coupons');
@@ -97,6 +99,22 @@ function toDateStr(val) {
   if (!val) return null;
   if (val instanceof Date) return val.toISOString().split('T')[0];
   return String(val).slice(0, 10);
+}
+
+// What the public may see of where a place is: the area to about a
+// kilometre, never the street address. Distances and "X km away" still
+// work at that precision; the exact address and pin reach a guest only
+// once they have booked (guest-profile.js, in the booking's messages).
+function publicLocation(row) {
+  if (!row) return row;
+  delete row.formatted_address;
+  // Exact distances from a chosen point would give the exact spot back
+  // (three searches are enough). Results are already sorted by it.
+  delete row.distance_km;
+  const round = (v) => (v == null || v === '' || !Number.isFinite(Number(v))) ? null : Math.round(Number(v) * 100) / 100;
+  if ('latitude' in row) row.latitude = round(row.latitude);
+  if ('longitude' in row) row.longitude = round(row.longitude);
+  return row;
 }
 
 // Same Haversine formula used client-side for "distance from me" — kept
@@ -454,6 +472,28 @@ async function runTierSnapshot({ asOf, prev, hosts, guests, listings }) {
   return changes;
 }
 
+// Standing each host and guest held going into the review that runs at
+// `at`. First review of the quarter: what they hold now (tier_current).
+// A later one in the same quarter: what they held before the quarter
+// began, read from tier_history (see the full-review branch below).
+async function standingGoingInto(sql, at) {
+  const periodStart = reviewPeriodStart(new Date(at), 'quarterly');
+  const lastRun = await lastSnapshotRun(sql);
+  if (lastRun && new Date(lastRun) >= new Date(periodStart)) {
+    return {
+      host: await standingBefore(sql, 'host', periodStart),
+      guest: await standingBefore(sql, 'guest', periodStart)
+    };
+  }
+  const prevRows = await sql`
+    SELECT subject_type, subject_id, tier_key FROM tier_current
+    WHERE subject_type IN ('host', 'guest')
+  `;
+  const prev = { host: {}, guest: {} };
+  prevRows.forEach(r => { prev[r.subject_type][r.subject_id] = r.tier_key; });
+  return prev;
+}
+
 // Likes per listing (stays and experiences share listing_likes). Never
 // throws: before migration_listing_likes.sql has run, or if the query
 // fails, every count is simply 0 — likes are decoration, never a reason
@@ -473,8 +513,6 @@ async function attachLikeCounts(rows) {
   }
   rows.forEach(r => { r.like_count = counts[r.id] || 0; });
 }
-
-let lastTrafficScheduleRun = 0; // see ?runSchedules below
 
 // ---- Currency display rates (daily job) ----
 // Two free, keyless sources, tried in order. If both fail, the cached
@@ -701,12 +739,14 @@ async function runReviewSweep(sql, opts = {}) {
       const startedAt = new Date().toISOString();
       let changes;
       try {
-        const prevRows = await sql`
-          SELECT subject_type, subject_id, tier_key FROM tier_current
-          WHERE subject_type IN ('host', 'guest')
-        `;
-        const prev = { host: {}, guest: {} };
-        prevRows.forEach(r => { prev[r.subject_type][r.subject_id] = r.tier_key; });
+        // The one-rung decay cap is measured against the standing held
+        // going INTO this quarter's review. If a review already ran this
+        // quarter (the quarterly run, then "recompute all badges", or two
+        // clicks), tier_current already holds that review's result, and
+        // capping against it again would take a second rung. So a repeat
+        // reads the standing from before the quarter began instead, and
+        // gives the same result as the first run.
+        const prev = await standingGoingInto(sql, startedAt);
         changes = await runTierSnapshot({ asOf: startedAt, prev, hosts: null, guests: null, listings: true });
         await markSnapshotRun(sql, startedAt);
         // A full review covers every pending admin correction too.
@@ -737,9 +777,13 @@ async function runReviewSweep(sql, opts = {}) {
     }
     try {
       const ids = (type) => [...new Set(queue.filter(e => e.type === type && e.id != null).map(e => Number(e.id)))];
+      // Standing going into the review being corrected — from before its
+      // quarter began, so a review re-run later in that quarter is not
+      // counted as an extra rung.
+      const periodStart = reviewPeriodStart(new Date(lastRun), 'quarterly');
       const prev = {
-        host: await standingBefore(sql, 'host', lastRun),
-        guest: await standingBefore(sql, 'guest', lastRun)
+        host: await standingBefore(sql, 'host', periodStart),
+        guest: await standingBefore(sql, 'guest', periodStart)
       };
       const changes = await runTierSnapshot({
         asOf: lastRun, prev,
@@ -799,14 +843,11 @@ module.exports = async (req, res) => {
     }
     return res.status(200).json({ jobs: await jobStatus(sql, JOBS) });
   }
-  if (req.method === 'GET') {
-    // Backstop between pinger runs (site traffic): light jobs only, at most
-    // every 2 minutes per server; the locks stop any double run.
-    if (Date.now() - lastTrafficScheduleRun > 120000) {
-      lastTrafficScheduleRun = Date.now();
-      await runJobs(sql, { budgetMs: 2500, lightOnly: true });
-    }
-  }
+  // Public page loads never run scheduled jobs: a guest's request must not
+  // wait on payouts or refunds. The 5-minute pinger (?runSchedules=1) runs
+  // everything, coupon release included (due 15 minutes after a
+  // cancellation, so released within 15–20 minutes), and the daily Vercel
+  // cron (?reviewSweep=1) is the backstop if the pinger stops.
 
   // ---- Calendar export: GET ?ical=<secret token> ----
   // A listing's (or resort room's) calendar for Airbnb, Agoda, Booking.com,
@@ -817,7 +858,7 @@ module.exports = async (req, res) => {
     try {
       const token = req.query.ical.trim();
       if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return res.status(404).send('Not found');
-      let listing = (await sql`SELECT id, property_name FROM listings WHERE ical_token = ${token} AND status = 'approved'`)[0] || null;
+      let listing = (await sql`SELECT id, property_name, property_type FROM listings WHERE ical_token = ${token} AND status = 'approved'`)[0] || null;
       let room = null;
       if (!listing) {
         room = (await sql`SELECT r.id, r.room_name, r.listing_id, l.property_name FROM listing_rooms r JOIN listings l ON l.id = r.listing_id
@@ -826,16 +867,23 @@ module.exports = async (req, res) => {
       }
       const listingId = listing ? listing.id : room.listing_id;
       const roomId = room ? room.id : null;
+      // A Resort's whole-property feed carries only what closes the WHOLE
+      // resort (blocks and bookings with no room). Each room has its own
+      // feed; putting every room's bookings here would close the entire
+      // resort on other sites whenever one room is booked. A room's feed
+      // carries its own dates plus whole-resort blocks.
+      const wholeResortOnly = !!(listing && listing.property_type === 'Resort');
       const orders = await sql`
         SELECT id, arrival::text AS a, departure::text AS d FROM orders
         WHERE listing_id = ${listingId} AND status = 'paid' AND COALESCE(order_type, 'stay') = 'stay'
           AND departure >= CURRENT_DATE - 1
           AND (${roomId}::int IS NULL OR room_id = ${roomId})
+          AND (${wholeResortOnly} = false OR room_id IS NULL)
       `;
       const blocks = await sql`
         SELECT id, start_date::text AS s, end_date::text AS e FROM listing_blocked_dates
         WHERE listing_id = ${listingId} AND source_feed_id IS NULL AND end_date >= CURRENT_DATE - 1
-          AND (room_id IS NULL OR ${roomId}::int IS NULL OR room_id = ${roomId})
+          AND (room_id IS NULL OR (${wholeResortOnly} = false AND (${roomId}::int IS NULL OR room_id = ${roomId})))
       `;
       const ranges = [
         ...orders.map(o => ({ uid: `order-${o.id}`, start: o.a, end: o.d, summary: 'Booked on Aerva' })),
@@ -851,19 +899,14 @@ module.exports = async (req, res) => {
     }
   }
 
-  // ---- Daily review sweep (cron) ----
-  // GET ?reviewSweep=1 — runs once a day from vercel.json. Two jobs:
+  // ---- Daily cron: run every due job (backstop for the pinger) ----
+  // GET ?reviewSweep=1 — once a day from vercel.json, and the admin's
+  // "Run all due jobs now" button. It runs whatever is due in JOBS above,
+  // in priority order (payments and payouts included), not only reviews.
   //
-  //   1. Publish what is due. A review goes live the moment BOTH sides
-  //      have reviewed, or once the window closes, whichever comes first.
-  //      Both cases are handled here rather than at submission time so
-  //      there is a single place that decides visibility.
-  //   2. Prompt guests who checked out yesterday and have not reviewed.
-  //
-  // Vercel's Hobby plan caps cron at once per day, which is why "publish
-  // immediately when both sides review" is really "within a day". That is
-  // a plan limit, not a design choice — on Pro this becomes hourly by
-  // changing the schedule alone, no code change.
+  // This is the daily Vercel cron (a backstop). Publishing itself runs
+  // every 15 minutes from the 5-minute pinger (the review_publish job), so
+  // a pair of reviews goes live within about 15 minutes of the second one.
   //
   // Cron-only. Without this, anyone who found the URL could run the full
   // tier recompute on demand — and with ?forceTierSnapshot=1, re-rate
@@ -943,6 +986,7 @@ module.exports = async (req, res) => {
       const auth = String(req.headers['authorization'] || '');
       const who = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
       if (!who || who.action !== 'guest-session') return res.status(401).json({ error: 'Please log in to view host profiles.' });
+      if (await isSessionRevoked(sql, who)) return res.status(401).json({ error: 'Please log in again.' });
       const listingId = Number(req.query.hostProfile);
       if (!Number.isInteger(listingId) || listingId <= 0) return res.status(400).json({ error: 'Which listing?' });
       try {
@@ -1221,18 +1265,26 @@ module.exports = async (req, res) => {
     const availabilityForRaw = typeof req.query.availabilityFor === 'string' ? req.query.availabilityFor.trim() : '';
     if (availabilityForRaw) {
       const listingId = Number(availabilityForRaw);
-      if (!listingId) {
+      if (!Number.isInteger(listingId) || listingId <= 0) {
         return res.status(400).json({ error: 'Missing or invalid availabilityFor' });
       }
+      // Live listings only, like everything else public in this file.
+      const live = await sql`SELECT id FROM listings WHERE id = ${listingId} AND status = 'approved'`;
+      if (!live.length) return res.status(404).json({ error: 'This listing is not available.' });
       // A resort room is independently available from every other room
       // in the same resort (and from the resort listing itself, which
-      // is never directly booked) — when roomId is present, everything
-      // below filters by room_id instead of listing_id.
+      // is never directly booked) — when roomId is present, bookings are
+      // that room's own. The room must belong to this listing.
       const roomIdRaw = typeof req.query.roomId === 'string' ? req.query.roomId.trim() : '';
       const roomId = roomIdRaw ? Number(roomIdRaw) : null;
+      if (roomIdRaw) {
+        if (!Number.isInteger(roomId) || roomId <= 0) return res.status(400).json({ error: 'Invalid roomId' });
+        const own = await sql`SELECT id FROM listing_rooms WHERE id = ${roomId} AND listing_id = ${listingId}`;
+        if (!own.length) return res.status(404).json({ error: 'This room is not part of that listing.' });
+      }
 
       const orderRows = roomId
-        ? await sql`SELECT arrival, departure FROM orders WHERE room_id = ${roomId} AND status = 'paid' ORDER BY arrival ASC`
+        ? await sql`SELECT arrival, departure FROM orders WHERE room_id = ${roomId} AND listing_id = ${listingId} AND status = 'paid' ORDER BY arrival ASC`
         : await sql`SELECT arrival, departure FROM orders WHERE listing_id = ${listingId} AND status = 'paid' ORDER BY arrival ASC`;
       const bookedRanges = orderRows.map(r => ({
         arrival: toDateStr(r.arrival),
@@ -1249,13 +1301,15 @@ module.exports = async (req, res) => {
       // Host-blocked dates (maintenance, personal use, etc.) — shown on
       // the same calendar as booked dates so a guest can't even try to
       // select them, though create-order.js is what actually enforces it.
+      // A room's calendar includes blocks on the whole resort (room_id
+      // NULL), the same rule checkout applies. Dates only: the host's own
+      // note on a block is private.
       const blockedRows = roomId
-        ? await sql`SELECT start_date, end_date, reason FROM listing_blocked_dates WHERE room_id = ${roomId} ORDER BY start_date ASC`
-        : await sql`SELECT start_date, end_date, reason FROM listing_blocked_dates WHERE listing_id = ${listingId} AND room_id IS NULL ORDER BY start_date ASC`;
+        ? await sql`SELECT start_date, end_date FROM listing_blocked_dates WHERE listing_id = ${listingId} AND (room_id IS NULL OR room_id = ${roomId}) ORDER BY start_date ASC`
+        : await sql`SELECT start_date, end_date FROM listing_blocked_dates WHERE listing_id = ${listingId} AND room_id IS NULL ORDER BY start_date ASC`;
       const blockedRanges = blockedRows.map(r => ({
         arrival: toDateStr(r.start_date),
         departure: toDateStr(r.end_date),
-        reason: r.reason || null,
       }));
 
       return res.status(200).json({ bookedRanges, blockedRanges });
@@ -1368,6 +1422,9 @@ module.exports = async (req, res) => {
           h.nightly_rate AS hosting_nightly_rate, h.cover_photo_url AS hosting_cover_photo_url,
           h.exterior_photo_urls AS hosting_exterior_photo_urls, h.interior_photo_urls AS hosting_interior_photo_urls,
           h.status AS hosting_status,
+          -- the booking page's guest cap and earliest date (the experience's
+          -- own timezone, else the property that hosts it)
+          e.max_guests, COALESCE(NULLIF(btrim(e.timezone), ''), NULLIF(btrim(h.timezone), '')) AS timezone,
           (
             NOT ${expDatesFilter} OR (
               NOT EXISTS (
@@ -1548,6 +1605,7 @@ module.exports = async (req, res) => {
       }
 
       await attachLikeCounts(filteredExperiences);
+      filteredExperiences.forEach(publicLocation);
       return res.status(200).json({ experiences: filteredExperiences });
     }
 
@@ -1573,6 +1631,8 @@ module.exports = async (req, res) => {
                experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
                experience_instructions, experience_special_instructions,
                experience_available_from, experience_available_until,
+               max_guests,
+               COALESCE(NULLIF(btrim(timezone), ''), (SELECT NULLIF(btrim(h.timezone), '') FROM listings h WHERE h.id = listings.hosting_listing_id)) AS timezone,
                COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
                to_jsonb(listings)->>'price_changed_at' AS price_changed_at
         FROM listings
@@ -1580,6 +1640,7 @@ module.exports = async (req, res) => {
         ORDER BY created_at DESC
       `;
       await attachLikeCounts(experiencesFor);
+      experiencesFor.forEach(publicLocation);
       return res.status(200).json({ experiences: experiencesFor });
     }
 
@@ -1638,7 +1699,7 @@ module.exports = async (req, res) => {
         exterior_photo_urls, interior_photo_urls, cover_photo_url,
         latitude, longitude, formatted_address,
         pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
-        created_at,
+        created_at, timezone,
         (
           ${arrivalFilter}::date IS NULL OR (
             NOT EXISTS (
@@ -2039,9 +2100,17 @@ module.exports = async (req, res) => {
     filtered.forEach(l => { delete l.host_id; });
 
     await attachLikeCounts(filtered);
+    filtered.forEach(publicLocation);
     return res.status(200).json({ listings: filtered });
   } catch (err) {
     console.error('get-listings error:', err);
     return res.status(500).json({ error: 'Could not fetch listings' });
   }
 };
+
+// For tests and tooling: the pieces the handler above is built from.
+module.exports.runReviewSweep = runReviewSweep;
+module.exports.runTierSnapshot = runTierSnapshot;
+module.exports.standingGoingInto = standingGoingInto;
+module.exports.JOBS = JOBS;
+module.exports.publicLocation = publicLocation;

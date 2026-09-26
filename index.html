@@ -15,7 +15,7 @@
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com;
   font-src https://fonts.gstatic.com;
   img-src 'self' data: blob: https://*.public.blob.vercel-storage.com https://*.gstatic.com https://*.googleapis.com https://*.googleusercontent.com https://*.tile.openstreetmap.org https://unpkg.com;
-  connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com https://aerva-in.vercel.app https://formspree.io https://vercel.com https://*.public.blob.vercel-storage.com https://*.googleapis.com https://nominatim.openstreetmap.org https://unpkg.com;
+  connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com https://aerva-in.vercel.app https://vercel.com https://*.public.blob.vercel-storage.com https://*.googleapis.com https://nominatim.openstreetmap.org https://unpkg.com https://ipapi.co;
   frame-src https://api.razorpay.com https://checkout.razorpay.com;
 ">
 
@@ -80,7 +80,7 @@
         <button type="button" class="currency-trigger" id="currencyTriggerBtn" aria-label="Change display currency">INR</button>
         <div class="currency-dropdown" id="currencyDropdown"></div>
       </div>
-      <a href="guest-login.html" id="guestLoginLink">Log In</a>
+      <a href="guest-login.html" id="guestLoginLink">Log in</a>
       <a href="host-dashboard.html" id="hostMessagesIcon" class="host-messages-icon" style="display:none;" aria-label="Messages">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         <span id="hostMessagesUnreadBadge" class="host-messages-badge" style="display:none;"></span>
@@ -120,9 +120,9 @@
           <a href="host-status.html" id="statusMenuLink" style="display:none;">Status</a>
           <a href="host-earnings.html" id="earningsMenuLink" style="display:none;">My Earnings</a>
           <a href="index.html?view=cohost">Co-hosting</a>
-          <a href="host-dashboard.html?openProfile=1">Account Settings</a>
+          <a href="index.html?view=profile" class="account-settings-link">Account Settings</a>
           <div class="menu-divider"></div>
-          <a href="#" id="guestLogoutLink">Log Out</a>
+          <a href="#" id="guestLogoutLink">Log out</a>
         </div>
       </span>
     </div>
@@ -136,7 +136,7 @@
     <button type="button" class="currency-trigger" id="currencyTriggerBtnMobile" aria-label="Change display currency">INR</button>
     <div class="currency-dropdown" id="currencyDropdownMobile"></div>
   </div>
-  <a href="guest-login.html" id="guestLoginLinkMobile">Log In</a>
+  <a href="guest-login.html" id="guestLoginLinkMobile">Log in</a>
   <span id="guestAccountBoxMobile" style="display:none; flex-direction:column; gap:18px;">
     <span style="display:flex; align-items:center; gap:10px;">
       <div class="nav-avatar-ring" id="navAvatarRingMobile" style="width:36px; height:36px;">
@@ -144,7 +144,14 @@
       </div>
       <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
     </span>
+    <a href="index.html?view=profile">Profile</a>
     <a href="index.html?view=my-bookings">My Bookings</a>
+    <!-- Notifications on a phone: the same list as the header bell. -->
+    <button type="button" class="mobile-notif-toggle" id="mobileNotifToggle" aria-expanded="false" aria-controls="mobileNotifList">
+      Notifications
+      <span id="mobileNotifCount" class="host-messages-badge" style="display:none; position:static; margin-left:2px;"></span>
+    </button>
+    <div class="mobile-notif-list" id="mobileNotifList" hidden></div>
     <a href="#" id="hostMessagesIconMobile" style="display:none; align-items:center; gap:8px;">
       Messages
       <span id="hostMessagesUnreadBadgeMobile" class="host-messages-badge" style="display:none; position:static; margin-left:2px;"></span>
@@ -153,9 +160,9 @@
     <a href="host-status.html" id="statusMenuLinkMobile" style="display:none;">Status</a>
     <a href="host-earnings.html" id="earningsMenuLinkMobile" style="display:none;">My Earnings</a>
     <a href="index.html?view=cohost">Co-hosting</a>
-    <a href="host-dashboard.html?openProfile=1">Account Settings</a>
+    <a href="index.html?view=profile" class="account-settings-link">Account Settings</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
-    <a href="#" id="guestLogoutLinkMobile">Log Out</a>
+    <a href="#" id="guestLogoutLinkMobile">Log out</a>
   </span>
 </nav>
 
@@ -292,7 +299,7 @@
         <div class="more-filters-wrapper">
           <button type="button" class="filter-clear near-me-btn more-filters-btn" id="moreFiltersBtn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
-            More Filters
+            More filters
           </button>
           <div class="calendar-dropdown-backdrop" id="moreFiltersDropdownBackdrop"></div>
           <div class="more-filters-dropdown" id="moreFiltersDropdown">
@@ -329,7 +336,7 @@
         <button type="button" class="filter-clear" id="clearFiltersBtn">Clear filters</button>
         <button type="button" class="filter-clear near-me-btn" id="showDistanceBtn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
-          Near Me
+          Near me
         </button>
       </div>
       <button type="button" class="pill-search-submit" id="searchBtn" aria-label="Search">
@@ -343,7 +350,7 @@
 
   <div class="wrap" id="specificMatchRow" style="display:none;">
     <div class="browse-row-head">
-      <h3 id="specificMatchHeading">This Property</h3>
+      <h3 id="specificMatchHeading">This property</h3>
       <p id="specificMatchSub" style="font-size:13px; opacity:0.6; margin-top:4px;"></p>
     </div>
     <div class="suite-grid" id="specificMatchContainer"></div>
@@ -351,21 +358,21 @@
 
   <div class="wrap" id="specificMatchNearbyRow" style="display:none;">
     <div class="browse-row-head">
-      <h3>Nearby Properties</h3>
+      <h3>Nearby properties</h3>
     </div>
     <div class="suite-grid" id="specificMatchNearbyContainer"></div>
   </div>
 
   <div class="wrap" id="recentlyViewedRow" style="display:none;">
     <div class="browse-row-head">
-      <h3>Recently Viewed</h3>
+      <h3>Recently viewed</h3>
     </div>
     <div class="suite-grid" id="recentlyViewedContainer"></div>
   </div>
 
   <div class="wrap" id="availableSectionWrap">
     <div class="browse-row-head">
-      <h3>Available Listings</h3>
+      <h3 id="availableHeading">Suites</h3>
     </div>
     <!-- Deliberately NOT .reveal: the grid used to start at opacity:0 and
          wait for an IntersectionObserver to fade it in, so any time that
@@ -554,6 +561,14 @@
       <div class="profile-section-title">What others have said</div>
       <div id="profileReviews"></div>
     </div>
+
+    <!-- Signs this account out everywhere, e.g. after using a shared or lost device. -->
+    <div class="profile-section" id="profileAccountSection">
+      <div class="profile-section-title">Your account</div>
+      <p class="profile-hint">Logged in on a device you no longer use? Log out everywhere, including here.</p>
+      <button type="button" class="filter-clear profile-logout-all" id="profileLogoutAll">Log out of all devices</button>
+      <p class="profile-msg" id="profileLogoutAllMsg"></p>
+    </div>
   </div>
 </section>
 
@@ -610,7 +625,7 @@
   <div class="wrap" style="max-width:760px;">
     <div id="loggedOutGate" style="display:none; text-align:center; padding:20px 0 40px;">
       <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">Log in or create an account to start listing.</p>
-      <a href="guest-login.html" class="btn solid">Log In</a>
+      <a href="guest-login.html" class="btn solid">Log in</a>
     </div>
     <form class="reserve-form reveal" id="listingForm" autocomplete="off">
 
@@ -666,7 +681,7 @@
         <div class="field">
           <label for="listBedrooms" id="listBedroomsLabel">Bedrooms</label>
           <input type="number" id="listBedrooms" name="Bedrooms" min="0" placeholder="e.g. 4 — enter 0 for a studio">
-          <p id="listBedroomsHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">You'll need at least this many interior photos below — one for each room helps guests know exactly what they're booking.</p>
+          <p id="listBedroomsHint" style="font-size:11.5px; opacity:0.6; margin-top:4px;">Add at least one photo for each bedroom below. For a studio, enter 0 and add a photo of the sleeping area as Bedroom 1.</p>
         </div>
       </div>
       <div class="form-row" id="listGuestsRow">
@@ -862,7 +877,7 @@
   <div class="wrap" style="max-width:760px;">
     <div id="expLoggedOutGate" style="display:none; text-align:center; padding:20px 0 40px;">
       <p style="font-size:14px; opacity:0.75; margin-bottom:18px;">Log in or create an account to start listing.</p>
-      <a href="guest-login.html" class="btn solid">Log In</a>
+      <a href="guest-login.html" class="btn solid">Log in</a>
     </div>
     <form class="reserve-form reveal" id="experienceForm" autocomplete="off">
 
@@ -900,7 +915,7 @@
       </div>
       <div class="form-row">
         <div class="field">
-          <label for="expPrice">Price (₹) <span class="required-mark">*</span></label>
+          <label for="expPrice">Price (₹, Indian Rupees) <span class="required-mark">*</span></label>
           <input type="number" id="expPrice" min="1" placeholder="e.g. 1500" required>
         </div>
         <div class="field">
@@ -1289,7 +1304,7 @@
     <div style="padding:36px 30px;">
 
       <div id="bookingEmailStepView">
-        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Log In to Book</h3>
+        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Log in to book</h3>
         <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">Please log in or create an account to complete your booking.</p>
         <div class="field">
           <label for="bookingEmailStepInput">Email</label>
@@ -1301,7 +1316,7 @@
       </div>
 
       <div id="bookingLoginFormView" style="display:none;">
-        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Welcome Back</h3>
+        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Welcome back</h3>
         <p style="font-size:13px; opacity:0.65; margin-bottom:22px;">
           <span id="bookingLoginEmailDisplay"></span> — <a href="#" id="bookingLoginChangeEmailLink" style="color:var(--gold-deep);">not you?</a>
         </p>
@@ -1315,7 +1330,7 @@
       </div>
 
       <div id="bookingSignupFormView" style="display:none;">
-        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Create Your Account</h3>
+        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:6px;">Create your account</h3>
         <p style="font-size:13px; opacity:0.65; margin-bottom:6px;">
           <span id="bookingSignupEmailDisplay"></span> — <a href="#" id="bookingSignupChangeEmailLink" style="color:var(--gold-deep);">not you?</a>
         </p>
@@ -1328,8 +1343,12 @@
           <label for="bookingSignupPassword">Password</label>
           <input type="password" id="bookingSignupPassword" autocomplete="new-password">
         </div>
+        <!-- Required: an account is only made with this tick (DPDP). -->
+        <label class="gate-consent" id="bookingSignupConsentRow">
+          <input type="checkbox" id="bookingSignupConsent">
+          <span>I agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
+        </label>
         <button type="button" class="btn" id="bookingSignupSubmitBtn" style="width:100%; margin-top:18px;">Create account</button>
-        <p class="terms-note">By continuing, you agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
         <p id="bookingSignupError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
         <p id="bookingSignupSuccessMsg" style="color:#3a7d44; font-size:12.5px; margin-top:12px; display:none;"></p>
       </div>
@@ -1351,7 +1370,7 @@
           <span class="foot-tagline">Stay Elegant</span>
         </span>
       </a>
-      <p>A curated collection of personally reviewed homes across Pune and Himachal Pradesh — never a template, never bulk-listed.</p>
+      <p>Hand-picked homes and experiences across India, each one personally reviewed — never a template, never bulk-listed.</p>
     </div>
     <nav class="foot-cols" aria-label="Footer">
       <div class="foot-col">

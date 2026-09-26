@@ -84,7 +84,7 @@ async function issueConfirmationCode(sql, orderId) {
 
 // Builds a simple, single-page-per-item PDF summarizing everything in
 // this booking — generated fresh from the SAME trusted stays/experiences
-// data pulled from Razorpay's order notes above, never from anything the
+// data read from the checkout cart (or, for older orders, Razorpay's order notes), never from anything the
 // browser sends, same reasoning as the DB inserts below. Returns a
 // Buffer (pdfkit streams to memory here, never touches disk — this is a
 // serverless function with no persistent filesystem to write to).
@@ -195,7 +195,8 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
 // special handling needed beyond what fetch/JSON already do.
 // The host's side of a confirmed booking: what was booked, and what the
 // host must do. One email per host per payment. Never throws.
-async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, confirmationCodes = null) {
+// guest: { firstName, lastName, phone } — who arrives, as the host must know.
+async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, confirmationCodes = null, guest = null) {
   if (!process.env.RESEND_API_KEY) return;
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const items = [
@@ -218,6 +219,7 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, 
       const html = `
         <div style="font-family:sans-serif; max-width:520px;">
           <h2 style="font-family:Georgia,serif;">New confirmed booking</h2>
+          ${guest && (guest.firstName || guest.lastName || guest.phone) ? `<p style="margin:0 0 8px;"><strong>Guest:</strong> ${esc([guest.firstName, guest.lastName].filter(Boolean).join(' ') || 'Name not given')}${guest.phone ? ` · Mobile: ${esc(guest.phone)}` : ''}</p>` : ''}
           <ul>${list.map(i => {
             const code = (confirmationCodes || []).find(c => c.item === i.name);
             return `<li><strong>${esc(i.name)}</strong> — ${esc(i.when)} — ${Number(i.guests) || 0} guest(s)${i.pets ? `, ${i.pets} pet(s)` : ''}${i.service ? `, ${i.service} service/support animal(s)` : ''}${code ? `<br><span style="font-size:13px; color:#6b5222;">Confirmation code: <strong>${esc(code.code)}</strong> — the guest shows this at check-in</span>` : ''}</li>`;
@@ -450,7 +452,43 @@ async function insertRow(sql, ctx, row, cancelledReason) {
     )
     RETURNING id
   `;
-  return inserted[0].id;
+  const id = inserted[0].id;
+  // The name of the guest staying, for the host. Written only once
+  // migration_guest_details.sql has added the columns; never fails the booking.
+  if ((ctx.firstName || ctx.lastName) && await hasGuestNameColumns(sql)) {
+    try { await sql`UPDATE orders SET guest_first_name = ${ctx.firstName || null}, guest_last_name = ${ctx.lastName || null} WHERE id = ${id}`; }
+    catch (err) { console.error('guest name not saved on booking:', id, err.message); }
+  }
+  return id;
+}
+
+// Do orders.guest_first_name / guest_last_name exist yet? Asked once per
+// instance when they do; re-asked every 10 minutes while they do not.
+let guestNameColumnsKnown = false;
+let guestNameColumnsCheckedAt = 0;
+async function hasGuestNameColumns(sql) {
+  if (guestNameColumnsKnown) return true;
+  if (Date.now() - guestNameColumnsCheckedAt < 10 * 60 * 1000) return false;
+  guestNameColumnsCheckedAt = Date.now();
+  try {
+    const r = await sql`SELECT count(*)::int AS n FROM information_schema.columns
+                        WHERE table_name = 'orders' AND column_name IN ('guest_first_name', 'guest_last_name')`;
+    guestNameColumnsKnown = Number(r[0] && r[0].n) === 2;
+  } catch (err) { guestNameColumnsKnown = false; }
+  return guestNameColumnsKnown;
+}
+
+// What was paid for. New orders keep it in checkout_carts (create-order.js),
+// with only the cart's id in the Razorpay notes; orders made before that
+// change carried everything in the notes themselves. Returns the cart, or
+// null when it cannot be found.
+async function loadCart(sql, cartId, razorpayOrderId) {
+  const rows = cartId
+    ? await sql`SELECT payload FROM checkout_carts WHERE id = ${cartId}`
+    : await sql`SELECT payload FROM checkout_carts WHERE razorpay_order_id = ${razorpayOrderId}`;
+  if (!rows.length) return null;
+  const p = rows[0].payload;
+  return typeof p === 'string' ? JSON.parse(p) : p;
 }
 
 // Everything that follows a PAID row: co-host shares, amenities, audit,
@@ -498,13 +536,41 @@ async function sendConflictEmail(ctx, reasonText, refundedInr, refundFailed) {
   } catch (err) { console.error('conflict email failed:', err.message); }
 }
 
-// Refund every row of this payment, in full, through _refunds.js.
+// Refund the whole payment, in full, through _refunds.js — exactly what
+// Razorpay still holds of it (amount captured minus anything already
+// refunded), never an amount worked out again from the booking rows. When
+// the rows add up to exactly that (the normal case, in INR), each row is
+// refunded its own share, so every booking shows its own refund; otherwise
+// (an amount mismatch, another currency) the whole amount is refunded once,
+// against the first row.
 async function refundWholePayment(sql, razorpay, ctx, orderIds) {
   const paid = allocatePaid(await sql`SELECT id, subtotal, total, coupon_discount FROM orders WHERE id = ANY(${orderIds})`);
+  const ids = [...orderIds].sort((a, b) => Number(a) - Number(b));
+  let left = null;
+  try {
+    const p = await razorpay.payments.fetch(ctx.razorpayPaymentId);
+    left = Math.max(0, Number(p.amount) - Number(p.amount_refunded || 0));
+  } catch (err) { console.error('could not read the payment before refunding:', ctx.razorpayPaymentId, err.message); }
+  const rowInr = (id) => (paid[id] || {}).paid || 0;
+  const rowsSubunit = ids.reduce((t, id) => t + Math.round(rowInr(id) * 100), 0);
   let totalInr = 0;
   let failed = false;
-  for (const id of orderIds) {
-    const inr = (paid[id] || {}).paid || 0;
+  if (left != null && !(ctx.chargeCurrency === 'INR' && rowsSubunit === left)) {
+    totalInr = ctx.chargeCurrency === 'INR' ? Math.round(left / 100) : ids.reduce((t, id) => t + rowInr(id), 0);
+    if (left > 0) {
+      try {
+        const refund = await safeRefund(sql, razorpay, { orderId: ids[0], paymentId: ctx.razorpayPaymentId, amountSubunit: left, kind: 'cancellation' });
+        if (refund.id) await sql`UPDATE orders SET deposit_refund_id = ${refund.id} WHERE id = ${ids[0]}`;
+      } catch (err) {
+        failed = true;
+        console.error('refund of the whole payment failed (Admin → Refunds can retry):', ids[0], err.message);
+      }
+    }
+    return { totalInr, failed };
+  }
+  if (left == null && ctx.capturedOnly) return { totalInr: 0, failed: true };
+  for (const id of ids) {
+    const inr = rowInr(id);
     totalInr += inr;
     try {
       const amount = ctx.chargeCurrency === 'INR' ? Math.round(inr * 100) : await convertInrToForeignSubunit(sql, inr, ctx.chargeCurrency);
@@ -525,8 +591,13 @@ async function refundWholePayment(sql, razorpay, ctx, orderIds) {
 async function cancelAndScheduleRefund(sql, razorpay, ctx, rows, reason) {
   const ids = [];
   for (const row of rows) ids.push(await insertRow(sql, ctx, row, 'Payment amount mismatch: ' + reason));
+  // What the guest is told and what is scheduled: the amount Razorpay
+  // actually captured (less anything already refunded), in rupees — not the
+  // booking rows, which by definition did not match the payment here.
   const paid = allocatePaid(await sql`SELECT id, subtotal, total, coupon_discount FROM orders WHERE id = ANY(${ids})`);
-  const amountInr = ids.reduce((t, id) => t + ((paid[id] || {}).paid || 0), 0);
+  const amountInr = ctx.chargeCurrency === 'INR' && ctx.capturedSubunit != null
+    ? Math.round(ctx.capturedSubunit / 100)
+    : ids.reduce((t, id) => t + ((paid[id] || {}).paid || 0), 0);
   let scheduled = false;
   try {
     const r = await sql`INSERT INTO scheduled_refunds (razorpay_order_id, razorpay_payment_id, order_ids, charge_currency, amount_inr, reason, due_at)
@@ -537,7 +608,7 @@ async function cancelAndScheduleRefund(sql, razorpay, ctx, rows, reason) {
     // Before migration_checkout_rules.sql: refund at once rather than never.
     await refundWholePayment(sql, razorpay, ctx, ids).catch(() => {});
   }
-  await releaseHolds(sql, { razorpayOrderId: ctx.razorpayOrderId });
+  await releaseHolds(sql, { razorpayOrderId: ctx.razorpayOrderId, reason: 'conflict' });
   await logAudit(sql, { action: 'booking_amount_mismatch', success: true, actorType: 'system', targetType: 'order', targetId: ids[0],
     metadata: { razorpayOrderId: ctx.razorpayOrderId, orderIds: ids, reason, amountInr, refundScheduled: scheduled, source: ctx.source } });
   if (process.env.RESEND_API_KEY && ctx.email) {
@@ -556,23 +627,36 @@ async function cancelAndScheduleRefund(sql, razorpay, ctx, rows, reason) {
 // scheduled_refunds job: refunds whose day has come. Each is claimed
 // (scheduled → processing) so two runs never refund it twice, and the
 // refund itself goes through _refunds.js (one per booking, checked with
-// Razorpay first).
+// Razorpay first). A run that died mid-way leaves its row 'processing':
+// after 15 minutes it is claimed again — safe, because _refunds.js finds
+// a refund that did go through and never makes a second one.
+const REFUND_RECLAIM_MINUTES = 15;
 async function processScheduledRefunds(sql, razorpay, { deadlineMs = 4000 } = {}) {
   const started = Date.now();
   const out = { refunded: 0, failed: 0 };
   if (!razorpay) return { ...out, skipped: 'Razorpay keys not set' };
   let due = [];
-  try { due = await sql`SELECT * FROM scheduled_refunds WHERE status = 'scheduled' AND due_at <= now() ORDER BY due_at LIMIT 20`; }
+  try {
+    due = await sql`SELECT * FROM scheduled_refunds
+                    WHERE (status = 'scheduled' AND due_at <= now())
+                       OR (status = 'processing' AND (processed_at IS NULL OR processed_at < now() - make_interval(mins => ${REFUND_RECLAIM_MINUTES})))
+                    ORDER BY due_at LIMIT 20`;
+  }
   catch (err) { return { ...out, skipped: 'table not ready' }; }
   for (const r of due) {
     if (Date.now() - started > deadlineMs) break;
-    const mine = await sql`UPDATE scheduled_refunds SET status = 'processing' WHERE id = ${r.id} AND status = 'scheduled' RETURNING id`;
+    // processed_at holds the claim time while processing; it is overwritten when done.
+    const mine = await sql`UPDATE scheduled_refunds SET status = 'processing', processed_at = now()
+                           WHERE id = ${r.id} AND (status = 'scheduled'
+                             OR (status = 'processing' AND (processed_at IS NULL OR processed_at < now() - make_interval(mins => ${REFUND_RECLAIM_MINUTES}))))
+                           RETURNING id`;
     if (!mine.length) continue;
     // A change payment is refunded on its own; a booking payment row by row.
     const res = r.refund_kind
       ? await safeRefund(sql, razorpay, { orderId: r.order_ids[0], paymentId: r.razorpay_payment_id, amountSubunit: r.amount_inr * 100, kind: r.refund_kind })
           .then(() => ({ failed: false })).catch(err => { console.error('scheduled change refund failed:', err.message); return { failed: true }; })
-      : await refundWholePayment(sql, razorpay, { razorpayPaymentId: r.razorpay_payment_id, chargeCurrency: r.charge_currency }, r.order_ids);
+      : await refundWholePayment(sql, razorpay, { razorpayPaymentId: r.razorpay_payment_id, chargeCurrency: r.charge_currency, capturedOnly: true }, r.order_ids)
+          .catch(err => { console.error('scheduled refund failed:', err.message); return { failed: true }; });
     await sql`UPDATE scheduled_refunds SET status = ${res.failed ? 'failed' : 'done'}, processed_at = now(), error = ${res.failed ? 'One or more refunds failed — retry in Admin → Refunds' : null} WHERE id = ${r.id}`;
     res.failed ? out.failed++ : out.refunded++;
   }
@@ -581,7 +665,7 @@ async function processScheduledRefunds(sql, razorpay, { deadlineMs = 4000 } = {}
 
 // ---------------------------------------------------------------------
 // The one entry point. Returns:
-//   { status: 'confirmed' }                  booking written as paid
+//   { status: 'confirmed', confirmationCodes } booking written as paid
 //   { status: 'duplicate' }                  already handled earlier
 //   { status: 'conflict', message }          written cancelled, refunded
 //   { status: 'pending', message }           payment not settled yet; retried later
@@ -609,29 +693,49 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     if (n.type === 'booking_change') {
       return await confirmChangePayment(sql, razorpay, { order, payment: check.payment, razorpayOrderId, razorpayPaymentId });
     }
+    // The cart: from checkout_carts (notes.cartId), or — for orders made
+    // before carts existed — from the notes themselves.
+    let src;
+    if (n.cartId) {
+      src = await loadCart(sql, String(n.cartId), razorpayOrderId);
+      if (!src) throw new Error('checkout cart ' + n.cartId + ' not found');
+    } else {
+      const parse = (v, fallback) => { if (!v) return fallback; try { return JSON.parse(v); } catch (e) { return fallback; } };
+      src = {
+        email: n.email, guestId: n.guestId, firstName: n.firstName, lastName: n.lastName,
+        stays: n.stays ? JSON.parse(n.stays) : [], experiences: n.experiences ? JSON.parse(n.experiences) : [],
+        chargeCurrency: n.chargeCurrency, chargeAmount: n.chargeAmount,
+        couponId: n.couponId, couponDiscount: n.couponDiscount, couponForfeited: n.couponForfeited,
+        agreement: n.agreement, held: n.held === '1', prices: parse(n.prices, null)
+      };
+    }
     const agreement = { version: null, acceptedAt: null, ip: null };
-    if (n.agreement) {
-      const [v, at, ip] = String(n.agreement).split('|');
+    if (src.agreement) {
+      const [v, at, ip] = String(src.agreement).split('|');
       agreement.version = v || null;
       agreement.acceptedAt = at && !isNaN(Date.parse(at)) ? new Date(at).toISOString() : null;
       agreement.ip = ip || null;
     }
     ctx = {
       source, razorpayOrderId, razorpayPaymentId,
-      email: n.email || null,
-      guestId: n.guestId ? parseInt(n.guestId, 10) || null : null,
-      stays: n.stays ? JSON.parse(n.stays) : [],
-      experiences: n.experiences ? JSON.parse(n.experiences) : [],
-      chargeCurrency: n.chargeCurrency || 'INR',
-      chargeAmount: n.chargeAmount ? Number(n.chargeAmount) : null,
-      couponId: n.couponId ? Number(n.couponId) : null,
-      couponDiscount: n.couponDiscount ? Number(n.couponDiscount) : 0,
-      couponForfeited: n.couponForfeited ? Number(n.couponForfeited) : 0,
+      email: src.email || null,
+      guestId: src.guestId ? parseInt(src.guestId, 10) || null : null,
+      firstName: src.firstName ? String(src.firstName).slice(0, 60) : null,
+      lastName: src.lastName ? String(src.lastName).slice(0, 60) : null,
+      stays: Array.isArray(src.stays) ? src.stays : [],
+      experiences: Array.isArray(src.experiences) ? src.experiences : [],
+      chargeCurrency: src.chargeCurrency || 'INR',
+      chargeAmount: src.chargeAmount ? Number(src.chargeAmount) : null,
+      couponId: src.couponId ? Number(src.couponId) : null,
+      couponDiscount: src.couponDiscount ? Number(src.couponDiscount) : 0,
+      couponForfeited: src.couponForfeited ? Number(src.couponForfeited) : 0,
       agreement,
       orderAmount: Number(order.amount),
       orderCreatedAt: order.created_at ? Number(order.created_at) : null,
-      heldAtCheckout: n.held === '1',
-      pricesAtCheckout: (() => { try { return n.prices ? JSON.parse(n.prices) : null; } catch (e) { return null; } })()
+      // What Razorpay holds of this payment: refunds never exceed it.
+      capturedSubunit: Math.max(0, Number(check.payment.amount) - Number(check.payment.amount_refunded || 0)),
+      heldAtCheckout: src.held === true || src.held === '1',
+      pricesAtCheckout: src.prices && typeof src.prices === 'object' ? src.prices : null
     };
   } catch (err) {
     await release();
@@ -678,7 +782,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
   // 2b. It must have completed inside its 90-second payment window. A
   // payment for a window that was cancelled, closed or timed out is not a
   // booking: cancelled and refunded in full at once.
-  if (ctx.stays.length) {
+  if (ctx.heldAtCheckout) {
     const win = await holdValidForConfirmation(sql, razorpayOrderId, { heldAtCheckout: ctx.heldAtCheckout });
     if (!win.ok) conflictReason = win.reason;
   }
@@ -755,7 +859,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     await logAudit(sql, { action: 'booking_conflict_refunded', success: !refund.failed, actorType: 'system', targetType: 'order', targetId: ids[0],
       metadata: { razorpayOrderId, orderIds: ids, reason: conflictReason, refundedInr: refund.totalInr, refundFailed: refund.failed, source } });
     await sendConflictEmail(ctx, conflictReason, refund.totalInr, refund.failed);
-    await releaseHolds(sql, { razorpayOrderId });
+    await releaseHolds(sql, { razorpayOrderId, reason: 'conflict' });
     return { status: 'conflict', message: `${conflictReason} The booking was not made, and your payment is being refunded in full — we have emailed you the details.` };
   }
 
@@ -795,15 +899,25 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version, ctx.confirmationCodes);
     } catch (err) { console.error('Could not send booking confirmation email:', err); }
   }
-  try { await sendHostBookingEmails(sql, ctx.stays, ctx.experiences, ctx.agreement.version, ctx.confirmationCodes); }
+  try {
+    // The host is told who arrives: the name given at checkout and the
+    // account's mobile number.
+    let phone = null;
+    if (ctx.guestId) {
+      try { phone = ((await sql`SELECT phone FROM guests WHERE id = ${ctx.guestId}`)[0] || {}).phone || null; }
+      catch (err) { /* the email still goes, without the number */ }
+    }
+    await sendHostBookingEmails(sql, ctx.stays, ctx.experiences, ctx.agreement.version, ctx.confirmationCodes,
+      { firstName: ctx.firstName, lastName: ctx.lastName, phone });
+  }
   catch (err) { console.error('host booking emails failed:', err.message); }
 
   // The booking now holds the dates itself; the temporary hold goes.
-  await releaseHolds(sql, { razorpayOrderId });
+  await releaseHolds(sql, { razorpayOrderId, reason: 'paid' });
   // Paid without a valid ID on the account (removed or rejected while
   // paying): the guest gets a short deadline to add one (_guest-id.js).
   await markIdDeadlineIfMissing(sql, written.map(w => w.id), ctx.guestId);
-  return { status: 'confirmed' };
+  return { status: 'confirmed', confirmationCodes: ctx.confirmationCodes || [] };
 }
 
 // ---------------------------------------------------------------------
@@ -843,4 +957,5 @@ async function reconcilePayments(sql, razorpay, { deadlineMs = 4000, limit = 25 
   return out;
 }
 
-module.exports = { confirmBooking, reconcilePayments, processScheduledRefunds, findDateConflicts, planRows, checkPayment };
+module.exports = { confirmBooking, reconcilePayments, processScheduledRefunds, findDateConflicts, planRows, checkPayment,
+  loadCart, refundWholePayment, sendHostBookingEmails };

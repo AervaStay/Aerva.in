@@ -19,6 +19,7 @@
 //     same endpoint listing photos already use) — this call just saves
 //     the resulting URL against the guest's account.
 //
+//   POST { mode: 'logoutAllDevices' } — ends every session of this account
 //   POST { mode: 'send', conversationId, text }
 //   POST { mode: 'saveTemplate', templateId?, listingId?, body }
 //   POST { mode: 'deleteTemplate', templateId }
@@ -39,7 +40,7 @@ const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { buildProfile, sanitizeProfileInput } = require('./_profiles');
 const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
-const { isAccountDeleted, deletionBlockers, deleteAccount } = require('./_accounts');
+const { isAccountDeleted, deletionBlockers, deleteAccount, sessionStatus, bumpSessionVersion, newSessionToken } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
 const { cancellationQuote, createCancellationRequest, cancellationCard } = require('./_cancellations');
@@ -58,6 +59,10 @@ async function disputeCard(sql, conversationId, role) {
   } catch (err) { return null; }
 }
 const { normalizeToE164 } = require('./_phone-validation');
+const { getClientIp, countRecentAttempts } = require('./_rate-limit');
+const bcrypt = require('bcryptjs');
+// Same lifetime as a sign-in (guest-auth.js), for the fresh token after an email change.
+const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 // What the guest sees about a change: never the internal pricing record.
 function changeView(qc) {
@@ -118,102 +123,20 @@ function toDateStr(val) {
 }
 
 
+// The signed session payload, or null. payload.listingId is the guest's id
+// (generically-named token field — see host-auth.js note).
 function requireGuest(req) {
   const authHeader = req.headers['authorization'] || '';
   const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   const payload = sessionToken ? verifyToken(sessionToken) : null;
   if (!payload || payload.action !== 'guest-session') return null;
-  return payload.listingId; // generically-named token field — see host-auth.js note; here it's the guest's id
+  return payload;
 }
 
 // ---- Contact-info redaction (server-side, authoritative) ----
-// Never trust a client-side-only filter for this — this function is what
-// actually gets enforced before anything is stored/shown, regardless of
-// whatever input restrictions the browser itself already tried (see
-// index.html). Worth being upfront: this is pattern-based (regex + a
-// spelled-out-digits check). It catches the overwhelming majority of real
-// attempts — plain digit sequences in any spacing, spelled-out numbers,
-// emails, and Instagram/Facebook/WhatsApp/Telegram mentions and links —
-// but no text filter can catch every possible obfuscation a determined
-// person invents (letter-substituted digits, unicode lookalikes, a
-// number split across two messages, etc.). That's a genuine, known limit
-// of any pattern-based approach, not a bug fixable with more regex.
-const NUMBER_WORDS = {
-  zero: '0', one: '1', two: '2', three: '3', four: '4',
-  five: '5', six: '6', seven: '7', eight: '8', nine: '9', oh: '0'
-};
-
-function redactContactInfo(text) {
-  let result = text;
-  let redacted = false;
-
-  // URLs are pulled out BEFORE any pattern runs and put back afterwards.
-  // Without this, the phone-number pattern below (7+ digits mixed with
-  // dashes) happily matches the middle of a Vercel Blob filename — a
-  // UUID plus random suffix is full of digit runs — and rewrites it to
-  // "[number removed]". The message still looked fine, but the link was
-  // dead: the guest taps a check-in photo and gets nothing. Silently
-  // corrupting a URL is worse than either allowing or blocking it,
-  // because nobody can tell it happened.
-  //
-  // Note this means an ordinary link is never redacted. Social links are
-  // NOT given that protection — they're checked here, at extraction time,
-  // so https://instagram.com/handle is still caught rather than being
-  // waved through by the very mechanism that protects photo URLs.
-  const SOCIAL_URL_PATTERN = /(instagram\.com|facebook\.com|fb\.com|fb\.me|wa\.me|whatsapp\.com|t\.me|telegram\.me|snapchat\.com)/i;
-  const urls = [];
-  result = result.replace(/https?:\/\/[^\s<>"']+/gi, (match) => {
-    if (SOCIAL_URL_PATTERN.test(match)) {
-      redacted = true;
-      return '[contact info removed]';
-    }
-    urls.push(match);
-    return `\u0000URL${urls.length - 1}\u0000`;
-  });
-
-  result = result.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, () => { redacted = true; return '[email removed]'; });
-
-  result = result.replace(/(\+?\d[\d\s\-.()]{6,}\d)/g, (match) => {
-    const digitCount = (match.match(/\d/g) || []).length;
-    if (digitCount < 7) return match;
-    redacted = true;
-    return '[number removed]';
-  });
-
-  // Spelled-out digits — "nine eight seven six five four three two one
-  // zero" or similar, 7+ consecutive number-words. Deliberately
-  // conservative (whole-word matches only) to avoid flagging ordinary
-  // sentences that just happen to contain a couple of number-words.
-  const words = result.split(/(\s+)/);
-  let run = [];
-  function flushRun(){
-    if (run.length >= 7) {
-      redacted = true;
-      for (const idx of run) words[idx] = '[number removed]';
-    }
-    run = [];
-  }
-  words.forEach((w, idx) => {
-    const clean = w.toLowerCase().replace(/[.,\-]/g, '');
-    if (NUMBER_WORDS[clean] !== undefined) {
-      run.push(idx);
-    } else if (w.trim() !== '') {
-      flushRun();
-    }
-  });
-  flushRun();
-  result = words.join('');
-  result = result.replace(/(\[number removed\]\s*){2,}/g, '[number removed] ');
-
-  result = result.replace(/\b(instagram|insta|ig|facebook|fb|whatsapp|telegram|snapchat)\b\s*[:@]?\s*[a-zA-Z0-9._]{2,}/gi, () => { redacted = true; return '[contact info removed]'; });
-  result = result.replace(/\b(instagram\.com|facebook\.com|fb\.com|wa\.me|t\.me)\/[a-zA-Z0-9._]+/gi, () => { redacted = true; return '[contact info removed]'; });
-
-  // Put the real URLs back now that every pattern has run. Done last so
-  // nothing above can have touched them.
-  result = result.replace(/\u0000URL(\d+)\u0000/g, (_m, i) => urls[Number(i)]);
-
-  return { displayText: result, wasRedacted: redacted };
-}
+// Lives in _redact.js so the messages Aerva sends on a host's behalf
+// (_template-scheduling.js) go through exactly the same filter.
+const { redactContactInfo } = require('./_redact');
 
 
 // ---- "How was your stay / your guest?" inside a message thread ----
@@ -244,6 +167,21 @@ async function threadReviewPrompt(sql, conversationId, role) {
   }
 }
 
+// A co-host may only see and change a template whose auto-send listings
+// are all theirs (and there is at least one): an empty list means "every
+// listing the host has", which is the host's to decide. A template tied
+// to one of their listings (listing_id) counts too.
+function templateListingIds(t) {
+  let ids = t.auto_send_listing_ids;
+  if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch (e) { ids = []; } }
+  return Array.isArray(ids) ? ids.map(Number).filter(Number.isInteger) : [];
+}
+function cohostOwnsTemplate(ctx, t) {
+  const ids = templateListingIds(t);
+  if (ids.length) return ids.every(id => cohostHasListing(ctx, id)) && (t.listing_id == null || cohostHasListing(ctx, t.listing_id));
+  return t.listing_id != null && cohostHasListing(ctx, t.listing_id);
+}
+
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -251,10 +189,33 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Typed text can never become markup — messages, names, templates,
+  // profile answers (see _plain-text.js). It was imported but never called.
+  sanitizeBody(req);
 
-  let guestId = requireGuest(req); // `let`: a co-host request continues as the host's side (below)
+  const session = requireGuest(req);
+  let guestId = session ? session.listingId : null; // `let`: a co-host request continues as the host's side (below)
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
-  if (await isAccountDeleted(sql, guestId)) return res.status(401).json({ error: 'This account has been deleted.' });
+  // Deleted, or logged out everywhere since this token was issued (see
+  // sessionStatus in _accounts.js). A check that cannot run answers 503,
+  // not 401, so a database hiccup never signs anyone out of the page.
+  {
+    const st = await sessionStatus(sql, session);
+    if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.' });
+    if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
+    if (st !== 'ok') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
+  }
+
+  // ---- Log out of all devices ----
+  // POST { mode: 'logoutAllDevices' } — every session this account has
+  // ends, this one included; the page then clears its own copy.
+  if (req.method === 'POST' && req.body && req.body.mode === 'logoutAllDevices') {
+    const v = await bumpSessionVersion(sql, guestId);
+    if (v == null) return res.status(503).json({ error: 'This is not available yet. Please try again later.' });
+    await logAudit(sql, { action: 'guest_logout_all_devices', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+      targetType: 'guest', targetId: guestId });
+    return res.status(200).json({ success: true, loggedOut: true });
+  }
 
   // ---- Delete my account (guest or host) ----
   // GET ?mode=deletionCheck → what still stops it; POST { mode: 'deleteAccount', confirm: 'DELETE' }.
@@ -295,6 +256,9 @@ module.exports = async (req, res) => {
         try { await sql`UPDATE hosts SET hosting_status = 'deactivated' WHERE id = ${me.host_id}`; } catch (e) { /* column not added yet */ }
       }
       await sql`UPDATE guests SET account_status = 'deactivated', deactivated_at = now() WHERE id = ${guestId}`;
+      // Every device is signed out by the pause itself; the next log in
+      // (which checks the password, Google or a code) un-pauses.
+      await bumpSessionVersion(sql, guestId);
       await logAudit(sql, { action: 'account_deactivated', success: true, actorType: 'guest', actorIdentifier: String(guestId),
         targetType: 'guest', targetId: guestId, metadata: { listingsHidden: hidden.length } });
       return res.status(200).json({ success: true, listingsHidden: hidden.length });
@@ -327,6 +291,7 @@ module.exports = async (req, res) => {
   // behind its permission; the co-host then acts as the HOST side of the
   // host's conversations — never as the host's own guest-side trips —
   // and only on the listings they were given.
+  let actingCtx = null; // set when a co-host works for a host (below)
   if (req.query && req.query.actingHost !== undefined) {
     const ctx = await resolveActingHost(sql, guestId, req.query.actingHost);
     if (!ctx) return res.status(403).json({ error: 'You are not a co-host for this host, or your access has ended.' });
@@ -360,6 +325,16 @@ module.exports = async (req, res) => {
     // Templates: stored against the host's own account id.
     myHostId = ctx.hostId;
     guestId = isTemplate ? ctx.ownerGuestId : -1;
+    actingCtx = ctx;
+    // Templates: a co-host works only on templates scoped to their own
+    // listings (see cohostOwnsTemplate) — never the host's account-wide
+    // ones, which reach every listing the host has.
+    if ((mode === 'saveTemplate' && (req.body || {}).templateId) || mode === 'deleteTemplate') {
+      const t = (await sql`SELECT listing_id, auto_send_listing_ids FROM message_templates
+                           WHERE id = ${Number((req.body || {}).templateId) || 0} AND host_id = ${ctx.ownerGuestId}`)[0];
+      if (!t) return res.status(404).json({ error: 'Template not found.' });
+      if (!cohostOwnsTemplate(ctx, t)) return res.status(403).json({ error: 'That template covers listings you do not co-host.' });
+    }
     if (mode === 'myConversations') {
       const originalJson = res.json.bind(res);
       res.json = (body) => originalJson(body && Array.isArray(body.conversations)
@@ -476,6 +451,7 @@ module.exports = async (req, res) => {
                  l.check_in_time, l.check_out_time, l.wifi_name, l.wifi_password, l.access_code, l.guest_guidance,
                  l.checkin_photos,
                  COALESCE(l.formatted_address, NULLIF(TRIM(CONCAT_WS(', ', l.area, l.city)), '')) AS location_text,
+                 NULLIF(TRIM(CONCAT_WS(', ', l.area, l.city)), '') AS area_text,
                  -- Aggregated into one JSON array per conversation so the
                  -- @checkininfo placeholder (see resolveTemplatePlaceholders
                  -- in index.html / resolveTemplateText in
@@ -496,6 +472,7 @@ module.exports = async (req, res) => {
                  COALESCE(g.name, c.guest_email) AS guest_display_name,
                  o.arrival, o.departure, o.status AS booking_status,
                  o.nights, o.guests, o.subtotal, o.gst, o.payout_amount,
+                 (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today,
                  (SELECT display_text FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
                  (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
                  (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id
@@ -516,6 +493,26 @@ module.exports = async (req, res) => {
         conversations.forEach(c => {
           c.arrival = toDateStr(c.arrival);
           c.departure = toDateStr(c.departure);
+          const localToday = toDateStr(c.local_today);
+          delete c.local_today;
+          // The host's payout is the host's business: never to a guest, and
+          // never to a co-host (payouts are the host's alone).
+          if (c.my_role !== 'host' || actingCtx) delete c.payout_amount;
+          // Check-in secrets (WiFi, door code, check-in steps and photos,
+          // the exact address and map position) are used by the HOST side
+          // to fill templates. A guest gets them only while their paid
+          // booking is still running, by the property's calendar — never
+          // after check-out or a cancellation. A co-host reaches this list
+          // only through their messages access and only for their own
+          // listings (filtered above), which they manage anyway.
+          const guestMayHave = c.booking_status === 'paid' && !!c.departure && !!localToday && c.departure >= localToday;
+          if (c.my_role !== 'host' && !guestMayHave) {
+            c.wifi_name = null; c.wifi_password = null; c.access_code = null;
+            c.checkin_photos = []; c.custom_fields = []; c.guest_guidance = null;
+            c.latitude = null; c.longitude = null;
+            c.location_text = c.area_text || null;
+          }
+          delete c.area_text;
         });
         return res.status(200).json({ conversations });
       }
@@ -539,11 +536,14 @@ module.exports = async (req, res) => {
       }
 
       if (mode === 'unreadMessageCount') {
+        // A co-host counts only the listings they were given.
+        const coListings = actingCtx ? [...actingCtx.listingIds] : null;
         const rows = await sql`
           SELECT COUNT(*) AS count
           FROM messages m
           JOIN conversations c ON c.id = m.conversation_id
-          WHERE (c.host_id = ${myHostId} AND m.sender_type = 'guest' AND m.read_at IS NULL)
+          WHERE (c.host_id = ${myHostId} AND m.sender_type = 'guest' AND m.read_at IS NULL
+                 AND (${coListings}::int[] IS NULL OR c.listing_id = ANY(${coListings}::int[])))
              OR (c.guest_id = ${guestId} AND m.sender_type = 'host' AND m.read_at IS NULL)
         `;
         return res.status(200).json({ count: Number(rows[0]?.count || 0) });
@@ -595,10 +595,11 @@ module.exports = async (req, res) => {
       }
 
       if (mode === 'templates') {
-        const templates = await sql`
+        let templates = await sql`
           SELECT * FROM message_templates
           WHERE host_id = ${guestId} ORDER BY sort_order ASC, created_at ASC
         `;
+        if (actingCtx) templates = templates.filter(t => cohostOwnsTemplate(actingCtx, t));
         return res.status(200).json({ templates: templates.map(t => ({
           id: t.id, listing_id: t.listing_id, title: t.title || '', body: t.body, sort_order: t.sort_order,
           send_trigger: t.send_trigger || (t.send_on_booking_confirmed ? 'booking_confirmed' : 'manual'),
@@ -618,11 +619,12 @@ module.exports = async (req, res) => {
       // per dropdown selection.
       if (mode === 'myListingsGuidance') {
         if (myHostId == null) return res.status(200).json({ listings: [] });
-        const listings = await sql`
+        let listings = await sql`
           SELECT id, property_name, guest_guidance FROM listings
           WHERE host_id = ${myHostId} AND listing_type = 'stay'
           ORDER BY property_name ASC
         `;
+        if (actingCtx) listings = listings.filter(l => cohostHasListing(actingCtx, l.id));
         return res.status(200).json({ listings });
       }
 
@@ -651,11 +653,15 @@ module.exports = async (req, res) => {
         // actual owning account first.
         const ownerRows = await sql`SELECT id FROM guests WHERE host_id = ${conv.host_id}`;
         const ownerGuestId = ownerRows[0] ? ownerRows[0].id : null;
-        const templates = ownerGuestId == null ? [] : await sql`
-          SELECT id, body FROM message_templates
+        const rows = ownerGuestId == null ? [] : await sql`
+          SELECT id, body, auto_send_listing_ids FROM message_templates
           WHERE host_id = ${ownerGuestId} AND (listing_id = ${conv.listing_id} OR listing_id IS NULL)
           ORDER BY sort_order ASC, created_at ASC
         `;
+        // A template limited to certain listings is offered only in their
+        // threads (an empty list still means every listing).
+        const templates = rows.filter(t => { const ids = templateListingIds(t); return !ids.length || ids.includes(Number(conv.listing_id)); })
+          .map(t => ({ id: t.id, body: t.body }));
         return res.status(200).json({ templates });
       }
 
@@ -728,7 +734,9 @@ module.exports = async (req, res) => {
         }
         b.review_window_days = REVIEW_WINDOW_DAYS;
         delete b.reviewed;
-        delete b.local_today;
+        // Sent as 'YYYY-MM-DD': My Bookings uses it to tell past stays from
+        // upcoming ones (Change / Request cancellation only before check-out).
+        b.local_today = toDateStr(b.local_today);
       });
 
       // Published, non-reverted only — a held review must not move a
@@ -846,8 +854,18 @@ module.exports = async (req, res) => {
       // goes to the email: email costs nothing to send, every SMS is
       // billed (_email-otp.js).
       //   POST { mode: 'emailOtpRequest', email }
-      //   POST { mode: 'emailOtpVerify', email, code }
+      //   POST { mode: 'emailOtpVerify', email, code, currentPassword?, currentEmailCode? }
       //   POST { mode: 'savePhone', phone }
+      //
+      // Confirming the email already on the account (or adding one to an
+      // account that has none) needs only the code. CHANGING the email
+      // someone signs in with also needs proof it is the account's owner
+      // and not someone at an unattended screen: the current password, or —
+      // for an account without one (Google, phone) — a code sent to the
+      // CURRENT address. The answer { reauth: 'password' | 'currentEmailCode' }
+      // says which; the old address is told about the change afterwards,
+      // and every other device is signed out (a fresh sessionToken comes
+      // back for this one).
       if (mode === 'emailOtpRequest' || mode === 'emailOtpVerify') {
         const b = req.body || {};
         const wanted = emailOtp.normalizeEmail(b.email);
@@ -858,23 +876,93 @@ module.exports = async (req, res) => {
         if (taken.length) {
           return res.status(409).json({ error: 'That email address is already on another Aerva account. Log in with it instead, or use a different address.' });
         }
+        const clientIp = getClientIp(req);
         try {
           if (mode === 'emailOtpRequest') {
+            // Per account and per connection, on top of _email-otp.js's own
+            // per-address limit: that one cannot stop one account (or one
+            // script) cycling through many different addresses.
+            const byAccount = await countRecentAttempts(sql, { action: 'guest_email_otp_requested', windowMinutes: 60, byActor: String(guestId) });
+            const byIp = await countRecentAttempts(sql, { action: 'guest_email_otp_requested', windowMinutes: 60, byIp: clientIp });
+            if (byAccount >= 10 || byIp >= 20) {
+              return res.status(429).json({ error: 'Too many codes have been asked for. Please try again in an hour.' });
+            }
+            await logAudit(sql, { action: 'guest_email_otp_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+              targetType: 'guest', targetId: guestId, metadata: { ip: clientIp } });
             const out = await emailOtp.requestCode(sql, wanted, { purpose: 'link' });
             return res.status(200).json({ sent: true, email: out.email, expiresInMinutes: out.expiresInMinutes });
           }
+
+          const me = (await sql`SELECT id, email, password_hash, host_id, email_verified,
+                                       to_jsonb(guests)->>'email_verified_at' AS email_verified_at
+                                FROM guests WHERE id = ${guestId}`)[0];
+          if (!me) return res.status(401).json({ error: 'Please log in again.' });
+          const current = emailOtp.normalizeEmail(me.email);
+          const currentConfirmed = !!(me.email_verified === true || me.email_verified_at);
+          const changing = !!current && current !== wanted && currentConfirmed;
+          if (changing) {
+            const fails = await countRecentAttempts(sql, { action: 'guest_email_change_reauth', windowMinutes: 15, byActor: String(guestId), onlyFailures: true });
+            if (fails >= 5) return res.status(429).json({ error: 'Too many attempts. Please try again in 15 minutes.' });
+            if (me.password_hash) {
+              if (typeof b.currentPassword !== 'string' || !b.currentPassword) {
+                return res.status(403).json({ reauth: 'password', error: 'To change the email you log in with, please enter your current password.' });
+              }
+              if (!(await bcrypt.compare(b.currentPassword, me.password_hash))) {
+                await logAudit(sql, { action: 'guest_email_change_reauth', success: false, actorType: 'guest', actorIdentifier: String(guestId),
+                  targetType: 'guest', targetId: guestId, metadata: { how: 'password', ip: clientIp } });
+                return res.status(401).json({ reauth: 'password', error: 'That password is not right.' });
+              }
+            } else {
+              if (!b.currentEmailCode) {
+                await emailOtp.requestCode(sql, current, { purpose: 'change' });
+                return res.status(403).json({ reauth: 'currentEmailCode', sentTo: emailOtp.maskEmail(current),
+                  error: `To change your email, enter the code we just sent to your current address, ${emailOtp.maskEmail(current)}.` });
+              }
+              const cur = await emailOtp.checkCode(sql, current, b.currentEmailCode);
+              if (!cur.ok) {
+                await logAudit(sql, { action: 'guest_email_change_reauth', success: false, actorType: 'guest', actorIdentifier: String(guestId),
+                  targetType: 'guest', targetId: guestId, metadata: { how: 'current_email_code', ip: clientIp } });
+                return res.status(400).json({ reauth: 'currentEmailCode', error: 'Code for your current address: ' + cur.error });
+              }
+            }
+          }
+
           const check = await emailOtp.checkCode(sql, wanted, b.code);
           if (!check.ok) return res.status(400).json({ error: check.error });
-          await sql`UPDATE guests SET email = ${wanted}, email_verified_at = now() WHERE id = ${guestId}`;
-          await logAudit(sql, { action: 'guest_email_confirmed', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-            targetType: 'guest', targetId: guestId, metadata: { email: wanted } });
-          return res.status(200).json({ confirmed: true, email: wanted });
+          try {
+            // Both flags: older code reads email_verified, newer reads
+            // email_verified_at (_guest-id.js accepts either).
+            await sql`UPDATE guests SET email = ${wanted}, email_verified = true, email_verified_at = now() WHERE id = ${guestId}`;
+          } catch (err) {
+            if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'That email address is already on another Aerva account.' });
+            throw err;
+          }
+          await logAudit(sql, { action: changing ? 'guest_email_changed' : 'guest_email_confirmed', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+            targetType: 'guest', targetId: guestId, metadata: { email: wanted, ip: clientIp } });
+          if (!changing) return res.status(200).json({ confirmed: true, email: wanted });
+
+          // The host record carries the same contact address (booking emails,
+          // the admin tool). Bookings and conversations keep the address
+          // they were made with.
+          if (me.host_id) {
+            try { await sql`UPDATE hosts SET email = ${wanted} WHERE id = ${me.host_id}`; } catch (e) { console.error('host email not updated:', e.message); }
+            try { await sql`UPDATE listings SET host_email = ${wanted} WHERE host_id = ${me.host_id}`; } catch (e) { console.error('listing host_email not updated:', e.message); }
+          }
+          await emailOtp.sendEmailChangedNotice(current, wanted);
+          await bumpSessionVersion(sql, guestId);
+          const sessionToken = await newSessionToken(sql, guestId, SESSION_LIFETIME_MS);
+          return res.status(200).json({ confirmed: true, changed: true, email: wanted, sessionToken });
         } catch (err) {
           if (err.isUserFacing) return res.status(err.status).json({ error: err.message });
           console.error('email OTP failed:', err);
           return res.status(500).json({ error: 'Could not do this right now. Please try again.' });
         }
       }
+      // A typed number is stored UNVERIFIED (guests.phone_verified = false):
+      // it is how a host reaches the guest, never a way to sign in. A person
+      // who later proves the number by text-message code (guest-phone-auth.js)
+      // takes it over from an unverified holder. Between two unverified
+      // claims the first one keeps it (see the report's owner decisions).
       if (mode === 'savePhone') {
         const e164 = normalizeToE164(String((req.body || {}).phone || ''));
         if (!e164) return res.status(400).json({ error: 'Please enter a valid mobile number, with the country code if you are outside India.' });
@@ -884,8 +972,11 @@ module.exports = async (req, res) => {
           return res.status(409).json({ error: 'That number is already on another Aerva account. Log in with it instead, or use a different one.' });
         }
         try {
+          const before = (await sql`SELECT phone FROM guests WHERE id = ${guestId}`)[0];
+          if (before && String(before.phone || '').trim() === e164) return res.status(200).json({ phone: e164 });
           await sql`UPDATE guests SET phone = ${e164} WHERE id = ${guestId}`;
-          return res.status(200).json({ phone: e164 });
+          try { await sql`UPDATE guests SET phone_verified = false WHERE id = ${guestId}`; } catch (e) { /* before migration_session_version.sql */ }
+          return res.status(200).json({ phone: e164, verified: false });
         } catch (err) {
           if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'That number is already on another Aerva account.' });
           throw err;
@@ -1203,17 +1294,30 @@ module.exports = async (req, res) => {
         // host's own properties.
         const safeSendOnBooking = safeTrigger === 'booking_confirmed';
         let safeAutoSendListingIds = [];
-        if (safeTrigger !== 'manual' && Array.isArray(autoSendListingIds) && autoSendListingIds.length) {
+        // A co-host's template keeps its listings even when sent by hand, so
+        // it stays theirs (an empty list would mean every listing the host
+        // has — see cohostOwnsTemplate).
+        if ((safeTrigger !== 'manual' || actingCtx) && Array.isArray(autoSendListingIds) && autoSendListingIds.length) {
           const ids = autoSendListingIds.map(Number).filter(Number.isInteger);
           const ownedRows = myHostId != null && ids.length
             ? await sql`SELECT id FROM listings WHERE host_id = ${myHostId} AND id = ANY(${ids})`
             : [];
           safeAutoSendListingIds = ownedRows.map(r => r.id);
         }
+        if (actingCtx) {
+          safeAutoSendListingIds = safeAutoSendListingIds.filter(id => cohostHasListing(actingCtx, id));
+          if (!safeAutoSendListingIds.length && !(listingId && cohostHasListing(actingCtx, listingId))) {
+            return res.status(400).json({ error: 'Choose at least one of the listings you co-host for this template.' });
+          }
+        }
+        // The page never sends listingId: leaving it out keeps the listing
+        // the template already has, rather than clearing it.
+        const listingGiven = Object.prototype.hasOwnProperty.call(req.body || {}, 'listingId');
 
         if (templateId) {
           const updated = await sql`
-            UPDATE message_templates SET body = ${safeBody}, title = ${safeTitle || null}, listing_id = ${listingId || null},
+            UPDATE message_templates SET body = ${safeBody}, title = ${safeTitle || null},
+              listing_id = CASE WHEN ${listingGiven} THEN ${listingId || null}::int ELSE listing_id END,
               send_on_booking_confirmed = ${safeSendOnBooking},
               send_trigger = ${safeTrigger}, send_offset_days = ${safeOffset},
               send_offset_minutes = ${safeMinutes}, send_offset_unit = ${timed ? safeUnit : null},
@@ -1264,7 +1368,8 @@ module.exports = async (req, res) => {
       const safeName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : undefined;
       // Whitelisted currency codes only — this is a display preference,
       // not something that should ever accept arbitrary input.
-      const SUPPORTED_CURRENCIES = ['INR', 'USD', 'GBP', 'EUR', 'AUD', 'CAD'];
+      // The same twelve the site header offers (aerva-header.js CURRENCIES).
+      const SUPPORTED_CURRENCIES = ['INR', 'USD', 'GBP', 'EUR', 'AUD', 'CAD', 'SGD', 'AED', 'JPY', 'KRW', 'CHF', 'RUB'];
       const safeCurrency = typeof preferredCurrency === 'string' && SUPPORTED_CURRENCIES.includes(preferredCurrency.toUpperCase())
         ? preferredCurrency.toUpperCase()
         : undefined;

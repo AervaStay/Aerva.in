@@ -1,9 +1,14 @@
 // /api/get-pending-listings.js
-// Powers admin.html. Requires the x-admin-secret header to match
-// ADMIN_SECRET — this is intentionally simple (a single shared password,
-// not per-user accounts), appropriate for a small internal review tool,
-// not a substitute for real authentication if this ever needs multiple
-// reviewers with different permissions.
+// Powers admin.html. Every mode below except the four login/password
+// ones needs a signed-in admin (email + password → session token in the
+// Authorization header, checked against the admins row on every request
+// — see _admin-auth.js) or the master x-admin-secret header (kept as a
+// fallback and for creating admin accounts; wrong guesses are rate
+// limited). All admins have the same permissions.
+//
+//   POST { adminSignOutEverywhere: true }
+//        — ends every session of the signed-in admin, on every device
+//          (raises admins.session_version).
 //
 //   POST { adminLogin: { email, password } }
 //        — real admin login, no secret needed once an account exists.
@@ -88,15 +93,15 @@ const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
-const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout } = require('./_payouts');
+const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout, createDepositCompensationPayout } = require('./_payouts');
 const { disputesForAdmin, decideDispute, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
-const { reviewIdDocument, idDocumentUrlForAdmin, ID_TYPES } = require('./_guest-id');
 const { safeRefund } = require('./_refunds');
 const { releaseDueDeposits } = require('./_deposits');
-const { encryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens, maskAccount } = require('./_secure-fields');
+const { encryptField, decryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens, maskAccount, maskPan, UNREADABLE } = require('./_secure-fields');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
-const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
+const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES, refundSubunitForInr } = require('./_currency');
 const { createToken, verifyToken, secretMatches } = require('./_approval-token');
+const { adminSessionActive, sessionExtra, bumpSessionVersion, checkAdminSecret } = require('./_admin-auth');
 const { REVIEW_POLICY, CONFLICT_CHECKS, REVIEW_WINDOW_DAYS, publicationState } = require('./_review-policy');
 const { describeLadders, guestTier, hostTier, reviewScore, weakestFactor,
         REVIEW_FACTORS, GUEST_FACTORS, HOST_TIERS, GUEST_TIERS,
@@ -333,7 +338,7 @@ module.exports = async (req, res) => {
         });
         return res.status(401).json({ error: 'Incorrect email or password.' });
       }
-      const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS);
+      const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS, await sessionExtra(sql, admin.id));
       await logAudit(sql, {
         action: 'admin_login', success: true, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
         targetType: 'admin', targetId: admin.id, metadata: { ip: clientIp }
@@ -351,8 +356,9 @@ module.exports = async (req, res) => {
   // to create a real login, whether for yourself the first time or for
   // a second admin later. Not reachable with just an admin-session token.
   if (req.method === 'POST' && req.body && req.body.adminSignup) {
-    const adminSecretHeader = req.headers['x-admin-secret'];
-    if (!secretMatches(adminSecretHeader, process.env.ADMIN_SECRET)) {
+    const secret = await checkAdminSecret(sql, req, 'get-pending-listings');
+    if (secret.limited) return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
+    if (!secret.ok) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     try {
@@ -447,10 +453,13 @@ module.exports = async (req, res) => {
       `;
       const admin = rows[0];
       if (!admin) return res.status(404).json({ error: 'Account not found.' });
+      // A new password ends every older session (whoever knew the old one
+      // is signed out too). Before the migration there is nothing to raise.
+      try { await bumpSessionVersion(sql, admin.id); } catch (e) { console.error('admin reset: sessions not ended:', e.message); }
 
       // Same convenience as the guest-facing version: one click both
       // resets the password and logs the admin straight in.
-      const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS);
+      const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS, await sessionExtra(sql, admin.id));
       await logAudit(sql, {
         action: 'admin_password_reset_completed', success: true, actorType: 'admin', actorIdentifier: admin.email, ...requestContext(req),
         targetType: 'admin', targetId: admin.id
@@ -464,12 +473,19 @@ module.exports = async (req, res) => {
 
   // ---- Everything else requires either a valid admin session OR the
   // master secret (kept working so nothing already relying on it breaks) ----
-  const adminSecret = req.headers['x-admin-secret'];
+  // The session is checked against the admins row every time, so a
+  // deleted admin or "Sign out everywhere" takes effect at once.
   const authHeader = req.headers['authorization'] || '';
   const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const sessionPayload = sessionToken ? verifyToken(sessionToken) : null;
-  const hasValidSession = sessionPayload && sessionPayload.action === 'admin-session';
-  const hasValidSecret = secretMatches(adminSecret, process.env.ADMIN_SECRET);
+  const tokenPayload = sessionToken ? verifyToken(sessionToken) : null;
+  const hasValidSession = await adminSessionActive(sql, tokenPayload);
+  const sessionPayload = hasValidSession ? tokenPayload : null;
+  let hasValidSecret = false;
+  if (!hasValidSession) {
+    const secret = await checkAdminSecret(sql, req, 'get-pending-listings');
+    if (secret.limited) return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
+    hasValidSecret = secret.ok;
+  }
   if (!hasValidSession && !hasValidSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -477,6 +493,22 @@ module.exports = async (req, res) => {
   // plus the IP and device the request came from (see _audit-log.js).
   const ADMIN_AUDIT = await adminContext(sql, req, sessionPayload, hasValidSecret);
   const ADMIN_ACTOR = ADMIN_AUDIT.actorIdentifier;
+
+  // ---- Sign out everywhere ----
+  // Ends every session of the signed-in admin, this one included.
+  if (req.method === 'POST' && req.body && req.body.adminSignOutEverywhere) {
+    if (!sessionPayload) return res.status(400).json({ error: 'Log in with your admin account to do this.' });
+    try {
+      const version = await bumpSessionVersion(sql, sessionPayload.listingId);
+      if (version === null) return res.status(404).json({ error: 'Account not found.' });
+      await logAudit(sql, { action: 'admin_signed_out_everywhere', success: true, actorType: 'admin', ...ADMIN_AUDIT,
+        targetType: 'admin', targetId: sessionPayload.listingId });
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('adminSignOutEverywhere failed:', err);
+      return res.status(err.isUserFacing ? 409 : 500).json({ error: err.isUserFacing ? err.message : 'Could not sign out everywhere right now.' });
+    }
+  }
 
   // ---- Feedback hosts have sent ("Tell us what needs looking at") ----
   // GET ?feedback=1 — read from the audit log, where every message is
@@ -515,29 +547,9 @@ module.exports = async (req, res) => {
     }
   }
 
-  // ---- Guest ID proofs waiting for review ----
-  // GET ?guestIds=1 · POST { reviewGuestId: { guestId, approve, reason } }
-  // The document address is decrypted for the admin only, here.
-  if (req.method === 'GET' && req.query.guestIds === '1') {
-    let rows = [];
-    try {
-      rows = await sql`SELECT id, name, email, phone, id_document_url, id_document_type, id_status, id_uploaded_at FROM guests
-                       WHERE id_status = 'uploaded' AND deleted_at IS NULL ORDER BY id_uploaded_at LIMIT 100`;
-    } catch (err) { /* before migration_trust_rules.sql */ }
-    return res.status(200).json({ types: ID_TYPES, ids: rows.map(r => ({ guestId: r.id, name: r.name, email: r.email, phone: r.phone,
-      type: r.id_document_type, uploadedAt: r.id_uploaded_at, url: idDocumentUrlForAdmin(r.id_document_url) })) });
-  }
-  if (req.method === 'POST' && req.body && req.body.reviewGuestId) {
-    try {
-      const b = req.body.reviewGuestId;
-      const out = await reviewIdDocument(sql, { guestId: Number(b.guestId) || 0, approve: b.approve === true, reason: String(b.reason || ''), adminLabel: ADMIN_ACTOR });
-      await logAudit(sql, { action: b.approve === true ? 'guest_id_verified' : 'guest_id_rejected', success: true, actorType: 'admin', ...ADMIN_AUDIT,
-        targetType: 'guest', targetId: Number(b.guestId) || null, metadata: { reason: b.reason || null } });
-      return res.status(200).json({ success: true, ...out });
-    } catch (err) {
-      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not save this review.' });
-    }
-  }
+  // Guest ID proofs are no longer collected or reviewed (Sept 2026): the host
+  // checks a government photo ID at check-in. Files uploaded before that are
+  // erased by purgeReviewedIdDocuments below.
 
   // ---- Audit history (admin only) ----
   // GET ?auditLog=1 [&who=admin|host|guest|cohost|system] [&q=text]
@@ -1155,15 +1167,15 @@ module.exports = async (req, res) => {
     // damage/etc.; whatever's left over (if anything) goes back to the
     // guest the same way processDeposits refunds do — a partial refund on
     // the original payment. The host's compensation isn't paid out
-    // automatically here (Aerva's payouts are handled outside this
-    // codebase, same as regular booking payouts) — deposit_resolution_amount
-    // just records the decision so it's visible on the host's dashboard
-    // and can be included in their next payout.
+    // as its own payout row (payouts.kind = 'deposit', _payouts.js
+    // createDepositCompensationPayout): sent with RazorpayX when it is set
+    // up, otherwise waiting in Payouts for Mark paid. deposit_resolution_amount
+    // records the decision for the host's dashboard.
     if (req.body && req.body.resolveDispute) {
       const { orderId, compensationAmount } = req.body.resolveDispute;
       let claimed = false;
       try {
-        const rows = await sql`SELECT id, razorpay_payment_id, deposit_amount, deposit_status, charge_currency FROM orders WHERE id = ${orderId}`;
+        const rows = await sql`SELECT id, razorpay_payment_id, razorpay_order_id, deposit_amount, deposit_status, charge_currency FROM orders WHERE id = ${orderId}`;
         const order = rows[0];
         if (!order) return res.status(404).json({ error: 'Order not found.' });
         if (order.deposit_status === 'resolving') {
@@ -1189,9 +1201,10 @@ module.exports = async (req, res) => {
           if (currency === 'INR') {
             refundSubunitAmount = Math.round(guestRefundAmount * 100);
           } else {
-            refundSubunitAmount = await convertInrToForeignSubunit(sql, guestRefundAmount, currency);
+            // The same share of what was captured, never today's rate (_currency.js).
+            refundSubunitAmount = await refundSubunitForInr(sql, { razorpayOrderId: order.razorpay_order_id, amountInr: guestRefundAmount, currency });
             if (!refundSubunitAmount) {
-              return res.status(502).json({ error: `No cached rate available to refund this ${currency} deposit right now. Please try again shortly.` });
+              return res.status(502).json({ error: `There is no record of the amount charged in ${currency} for this booking, so the deposit cannot be refunded automatically.` });
             }
           }
         }
@@ -1243,12 +1256,26 @@ module.exports = async (req, res) => {
           return res.status(500).json({ error: `Refund ${refundId} was issued, but saving the result failed. The dispute is locked so it cannot be refunded twice; update order ${orderId} by hand.` });
         }
 
+        // The host's compensation: its own payout (once, whatever happens).
+        let payoutId = null, payoutWarning = null;
+        if (compensation > 0) {
+          try {
+            const p = await createDepositCompensationPayout(sql, { orderId, amount: compensation });
+            payoutId = p ? p.id : null;
+            if (!p) payoutWarning = 'The host payout for the compensation could not be created. Pay it by hand.';
+          } catch (payErr) {
+            console.error('resolveDispute: compensation payout not created:', payErr);
+            payoutWarning = /kind/.test(String(payErr.message)) ? 'Run sql/migration_payout_kinds.sql, then pay this compensation by hand.' : 'The host payout for the compensation could not be created. Pay it by hand.';
+            await logAudit(sql, { action: 'deposit_compensation_payout_failed', success: false, actorType: 'admin', ...ADMIN_AUDIT,
+              targetType: 'order', targetId: orderId, metadata: { compensation, error: String(payErr.message || payErr).slice(0, 300) } });
+          }
+        }
         await logAudit(sql, {
           action: 'deposit_dispute_resolved', success: true, actorType: 'admin', ...ADMIN_AUDIT,
           targetType: 'order', targetId: orderId,
-          metadata: { compensation, guestRefundAmount, refundId }
+          metadata: { compensation, guestRefundAmount, refundId, payoutId }
         });
-        return res.status(200).json({ success: true, compensation, guestRefundAmount });
+        return res.status(200).json({ success: true, compensation, guestRefundAmount, payoutId, warning: payoutWarning });
       } catch (err) {
         console.error('get-pending-listings (resolveDispute) error:', err);
         // Only reached before any refund was attempted (refund and save
@@ -1289,25 +1316,43 @@ module.exports = async (req, res) => {
 
     // ---- Mark a payout as sent (sent by hand), and tell the host / co-host ----
     // POST { markPayoutPaid: { orderId, payee: 'host' | 'cohost', cohostGuestId?,
-    //        reference, arrivingBy (YYYY-MM-DD), tds?, deductCoupons? } }
+    //        reference, arrivingBy (YYYY-MM-DD), tds?, deductCoupons?, kind? } }
     // Finishes the booking's payout row (created automatically at 5 PM on
     // check-out day, or here if not yet): amounts come from the booking.
+    // kind 'deposit': the host's security deposit compensation instead.
     // Co-host shares are paid in full. Refused if already sent, or being
-    // sent by RazorpayX, or if deductions would take it below zero.
+    // sent by RazorpayX, or if deductions would take it below zero; and
+    // before the booking's check-out day, or while a stay dispute is open
+    // (the payout may still shrink), exactly as automatic payouts are.
     if (req.body && req.body.markPayoutPaid) {
       try {
         const b = req.body.markPayoutPaid;
         const orderId = Number(b.orderId) || 0;
         const isCohost = b.payee === 'cohost';
+        const isDeposit = b.kind === 'deposit' && !isCohost;
         const reference = String(b.reference || '').trim().slice(0, 100);
         if (!reference) return res.status(400).json({ error: 'Enter the bank reference (UTR) for this payout.' });
         const arrivingBy = /^\d{4}-\d{2}-\d{2}$/.test(String(b.arrivingBy || '')) ? b.arrivingBy : null;
-        const o = (await sql`SELECT id, status FROM orders WHERE id = ${orderId}`)[0];
-        if (!o || o.status !== 'paid') return res.status(404).json({ error: 'That booking is not a paid booking.' });
-        await createPayoutRows(sql, orderId);
+        const o = (await sql`SELECT o.id, o.status, (to_jsonb(o)->>'payout_on_cancel')::boolean AS payout_on_cancel, o.payout_amount,
+                                    (o.departure > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS before_checkout
+                             FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
+        // A guest-cancelled booking still pays the host the part not refunded.
+        const payable = o && (o.status === 'paid' || (o.status === 'cancelled' && o.payout_on_cancel === true && Number(o.payout_amount) > 0));
+        if (!o || (!payable && !isDeposit)) return res.status(404).json({ error: 'This booking has no payout to make.' });
+        if (!isDeposit) {
+          if (o.before_checkout) return res.status(409).json({ error: 'A payout can be made from the booking’s check-out day.' });
+          let disputed = [];
+          try { disputed = await sql`SELECT 1 FROM stay_disputes WHERE order_id = ${orderId} AND status IN ('open', 'host_responded') LIMIT 1`; } catch (e) { /* table not created yet */ }
+          if (disputed.length) return res.status(409).json({ error: 'A problem reported on this stay is open. Decide it in Stay disputes first — the payout may change.' });
+          await createPayoutRows(sql, orderId);
+        }
         const payeeGuestId = isCohost ? (Number(b.cohostGuestId) || 0) : null;
-        const row = (await sql`SELECT * FROM payouts WHERE order_id = ${orderId} AND payee_type = ${isCohost ? 'cohost' : 'host'} AND COALESCE(payee_guest_id, 0) = ${payeeGuestId || 0}`)[0];
-        if (!row) return res.status(404).json({ error: isCohost ? 'That co-host has no share in this booking.' : 'No payout found for this booking.' });
+        let row;
+        try {
+          row = (await sql`SELECT * FROM payouts WHERE order_id = ${orderId} AND payee_type = ${isCohost ? 'cohost' : 'host'} AND COALESCE(payee_guest_id, 0) = ${payeeGuestId || 0}
+                             AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = ${isDeposit ? 'deposit' : 'booking'}`)[0];
+        } catch (e) { row = null; }
+        if (!row) return res.status(404).json({ error: isDeposit ? 'No deposit compensation payout found for this booking.' : isCohost ? 'That co-host has no share in this booking.' : 'No payout found for this booking.' });
         if (row.status === 'sent') return res.status(409).json({ error: 'This payout is already marked paid.' });
         if (row.status === 'processing') return res.status(409).json({ error: 'RazorpayX is sending this payout. Wait for it to finish.' });
         // With automatic payouts on, never pay by hand what the system pays:
@@ -1318,6 +1363,13 @@ module.exports = async (req, res) => {
         if (!isCohost) {
           if (b.tds !== undefined && b.tds !== null && b.tds !== '') tds = Math.max(0, Math.round((Number(b.tds) || 0) * 100) / 100);
           if (!b.deductCoupons) { deductions = 0; ids = []; }
+          else if (ids.length) {
+            // Only coupons still owed and not listed on another payout not yet sent.
+            const still = await sql`SELECT hp.id, hp.amount FROM host_penalties hp WHERE hp.id = ANY(${ids}) AND hp.status = 'owed'
+                                      AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.id <> ${row.id} AND p.status IN ('due', 'processing', 'failed') AND hp.id = ANY(p.deducted_penalty_ids))`;
+            ids = still.map(r => r.id);
+            deductions = Math.round(still.reduce((t, r) => t + Number(r.amount), 0) * 100) / 100;
+          }
         }
         const net = Math.round((Number(row.gross) - Number(row.commission) - Number(row.cohost_shares) - deductions - tds) * 100) / 100;
         if (net < 0) return res.status(400).json({ error: `Deductions (₹${(deductions + tds).toLocaleString('en-IN')}) are more than this payout. Leave the coupon deduction for a larger payout.` });
@@ -1360,10 +1412,15 @@ module.exports = async (req, res) => {
     if (req.body && req.body.retryRefund) {
       try {
         const id = Number(req.body.retryRefund.refundId) || 0;
-        const rf = (await sql`SELECT * FROM refunds WHERE id = ${id}`)[0];
+        const rf = (await sql`SELECT *, (created_at < now() - interval '10 minutes') AS stale FROM refunds WHERE id = ${id}`)[0];
         if (!rf) return res.status(404).json({ error: 'Refund not found.' });
-        if (rf.status !== 'failed') return res.status(409).json({ error: rf.status === 'processed' ? 'This refund has already been processed.' : 'This refund is in progress.' });
-        const r = await safeRefund(sql, razorpay, { orderId: rf.order_id, paymentId: rf.razorpay_payment_id, amountSubunit: rf.amount, kind: rf.kind });
+        // Failed, or written down ahead and never started (the work that
+        // should have made it was interrupted — e.g. a change refund).
+        const retryable = rf.status === 'failed' || (rf.status === 'new' && rf.stale);
+        if (!retryable) return res.status(409).json({ error: rf.status === 'processed' ? 'This refund has already been processed.' : 'This refund is in progress.' });
+        // The row's own amount is the amount of record (_refunds.js keeps it
+        // current), read fresh here, so a retry refunds exactly what is owed.
+        const r = await safeRefund(sql, razorpay, { orderId: rf.order_id, paymentId: rf.razorpay_payment_id, amountSubunit: Number(rf.amount), kind: rf.kind });
         // A retried deposit refund also settles the deposit on the booking.
         if (rf.kind === 'deposit' && r.id) {
           await sql`UPDATE orders SET deposit_status = 'refunded', deposit_refund_id = ${r.id} WHERE id = ${rf.order_id} AND deposit_status IN ('held', 'refunding')`;
@@ -1469,6 +1526,22 @@ module.exports = async (req, res) => {
             else { out.failed++; out.failures.push({ hostId: h.id, field, reason: e.reason || 'unknown' }); }
           }
         }
+        // Guest ID proofs uploaded before Aerva stopped collecting them
+        // (Sept 2026): every file is deleted from storage and its address
+        // cleared. A file whose address cannot be read (wrong key) or whose
+        // deletion fails is kept and reported, so it can be retried.
+        out.guestIds = 0;
+        try {
+          const guestDocs = await sql`SELECT id, id_document_url FROM guests WHERE id_document_url IS NOT NULL`;
+          for (const g of guestDocs) {
+            const url = decryptField(g.id_document_url);
+            if (!url) { out.failed++; out.failures.push({ guestId: g.id, field: 'ID proof', reason: 'address unreadable — check DATA_ENCRYPTION_KEY' }); continue; }
+            const d = await deleteUploadedDocument(url);
+            if (!d.ok) { out.failed++; out.failures.push({ guestId: g.id, field: 'ID proof', reason: d.reason }); continue; }
+            await sql`UPDATE guests SET id_document_url = NULL WHERE id = ${g.id}`;
+            out.guestIds++;
+          }
+        } catch (err) { /* guests.id_document_url never existed: nothing to erase */ }
         // Encrypt any PAN or bank number still stored in the clear (saved
         // before encryption existed). Values already encrypted are skipped.
         const plainHosts = await sql`
@@ -1605,7 +1678,7 @@ module.exports = async (req, res) => {
                h.id AS host_id, h.name AS host_name, h.bank_account_holder_name AS host_holder,
                h.bank_account_number AS host_account, h.bank_ifsc AS host_ifsc, h.bank_status AS host_bank_status
         FROM orders o JOIN listings l ON l.id = o.listing_id JOIN hosts h ON h.id = l.host_id
-        WHERE o.status = 'paid'
+        WHERE o.status = 'paid' OR (o.status = 'cancelled' AND (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE AND o.payout_amount > 0)
         ORDER BY o.arrival DESC NULLS LAST, o.id DESC
         LIMIT 200
       `;
@@ -1651,11 +1724,19 @@ module.exports = async (req, res) => {
       let paidRows = [];
       try {
         const ids = orders.map(o => o.id);
-        if (ids.length) paidRows = await sql`SELECT id, order_id, payee_type, payee_guest_id, status, net, reference, sent_at, failure_reason, attempts, last_attempt_at, auto_eligible, tds, tds_rate, pan_furnished FROM payouts WHERE order_id = ANY(${ids})`;
+        if (ids.length) paidRows = await sql`SELECT id, order_id, payee_type, payee_guest_id, status, net, reference, sent_at, failure_reason, attempts, last_attempt_at, auto_eligible, tds, tds_rate, pan_furnished,
+                                                    COALESCE(to_jsonb(payouts)->>'kind', 'booking') AS kind FROM payouts WHERE order_id = ANY(${ids})`;
       } catch (err) { /* migration_payouts.sql not run yet */ }
+      // Security deposit compensation payouts are listed on their own.
+      let depositPayouts = [];
+      try {
+        depositPayouts = await sql`SELECT p.id, p.order_id, p.status, p.net, p.reference, p.sent_at, p.failure_reason, p.attempts, p.auto_eligible, o.suite_name, h.name AS host_name
+                                   FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id
+                                   WHERE p.kind = 'deposit' ORDER BY p.created_at DESC LIMIT 100`;
+      } catch (err) { /* migration_payout_kinds.sql not run yet */ }
       const paidKey = (orderId, type, guest) => `${orderId}:${type}:${guest || 0}`;
       const paidMap = {};
-      paidRows.forEach(p => { paidMap[paidKey(p.order_id, p.payee_type, p.payee_guest_id)] = { id: p.id, status: p.status, net: Number(p.net), reference: p.reference, sentAt: p.sent_at, failure: p.failure_reason,
+      paidRows.filter(p => p.kind !== 'deposit').forEach(p => { paidMap[paidKey(p.order_id, p.payee_type, p.payee_guest_id)] = { id: p.id, status: p.status, net: Number(p.net), reference: p.reference, sentAt: p.sent_at, failure: p.failure_reason,
         attempts: p.attempts, lastAttemptAt: p.last_attempt_at, autoEligible: p.auto_eligible, tds: Number(p.tds), tdsRate: Number(p.tds_rate), panFurnished: p.pan_furnished }; });
       // Refunds not yet confirmed (in progress, or failed: admin retries).
       let openRefunds = [];
@@ -1680,6 +1761,8 @@ module.exports = async (req, res) => {
       return res.status(200).json({
         couponForfeitTotal,
         automaticPayouts: razorpayxReady(),
+        depositPayouts: depositPayouts.map(p => ({ id: p.id, orderId: p.order_id, status: p.status, net: Number(p.net), reference: p.reference, sentAt: p.sent_at,
+          failure: p.failure_reason, attempts: p.attempts, autoEligible: p.auto_eligible, listing: p.suite_name, hostName: p.host_name })),
         refunds: openRefunds.map(r => ({ id: r.id, orderId: r.order_id, kind: r.kind, amount: Number(r.amount) / 100, currency: r.charge_currency || 'INR', status: r.status,
           failure: r.failure_reason, attempts: r.attempts, listing: r.suite_name, guestEmail: r.guest_email, createdAt: r.created_at })),
         penalties: penalties.map(p => ({ id: p.id, hostId: p.host_id, hostName: p.host_name, amount: Number(p.amount),
@@ -1736,10 +1819,17 @@ module.exports = async (req, res) => {
         WHERE h.aadhaar_status = 'pending_review' OR h.bank_status = 'pending_review' OR h.pan_status = 'pending_review'
         ORDER BY h.id ASC
       `;
-      // Numbers are stored encrypted; the admin reviewing sees them readable.
+      // Numbers are stored encrypted and only ever leave here masked: the
+      // last 4 digits of the account, and the PAN as XXXXX1234X. A value
+      // that cannot be decrypted shows the loud "unreadable" marker.
+      const masked = (stored, mask) => {
+        const plain = readableForAdmin(stored);
+        if (plain == null || plain === UNREADABLE) return plain;
+        return mask(stored) || '\u2022\u2022\u2022\u2022 ' + String(plain).slice(-4);
+      };
       verifications.forEach(v => {
-        v.pan_number = readableForAdmin(v.pan_number);
-        v.bank_account_number = readableForAdmin(v.bank_account_number);
+        v.pan_number = masked(v.pan_number, maskPan);
+        v.bank_account_number = masked(v.bank_account_number, maskAccount);
       });
       // Rejected Aadhaar / PAN: the document is already erased, and the
       // host cannot upload again by themselves, so the admin can reopen it.

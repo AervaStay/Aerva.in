@@ -15,7 +15,7 @@
 //     cut — so GST is worked out on the full price and the coupon then
 //     reduces the amount the guest pays.
 //
-// index.html carries a display-only copy of these numbers
+// aerva.js carries a display-only copy of these numbers
 // (GST_ACCOMMODATION_SLABS / GST_EXPERIENCE_RATE there). This file is the
 // one that decides what a guest is actually charged; keep them in step.
 //

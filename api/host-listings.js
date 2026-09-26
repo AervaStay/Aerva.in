@@ -71,10 +71,11 @@ const { submissionOpen, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { GUEST_FACTORS, reviewScore } = require('./_tiers');
 const { openFlagsForHost } = require('./_compliance');
 const { buildProfile, answeredQuestions } = require('./_profiles');
-const { DEFAULT_TIMEZONE } = require('./_timezones');
-const { isAccountDeleted } = require('./_accounts');
+const { DEFAULT_TIMEZONE, localTodayIn } = require('./_timezones');
+const { findNameClashInPincode, nameClashMessage } = require('./_listing-rules');
+const { isAccountDeleted, isSessionRevoked } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
-const { convertInrToForeignSubunit } = require('./_currency');
+const { refundSubunitForInr } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const { COUPON_RELEASE_DELAY_MINUTES, sendCouponEmail } = require('./_coupons');
 const { loadPayoutSummary } = require('./_payouts');
@@ -82,7 +83,7 @@ const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refu
 const { respondChange } = require('./_booking-changes');
 const { respondDispute } = require('./_stay-disputes');
 const { hoursUntilCheckIn, hoursUntilCheckInTime, paidByOrderRow, dateStr } = require('./_booking-rules');
-const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REQUEST_REASONS, depositStillHeld, guestGetsBackFor } = require('./_cancellations');
+const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REQUEST_REASONS, depositStillHeld, guestGetsBackFor, clearUnsentPayouts } = require('./_cancellations');
 const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
@@ -100,6 +101,32 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 const CANCELLATION_CUTOFF_HOURS = 48;
+
+// What a cancelled booking took away from the host (their share, after
+// co-hosts). Host cancellation: the whole payout. Guest cancellation: the
+// host keeps payout_amount (already reduced to what they still get), so
+// only the refunded part is lost. The original payout isn't stored; under
+// the split in _cancellations.js (splitRow) the host keeps (100 − P)% of
+// it, which gives it back from the current figure.
+function notEarnedFor(b, byGuest) {
+  if (!(b.status === 'cancelled' || b.status === 'refunded')) return 0;
+  const now = Math.max(0, Number(b.payout_amount) || 0);
+  const coShare = Math.max(0, Number(b.cohost_share) || 0);
+  if (!byGuest) return Math.max(0, Math.round(now - coShare));
+  const p = Math.max(0, Math.min(100, Number(b.refund_percent) || 0));
+  let original;
+  if (p === 0) original = now;
+  else if (p < 100) original = now * 100 / (100 - p);
+  else {
+    // Full refund: nothing kept, so work it out from the booking itself.
+    const subtotal = Math.max(0, Number(b.subtotal) || 0);
+    original = Math.round(subtotal - subtotal * (Number(b.commission_rate) || 0) / 100);
+  }
+  // Co-host shares were scaled the same way, so the host's own part of
+  // the loss is in the same proportion.
+  const hostPart = now > 0 ? Math.max(0, (now - coShare) / now) : 1;
+  return Math.max(0, Math.round((original - now) * hostPart));
+}
 
 // Same Resend pattern used everywhere else in this codebase (see
 // guest-auth.js, submit-listing.js, approve-listing.js) — never throws;
@@ -165,12 +192,13 @@ async function sendCancellationEmail(order, opts = {}){
 const SITE_BASE = 'https://aerva.in';
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
+// Returns { guestId, payload } (payload is needed for isSessionRevoked), or null.
 function requireGuestId(req) {
   const authHeader = req.headers['authorization'] || '';
   const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   const payload = sessionToken ? verifyToken(sessionToken) : null;
-  if (!payload || payload.action !== 'guest-session') return null;
-  return payload.listingId; // generically-named token field — see host-auth.js note
+  if (!payload || payload.action !== 'guest-session' || !payload.listingId) return null;
+  return { guestId: payload.listingId, payload }; // generically-named token field — see host-auth.js note
 }
 
 
@@ -199,8 +227,12 @@ function requireGuestId(req) {
 // request with no room), else the new row for the requested room.
 async function resolveBlockRowForRoom(sql, rowId, roomId) {
   if (!roomId) return rowId;
-  const rows = await sql`SELECT id, listing_id, room_id, start_date, end_date, reason FROM listing_blocked_dates WHERE id = ${rowId}`;
+  const rows = await sql`SELECT id, listing_id, room_id, start_date, end_date, reason, source_feed_id FROM listing_blocked_dates WHERE id = ${rowId}`;
   const row = rows[0];
+  // Dates imported from another site's calendar belong to that feed: the
+  // next sync replaces them wholesale. Splitting them into rows without
+  // source_feed_id would turn them into permanent manual blocks.
+  if (row && row.source_feed_id != null) return null;
   if (!row || row.room_id !== null) return rowId;
 
   const rooms = await sql`SELECT id FROM listing_rooms WHERE listing_id = ${row.listing_id} ORDER BY id ASC`;
@@ -223,9 +255,11 @@ async function resolveBlockRowForRoom(sql, rowId, roomId) {
 }
 
 async function unblockRangeFromRow(sql, rowId, from, to) {
-  const rows = await sql`SELECT id, listing_id, room_id, start_date, end_date, reason FROM listing_blocked_dates WHERE id = ${rowId}`;
+  const rows = await sql`SELECT id, listing_id, room_id, start_date, end_date, reason, source_feed_id FROM listing_blocked_dates WHERE id = ${rowId}`;
   const row = rows[0];
-  if (!row) return;
+  // Imported (calendar-sync) rows are never trimmed or split here — see
+  // resolveBlockRowForRoom.
+  if (!row || row.source_feed_id != null) return;
 
   const rowStart = new Date(row.start_date).toISOString().slice(0, 10);
   const rowEnd = new Date(row.end_date).toISOString().slice(0, 10);
@@ -255,6 +289,28 @@ async function unblockRangeFromRow(sql, rowId, from, to) {
   }
 }
 
+// An imported (calendar-sync) block overlapping [from, to), with the
+// linked calendar's name — or null.
+async function importedBlockCovering(sql, listingId, roomId, from, to) {
+  const rows = await sql`
+    SELECT b.id, b.reason, f.name AS feed_name FROM listing_blocked_dates b
+    LEFT JOIN calendar_feeds f ON f.id = b.source_feed_id
+    WHERE b.listing_id = ${listingId} AND (b.room_id = ${roomId || null} OR b.room_id IS NULL)
+      AND b.start_date < ${to}::date AND b.end_date > ${from}::date
+      AND b.source_feed_id IS NOT NULL
+    LIMIT 1
+  `.catch(() => []);
+  return rows[0] || null;
+}
+function importedBlockMessage(row) {
+  const site = row && row.feed_name ? row.feed_name : 'another site';
+  return `These dates are booked on ${site}. Free them on ${site} and they reopen here at the next sync.`;
+}
+function dayAfterStr(ymd) {
+  const d = new Date(ymd + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
 
 // ======================================================================
 // Co-hosts
@@ -935,10 +991,13 @@ module.exports = async (req, res) => {
 
   // `let`, not `const`: a co-host request continues below AS the host it
   // is working for, once cohostGate() has checked what it may do.
-  let guestId = requireGuestId(req);
+  const session = requireGuestId(req);
+  let guestId = session ? session.guestId : null;
   let cohostActor = null; // set when a co-host acts for the host (?actingHost=)
   if (!guestId) return res.status(401).json({ error: 'Please log in again.' });
-  if (await isAccountDeleted(sql, guestId)) return res.status(401).json({ error: 'This account has been deleted.' });
+  // Logged out everywhere, deleted, or the check could not run → refused
+  // (isSessionRevoked covers deleted accounts and fails closed).
+  if (await isSessionRevoked(sql, session.payload)) return res.status(401).json({ error: 'Please log in again.' });
   const accountId = guestId; // the person actually signed in, always
 
   // ---- Host agreement: one-time acceptance for hosts who listed before
@@ -988,15 +1047,11 @@ module.exports = async (req, res) => {
       if (req.query.payoutDetail !== undefined) {
         const sum = await loadPayoutSummary(sql, req.query.payoutDetail);
         // The host sees every payout on their bookings (theirs and their
-        // co-hosts'); a co-host sees their own and the host's, on listings
-        // they co-host.
-        let allowed = sum && ((me.host_id && sum.hostId === me.host_id) || (sum.payeeType === 'cohost' && sum.payeeGuestId === accountId));
-        if (sum && !allowed) {
-          const shared = await sql`SELECT 1 FROM cohosts c JOIN orders o ON o.id = ${sum.orderId}
-                                   WHERE c.cohost_guest_id = ${accountId} AND c.status = 'active' AND c.host_id = ${sum.hostId}
-                                     AND o.listing_id = ANY(c.listing_ids) LIMIT 1`.catch(() => []);
-          allowed = shared.length > 0;
-        }
+        // co-hosts'). A co-host sees ONLY their own payouts — never the
+        // host's, which carry the host's bank label and TDS (co-hosts never
+        // get bank/payout access).
+        const allowed = sum && ((me.host_id && Number(sum.hostId) === Number(me.host_id))
+          || (sum.payeeType === 'cohost' && Number(sum.payeeGuestId) === Number(accountId)));
         if (!allowed || sum.status !== 'sent') return res.status(404).json({ error: 'Payout not found.' });
         return res.status(200).json({ payout: { ...sum, viewerIsPayee: (sum.payeeType === 'host' ? sum.hostId === me.host_id : sum.payeeGuestId === accountId) } });
       }
@@ -1004,17 +1059,20 @@ module.exports = async (req, res) => {
       try {
         rows = await sql`
           SELECT p.id, p.net, p.sent_at, p.arriving_by, p.payee_type, p.payee_guest_id, p.host_id, o.suite_name, o.arrival, o.departure,
+                 COALESCE(to_jsonb(p)->>'kind', 'booking') AS kind,
                  CASE WHEN p.payee_type = 'host' THEN h.name ELSE pg.name END AS payee_name
           FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id LEFT JOIN guests pg ON pg.id = p.payee_guest_id
           WHERE p.status = 'sent' AND (p.host_id = ${me.host_id || 0}
-             OR (p.payee_type = 'cohost' AND p.payee_guest_id = ${accountId})
-             OR EXISTS (SELECT 1 FROM cohosts c WHERE c.cohost_guest_id = ${accountId} AND c.status = 'active' AND c.host_id = p.host_id AND o.listing_id = ANY(c.listing_ids)))
+             OR (p.payee_type = 'cohost' AND p.payee_guest_id = ${accountId}))
           ORDER BY p.sent_at DESC LIMIT 200
         `;
       } catch (err) { /* migration_payouts.sql not run yet */ }
       return res.status(200).json({ payouts: rows.map(r => ({ id: r.id, amount: Number(r.net), sentAt: r.sent_at, arrivingBy: r.arriving_by, as: r.payee_type,
         payeeName: r.payee_name || '', mine: r.payee_type === 'host' ? (me.host_id != null && r.host_id === me.host_id) : r.payee_guest_id === accountId,
-        listing: r.suite_name, arrival: r.arrival, departure: r.departure })) });
+        listing: r.suite_name, arrival: r.arrival, departure: r.departure,
+        // A deposit dispute paid to the host is its own payout (payouts.kind,
+        // migration_payout_kinds.sql) — labelled like _payouts.js does.
+        kind: r.kind === 'deposit' ? 'deposit' : 'booking', label: r.kind === 'deposit' ? 'Security deposit compensation' : 'Booking payout' })) });
     } catch (err) {
       console.error('payouts view failed:', err);
       return res.status(500).json({ error: 'Could not load payouts right now.' });
@@ -1523,7 +1581,7 @@ module.exports = async (req, res) => {
       if (!guest || !guest.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
 
       const listings = await sql`
-        SELECT id, property_name, property_type, nightly_rate FROM listings
+        SELECT id, property_name, property_type, nightly_rate, timezone FROM listings
         WHERE host_id = ${guest.host_id} AND status = 'approved' AND listing_type = 'stay'
         ORDER BY created_at DESC
       `;
@@ -1540,7 +1598,10 @@ module.exports = async (req, res) => {
         const d = new Date(t + 'T00:00:00Z');
         return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === t ? t : null;
       };
-      const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+      // "Today" is the property's own date, not the server's (UTC): at 2am
+      // in India the server is still on yesterday. A host's listings are in
+      // one country in practice; the first listing's clock is used.
+      const today = new Date(localTodayIn((listings[0] || {}).timezone || DEFAULT_TIMEZONE) + 'T00:00:00Z');
       const shift = (base, n) => { const d = new Date(base); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
       const earliest = shift(today, -MAX_HISTORY_DAYS), latest = shift(today, MAX_FUTURE_DAYS);
       let startStr2 = asDay(req.query.from) || shift(today, 0);
@@ -1600,6 +1661,17 @@ module.exports = async (req, res) => {
         if (d instanceof Date) return d.toISOString().slice(0, 10);
         return typeof d === 'string' ? d.slice(0, 10) : d;
       }
+      // Per day: the linked calendar's name when a blocked night comes ONLY
+      // from calendar sync (the page shows it read-only, "Booked on …"),
+      // else null. A night the host also blocked by hand stays editable.
+      function importedByDay(dayStatuses, blockedRanges) {
+        return dayStrs.map((dateStr, i) => {
+          if (dayStatuses[i] !== 'blocked') return null;
+          const covering = blockedRanges.filter(r => dateStr >= r.start_date && dateStr < r.end_date);
+          if (!covering.length || covering.some(r => r.source_feed_id == null)) return null;
+          return covering[0].feed_name || 'another site';
+        });
+      }
 
       const rows = [];
       for (const listing of listings) {
@@ -1624,9 +1696,10 @@ module.exports = async (req, res) => {
             `;
             const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
             const blockedRangesRaw = await sql`
-              SELECT start_date, end_date FROM listing_blocked_dates
-              WHERE listing_id = ${listing.id} AND (room_id = ${room.id} OR room_id IS NULL)
-                AND start_date < ${endStr}::date AND end_date > ${startStr}::date
+              SELECT b.start_date, b.end_date, b.source_feed_id, f.name AS feed_name FROM listing_blocked_dates b
+              LEFT JOIN calendar_feeds f ON f.id = b.source_feed_id
+              WHERE b.listing_id = ${listing.id} AND (b.room_id = ${room.id} OR b.room_id IS NULL)
+                AND b.start_date < ${endStr}::date AND b.end_date > ${startStr}::date
             `;
             const blockedRanges = blockedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
             const dayStatuses = dayStrs.map(dateStr => {
@@ -1641,7 +1714,8 @@ module.exports = async (req, res) => {
             const dayPricing = dayStrs.map(dateStr => priceForDate(Number(room.nightly_rate) || 0, roomPromotions, dateStr));
             rows.push({
               listingId: listing.id, roomId: room.id, label: `${listing.property_name} — ${room.room_name || 'Room'}`,
-              propertyType: listing.property_type, dayStatuses, dayPricing, bookings: bookedRanges
+              propertyType: listing.property_type, dayStatuses, dayPricing, bookings: bookedRanges,
+              dayImportedFrom: importedByDay(dayStatuses, blockedRanges)
             });
           }
           if (!rooms.length) {
@@ -1667,9 +1741,10 @@ module.exports = async (req, res) => {
           `;
           const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
           const blockedRangesRaw = await sql`
-            SELECT start_date, end_date FROM listing_blocked_dates
-            WHERE listing_id = ${listing.id}
-              AND start_date < ${endStr}::date AND end_date > ${startStr}::date
+            SELECT b.start_date, b.end_date, b.source_feed_id, f.name AS feed_name FROM listing_blocked_dates b
+            LEFT JOIN calendar_feeds f ON f.id = b.source_feed_id
+            WHERE b.listing_id = ${listing.id}
+              AND b.start_date < ${endStr}::date AND b.end_date > ${startStr}::date
           `;
           const blockedRanges = blockedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
           const dayStatuses = dayStrs.map(dateStr => {
@@ -1678,7 +1753,8 @@ module.exports = async (req, res) => {
             return 'available';
           });
           const dayPricing = dayStrs.map(dateStr => priceForDate(Number(listing.nightly_rate) || 0, promotions, dateStr));
-          rows.push({ listingId: listing.id, roomId: null, label: listing.property_name, propertyType: listing.property_type, dayStatuses, dayPricing, bookings: bookedRanges });
+          rows.push({ listingId: listing.id, roomId: null, label: listing.property_name, propertyType: listing.property_type, dayStatuses, dayPricing, bookings: bookedRanges,
+                      dayImportedFrom: importedByDay(dayStatuses, blockedRanges) });
         }
       }
 
@@ -1724,9 +1800,12 @@ module.exports = async (req, res) => {
         SELECT id FROM listing_blocked_dates
         WHERE listing_id = ${listingId} AND (room_id = ${safeRoomId} OR room_id IS NULL)
           AND start_date <= ${date}::date AND end_date > ${date}::date
+          AND source_feed_id IS NULL
         LIMIT 1
       `;
       if (!existing[0]) {
+        const imported = await importedBlockCovering(sql, listingId, safeRoomId, date, dayAfterStr(date));
+        if (imported) return res.status(400).json({ error: importedBlockMessage(imported) });
         return res.status(400).json({ error: 'No block was found covering this date.' });
       }
       // Unblocks exactly ONE day, which usually means SPLITTING the row
@@ -1734,9 +1813,7 @@ module.exports = async (req, res) => {
       // the row outright (as this used to) silently freed every other
       // night in the same block — a host clicking 15 Sep to reopen one
       // night would quietly reopen 13-20 Sep too.
-      const nextDay = new Date(date + 'T00:00:00');
-      nextDay.setDate(nextDay.getDate() + 1);
-      const dayAfter = nextDay.toISOString().slice(0, 10);
+      const dayAfter = dayAfterStr(date);
       const targetRowId = await resolveBlockRowForRoom(sql, existing[0].id, roomId || null);
       if (targetRowId) await unblockRangeFromRow(sql, targetRowId, date, dayAfter);
       return res.status(200).json({ success: true, blocked: false });
@@ -1784,13 +1861,18 @@ module.exports = async (req, res) => {
       const safeRoomId = roomId || null;
       // Overlap test for two half-open ranges: they overlap when each
       // starts before the other ends.
+      // Imported rows (source_feed_id set) are left alone: they are the
+      // other site's bookings and only that site can free them.
       const overlapping = await sql`
         SELECT id FROM listing_blocked_dates
         WHERE listing_id = ${listingId}
           AND (room_id = ${safeRoomId} OR room_id IS NULL)
           AND start_date < ${endDate}::date AND end_date > ${startDate}::date
+          AND source_feed_id IS NULL
       `;
       if (!overlapping.length) {
+        const imported = await importedBlockCovering(sql, listingId, safeRoomId, startDate, endDate);
+        if (imported) return res.status(400).json({ error: importedBlockMessage(imported) });
         return res.status(400).json({ error: 'No blocked dates were found in that range.' });
       }
 
@@ -1820,15 +1902,23 @@ module.exports = async (req, res) => {
   if (req.method === 'POST' && req.body && req.body.bulkBlockRange) {
     try {
       const { listingId, roomId, startDate, endDate, reason } = req.body.bulkBlockRange;
-      if (!listingId || !startDate || !endDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      const realDay = (t) => /^\d{4}-\d{2}-\d{2}$/.test(String(t || '')) && new Date(t + 'T00:00:00Z').toISOString().slice(0, 10) === t;
+      if (!listingId || !realDay(startDate) || !realDay(endDate)) {
         return res.status(400).json({ error: 'Missing or invalid listing/date range.' });
       }
+      if (endDate <= startDate) {
+        return res.status(400).json({ error: 'The last night must be on or after the first night.' });
+      }
       const listingRows = await sql`
-        SELECT l.id FROM listings l
+        SELECT l.id, l.timezone FROM listings l
         JOIN guests g ON g.host_id = l.host_id
         WHERE l.id = ${listingId} AND g.id = ${guestId}
       `;
       if (!listingRows[0]) return res.status(403).json({ error: 'You do not have permission to do this.' });
+      // Past nights can't be blocked — "today" on the property's own clock.
+      if (startDate < localTodayIn(listingRows[0].timezone || DEFAULT_TIMEZONE)) {
+        return res.status(400).json({ error: 'Dates in the past can\'t be blocked. Please start from today or later.' });
+      }
 
       if (roomId) {
         const roomRows = await sql`SELECT id FROM listing_rooms WHERE id = ${roomId} AND listing_id = ${listingId}`;
@@ -2140,7 +2230,9 @@ module.exports = async (req, res) => {
       // never trust orderId alone, since it's just a number a guest's
       // browser could also send.
       const rows = await sql`
-        SELECT o.id, o.deposit_status, o.deposit_release_at
+        SELECT o.id, o.deposit_status, o.deposit_release_at,
+               (o.deposit_release_at IS NOT NULL
+                AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date > o.deposit_release_at) AS window_closed
         FROM orders o
         JOIN listings l ON o.listing_id = l.id
         WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
@@ -2152,8 +2244,10 @@ module.exports = async (req, res) => {
       if (order.deposit_status !== 'held') {
         return res.status(400).json({ error: 'This deposit is no longer open to a concern — it has already been refunded, disputed, or resolved.' });
       }
-      const releaseDate = order.deposit_release_at ? new Date(order.deposit_release_at) : null;
-      if (releaseDate && new Date() > releaseDate) {
+      // "Within 7 days of check-out" (aerva-policies.js): deposit_release_at
+      // is check-out + 7 days, and that whole day still counts — on the
+      // listing's own calendar, not the server's UTC clock.
+      if (order.window_closed === true || order.window_closed === 't') {
         return res.status(400).json({ error: 'The 7-day window to raise a concern on this deposit has passed.' });
       }
 
@@ -2319,19 +2413,6 @@ module.exports = async (req, res) => {
     return { order, guest };
   }
 
-  // A payout already sent (or being sent) for a booking cannot be taken
-  // back by refunding the guest — Aerva would pay twice. Refused with a
-  // clear message instead; 'due' payouts are simply cancelled with the
-  // booking. Before the payouts table exists, nothing to check.
-  async function assertNoPayoutSent(ids){
-    let rows = [];
-    try { rows = await sql`SELECT status FROM payouts WHERE order_id = ANY(${ids})`; } catch (err) { return; }
-    const DEAD = ['failed', 'reversed', 'rejected', 'cancelled'];
-    if (rows.some(r => r.status !== 'due' && !DEAD.includes(r.status))) {
-      throw Object.assign(new Error('The host payout for this booking has already been sent, so it cannot be cancelled here. Please contact hello@aerva.in.'), { isUserFacing: true, status: 409 });
-    }
-  }
-
   // A guest who paid part of a booking with a coupon gets that part back as
   // a new coupon when the booking is cancelled (their cash is refunded
   // separately). Never throws: the cancellation and refund are done.
@@ -2347,6 +2428,26 @@ module.exports = async (req, res) => {
   async function hostLimitReached(hostId){
     return (await hostCancellationsLastYear(sql, hostId)) >= HOST_CANCELLATIONS_PER_YEAR;
   }
+  // Claim row for host cancellations: hosts.cancel_claim holds a token
+  // while one cancellation runs (a stale claim, over 3 minutes old, is
+  // taken over — a crashed request must not lock the host out). Returns
+  // the token, false when another cancellation holds it, or null before
+  // migration_host_listing_fixes.sql has added the columns (no lock then,
+  // as before).
+  async function claimHostCancelSlot(hostId){
+    const token = crypto.randomBytes(8).toString('hex');
+    try {
+      const got = await sql`UPDATE hosts SET cancel_claim = ${token}, cancel_claimed_at = now()
+                            WHERE id = ${hostId} AND (cancel_claim IS NULL OR cancel_claimed_at < now() - interval '3 minutes')
+                            RETURNING id`;
+      return got.length ? token : false;
+    } catch (err) { return null; }
+  }
+  async function releaseHostCancelSlot(hostId, token){
+    if (!token) return;
+    try { await sql`UPDATE hosts SET cancel_claim = NULL, cancel_claimed_at = NULL WHERE id = ${hostId} AND cancel_claim = ${token}`; }
+    catch (err) { /* columns not added yet */ }
+  }
   const HOST_LIMIT_MESSAGE = `You have already cancelled ${HOST_CANCELLATIONS_PER_YEAR} bookings in the last 12 months, which is the limit. To cancel this one, please contact hello@aerva.in.`;
 
   // Actually performs the refund + DB update + email — shared by a plain
@@ -2358,11 +2459,15 @@ module.exports = async (req, res) => {
     // "Includes a Stay" purchase. Never the other homes in the same cart.
     const siblings = await linkedSiblings(orderId);
     const allIds = [Number(orderId)].concat(siblings.map(r => Number(r.id)));
-    await assertNoPayoutSent(allIds);
     // One cancellation at a time: claimed before any money moves, so a guest
     // request, a second click or the scheduler can never cancel it as well.
     const claim = await claimForCancellation(sql, allIds);
     try {
+      // A payout already sent (or being sent) cannot be taken back by
+      // refunding the guest — Aerva would pay twice — so that refuses. One
+      // not sent yet is removed and planned again from the new amounts
+      // (_cancellations.js clearUnsentPayouts, same as guest cancellations).
+      await clearUnsentPayouts(sql, allIds);
       const result = await cancelClaimed();
       // Anything still carrying this claim (a linked half that could not be
       // finished and was logged for follow-up) is released, never left locked.
@@ -2384,9 +2489,11 @@ module.exports = async (req, res) => {
       const row = depositOf.get(Number(id)) || {};
       const inr = Math.max(0, ((paidMap[id] || {}).paid || 0) - (depositStillHeld(row) ? 0 : Math.round(Number(row.deposit_amount) || 0)));
       if (currency === 'INR') return Math.round(inr * 100);
-      const amt = await convertInrToForeignSubunit(sql, inr, currency);
-      if (!amt && inr > 0) {
-        throw Object.assign(new Error(`No cached exchange rate available to refund this ${currency} booking right now. Please try again shortly.`), { isUserFacing: true, status: 502 });
+      // The same share of what was actually captured, never re-converted at
+      // today's rate (_currency.js). null = no record of the charge: refuse.
+      const amt = await refundSubunitForInr(sql, { razorpayOrderId: row.razorpay_order_id || order.razorpay_order_id, amountInr: inr, currency });
+      if (amt == null || (!amt && inr > 0)) {
+        throw Object.assign(new Error(`This ${currency} booking cannot be refunded automatically. Please contact hello@aerva.in.`), { isUserFacing: true, status: 502 });
       }
       return amt;
     };
@@ -2487,6 +2594,11 @@ module.exports = async (req, res) => {
       const reason = reasonLabel + (details ? ' — ' + details : '');
       const loaded = await loadCancellableOrder(orderId, true);
       if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
+      // One host cancellation at a time per host, so two at once (two tabs,
+      // host and co-host) can't both pass the 3-a-year check below.
+      const slot = await claimHostCancelSlot(loaded.guest.host_id);
+      if (slot === false) return res.status(409).json({ error: 'Another cancellation is being processed. Please try again in a minute.' });
+      try {
       if (await hostLimitReached(loaded.guest.host_id)) return res.status(403).json({ error: HOST_LIMIT_MESSAGE, limitReached: true });
 
       // The guest's 10% coupon is paid for by the host, one of two ways:
@@ -2517,6 +2629,9 @@ module.exports = async (req, res) => {
       }
       const issued = await issueCouponChargedToNextPayout(loaded.order, orderId, loaded.guest.host_id, amountLater);
       return res.status(200).json({ success: true, couponAmount: issued.amount, paid: 'next_payout', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES });
+      } finally {
+        await releaseHostCancelSlot(loaded.guest.host_id, slot);
+      }
     } catch (err) {
       console.error('host-listings (cancelBooking) error:', err);
       const status = err.isUserFacing ? err.status : 500;
@@ -2616,7 +2731,7 @@ module.exports = async (req, res) => {
       if (!g || !g.host_id) return res.status(403).json({ error: 'You do not have permission to do this.' });
       if (req.body.setListingActive) {
         const { listingId, active } = req.body.setListingActive;
-        const l = (await sql`SELECT id, status, deactivated_by FROM listings WHERE id = ${Number(listingId) || 0} AND host_id = ${g.host_id}`)[0];
+        const l = (await sql`SELECT id, status, deactivated_by, property_name, pincode, property_type, listing_type FROM listings WHERE id = ${Number(listingId) || 0} AND host_id = ${g.host_id}`)[0];
         if (!l) return res.status(404).json({ error: 'Listing not found.' });
         if (active === false) {
           if (l.status !== 'approved') return res.status(400).json({ error: 'Only a live listing can be deactivated.' });
@@ -2625,6 +2740,12 @@ module.exports = async (req, res) => {
           if (l.status !== 'deactivated') return res.status(400).json({ error: 'This listing is not deactivated.' });
           const h = (await sql`SELECT hosting_status FROM hosts WHERE id = ${g.host_id}`)[0] || {};
           if (h.hosting_status === 'deactivated') return res.status(400).json({ error: 'Reactivate your hosting first.' });
+          // One name per pincode: another property may have taken this
+          // name while it was switched off (see _listing-rules.js).
+          if ((l.listing_type || 'stay') === 'stay') {
+            const clash = await findNameClashInPincode(sql, { propertyName: l.property_name, pincode: l.pincode, propertyType: l.property_type, excludeListingId: l.id });
+            if (clash) return res.status(409).json({ error: nameClashMessage(l.property_name, String(l.pincode || '').trim()) + ' It stays paused — write to hello@aerva.in and we will help you rename it.' });
+          }
           await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL WHERE id = ${l.id}`;
         }
         await logAudit(sql, { action: active === false ? 'listing_deactivated_by_host' : 'listing_reactivated_by_host', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'listing', targetId: l.id });
@@ -2638,11 +2759,24 @@ module.exports = async (req, res) => {
         await logAudit(sql, { action: 'hosting_deactivated', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'host', targetId: g.host_id, metadata: { listings: changed.map(r => r.id) } });
         return res.status(200).json({ success: true, hostingStatus: 'deactivated', listingsDeactivated: changed.length });
       }
+      // Same name-per-pincode check as reactivating one listing: a listing
+      // whose name was taken meanwhile stays deactivated, and the host is told.
+      const toRestore = await sql`SELECT id, property_name, pincode, property_type, listing_type FROM listings
+                                  WHERE host_id = ${g.host_id} AND status = 'deactivated' AND deactivated_by = 'hosting'`;
+      const keepOff = [];
+      for (const l of toRestore) {
+        if ((l.listing_type || 'stay') !== 'stay') continue;
+        const clash = await findNameClashInPincode(sql, { propertyName: l.property_name, pincode: l.pincode, propertyType: l.property_type, excludeListingId: l.id });
+        if (clash) keepOff.push(l);
+      }
+      const keepOffIds = keepOff.map(l => l.id);
       const restored = await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL
-                                 WHERE host_id = ${g.host_id} AND status = 'deactivated' AND deactivated_by = 'hosting' RETURNING id`;
+                                 WHERE host_id = ${g.host_id} AND status = 'deactivated' AND deactivated_by = 'hosting'
+                                   AND NOT (id = ANY(${keepOffIds}::int[])) RETURNING id`;
       await sql`UPDATE hosts SET hosting_status = 'active' WHERE id = ${g.host_id}`;
-      await logAudit(sql, { action: 'hosting_reactivated', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'host', targetId: g.host_id, metadata: { listings: restored.map(r => r.id) } });
-      return res.status(200).json({ success: true, hostingStatus: 'active', listingsRestored: restored.length });
+      await logAudit(sql, { action: 'hosting_reactivated', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'host', targetId: g.host_id, metadata: { listings: restored.map(r => r.id), keptOffForNameClash: keepOffIds } });
+      return res.status(200).json({ success: true, hostingStatus: 'active', listingsRestored: restored.length,
+        warning: keepOff.length ? keepOff.map(l => nameClashMessage(l.property_name, String(l.pincode || '').trim())).join(' ') + ' That listing stays paused — write to hello@aerva.in and we will help you rename it.' : undefined });
     } catch (err) {
       console.error('deactivation failed:', err);
       return res.status(500).json({ error: 'Could not do this right now. Please try again.' });
@@ -2816,15 +2950,35 @@ module.exports = async (req, res) => {
       const already = (await sql`SELECT id FROM coupons WHERE source_order_id = ${bookingId} AND status = 'reserved' LIMIT 1`)[0];
       if (already) return res.status(200).json({ alreadyPaid: true });
       const amount = await cancellationCouponAmount(loaded.order, bookingId);
+      // One coupon payment per booking. A second tab (or a second click)
+      // gets the SAME Razorpay order back, and Razorpay accepts only one
+      // payment per order — so the coupon can never be paid for twice.
+      const reuse = async () => (await sql`SELECT id, amount, razorpay_order_id FROM coupons
+                                           WHERE source_order_id = ${bookingId} AND status = 'pending_payment' ORDER BY id DESC LIMIT 1`)[0];
+      const reply = (c) => res.status(200).json({ couponId: c.id, amount: Number(c.amount), razorpayOrderId: c.razorpay_order_id, keyId: process.env.RAZORPAY_KEY_ID, currency: 'INR' });
+      const pending = await reuse();
+      if (pending && Number(pending.amount) === Number(amount) && pending.razorpay_order_id) return reply(pending);
+      // The amount has changed since (e.g. the booking was changed): the
+      // old unpaid order is retired, and paying it later is refused.
+      if (pending) await sql`UPDATE coupons SET status = 'abandoned' WHERE id = ${pending.id} AND status = 'pending_payment'`;
       const razorpayOrder = await razorpay.orders.create({
         amount: amount * 100, currency: 'INR', receipt: `aerva_coupon_${Date.now()}`,
         notes: { type: 'host_cancellation_coupon', hostId: String(loaded.guest.host_id), bookingId: String(bookingId), paidBy: cohostActor ? 'cohost:' + accountId : 'host' }
       });
-      const couponRows = await sql`
-        INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, razorpay_order_id)
-        VALUES (${'PENDING-' + razorpayOrder.id}, ${loaded.order.guest_id}, ${amount}, ${loaded.guest.host_id}, ${bookingId}, 'pending_payment', ${razorpayOrder.id})
-        RETURNING id
-      `;
+      let couponRows;
+      try {
+        couponRows = await sql`
+          INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, razorpay_order_id)
+          VALUES (${'PENDING-' + razorpayOrder.id}, ${loaded.order.guest_id}, ${amount}, ${loaded.guest.host_id}, ${bookingId}, 'pending_payment', ${razorpayOrder.id})
+          RETURNING id
+        `;
+      } catch (err) {
+        // Two tabs raced past the check above: the unique index from
+        // migration_host_listing_fixes.sql lets only one row in. Hand this
+        // tab the winner's order.
+        if (err && err.code === '23505') { const w = await reuse(); if (w) return reply(w); }
+        throw err;
+      }
       return res.status(200).json({ couponId: couponRows[0].id, amount, razorpayOrderId: razorpayOrder.id, keyId: process.env.RAZORPAY_KEY_ID, currency: 'INR' });
     } catch (err) {
       console.error('host-listings (buyCouponOrder) error:', err);
@@ -2850,10 +3004,32 @@ module.exports = async (req, res) => {
       if (coupon.razorpay_order_id !== razorpay_order_id) return res.status(400).json({ error: 'This payment does not match the coupon being confirmed.' });
       if (coupon.status === 'reserved' || coupon.status === 'active') return res.status(200).json({ verified: true });
       const code = 'AERVA-' + crypto.randomBytes(5).toString('hex').toUpperCase();
-      await sql`
-        UPDATE coupons SET status = 'reserved', code = ${code}, razorpay_payment_id = ${razorpay_payment_id}
-        WHERE id = ${coupon.id} AND status = 'pending_payment'
-      `;
+      // Claimed only if no other coupon for this booking is already held
+      // (the unique index in migration_host_listing_fixes.sql makes this
+      // airtight between two simultaneous confirmations).
+      let flipped = [];
+      try {
+        flipped = await sql`
+          UPDATE coupons SET status = 'reserved', code = ${code}, razorpay_payment_id = ${razorpay_payment_id}
+          WHERE id = ${coupon.id} AND status = 'pending_payment'
+            AND NOT EXISTS (SELECT 1 FROM coupons c2 WHERE c2.source_order_id = coupons.source_order_id AND c2.status = 'reserved' AND c2.id <> coupons.id)
+          RETURNING id
+        `;
+      } catch (err) {
+        if (!(err && err.code === '23505')) throw err;
+      }
+      if (!flipped.length) {
+        // This payment is not needed (a retired order, or the coupon was
+        // already paid from another tab): give the money straight back.
+        let refunded = false;
+        try { await razorpay.payments.refund(razorpay_payment_id, { notes: { reason: 'duplicate_host_coupon_payment', couponId: String(coupon.id) } }); refunded = true; }
+        catch (err) { console.error('duplicate coupon payment refund failed (needs manual refund):', razorpay_payment_id, err && err.message); }
+        await logAudit(sql, { action: 'coupon_payment_duplicate', success: refunded, actorType: cohostActor ? 'cohost' : 'host', actorIdentifier: String(cohostActor ? accountId : guest.host_id),
+          targetType: 'coupon', targetId: coupon.id, metadata: { paymentId: razorpay_payment_id, refunded } });
+        return res.status(409).json({ verified: false, error: refunded
+          ? 'This coupon was already paid for, so this payment has been refunded to you.'
+          : 'This coupon was already paid for. We will refund this second payment — write to hello@aerva.in if it has not arrived in 7 days.' });
+      }
       try { await sql`UPDATE coupons SET paid_by_guest_id = ${accountId} WHERE id = ${coupon.id}`; } catch (err) { /* column added by migration_coupon_release.sql */ }
       await logAudit(sql, { action: 'coupon_purchased', success: true, actorType: cohostActor ? 'cohost' : 'host', actorIdentifier: String(cohostActor ? accountId : guest.host_id), targetType: 'coupon', targetId: coupon.id,
         metadata: { paidBy: cohostActor ? 'cohost' : 'host' } });
@@ -3032,9 +3208,13 @@ module.exports = async (req, res) => {
              experience_meeting_point_details, experience_start_time, experience_refund_policy,
              experience_meeting_point_lat, experience_meeting_point_lng, experience_meeting_point_address,
              experience_instructions, experience_special_instructions,
-             experience_available_from, experience_available_until
+             experience_available_from, experience_available_until,
+             -- read by "Clone listing" (aerva.js) to copy the pet policy and deposit
+             pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit
       FROM listings
       WHERE host_id = ${guest.host_id}
+        -- a removed listing is gone for good from the host's own list
+        AND status IS DISTINCT FROM 'removed'
       ORDER BY created_at DESC
     `;
     // Generate a fresh "manage price" link for each listing on the spot —
@@ -3082,13 +3262,20 @@ module.exports = async (req, res) => {
              o.subtotal, o.discount_amount, o.gst,
              o.commission_rate, o.commission_amount, o.payout_amount,
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
+             -- the host may still raise a concern (same rule as raiseDispute)
+             (o.deposit_release_at IS NOT NULL
+              AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date <= o.deposit_release_at) AS deposit_window_open,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
              o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
              -- not revenue: only so the page knows what unit a refund
              -- amount is in before it prints a ₹ in front of it
              o.charge_currency,
-             o.guest_email, g.name AS guest_name
+             o.guest_email, g.name AS guest_name,
+             -- for can_cancel (the host's 48-hour limit, on the property's clock)
+             l.timezone AS listing_timezone, l.check_in_time AS listing_check_in_time,
+             -- set only when a GUEST cancellation was settled (_cancellations.js)
+             (to_jsonb(o)->>'refund_percent')::numeric AS refund_percent
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
       LEFT JOIN guests g ON g.id = o.guest_id
@@ -3153,9 +3340,16 @@ module.exports = async (req, res) => {
         const couponByOrder = {};
         if (cancelledIds.length) {
           try {
+            // Only coupons the host actually paid for or owes: paid up front
+            // (razorpay_payment_id) or charged to the next payout (release_at).
+            // Not an unpaid attempt ('pending_payment' / 'abandoned'), and
+            // not the guest's own coupon value handed back on a cancellation
+            // (returnCouponValue — neither column set).
             const cp = await sql`SELECT source_order_id, COALESCE(SUM(amount), 0)::int AS amt
                                  FROM coupons
                                  WHERE source_order_id = ANY(${cancelledIds}) AND issuing_host_id = ${guest.host_id}
+                                   AND status NOT IN ('pending_payment', 'abandoned')
+                                   AND (razorpay_payment_id IS NOT NULL OR release_at IS NOT NULL)
                                  GROUP BY source_order_id`;
             cp.forEach(r => { couponByOrder[r.source_order_id] = Number(r.amt) || 0; });
           } catch (e) { console.error('coupon cost unavailable (non-fatal):', e.message); }
@@ -3175,15 +3369,29 @@ module.exports = async (req, res) => {
           b.refund_amount_subunit = r ? r.amount : 0;
           b.refund_status = r ? r.status : null;
           b.coupon_cost = couponByOrder[b.id] || 0;
+          // A guest cancellation always records refund_percent — including
+          // one settled at 0% (declined, or no answer) — so that, not only an
+          // 'accepted' request, is what makes it the guest's.
+          const byGuest = b.refund_percent != null || guestAsked.has(Number(b.id));
           b.cancelled_by = (b.status === 'cancelled' || b.status === 'refunded')
-            ? (guestAsked.has(Number(b.id)) ? 'guest' : 'host')
+            ? (byGuest ? 'guest' : 'host')
             : null;
+          b.not_earned = notEarnedFor(b, byGuest);
         });
       }
     } catch (err) {
       console.error('cancellation detail unavailable (non-fatal):', err.message);
     }
 
+
+    // Whether the host may still cancel each booking — the SAME rule the
+    // cancel action enforces (48 hours before the check-in moment on the
+    // property's clock), so the page never offers a button that fails.
+    bookings.forEach(b => {
+      const h = hoursUntilCheckInTime(b.arrival, b.listing_timezone, b.listing_check_in_time);
+      b.can_cancel = b.status === 'paid' && h >= CANCELLATION_CUTOFF_HOURS;
+      delete b.listing_timezone; delete b.listing_check_in_time;
+    });
 
     // Verification status for the checklist. Bank account number is
     // masked to its last 4 digits — even the host's own dashboard never

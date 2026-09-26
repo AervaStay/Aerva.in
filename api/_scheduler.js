@@ -14,7 +14,24 @@
 // (_job-impact.js), for Admin → Batch Jobs. Quiet runs are not logged, so
 // the log holds what matters rather than thousands of empty rows.
 
-const { impactFor } = require('./_job-impact');
+const { impactFor, impactBefore } = require('./_job-impact');
+
+// A job "succeeds" only if it says it did. Several jobs catch their own
+// errors and return instead of throwing: { skipped: true } (it stopped on
+// an error), { error } or { failed: n } (n items could not be done). Those
+// runs are recorded as FAILED, so Admin → Batch Jobs shows them in red
+// instead of OK. A skipped reason given as text ('Razorpay keys not set')
+// is a setting, not a failure.
+function resultProblem(result) {
+  if (!result || typeof result !== 'object') return null;
+  if (result.error) return String(result.error.message || result.error);
+  if (Number(result.failed) > 0) return `${Number(result.failed)} could not be completed`;
+  if (result.skipped === true) return 'Stopped on an error (see the server log)';
+  return null;
+}
+
+// Postgres "undefined_table": job_runs does not exist yet.
+const isMissingTable = (err) => !!err && err.code === '42P01';
 
 async function ensureRow(sql, name) {
   await sql`INSERT INTO job_runs (name) VALUES (${name}) ON CONFLICT (name) DO NOTHING`;
@@ -83,16 +100,39 @@ async function runScheduled(sql, jobs, opts = {}) {
     let claimed;
     try { claimed = await claim(sql, job, force); }
     catch (err) {
-      // Before migration_job_runs.sql: run on the old fixed schedule, unlocked.
-      jobsTableMissing = true; claimed = true;
+      if (isMissingTable(err)) {
+        // Before migration_job_runs.sql: run on the old fixed schedule, unlocked.
+        jobsTableMissing = true; claimed = true;
+      } else {
+        // Any other error (connection, timeout…) means the lock could not
+        // be taken, so the job must NOT run: two callers could otherwise
+        // send the same payout at once. Recorded as a failure; the next
+        // call tries again.
+        console.error(`scheduled job ${job.name} not started — could not take its lock:`, err);
+        const error = 'Could not take the job lock: ' + String((err && err.message) || err);
+        out.failed.push({ job: job.name, error });
+        await logRun(sql, job.name, new Date(), false, null, error, []);
+        continue;
+      }
     }
     if (!claimed) continue;
     // The database's own clock, so "since" matches every timestamp it writes.
     let since = new Date();
     try { since = (await sql`SELECT now() AS t`)[0].t; } catch (e) { /* use the server clock */ }
+    // Some jobs need to know how things stood before they ran, to report
+    // what changed (a payout failed at the bank, a refund confirmed).
+    const before = await impactBefore(sql, job.name);
     try {
       const result = await job.run(Object.assign({ remainingMs: Math.max(1000, budget - (Date.now() - started)) }, opts.ctx || {}));
-      const affected = await impactFor(sql, job.name, since);
+      const affected = await impactFor(sql, job.name, since, before);
+      const problem = resultProblem(result);
+      if (problem) {
+        console.error(`scheduled job ${job.name} reported a problem:`, problem);
+        out.failed.push({ job: job.name, error: problem, result, affectedCount: affected.length });
+        if (!jobsTableMissing) { try { await finish(sql, job.name, false, result, problem); } catch (e) { /* recorded next time */ } }
+        await logRun(sql, job.name, since, false, result, problem, affected);
+        continue;
+      }
       out.ran.push({ job: job.name, result, affectedCount: affected.length });
       if (!jobsTableMissing) await finish(sql, job.name, true, result, null);
       if (affected.length || force || job.dailyAtHour != null) await logRun(sql, job.name, since, true, result, null, affected);
@@ -100,7 +140,7 @@ async function runScheduled(sql, jobs, opts = {}) {
       console.error(`scheduled job ${job.name} failed:`, err);
       out.failed.push({ job: job.name, error: String((err && err.message) || err) });
       if (!jobsTableMissing) { try { await finish(sql, job.name, false, null, (err && err.message) || err); } catch (e) { /* recorded next time */ } }
-      await logRun(sql, job.name, since, false, null, (err && err.message) || err, await impactFor(sql, job.name, since));
+      await logRun(sql, job.name, since, false, null, (err && err.message) || err, await impactFor(sql, job.name, since, before));
     }
   }
   out.ms = Date.now() - started;
@@ -127,4 +167,4 @@ async function jobStatus(sql, jobs) {
   });
 }
 
-module.exports = { runScheduled, jobStatus, jobRuns };
+module.exports = { runScheduled, jobStatus, jobRuns, resultProblem };
