@@ -116,7 +116,18 @@
         // to act for the host; send the co-host to the Co-hosting tab to finish.
         try{
           if(r && r.status === 403 && read() && window.location.search.indexOf('view=cohost') === -1){
-            r.clone().json().then(function(d){ if(d && d.detailsRequired) window.location.href = 'index.html?view=cohost'; }).catch(function(){});
+            r.clone().json().then(function(d){
+              if(d && d.detailsRequired) window.location.href = 'index.html?view=cohost';
+              // Co-host access has ended (or was never this account's, e.g.
+              // left over from someone else on this device): leave co-host
+              // mode and reload, so the page shows this account's own data
+              // instead of an error or an empty list.
+              else if(d && d.cohostEnded){
+                window.AervaCohost.stop();
+                try{ sessionStorage.removeItem('aerva_cohost_convs'); }catch(e){}
+                window.location.reload();
+              }
+            }).catch(function(){});
           }
         }catch(e){}
         return r;
