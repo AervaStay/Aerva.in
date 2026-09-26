@@ -351,7 +351,8 @@ function cohostDenied(res, msg) {
 // everything the response would otherwise show to what they may see.
 async function cohostGate(req, res, accountId) {
   const ctx = await resolveActingHost(sql, accountId, req.query.actingHost);
-  if (!ctx) return cohostDenied(res, 'You are not a co-host for this host, or your access has ended.');
+  // cohostEnded tells the page to leave co-host mode by itself (aerva-cohost.js).
+  if (!ctx) { res.status(403).json({ error: 'You are not a co-host for this host, or your access has ended.', cohostEnded: true }); return null; }
   // Nothing may be done for the host until the co-host's own details are in.
   const missing = await cohostDetailsMissing(sql, accountId, ctx.hostId);
   if (missing.length) { res.status(403).json({ error: DETAILS_REQUIRED_MESSAGE, detailsRequired: true, missing }); return null; }
