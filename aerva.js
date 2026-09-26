@@ -11075,6 +11075,8 @@
           <div><span>Nights</span><strong>${r.nights || '—'}</strong></div>
         `}
         ${r.payout ? `<div><span>Your payout</span><strong>${fmtGuest(r.payout)}</strong></div>` : ''}
+        ${/* a co-host gets their own share instead (the host's payout is never sent) */ ''}
+        ${!r.payout && Number(r.share) > 0 ? `<div><span>Your share</span><strong>${fmtGuest(r.share)}</strong></div>` : ''}
       </div>
       <div class="tb-section-title">Message ${esc((r.guestName || 'your guest').split(' ')[0])}</div>
       <div class="tb-thread" id="tbThread"><p class="tb-muted">Loading messages…</p></div>

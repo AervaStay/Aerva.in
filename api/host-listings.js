@@ -426,6 +426,10 @@ async function cohostGate(req, res, accountId) {
     });
   }
 
+  // The co-host's own money, looked up now because the trim below runs
+  // synchronously inside res.json.
+  await loadCohostMoney(ctx, accountId, mode);
+
   // Trim the answer to what this co-host may see.
   const originalJson = res.json.bind(res);
   res.json = (body) => originalJson(trimForCohost(ctx, mode, body));
@@ -436,9 +440,96 @@ function cohostManageLink(listingId, cohostRowId) {
   return `${SITE_BASE}/manage-listing.html?token=${cohostManageToken(listingId, cohostRowId)}`;
 }
 
+// A co-host never sees the host's money: not the payout, the commission,
+// what the guest paid, what a cancellation cost the host, the bank or TDS.
+// They see their OWN share only. These keys are removed from every
+// co-host response, however deep they sit; the modes below also rebuild
+// their rows from an allowlist, so a column added later stays out.
+const HOST_MONEY_KEYS = new Set([
+  'payout', 'payout_amount', 'payoutAmount', 'hostPayout', 'host_payout', 'net', 'gross', 'earned',
+  'commission', 'commission_amount', 'commission_rate', 'commissionAmount', 'commissionRate',
+  'subtotal', 'gst', 'total', 'discount_amount', 'guest_service_fee', 'serviceFee',
+  'not_earned', 'notEarned', 'deposit_resolution_amount', 'depositResolutionAmount',
+  'refund_amount_subunit', 'cohost_share', 'coupon_cost', 'verification'
+]);
+const HOST_MONEY_PREFIX = /^(bank|tds|pan)([A-Z_]|$)/;
+function stripHostMoney(v, keep) {
+  if (Array.isArray(v)) return v.map(x => stripHostMoney(x, keep));
+  if (!v || typeof v !== 'object' || v instanceof Date) return v;
+  const out = {};
+  for (const k of Object.keys(v)) {
+    if ((HOST_MONEY_KEYS.has(k) || HOST_MONEY_PREFIX.test(k)) && !(keep && keep.has(k))) continue;
+    out[k] = stripHostMoney(v[k], keep);
+  }
+  return out;
+}
+const pickKeys = (o, keys) => { const out = {}; for (const k of keys) if (o && o[k] !== undefined) out[k] = o[k]; return out; };
+
+// The same buckets the ?analytics=1 query groups by, so a co-host's share
+// lines up with each row they are shown.
+const shareBucketKey = (r) => [r.month, r.stayMonth, r.listingId, r.bucket, r.status].join('|');
+
+// The co-host's own money, for the trim: their share of each booking
+// (order_cohost_shares) and the guest coupons THEY paid for when they
+// cancelled. Fail-safe: before the co-host tables exist everything is 0.
+async function loadCohostMoney(ctx, accountId, mode) {
+  ctx.shareByOrder = new Map();
+  ctx.shareByBucket = new Map();
+  ctx.couponByOrder = new Map();
+  if (!['dashboard', 'statusCalendar', 'analytics'].includes(mode)) return;
+  try {
+    if (mode === 'analytics') {
+      const rows = await sql`
+        SELECT to_char(date_trunc('month', o.created_at), 'YYYY-MM') AS month,
+               to_char(date_trunc('month', o.arrival), 'YYYY-MM')    AS "stayMonth",
+               o.listing_id AS "listingId",
+               CASE WHEN o.arrival <= CURRENT_DATE THEN 'current' ELSE 'upcoming' END AS bucket,
+               o.status AS status,
+               COALESCE(SUM(s.amount), 0)::int AS share
+        FROM order_cohost_shares s JOIN orders o ON o.id = s.order_id JOIN listings l ON l.id = o.listing_id
+        WHERE l.host_id = ${ctx.hostId} AND (s.cohost_id = ${ctx.cohostId} OR s.cohost_guest_id = ${accountId})
+        GROUP BY 1, 2, 3, 4, 5`;
+      rows.forEach(r => ctx.shareByBucket.set(shareBucketKey(r), Number(r.share) || 0));
+    } else {
+      const rows = await sql`
+        SELECT s.order_id, COALESCE(SUM(s.amount), 0)::int AS share
+        FROM order_cohost_shares s JOIN orders o ON o.id = s.order_id JOIN listings l ON l.id = o.listing_id
+        WHERE l.host_id = ${ctx.hostId} AND (s.cohost_id = ${ctx.cohostId} OR s.cohost_guest_id = ${accountId})
+        GROUP BY s.order_id`;
+      rows.forEach(r => ctx.shareByOrder.set(Number(r.order_id), Number(r.share) || 0));
+    }
+  } catch (err) { console.error('co-host shares unavailable (non-fatal):', err.message); }
+  if (mode !== 'dashboard') return;
+  try {
+    // Same rule as the host's coupon_cost, but only coupons this co-host paid.
+    const rows = await sql`
+      SELECT c.source_order_id, COALESCE(SUM(c.amount), 0)::int AS amt
+      FROM coupons c JOIN orders o ON o.id = c.source_order_id JOIN listings l ON l.id = o.listing_id
+      WHERE l.host_id = ${ctx.hostId} AND c.paid_by_guest_id = ${accountId}
+        AND c.status NOT IN ('pending_payment', 'abandoned') AND c.razorpay_payment_id IS NOT NULL
+      GROUP BY c.source_order_id`;
+    rows.forEach(r => ctx.couponByOrder.set(Number(r.source_order_id), Number(r.amt) || 0));
+  } catch (err) { console.error('co-host coupon cost unavailable (non-fatal):', err.message); }
+}
+
+// What a co-host may see of one booking on the dashboard: the stay, the
+// guest, the deposit's state and the cancellation — none of the money.
+const COHOST_BOOKING_KEYS = ['id', 'suite_name', 'listing_id', 'arrival', 'departure', 'nights', 'guests',
+  'deposit_amount', 'deposit_status', 'deposit_release_at', 'deposit_window_open', 'dispute_reason', 'dispute_raised_at',
+  'cancellation_reason', 'cancelled_at', 'status', 'created_at', 'pet_types', 'service_animal_types', 'young_litter_count',
+  'charge_currency', 'guest_email', 'guest_name', 'refund_percent', 'refund_status', 'cancelled_by', 'can_cancel'];
+// One booking on the status calendar.
+const COHOST_CALENDAR_BOOKING_KEYS = ['id', 'start_date', 'end_date', 'guest_email', 'guests', 'nights',
+  'deposit_amount', 'deposit_status', 'created_at', 'razorpay_order_id', 'guest_name', 'guest_phone',
+  'confirmation_code', 'guest_phone_verified'];
+const COHOST_TODAY_KEYS = ['orderId', 'guestName', 'guests', 'arrival', 'departure', 'nights', 'listingId', 'listingName',
+  'photoUrl', 'guestPhotoUrl', 'checkInTime', 'checkOutTime', 'nightsLeft', 'kind', 'startTime', 'petTypes',
+  'serviceAnimals', 'youngLitter'];
+
 function trimForCohost(ctx, mode, body) {
-  if (!body || typeof body !== 'object' || body.error) return body;
+  if (!body || typeof body !== 'object' || body.error) return stripHostMoney(body);
   const inScope = (id) => cohostHasListing(ctx, id);
+  const shareOf = (orderId) => (ctx.shareByOrder && ctx.shareByOrder.get(Number(orderId))) || 0;
   if (mode === 'dashboard') {
     const seesBookings = cohostCan(ctx, 'bookings');
     const out = {
@@ -446,7 +537,11 @@ function trimForCohost(ctx, mode, body) {
       // stops working when they are removed and cannot rename the listing.
       listings: (body.listings || []).filter(l => inScope(l.id)).map(l => ({ ...l, manageLink: cohostManageLink(l.id, ctx.cohostId) })),
       hostBadge: body.hostBadge || null,
-      bookings: seesBookings ? (body.bookings || []).filter(b => inScope(b.listing_id)) : [],
+      // Rebuilt from the allowlist, with the co-host's OWN share and the
+      // coupons they paid for — never the host's figures.
+      bookings: seesBookings ? (body.bookings || []).filter(b => inScope(b.listing_id))
+        .map(b => ({ ...pickKeys(b, COHOST_BOOKING_KEYS), cohost_share: shareOf(b.id),
+                     my_coupon_cost: (ctx.couponByOrder && ctx.couponByOrder.get(Number(b.id))) || 0 })) : [],
       // Which period was fetched, so the co-host's page knows what it is
       // holding. The counts are deliberately NOT carried over: they
       // describe the host's whole list, and this one has been cut to
@@ -461,19 +556,37 @@ function trimForCohost(ctx, mode, body) {
       cohost: describeAccess(ctx)
     };
     if (seesBookings && body.today) {
-      for (const k of Object.keys(out.today)) out.today[k] = (body.today[k] || []).filter(r => inScope(r.listingId));
+      for (const k of Object.keys(out.today)) {
+        out.today[k] = (body.today[k] || []).filter(r => inScope(r.listingId))
+          .map(r => ({ ...pickKeys(r, COHOST_TODAY_KEYS), share: shareOf(r.orderId) }));
+      }
     }
-    return out;
+    const keep = new Set(['cohost_share', 'verification']);
+    return stripHostMoney(out, keep);
   }
   if (mode === 'analytics') {
-    return { ...body,
-      rows: (body.rows || []).filter(r => inScope(r.listingId)),
-      listings: Array.isArray(body.listings) ? body.listings.filter(l => inScope(l.id)) : body.listings };
+    // Counts stay (bookings, nights); the host's gross, payout and
+    // commission go; `share` is the co-host's own share in the same bucket.
+    return stripHostMoney({ ...body,
+      rows: (body.rows || []).filter(r => inScope(r.listingId)).map(r => ({
+        ...pickKeys(r, ['month', 'stayMonth', 'listingId', 'listingName', 'listingType', 'bucket', 'status', 'nights', 'bookings']),
+        share: (ctx.shareByBucket && ctx.shareByBucket.get(shareBucketKey(r))) || 0
+      })),
+      listings: Array.isArray(body.listings) ? body.listings.filter(l => inScope(l.id)) : body.listings,
+      shareOnly: true });
   }
   if (mode === 'statusCalendar') {
-    return { ...body, rows: (body.rows || []).filter(r => inScope(r.listingId)) };
+    return stripHostMoney({ ...body, shareOnly: true, rows: (body.rows || []).filter(r => inScope(r.listingId)).map(r => ({
+      ...r, bookings: (r.bookings || []).map(b => ({ ...pickKeys(b, COHOST_CALENDAR_BOOKING_KEYS), cohost_share: shareOf(b.id) }))
+    })) }, new Set(['cohost_share']));
   }
-  return body;
+  // myPenalties is the co-host's own coupon deductions (payer_guest_id is
+  // them), so its total is theirs to see.
+  if (mode === 'myPenalties') return stripHostMoney(body, new Set(['total']));
+  // Everything else (cancellation requests, booking changes, the guest's
+  // profile, the result of an action) keeps what the guest pays or gets
+  // back, and loses anything that is the host's.
+  return stripHostMoney(body);
 }
 
 // Inviting, changing and removing co-hosts (the host), and seeing,

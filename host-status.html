@@ -1008,6 +1008,9 @@
     if(b.start_date > t) return 'upcoming';
     return 'staying now';
   }
+  function isCohostView(data){
+    return !!((data && data.shareOnly) || (window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get()));
+  }
   function renderBookingsList(data){
     const box = document.getElementById('statusBookingsList');
     if(!box) return;
@@ -1021,12 +1024,17 @@
     }
     const money = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
     const fmt = formatDateLong;
-    const earned = all.reduce((t, b) => t + (Number(b.payout_amount) || 0), 0);
+    // A co-host is sent only their own share of each booking, never what
+    // the guest paid or the host's payout.
+    const cohostView = isCohostView(data);
+    const earned = all.reduce((t, b) => t + (Number(cohostView ? b.cohost_share : b.payout_amount) || 0), 0);
     box.innerHTML = `
       <h2 class="bookings-head">Bookings in this range</h2>
-      <p style="color:#6e675d; font-size:13.5px; margin:0 0 12px;">${all.length} booking${all.length === 1 ? '' : 's'} between ${rangeText} · your payouts total ${money(earned)} before TDS</p>
+      <p style="color:#6e675d; font-size:13.5px; margin:0 0 12px;">${all.length} booking${all.length === 1 ? '' : 's'} between ${rangeText} · ${cohostView
+        ? `your share totals ${money(earned)}. You see your own share only. The host's earnings are private.`
+        : `your payouts total ${money(earned)} before TDS`}</p>
       <div class="bookings-scroll"><table class="bookings-table">
-        <thead><tr><th>When</th><th>Code</th><th>Listing</th><th>Guest</th><th>Dates</th><th>Guests</th><th>Guest paid</th><th>Your payout</th><th>Deposit</th></tr></thead>
+        <thead><tr><th>When</th><th>Code</th><th>Listing</th><th>Guest</th><th>Dates</th><th>Guests</th>${cohostView ? '<th>Your share</th>' : '<th>Guest paid</th><th>Your payout</th>'}<th>Deposit</th></tr></thead>
         <tbody>${all.map(b => {
           const when = bookingWhen(b, data.today);
           return `<tr>
@@ -1036,8 +1044,10 @@
             <td>${esc(b.guest_name || b.guest_email || '—')}${b.guest_phone ? `<br><span class="sub"><a href="${esc(telHref(b.guest_phone))}">${esc(b.guest_phone)}</a></span>` : ''}${b.guest_email ? `<br><span class="sub"><a href="mailto:${encodeURIComponent(b.guest_email)}">${esc(b.guest_email)}</a></span>` : ''}</td>
             <td>${fmt(b.start_date)} – ${fmt(b.end_date)}<br><span class="sub">${Number(b.nights) || ''} night${Number(b.nights) === 1 ? '' : 's'}</span></td>
             <td>${esc(b.guests || '—')}</td>
-            <td>${money(b.total)}</td>
-            <td>${money(b.payout_amount)}</td>
+            ${cohostView
+              ? `<td>${Number(b.cohost_share) > 0 ? money(b.cohost_share) : '—'}</td>`
+              : `<td>${money(b.total)}</td>
+            <td>${money(b.payout_amount)}</td>`}
             <td>${Number(b.deposit_amount) ? money(b.deposit_amount) + '<br><span class="sub">' + esc(depositLabel(b.deposit_status)) + '</span>' : '—'}</td>
           </tr>`;
         }).join('')}</tbody>
@@ -1170,6 +1180,7 @@
       <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}${b.nights ? ` (${Number(b.nights)} night${Number(b.nights) === 1 ? '' : 's'})` : ''} <span style="color:#6e675d;">· ${bookingWhen(b)}</span></p>
       ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${esc(b.guests)}</p>` : ''}
       ${b.total ? `<p style="margin:4px 0;"><strong>Guest paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
+      ${Number(b.cohost_share) > 0 && b.payout_amount === undefined ? `<p style="margin:4px 0;"><strong>Your share:</strong> ₹${Number(b.cohost_share).toLocaleString('en-IN')}</p>` : ''}
       ${b.payout_amount ? `<p style="margin:4px 0;"><strong>Your payout:</strong> ₹${Number(b.payout_amount).toLocaleString('en-IN')} <span style="color:#6e675d; font-size:12.5px;">before TDS</span></p>` : ''}
       ${Number(b.deposit_amount) ? `<p style="margin:4px 0;"><strong>Deposit:</strong> ₹${Number(b.deposit_amount).toLocaleString('en-IN')} · ${depositLabel(b.deposit_status)}</p>` : ''}
       ${b.created_at ? `<p style="margin:4px 0; color:#6e675d; font-size:12.5px;">Booked on ${fmtDate(String(b.created_at).slice(0, 10))}${b.razorpay_order_id ? ` · Ref ${esc(b.razorpay_order_id)}` : ''}</p>` : ''}

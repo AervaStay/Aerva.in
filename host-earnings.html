@@ -231,7 +231,7 @@
 <div class="wrap">
   <a href="host-dashboard.html" class="back-home">&larr; Back to My Collection</a>
   <div class="top-row">
-    <div><h1>My Earnings</h1></div>
+    <div><h1 id="earnTitle">My Earnings</h1><p id="cohostShareNote" style="display:none; font-size:14px; opacity:0.75; margin:6px 0 0;">You see your own share only. The host's earnings are private.</p></div>
   </div>
 
   <!-- The same action-needed warning as the dashboard. Earnings is the
@@ -244,7 +244,7 @@
     <p class="loading">Loading your analytics…</p>
   </div>
 
-  <h2 class="section-heading">Your Earnings</h2>
+  <h2 class="section-heading" id="earnSectionHeading">Your Earnings</h2>
   <div id="bookingsContainer">
     <p class="loading">Loading your bookings…</p>
   </div>
@@ -259,6 +259,17 @@
   };
   const sessionToken = safeStorage.get('aerva_guest_session');
   if(!sessionToken) window.location.replace('guest-login.html');
+
+  // Co-host mode: the server sends only the co-host's own share of each
+  // booking (cohost_share / share), never the host's payout, commission
+  // or what the guest paid. Every money figure on this page then shows
+  // that share, and says so.
+  const IS_COHOST = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
+  if(IS_COHOST){
+    document.getElementById('earnTitle').textContent = 'Your share';
+    document.getElementById('earnSectionHeading').textContent = 'Your share by booking';
+    document.getElementById('cohostShareNote').style.display = 'block';
+  }
 
   function statusBadgeHtml(status){
     return `<span class="status-badge status-${status}">${status}</span>`;
@@ -551,7 +562,9 @@
         if(b.deposit_status === 'held') statusNote = `Held until ${releaseLabel} unless you raise a concern.`;
         else if(b.deposit_status === 'disputed') statusNote = 'Under review by Aerva — you\'ll hear back once it\'s resolved.';
         else if(b.deposit_status === 'refunded') statusNote = 'The 7-day window passed with no concern raised — refunded to the guest in full.';
-        else if(b.deposit_status === 'resolved') statusNote = `Resolved — ${fmt(b.deposit_resolution_amount || 0)} credited toward your payout, remainder refunded to the guest.`;
+        else if(b.deposit_status === 'resolved') statusNote = IS_COHOST
+          ? 'Resolved by Aerva between the host and the guest.'
+          : `Resolved — ${fmt(b.deposit_resolution_amount || 0)} credited toward your payout, remainder refunded to the guest.`;
 
         depositHtml = `
           <div class="deposit-row">
@@ -647,6 +660,38 @@
       // cancelled under the policy may still leave the host a payout.
       const notEarned = b.not_earned != null ? Number(b.not_earned) || 0 : myPayout;
       const commissionRate = Number(b.commission_rate);
+      const myShare = Number(b.cohost_share) || 0;
+      const myCoupon = Number(b.my_coupon_cost) || 0;
+
+      // Co-host: the stay, their own share, and (cancelled) what their
+      // own cancellation cost them. Nothing of the host's.
+      if(IS_COHOST) return `
+        <tr>
+          <td data-label="">
+            <span class="earn-prop">${escA(b.suite_name)}</span>
+            ${b.guest_name ? `<span class="earn-guest">${escA(b.guest_name)}</span>` : ''}
+            ${flag ? `<span class="earn-flag">${flag}</span>` : ''}
+          </td>
+          <td data-label="Stay" class="earn-when">${dateRange}
+            <small>${b.nights} night${b.nights === 1 ? '' : 's'}${b.guests ? ' · ' + b.guests + ' guest' + (b.guests === 1 ? '' : 's') : ''}</small></td>
+          ${cancelled ? `
+          <td data-label="Cancelled" class="earn-when">${b.cancelled_at ? new Date(b.cancelled_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', year:'numeric' }) : '—'}
+            <small>${b.cancelled_by === 'guest' ? 'by the guest' : myCoupon > 0 ? 'by you' : b.cancelled_by === 'host' ? 'by the host' : ''}</small></td>
+          <td data-label="Refund to guest" class="num">${earnRefundText(b)}</td>
+          <td data-label="Cost to you" class="num">${myCoupon > 0
+            ? `<span class="earn-cost">− ${fmt(myCoupon)}</span><small style="display:block; opacity:0.6;">guest coupon</small>`
+            : '—'}</td>
+          ` : ''}
+          <td data-label="Your share" class="num payout-value">${myShare > 0 ? fmt(myShare) : '—'}</td>
+          <td data-label="Status">${statusBadgeHtml(b.status)}</td>
+          <td data-label="" class="${detailHtml.trim() ? '' : 'is-blank'}">${detailHtml.trim()
+            ? `<button type="button" class="earn-more" data-earn-toggle="${b.id}" aria-expanded="${isOpen}">${isOpen ? 'Hide' : 'Details'}</button>`
+            : ''}</td>
+        </tr>
+        ${detailHtml.trim() && isOpen
+          ? `<tr class="earn-detail"><td colspan="${cancelled ? 7 : 5}">${detailHtml}</td></tr>`
+          : ''}
+      `;
 
       return `
         <tr>
@@ -691,8 +736,10 @@
       payout: a.payout + (Number(b.payout_amount) || 0) - (Number(b.cohost_share) || 0),
       lost:   a.lost   + (b.not_earned != null ? (Number(b.not_earned) || 0) : (Number(b.payout_amount) || 0) - (Number(b.cohost_share) || 0)),
       nights: a.nights + Number(b.nights || 0),
-      coupon: a.coupon + Number(b.coupon_cost || 0)
-    }), { paid:0, comm:0, cohost:0, payout:0, lost:0, nights:0, coupon:0 });
+      coupon: a.coupon + Number(b.coupon_cost || 0),
+      share:  a.share  + (Number(b.cohost_share) || 0),
+      myCoupon: a.myCoupon + (Number(b.my_coupon_cost) || 0)
+    }), { paid:0, comm:0, cohost:0, payout:0, lost:0, nights:0, coupon:0, share:0, myCoupon:0 });
     // Refunds are only totalled when every one of them is in rupees —
     // adding a paise figure to a foreign subunit would produce a number
     // that means nothing.
@@ -717,7 +764,13 @@
       ? `<p class="earn-scope-note">These are your most recent ${bookingsMeta.returned} bookings, back to ${new Date(bookingsMeta.oldest).toLocaleDateString('en-IN', { month:'short', day:'numeric', year:'numeric' })}. For anything older, click its month on the chart above.</p>`
       : '';
 
-    const head = cancelled
+    const head = IS_COHOST
+      ? (cancelled
+        ? `<th>Booking</th><th>Stay</th><th>Cancelled</th>
+           <th class="num">Refund to guest</th><th class="num">Cost to you</th>
+           <th class="num">Your share</th><th>Status</th><th></th>`
+        : `<th>Booking</th><th>Stay</th><th class="num">Your share</th><th>Status</th><th></th>`)
+      : cancelled
       ? `<th>Booking</th><th>Stay</th><th>Cancelled</th>
          <th class="num">Refund to guest</th><th class="num">Cost to you</th>
          <th class="num">Not earned</th><th>Status</th><th></th>`
@@ -725,7 +778,15 @@
          <th class="num">Commission</th><th class="num">Co-host</th>
          <th class="num">Your payout</th><th>Status</th><th></th>`;
 
-    const foot = cancelled
+    const foot = IS_COHOST
+      ? `<td class="foot-label" data-label="">${bookings.length} booking${bookings.length===1?'':'s'}</td>
+         <td class="foot-label" data-label="">${t.nights} night${t.nights===1?'':'s'}</td>
+         ${cancelled ? `<td class="is-blank"></td>
+         <td class="num" data-label="Refunded to guests">${refundTotal ? fmt(Math.round(refundTotal)) : '—'}</td>
+         <td class="num earn-cost" data-label="Cost to you">${t.myCoupon > 0 ? '− ' + fmt(t.myCoupon) : '—'}</td>` : ''}
+         <td class="num payout-value" data-label="Your share">${fmt(t.share)}</td>
+         <td class="is-blank"></td><td class="is-blank"></td>`
+      : cancelled
       ? `<td class="foot-label" data-label="">${bookings.length} booking${bookings.length===1?'':'s'}</td>
          <td class="foot-label" data-label="">${t.nights} night${t.nights===1?'':'s'}</td>
          <td class="is-blank"></td>
@@ -960,6 +1021,9 @@
     return '₹' + v.toLocaleString('en-IN');
   }
   function anMoneyFull(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN'); }
+  // What the money on the charts is: the host's payout, or — for a
+  // co-host — their own share (rows carry `share`, never `payout`).
+  const AN_MONEY_WORD = IS_COHOST ? 'Your share' : 'Payout';
   // Built from the string, never through new Date(), so a month label
   // can't shift by one in a negative-offset timezone.
   function anMonthLabel(key){ return AN_MONTHS[Number(key.slice(5,7)) - 1] || key; }
@@ -1051,7 +1115,7 @@
       });
       labels += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10" fill="${isSel ? '#1c1a17' : '#8a7f6c'}" font-weight="${isSel ? '600' : '400'}" style="pointer-events:none">${anMonthLabel(s.month)}</text>`;
     });
-    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Payout by month">${grid}${bars}${labels}</svg>`;
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${AN_MONEY_WORD} by month">${grid}${bars}${labels}</svg>`;
   }
 
   // Two years side by side, one pair of bars per month.
@@ -1109,13 +1173,13 @@
       out += `<rect class="an-bar" data-tip="${anEsc(l.name + ' · ' + anMoneyFull(l.payout) + ' · ' + l.bookings + (l.bookings===1?' booking':' bookings') + ' · ' + l.nights + (l.nights===1?' night':' nights'))}" x="${padLl}" y="${y+3}" width="${Math.max(w,2).toFixed(1)}" height="15" rx="2" fill="${l.type === 'experience' ? '#8a6c39' : '#3a7d44'}"></rect>`;
       out += `<text x="${padLl+Math.max(w,2)+7}" y="${y+15}" font-size="10" fill="#8a7f6c">${anMoney(l.payout)} · ${l.bookings} bkg</text>`;
     });
-    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Payout by listing">${out}</svg>`;
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${AN_MONEY_WORD} by listing">${out}</svg>`;
   }
 
   function anTotalsStrip(t, caption){
     return `<p class="an-sub">${anEsc(caption)}</p><div class="an-totals">
       ${AN_BUCKETS.map(b => `<div class="an-total"><span class="an-label"><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span><span class="an-value">${anFmt(t[b.key])}</span></div>`).join('')}
-      <div class="an-total"><span class="an-label">${anMetric === 'bookings' ? 'Total bookings' : 'Total payout'}</span><span class="an-value payout-value">${anFmt(t.total)}</span></div>
+      <div class="an-total"><span class="an-label">${anMetric === 'bookings' ? 'Total bookings' : (IS_COHOST ? 'Your share' : 'Total payout')}</span><span class="an-value payout-value">${anFmt(t.total)}</span></div>
     </div>`;
   }
 
@@ -1174,7 +1238,7 @@
           .map(([v,l]) => `<option value="${v}" ${anStatus===v?'selected':''}>${l}</option>`).join('')}
       </select>
       <div class="an-toggle an-metric">
-        ${[['payout','₹ Payout'],['bookings','# Bookings']].map(([v,l]) =>
+        ${[['payout', IS_COHOST ? '₹ Your share' : '₹ Payout'],['bookings','# Bookings']].map(([v,l]) =>
           `<button type="button" data-an-metric="${v}" class="${anMetric===v?'on':''}">${l}</button>`).join('')}
       </div>
     </div>`;
@@ -1186,7 +1250,7 @@
       const diff = tB.total - tA.total;
       const pct = tA.total > 0 ? Math.round((diff/tA.total)*100) : null;
       body = `<div class="an-card"><h4>${yA} vs ${yB}</h4>
-        <p class="an-sub">Total payout per month, both years side by side.</p>
+        <p class="an-sub">${IS_COHOST ? 'Your share' : 'Total payout'} per month, both years side by side.</p>
         ${anCompareChart(yA, yB)}
         <div class="an-legend">
           <span><i class="an-swatch" style="background:#c2b49a"></i>${yA} — ${anMoney(tA.total)}</span>
@@ -1198,21 +1262,21 @@
       const sel = anSelectedMonth && anSelectedMonth.slice(0,4) === String(anYear)
         ? series.find(s => s.month === anSelectedMonth) : null;
       const scopeTotals = sel
-        ? { current:sel.current, upcoming:sel.upcoming, total:sel.total, bookings:sel.bookings, nights:sel.nights }
+        ? { current:sel.current, upcoming:sel.upcoming, total:sel.total, payout:sel.payout, bookings:sel.bookings, nights:sel.nights }
         : anYearTotals(anYear);
       const statusWord = { paid:'confirmed', all:'', cancelled:'cancelled', refunded:'refunded' }[anStatus];
       const scopeLabel = sel ? `${anMonthLabel(sel.month)} ${anYear}` : String(anYear);
       const caption = `${scopeLabel} — ${scopeTotals.bookings} ${statusWord ? statusWord + ' ' : ''}booking${scopeTotals.bookings===1?'':'s'}`
         + `, ${scopeTotals.nights} night${scopeTotals.nights===1?'':'s'}`
-        + `, ${anMoneyFull(scopeTotals.payout)} paid out`;
+        + (IS_COHOST ? `, your share ${anMoneyFull(scopeTotals.payout)}` : `, ${anMoneyFull(scopeTotals.payout)} paid out`);
       body = anTotalsStrip(scopeTotals, caption)
-        + `<div class="an-card"><h4>${anMetric === 'bookings' ? 'Bookings' : 'Payout'} by booking month</h4>
-           <p class="an-sub">Counted in the month you were paid, split by whether the stay has happened yet. Tap a month for its own numbers.${sel?' <button type="button" class="an-clear" id="anClearMonth">Show whole year</button>':''}</p>
+        + `<div class="an-card"><h4>${anMetric === 'bookings' ? 'Bookings' : AN_MONEY_WORD} by booking month</h4>
+           <p class="an-sub">Counted in the month ${IS_COHOST ? 'the booking was paid' : 'you were paid'}, split by whether the stay has happened yet. Tap a month for its own numbers.${sel?' <button type="button" class="an-clear" id="anClearMonth">Show whole year</button>':''}</p>
            ${anMonthChart(series)}
            <div class="an-legend">${AN_BUCKETS.map(b=>`<span><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span>`).join('')}</div>
            </div>`
         + `<div class="an-card"><h4>By listing${sel?' — '+anMonthLabel(sel.month)+' '+anYear:''}</h4>
-           <p class="an-sub">Payout, highest first.</p>
+           <p class="an-sub">${AN_MONEY_WORD}, highest first.</p>
            ${anListingBreakdown(anYear, sel ? sel.month : null)}</div>`;
     }
 
@@ -1280,6 +1344,11 @@
       if(!Array.isArray(d.rows) || !Array.isArray(d.years)){
         box.innerHTML = '<p class="an-empty">Analytics isn’t available right now. Please try again later.</p>';
         return;
+      }
+      // A co-host's rows carry their own `share` in place of the host's
+      // payout; the charts read it through the same field.
+      if(IS_COHOST || d.shareOnly){
+        d.rows = d.rows.map(r => ({ ...r, payout: Number(r.share) || 0, gross: 0, commission: 0 }));
       }
       anData = d;
       anYear = d.years[d.years.length - 1];

@@ -498,6 +498,9 @@ module.exports = async (req, res) => {
           // The host's payout is the host's business: never to a guest, and
           // never to a co-host (payouts are the host's alone).
           if (c.my_role !== 'host' || actingCtx) delete c.payout_amount;
+          // Nor what the guest paid for the stay: the host's payout is that
+          // less commission, so it is the host's earnings by another name.
+          if (actingCtx) { delete c.subtotal; delete c.gst; }
           // Check-in secrets (WiFi, door code, check-in steps and photos,
           // the exact address and map position) are used by the HOST side
           // to fill templates. A guest gets them only while their paid
