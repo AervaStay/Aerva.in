@@ -6094,19 +6094,28 @@
   // Shown once per browser session per number of pending reviews, so
   // dismissing it does not bring it straight back on the next page, but a
   // NEW stay to review does re-raise it.
+  // The fixed header sits below the bar while it shows (--rr-h in aerva.css).
+  function reviewBarSpace(){
+    const bar = document.getElementById('reviewReminderBar');
+    const h = bar && bar.style.display === 'block' ? bar.offsetHeight : 0;
+    document.documentElement.style.setProperty('--rr-h', h + 'px');
+  }
+  window.addEventListener('resize', reviewBarSpace);
   function showReviewReminder(count){
     const bar = document.getElementById('reviewReminderBar');
     if(!bar) return;
-    if(!count){ bar.style.display = 'none'; return; }
+    if(!count){ bar.style.display = 'none'; reviewBarSpace(); return; }
     const dismissedFor = safeSessionGet('aerva_review_reminder_dismissed');
-    if(dismissedFor === String(count)){ bar.style.display = 'none'; return; }
+    if(dismissedFor === String(count)){ bar.style.display = 'none'; reviewBarSpace(); return; }
     document.getElementById('reviewReminderText').textContent = count === 1
       ? 'You have a stay to review. It takes a minute, and the window closes 15 days after checkout.'
       : `You have ${count} stays to review. It takes a minute, and the window closes 15 days after checkout.`;
     bar.style.display = 'block';
+    reviewBarSpace();
     document.getElementById('reviewReminderBtn').onclick = () => { window.location.href = 'index.html?view=my-bookings'; };
     document.getElementById('reviewReminderDismiss').onclick = () => {
       bar.style.display = 'none';
+      reviewBarSpace();
       safeSessionSet('aerva_review_reminder_dismissed', String(count));
     };
   }

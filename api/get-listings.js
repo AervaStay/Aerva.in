@@ -67,6 +67,7 @@ const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
         tierByKey, applyDecayCap } = require('./_tiers');
 const { verifyToken, secretMatches } = require('./_approval-token');
+const { adminSessionActive, checkAdminSecret } = require('./_admin-auth');
 const { isSessionRevoked } = require('./_accounts');
 const { buildIcs, syncStaleFeeds } = require('./_calendar-sync');
 const { sendScheduledTemplates } = require('./_template-scheduling');
@@ -151,13 +152,17 @@ function isCronAuthorized(req) {
 // authorises this instead, exactly as it does for every other admin
 // action. Same two ways in as get-pending-listings.js: an admin session
 // token, or the x-admin-secret header.
-function isAdminAuthorized(req) {
+// An admin signed in (a session not signed out everywhere and whose admin
+// still exists — _admin-auth.js), or the admin secret (wrong guesses
+// counted and limited, same as the other admin endpoints).
+async function isAdminAuthorized(req) {
   const header = String(req.headers['authorization'] || '');
   if (header.startsWith('Bearer ')) {
     const payload = verifyToken(header.slice(7));
-    if (payload && payload.action === 'admin-session') return true;
+    if (payload && payload.action === 'admin-session' && await adminSessionActive(sql, payload)) return true;
   }
-  return secretMatches(req.headers['x-admin-secret'], process.env.ADMIN_SECRET);
+  if (!req.headers['x-admin-secret']) return false;
+  return (await checkAdminSecret(sql, req, 'get-listings')).ok;
 }
 
 
@@ -833,14 +838,14 @@ module.exports = async (req, res) => {
   // GET ?jobRuns=1[&job=<name>] (admin): recent runs that affected people,
   // failed, or were run by hand — with who was affected and how.
   if (req.method === 'GET' && req.query.jobRuns === '1') {
-    if (!isAdminAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    if (!(await isAdminAuthorized(req))) return res.status(401).json({ error: 'Unauthorized' });
     const job = typeof req.query.job === 'string' && JOBS.some(j => j.name === req.query.job) ? req.query.job : null;
     return res.status(200).json({ runs: await jobRuns(sql, { job, limit: req.query.limit }) });
   }
   // GET ?jobStatus=1 (admin): every job, its schedule and how its last run went.
   // GET ?runJob=<name> (admin): run one job now (for when something went wrong).
   if (req.method === 'GET' && (req.query.jobStatus === '1' || req.query.runJob)) {
-    if (!isAdminAuthorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    if (!(await isAdminAuthorized(req))) return res.status(401).json({ error: 'Unauthorized' });
     if (req.query.runJob) {
       if (!JOBS.some(j => j.name === req.query.runJob)) return res.status(404).json({ error: 'No such job.' });
       const out = await runJobs(sql, { only: String(req.query.runJob), force: true, budgetMs: 20000 });
@@ -921,7 +926,7 @@ module.exports = async (req, res) => {
   //   curl -H "Authorization: Bearer $CRON_SECRET" \
   //     "https://aerva-in.vercel.app/api/get-listings?reviewSweep=1&forceTierSnapshot=1"
   if (req.method === 'GET' && req.query.reviewSweep === '1') {
-    if (!isCronAuthorized(req) && !isAdminAuthorized(req)) {
+    if (!isCronAuthorized(req) && !(await isAdminAuthorized(req))) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     // The daily Vercel cron (a backstop for the 5-minute pinger): runs

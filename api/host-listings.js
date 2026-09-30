@@ -2713,8 +2713,13 @@ module.exports = async (req, res) => {
       // host and co-host) can't both pass the 3-a-year check below.
       const slot = await claimHostCancelSlot(loaded.guest.host_id);
       if (slot === false) return res.status(409).json({ error: 'Another cancellation is being processed. Please try again in a minute.' });
+      // The slot is released BEFORE the answer goes out: a host who acts on
+      // the answer at once (e.g. picks how to pay the coupon) must not find
+      // their own cancellation still "being processed".
+      let reply;
       try {
-      if (await hostLimitReached(loaded.guest.host_id)) return res.status(403).json({ error: HOST_LIMIT_MESSAGE, limitReached: true });
+      reply = await (async () => {
+      if (await hostLimitReached(loaded.guest.host_id)) return [403, { error: HOST_LIMIT_MESSAGE, limitReached: true }];
 
       // The guest's 10% coupon is paid for by the host, one of two ways:
       //  1. up front: buyCouponOrder → verifyCouponPayment (coupon held), or
@@ -2725,28 +2730,30 @@ module.exports = async (req, res) => {
       const payLater = req.body.cancelBooking.payLater === true;
       // Co-host shares are paid in full, without deductions, so a co-host
       // pays for the coupon before cancelling.
-      if (payLater && cohostActor) return res.status(400).json({ error: 'Co-hosts pay for the guest’s coupon before cancelling.', needsCoupon: true });
+      if (payLater && cohostActor) return [400, { error: 'Co-hosts pay for the guest’s coupon before cancelling.', needsCoupon: true }];
       if (!held && !payLater) {
         const amount = await cancellationCouponAmount(loaded.order, orderId);
-        return res.status(402).json({ error: `Choose how to pay the guest’s cancellation coupon (₹${amount.toLocaleString('en-IN')}).`, needsCoupon: true, amount });
+        return [402, { error: `Choose how to pay the guest’s cancellation coupon (₹${amount.toLocaleString('en-IN')}).`, needsCoupon: true, amount }];
       }
       const amountLater = held ? 0 : await cancellationCouponAmount(loaded.order, orderId);
 
       const didCancel = await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host', { reasonLabel, details });
       // Another request (a double click) already cancelled it: never issue
       // a second coupon or penalty.
-      if (!didCancel) return res.status(409).json({ error: 'This booking has already been cancelled.' });
+      if (!didCancel) return [409, { error: 'This booking has already been cancelled.' }];
       // Refund done: now the coupon goes to the guest. The host never sees
       // its code (it is only emailed to the guest).
       if (held) {
         await scheduleCancellationCoupon(held.id, orderId);
-        return res.status(200).json({ success: true, couponAmount: Number(held.amount), paid: 'now', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES });
+        return [200, { success: true, couponAmount: Number(held.amount), paid: 'now', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES }];
       }
       const issued = await issueCouponChargedToNextPayout(loaded.order, orderId, loaded.guest.host_id, amountLater);
-      return res.status(200).json({ success: true, couponAmount: issued.amount, paid: 'next_payout', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES });
+      return [200, { success: true, couponAmount: issued.amount, paid: 'next_payout', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES }];
+      })();
       } finally {
         await releaseHostCancelSlot(loaded.guest.host_id, slot);
       }
+      return res.status(reply[0]).json(reply[1]);
     } catch (err) {
       console.error('host-listings (cancelBooking) error:', err);
       const status = err.isUserFacing ? err.status : 500;

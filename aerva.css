@@ -56,7 +56,7 @@
 
   /* ---------- NAV ---------- */
   header{
-    position:fixed; top:0; left:0; right:0; z-index:100;
+    position:fixed; top:var(--rr-h, 0px); left:0; right:0; z-index:100;
     padding:20px 0;
     transition:background .3s ease, border-color .3s ease, box-shadow .3s ease;
     border-bottom:1px solid transparent;
@@ -757,8 +757,10 @@
   .photo-filter-btn.is-on{border-color:var(--ink); opacity:1; box-shadow:inset 0 0 0 1px var(--ink);}
   .photo-editor-actions{display:flex; gap:10px;}
 
+  /* Above the fixed header, which moves down by the bar's height (--rr-h,
+     set in showReviewReminder) so the two never overlap. */
   #reviewReminderBar{
-    position:sticky; top:0; z-index:60; background:var(--ink); color:var(--cream);
+    position:sticky; top:0; z-index:101; background:var(--ink); color:var(--cream);
   }
   .rr-inner{
     max-width:1180px; margin:0 auto; padding:11px 40px;
