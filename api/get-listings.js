@@ -76,6 +76,7 @@ const { runScheduled, jobStatus, jobRuns } = require('./_scheduler');
 const { reconcilePayments, processScheduledRefunds } = require('./_confirm-booking');
 const { settleUnansweredRequests } = require('./_cancellations');
 const { heldListingIds } = require('./_booking-rules');
+const { runPhotoScan } = require('./_photo-guard');
 const { expireChanges } = require('./_booking-changes');
 const { releaseDueDeposits } = require('./_deposits');
 const { decryptField } = require('./_secure-fields');
@@ -573,6 +574,11 @@ const JOBS = [
     run: (c) => releaseDueDeposits(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'review_publish', label: 'Publish reviews (both sides in, or window closed)', everyMinutes: 15,
     run: async (c) => { const r = await runReviewSweep(c.sql, { publishOnly: true }); if (r.status >= 400) throw new Error(r.body.error || 'failed'); return r.body; } },
+  // Photos showing contact details (phone, email, website, social, QR):
+  // removed silently, admin told (_photo-guard.js). Mostly already done at
+  // upload; this checks photos in use that were never checked.
+  { name: 'photo_scan', label: 'Check photos for contact details (and remove any that show them)', everyMinutes: 5, lockMinutes: 3,
+    run: (c) => runPhotoScan(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) },
   { name: 'calendar_sync', label: 'Sync external calendars (Airbnb, Booking.com, Agoda…)', everyMinutes: 60, heavy: true, lockMinutes: 10,
     run: (c) => syncStaleFeeds(c.sql, decryptField, { maxAgeMinutes: 55, deadlineMs: Math.min(6000, c.remainingMs), limit: 100 }) },
   { name: 'daily_reviews_compliance_tiers', label: 'Review prompts, compliance deadlines, host/guest standing', dailyAtHour: 3, heavy: true, lockMinutes: 15,

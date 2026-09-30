@@ -90,6 +90,7 @@
 // real Razorpay test-mode payment before relying on it in production.
 
 const { neon } = require('@neondatabase/serverless');
+const { listRemovals, restoreRemoval } = require('./_photo-guard');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
@@ -544,6 +545,24 @@ module.exports = async (req, res) => {
     } catch (err) {
       if (!err.isUserFacing) console.error('decideStayDispute failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not decide this dispute.' });
+    }
+  }
+
+  // ---- Photos removed for showing contact details (_photo-guard.js) ----
+  // GET ?photoRemovals=1 · POST { restorePhoto: { removalId } }
+  if (req.method === 'GET' && req.query.photoRemovals === '1') {
+    return res.status(200).json({ removals: await listRemovals(sql, { limit: 200 }), checking: !!process.env.ANTHROPIC_API_KEY });
+  }
+  if (req.method === 'POST' && req.body && req.body.restorePhoto) {
+    try {
+      const out = await restoreRemoval(sql, Number(req.body.restorePhoto.removalId) || 0, ADMIN_ACTOR);
+      if (out.error) return res.status(out.error === 'Not found.' ? 404 : 409).json({ error: out.error });
+      await logAudit(sql, { action: 'photo_restored', success: true, actorType: 'admin', ...ADMIN_AUDIT,
+        targetType: 'photo_removal', targetId: Number(req.body.restorePhoto.removalId) || 0 });
+      return res.status(200).json({ success: true, note: out.note });
+    } catch (err) {
+      console.error('restorePhoto failed:', err);
+      return res.status(500).json({ error: 'Could not restore this photo.' });
     }
   }
 

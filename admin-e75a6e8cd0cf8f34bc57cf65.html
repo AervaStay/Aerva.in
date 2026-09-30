@@ -54,6 +54,7 @@
     display:flex; gap:8px; overflow-x:auto; scroll-snap-type:x mandatory;
     padding-bottom:6px; -webkit-overflow-scrolling:touch;
   }
+  .photo-removal-img img{width:160px; height:120px; object-fit:cover; border-radius:6px; display:block;}
   .photo-row img{
     width:160px; height:160px; object-fit:cover; border-radius:4px; border:1px solid #e0d5c0;
     flex:0 0 auto; scroll-snap-align:start;
@@ -297,6 +298,12 @@
       <h3>Manage Live Listings</h3>
       <p>Block temporarily pauses a listing (reversible); Remove is a more final takedown. Either way, guests stop seeing it immediately and nothing already booked is affected — this never deletes the listing's history.</p>
       <div id="liveListingsContainer"><p class="empty">Loading…</p></div>
+    </div>
+    <div class="deposit-section">
+      <h3>Removed photos</h3>
+      <p>Every listing, room and profile photo is checked by Claude for phone numbers, emails, websites, social handles, UPI IDs and QR codes. A photo that shows one is taken down at once without telling the account holder, and listed here. If a check was wrong, Restore puts the photo back and it is never removed again.</p>
+      <p id="photoCheckOff" class="error" style="display:none;">Photo checking is off: set ANTHROPIC_API_KEY in Vercel.</p>
+      <div id="photoRemovalsContainer"><p class="empty">Loading…</p></div>
     </div>
   </div>
 
@@ -1988,7 +1995,48 @@
   }
 
   // ---- Live Listings tab: block/unblock/remove/restore ----
+  async function loadPhotoRemovals(){
+    const box = document.getElementById('photoRemovalsContainer');
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?photoRemovals=1', { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok){ box.innerHTML = '<p class="error">' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
+      document.getElementById('photoCheckOff').style.display = d.checking ? 'none' : 'block';
+      if(!d.removals.length){ box.innerHTML = '<p style="opacity:0.7;">No photos removed so far.</p>'; return; }
+      box.innerHTML = d.removals.map(r => {
+        const found = (Array.isArray(r.findings) ? r.findings : []).map(f => `<li>${escAdmin(f.type)}: <strong>${escAdmin(f.text)}</strong></li>`).join('') || '<li>Contact details</li>';
+        const where = (Array.isArray(r.places) ? r.places : []).map(p => `<li>${escAdmin(p)}</li>`).join('');
+        const when = new Date(r.removed_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const state = r.restored_at
+          ? `<p style="color:#2f6b3a; font-size:13px; margin:8px 0 0;">Restored by ${escAdmin(r.restored_by || 'admin')}${r.restore_note ? ' — ' + escAdmin(r.restore_note) : ''}</p>`
+          : `<button type="button" class="reject-btn" style="margin-top:8px;" onclick="restorePhoto(${Number(r.id)}, this)">Restore photo</button>`;
+        return `<div class="photo-removal" style="display:flex; gap:16px; border:1px solid #e6ded3; padding:12px; margin-bottom:10px; flex-wrap:wrap;">
+          <div class="photo-removal-img" style="flex:0 0 160px;">${photoHtml(r.url, 'Removed photo')}</div>
+          <div style="flex:1 1 260px; font-size:14px;">
+            <strong>${escAdmin(r.listing_name || 'Profile photo')}</strong> · ${escAdmin(r.host_name || '')}${r.host_email ? ' (' + escAdmin(r.host_email) + ')' : ''}
+            <div style="opacity:0.7; font-size:12.5px; margin:2px 0 6px;">#${Number(r.id)} · ${escAdmin(when)}</div>
+            <div>Found:</div><ul style="margin:2px 0 6px 18px;">${found}</ul>
+            <div>Removed from:</div><ul style="margin:2px 0 0 18px;">${where}</ul>
+            ${state}
+          </div>
+        </div>`;
+      }).join('');
+    }catch(e){ box.innerHTML = '<p class="error">Could not load removed photos.</p>'; }
+  }
+  async function restorePhoto(id, btn){
+    if(!confirm('Put this photo back? It will not be checked again.')) return;
+    btn.disabled = true; btn.textContent = 'Restoring…';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ restorePhoto: { removalId: id } }) });
+      const d = await res.json();
+      if(!res.ok){ alert(d.error || 'Could not restore.'); btn.disabled = false; btn.textContent = 'Restore photo'; return; }
+      if(d.note) alert(d.note);
+      loadPhotoRemovals();
+    }catch(e){ alert('Could not restore right now.'); btn.disabled = false; btn.textContent = 'Restore photo'; }
+  }
+
   async function loadLiveListings(){
+    loadPhotoRemovals();
     const container = document.getElementById('liveListingsContainer');
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings?liveListings=1', {

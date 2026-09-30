@@ -1312,6 +1312,19 @@
     allPhotoManagers.forEach(m => m.renderPreviews());
   }
 
+  // The pin chosen on the listing form (from the address suggestions),
+  // for aerva-photo-location.js: stay photos must be taken at the property.
+  function listingFormPin(){
+    const lat = document.getElementById('listLatitude').value, lng = document.getElementById('listLongitude').value;
+    return lat && lng ? { lat: Number(lat), lng: Number(lng) } : null;
+  }
+  // Keeps only the photos taken at the property (or added there), and says
+  // which were not. Without the helper script, everything passes here and
+  // the server decides.
+  function screenPhotosAtProperty(files){
+    return window.AervaPhotoLocation ? window.AervaPhotoLocation.screen(files, listingFormPin()) : Promise.resolve(Array.from(files));
+  }
+
   function createPhotoManager(inputId, previewContainerId){
     const inputEl = document.getElementById(inputId);
     const previewContainer = document.getElementById(previewContainerId);
@@ -1379,8 +1392,10 @@
       });
     }
 
-    inputEl.addEventListener('change', () => {
-      const newFiles = Array.from(inputEl.files);
+    inputEl.addEventListener('change', async () => {
+      const picked = Array.from(inputEl.files);
+      syncInput();
+      const newFiles = await screenPhotosAtProperty(picked);
       for(const f of newFiles){
         if(selectedPhotos.length >= MAX_LISTING_PHOTOS) break;
         const alreadyAdded = selectedPhotos.some(p => p.file && p.file.name === f.name && p.file.size === f.size);
@@ -1521,12 +1536,15 @@
       input.accept = 'image/*';
       input.style.display = 'none';
       document.body.appendChild(input);
-      input.addEventListener('change', () => {
-        if(input.files[0]){
-          setFile(input.files[0]);
+      input.addEventListener('change', async () => {
+        const picked = input.files[0];
+        input.remove();
+        if(!picked) return;
+        const [ok] = await screenPhotosAtProperty([picked]);
+        if(ok){
+          setFile(ok);
           onPicked();
         }
-        input.remove();
       });
       input.click();
     });
@@ -1612,10 +1630,12 @@
       input.multiple = true;
       input.style.display = 'none';
       document.body.appendChild(input);
-      input.addEventListener('change', () => {
-        Array.from(input.files).forEach(file => room[bucketKey].push({ file, url: null }));
-        renderRoomSpaces();
+      input.addEventListener('change', async () => {
+        const picked = Array.from(input.files);
         input.remove();
+        const ok = await screenPhotosAtProperty(picked);
+        ok.forEach(file => room[bucketKey].push({ file, url: null }));
+        if(ok.length) renderRoomSpaces();
       });
       input.click();
     });
@@ -1978,6 +1998,7 @@
             clientPayload: JSON.stringify({ purpose: 'listing-photo', token: safeStorage.get('aerva_guest_session') || '' }) }),
           computeFileHash(compressed)
         ]);
+        if(window.AervaPhotoLocation) window.AervaPhotoLocation.remember(uploaded.url, file);
         return { url: uploaded.url, hash };
       }
       try{
@@ -2157,6 +2178,22 @@
         uploadTasks.push(room);
       }
     });
+
+    // A pin chosen after the photos were: every new photo must still be
+    // within 2 km of it (aerva-photo-location.js). Checked before uploading.
+    if(window.AervaPhotoLocation){
+      const pendingFiles = [...(exteriorPhotoUrls === null ? exteriorPhotoManager.getFiles() : []), ...uploadTasks.map(t => t.file)];
+      const far = window.AervaPhotoLocation.farFiles(pendingFiles, listingFormPin());
+      if(far.length){
+        window.AervaPhotoLocation.notice(far.map(f => f.text));
+        errorEl.textContent = 'Some photos don\u2019t comply with Aerva policies: they were not taken at the property shown on the map. Remove them, or check the address.';
+        errorEl.style.display = 'block';
+        activeBtn.disabled = false;
+        otherBtn.disabled = false;
+        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
+        return;
+      }
+    }
 
     if(exteriorPhotoUrls === null || uploadTasks.length){
       activeBtn.textContent = 'Uploading photos…';
@@ -2343,6 +2380,8 @@
           interiorPhotoUrls: interiorPhotoUrls,
           roomPhotos: roomPhotos,
           coverPhotoUrl: coverPhotoUrl,
+          // Where each new photo was taken (api/_photo-location.js).
+          photoLocations: window.AervaPhotoLocation ? window.AervaPhotoLocation.payload() : {},
           clonedFromListingId: clonedFromListingId,
           // Content hashes, not URLs — a re-upload of the exact same photo
           // always gets a brand-new Blob URL, so only comparing actual
@@ -2358,6 +2397,7 @@
         // they are, so clicking again just retries from here, not from scratch.
         errorEl.textContent = data.error || 'Could not save your listing. Please try again.';
         errorEl.style.display = 'block';
+        if(data.policy === 'photo_location' && window.AervaPhotoLocation) window.AervaPhotoLocation.showServerRejection(data);
         activeBtn.disabled = false;
         otherBtn.disabled = false;
         activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
@@ -11163,10 +11203,13 @@
         const data = await res.json();
         if(!res.ok) throw new Error(data.error || 'Could not send that.');
         document.getElementById('tbText').value = '';
+        // What was stored (contact details taken out), not what was typed.
+        const shown = data.message && typeof data.message.display_text === 'string' ? data.message.display_text : text;
         thread.insertAdjacentHTML('beforeend',
-          `<div class="tb-msg tb-msg-mine"><span class="tb-msg-who">You</span><span class="tb-msg-text">${esc(text)}</span></div>`);
+          `<div class="tb-msg tb-msg-mine"><span class="tb-msg-who">You</span><span class="tb-msg-text">${esc(shown)}</span></div>`);
+        if(data.message && data.message.was_redacted) note.textContent = 'Some content was removed \u2014 contact info can\u2019t be shared here.';
         thread.scrollTop = thread.scrollHeight;
-        note.textContent = '';
+        if(!(data.message && data.message.was_redacted)) note.textContent = '';
       } catch(err){
         note.textContent = err.message || 'Could not send that. Please try again.';
       }

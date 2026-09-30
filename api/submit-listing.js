@@ -26,6 +26,8 @@ const { createToken, verifyToken } = require('./_approval-token');
 const { isSessionRevoked } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
+const photoGuard = require('./_photo-guard');
+const { checkPhotoLocations, tagListing } = require('./_photo-location');
 const { timezoneForAddress } = require('./_timezones');
 const { sanitizeBody } = require('./_plain-text');
 const { AGREEMENT_VERSION } = require('./_agreements');
@@ -677,6 +679,28 @@ module.exports = async (req, res) => {
       }
     }
 
+    // ---- Every new stay photo must be taken at the property ----
+    // (_photo-location.js). Checked before anything is written; photos
+    // already on this listing before the rule began are left alone.
+    let stayPhotoUrls = [];
+    if (!isExperience) {
+      const roomUrls = [];
+      (Array.isArray(roomPhotos) ? roomPhotos : []).forEach(r => {
+        if (!r) return;
+        (Array.isArray(r.urls) ? r.urls : [r.url]).forEach(u => { if (isAervaBlobUrl(u)) roomUrls.push(String(u).trim()); });
+      });
+      stayPhotoUrls = [...safeExteriorUrls, ...safeInteriorUrls, ...roomUrls, ...(safeCoverPhotoUrl ? [safeCoverPhotoUrl] : [])];
+      const located = await checkPhotoLocations(sql, {
+        listingId: existingDraft ? existingDraft.id : null,
+        urls: stayPhotoUrls,
+        pin: safeLatitude != null && safeLongitude != null ? { lat: safeLatitude, lng: safeLongitude } : null,
+        locations: req.body && req.body.photoLocations
+      });
+      if (!located.ok) {
+        return res.status(located.status).json({ error: located.error, rejectedPhotos: located.rejectedPhotos, policy: 'photo_location' });
+      }
+    }
+
     // Logistics fields — experience-only, same "only ever kept for
     // listing_type = 'experience' rows" rule as the other experience
     // fields above.
@@ -876,6 +900,18 @@ module.exports = async (req, res) => {
           }))
         : [];
       await sql`UPDATE listings SET pending_room_photos = ${JSON.stringify(safeRoomPhotos)} WHERE id = ${listing.id}`;
+    }
+
+    // Photos already found to show contact details are taken out now,
+    // silently (_photo-guard.js), and left out of the admin email below.
+    if (stayPhotoUrls.length) await tagListing(sql, stayPhotoUrls, listing.id);
+    const photosRemoved = await photoGuard.sweepListing(sql, listing.id);
+    if (photosRemoved.length) {
+      const keep = (arr) => (Array.isArray(arr) ? arr : []).filter(e => !photosRemoved.includes(typeof e === 'string' ? e.trim() : (e && e.url)));
+      listing.exterior_photo_urls = keep(listing.exterior_photo_urls);
+      listing.interior_photo_urls = keep(listing.interior_photo_urls);
+      safeExteriorUrls.splice(0, safeExteriorUrls.length, ...keep(safeExteriorUrls));
+      safeInteriorUrls.splice(0, safeInteriorUrls.length, ...keep(safeInteriorUrls));
     }
 
     // Drafts don't need admin review yet, and don't count as a "real" price

@@ -33,6 +33,8 @@ const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { readCohostManageToken } = require('./_cohosts');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
+const photoGuard = require('./_photo-guard');
+const { checkPhotoLocations } = require('./_photo-location');
 const { timezoneForAddress, localTodayIn } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { resolveSatisfiedComplianceFlags } = require('./_compliance');
@@ -513,6 +515,28 @@ module.exports = async (req, res) => {
       // that was already set.
       const safeLat = (latitude && !isNaN(Number(latitude)) && Math.abs(Number(latitude)) <= 90) ? Number(latitude) : undefined;
       const safeLng = (longitude && !isNaN(Number(longitude)) && Math.abs(Number(longitude)) <= 180) ? Number(longitude) : undefined;
+
+      // ---- Every new stay photo must be taken at the property ----
+      // (_photo-location.js). Before anything is written. Photos already
+      // on the listing before the rule began are left alone.
+      if (!me || (me.listing_type || 'stay') === 'stay') {
+        const roomUrls = [];
+        if (Array.isArray(rooms)) rooms.forEach(r => (r && Array.isArray(r.photos) ? r.photos : []).forEach(p => { if (p && isAervaBlobUrl(p.url)) roomUrls.push(p.url.trim()); }));
+        const sentUrls = [...(safeExteriorUrls || []), ...(safeInteriorUrls || []), ...roomUrls, ...(safeCoverUrl ? [safeCoverUrl] : [])];
+        if (sentUrls.length) {
+          const pinRow = (await sql`SELECT latitude, longitude FROM listings WHERE id = ${listingId}`)[0] || {};
+          const pinLat = safeLat !== undefined ? safeLat : pinRow.latitude;
+          const pinLng = safeLng !== undefined ? safeLng : pinRow.longitude;
+          const located = await checkPhotoLocations(sql, {
+            listingId, urls: sentUrls,
+            pin: pinLat != null && pinLng != null ? { lat: Number(pinLat), lng: Number(pinLng) } : null,
+            locations: req.body && req.body.photoLocations
+          });
+          if (!located.ok) {
+            return res.status(located.status).json({ error: located.error, rejectedPhotos: located.rejectedPhotos, policy: 'photo_location' });
+          }
+        }
+      }
 
       // Pet policy — same "Dog"/"Cat" whitelist as submit-listing.js. A
       // save that doesn't send petFriendly at all (e.g. a price-only
@@ -1140,11 +1164,16 @@ module.exports = async (req, res) => {
         }
       }
 
+      // Photos already found to show contact details are taken out now,
+      // silently (_photo-guard.js). Never fails the save.
+      const photosRemoved = await photoGuard.sweepListing(sql, listingId);
+      const stillShown = (arr) => (arr || []).filter(u => !photosRemoved.includes(typeof u === 'string' ? u.trim() : (u && u.url)));
+
       // Photos or name changed on a live (approved) listing: tell the admin
       // (see notifyAdminOfListingChange). Never fails the save.
       if (before[0].status === 'approved') {
         const oldPhotos = [...(before[0].exterior_photo_urls || []), ...(before[0].interior_photo_urls || [])];
-        const newPhotos = [...effectiveExterior, ...effectiveInterior];
+        const newPhotos = [...stillShown(effectiveExterior), ...stillShown(effectiveInterior)];
         const added = newPhotos.filter(u => !oldPhotos.includes(u));
         const removed = oldPhotos.filter(u => !newPhotos.includes(u)).length;
         const coverChanged = (safeCoverUrl || null) !== (before[0].cover_photo_url || null) && !!safeCoverUrl;

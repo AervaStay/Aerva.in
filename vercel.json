@@ -1,7 +1,14 @@
 {
   "functions": {
-    "api/get-listings.js": { "maxDuration": 60 },
-    "api/get-pending-listings.js": { "maxDuration": 60 }
+    "api/get-listings.js": {
+      "maxDuration": 60
+    },
+    "api/get-pending-listings.js": {
+      "maxDuration": 60
+    },
+    "api/blob-upload.js": {
+      "maxDuration": 60
+    }
   },
   "crons": [
     {

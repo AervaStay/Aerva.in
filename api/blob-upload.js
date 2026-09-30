@@ -28,6 +28,7 @@ const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { logAudit } = require('./_audit-log');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
+const photoGuard = require('./_photo-guard');
 
 const UPLOADS_PER_DAY = 200;
 const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence'];
@@ -121,13 +122,25 @@ module.exports = async (req, res) => {
             : ['image/jpeg', 'image/png', 'image/webp'],
           maximumSizeInBytes: 8 * 1024 * 1024, // 8MB per file
           addRandomSuffix: true, // avoids filename collisions between hosts
+          // Comes back in onUploadCompleted: who uploaded it, and why.
+          tokenPayload: JSON.stringify({ account: who.account, purpose: who.purpose || '' }),
         };
       },
-      onUploadCompleted: async ({ blob }) => {
-        // Nothing to do here — the browser already has the blob's URL and
-        // includes it directly in the listing submission (see submit-listing.js)
-        // or the Aadhaar submission (see host-listings.js).
-        console.log('File uploaded to Blob:', blob.url);
+      onUploadCompleted: async ({ blob, tokenPayload }) => {
+        // Vercel calls this seconds after the file lands. A listing or
+        // profile photo is checked for contact details here (_photo-guard.js);
+        // one that shows any is removed wherever it is already used, and
+        // stripped from the listing when it is saved. Identity documents
+        // and dispute evidence are never sent.
+        let meta = {};
+        try { meta = JSON.parse(tokenPayload || '{}') || {}; } catch (e) { meta = {}; }
+        if (!photoGuard.shouldCheckUpload(meta.purpose, blob.contentType)) return;
+        try {
+          await photoGuard.scanAndAct(db(), blob.url, { uploadedBy: meta.account || null });
+        } catch (err) {
+          // The 5-minute job checks it instead.
+          console.error('photo check after upload failed:', err.message || err);
+        }
       },
     });
 

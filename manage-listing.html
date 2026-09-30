@@ -247,6 +247,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css">
 <script src="aerva-cohost.js"></script>
+<script src="aerva-photo-location.js"></script>
 </head>
 <body>
 
@@ -858,6 +859,16 @@
     }
   }
 
+  // Stay photos must be taken at the property (aerva-photo-location.js,
+  // api/_photo-location.js): checked against the listing's map pin.
+  function listingPin(){
+    const lat = document.getElementById('listLatitude').value, lng = document.getElementById('listLongitude').value;
+    return lat && lng ? { lat: Number(lat), lng: Number(lng) } : null;
+  }
+  function screenPhotosAtProperty(files){
+    return window.AervaPhotoLocation ? window.AervaPhotoLocation.screen(files, listingPin()) : Promise.resolve(Array.from(files));
+  }
+
   function createPhotoManager(previewGridId, fileInputId, addBtnId){
     const previewGrid = document.getElementById(previewGridId);
     const fileInput = document.getElementById(fileInputId);
@@ -905,8 +916,10 @@
     }
 
     addBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => {
-      const newFiles = Array.from(fileInput.files);
+    fileInput.addEventListener('change', async () => {
+      const picked = Array.from(fileInput.files);
+      fileInput.value = '';
+      const newFiles = await screenPhotosAtProperty(picked);
       for(const f of newFiles){
         if(items.length >= MAX_LISTING_PHOTOS) break;
         items.push({ key: 'new_' + (nextTempId++), type: 'new', file: f });
@@ -916,6 +929,7 @@
     });
 
     const manager = {
+      newFiles: () => items.filter(i => i.type === 'new').map(i => i.file),
       setExisting: (urls) => {
         items = (urls || []).map(url => ({ key: url, type: 'existing', url }));
         renderPreviews();
@@ -937,6 +951,7 @@
               clientPayload: uploadClientPayload()
             });
             urls.push(result.url);
+            if(window.AervaPhotoLocation) window.AervaPhotoLocation.remember(result.url, item.file);
             // A newly-uploaded photo that was chosen as cover needs its
             // temp key swapped for the real URL now that one exists.
             if(coverPhotoKey === item.key) coverPhotoKey = result.url;
@@ -1268,10 +1283,12 @@
           input.multiple = true;
           input.style.display = 'none';
           document.body.appendChild(input);
-          input.addEventListener('change', () => {
-            Array.from(input.files).forEach(file => room.photos.push({ file, url: null }));
-            renderRooms();
+          input.addEventListener('change', async () => {
+            const picked = Array.from(input.files);
             input.remove();
+            const ok = await screenPhotosAtProperty(picked);
+            ok.forEach(file => room.photos.push({ file, url: null }));
+            if(ok.length) renderRooms();
           });
           input.click();
         });
@@ -1422,6 +1439,7 @@
         const compressed = await compressImage(photo.file);
         const uploaded = await upload(compressed.name, compressed, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload', clientPayload: uploadClientPayload() });
         cache.set(photo.file, uploaded.url);
+        if(window.AervaPhotoLocation) window.AervaPhotoLocation.remember(uploaded.url, photo.file);
         photo.url = uploaded.url;
         photo.file = null;
       }
@@ -1912,6 +1930,19 @@
       return;
     }
 
+    // The pin may have moved since the photos were picked: every new
+    // photo must still be taken within 2 km of it. Checked before uploading.
+    if(window.AervaPhotoLocation){
+      const pending = [...exteriorManager.newFiles(), ...interiorManager.newFiles(), ...roomRows.flatMap(r => r.photos.filter(p => p.file && !p.url).map(p => p.file))];
+      const far = window.AervaPhotoLocation.farFiles(pending, listingPin());
+      if(far.length){
+        window.AervaPhotoLocation.notice(far.map(f => f.text));
+        errorMsg.textContent = 'Some photos don\u2019t comply with Aerva policies: they were not taken at the property shown on the map. Remove them, or check the address.';
+        errorMsg.style.display = 'block';
+        return;
+      }
+    }
+
     submitBtn.disabled = true;
     submitBtn.textContent = 'Saving…';
 
@@ -1964,6 +1995,8 @@
           autoSendCheckinInstructions: document.getElementById('checkinScheduleTrigger').value === 'on_booking_confirmed',
           checkinPhotos,
           rooms: roomRows,
+          // Where each new photo was taken (api/_photo-location.js).
+          photoLocations: window.AervaPhotoLocation ? window.AervaPhotoLocation.payload() : {},
           // No more manually "declaring" a count that has to match —
           // this is simply however many active rooms are actually here
           // when you save, computed automatically rather than asked for
@@ -1981,6 +2014,7 @@
       } else {
         errorMsg.textContent = data.error || 'Something went wrong. Please try again.';
         errorMsg.style.display = 'block';
+        if(data.policy === 'photo_location' && window.AervaPhotoLocation) window.AervaPhotoLocation.showServerRejection(data);
       }
     } catch(err){
       errorMsg.textContent = 'Something went wrong saving your photos. Please try again.';
