@@ -27,7 +27,7 @@ const { isSessionRevoked } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
 const photoGuard = require('./_photo-guard');
-const { checkPhotoLocations, tagListing } = require('./_photo-location');
+const { recordPhotoLocations, tagListing } = require('./_photo-location');
 const { timezoneForAddress } = require('./_timezones');
 const { sanitizeBody } = require('./_plain-text');
 const { AGREEMENT_VERSION } = require('./_agreements');
@@ -679,9 +679,8 @@ module.exports = async (req, res) => {
       }
     }
 
-    // ---- Every new stay photo must be taken at the property ----
-    // (_photo-location.js). Checked before anything is written; photos
-    // already on this listing before the rule began are left alone.
+    // ---- Where new stay photos were taken (_photo-location.js) ----
+    // Recorded for the admin's review; nothing is refused for location.
     let stayPhotoUrls = [];
     if (!isExperience) {
       const roomUrls = [];
@@ -690,15 +689,11 @@ module.exports = async (req, res) => {
         (Array.isArray(r.urls) ? r.urls : [r.url]).forEach(u => { if (isAervaBlobUrl(u)) roomUrls.push(String(u).trim()); });
       });
       stayPhotoUrls = [...safeExteriorUrls, ...safeInteriorUrls, ...roomUrls, ...(safeCoverPhotoUrl ? [safeCoverPhotoUrl] : [])];
-      const located = await checkPhotoLocations(sql, {
+      await recordPhotoLocations(sql, {
         listingId: existingDraft ? existingDraft.id : null,
         urls: stayPhotoUrls,
-        pin: safeLatitude != null && safeLongitude != null ? { lat: safeLatitude, lng: safeLongitude } : null,
         locations: req.body && req.body.photoLocations
       });
-      if (!located.ok) {
-        return res.status(located.status).json({ error: located.error, rejectedPhotos: located.rejectedPhotos, policy: 'photo_location' });
-      }
     }
 
     // Logistics fields — experience-only, same "only ever kept for

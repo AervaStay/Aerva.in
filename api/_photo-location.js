@@ -1,35 +1,29 @@
-// /api/_photo-location.js — every new stay photo must be taken at the
-// property. Not an endpoint.
+// /api/_photo-location.js — where new stay photos were taken, for the
+// admin to review. Not an endpoint.
 //
-// Aerva policy: a listing's photos show that listing. A NEW photo on a
-// stay (home, villa, resort, its rooms) is accepted only when it carries
-// a location within MAX_KM of the listing's map pin:
+// Hosts may upload photos from anywhere: nothing is refused for location
+// (owner's decision, 1 Oct 2026 — it is the host's responsibility to show
+// the right property). What Aerva does is RECORD where each new stay photo
+// was taken, when the file says, so the admin can spot photos that are
+// probably not of the property:
 //   • 'photo'  — the location the camera wrote into the photo (read in the
 //                browser from the original file, before it is shrunk:
 //                shrinking erases it);
-//   • 'device' — the photo has none (phones strip it on upload), so the
-//                browser asked for the host's current location while they
-//                picked it: they are at the property;
-//   • 'copied' — a photo already used on another listing whose pin is
-//                within MAX_KM (Clone "with photos": a second unit in the
-//                same building).
-// Anything else is refused with the policy message and the save does not
-// happen. The browser checks first (aerva-photo-location.js) so hosts
-// learn at once; this is the rule that cannot be skipped.
+//   • 'copied' — a photo already used on another listing (Clone "with
+//                photos"): that listing's pin;
+//   • 'none'   — the file carries no location (phones usually strip it on
+//                upload; screenshots and forwarded photos have none).
+// Admin → Live Listings → "Photo locations to check" lists new photos taken
+// more than MAX_KM from the listing's pin, or with no location.
 //
-// Photos already on a listing before this rule (they have no row in
-// photo_locations) are left alone: their location was erased long ago.
-// Experiences are not covered: their photos are often taken on the trail.
-//
-// A location can be faked with the right tools — this is strong evidence,
-// not proof. Tables: sql/migration_photo_locations.sql. Before it runs,
-// nothing is checked.
+// Photos already on a listing before this began have no row and are not
+// listed. Experiences are not covered. A location can be faked — this is a
+// hint for review, not proof. Table: sql/migration_photo_locations.sql;
+// before it runs, nothing is recorded.
 
 const MAX_KM = 2;
-const POLICY_MESSAGE = 'Some photos don\'t comply with Aerva policies: every photo must be taken at the property. '
-  + 'Use photos taken there with your camera\'s location turned on, or add them while you are at the property and allow location when asked.';
 
-const isMissingTable = (err) => !!err && err.code === '42P01';
+const isMissingTable = (err) => !!err && (err.code === '42P01' || err.code === '42703');
 const num = (v) => (v === null || v === undefined || v === '') ? NaN : Number(v);
 const validLat = (v) => Number.isFinite(num(v)) && Math.abs(num(v)) <= 90;
 const validLng = (v) => Number.isFinite(num(v)) && Math.abs(num(v)) <= 180;
@@ -77,63 +71,37 @@ async function pinOfListingWith(sql, url, excludeListingId) {
 function sentLocation(locations, url) {
   const l = locations && typeof locations === 'object' ? locations[url] : null;
   if (!l || typeof l !== 'object' || !validLat(l.lat) || !validLng(l.lng)) return null;
-  const source = l.source === 'device' ? 'device' : 'photo';
-  const accuracy = Number.isFinite(num(l.accuracy)) ? Math.max(0, Math.min(100000, num(l.accuracy))) : null;
   const takenAt = typeof l.takenAt === 'string' && !isNaN(Date.parse(l.takenAt)) ? new Date(l.takenAt).toISOString() : null;
-  return { lat: num(l.lat), lng: num(l.lng), source, accuracy, takenAt };
+  return { lat: num(l.lat), lng: num(l.lng), source: 'photo', takenAt };
 }
 
-// How far a located photo may be: 2 km, plus the phone's own uncertainty
-// (capped at 500 m) for a device location.
-const allowedKm = (loc) => MAX_KM + (loc.source === 'device' && loc.accuracy ? Math.min(loc.accuracy, 500) / 1000 : 0);
-
-// Checks the photos of one save. urls: every stay photo URL the save
-// would keep. pin: the listing's map pin after the save ({lat, lng}), or
-// null when not chosen yet (a draft) — then only "has a location" is
-// checked, and distance is checked at the save that has a pin.
-// Returns { ok: true } or { ok: false, status, error, rejectedPhotos: [{ url, reason, km? }] }.
-async function checkPhotoLocations(sql, { listingId = null, urls = [], pin = null, locations = null }) {
-  const list = [...new Set((urls || []).filter(u => typeof u === 'string' && u.trim()).map(u => u.trim()))];
-  if (!list.length) return { ok: true };
-  let known;
+// Records where each NEW photo of one save was taken. urls: every stay
+// photo URL the save keeps. Never refuses anything and never throws: a
+// problem here must not stop a host saving.
+async function recordPhotoLocations(sql, { listingId = null, urls = [], locations = null }) {
   try {
-    known = new Map((await sql`SELECT url, lat, lng, source, accuracy FROM photo_locations WHERE url = ANY(${list})`)
-      .map(r => [r.url, { lat: Number(r.lat), lng: Number(r.lng), source: r.source, accuracy: r.accuracy == null ? null : Number(r.accuracy) }]));
-  } catch (err) {
-    if (isMissingTable(err)) return { ok: true };   // migration not run yet: nothing is checked
-    throw err;
-  }
-  const havePin = pin && validLat(pin.lat) && validLng(pin.lng);
-  const at = havePin ? { lat: num(pin.lat), lng: num(pin.lng) } : null;
-  const onListing = await photosOnListing(sql, listingId);
-
-  const rejected = [], toStore = [];
-  for (const url of list) {
-    let loc = known.get(url) || null;
-    if (!loc) {
-      if (onListing.has(url)) continue;                 // there before this rule: left alone
-      loc = sentLocation(locations, url);
+    const list = [...new Set((urls || []).filter(u => typeof u === 'string' && u.trim()).map(u => u.trim()))];
+    if (!list.length) return { recorded: 0 };
+    const known = new Set((await sql`SELECT url FROM photo_locations WHERE url = ANY(${list})`).map(r => r.url));
+    const onListing = await photosOnListing(sql, listingId);
+    let recorded = 0;
+    for (const url of list) {
+      if (known.has(url) || onListing.has(url)) continue;     // recorded before, or there before this began
+      let loc = sentLocation(locations, url);
       if (!loc) {
         const other = await pinOfListingWith(sql, url, listingId);
-        if (other) loc = { lat: other.lat, lng: other.lng, source: 'copied', accuracy: null, takenAt: null };
+        loc = other ? { lat: other.lat, lng: other.lng, source: 'copied', takenAt: null } : { lat: null, lng: null, source: 'none', takenAt: null };
       }
-      if (!loc) { rejected.push({ url, reason: 'no_location' }); continue; }
-      toStore.push(Object.assign({ url }, loc));
+      await sql`INSERT INTO photo_locations (url, lat, lng, source, taken_at, listing_id)
+                VALUES (${url}, ${loc.lat}, ${loc.lng}, ${loc.source}, ${loc.takenAt}, ${listingId || null})
+                ON CONFLICT (url) DO NOTHING`;
+      recorded++;
     }
-    if (at) {
-      const km = distanceKm(at, loc);
-      if (km > allowedKm(loc)) rejected.push({ url, reason: 'too_far', km: Math.round(km * 10) / 10 });
-    }
+    return { recorded };
+  } catch (err) {
+    if (!isMissingTable(err)) console.error('photo location record failed:', err.message || err);
+    return { recorded: 0 };
   }
-  if (rejected.length) {
-    return { ok: false, status: 400, error: POLICY_MESSAGE, rejectedPhotos: rejected };
-  }
-  for (const s of toStore) {
-    await sql`INSERT INTO photo_locations (url, lat, lng, source, accuracy, taken_at, listing_id)
-              VALUES (${s.url}, ${s.lat}, ${s.lng}, ${s.source}, ${s.accuracy}, ${s.takenAt || null}, ${listingId || null})
-              ON CONFLICT (url) DO NOTHING`;
-  }
-  return { ok: true, stored: toStore.length };
 }
 
 // For a brand-new listing: rows stored before its id existed get it now.
@@ -144,20 +112,45 @@ async function tagListing(sql, urls, listingId) {
   } catch (err) { if (!isMissingTable(err)) console.error('photo_locations tag failed:', err.message || err); }
 }
 
-// For the admin review: each photo's recorded location and distance.
-async function locationsFor(sql, urls, pin) {
-  try {
-    const list = [...new Set((urls || []).filter(Boolean))];
-    if (!list.length) return {};
-    const rows = await sql`SELECT url, lat, lng, source, taken_at FROM photo_locations WHERE url = ANY(${list})`;
-    const havePin = pin && validLat(pin.lat) && validLng(pin.lng);
-    const out = {};
-    for (const r of rows) {
-      out[r.url] = { source: r.source, takenAt: r.taken_at,
-        km: havePin ? Math.round(distanceKm({ lat: num(pin.lat), lng: num(pin.lng) }, { lat: Number(r.lat), lng: Number(r.lng) }) * 10) / 10 : null };
-    }
-    return out;
-  } catch (err) { if (isMissingTable(err)) return {}; throw err; }
+// One location against a pin: { status: 'at_property'|'too_far'|'no_location'|'no_pin', km? }.
+function judgeLocation(loc, pin) {
+  const havePin = pin && validLat(pin.lat) && validLng(pin.lng);
+  if (!loc || !validLat(loc.lat) || !validLng(loc.lng)) return { status: 'no_location', ok: false };
+  if (!havePin) return { status: 'no_pin', ok: true };
+  const km = Math.round(distanceKm({ lat: num(pin.lat), lng: num(pin.lng) }, { lat: num(loc.lat), lng: num(loc.lng) }) * 10) / 10;
+  return { status: km <= MAX_KM ? 'at_property' : 'too_far', ok: km <= MAX_KM, km };
 }
 
-module.exports = { checkPhotoLocations, tagListing, locationsFor, distanceKm, MAX_KM, POLICY_MESSAGE };
+// Admin → "Photo locations to check": new photos (last 90 days) still on a
+// listing, taken more than MAX_KM from its pin or with no location,
+// grouped by listing, newest first.
+async function flaggedPhotoLocations(sql, { days = 90, limit = 100 } = {}) {
+  let rows;
+  try {
+    rows = await sql`
+      SELECT pl.url, pl.lat, pl.lng, pl.source, pl.taken_at, pl.created_at, pl.listing_id,
+             l.property_name, l.host_name, l.host_email, l.latitude, l.longitude, l.status
+      FROM photo_locations pl JOIN listings l ON l.id = pl.listing_id
+      WHERE pl.created_at > now() - make_interval(days => ${days}) AND COALESCE(l.listing_type, 'stay') = 'stay'
+      ORDER BY pl.created_at DESC LIMIT 2000`;
+  } catch (err) { if (isMissingTable(err)) return []; throw err; }
+  const byListing = new Map();
+  for (const r of rows) {
+    const pin = r.latitude != null && r.longitude != null ? { lat: Number(r.latitude), lng: Number(r.longitude) } : null;
+    const j = judgeLocation(r.lat == null ? null : { lat: Number(r.lat), lng: Number(r.lng) }, pin);
+    if (j.status !== 'too_far' && j.status !== 'no_location') continue;
+    if (!byListing.has(r.listing_id)) byListing.set(r.listing_id, { listingId: r.listing_id, listingName: r.property_name, hostName: r.host_name, hostEmail: r.host_email, status: r.status, photos: [] });
+    byListing.get(r.listing_id).photos.push({ url: r.url, status: j.status, km: j.km == null ? null : j.km, source: r.source, takenAt: r.taken_at, addedAt: r.created_at });
+  }
+  // Only photos still on the listing.
+  const out = [];
+  for (const g of byListing.values()) {
+    const current = await photosOnListing(sql, g.listingId);
+    g.photos = g.photos.filter(p => current.has(p.url));
+    if (g.photos.length) out.push(g);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+module.exports = { recordPhotoLocations, tagListing, judgeLocation, flaggedPhotoLocations, distanceKm, MAX_KM };

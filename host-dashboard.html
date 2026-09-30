@@ -2131,7 +2131,7 @@
         ${v.panSubmitted
           ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + escH(v.panNumberMasked) + '. ' : ''}Submitted — this can't be changed here. Contact hello@aerva.in if it needs to be updated.</p>`
           : `
-            <input type="text" id="panNumberInput" placeholder="PAN number, e.g. ABCDE1234F" style="text-transform:uppercase;">
+            <input type="text" id="panNumberInput" placeholder="PAN number, e.g. ABCPE1234F" style="text-transform:uppercase;">
             <input type="file" id="panFileInput" accept="image/*,.pdf">
             <button type="button" class="btn-small" id="submitPanBtn">Submit PAN</button>
             <p class="verify-error" id="panError"></p>
@@ -2179,8 +2179,8 @@
         errorEl.style.display = 'none';
         const panNumber = numberInput.value.trim().toUpperCase();
         const file = fileInput.files[0];
-        if(!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panNumber)){
-          errorEl.textContent = 'Please enter a valid 10-character PAN, e.g. ABCDE1234F.';
+        if(!/^[A-Z]{3}[ABCFGHJLPT][A-Z][0-9]{4}[A-Z]$/.test(panNumber)){
+          errorEl.textContent = 'Please enter a valid PAN, like ABCPE1234F. The 4th letter shows who holds it (P for a person, H for a HUF, C for a company, F for a firm).';
           errorEl.style.display = 'block';
           return;
         }

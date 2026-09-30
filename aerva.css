@@ -1425,6 +1425,40 @@
     background:#fff; position:relative; overflow-y:auto;
   }
   .inbox-panel.details-open .inbox-details-pane{display:block;}
+  /* The pane's own close sits top-left as text: the inbox's × owns the
+     top-right corner, and two ×'s there read as one. */
+  .inbox-details-close{
+    display:flex; align-items:center; min-height:56px; padding:0 22px; background:none; border:0; cursor:pointer;
+    font-size:12.5px; letter-spacing:0.03em; color:var(--gold-deep, #8a6c39); text-decoration:underline; text-underline-offset:3px;
+  }
+  .idc-narrow{display:none;}
+  @media (max-width:960px){ .idc-wide{display:none;} .idc-narrow{display:inline;} }
+  /* Keep the chat header's Details clear of the inbox close button. */
+  @media (min-width:761px){ .inbox-panel .inbox-chat-header{padding-right:72px;} }
+  /* Booking details (showInboxBookingDetails in aerva.js) */
+  .bd{font-size:13.5px; color:var(--ink, #1c1b19);}
+  .bd-photo{margin:-4px 0 14px; border-radius:12px; overflow:hidden; aspect-ratio:16/10; background:var(--cream-deep, #eee3d3);}
+  .bd-photo img{width:100%; height:100%; object-fit:cover; display:block;}
+  .bd-title{font-family:'Bodoni Moda', serif; font-size:22px; line-height:1.2; margin:10px 36px 4px 0; font-weight:500;}
+  .bd-sub{font-size:12.5px; color:#8a7f6c; margin:0 0 18px; line-height:1.45;}
+  .bd-dates{display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--line-dark, #e6dccd); border-radius:12px; overflow:hidden;}
+  .bd-date{padding:12px 14px; display:flex; flex-direction:column; gap:2px; min-width:0;}
+  .bd-date + .bd-date{border-left:1px solid var(--line-dark, #e6dccd);}
+  .bd-date strong{font-size:15px; font-weight:600;}
+  .bd-label{font-size:10.5px; text-transform:uppercase; letter-spacing:0.08em; color:#8a6c39;}
+  .bd-small{font-size:12px; color:#8a7f6c;}
+  .bd-facts{margin:10px 0 0; font-size:13px; color:#5c554b;}
+  .bd-section{margin-top:22px; padding-top:16px; border-top:1px solid var(--line-dark, #e6dccd);}
+  .bd-section-title{font-size:10.5px; text-transform:uppercase; letter-spacing:0.08em; color:#8a6c39; margin-bottom:10px;}
+  .bd-row{display:flex; justify-content:space-between; align-items:baseline; gap:16px; padding:5px 0;}
+  .bd-row > span:first-child{color:#8a7f6c; flex:0 0 auto;}
+  .bd-row > span:last-child{text-align:right; min-width:0;}
+  .bd-row.bd-good > span:last-child{color:#3a7d44; font-weight:600;}
+  .bd-row.bd-muted{font-size:12px;}
+  .bd-row.bd-muted > span:last-child{color:#8a7f6c;}
+  .bd-wrap{overflow-wrap:anywhere;}
+  .bd-note{margin:0; line-height:1.5; color:#5c554b;}
+  .bd-link{display:inline-block; margin-top:18px; font-size:13px; color:var(--gold-deep, #8a6c39); text-decoration:underline; text-underline-offset:3px;}
   @media (max-width:960px){
     /* Not enough room for three columns at once on a narrower desktop/
        tablet width — the details pane takes over the chat pane's spot

@@ -859,14 +859,10 @@
     }
   }
 
-  // Stay photos must be taken at the property (aerva-photo-location.js,
-  // api/_photo-location.js): checked against the listing's map pin.
-  function listingPin(){
-    const lat = document.getElementById('listLatitude').value, lng = document.getElementById('listLongitude').value;
-    return lat && lng ? { lat: Number(lat), lng: Number(lng) } : null;
-  }
+  // Reads where each photo was taken, for the admin's review
+  // (aerva-photo-location.js, api/_photo-location.js). Every photo is kept.
   function screenPhotosAtProperty(files){
-    return window.AervaPhotoLocation ? window.AervaPhotoLocation.screen(files, listingPin()) : Promise.resolve(Array.from(files));
+    return window.AervaPhotoLocation ? window.AervaPhotoLocation.screen(files) : Promise.resolve(Array.from(files));
   }
 
   function createPhotoManager(previewGridId, fileInputId, addBtnId){
@@ -1930,19 +1926,6 @@
       return;
     }
 
-    // The pin may have moved since the photos were picked: every new
-    // photo must still be taken within 2 km of it. Checked before uploading.
-    if(window.AervaPhotoLocation){
-      const pending = [...exteriorManager.newFiles(), ...interiorManager.newFiles(), ...roomRows.flatMap(r => r.photos.filter(p => p.file && !p.url).map(p => p.file))];
-      const far = window.AervaPhotoLocation.farFiles(pending, listingPin());
-      if(far.length){
-        window.AervaPhotoLocation.notice(far.map(f => f.text));
-        errorMsg.textContent = 'Some photos don\u2019t comply with Aerva policies: they were not taken at the property shown on the map. Remove them, or check the address.';
-        errorMsg.style.display = 'block';
-        return;
-      }
-    }
-
     submitBtn.disabled = true;
     submitBtn.textContent = 'Saving…';
 
@@ -2014,7 +1997,6 @@
       } else {
         errorMsg.textContent = data.error || 'Something went wrong. Please try again.';
         errorMsg.style.display = 'block';
-        if(data.policy === 'photo_location' && window.AervaPhotoLocation) window.AervaPhotoLocation.showServerRejection(data);
       }
     } catch(err){
       errorMsg.textContent = 'Something went wrong saving your photos. Please try again.';

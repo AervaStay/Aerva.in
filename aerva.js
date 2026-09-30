@@ -1312,17 +1312,10 @@
     allPhotoManagers.forEach(m => m.renderPreviews());
   }
 
-  // The pin chosen on the listing form (from the address suggestions),
-  // for aerva-photo-location.js: stay photos must be taken at the property.
-  function listingFormPin(){
-    const lat = document.getElementById('listLatitude').value, lng = document.getElementById('listLongitude').value;
-    return lat && lng ? { lat: Number(lat), lng: Number(lng) } : null;
-  }
-  // Keeps only the photos taken at the property (or added there), and says
-  // which were not. Without the helper script, everything passes here and
-  // the server decides.
+  // Reads where each photo was taken, for the admin's review
+  // (aerva-photo-location.js). Every photo is kept.
   function screenPhotosAtProperty(files){
-    return window.AervaPhotoLocation ? window.AervaPhotoLocation.screen(files, listingFormPin()) : Promise.resolve(Array.from(files));
+    return window.AervaPhotoLocation ? window.AervaPhotoLocation.screen(files) : Promise.resolve(Array.from(files));
   }
 
   function createPhotoManager(inputId, previewContainerId){
@@ -2179,22 +2172,6 @@
       }
     });
 
-    // A pin chosen after the photos were: every new photo must still be
-    // within 2 km of it (aerva-photo-location.js). Checked before uploading.
-    if(window.AervaPhotoLocation){
-      const pendingFiles = [...(exteriorPhotoUrls === null ? exteriorPhotoManager.getFiles() : []), ...uploadTasks.map(t => t.file)];
-      const far = window.AervaPhotoLocation.farFiles(pendingFiles, listingFormPin());
-      if(far.length){
-        window.AervaPhotoLocation.notice(far.map(f => f.text));
-        errorEl.textContent = 'Some photos don\u2019t comply with Aerva policies: they were not taken at the property shown on the map. Remove them, or check the address.';
-        errorEl.style.display = 'block';
-        activeBtn.disabled = false;
-        otherBtn.disabled = false;
-        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
-        return;
-      }
-    }
-
     if(exteriorPhotoUrls === null || uploadTasks.length){
       activeBtn.textContent = 'Uploading photos…';
       try{
@@ -2380,7 +2357,7 @@
           interiorPhotoUrls: interiorPhotoUrls,
           roomPhotos: roomPhotos,
           coverPhotoUrl: coverPhotoUrl,
-          // Where each new photo was taken (api/_photo-location.js).
+          // Where each new photo was taken, for the admin (api/_photo-location.js).
           photoLocations: window.AervaPhotoLocation ? window.AervaPhotoLocation.payload() : {},
           clonedFromListingId: clonedFromListingId,
           // Content hashes, not URLs — a re-upload of the exact same photo
@@ -2397,7 +2374,6 @@
         // they are, so clicking again just retries from here, not from scratch.
         errorEl.textContent = data.error || 'Could not save your listing. Please try again.';
         errorEl.style.display = 'block';
-        if(data.policy === 'photo_location' && window.AervaPhotoLocation) window.AervaPhotoLocation.showServerRejection(data);
         activeBtn.disabled = false;
         otherBtn.disabled = false;
         activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
@@ -4499,8 +4475,8 @@
             <p class="hp-meta cohost-commission">${esc(payoutStatus)}</p>
             ${payout ? `<p class="hp-meta">${payout.panMasked ? 'PAN ' + esc(payout.panMasked) : 'PAN on file'}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
             <div class="cohost-payout-form">
-              <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCDE1234F" autocomplete="off"></label>
-              <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCDE1234F1Z5" autocomplete="off"></label>
+              <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCPE1234F" autocomplete="off"></label>
+              <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCPE1234F1Z5" autocomplete="off"></label>
               <label>Account holder name<input type="text" data-po="holder" maxlength="120" placeholder="As on your bank account"></label>
               <label>Account number<input type="text" data-po="account" inputmode="numeric" maxlength="18" autocomplete="off"></label>
               <label>IFSC<input type="text" data-po="ifsc" maxlength="11" placeholder="HDFC0001234" autocomplete="off"></label>
@@ -7155,21 +7131,46 @@
 
   function showInboxBookingDetails(conv){
     const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
-    const arrival = conv.arrival ? new Date(conv.arrival + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-    const departure = conv.departure ? new Date(conv.departure + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+    const day = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : '—';
+    const year = (d) => d ? new Date(d + 'T00:00:00').getFullYear() : '';
     const isHostView = conv.my_role === 'host';
-    // A guest viewing their own booking shouldn't see host-framed numbers
-    // ("Your Payout," commission) — that's the host's business, not
-    // theirs. They see what THEY paid and who to contact instead.
+    const tag = inboxStatusTag(conv);
+    const esc = escapeMessageHtml;
+    const photo = conv.cover_photo_url && /^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\//i.test(conv.cover_photo_url) ? conv.cover_photo_url : null;
+    const nights = Number(conv.nights) || 0, guests = Number(conv.guests) || 0;
+    const facts = [nights ? `${nights} night${nights === 1 ? '' : 's'}` : '', guests ? `${guests} guest${guests === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    const place = conv.area_text || '';
+    // A guest sees what THEY paid and who is hosting; a host sees what the
+    // guest paid and their payout (a co-host acting for a host sees neither).
+    const paid = conv.subtotal != null ? Number(conv.subtotal) + Number(conv.gst || 0) : null;
+    const money = isHostView
+      ? [paid != null ? ['Guest paid', fmt(paid), ''] : null, conv.payout_amount != null ? ['Your payout', fmt(conv.payout_amount), 'bd-good'] : null].filter(Boolean)
+      : (paid != null ? [['Total paid', fmt(paid), ''], ...(Number(conv.gst) ? [['Includes GST', fmt(conv.gst), 'bd-muted']] : [])] : []);
     document.getElementById('inboxBookingDetailsBody').innerHTML = `
-      <h3 style="font-family:'Bodoni Moda', serif; font-size:19px; margin-bottom:4px;">${escapeMessageHtml(conv.counterpart_name || conv.guest_email || '')}</h3>
-      <p style="font-size:12.5px; opacity:0.6; margin-bottom:20px;">${escapeMessageHtml(conv.property_name || '')}</p>
-      <div style="display:flex; flex-direction:column; gap:12px; font-size:13.5px;">
-        <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Dates</span><span>${arrival} → ${departure}${conv.nights ? ` (${conv.nights} night${conv.nights === 1 ? '' : 's'})` : ''}</span></div>
-        ${conv.guests ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Guests</span><span>${conv.guests}</span></div>` : ''}
-        ${conv.subtotal != null ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">${isHostView ? 'Guest Paid' : 'You Paid'}</span><span>${fmt(Number(conv.subtotal) + Number(conv.gst || 0))}</span></div>` : ''}
-        ${isHostView && conv.payout_amount != null ? `<div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--line-dark); padding-bottom:10px;"><span style="opacity:0.6;">Your Payout</span><span style="color:#3a7d44; font-weight:600;">${fmt(conv.payout_amount)}</span></div>` : ''}
-        <div style="display:flex; justify-content:space-between;"><span style="opacity:0.6;">${isHostView ? 'Contact' : 'Host Contact'}</span><span>${escapeMessageHtml(isHostView ? (conv.guest_email || '') : (conv.counterpart_name || '—'))}</span></div>
+      <div class="bd">
+        ${photo ? `<div class="bd-photo"><img src="${esc(photo)}" alt=""></div>` : ''}
+        <span class="inbox-status-tag ${tag.cls}">${esc(tag.label)}</span>
+        <h3 class="bd-title">${esc(conv.property_name || 'Your stay')}</h3>
+        <p class="bd-sub">${esc([place, isHostView ? 'Guest: ' + (conv.counterpart_name || conv.guest_email || 'Guest') : 'Hosted by ' + (conv.counterpart_name || 'your host')].filter(Boolean).join(' · '))}</p>
+        ${conv.arrival && conv.departure ? `
+        <div class="bd-dates">
+          <div class="bd-date"><span class="bd-label">Check-in</span><strong>${esc(day(conv.arrival))}</strong><span class="bd-small">${esc(String(year(conv.arrival)))}</span>${conv.check_in_time ? `<span class="bd-small">from ${esc(conv.check_in_time)}</span>` : ''}</div>
+          <div class="bd-date"><span class="bd-label">Check-out</span><strong>${esc(day(conv.departure))}</strong><span class="bd-small">${esc(String(year(conv.departure)))}</span>${conv.check_out_time ? `<span class="bd-small">by ${esc(conv.check_out_time)}</span>` : ''}</div>
+        </div>
+        ${facts ? `<p class="bd-facts">${esc(facts)}</p>` : ''}` : ''}
+        ${money.length ? `
+        <div class="bd-section">
+          <div class="bd-section-title">Payment</div>
+          ${money.map(([k, v, cls]) => `<div class="bd-row ${cls}"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('')}
+        </div>` : ''}
+        <div class="bd-section">
+          <div class="bd-section-title">${isHostView ? 'Your guest' : 'Your host'}</div>
+          ${isHostView
+            ? `<div class="bd-row"><span>Name</span><span>${esc(conv.counterpart_name || '—')}</span></div>
+               ${conv.guest_email ? `<div class="bd-row"><span>Email</span><span class="bd-wrap">${esc(conv.guest_email)}</span></div>` : ''}`
+            : `<p class="bd-note">Message ${esc(conv.counterpart_name || 'your host')} right here. For your safety, keep every conversation and payment on Aerva.</p>`}
+        </div>
+        ${!isHostView && conv.order_id ? `<a class="bd-link" href="index.html?view=my-bookings">View booking in My Bookings</a>` : ''}
       </div>
       ${isHostView && conv.order_id ? '<div id="inboxGuestProfile" style="margin-top:24px;"></div>' : ''}
     `;
@@ -12586,6 +12587,7 @@
           <div class="payout-label" style="margin-top:14px;">Earnings</div>
           ${p.lines.map(l => `<div class="payout-line"><span>${esc(l.label)}</span><span>${l.value < 0 ? '−' : ''}${inr(Math.abs(l.value))}</span></div>`).join('')}
           <div class="payout-line payout-total"><span>Total (INR)</span><span>${inr(p.amount)}</span></div>
+          ${p.note ? `<p class="payout-muted" style="margin:12px 0 0; font-size:13px;">${esc(p.note)}</p>` : ''}
         </div>`;
     })
     .catch(() => { body.innerHTML = '<p class="payout-muted">Could not load this payout. Try again.</p>'; });

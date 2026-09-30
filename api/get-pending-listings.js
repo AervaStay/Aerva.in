@@ -90,11 +90,12 @@
 // real Razorpay test-mode payment before relying on it in production.
 
 const { neon } = require('@neondatabase/serverless');
-const { listRemovals, restoreRemoval } = require('./_photo-guard');
+const { listRemovals, restoreRemoval, checkPhoto } = require('./_photo-guard');
+const { judgeLocation, flaggedPhotoLocations } = require('./_photo-location');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
-const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout, createDepositCompensationPayout } = require('./_payouts');
+const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout, createDepositCompensationPayout, refreshTds } = require('./_payouts');
 const { disputesForAdmin, decideDispute, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
 const { safeRefund } = require('./_refunds');
 const { releaseDueDeposits } = require('./_deposits');
@@ -548,10 +549,126 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- TDS: what was deducted, when it must be deposited and returned ----
+  // GET ?tdsReport=1&fy=2026 — every booking payout credited in that
+  // financial year (April–March), with the payee's full PAN (needed for the
+  // quarterly return), month totals with deposit dates, quarter totals with
+  // return and certificate dates, and each payee's year. Viewing is logged.
+  if (req.method === 'GET' && req.query.tdsReport === '1') {
+    const T = require('./_tds');
+    const { decryptField } = require('./_secure-fields');
+    const fy = Number(req.query.fy) || T.financialYear(new Date());
+    try {
+      const rows = await sql`
+        SELECT p.id, p.order_id, p.payee_type, p.host_id, p.payee_guest_id, p.status, p.created_at, p.sent_at, p.net,
+               p.tds, p.tds_rate, p.tds_reason, p.tds_base, p.tds_catchup_base, p.pan_furnished,
+               CASE WHEN p.payee_type = 'host' THEN h.name ELSE g.name END AS payee_name,
+               CASE WHEN p.payee_type = 'host' THEN h.pan_number ELSE cp.pan_number END AS pan,
+               CASE WHEN p.payee_type = 'host' THEN (to_jsonb(h)->>'pan_inoperative')::boolean ELSE (to_jsonb(cp)->>'pan_inoperative')::boolean END AS pan_inoperative
+        FROM payouts p
+        LEFT JOIN hosts h ON h.id = p.host_id
+        LEFT JOIN guests g ON g.id = p.payee_guest_id
+        LEFT JOIN cohost_payout_profiles cp ON cp.guest_id = p.payee_guest_id
+        WHERE p.tds_fy = ${fy} AND COALESCE(p.kind, 'booking') = 'booking'
+        ORDER BY p.created_at, p.id`;
+      const months = new Map(), quarters = new Map(), payees = new Map();
+      const out = rows.map(r => {
+        const pan = decryptField(r.pan);
+        const d = T.dueDates(r.created_at);
+        const row = {
+          payoutId: r.id, bookingId: r.order_id, payeeType: r.payee_type, payeeName: r.payee_name || '',
+          pan: pan || null, panKind: pan && T.panKind(pan) ? T.PAN_KINDS[T.panKind(pan)] : null,
+          creditedOn: r.created_at, paidOn: r.sent_at, status: r.status,
+          amount: Number(r.tds_base) || 0, catchupAmount: Number(r.tds_catchup_base) || 0, rate: Number(r.tds_rate) || 0,
+          tds: Number(r.tds) || 0, reason: r.tds_reason, depositBy: d.depositBy, month: d.month, quarter: d.quarter
+        };
+        const m = months.get(d.month) || { month: d.month, depositBy: d.depositBy, tds: 0, payouts: 0 };
+        m.tds += row.tds; m.payouts++; months.set(d.month, m);
+        const q = quarters.get(d.quarter) || { quarter: d.quarter, returnBy: d.returnBy, certificatesBy: d.certificatesBy, tds: 0, amount: 0, payouts: 0 };
+        q.tds += row.tds; q.amount += row.amount; q.payouts++; quarters.set(d.quarter, q);
+        const key = r.payee_type === 'host' ? 'host:' + r.host_id : 'cohost:' + r.payee_guest_id;
+        const y = payees.get(key) || { key, payeeType: r.payee_type, hostId: r.host_id, cohostGuestId: r.payee_guest_id, name: row.payeeName, pan: row.pan, panKind: row.panKind,
+                                       panInoperative: r.pan_inoperative === true, amount: 0, tds: 0, payouts: 0 };
+        y.amount += row.amount; y.tds += row.tds; y.payouts++; payees.set(key, y);
+        return row;
+      });
+      const r2 = (x) => Math.round(x * 100) / 100;
+      await logAudit(sql, { action: 'tds_report_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, metadata: { fy, rows: out.length } });
+      return res.status(200).json({
+        fy, label: T.fyLabel(fy), threshold: T.THRESHOLD(), rateWithPan: T.RATE_WITH_PAN(), rateWithoutPan: T.RATE_WITHOUT_PAN(),
+        months: [...months.values()].map(m => ({ ...m, tds: r2(m.tds) })),
+        quarters: ['Q1', 'Q2', 'Q3', 'Q4'].map(q => quarters.get(q)).filter(Boolean).map(q => ({ ...q, tds: r2(q.tds), amount: r2(q.amount) })),
+        payees: [...payees.values()].map(y => ({ ...y, amount: r2(y.amount), tds: r2(y.tds) })).sort((a, b) => b.amount - a.amount),
+        rows: out
+      });
+    } catch (err) {
+      console.error('tdsReport failed:', err);
+      return res.status(err.code === '42703' ? 409 : 500).json({ error: err.code === '42703' ? 'Run sql/migration_tds.sql first.' : 'Could not build the TDS report.' });
+    }
+  }
+  // POST { setPanInoperative: { hostId | cohostGuestId, inoperative } } — a PAN
+  // not linked to Aadhaar is inoperative: TDS at 5% until it is fixed.
+  // Payouts not yet sent pick this up when they are sent.
+  if (req.method === 'POST' && req.body && req.body.setPanInoperative) {
+    const x = req.body.setPanInoperative;
+    const flag = x.inoperative === true;
+    try {
+      let n = 0;
+      if (x.hostId) n = (await sql`UPDATE hosts SET pan_inoperative = ${flag} WHERE id = ${Number(x.hostId) || 0} RETURNING id`).length;
+      else if (x.cohostGuestId) n = (await sql`UPDATE cohost_payout_profiles SET pan_inoperative = ${flag} WHERE guest_id = ${Number(x.cohostGuestId) || 0} RETURNING guest_id`).length;
+      if (!n) return res.status(404).json({ error: 'Payee not found.' });
+      await logAudit(sql, { action: flag ? 'pan_marked_inoperative' : 'pan_marked_operative', success: true, actorType: 'admin', ...ADMIN_AUDIT,
+        targetType: x.hostId ? 'host' : 'guest', targetId: Number(x.hostId || x.cohostGuestId) });
+      return res.status(200).json({ success: true, inoperative: flag });
+    } catch (err) {
+      console.error('setPanInoperative failed:', err);
+      return res.status(err.code === '42703' ? 409 : 500).json({ error: err.code === '42703' ? 'Run sql/migration_tds.sql first.' : 'Could not update this PAN.' });
+    }
+  }
+
   // ---- Photos removed for showing contact details (_photo-guard.js) ----
   // GET ?photoRemovals=1 · POST { restorePhoto: { removalId } }
   if (req.method === 'GET' && req.query.photoRemovals === '1') {
-    return res.status(200).json({ removals: await listRemovals(sql, { limit: 200 }), checking: !!process.env.ANTHROPIC_API_KEY });
+    // New stay photos taken far from the listing's pin, or with no
+    // location: listed for review, never refused (_photo-location.js).
+    let locationFlags = [];
+    try { locationFlags = await flaggedPhotoLocations(sql); } catch (err) { console.error('photo location flags failed:', err.message); }
+    return res.status(200).json({ removals: await listRemovals(sql, { limit: 200 }), locationFlags, checking: !!process.env.ANTHROPIC_API_KEY });
+  }
+
+  // ---- Photo test: both photo rules on one photo, nothing saved ----
+  // POST { photoTest: { url, listingId, location: { lat, lng } | null } }
+  // The photo is uploaded by the admin page (purpose 'admin-photo-test', so
+  // the upload check leaves it alone), checked here, then deleted.
+  if (req.method === 'POST' && req.body && req.body.photoTest) {
+    const t = req.body.photoTest;
+    const url = String(t.url || '').trim();
+    if (!/^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\//i.test(url)) return res.status(400).json({ error: 'Upload the photo first.' });
+    try {
+      const listing = t.listingId ? (await sql`SELECT id, property_name, latitude, longitude, listing_type FROM listings WHERE id = ${Number(t.listingId) || 0}`)[0] : null;
+      const pin = listing && listing.latitude != null && listing.longitude != null ? { lat: Number(listing.latitude), lng: Number(listing.longitude) } : null;
+      const loc = t.location && typeof t.location === 'object' ? t.location : null;
+      const [contact, location] = await Promise.all([
+        checkPhoto(url).catch(err => ({ status: 'error', error: err.message })),
+        Promise.resolve(judgeLocation(loc, pin))
+      ]);
+      await deleteUploadedDocument(url).catch(() => {});
+      const contactBad = contact.status === 'flagged';
+      const locationBad = !location.ok;
+      const verdict = contactBad && locationBad ? 'both' : contactBad ? 'contact' : locationBad ? 'location' : (contact.status === 'clean' ? 'accepted' : 'unchecked');
+      await logAudit(sql, { action: 'photo_test_run', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'listing', targetId: listing ? listing.id : null,
+        metadata: { verdict, contact: contact.status, location: location.status, km: location.km == null ? null : location.km } });
+      return res.status(200).json({
+        verdict,
+        listing: listing ? { id: listing.id, name: listing.property_name, pinSet: !!pin, experience: listing.listing_type === 'experience' } : null,
+        contact: { status: contact.status, findings: contact.findings || [], error: contact.error || null, keyMissing: !!contact.noKey },
+        location
+      });
+    } catch (err) {
+      console.error('photoTest failed:', err);
+      await deleteUploadedDocument(url).catch(() => {});
+      return res.status(500).json({ error: 'The test could not run. Please try again.' });
+    }
   }
   if (req.method === 'POST' && req.body && req.body.restorePhoto) {
     try {
@@ -1378,6 +1495,9 @@ module.exports = async (req, res) => {
         // use Retry. (Payouts created while they were off can still be
         // recorded here.)
         if (razorpayxReady() && row.auto_eligible) return res.status(409).json({ error: 'Automatic payouts are on. Use Retry instead of paying by hand.' });
+        // TDS as the rules give it today (a PAN added since, the ₹5 lakh
+        // limit) — unless the admin typed the amount.
+        if (!isDeposit && (b.tds === undefined || b.tds === null || b.tds === '')) row = await refreshTds(sql, row);
         let tds = Number(row.tds), deductions = Number(row.deductions), ids = row.deducted_penalty_ids || [];
         if (!isCohost) {
           if (b.tds !== undefined && b.tds !== null && b.tds !== '') tds = Math.max(0, Math.round((Number(b.tds) || 0) * 100) / 100);

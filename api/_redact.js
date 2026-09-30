@@ -101,7 +101,8 @@ const stripInvisible = (s) => s.replace(/[\p{Cf}\uFE0E\uFE0F]/gu, '');
 function safeSpans(text) {
   const spans = [];
   const add = (re) => { for (const m of text.matchAll(re)) spans.push([m.index, m.index + m[0].length]); };
-  add(/(?<![\d\p{L}])(?:0?[1-9]|[12]\d|3[01])[\/.\-](?:0?[1-9]|1[0-2])(?:[\/.\-](?:(?:19|20)\d{2}|\d{2}))?(?![\d\p{L}])/gu);   // 12/10, 12-10-2026
+  add(/(?<![\d\p{L}])(?:0?[1-9]|[12]\d|3[01])\/(?:0?[1-9]|1[0-2])(?:\/(?:(?:19|20)\d{2}|\d{2}))?(?![\d\p{L}\/])/gu);   // 12/10, 12/10/2026
+  add(/(?<![\d\p{L}])(?:0?[1-9]|[12]\d|3[01])[.\-](?:0?[1-9]|1[0-2])[.\-](?:(?:19|20)\d{2}|\d{2})(?![\d\p{L}])/gu);          // 12-10-2026 (a year needed: "7-2" is not a date)
   add(/(?<![\d\p{L}])(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?![\d\p{L}])/gu);                              // 2026-10-12
   add(/(?<![\d\p{L}])(?:[01]?\d|2[0-3])[:.][0-5]\d(?:\s*(?:am|pm|hrs?))?(?![\d\p{L}])/giu);                                  // 11:30, 9.45 pm
   add(/(?<![\d\p{L}])(?:1[0-2]|0?[1-9])\s*(?:am|pm)(?![\p{L}])/giu);                                                          // 9 am
@@ -287,6 +288,11 @@ function digitCount(input) {
   const { text } = removeLinksAndHandles(input);
   return findNumbers(text, safeSpans(text)).reduce((n, g) => n + g.digits, 0);
 }
+// Every digit, dates and prices included (for deciding when to look closer).
+function rawDigitCount(input) {
+  const { text } = removeLinksAndHandles(input);
+  return findNumbers(text, []).reduce((n, g) => n + g.digits, 0);
+}
 // A short message that is mostly digits: a piece of a number.
 function isNumberPiece(input) {
   const { text } = removeLinksAndHandles(input);
@@ -323,4 +329,4 @@ function splitNumberCheck(displayText, recent) {
   return total >= 10 ? pieces : null;
 }
 
-module.exports = { redactContactInfo, isProtectedUrl, digitCount, isNumberPiece, removeAllDigits, splitNumberCheck, NUMBER_REMOVED };
+module.exports = { redactContactInfo, isProtectedUrl, digitCount, rawDigitCount, isNumberPiece, removeAllDigits, splitNumberCheck, NUMBER_REMOVED };

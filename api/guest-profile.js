@@ -137,7 +137,8 @@ function requireGuest(req) {
 // ---- Contact-info redaction (server-side, authoritative) ----
 // Lives in _redact.js so the messages Aerva sends on a host's behalf
 // (_template-scheduling.js) go through exactly the same filter.
-const { redactContactInfo, splitNumberCheck, removeAllDigits } = require('./_redact');
+const { redactContactInfo } = require('./_redact');
+const { guardMessage } = require('./_message-guard');
 
 
 // ---- "How was your stay / your guest?" inside a message thread ----
@@ -1198,27 +1199,17 @@ module.exports = async (req, res) => {
           senderType = isHost ? 'host' : 'guest';
         }
 
-        let { displayText, wasRedacted } = redactContactInfo(rawText);
-        // A number sent in pieces ("98765" … "43210"): this sender's recent
-        // short, digit-heavy messages here are read together. When they add
-        // up to a phone number, the digits go from all of them.
-        try {
-          const recent = await sql`
-            SELECT id, display_text FROM messages
-            WHERE conversation_id = ${conversationId} AND sender_type = ${senderType}
-              AND created_at > now() - interval '30 minutes'
-            ORDER BY created_at DESC LIMIT 6`;
-          const pieces = splitNumberCheck(displayText, recent);
-          if (pieces) {
-            displayText = removeAllDigits(displayText);
-            wasRedacted = true;
-            for (const m of recent.filter(r => pieces.includes(r.id))) {
-              await sql`UPDATE messages SET display_text = ${removeAllDigits(m.display_text)}, was_redacted = true WHERE id = ${m.id}`;
-            }
-            await logAudit(sql, { action: 'message_split_number_removed', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-              targetType: 'conversation', targetId: conversationId, metadata: { senderType, pieces: pieces.length + 1 } });
-          }
-        } catch (err) { console.error('split-number check failed:', err.message || err); }
+        // Contact details in this message, or built up over the sender's
+        // recent messages (_message-guard.js). Earlier pieces lose them too.
+        const guard = await guardMessage(sql, { conversationId, senderType, text: rawText });
+        const displayText = guard.displayText, wasRedacted = guard.wasRedacted;
+        for (const m of guard.rewrite) {
+          await sql`UPDATE messages SET display_text = ${m.display_text}, was_redacted = true WHERE id = ${m.id} AND conversation_id = ${conversationId}`;
+        }
+        if (guard.by) {
+          await logAudit(sql, { action: 'message_contact_pieces_removed', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+            targetType: 'conversation', targetId: conversationId, metadata: { senderType, by: guard.by, what: guard.what, earlierMessages: guard.rewrite.map(m => m.id) } });
+        }
         const inserted = await sql`
           INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
           VALUES (${conversationId}, ${senderType}, ${rawText}, ${displayText}, ${wasRedacted})

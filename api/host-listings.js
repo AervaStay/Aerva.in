@@ -64,6 +64,7 @@
 //          the coupon has to be bought and confirmed FIRST. Same 48-hour
 //          check-in cutoff as cancelBooking.
 
+const { isValidPan, PAN_ERROR } = require('./_tds');
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const { verifyToken, createToken } = require('./_approval-token');
@@ -734,8 +735,8 @@ async function handleCohostModes(req, res, accountId) {
       const holder = String(x.accountHolderName || '').trim().slice(0, 120);
       const account = String(x.accountNumber || '').replace(/\s+/g, '');
       const ifsc = String(x.ifsc || '').trim().toUpperCase();
-      if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) { res.status(400).json({ error: 'Please enter a valid PAN, like ABCDE1234F.' }); return true; }
-      if (gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCDE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
+      if (!isValidPan(pan)) { res.status(400).json({ error: PAN_ERROR }); return true; }
+      if (gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCPE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
       if (gstin && gstin.slice(2, 12) !== pan) { res.status(400).json({ error: 'Your GSTIN should contain your PAN (characters 3 to 12).' }); return true; }
       if (holder.length < 2) { res.status(400).json({ error: 'Please enter the account holder\'s name as the bank has it.' }); return true; }
       if (!/^[0-9]{9,18}$/.test(account)) { res.status(400).json({ error: 'Bank account numbers are 9 to 18 digits.' }); return true; }
@@ -3187,13 +3188,13 @@ module.exports = async (req, res) => {
       // ---- PAN: submit once, then permanently locked ----
       if (typeof panDocumentUrl === 'string' && panDocumentUrl.startsWith('https://')) {
         // Decided by the status, not by a stored document: after review the
-        // document and number are erased, and only the outcome is kept.
+        // PAN card image is erased; the number stays (encrypted) for TDS.
         if (host.pan_status && host.pan_status !== 'not_submitted') {
           return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
         }
         const cleanPan = typeof panNumber === 'string' ? panNumber.trim().toUpperCase() : '';
-        if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(cleanPan)) {
-          return res.status(400).json({ error: 'Please enter a valid 10-character PAN, e.g. ABCDE1234F.' });
+        if (!isValidPan(cleanPan)) {
+          return res.status(400).json({ error: PAN_ERROR });
         }
         await sql`
           UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL

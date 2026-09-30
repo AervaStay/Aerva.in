@@ -34,7 +34,7 @@ const { verifyToken } = require('./_approval-token');
 const { readCohostManageToken } = require('./_cohosts');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
 const photoGuard = require('./_photo-guard');
-const { checkPhotoLocations } = require('./_photo-location');
+const { recordPhotoLocations } = require('./_photo-location');
 const { timezoneForAddress, localTodayIn } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
 const { resolveSatisfiedComplianceFlags } = require('./_compliance');
@@ -516,26 +516,13 @@ module.exports = async (req, res) => {
       const safeLat = (latitude && !isNaN(Number(latitude)) && Math.abs(Number(latitude)) <= 90) ? Number(latitude) : undefined;
       const safeLng = (longitude && !isNaN(Number(longitude)) && Math.abs(Number(longitude)) <= 180) ? Number(longitude) : undefined;
 
-      // ---- Every new stay photo must be taken at the property ----
-      // (_photo-location.js). Before anything is written. Photos already
-      // on the listing before the rule began are left alone.
+      // ---- Where new stay photos were taken (_photo-location.js) ----
+      // Recorded for the admin's review; nothing is refused for location.
       if (!me || (me.listing_type || 'stay') === 'stay') {
         const roomUrls = [];
         if (Array.isArray(rooms)) rooms.forEach(r => (r && Array.isArray(r.photos) ? r.photos : []).forEach(p => { if (p && isAervaBlobUrl(p.url)) roomUrls.push(p.url.trim()); }));
         const sentUrls = [...(safeExteriorUrls || []), ...(safeInteriorUrls || []), ...roomUrls, ...(safeCoverUrl ? [safeCoverUrl] : [])];
-        if (sentUrls.length) {
-          const pinRow = (await sql`SELECT latitude, longitude FROM listings WHERE id = ${listingId}`)[0] || {};
-          const pinLat = safeLat !== undefined ? safeLat : pinRow.latitude;
-          const pinLng = safeLng !== undefined ? safeLng : pinRow.longitude;
-          const located = await checkPhotoLocations(sql, {
-            listingId, urls: sentUrls,
-            pin: pinLat != null && pinLng != null ? { lat: Number(pinLat), lng: Number(pinLng) } : null,
-            locations: req.body && req.body.photoLocations
-          });
-          if (!located.ok) {
-            return res.status(located.status).json({ error: located.error, rejectedPhotos: located.rejectedPhotos, policy: 'photo_location' });
-          }
-        }
+        if (sentUrls.length) await recordPhotoLocations(sql, { listingId, urls: sentUrls, locations: req.body && req.body.photoLocations });
       }
 
       // Pet policy — same "Dog"/"Cat" whitelist as submit-listing.js. A

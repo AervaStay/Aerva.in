@@ -8,15 +8,16 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <!-- Only what this page actually loads: its own files, Leaflet (unpkg),
      Google Fonts, the API, map tiles, and listing photos from Aerva's own
-     Blob storage. Anything a host typed that slipped past escaping still
+     Blob storage (plus esm.sh and Vercel's upload address, for the Photo
+     test's EXIF reader and upload). Anything a host typed that slipped past escaping still
      cannot load or send anything anywhere else. -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
-  script-src 'self' 'unsafe-inline' https://unpkg.com;
+  script-src 'self' 'unsafe-inline' https://unpkg.com https://esm.sh;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com;
   font-src https://fonts.gstatic.com;
   img-src 'self' data: blob: https://*.public.blob.vercel-storage.com https://*.tile.openstreetmap.org https://unpkg.com;
-  connect-src 'self' https://aerva-in.vercel.app;
+  connect-src 'self' https://aerva-in.vercel.app https://esm.sh https://vercel.com;
   frame-src 'none';
   object-src 'none';
   base-uri 'self';
@@ -54,6 +55,23 @@
     display:flex; gap:8px; overflow-x:auto; scroll-snap-type:x mandatory;
     padding-bottom:6px; -webkit-overflow-scrolling:touch;
   }
+  .pt-form{display:flex; flex-wrap:wrap; gap:12px 18px; align-items:flex-end; font-size:14px;}
+  .pt-form label{display:flex; flex-direction:column; gap:4px;}
+  .pt-form select, .pt-form input[type=file]{max-width:100%;}
+  .tds-bar{display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin:10px 0 6px; font-size:14px;}
+  .tds-bar label{display:flex; flex-direction:column; gap:4px;}
+  .tds-h{font-size:15px; margin:18px 0 6px;}
+  .tds-table{width:100%; border-collapse:collapse; font-size:13.5px; display:block; overflow-x:auto;}
+  .tds-table th, .tds-table td{text-align:left; padding:7px 10px; border-bottom:1px solid #e6ded3; vertical-align:top; white-space:nowrap;}
+  .tds-table th{font-weight:600; font-size:12px; color:#8a6c39; text-transform:uppercase; letter-spacing:0.04em;}
+  .tds-sub{font-size:11.5px; opacity:0.65;}
+  .tds-late{color:#a3402f; font-weight:600;}
+  .tds-inop{display:flex; gap:6px; align-items:center; white-space:normal; font-size:12.5px;}
+  .pl-grid{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px;}
+  .pl-photo{margin:0; width:150px;}
+  .pl-photo img{width:150px; height:110px; object-fit:cover; border-radius:6px; display:block;}
+  .pl-photo figcaption{font-size:12px; margin-top:4px;}
+  .pl-far{color:#a3402f;} .pl-none{color:#8a6c39;}
   .photo-removal-img img{width:160px; height:120px; object-fit:cover; border-radius:6px; display:block;}
   .photo-row img{
     width:160px; height:160px; object-fit:cover; border-radius:4px; border:1px solid #e0d5c0;
@@ -305,6 +323,21 @@
       <p id="photoCheckOff" class="error" style="display:none;">Photo checking is off: set ANTHROPIC_API_KEY in Vercel.</p>
       <div id="photoRemovalsContainer"><p class="empty">Loading…</p></div>
     </div>
+    <div class="deposit-section">
+      <h3>Photo locations to check</h3>
+      <p>Hosts can upload photos from anywhere — nothing is refused for location. New stay photos from the last 90 days that were taken more than 2 km from the listing's map pin, or that carry no location, are listed here so you can look at them. Phones usually strip a photo's location on upload, so "no location" is common and not a problem by itself. If a listing's photos are not of the property, use Block above.</p>
+      <div id="locationRefusalsContainer"><p class="empty">Loading…</p></div>
+    </div>
+    <div class="deposit-section" id="photoTestSection">
+      <h3>Photo test</h3>
+      <p>Try a photo against both checks without saving it anywhere: contact details (Claude — such a photo is removed) and location (the photo's own location against a listing's pin — a photo far away is only flagged for your review). The photo is deleted after the test.</p>
+      <div class="pt-form">
+        <label>Listing<select id="photoTestListing"><option value="">No listing (contact check only)</option></select></label>
+        <label>Photo<input type="file" id="photoTestFile" accept="image/*"></label>
+        <button type="button" class="approve-btn" id="photoTestBtn">Run test</button>
+      </div>
+      <div id="photoTestResult"></div>
+    </div>
   </div>
 
   <div id="verificationsView" style="display:none;">
@@ -423,6 +456,10 @@
     <p style="opacity:0.7; font-size:14px;">Refunds start automatically and are checked with Razorpay until confirmed. Only failed ones, or ones not started after 10 minutes, need you: Retry re-checks Razorpay first, so nothing is refunded twice.</p>
     <div id="refundsList"><p style="opacity:0.6;">Loading…</p></div>
     <p id="couponForfeitLine" style="margin-top:8px; font-size:14.5px;"></p>
+    <h2 style="margin-top:40px;">TDS</h2>
+    <p style="opacity:0.7; font-size:14px;">What Aerva deducted from host and co-host payouts as the e-commerce operator: 0.1% with a PAN, 5% without one or with an inoperative PAN, and nothing for an individual or HUF while their year's earnings through Aerva stay within ₹5 lakh. Deposit each month's TDS by the date shown, file the quarter's return and issue certificates by the dates shown. Confirm figures with your CA.</p>
+    <div class="tds-bar"><label>Financial year <select id="tdsYear"></select></label><button type="button" class="approve-btn" id="tdsCsvAll">Download year (CSV)</button></div>
+    <div id="tdsReport"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Security deposit compensation</h2>
     <p style="opacity:0.7; font-size:14px;">What a host is paid from a guest’s deposit after a dispute is decided. Paid on its own, separate from the booking payout.</p>
     <div id="depositPayoutsList"><p style="opacity:0.6;">Loading…</p></div>
@@ -1631,7 +1668,78 @@
     return escAdmin(p.holder || '') + ' · ' + escAdmin(p.account) + ' · ' + escAdmin(p.ifsc || '')
       + (p.ready ? ' <span style="color:#3d5a3a;">· Ready</span>' : ' <span style="color:#a3402f;">· Hold (' + escAdmin(p.bankStatus || p.profileStatus || 'not approved') + ')</span>');
   }
+  // ---- TDS report (get-pending-listings ?tdsReport=1) ----
+  let tdsData = null;
+  function currentFy(){ const d = new Date(Date.now() + 5.5 * 3600e3); return d.getUTCMonth() >= 3 ? d.getUTCFullYear() : d.getUTCFullYear() - 1; }
+  function fyText(fy){ return fy + '-' + String((fy + 1) % 100).padStart(2, '0'); }
+  const inrT = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  const dayT = (d) => d ? new Date(d.length === 10 ? d + 'T00:00:00' : d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+  const TDS_REASON = { pan: 'PAN', no_pan: 'No PAN (5%)', inoperative_pan: 'PAN inoperative (5%)', below_threshold: 'Under ₹5 lakh: none', threshold_crossed: 'Crossed ₹5 lakh (with catch-up)' };
+  async function loadTdsReport(){
+    const sel = document.getElementById('tdsYear'), box = document.getElementById('tdsReport');
+    if(!sel.options.length){
+      const fy = currentFy();
+      sel.innerHTML = [fy, fy - 1, fy - 2].map(y => `<option value="${y}">${fyText(y)}</option>`).join('');
+    }
+    box.innerHTML = '<p style="opacity:0.6;">Loading…</p>';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?tdsReport=1&fy=' + encodeURIComponent(sel.value), { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || 'Could not load the TDS report.');
+      tdsData = d;
+      const today = new Date().toISOString().slice(0, 10);
+      if(!d.rows.length){ box.innerHTML = `<p style="opacity:0.7;">No payouts credited in ${esc(d.label)} yet.</p>`; return; }
+      box.innerHTML = `
+        <h3 class="tds-h">Deposit each month</h3>
+        <table class="tds-table"><thead><tr><th>Month</th><th>Payouts</th><th>TDS</th><th>Deposit by</th></tr></thead><tbody>
+          ${d.months.map(m => `<tr><td>${esc(new Date(m.month + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }))}</td><td>${m.payouts}</td><td>${inrT(m.tds)}</td>
+            <td class="${m.tds > 0 && m.depositBy < today ? 'tds-late' : ''}">${esc(dayT(m.depositBy))}</td></tr>`).join('')}
+        </tbody></table>
+        <h3 class="tds-h">Quarterly return and certificates</h3>
+        <table class="tds-table"><thead><tr><th>Quarter</th><th>Amount credited</th><th>TDS</th><th>Return by</th><th>Certificates by</th><th></th></tr></thead><tbody>
+          ${d.quarters.map(q => `<tr><td>${esc(q.quarter)}</td><td>${inrT(q.amount)}</td><td>${inrT(q.tds)}</td><td>${esc(dayT(q.returnBy))}</td><td>${esc(dayT(q.certificatesBy))}</td>
+            <td><button type="button" class="reject-btn" onclick="downloadTdsCsv('${esc(q.quarter)}')">CSV</button></td></tr>`).join('')}
+        </tbody></table>
+        <h3 class="tds-h">Payees this year</h3>
+        <table class="tds-table"><thead><tr><th>Payee</th><th>PAN</th><th>Earnings</th><th>TDS</th><th>PAN status</th></tr></thead><tbody>
+          ${d.payees.map(y => `<tr><td>${esc(y.name || '—')}<div class="tds-sub">${y.payeeType === 'host' ? 'Host' : 'Co-host'}</div></td>
+            <td>${y.pan ? esc(y.pan) + (y.panKind ? `<div class="tds-sub">${esc(y.panKind)}</div>` : '') : '<span class="tds-late">None</span>'}</td>
+            <td>${inrT(y.amount)}${y.panKind === 'Individual' || y.panKind === 'HUF' ? `<div class="tds-sub">${y.amount > d.threshold ? 'over' : 'within'} ₹5 lakh</div>` : ''}</td>
+            <td>${inrT(y.tds)}</td>
+            <td>${y.pan ? `<label class="tds-inop"><input type="checkbox" ${y.panInoperative ? 'checked' : ''} onchange="setPanInoperative(${y.payeeType === 'host' ? Number(y.hostId) : 'null'}, ${y.payeeType === 'cohost' ? Number(y.cohostGuestId) : 'null'}, this)"> Inoperative (not linked to Aadhaar)</label>` : '—'}</td></tr>`).join('')}
+        </tbody></table>`;
+    }catch(e){ box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+  }
+  function downloadTdsCsv(quarter){
+    if(!tdsData) return;
+    const rows = tdsData.rows.filter(r => !quarter || r.quarter === quarter);
+    const head = ['Payout ID', 'Booking ID', 'Payee type', 'Payee name', 'PAN', 'PAN holder', 'Credited on', 'Paid on', 'Amount credited (INR)', 'Earlier amount caught up (INR)', 'TDS rate %', 'TDS (INR)', 'Reason', 'Quarter', 'Deposit by', 'Status'];
+    const cell = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const date = (d) => d ? new Date(d).toISOString().slice(0, 10) : '';
+    const lines = [head.join(',')].concat(rows.map(r => [r.payoutId, r.bookingId, r.payeeType, r.payeeName, r.pan, r.panKind, date(r.creditedOn), date(r.paidOn), r.amount, r.catchupAmount, r.rate, r.tds,
+      TDS_REASON[r.reason] || r.reason || '', r.quarter, r.depositBy, r.status].map(cell).join(',')));
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `aerva-tds-${tdsData.label}${quarter ? '-' + quarter : ''}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  async function setPanInoperative(hostId, cohostGuestId, box){
+    const flag = box.checked;
+    if(!confirm(flag ? 'Mark this PAN inoperative? Payouts not yet sent will have 5% TDS.' : 'Mark this PAN as working again? Payouts not yet sent go back to the normal rate.')){ box.checked = !flag; return; }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true),
+        body: JSON.stringify({ setPanInoperative: hostId ? { hostId, inoperative: flag } : { cohostGuestId, inoperative: flag } }) });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || 'Could not update.');
+    }catch(e){ alert(e.message); box.checked = !flag; }
+  }
+  document.getElementById('tdsYear').addEventListener('change', loadTdsReport);
+  document.getElementById('tdsCsvAll').addEventListener('click', () => downloadTdsCsv(null));
+
   async function loadPayouts(){
+    loadTdsReport();
     const profilesEl = document.getElementById('payoutProfilesList');
     const listEl = document.getElementById('payoutsList');
     try{
@@ -2002,6 +2110,7 @@
       const d = await res.json();
       if(!res.ok){ box.innerHTML = '<p class="error">' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
       document.getElementById('photoCheckOff').style.display = d.checking ? 'none' : 'block';
+      renderLocationRefusals(d.locationFlags);
       if(!d.removals.length){ box.innerHTML = '<p style="opacity:0.7;">No photos removed so far.</p>'; return; }
       box.innerHTML = d.removals.map(r => {
         const found = (Array.isArray(r.findings) ? r.findings : []).map(f => `<li>${escAdmin(f.type)}: <strong>${escAdmin(f.text)}</strong></li>`).join('') || '<li>Contact details</li>';
@@ -2049,7 +2158,103 @@
     }
   }
 
+  // ---- Photo checks: refusals for location, and the Photo test ----
+  const esc = escAdmin;
+  const kmTxt = (km) => km == null ? '' : (km < 10 ? Number(km).toFixed(1) : Math.round(km)) + ' km';
+  function renderLocationRefusals(groups){
+    const box = document.getElementById('locationRefusalsContainer');
+    if(!groups || !groups.length){ box.innerHTML = '<p style="opacity:0.7;">Nothing to check: every new photo was taken at its property.</p>'; return; }
+    box.innerHTML = groups.map(g => {
+      const photos = (g.photos || []).map(p => {
+        const why = p.status === 'too_far' ? `taken ${kmTxt(p.km)} from the pin` : 'no location in the photo';
+        const taken = p.takenAt ? ' · taken ' + new Date(p.takenAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+        return `<figure class="pl-photo">${photoHtml(p.url, 'Photo')}<figcaption class="${p.status === 'too_far' ? 'pl-far' : 'pl-none'}">${esc(why)}${esc(taken)}</figcaption></figure>`;
+      }).join('');
+      return `<div style="border:1px solid #e6ded3; padding:12px 14px; margin-bottom:10px; font-size:14px;">
+        <strong>${esc(g.listingName || 'Listing #' + g.listingId)}</strong> (#${Number(g.listingId)}) · ${esc(g.hostName || '')}${g.hostEmail ? ' (' + esc(g.hostEmail) + ')' : ''}
+        <div class="pl-grid">${photos}</div></div>`;
+    }).join('');
+  }
+  function fillPhotoTestListings(listings){
+    const sel = document.getElementById('photoTestListing');
+    if(!sel) return;
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">No listing (contact check only)</option>' + (listings || [])
+      .filter(l => (l.listing_type || 'stay') !== 'experience')
+      .map(l => `<option value="${Number(l.id)}">${esc(l.property_name || 'Listing')} (#${Number(l.id)})</option>`).join('');
+    sel.value = keep;
+  }
+  // Same as the site: the location is read from the ORIGINAL file, then the
+  // photo is shrunk (which erases it) before upload.
+  async function readPhotoGps(file){
+    try{
+      const exifr = (await import('https://esm.sh/exifr@7.1.3')).default;
+      const g = await exifr.gps(file);
+      return g && isFinite(g.latitude) && isFinite(g.longitude) ? { lat: g.latitude, lng: g.longitude, source: 'photo' } : null;
+    }catch(e){ return null; }
+  }
+  async function shrinkForUpload(file){
+    try{
+      const bmp = await createImageBitmap(file);
+      const scale = Math.min(1, 1920 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas'); c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height); bmp.close();
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.82));
+      return blob ? new File([blob], 'photo-test.jpg', { type: 'image/jpeg' }) : file;
+    }catch(e){ return file; }
+  }
+  async function runPhotoTest(){
+    const btn = document.getElementById('photoTestBtn'), out = document.getElementById('photoTestResult');
+    const file = document.getElementById('photoTestFile').files[0];
+    if(!file){ out.innerHTML = '<p class="error">Choose a photo first.</p>'; return; }
+    const listingId = document.getElementById('photoTestListing').value || null;
+    const mode = 'photo';
+    btn.disabled = true; btn.textContent = 'Testing…'; out.innerHTML = '<p style="opacity:0.7;">Reading the photo and checking it…</p>';
+    try{
+      const location = await readPhotoGps(file);
+      const small = await shrinkForUpload(file);
+      const { upload } = await import('https://esm.sh/@vercel/blob/client');
+      const up = await upload('photo-test.jpg', small, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload',
+        clientPayload: JSON.stringify({ purpose: 'admin-photo-test', token: sessionToken }) });
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true),
+        body: JSON.stringify({ photoTest: { url: up.url, listingId, location } }) });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || 'The test could not run.');
+      out.innerHTML = photoTestHtml(d, mode);
+    }catch(e){
+      out.innerHTML = `<p class="error">${esc(e.message || 'The test could not run.')}</p>`;
+    }
+    btn.disabled = false; btn.textContent = 'Run test';
+  }
+  function photoTestHtml(d, mode){
+    const V = {
+      accepted: ['#2f6b3a', '#e5f1e7', 'Accepted: passes both checks'],
+      contact: ['#a3402f', '#f8e2dd', 'Would be removed: shows contact details'],
+      location: ['#8a6c39', '#f6eddc', 'Accepted, flagged for your review: location'],
+      both: ['#a3402f', '#f8e2dd', 'Would be removed (contact details) — and flagged for location'],
+      unchecked: ['#8a6c39', '#f6eddc', 'Contact details could not be checked (see below)']
+    }[d.verdict] || ['#8a6c39', '#f6eddc', d.verdict];
+    const c = d.contact || {}, l = d.location || {};
+    const contactLine = c.status === 'flagged'
+      ? `<span style="color:#a3402f;">✗ Found:</span> ${(c.findings || []).map(f => `${esc(f.type)} <strong>${esc(f.text)}</strong>`).join(', ') || 'contact details'}`
+      : c.status === 'clean' ? '<span style="color:#2f6b3a;">✓ None found</span>'
+      : c.keyMissing ? '<span style="color:#8a6c39;">Not checked: ANTHROPIC_API_KEY is not set in Vercel</span>'
+      : `<span style="color:#8a6c39;">Not checked: ${esc(c.error || c.status)}</span>`;
+    const locationLine = l.status === 'at_property' ? `<span style="color:#2f6b3a;">✓ At the property</span>: taken ${esc(kmTxt(l.km))} from the pin`
+      : l.status === 'too_far' ? `<span style="color:#a3402f;">✗ Far away</span>: taken ${esc(kmTxt(l.km))} from the pin — would be listed under "Photo locations to check"`
+      : l.status === 'no_pin' ? (d.listing ? '<span style="color:#8a6c39;">This listing has no map pin yet</span>' : '<span style="opacity:0.7;">No listing chosen</span> — the photo has a location')
+      : '<span style="color:#8a6c39;">No location in the photo</span> — would be listed under "Photo locations to check" (common: phones strip it on upload)';
+    return `<div style="border:1px solid #e6ded3; border-radius:10px; padding:14px 16px; margin-top:12px; font-size:14px;">
+      <div style="display:inline-block; padding:4px 10px; border-radius:999px; font-weight:600; color:${V[0]}; background:${V[1]}; margin-bottom:10px;">${esc(V[2])}</div>
+      ${d.listing ? `<p style="margin:0 0 8px; opacity:0.75;">Against ${esc(d.listing.name)} (#${Number(d.listing.id)})</p>` : ''}
+      <p style="margin:0 0 6px;"><strong>Contact details:</strong> ${contactLine}</p>
+      <p style="margin:0;"><strong>Location:</strong> ${locationLine}</p>
+    </div>`;
+  }
+  document.getElementById('photoTestBtn').addEventListener('click', runPhotoTest);
+
   function renderLiveListings(listings){
+    fillPhotoTestListings(listings);
     const container = document.getElementById('liveListingsContainer');
     if(!listings.length){
       container.innerHTML = '<p class="empty">No live listings yet.</p>';
