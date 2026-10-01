@@ -37,7 +37,7 @@ const MODEL = () => process.env.PHOTO_SCAN_MODEL || 'claude-haiku-4-5-20251001';
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;       // Claude's per-image limit
 const MAX_ATTEMPTS = 6;                         // failed checks retried every 15 minutes
 const ADMIN_EMAIL = () => process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in';
-const SKIP_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'admin-photo-test'];   // the admin's Photo test runs its own check
+const SKIP_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'support-evidence', 'admin-photo-test'];   // the admin's Photo test runs its own check
 
 const isMissingTable = (err) => !!err && (err.code === '42P01' || err.code === '42703');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -13,9 +13,9 @@
 //             manage-listing link token, or an admin session.
 //   purpose — (nothing / anything else) listing and profile photos:
 //               images only.
-//             'aadhaar-verification' / 'dispute-evidence' — PDF allowed
-//               too (e-Aadhaar downloads and stay-dispute evidence are
-//               often PDFs). Kept to those flows only.
+//             'aadhaar-verification' / 'dispute-evidence' / 'support-evidence'
+//               — PDF allowed too (e-Aadhaar downloads, stay-dispute and
+//               Resolution Center evidence are often PDFs). Kept to those flows only.
 // The old plain-string clientPayload ('aadhaar-verification') carried no
 // session and is refused.
 //
@@ -31,7 +31,7 @@ const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const photoGuard = require('./_photo-guard');
 
 const UPLOADS_PER_DAY = 200;
-const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence'];
+const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'support-evidence'];
 const SESSION_ACTIONS = ['guest-session', 'manage-pricing', 'manage-cohost', 'admin-session'];
 
 let sqlClient = null;

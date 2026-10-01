@@ -548,6 +548,8 @@ module.exports = async (req, res) => {
             href: 'index.html?view=cohost'
           }));
         } catch (err) { /* co-host tables not there */ }
+        // Resolution Center: requests with a reply not opened yet (_support.js).
+        (await require('./_support').bellNotifications(sql, guest.id)).forEach(n => notifications.push(n));
         // Payouts sent in the last 30 days (as host, or as a co-host).
         (await recentPayoutNotifications(sql, { hostId: guest.host_id, guestId: guest.id })).forEach(n => notifications.push(n));
       } catch (err) {

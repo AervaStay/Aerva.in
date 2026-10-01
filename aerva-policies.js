@@ -122,6 +122,7 @@ window.AERVA_POLICIES = {
         'Aerva may change these Terms at any time. Using Aerva after a change means you accept it.'
       ]},
       { id: 'contact', title: 'Contact', points: [
+        'Questions, complaints and grievances: the Resolution Center (index.html?view=help), or write to hello@aerva.in.',
         'Grievance Officer: hello@aerva.in'
       ]}
     ],
@@ -178,7 +179,7 @@ window.AERVA_POLICIES = {
     sections: [
       { id: 'collect', title: 'What Aerva collects', points: [
         'Details you give: name, email, phone, profile, bookings, messages and reviews.',
-        'Photos and documents you send as evidence when reporting a problem with a stay.',
+        'Photos and documents you send as evidence when reporting a problem with a stay, and what you send in a Resolution Center request.',
         'From hosts and co-hosts: verification results, PAN, bank details and listing details.',
         'Payment references. Card and UPI details are handled by the payment provider, not Aerva.',
         'Technical data such as IP address and device, for security.'
@@ -366,7 +367,7 @@ window.AERVA_POLICIES = {
         'The host is told and gives their side through Aerva. The host’s payout for the booking is held until Aerva decides.'
       ]},
       { title: 'Aerva’s decision', points: [
-        'Aerva gives the host’s account more weight. A refund is given only when the guest’s evidence stands and the host cannot justify.',
+        'Aerva reviews the guest’s report, the evidence and the host’s response, and decides whether a refund is due.',
         'If upheld, the nights from the day the problem was reported to check-out are refunded, with their GST and service fee. The host is paid for the nights already used, less Aerva’s commission.',
         'The security deposit is handled separately under the Security Deposit and Damage Policy.',
         'Aerva’s decision is full and final.'
@@ -474,6 +475,415 @@ window.AERVA_POLICIES = {
     ]}
   ],
 
+  // The Resolution Center (index.html?view=help): how guests and hosts get
+  // help, the help topics, and what each badge means. Rendered by
+  // aerva-help.js.
+  //
+  // Wording rule: tell people what to do and what to expect, never how
+  // Aerva weighs or decides (no internal rules, weights or thresholds).
+  // The decision rules for the support team live in adminNotes, which only
+  // the admin tool shows.
+  support: {
+    // Contact options. A blank value hides that option on the page, so
+    // nothing dead is ever shown. Fill these in when the numbers are live:
+    //   tollFree: '1800 123 4567'          (shown as a tap-to-call button)
+    //   whatsapp: '+91 98765 43210'        (opens WhatsApp to this number)
+    //   hours:    'Every day, 9 AM – 9 PM IST'
+    contacts: {
+      tollFree: '',
+      whatsapp: '',
+      email: 'hello@aerva.in',
+      hours: ''
+    },
+    // Required by the Consumer Protection (E-Commerce) Rules, 2020: the
+    // Grievance Officer's name, designation and contact. Fill in the name.
+    grievanceOfficer: {
+      name: '',
+      designation: 'Grievance Officer',
+      email: 'hello@aerva.in'
+    },
+    intro: 'Help with a booking, a stay, hosting or your account. Find answers below, or raise a request and our support team will take it from there.',
+    emergency: 'If anyone is in danger or needs urgent medical help, call 112 first. Then tell us.',
+
+    // Shown as "Our commitments".
+    commitments: [
+      { title: 'A reference number at once', text: 'Every request gets a reference number the moment you send it, confirmed by email.' },
+      { title: 'A reply within 48 hours', text: 'A member of our support team replies within 48 hours, usually much sooner.' },
+      { title: 'Resolved within a month', text: 'We aim to resolve every request within one month of receiving it, and keep you updated along the way.' },
+      { title: 'One place for everything', text: 'Follow your request, reply and add files under My requests. We email you whenever we reply.' }
+    ],
+
+    // Shown as "How a request works". General steps only.
+    process: [
+      { title: 'Tell us', text: 'Choose what it is about, pick the booking or listing, describe what happened and add photos or documents.' },
+      { title: 'We acknowledge it', text: 'You receive a reference number straight away. Keep it for anything about this request.' },
+      { title: 'We look into it', text: 'We review the booking details and what you send us. Where another person is involved, we may ask them for their side. We may ask you for more information.' },
+      { title: 'We let you know', text: 'We tell you the outcome under Aerva’s Policies, and what happens next.' }
+    ],
+
+    // Before raising a request: what makes it quick to resolve.
+    tips: [
+      'One request per problem. Add to an open request rather than raising a new one.',
+      'Choose the booking or listing it is about, so we have the details at once.',
+      'Say what happened, when, and what you would like to happen.',
+      'Add clear photos, screenshots or documents. A payment reference (it starts with “pay_”) helps with any payment question.',
+      'Keep messages and payments on Aerva. We can help only with what happened through Aerva.'
+    ],
+
+    // The form's "What is this about?" list. Keys must match CATEGORIES in
+    // api/_support.js. audience: 'guest', 'host' (hosts only) or 'both'.
+    categories: [
+      { key: 'booking_payment',       label: 'Booking or payment',                    audience: 'guest' },
+      { key: 'cancellation_refund',   label: 'Cancellation or refund',                audience: 'guest' },
+      { key: 'change_booking',        label: 'Changing a booking',                    audience: 'guest' },
+      { key: 'stay_problem',          label: 'Problem during a stay or experience',   audience: 'guest' },
+      { key: 'deposit_damage',        label: 'Security deposit',                      audience: 'guest' },
+      { key: 'coupon',                label: 'Coupon',                                audience: 'guest' },
+      { key: 'host_conduct',          label: 'A host’s behaviour',                    audience: 'guest' },
+      { key: 'payout_tds',            label: 'Payouts and TDS',                       audience: 'host' },
+      { key: 'listing_photos',        label: 'Listing, photos or approval',           audience: 'host' },
+      { key: 'calendar_availability', label: 'Calendar and availability',             audience: 'host' },
+      { key: 'damage_claim',          label: 'Damage claim',                          audience: 'host' },
+      { key: 'guest_conduct',         label: 'A guest’s behaviour',                   audience: 'host' },
+      { key: 'cohosting',             label: 'Co-hosting',                            audience: 'host' },
+      { key: 'verification',          label: 'PAN, bank or Aadhaar verification',     audience: 'host' },
+      { key: 'safety',                label: 'Safety concern',                        audience: 'both' },
+      { key: 'off_platform',          label: 'Asked to pay or talk outside Aerva',    audience: 'both' },
+      { key: 'account_signin',        label: 'Account and sign-in',                   audience: 'both' },
+      { key: 'reviews_badges',        label: 'Reviews and badges',                    audience: 'both' },
+      { key: 'report_content',        label: 'Report a listing, review or message',   audience: 'both' },
+      { key: 'privacy_data',          label: 'My personal data',                      audience: 'both' },
+      { key: 'grievance',             label: 'Formal grievance (Grievance Officer)',  audience: 'both' },
+      { key: 'other',                 label: 'Something else',                        audience: 'both' }
+    ],
+
+    // Help topics. group: 'guest', 'host' or 'everyone'. category: what the
+    // "Raise a request" button on the topic preselects. docs: policy
+    // documents to link (ids in documents above, or 'terms' / 'privacy').
+    topics: [
+      // ---------------------------------------------------------- guests
+      { id: 'booking-payment', group: 'guest', title: 'Booking and payment', category: 'booking_payment',
+        summary: 'Payment taken but no booking, a failed payment, or a charge you do not recognise.',
+        sections: [
+          { title: 'Paid, but no booking shows', points: [
+            'Check My Bookings and the email address on your account for the confirmation. A confirmation can take a few minutes to appear.',
+            'A payment made after the 90-second payment window ended, or after it was closed, is not a booking. It is refunded in full to the original payment method.',
+            'If money left your account and no booking appears after 30 minutes, raise a request with the payment reference, the date and the amount.'
+          ]},
+          { title: 'A payment that failed', points: [
+            'A failed payment does not book the dates. If you were charged anyway, your bank normally reverses it on its own; if it does not, raise a request with the payment reference.',
+            'You have 5 payment attempts per listing per day.'
+          ]},
+          { title: 'What you pay', points: [
+            'The total shown before you pay is the full price: the booking price, Aerva’s guest service fee, GST and any security deposit.',
+            'Refunds, where due, go to the original payment method. Timing depends on your bank or card issuer.'
+          ]}
+        ], docs: ['payments', 'service-fees', 'taxes', 'booking-requirements'] },
+
+      { id: 'cancellations', group: 'guest', title: 'Cancellations and refunds', category: 'cancellation_refund',
+        summary: 'Cancelling a booking, what is refunded, and a refund you are waiting for.',
+        sections: [
+          { title: 'To cancel', points: [
+            'Open the booking in My Bookings and send a cancellation request. The host has 24 hours to answer it.',
+            'The refund follows the listing’s refund policy, shown before you paid. The percentage is fixed when you send the request.',
+            'For an emergency, a hazard or a travel restriction, choose that reason when you cancel.'
+          ]},
+          { title: 'If the host cancels', points: [
+            'You are refunded in full at once, and receive an Aerva coupon shortly after.'
+          ]},
+          { title: 'Waiting for a refund', points: [
+            'Refunds go to the original payment method. Banks and card issuers usually take several working days to show them.',
+            'If a refund has not arrived after 7 working days, raise a request and choose the booking.'
+          ]}
+        ], docs: ['cancellation-stays', 'cancellation-experiences', 'payments'] },
+
+      { id: 'changes', group: 'guest', title: 'Changing a booking', category: 'change_booking',
+        summary: 'Moving dates, extending or shortening a stay, guests, pets and add-ons.',
+        sections: [
+          { title: 'How', points: [
+            'Choose the change in My Bookings. The new price and the difference are shown before you send it.',
+            'The host accepts or rejects the change in Aerva Messages. Until then, your booking stays as it is.',
+            'If the new total is higher, pay the difference within 24 hours of the host accepting.'
+          ]},
+          { title: 'When we can help', points: [
+            'If the change will not send, the price looks wrong, or you paid the difference and the booking did not change, raise a request and choose the booking.'
+          ]}
+        ], docs: ['booking-changes'] },
+
+      { id: 'stay-problem', group: 'guest', title: 'A problem during your stay', category: 'stay_problem',
+        summary: 'The home is not as described, something does not work, or you cannot check in.',
+        sections: [
+          { title: 'First', points: [
+            'If anyone is in danger, call 112.',
+            'Message the host in Aerva Messages. Most problems are fixed fastest by the host, on the spot.',
+            'Take clear photos or a short video of the problem as soon as you notice it.'
+          ]},
+          { title: 'If it is not fixed', points: [
+            'Report it from My Bookings during your stay, up to the day before check-out, with at least one photo or document.',
+            'The host is told and can give their side. Aerva reviews the report and lets you both know the outcome.',
+            'For an experience that was cancelled or did not run as described, raise a request and choose the booking.'
+          ]},
+          { title: 'Cannot check in', points: [
+            'Call or message the host first. If you cannot reach them, raise a request straight away, choose the booking, and tick the call back box.'
+          ]}
+        ], docs: ['stay-issues', 'refund-experiences'] },
+
+      { id: 'deposit', group: 'guest', title: 'Security deposits', category: 'deposit_damage',
+        summary: 'When a deposit is refunded, and what happens if a host reports damage.',
+        sections: [
+          { title: 'Refund', points: [
+            'A security deposit is refunded to the original payment method after check-out, unless the host reports damage through Aerva within 7 days of check-out.'
+          ]},
+          { title: 'If damage is reported', points: [
+            'You are told, and can send your side and your own photos.',
+            'Aerva reviews the claim and decides how much of the deposit, if any, goes to the host. The rest is refunded.',
+            'Damage above the deposit is between you and the host.'
+          ]}
+        ], docs: ['resolution'] },
+
+      { id: 'coupons', group: 'guest', title: 'Coupons', category: 'coupon',
+        summary: 'Using an Aerva coupon, and a coupon you expected but did not receive.',
+        sections: [
+          { title: 'Using a coupon', points: [
+            'A coupon covers the booking price only. The service fee, GST and any deposit are paid in full.',
+            'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown.'
+          ]},
+          { title: 'A coupon that did not arrive', points: [
+            'A cancellation coupon arrives about 15 minutes after a host cancels. If it has not arrived after an hour, raise a request and choose the booking.'
+          ]}
+        ], docs: ['payments'] },
+
+      { id: 'host-conduct', group: 'guest', title: 'Concerns about a host', category: 'host_conduct',
+        summary: 'A host asked for extra money, was disrespectful, or broke Aerva’s rules.',
+        sections: [
+          { title: 'Tell us if a host', points: [
+            'asks for money or any fee outside Aerva;',
+            'treats you differently because of who you are;',
+            'is abusive, threatening or harassing;',
+            'has cameras in a bedroom, bathroom or other private space, or devices that were not disclosed;',
+            'misuses your ID or personal information.'
+          ]},
+          { title: 'What to send', points: [
+            'The booking, what happened and when, and screenshots of any messages. Keep your messages with the host on Aerva.',
+            'If you feel unsafe, leave and call 112 first.'
+          ]}
+        ], docs: ['community', 'nondiscrimination', 'offline-fees', 'host-privacy'] },
+
+      // ----------------------------------------------------------- hosts
+      { id: 'payouts', group: 'host', title: 'Payouts and TDS', category: 'payout_tds',
+        summary: 'When you are paid, why a payout may be held, and tax deducted at source.',
+        sections: [
+          { title: 'When you are paid', points: [
+            'Payouts are sent automatically after check-out to your verified bank account, after Aerva’s commission and TDS.',
+            'See every payout and its status in My Earnings.'
+          ]},
+          { title: 'A payout on hold or failed', points: [
+            'A payout may be held while a guest’s report, a refund or a damage claim is open. It is released once that is settled.',
+            'A failed payout is usually a bank detail that does not match. Check your bank details in your account; the payout is tried again.',
+            'If a payout is late or the amount looks wrong, raise a request and choose the booking.'
+          ]},
+          { title: 'TDS', points: [
+            'TDS is deducted under section 194-O: 0.1% with a valid PAN, 5% without one. Add your PAN in your account before your first payout.',
+            'Use your own PAN, and a bank account in the same name.'
+          ]}
+        ], docs: ['payments', 'taxes', 'service-fees'] },
+
+      { id: 'listings', group: 'host', title: 'Listings, photos and approval', category: 'listing_photos',
+        summary: 'Getting a listing approved, blocked photos, and editing a live listing.',
+        sections: [
+          { title: 'Approval', points: [
+            'Every listing is reviewed before it goes live. You are emailed when it is approved, or told what to change.'
+          ]},
+          { title: 'Photos', points: [
+            'Photos must be of the actual property and must not show phone numbers, email addresses, websites, social media handles or QR codes. A listing with such a photo is blocked at once.',
+            'Remove or replace the photo. If you believe a photo was blocked by mistake, raise a request and choose the listing.'
+          ]}
+        ], docs: ['content', 'experience-standards', 'experience-host-terms'] },
+
+      { id: 'calendar', group: 'host', title: 'Calendar and availability', category: 'calendar_availability',
+        summary: 'Blocking dates, syncing other calendars, and dates that look wrong.',
+        sections: [
+          { title: 'Keeping dates right', points: [
+            'Block dates you cannot host in your calendar. Linked calendars (Airbnb, Booking.com and others) sync about every hour.',
+            'If dates show as free or booked when they should not, raise a request with the listing and the dates.'
+          ]}
+        ], docs: [] },
+
+      { id: 'host-cancellations', group: 'host', title: 'Cancelling as a host', category: 'cancellation_refund',
+        summary: 'When a host may cancel, and what it means for the guest and for you.',
+        sections: [
+          { title: 'Rules', points: [
+            'Cancel only 48 hours or more before check-in, and give a reason. The guest is told the reason.',
+            'At most 3 cancellations in any 12 months. Beyond that, write to us.',
+            'The guest is refunded in full and receives a coupon worth 10% of the booking, paid for by you.'
+          ]},
+          { title: 'Instead of cancelling', points: [
+            'If something at the property has gone wrong, raise a request before cancelling. We may be able to help the guest another way.'
+          ]}
+        ], docs: ['cancellation-stays', 'cancellation-experiences'] },
+
+      { id: 'damage', group: 'host', title: 'Damage and deposit claims', category: 'damage_claim',
+        summary: 'Claiming against a security deposit after a stay.',
+        sections: [
+          { title: 'How to claim', points: [
+            'Report damage through Aerva within 7 days of check-out, from the booking.',
+            'Send dated photos of the damage, and a repair estimate or invoice.',
+            'The guest is told and can give their side. Aerva decides how much of the deposit, if any, is paid to you.'
+          ]},
+          { title: 'Above the deposit', points: [
+            'Aerva handles claims only up to the security deposit. Anything above it, or where no deposit was held, is between you and the guest.'
+          ]}
+        ], docs: ['resolution'] },
+
+      { id: 'guest-conduct', group: 'host', title: 'Concerns about a guest', category: 'guest_conduct',
+        summary: 'More guests than booked, a party, rule-breaking or unsafe behaviour.',
+        sections: [
+          { title: 'First', points: [
+            'If anyone is in danger, call 112.',
+            'Keep calm, keep a record (dated photos, messages on Aerva), and remind the guest of the house rules in Aerva Messages.'
+          ]},
+          { title: 'Tell us', points: [
+            'Raise a request, choose the booking, and say what happened and when. Tick the call back box if it is happening now.'
+          ]}
+        ], docs: ['community', 'nondiscrimination'] },
+
+      { id: 'cohosting', group: 'host', title: 'Co-hosting', category: 'cohosting',
+        summary: 'Inviting a co-host, what they can do, and how their share is paid.',
+        sections: [
+          { title: 'Basics', points: [
+            'Invite a co-host from Co-hosting. They accept with their own Aerva account.',
+            'Aerva pays each co-host their own share, in full. Anything else between a host and a co-host is for them to settle.',
+            'A host can remove a co-host, and a co-host can leave, at any time. Shares already earned are still paid.'
+          ]}
+        ], docs: ['payments', 'accounts'] },
+
+      { id: 'verification', group: 'host', title: 'PAN, bank and identity verification', category: 'verification',
+        summary: 'Verifying your identity, PAN and bank account to host and be paid.',
+        sections: [
+          { title: 'What you need', points: [
+            'Your own PAN, a bank account in your own name, and the identity verification asked for in your account.',
+            'The name on your bank account must match the name on your PAN.'
+          ]},
+          { title: 'If verification is stuck', points: [
+            'Check that each document is clear, complete and current. If it is still pending or was declined and you do not know why, raise a request.'
+          ]}
+        ], docs: ['taxes', 'payments'] },
+
+      // -------------------------------------------------------- everyone
+      { id: 'safety', group: 'everyone', title: 'Safety', category: 'safety',
+        summary: 'Emergencies, and anything at a stay that feels unsafe.',
+        sections: [
+          { title: 'In an emergency', points: [
+            'Call 112, India’s emergency number, for police, fire or ambulance.',
+            'Once you are safe, raise a request with the booking and tick the call back box.'
+          ]},
+          { title: 'Not urgent, but worrying', points: [
+            'A hazard at the property, a concern about someone’s behaviour, or anything that does not feel right: raise a safety request. Safety requests are looked at first.'
+          ]}
+        ], docs: ['safety-liability', 'community'] },
+
+      { id: 'off-platform', group: 'everyone', title: 'Payments and contact outside Aerva', category: 'off_platform',
+        summary: 'Someone asked you to pay, book or talk outside Aerva.',
+        sections: [
+          { title: 'Never', points: [
+            'Never pay for a stay or experience found on Aerva anywhere but on Aerva. A payment outside Aerva is not protected by Aerva’s Policies.',
+            'If anyone asks you to, do not pay. Raise a request with a screenshot.'
+          ]}
+        ], docs: ['off-platform', 'offline-fees'] },
+
+      { id: 'account', group: 'everyone', title: 'Your account', category: 'account_signin',
+        summary: 'Signing in, your email and phone number, and deleting your account.',
+        sections: [
+          { title: 'Signing in', points: [
+            'Use the email address or phone number on your account. If a code does not arrive, check your spam folder and wait a minute before asking again.',
+            'If you can no longer reach your email or phone number, raise a request from any account you can sign in to, or write to us from that email address.'
+          ]},
+          { title: 'Deleting your account', points: [
+            'Delete it in Account Settings once nothing is open. Deletion cannot be undone.'
+          ]}
+        ], docs: ['accounts', 'privacy'] },
+
+      { id: 'reviews', group: 'everyone', title: 'Reviews', category: 'reviews_badges',
+        summary: 'Leaving a review, and reporting one that breaks the rules.',
+        sections: [
+          { title: 'Leaving a review', points: [
+            'Guests and hosts may review each other within 15 days of check-out. Reviews appear once both have reviewed, or the window closes.'
+          ]},
+          { title: 'Reporting a review', points: [
+            'Report a review that is false, abusive, not about the stay, or offered in exchange for something. Raise a request and say which review and why.',
+            'A review is not removed only because it is critical.'
+          ]}
+        ], docs: ['reviews', 'content'] },
+
+      { id: 'badges', group: 'everyone', title: 'Badges', category: 'reviews_badges',
+        summary: 'What each badge on Aerva means, and how badges are earned.',
+        badges: true,
+        sections: [
+          { title: 'About badges', points: [
+            'Badges are earned, not bought or requested. They reflect recent standing on Aerva, so they can move up or down.',
+            'They are reviewed at the start of every quarter. Between reviews, a badge stays as it is.',
+            'Removing a review that breaks the Reviews Policy updates the badges it affected.',
+            'If a badge looks wrong, raise a request. We can check that it was worked out correctly; we cannot change the standards behind it.'
+          ]}
+        ], docs: ['reviews'] },
+
+      { id: 'privacy', group: 'everyone', title: 'Your personal data', category: 'privacy_data',
+        summary: 'Seeing, correcting or erasing the information Aerva holds about you.',
+        sections: [
+          { title: 'Your rights', points: [
+            'Ask to see, correct or erase your personal information. Most of it can be changed in Account Settings; deleting your account erases it.',
+            'For anything else, raise a request. You may also complain to the Data Protection Board of India.'
+          ]}
+        ], docs: ['privacy', 'accounts'] },
+
+      { id: 'grievance', group: 'everyone', title: 'Complaints and grievances', category: 'grievance',
+        summary: 'Making a formal complaint, and reaching the Grievance Officer.',
+        sections: [
+          { title: 'Making a complaint', points: [
+            'Raise a request and choose “Formal grievance”. It goes to the Grievance Officer.',
+            'You receive a reference number at once. Your complaint is acknowledged within 48 hours and resolved within one month of receipt.'
+          ]},
+          { title: 'If you are not satisfied', points: [
+            'Reply on the request and say why. You may also contact the National Consumer Helpline (1915) or the consumer commission.'
+          ]}
+        ], docs: ['terms'] }
+    ],
+
+    // What each badge means, and what it generally rests on. Meanings and
+    // general factors only: never the thresholds (those are in api/_tiers.js).
+    badges: [
+      { group: 'Host badges', intro: 'Shown on a host’s profile and listings. They rest on guests’ ratings of the stays a host has hosted, how consistent those ratings are across every part of the stay, the number of reviewed stays, and the host’s hosting over the past twelve months. From the first rung to the top:', items: [
+        { name: 'Rising Host', text: 'A new host, off to a good start.' },
+        { name: 'Established Host', text: 'A proven track record of happy guests.' },
+        { name: 'Signature Host', text: 'Consistently well reviewed, with no weak spots.' },
+        { name: 'Elite', text: 'Exceptional across every part of the stay.' },
+        { name: 'Golden Elite', text: 'Near-perfect reviews across a substantial body of stays.' },
+        { name: 'Aerva Elite', text: 'The highest standard on Aerva, sustained over time.' }
+      ]},
+      { group: 'Guest badges', intro: 'Shown on a guest’s Aerva profile. They rest on a guest’s confirmed bookings over the past twelve months and how hosts have rated them, including cleanliness, communication, respect and following the house rules. From the first rung to the top:', items: [
+        { name: 'Guest', text: 'Welcome to Aerva.' },
+        { name: 'Valued Guest', text: 'A confirmed booking history with Aerva.' },
+        { name: 'Trusted Guest', text: 'A strong booking history, well rated by hosts.' },
+        { name: 'Aerva Favorite', text: 'A substantial booking history, consistently rated highly by hosts.' }
+      ]},
+      { group: 'Stay badges', intro: 'Shown on a stay. They rest on guests’ ratings of that stay, compared with other stays in the same city, and the number of reviews. From the first rung to the top:', items: [
+        { name: 'Great Stay', text: 'Among the best-rated stays in its city.' },
+        { name: 'Outstanding', text: 'Among the very best-rated stays in its city.' },
+        { name: 'Exceptional', text: 'One of the top stays in its city.' },
+        { name: 'Aerva Exceptional', text: 'The finest stays in its city.' }
+      ]},
+      { group: 'Stay highlights', intro: 'Shown alongside a stay’s badge.', items: [
+        { name: 'Spotless', text: 'Rated near-perfect on hygiene by every guest who scored it.' },
+        { name: 'Hidden Treasure', text: 'Rated excellent by its guests, and not yet widely discovered.' }
+      ]},
+      { group: 'Experience badges', intro: 'Shown on an experience. They rest on guests’ ratings, including organisation, safety and the guide, and the number of reviews. From the first rung to the top:', items: [
+        { name: 'Great Experience', text: 'Well reviewed by the guests who have been.' },
+        { name: 'Unforgettable', text: 'Consistently rated among the best experiences on Aerva.' },
+        { name: 'Wow Experience', text: 'Rated outstanding by a substantial number of guests.' }
+      ]}
+    ]
+  },
+
   // Local laws: what hosts must check where the property is. Instructions
   // only. Rules change; hosts must confirm with the local authority.
   localLaws: {
@@ -544,7 +954,8 @@ window.AERVA_POLICIES = {
 
   // Gaps between these policies and the product, for the admin to close.
   openItems: [
-    'Add the Grievance Officer’s name and designation to the Complaints section (required by the E-Commerce Rules).',
+    'Add the Grievance Officer’s name to support.grievanceOfficer in this file (required by the E-Commerce Rules); it then shows in the Resolution Center.',
+    'Resolution Center: fill in support.contacts.tollFree, whatsapp and hours in this file when the numbers are live. Until then those buttons stay hidden.',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',
     'Have the lawyer review agreements 2026-09g: ID checked by the host at check-in (not by Aerva), the 90-second payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
     'Erase the guest ID proofs uploaded before September 2026: Admin → ID Verifications → “Erase reviewed documents & encrypt stored numbers”.',

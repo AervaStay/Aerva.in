@@ -10927,7 +10927,7 @@
   // Today's had left out the profile, so Today "did nothing" when clicked
   // from the profile (it opened underneath it, out of sight).
   const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
-    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'policiesView', 'privacyView', 'termsView'];
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'policiesView', 'privacyView', 'termsView', 'helpView'];
 
   // ---- Agreements shown before payment and before listing ----
   // The guest booking agreement sits directly above every Book button; the
@@ -12293,6 +12293,11 @@
       showPrivacyView();
     } else if(requestedView === 'terms'){
       showTermsView();
+    } else if(requestedView === 'help'){
+      // The Resolution Center (aerva-help.js).
+      hideMainViews();
+      document.body.classList.remove('showing-hero');
+      if(window.AervaHelp) window.AervaHelp.show();
     } else if(requestedView === 'cohost'){
       openCohostCenter();
     } else if(requestedView === 'messages'){

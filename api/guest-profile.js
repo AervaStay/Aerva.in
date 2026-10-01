@@ -49,6 +49,7 @@ const { idSummary } = require('./_guest-id');
 const emailOtp = require('./_email-otp');
 const photoGuard = require('./_photo-guard');
 const { raiseDispute, openDisputeFor, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
+const support = require('./_support');
 // The problem-report card at the top of a booking's thread.
 async function disputeCard(sql, conversationId, role) {
   try {
@@ -357,6 +358,22 @@ module.exports = async (req, res) => {
       // check-in, as the law requires of them.
       if (mode === 'bookingRequirements') {
         return res.status(200).json(await idSummary(sql, guestId));
+      }
+
+      // ---- Resolution Center: the person's own requests (_support.js) ----
+      // GET ?mode=supportOptions          — bookings and listings a request can be about
+      // GET ?mode=supportRequests         — every request they raised
+      // GET ?mode=supportRequest&ref=SR-… — one request and its conversation
+      if (mode === 'supportOptions' || mode === 'supportRequests' || mode === 'supportRequest') {
+        if (actingCtx) return res.status(403).json({ error: 'Requests are raised from your own account.' });
+        try {
+          if (mode === 'supportOptions') return res.status(200).json(await support.requestOptions(sql, guestId));
+          if (mode === 'supportRequests') return res.status(200).json({ requests: await support.listRequests(sql, guestId) });
+          return res.status(200).json({ request: await support.getRequest(sql, guestId, req.query.ref) });
+        } catch (err) {
+          if (!err.isUserFacing) console.error(mode + ' failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this right now. Please try again.' });
+        }
       }
 
       // ---- Changing a booking: what can change, and the current booking ----
@@ -867,6 +884,28 @@ module.exports = async (req, res) => {
         } catch (err) {
           if (!err.isUserFacing) console.error('inquiry failed:', err);
           return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send your question right now. Please try again.' });
+        }
+      }
+
+      // ---- Resolution Center: raise, reply to or close a request (_support.js) ----
+      // POST { mode: 'supportCreate', category, subject, description, orderId?, listingId?, attachments?, callback? }
+      // POST { mode: 'supportReply', ref, text, attachments? }
+      // POST { mode: 'supportClose', ref }
+      if (mode === 'supportCreate' || mode === 'supportReply' || mode === 'supportClose') {
+        if (actingCtx) return res.status(403).json({ error: 'Requests are raised from your own account.' });
+        try {
+          const b = req.body || {};
+          if (mode === 'supportCreate') {
+            const out = await support.createRequest(sql, { guestId, category: b.category, subject: b.subject, description: b.description,
+              orderId: Number(b.orderId) || null, listingId: Number(b.listingId) || null, attachments: b.attachments, callback: b.callback === true,
+              ip: (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || null });
+            return res.status(200).json({ success: true, ...out });
+          }
+          if (mode === 'supportReply') return res.status(200).json({ request: await support.replyToRequest(sql, { guestId, ref: b.ref, text: b.text, attachments: b.attachments }) });
+          return res.status(200).json({ request: await support.closeRequest(sql, { guestId, ref: b.ref }) });
+        } catch (err) {
+          if (!err.isUserFacing) console.error(mode + ' failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now. Please try again, or email hello@aerva.in.' });
         }
       }
 

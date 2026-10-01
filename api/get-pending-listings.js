@@ -97,6 +97,7 @@ const bcrypt = require('bcryptjs');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
 const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout, createDepositCompensationPayout, refreshTds } = require('./_payouts');
 const { disputesForAdmin, decideDispute, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
+const support = require('./_support');
 const { safeRefund } = require('./_refunds');
 const { releaseDueDeposits } = require('./_deposits');
 const { encryptField, decryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens, maskAccount, maskPan, UNREADABLE } = require('./_secure-fields');
@@ -546,6 +547,37 @@ module.exports = async (req, res) => {
     } catch (err) {
       if (!err.isUserFacing) console.error('decideStayDispute failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not decide this dispute.' });
+    }
+  }
+
+  // ---- Support: requests raised in the Resolution Center (_support.js) ----
+  // GET ?supportTickets=1[&status=active|all|open|in_progress|waiting_on_you|resolved|closed][&q=]
+  // GET ?supportTicket=<id>
+  // POST { supportReply: { ticketId, text?, status?, internal? } } — a reply (emailed to
+  //   the person), an internal note (never shown to them), and/or a new status.
+  if (req.method === 'GET' && req.query.supportTickets === '1') {
+    try { return res.status(200).json(await support.adminList(sql, { status: String(req.query.status || 'active'), q: req.query.q })); }
+    catch (err) { console.error('supportTickets failed:', err); return res.status(500).json({ error: 'Could not load requests.' }); }
+  }
+  if (req.method === 'GET' && req.query.supportTicket) {
+    try {
+      const out = await support.adminGet(sql, Number(req.query.supportTicket));
+      await logAudit(sql, { action: 'support_request_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'support_ticket', targetId: out.ticket.id, metadata: { ref: out.ticket.ref } });
+      return res.status(200).json(out);
+    } catch (err) {
+      if (!err.isUserFacing) console.error('supportTicket failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this request.' });
+    }
+  }
+  if (req.method === 'POST' && req.body && req.body.supportReply) {
+    try {
+      const b = req.body.supportReply;
+      const out = await support.adminReply(sql, { id: Number(b.ticketId) || 0, text: b.text, status: b.status || null, internal: b.internal === true,
+        adminEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('supportReply failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not save this.' });
     }
   }
 

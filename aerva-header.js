@@ -118,6 +118,7 @@
       '<a href="host-status.html" class="ah-host-only" hidden>Status</a>' +
       '<a href="host-earnings.html" class="ah-host-only" data-ah-cohost hidden>My Earnings</a>' +
       '<a href="index.html?view=cohost">Co-hosting</a>' +
+      '<a href="index.html?view=help">Help &amp; Support</a>' +
       '<a href="host-dashboard.html?openProfile=1" data-ah-settings>Account Settings</a>' +
       '<hr>' +
       '<a href="#" data-ah-logout>Log Out</a>';

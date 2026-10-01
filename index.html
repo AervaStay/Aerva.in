@@ -120,6 +120,7 @@
           <a href="host-status.html" id="statusMenuLink" style="display:none;">Status</a>
           <a href="host-earnings.html" id="earningsMenuLink" style="display:none;">My Earnings</a>
           <a href="index.html?view=cohost">Co-hosting</a>
+          <a href="index.html?view=help">Help &amp; Support</a>
           <a href="index.html?view=profile" class="account-settings-link">Account Settings</a>
           <div class="menu-divider"></div>
           <a href="#" id="guestLogoutLink">Log out</a>
@@ -137,6 +138,7 @@
     <div class="currency-dropdown" id="currencyDropdownMobile"></div>
   </div>
   <a href="guest-login.html" id="guestLoginLinkMobile">Log in</a>
+  <a href="index.html?view=help" id="helpLinkMobileGuest">Help &amp; Support</a>
   <span id="guestAccountBoxMobile" style="display:none; flex-direction:column; gap:18px;">
     <span style="display:flex; align-items:center; gap:10px;">
       <div class="nav-avatar-ring" id="navAvatarRingMobile" style="width:36px; height:36px;">
@@ -520,6 +522,12 @@
     <p class="policies-updated" id="policiesUpdated"></p>
     <div id="policiesBody"></div>
   </div>
+</section>
+
+<!-- Resolution Center: help topics, contact options and support
+     requests. Drawn by aerva-help.js from AERVA_POLICIES.support. -->
+<section id="helpView" class="pad" style="display:none;">
+  <div class="wrap policies-wrap hc-wrap" id="helpBody"></div>
 </section>
 
 <section class="pad" id="profileView" style="background:var(--band); display:none;">
@@ -1399,6 +1407,7 @@
       <div class="foot-col">
         <h4>Reach Us</h4>
         <ul>
+          <li><a href="index.html?view=help">Resolution Center</a></li>
           <li><a href="mailto:hello@aerva.in" class="foot-mail">hello@aerva.in</a></li>
         </ul>
         <div class="foot-social">
@@ -1414,7 +1423,7 @@
   </div>
   <div class="wrap foot-bottom">
     <span>&copy; <span id="footYear">2026</span> Aerva. All rights reserved.</span>
-    <span class="foot-bottom-right"><a href="index.html?view=terms" class="foot-policies">Terms</a> · <a href="index.html?view=policies" class="foot-policies">Policies</a> · <a href="index.html?view=privacy" class="foot-policies">Privacy</a> · Stay Elegant</span>
+    <span class="foot-bottom-right"><a href="index.html?view=terms" class="foot-policies">Terms</a> · <a href="index.html?view=policies" class="foot-policies">Policies</a> · <a href="index.html?view=privacy" class="foot-policies">Privacy</a> · <a href="index.html?view=help" class="foot-policies">Help</a> · Stay Elegant</span>
   </div>
 </footer>
 
@@ -1422,6 +1431,7 @@
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <script src="aerva-photo-location.js" defer></script>
 <script src="aerva-policies.js" defer></script>
+<script src="aerva-help.js" defer></script>
 <script src="aerva.js" defer></script>
 
 </body>

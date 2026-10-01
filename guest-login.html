@@ -363,10 +363,34 @@
   // lives on the main site (index.html?view=today; My Collection no longer
   // has it). Everyone else lands on Suites. Every sign-in answer carries
   // hasActiveListing and isCohost (guest-auth.js).
+  // ?next=<page on aerva.in>: where to go after signing in (the page that
+  // sent the person here, e.g. a booking or the Resolution Center). Kept in
+  // sessionStorage for 30 minutes so a Google sign-in round trip keeps it.
+  // Only pages on this site are accepted, never another address.
+  function nextPage(){
+    let raw = new URLSearchParams(window.location.search).get('next');
+    try{
+      if(raw) sessionStorage.setItem('aerva_login_next', JSON.stringify({ to: raw, at: Date.now() }));
+      else {
+        const kept = JSON.parse(sessionStorage.getItem('aerva_login_next') || 'null');
+        if(kept && Date.now() - kept.at < 30 * 60 * 1000) raw = kept.to;
+      }
+    }catch(e){}
+    if(!raw) return null;
+    try{
+      const u = new URL(raw, window.location.href);
+      if(u.origin !== window.location.origin || /guest-login\.html$/i.test(u.pathname)) return null;
+      return u.pathname.replace(/^\//, '') + u.search + u.hash || 'index.html';
+    }catch(e){ return null; }
+  }
+  nextPage();   // remember it now, before any sign-in redirect
+
   function landingPageFor(guest){
     // Arrived from a co-host invitation: back to it (it is accepted and the
     // host's listings open — see openCohostCenter in aerva.js).
     if(store.get('aerva_pending_cohost_invite')) return 'index.html?view=cohost';
+    const next = nextPage();
+    if(next){ try{ sessionStorage.removeItem('aerva_login_next'); }catch(e){} return next; }
     return (guest && (guest.hasActiveListing === true || guest.isCohost === true)) ? 'index.html?view=today' : 'index.html';
   }
 

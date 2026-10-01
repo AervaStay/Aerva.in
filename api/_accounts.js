@@ -195,6 +195,7 @@ async function deleteAccount(sql, guestId) {
             WHERE id = ${guestId}`;
   await tryRun('ID proof', sql`UPDATE guests SET id_document_url = NULL, id_document_type = NULL, id_status = NULL, id_rejection_reason = NULL WHERE id = ${guestId}`);
   await tryRun('stay dispute text', sql`UPDATE stay_disputes SET details = NULL, evidence = '[]'::jsonb WHERE guest_id = ${guestId}`);
+  await tryRun('support requests', require('./_support').eraseForAccount(sql, guestId));
   await tryRun('mark deleted', sql`UPDATE guests SET deleted_at = now() WHERE id = ${guestId}`);
   await bumpSessionVersion(sql, guestId);   // every open session ends now
   return { ok: true };
