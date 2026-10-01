@@ -572,6 +572,68 @@
     color:#fff; font-size:12.5px; letter-spacing:0.06em; opacity:0.8;
   }
 
+
+  /* ---- Property walkthrough (listing page → "Walk through the property") ---- */
+  .wt-teaser{
+    margin-top:14px; padding:14px; border:1px solid var(--hairline, #e6dccb); border-radius:8px; background:#faf6ef;
+  }
+  .wt-teaser-head{display:flex; align-items:center; gap:12px; margin-bottom:12px;}
+  .wt-teaser-thumbs{display:flex; flex:0 0 auto;}
+  .wt-teaser-thumbs img{width:44px; height:44px; object-fit:cover; border-radius:6px; border:2px solid #faf6ef; margin-left:-12px; background:#e6dccb;}
+  .wt-teaser-thumbs img:first-child{margin-left:0;}
+  .wt-teaser-text{flex:1 1 auto; min-width:0;}
+  .wt-teaser-text strong{display:block; font-size:14px; color:var(--ink, #1c1b19);}
+  .wt-teaser-text span{display:block; font-size:12px; color:#6e675d; margin-top:2px; line-height:1.4;}
+  .wt-teaser .btn{display:block; width:100%; text-align:center; padding:10px 14px; font-size:11.5px;}
+
+  .wt-overlay{position:fixed; inset:0; z-index:320; background:#0f0e0c; color:#f4eadc; display:flex; flex-direction:column; font-family:'Jost', sans-serif;}
+  .wt-top{display:flex; align-items:center; gap:12px; padding:12px 16px; font-size:12.5px; letter-spacing:0.06em; text-transform:uppercase; opacity:0.9;}
+  .wt-top .wt-title{flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .wt-close{width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,0.12); color:#fff; border:none; cursor:pointer; font-size:22px; line-height:1;}
+  .wt-close:hover{background:rgba(255,255,255,0.24);}
+  .wt-stage{position:relative; flex:1 1 auto; min-height:0; display:flex; align-items:center; justify-content:center; touch-action:pan-y;}
+  .wt-stage img{max-width:100%; max-height:100%; object-fit:contain; display:block; user-select:none; -webkit-user-drag:none;}
+  .wt-nav{position:absolute; top:50%; transform:translateY(-50%); width:50px; height:50px; border-radius:50%; background:rgba(255,255,255,0.14); color:#fff; border:none; cursor:pointer; font-size:24px; line-height:1;}
+  .wt-nav:hover{background:rgba(255,255,255,0.28);}
+  .wt-nav[disabled]{opacity:0.25; cursor:default;}
+  .wt-prev{left:14px;} .wt-next{right:14px;}
+  .wt-caption{position:absolute; left:16px; bottom:14px; right:16px; display:flex; align-items:baseline; gap:10px; pointer-events:none;}
+  .wt-caption .wt-step{font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.75; flex:0 0 auto;}
+  .wt-caption .wt-label{font-family:'Bodoni Moda', Georgia, serif; font-size:22px; line-height:1.1; text-shadow:0 1px 8px rgba(0,0,0,0.6);}
+  .wt-progress{height:3px; background:rgba(255,255,255,0.14);}
+  .wt-progress i{display:block; height:100%; background:#c9a86a; transition:width .25s ease;}
+  .wt-route{display:flex; gap:10px; overflow-x:auto; padding:12px 16px 14px; scrollbar-width:thin; -webkit-overflow-scrolling:touch;}
+  .wt-stop{flex:0 0 auto; width:84px; background:none; border:none; padding:0; cursor:pointer; color:inherit; text-align:left; opacity:0.6;}
+  .wt-stop img{width:84px; height:56px; object-fit:cover; border-radius:5px; border:2px solid transparent; display:block; background:#2a2724;}
+  .wt-stop span{display:block; font-size:10.5px; letter-spacing:0.04em; margin-top:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .wt-stop.is-current{opacity:1;} .wt-stop.is-current img{border-color:#c9a86a;}
+  .wt-stop.is-seen{opacity:0.85;}
+  .wt-end{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; background:rgba(15,14,12,0.86); text-align:center; padding:24px;}
+  .wt-end h3{font-family:'Bodoni Moda', Georgia, serif; font-size:26px; font-weight:400; margin:0;}
+  .wt-end p{font-size:13.5px; opacity:0.8; margin:0; max-width:360px; line-height:1.6;}
+  .wt-end .btn{border-color:#f4eadc; color:#f4eadc;}
+  .wt-end .btn.solid{background:#f4eadc; color:#1c1b19;}
+  @media (max-width:640px){ .wt-nav{width:40px; height:40px; font-size:20px;} .wt-caption .wt-label{font-size:18px;} .wt-stop{width:64px;} .wt-stop img{width:64px; height:44px;} }
+
+  /* ---- Ask the host (enquiry before booking) ---- */
+  .ask-host-link{display:block; text-align:center; margin-top:12px; font-size:12.5px; letter-spacing:0.04em; color:var(--ink, #1c1b19); text-decoration:underline; text-underline-offset:3px; background:none; border:none; cursor:pointer; width:100%; font-family:inherit;}
+  .ask-host-link:hover{color:var(--gold-deep, #8a6d3b);}
+  .inq-overlay{position:fixed; inset:0; z-index:310; background:rgba(20,17,14,0.72); display:flex; align-items:center; justify-content:center; padding:20px;}
+  .inq-card{background:#fff; color:var(--ink, #1c1b19); border-radius:10px; width:100%; max-width:460px; max-height:92vh; overflow:auto; padding:24px 24px 20px; position:relative; box-shadow:0 20px 60px rgba(0,0,0,0.3);}
+  .inq-card h3{font-family:'Bodoni Moda', Georgia, serif; font-weight:400; font-size:24px; margin:0 0 4px;}
+  .inq-card .inq-sub{font-size:13px; color:#6e675d; margin:0 0 16px; line-height:1.5;}
+  .inq-close{position:absolute; top:12px; right:12px; width:34px; height:34px; border-radius:50%; background:#f1ebe2; border:none; cursor:pointer; font-size:20px; line-height:1;}
+  .inq-grid{display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:12px;}
+  .inq-card label{display:block; font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7f6c; margin-bottom:5px;}
+  .inq-card input, .inq-card textarea{width:100%; border:1px solid #ddd0bc; border-radius:6px; padding:9px 10px; font-family:inherit; font-size:13.5px; color:inherit; background:#fff;}
+  .inq-card textarea{min-height:110px; resize:vertical;}
+  .inq-note{font-size:11.5px; color:#8a7f6c; margin:8px 0 14px; line-height:1.5;}
+  .inq-error{color:#a3402f; font-size:13px; margin:0 0 10px; display:none;}
+  .inq-done{text-align:center; padding:10px 0 4px;}
+  .inq-done h3{margin-bottom:8px;}
+  .inq-done p{font-size:13.5px; color:#6e675d; line-height:1.6; margin:0 0 16px;}
+  @media (max-width:480px){ .inq-grid{grid-template-columns:1fr 1fr;} .inq-grid > div:last-child{grid-column:1 / -1;} }
+
   /* Three-column hero row, all visible together above the description:
      booking widget (calendar/guests/price) on the left, photo collage in
      the middle, Google Map on the right. Stacks into a single column —

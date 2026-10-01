@@ -20,7 +20,8 @@
 //
 // Where photos live (all read and cleaned here):
 //   listings:      cover_photo_url, exterior_photo_urls, interior_photo_urls,
-//                  photo_urls, photos, pending_room_photos, pending_room_changes
+//                  photo_urls, photos, pending_room_photos, pending_room_changes,
+//                  walkthrough (migration_walkthrough.sql)
 //   listing_rooms: cover_photo_url, photo_urls, pending_changes
 //   guests:        profile_photo_url
 // Check-in photos (sent only to booked guests) are left alone.
@@ -38,7 +39,7 @@ const MAX_ATTEMPTS = 6;                         // failed checks retried every 1
 const ADMIN_EMAIL = () => process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in';
 const SKIP_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'admin-photo-test'];   // the admin's Photo test runs its own check
 
-const isMissingTable = (err) => !!err && err.code === '42P01';
+const isMissingTable = (err) => !!err && (err.code === '42P01' || err.code === '42703');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const jb = (v) => (v === null || v === undefined) ? null : JSON.stringify(v);
 
@@ -223,7 +224,14 @@ async function updateListingRow(sql, before, after) {
       AND pending_room_photos IS NOT DISTINCT FROM ${jb(before.pending_room_photos)}::jsonb
       AND pending_room_changes IS NOT DISTINCT FROM ${jb(before.pending_room_changes)}::jsonb
     RETURNING id`;
-  return r.length > 0;
+  if (!r.length) return false;
+  // The walkthrough (migration_walkthrough.sql) in its own statement, so
+  // the rest still works before that migration has run.
+  if (!same(before.walkthrough, after.walkthrough)) {
+    try { await sql`UPDATE listings SET walkthrough = ${jb(after.walkthrough || [])}::jsonb WHERE id = ${before.id}`; }
+    catch (err) { if (!isMissingTable(err)) throw err; }
+  }
+  return true;
 }
 async function updateRoomRow(sql, before, after) {
   const r = await sql`
@@ -243,17 +251,19 @@ async function updateGuestRow(sql, before, after) {
   return r.length > 0;
 }
 
-const LISTING_COLS = ['cover_photo_url', 'photo_urls', 'photos', 'exterior_photo_urls', 'interior_photo_urls', 'pending_room_photos', 'pending_room_changes'];
+const LISTING_COLS = ['cover_photo_url', 'photo_urls', 'photos', 'exterior_photo_urls', 'interior_photo_urls', 'pending_room_photos', 'pending_room_changes', 'walkthrough'];
 const ROOM_COLS = ['cover_photo_url', 'photo_urls', 'pending_changes', 'is_active'];
 const pick = (row, cols) => { const o = { id: row.id }; cols.forEach(c => { o[c] = row[c] === undefined ? null : row[c]; }); return o; };
 
 async function loadListingRows(sql, url) {
   return sql`SELECT id, property_name, host_name, host_email, status, cover_photo_url,
-                    photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes
+                    photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes,
+                    COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough
              FROM listings
              WHERE strpos(COALESCE(cover_photo_url, '') || COALESCE(photo_urls::text, '') || COALESCE(photos::text, '')
                         || COALESCE(exterior_photo_urls::text, '') || COALESCE(interior_photo_urls::text, '')
-                        || COALESCE(pending_room_photos::text, '') || COALESCE(pending_room_changes::text, ''), ${url}) > 0`;
+                        || COALESCE(pending_room_photos::text, '') || COALESCE(pending_room_changes::text, '')
+                        || COALESCE(to_jsonb(listings)->>'walkthrough', ''), ${url}) > 0`;
 }
 async function loadRoomRows(sql, url) {
   return sql`SELECT r.id, r.listing_id, r.room_name, r.cover_photo_url, r.photo_urls, r.pending_changes, r.is_active,
@@ -291,6 +301,7 @@ function listingPlaces(row, url) {
   if (urlsIn(row.interior_photo_urls).has(url)) p.push('Inside photos');
   if (urlsIn(row.photo_urls).has(url) || urlsIn(row.photos).has(url)) p.push('Photos');
   if (urlsIn(row.pending_room_photos).has(url) || urlsIn(row.pending_room_changes).has(url)) p.push('Room photos awaiting review');
+  if (urlsIn(row.walkthrough).has(url)) p.push('Walkthrough');
   return p;
 }
 
@@ -309,7 +320,7 @@ async function removeEverywhere(sql, url, findings) {
       const after = listingWithout(row, url);
       if (same(before, after)) continue;
       if (!(await updateListingRow(sql, before, after))) { conflict = true; continue; }
-      const now = (await sql`SELECT id, cover_photo_url, photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes FROM listings WHERE id = ${row.id}`)[0];
+      const now = (await sql`SELECT id, cover_photo_url, photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes, COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough FROM listings WHERE id = ${row.id}`)[0];
       snapshots.push({ table: 'listings', id: row.id, before, after: pick(now, LISTING_COLS) });
       listingPlaces(row, url).forEach(p => places.push(`${p} — ${row.property_name} (#${row.id})`));
       context = context || { listingId: row.id, listingName: row.property_name, hostName: row.host_name, hostEmail: row.host_email };
@@ -406,7 +417,7 @@ async function alertTooLarge(sql, url, why) {
 // show contact details. Call after a save. Returns the URLs removed.
 async function sweepListing(sql, listingId) {
   try {
-    const row = (await sql`SELECT cover_photo_url, photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes
+    const row = (await sql`SELECT cover_photo_url, photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes, COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough
                            FROM listings WHERE id = ${listingId}`)[0];
     if (!row) return [];
     const urls = urlsIn(row);
@@ -437,7 +448,7 @@ async function removeFlagged(sql, urls) {
 // Every photo in use right now.
 async function photosInUse(sql) {
   const urls = new Set();
-  for (const r of await sql`SELECT cover_photo_url, photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes
+  for (const r of await sql`SELECT cover_photo_url, photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes, COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough
                             FROM listings WHERE status <> 'removed'`) urlsIn(r, urls);
   for (const r of await sql`SELECT cover_photo_url, photo_urls, pending_changes FROM listing_rooms`) urlsIn(r, urls);
   for (const r of await sql`SELECT profile_photo_url FROM guests WHERE profile_photo_url IS NOT NULL AND deleted_at IS NULL`) urlsIn(r, urls);
@@ -499,7 +510,7 @@ async function restoreRemoval(sql, removalId, adminName) {
   const notes = [];
   for (const s of rem.snapshots || []) {
     if (s.table === 'listings') {
-      const cur = (await sql`SELECT id, cover_photo_url, photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes FROM listings WHERE id = ${s.id}`)[0];
+      const cur = (await sql`SELECT id, cover_photo_url, photo_urls, photos, exterior_photo_urls, interior_photo_urls, pending_room_photos, pending_room_changes, COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough FROM listings WHERE id = ${s.id}`)[0];
       if (!cur) { notes.push(`Listing #${s.id} no longer exists.`); continue; }
       const now = pick(cur, LISTING_COLS);
       if (same(now, s.after)) { await updateListingRow(sql, now, s.before); continue; }
@@ -541,9 +552,58 @@ async function restoreRemoval(sql, removalId, adminName) {
 const shouldCheckUpload = (purpose, contentType) =>
   !SKIP_PURPOSES.includes(String(purpose || '')) && /^image\//i.test(String(contentType || 'image/'));
 
+// ---------------------------------------------------------------- walkthrough
+
+// The property walkthrough is checked BEFORE it is saved: a photo that
+// shows contact details is refused, not just taken down later. Photos
+// already checked at upload (photo_scans) are known at once; the rest are
+// checked now, within deadlineMs; anything still unchecked is accepted and
+// left to the 5-minute job. The admin is told of every refused photo, once.
+// Returns { blocked: [{ url, findings }], unchecked: [url] }.
+async function screenForWalkthrough(sql, urls, { listing = {}, deadlineMs = 6500 } = {}) {
+  const started = Date.now();
+  const list = [...new Set((urls || []).map(u => String(u || '').trim()).filter(isAervaBlobUrl))];
+  const out = { blocked: [], unchecked: [] };
+  if (!list.length) return out;
+  let known = new Map();
+  try { known = new Map((await sql`SELECT url, status, findings FROM photo_scans WHERE url = ANY(${list})`).map(r => [r.url, r])); }
+  catch (err) { if (!isMissingTable(err)) throw err; }
+  for (const url of list) {
+    const k = known.get(url);
+    if (k && (k.status === 'clean' || k.status === 'restored' || k.status === 'unscannable')) continue;
+    if (k && k.status === 'flagged') { out.blocked.push({ url, findings: k.findings || [] }); continue; }
+    if (Date.now() - started > deadlineMs) { out.unchecked.push(url); continue; }
+    const r = await scanAndAct(sql, url, { uploadedBy: listing.hostEmail || null });
+    if (r.status === 'flagged') out.blocked.push({ url, findings: r.findings || [] });
+    else if (r.status !== 'clean' && r.status !== 'unscannable') out.unchecked.push(url);
+  }
+  for (const b of out.blocked) {
+    try {
+      const told = (await sql`SELECT 1 FROM audit_log WHERE action = 'walkthrough_photo_blocked' AND target_type = 'listing'
+                                AND target_id = ${listing.id || 0} AND metadata->>'url' = ${b.url} LIMIT 1`).length;
+      if (told) continue;
+      await sql`INSERT INTO audit_log (action, success, actor_type, actor_identifier, target_type, target_id, metadata)
+                VALUES ('walkthrough_photo_blocked', true, 'host', ${listing.hostEmail || null}, 'listing', ${listing.id || null},
+                        ${JSON.stringify({ url: b.url, findings: b.findings })})`;
+      const offences = listing.hostEmail
+        ? Number((await sql`SELECT count(*)::int AS n FROM audit_log WHERE action = 'walkthrough_photo_blocked' AND actor_identifier = ${listing.hostEmail}`)[0].n) : 1;
+      const found = (b.findings || []).map(f => `<li>${esc(f.type)}: <strong>${esc(f.text)}</strong></li>`).join('') || '<li>Contact details</li>';
+      await sendEmail(`Walkthrough photo refused: contact details${listing.name ? ' — ' + listing.name : ''}`, `
+        <div style="font-family:sans-serif; max-width:560px;">
+          <h2 style="font-family:Georgia,serif; margin:0 0 8px;">Someone tried to put contact details in a walkthrough photo</h2>
+          <p style="margin:0 0 12px;">${esc(listing.hostName || '')} (${esc(listing.hostEmail || 'unknown')})${offences > 1 ? ` — <strong>refused photo #${offences}</strong> for this account` : ''}, listing ${esc(listing.name || '')} (#${listing.id || '?'})</p>
+          <p style="margin:0 0 4px;">What the photo showed:</p><ul style="margin:0 0 12px;">${found}</ul>
+          <p><a href="${esc(b.url)}"><img src="${esc(b.url)}" width="260" style="border-radius:6px; border:1px solid #ddd;"></a></p>
+          <p style="font-size:13px; color:#6e675d;">The photo was refused at save and told to the host as "can't be used". It was never shown to guests.</p>
+        </div>`);
+    } catch (err) { console.error('walkthrough block alert failed:', err.message || err); }
+  }
+  return out;
+}
+
 module.exports = {
   checkPhoto, scanAndAct, removeEverywhere, sweepListing, sweepGuest, runPhotoScan,
-  listRemovals, restoreRemoval, shouldCheckUpload,
+  listRemovals, restoreRemoval, shouldCheckUpload, screenForWalkthrough,
   // for tests
   _strip: strip, _urlsIn: urlsIn
 };

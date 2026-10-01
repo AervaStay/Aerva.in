@@ -176,6 +176,10 @@ async function loadBookingContext(sql, orderId) {
 
 async function conversationFor(sql, order) {
   const existing = await sql`SELECT id FROM conversations WHERE order_id = ${order.id}`;
+  if (!existing.length) {   // the guest's enquiry thread for this listing, if any (_inquiries.js)
+    const adopted = await require('./_inquiries').adoptInquiryThread(sql, { orderId: order.id, listingId: order.listing_id, guestId: order.guest_id });
+    if (adopted) return adopted;
+  }
   if (existing.length) return existing[0].id;
   const inserted = await sql`
     INSERT INTO conversations (order_id, listing_id, guest_id, guest_email, host_id)

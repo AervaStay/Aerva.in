@@ -139,6 +139,7 @@ function requireGuest(req) {
 // (_template-scheduling.js) go through exactly the same filter.
 const { redactContactInfo } = require('./_redact');
 const { guardMessage } = require('./_message-guard');
+const { createInquiry, adoptInquiryThread, inquiryDetails } = require('./_inquiries');
 
 
 // ---- "How was your stay / your guest?" inside a message thread ----
@@ -399,6 +400,12 @@ module.exports = async (req, res) => {
 
         let convRows = await sql`SELECT id FROM conversations WHERE order_id = ${orderId}`;
         let conversationId;
+        // A guest who asked about this listing before booking: the
+        // booking joins that thread (_inquiries.js).
+        if (!convRows.length && order.status === 'paid') {
+          const adopted = await adoptInquiryThread(sql, { orderId, listingId: order.listing_id, guestId: order.guest_id });
+          if (adopted) convRows = [{ id: adopted }];
+        }
         if (convRows.length) {
           conversationId = convRows[0].id;
         } else if (order.status !== 'paid') {
@@ -493,7 +500,12 @@ module.exports = async (req, res) => {
         // frontend's status-tag logic (Enquiry / Check-in Today / etc.)
         // does plain string/date-object comparisons against a real date,
         // never a mangled concatenation.
+        // Enquiry threads (no booking yet): the dates and party asked about.
+        const inquiries = await inquiryDetails(sql, conversations.filter(c => !c.order_id).map(c => c.id));
         conversations.forEach(c => {
+          if (!c.order_id && inquiries[c.id]) {
+            c.inquiry = { arrival: toDateStr(inquiries[c.id].arrival), departure: toDateStr(inquiries[c.id].departure), guests: inquiries[c.id].guests, askedAt: inquiries[c.id].askedAt };
+          }
           c.arrival = toDateStr(c.arrival);
           c.departure = toDateStr(c.departure);
           const localToday = toDateStr(c.local_today);
@@ -843,6 +855,21 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     const { mode } = req.body || {};
     try {
+      // ---- Ask the host before booking (_inquiries.js) ----
+      // POST { mode: 'inquiry', listingId, text, arrival?, departure?, guests? }
+      if (mode === 'inquiry') {
+        if (actingCtx) return res.status(403).json({ error: 'Co-hosts cannot send enquiries.' });
+        try {
+          const b = req.body || {};
+          const out = await createInquiry(sql, { guestId, listingId: Number(b.listingId) || 0, text: b.text, arrival: b.arrival, departure: b.departure, guests: b.guests,
+            ip: (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || null });
+          return res.status(200).json({ success: true, ...out });
+        } catch (err) {
+          if (!err.isUserFacing) console.error('inquiry failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send your question right now. Please try again.' });
+        }
+      }
+
       // ---- Report a problem during the stay (_stay-disputes.js) ----
       // POST { mode: 'raiseDispute', orderId, reason, details, evidence: [urls] }
       if (mode === 'raiseDispute') {

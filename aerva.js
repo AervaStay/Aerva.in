@@ -6859,6 +6859,7 @@
   // booking wasn't confirmed yet, when it always is by the time a
   // conversation can exist at all. ----
   function inboxStatusTag(conv){
+    if(conv.inquiry && !conv.order_id) return { label: 'Enquiry', cls: 'tag-upcoming' };
     if(!conv.arrival || !conv.departure) return { label: 'Message', cls: 'tag-upcoming' };
     if(conv.booking_status === 'cancelled') return { label: 'Cancelled', cls: 'tag-cancelled' };
     const today = new Date().toISOString().split('T')[0];
@@ -6946,7 +6947,7 @@
               <div class="inbox-conv-name">${escapeMessageHtml(c.property_name || 'Aerva')}</div>
               <span class="inbox-conv-time">${inboxRelativeTime(c.last_message_at)}</span>
             </div>
-            <div class="inbox-conv-counterpart">${roleLabel === 'Hosting' ? 'Guest' : 'Host'}: ${escapeMessageHtml(name || '')}</div>
+            <div class="inbox-conv-counterpart">${c.my_role === 'host' ? 'Guest' : 'Host'}: ${escapeMessageHtml(name || '')}</div>
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
               <div class="inbox-conv-preview">${escapeMessageHtml(c.last_message || 'No messages yet')}</div>
               ${Number(c.unread_count) > 0 ? '<span class="inbox-conv-unread-dot"></span>' : ''}
@@ -7161,6 +7162,14 @@
         <span class="inbox-status-tag ${tag.cls}">${esc(tag.label)}</span>
         <h3 class="bd-title">${esc(conv.property_name || 'Your stay')}</h3>
         <p class="bd-sub">${esc([place, isHostView ? 'Guest: ' + (conv.counterpart_name || conv.guest_email || 'Guest') : 'Hosted by ' + (conv.counterpart_name || 'your host')].filter(Boolean).join(' · '))}</p>
+        ${conv.inquiry && !conv.order_id ? `
+        <div class="bd-section">
+          <div class="bd-section-title">Asked about</div>
+          ${conv.inquiry.arrival && conv.inquiry.departure ? `<div class="bd-row"><span>Dates</span><span>${esc(day(conv.inquiry.arrival))} – ${esc(day(conv.inquiry.departure))} ${esc(String(year(conv.inquiry.departure)))}</span></div>` : `<div class="bd-row"><span>Dates</span><span>Not chosen yet</span></div>`}
+          ${conv.inquiry.guests ? `<div class="bd-row"><span>Guests</span><span>${Number(conv.inquiry.guests)}</span></div>` : ''}
+          <p class="bd-note">${isHostView ? 'This guest has not booked yet. A quick, clear reply is what turns an enquiry into a booking.' : 'You have not booked yet. When you are ready, book from the listing page and this thread continues with your booking.'}</p>
+          ${!isHostView ? `<a class="bd-link" href="index.html?listing=${Number(conv.listing_id)}">Open the listing</a>` : ''}
+        </div>` : ''}
         ${conv.arrival && conv.departure ? `
         <div class="bd-dates">
           <div class="bd-date"><span class="bd-label">Check-in</span><strong>${esc(day(conv.arrival))}</strong><span class="bd-small">${esc(String(year(conv.arrival)))}</span>${conv.check_in_time ? `<span class="bd-small">from ${esc(conv.check_in_time)}</span>` : ''}</div>
@@ -8137,6 +8146,211 @@
     if(overlay) overlay.style.display = 'none';
     document.body.style.overflow = document.getElementById('listingModalOverlay').style.display === 'flex' ? 'hidden' : '';
   }
+
+  // ---- Property walkthrough (listing.walkthrough: [{ url, label }]) ----
+  // The host's ordered photos from the entrance to the end of the
+  // property; the guest steps through them like walking the route.
+  function walkthroughStops(listing){
+    const raw = listing && Array.isArray(listing.walkthrough) ? listing.walkthrough : [];
+    return raw.map(e => typeof e === 'string' ? { url: e, label: '' } : e)
+              .filter(e => e && typeof e.url === 'string' && /^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\//i.test(e.url))
+              .map(e => ({ url: e.url, label: typeof e.label === 'string' ? e.label.trim().slice(0, 40) : '' }));
+  }
+  function buildWalkthroughTeaserHtml(listing){
+    const stops = walkthroughStops(listing);
+    if(stops.length < 2) return '';
+    const esc = escapeMessageHtml;
+    const thumbs = stops.slice(0, 3).map(st => `<img src="${esc(st.url)}" alt="" loading="lazy">`).join('');
+    const first = stops[0].label, last = stops[stops.length - 1].label;
+    const route = first && last ? `From the ${esc(first.toLowerCase())} to the ${esc(last.toLowerCase())}` : 'From the entrance through the whole property';
+    return `
+      <div class="wt-teaser" data-walkthrough-teaser="${listing.id}">
+        <div class="wt-teaser-head">
+          <div class="wt-teaser-thumbs">${thumbs}</div>
+          <div class="wt-teaser-text"><strong>Walk through the property</strong><span>${route} · ${stops.length} stops</span></div>
+        </div>
+        <button type="button" class="btn" data-open-walkthrough="${listing.id}">Start the walkthrough</button>
+      </div>`;
+  }
+  let wtState = null;
+  function openWalkthrough(listingId){
+    const listing = listingsById[listingId];
+    const stops = listing ? walkthroughStops(listing) : [];
+    if(!stops.length) return;
+    wtState = { stops, i: 0, seen: new Set([0]), name: listing.property_name || 'Walkthrough', ended: false };
+    let overlay = document.getElementById('walkthroughOverlay');
+    if(!overlay){
+      overlay = document.createElement('div');
+      overlay.id = 'walkthroughOverlay';
+      overlay.className = 'wt-overlay';
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => {
+        const t = e.target.closest('[data-wt]');
+        if(!t) return;
+        const a = t.dataset.wt;
+        if(a === 'close') closeWalkthrough();
+        else if(a === 'prev') walkthroughGo(wtState.i - 1);
+        else if(a === 'next') walkthroughGo(wtState.i + 1);
+        else if(a === 'restart') walkthroughGo(0);
+        else if(a === 'stop') walkthroughGo(Number(t.dataset.index));
+      });
+      let touchX = null;
+      overlay.addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+      overlay.addEventListener('touchend', (e) => {
+        if(touchX === null) return;
+        const dx = e.changedTouches[0].clientX - touchX; touchX = null;
+        if(Math.abs(dx) > 50) walkthroughGo(wtState.i + (dx < 0 ? 1 : -1));
+      }, { passive: true });
+    }
+    overlay.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', walkthroughKeys);
+    renderWalkthrough();
+    // The next photo is fetched ahead, so stepping forward never waits.
+    stops.slice(1, 3).forEach(st => { const im = new Image(); im.src = st.url; });
+  }
+  function walkthroughKeys(e){
+    if(!wtState) return;
+    if(e.key === 'Escape') closeWalkthrough();
+    else if(e.key === 'ArrowRight') walkthroughGo(wtState.i + 1);
+    else if(e.key === 'ArrowLeft') walkthroughGo(wtState.i - 1);
+  }
+  function walkthroughGo(i){
+    if(!wtState) return;
+    const n = wtState.stops.length;
+    if(i >= n){ wtState.ended = true; renderWalkthrough(); return; }
+    if(i < 0) i = 0;
+    wtState.i = i; wtState.ended = false; wtState.seen.add(i);
+    renderWalkthrough();
+    const nxt = wtState.stops[i + 1]; if(nxt){ const im = new Image(); im.src = nxt.url; }
+  }
+  function renderWalkthrough(){
+    const overlay = document.getElementById('walkthroughOverlay');
+    if(!overlay || !wtState) return;
+    const esc = escapeMessageHtml;
+    const { stops, i, ended } = wtState;
+    const cur = stops[i];
+    const label = cur.label || (i === 0 ? 'Where you arrive' : `Stop ${i + 1}`);
+    overlay.innerHTML = `
+      <div class="wt-top">
+        <span class="wt-title">${esc(wtState.name)} · Walkthrough</span>
+        <button type="button" class="wt-close" data-wt="close" aria-label="Close walkthrough">&times;</button>
+      </div>
+      <div class="wt-stage" id="walkthroughStage">
+        <img src="${esc(cur.url)}" alt="${esc(label)}">
+        <button type="button" class="wt-nav wt-prev" data-wt="prev" aria-label="Back" ${i === 0 ? 'disabled' : ''}>&larr;</button>
+        <button type="button" class="wt-nav wt-next" data-wt="next" aria-label="Next">&rarr;</button>
+        <div class="wt-caption"><span class="wt-step">${i + 1} of ${stops.length}</span><span class="wt-label">${esc(label)}</span></div>
+        ${ended ? `
+        <div class="wt-end">
+          <h3>You have walked the whole property</h3>
+          <p>${stops.length} stops, from ${esc((stops[0].label || 'the entrance').toLowerCase())} to ${esc((stops[stops.length - 1].label || 'the end').toLowerCase())}.</p>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+            <button type="button" class="btn" data-wt="restart">Walk it again</button>
+            <button type="button" class="btn solid" data-wt="close">Back to the listing</button>
+          </div>
+        </div>` : ''}
+      </div>
+      <div class="wt-progress"><i style="width:${Math.round(((ended ? stops.length : i + 1) / stops.length) * 100)}%"></i></div>
+      <div class="wt-route" id="walkthroughRoute">
+        ${stops.map((st, k) => `<button type="button" class="wt-stop ${k === i && !ended ? 'is-current' : ''} ${wtState.seen.has(k) ? 'is-seen' : ''}" data-wt="stop" data-index="${k}" title="${esc(st.label || 'Stop ' + (k + 1))}">
+            <img src="${esc(st.url)}" alt="" loading="lazy"><span>${k + 1}. ${esc(st.label || 'Stop ' + (k + 1))}</span></button>`).join('')}
+      </div>`;
+    const curStop = overlay.querySelector('.wt-stop.is-current');
+    if(curStop && curStop.scrollIntoView) curStop.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }
+  function closeWalkthrough(){
+    const overlay = document.getElementById('walkthroughOverlay');
+    if(overlay) overlay.style.display = 'none';
+    document.removeEventListener('keydown', walkthroughKeys);
+    wtState = null;
+    document.body.style.overflow = document.getElementById('listingModalOverlay').style.display === 'flex' ? 'hidden' : '';
+  }
+  document.addEventListener('click', function(e){
+    const b = e.target.closest('[data-open-walkthrough]');
+    if(b) openWalkthrough(b.dataset.openWalkthrough);
+  });
+  window.openWalkthrough = openWalkthrough;
+
+  // ---- Ask the host (an enquiry before booking; guest-profile mode 'inquiry') ----
+  // Opens the guest's Messages thread with this listing's host. The host
+  // is emailed; contact details are removed exactly as in a booking chat.
+  let lgCurrentSelection = { arrival: null, departure: null };
+  function buildAskHostHtml(listing){
+    return `<button type="button" class="ask-host-link" data-ask-host="${listing.id}">Have a question? Ask the host</button>`;
+  }
+  function openInquiryPanel(listingId){
+    const listing = listingsById[listingId];
+    if(!listing) return;
+    requireLoginForBooking(() => renderInquiryPanel(listing));
+  }
+  function renderInquiryPanel(listing){
+    const esc = escapeMessageHtml;
+    let overlay = document.getElementById('inquiryOverlay');
+    if(!overlay){
+      overlay = document.createElement('div');
+      overlay.id = 'inquiryOverlay';
+      overlay.className = 'inq-overlay';
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => { if(e.target === overlay || e.target.closest('[data-inq-close]')) closeInquiryPanel(); });
+    }
+    const sel = lgCurrentSelection || {};
+    overlay.innerHTML = `
+      <div class="inq-card" role="dialog" aria-label="Ask the host">
+        <button type="button" class="inq-close" data-inq-close aria-label="Close">&times;</button>
+        <h3>Ask ${esc(listing.host_name || 'the host')}</h3>
+        <p class="inq-sub">About <strong>${esc(listing.property_name)}</strong>. The host replies in your Messages, usually within a few hours.</p>
+        <form id="inquiryForm">
+          <div class="inq-grid">
+            <div><label for="inqArrival">Check-in (optional)</label><input type="date" id="inqArrival" value="${esc(sel.arrival || '')}"></div>
+            <div><label for="inqDeparture">Check-out</label><input type="date" id="inqDeparture" value="${esc(sel.departure || '')}"></div>
+            <div><label for="inqGuests">Guests</label><input type="number" id="inqGuests" min="1" max="50" placeholder="2"></div>
+          </div>
+          <label for="inqText">Your question</label>
+          <textarea id="inqText" maxlength="1500" placeholder="Is the pool heated in December? Can we check in after 10 pm?" required></textarea>
+          <p class="inq-note">For everyone's safety, keep the conversation and any payment on Aerva. Phone numbers and email addresses are removed from messages automatically.</p>
+          <p class="inq-error" id="inqError"></p>
+          <button type="submit" class="btn solid" id="inqSendBtn" style="width:100%;">Send to the host</button>
+        </form>
+      </div>`;
+    overlay.style.display = 'flex';
+    document.getElementById('inqText').focus();
+    document.getElementById('inquiryForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('inqSendBtn'), err = document.getElementById('inqError');
+      err.style.display = 'none';
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try{
+        const body = { mode: 'inquiry', listingId: listing.id, text: document.getElementById('inqText').value,
+          arrival: document.getElementById('inqArrival').value || undefined, departure: document.getElementById('inqDeparture').value || undefined,
+          guests: document.getElementById('inqGuests').value ? Number(document.getElementById('inqGuests').value) : undefined };
+        const res = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() }, body: JSON.stringify(body) });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || 'Could not send your question.');
+        overlay.querySelector('.inq-card').innerHTML = `
+          <button type="button" class="inq-close" data-inq-close aria-label="Close">&times;</button>
+          <div class="inq-done">
+            <h3>Sent to ${esc(listing.host_name || 'the host')}</h3>
+            <p>${data.message && data.message.was_redacted ? 'Contact details were removed from your message before it was sent. ' : ''}You will find the reply in your Messages, and get an email when it arrives.</p>
+            <a class="btn solid" href="index.html?view=messages">Open Messages</a>
+          </div>`;
+      } catch(ex){
+        err.textContent = ex.message; err.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Send to the host';
+      }
+    });
+  }
+  function closeInquiryPanel(){
+    const overlay = document.getElementById('inquiryOverlay');
+    if(overlay) overlay.style.display = 'none';
+  }
+  document.addEventListener('click', function(e){
+    const b = e.target.closest('[data-ask-host]');
+    if(b) openInquiryPanel(b.dataset.askHost);
+  });
+  window.openInquiryPanel = openInquiryPanel;
+
   // Delegated click handler — works for any collage rendered anywhere,
   // present or future, without needing per-tile listeners re-attached
   // every time the modal content is rebuilt.
@@ -8373,10 +8587,12 @@
                 <p id="resortBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
                 <p id="resortBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
               </div>
+              ${buildAskHostHtml(listing)}
             </div>
             <div class="listing-col-photos">
               <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
               <div id="resortPhotosContainer" data-listing-id="${listing.id}"></div>
+              ${buildWalkthroughTeaserHtml(listing)}
               <div class="listing-reviews" data-reviews-for="${listing.id}"></div>
               <p class="desc" style="margin-top:16px;">${escapeMessageHtml(listing.description)}</p>
             </div>
@@ -8497,10 +8713,12 @@
               <p id="listingBookError" class="offer" style="display:none; color:#a3402f; margin-top:10px;"></p>
               <p id="listingBookConfirm" style="display:none; color:#3a7d44; font-size:13.5px; margin-top:10px; line-height:1.6;"></p>
             </div>
+            ${buildAskHostHtml(listing)}
           </div>
           <div class="listing-col-photos">
             <div class="listing-modal-section-title" style="margin-top:16px;">Photos</div>
             ${photosHtml}
+            ${buildWalkthroughTeaserHtml(listing)}
             <div class="listing-reviews" data-reviews-for="${listing.id}"></div>
             <p class="desc" style="margin-top:16px;">${escapeMessageHtml(listing.description)}</p>
           </div>
@@ -8915,6 +9133,7 @@
     let lgArrival = initialArrival;
     let lgDeparture = initialDeparture;
     let lgSelectingStart = !initialArrival;
+    lgCurrentSelection = { arrival: lgArrival, departure: lgDeparture };
 
     // A selected range is only valid to commit if no night inside it is
     // already booked — picking through a gap between two bookings isn't
@@ -8939,6 +9158,7 @@
         lgSelectingStart = true;
       }
       renderMonth();
+      lgCurrentSelection = { arrival: lgArrival, departure: lgDeparture };
       updateListingPriceSummary(listing, lgArrival, lgDeparture);
       renderListingAmenities(listing, lgArrival, lgDeparture);
     }

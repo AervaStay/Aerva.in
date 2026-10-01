@@ -289,7 +289,8 @@ module.exports = async (req, res) => {
                experience_price_unit, commission_rate,
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
                auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason, timezone,
-               COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy
+               COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
+               COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -357,6 +358,51 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('update-listing-pricing (GET) error:', err);
       return res.status(500).json({ error: 'Could not load your listing right now. Please try again.' });
+    }
+  }
+
+  // ---- Property walkthrough (Manage page → Walkthrough) ----
+  // POST { token, walkthrough: [{ url, label }] } — the host's ordered
+  // photos from the entrance to the end of the property, stepped through
+  // by guests on the listing page. Saved on its own, whole. Every photo is
+  // checked for contact details before it is accepted (_photo-guard.js
+  // screenForWalkthrough): one that shows a number, email, handle or QR
+  // code is refused, named to the host as "can't be used", and the admin
+  // is told. Photos must be Aerva's own uploads. Up to 40 stops.
+  if (req.method === 'POST' && req.body && Array.isArray(req.body.walkthrough)) {
+    try {
+      const l = (await sql`SELECT id, property_name, host_name, host_email, status FROM listings WHERE id = ${listingId}`)[0];
+      if (!l) return res.status(404).json({ error: 'Listing not found.' });
+      const seen = new Set();
+      const stops = [];
+      for (const e of req.body.walkthrough.slice(0, 60)) {
+        const url = typeof e === 'string' ? e.trim() : (e && typeof e.url === 'string' ? e.url.trim() : '');
+        if (!isAervaBlobUrl(url) || seen.has(url)) continue;
+        seen.add(url);
+        const label = e && typeof e.label === 'string' ? e.label.replace(/\s+/g, ' ').trim().slice(0, 40) : '';
+        stops.push({ url, label });
+      }
+      if (stops.length > 40) return res.status(400).json({ error: 'A walkthrough can have up to 40 photos. Keep the ones that show the way through the property.' });
+      const screen = await photoGuard.screenForWalkthrough(sql, stops.map(s => s.url), { listing: { id: l.id, name: l.property_name, hostName: l.host_name, hostEmail: l.host_email } });
+      if (screen.blocked.length) {
+        const which = screen.blocked.map(b => { const i = stops.findIndex(s => s.url === b.url); const st = stops[i]; return `photo ${i + 1}${st && st.label ? ' (' + st.label + ')' : ''}`; });
+        return res.status(400).json({
+          error: `${which.length === 1 ? 'One photo' : which.length + ' photos'} can't be used: ${which.join(', ')} ${which.length === 1 ? 'shows' : 'show'} contact details (a phone number, email, website, social handle or QR code). Remove ${which.length === 1 ? 'it' : 'them'} and save again.`,
+          blockedUrls: screen.blocked.map(b => b.url)
+        });
+      }
+      try {
+        await sql`UPDATE listings SET walkthrough = ${JSON.stringify(stops)}::jsonb WHERE id = ${listingId}`;
+      } catch (err) {
+        if (err && err.code === '42703') return res.status(503).json({ error: 'The walkthrough cannot be saved yet (run sql/migration_walkthrough.sql).' });
+        throw err;
+      }
+      await logAudit(sql, { action: 'listing_walkthrough_saved', success: true, actorType: access.isCohost ? 'cohost' : 'host', actorIdentifier: l.host_email,
+        targetType: 'listing', targetId: listingId, metadata: { stops: stops.length, unchecked: screen.unchecked.length } });
+      return res.status(200).json({ success: true, walkthrough: stops, unchecked: screen.unchecked.length });
+    } catch (err) {
+      console.error('update-listing-pricing (walkthrough) error:', err);
+      return res.status(500).json({ error: 'Could not save the walkthrough right now. Please try again.' });
     }
   }
 
