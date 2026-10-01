@@ -254,12 +254,47 @@ function removeLinksAndHandles(input) {
   text = text.replace(/[a-zA-Z0-9._%+-]+\s*(?:\(at\)|\[at\]|\sat\s)\s*[a-zA-Z0-9-]+\s*(?:\(dot\)|\[dot\]|\sdot\s)\s*[a-zA-Z]{2,}/gi, () => { redacted = true; return '[email removed]'; });
   // UPI IDs: name@okicici, 98xxxx@ybl
   text = text.replace(/[a-zA-Z0-9._-]{2,}@(?:ok[a-z]+|ybl|ibl|axl|apl|upi|paytm|ptyes|ptaxis|pthdfc|ptsbi|yapl|ikwik|jupiteraxis|fbl|waicici|wahdfcbank|wasbi|waaxis|kotak|icici|hdfcbank|sbi|axisbank|pingpay|freecharge)\b/gi, () => { redacted = true; return '[contact info removed]'; });
-  text = text.replace(/\b(instagram|insta|ig|facebook|fb|whatsapp|whats app|watsapp|whatsap|telegram|snapchat)\b\s*(?:id|handle|no\.?|number)?\s*[:@\-]?\s*@?[a-zA-Z][a-zA-Z0-9._]{2,}/gi, (m, _w) => {
+  text = text.replace(/\b(instagram|insta|ig|facebook|fb|whatsapp|whats app|watsapp|whatsap|telegram|snapchat)\b\s*(?:id|handle|no\.?|number)?\s*[:@\-]?\s*@?([a-zA-Z][a-zA-Z0-9._]{2,})/gi, (m, _w, h) => {
+    if (COMMON_WORDS.has(h.toLowerCase()) && !/[._@]/.test(m.slice(_w.length))) return m;   // "telegram tomorrow", "facebook group"
     redacted = true; return '[contact info removed]';
   });
   text = text.replace(/\b(instagram\.com|facebook\.com|fb\.com|wa\.me|t\.me)\/[a-zA-Z0-9._]+/gi, () => { redacted = true; return '[contact info removed]'; });
+  // An email or messaging account named without its "@domain": "send gmail
+  // to me at tanishoswal", "my mail id is ravi.k", "tanishoswal on gmail",
+  // "telegram: ravi_k". Once the message names a provider or account kind,
+  // any handle-like word after at / @ / : / is / id / on / - / dash, or the
+  // word right before the provider, goes.
+  if (ACCOUNT_WORDS.test(text)) {
+    const handle = '[a-zA-Z][a-zA-Z0-9._-]{3,}[a-zA-Z0-9]';
+    const lead = '(?:\\bat\\b|@|:|\\bis\\b|\\bid\\b|\\bon\\b|\\bdash\\b|-|\\bunderscore\\b|_)';
+    text = text.replace(new RegExp(`(${lead}\\s*)(${handle})`, 'gi'), (m, l, h) => {
+      if (COMMON_WORDS.has(h.toLowerCase()) || ACCOUNT_WORDS.test(h)) return m;
+      redacted = true; return l + '[contact info removed]';
+    });
+    // "gmail tanishoswal", "insta ravi_k": the word right after the provider.
+    text = text.replace(new RegExp(`(${ACCOUNT_WORDS.source}\\s+(?:id\\s+|handle\\s+|account\\s+)?)(${handle})`, 'gi'), (m, l, _w, h) => {
+      if (COMMON_WORDS.has(h.toLowerCase()) || ACCOUNT_WORDS.test(h)) return m;
+      redacted = true; return l + '[contact info removed]';
+    });
+    text = text.replace(new RegExp(`\\b(${handle})(\\s*(?:\\(at\\)|\\bat\\b|@|\\bon\\b)?\\s*)(gmail|yahoo|outlook|hotmail|rediff|rediffmail|protonmail|proton|icloud|ymail|zoho)\\b`, 'gi'), (m, h, mid, prov) => {
+      if (COMMON_WORDS.has(h.toLowerCase())) return m;
+      redacted = true; return '[contact info removed]' + mid + prov;
+    });
+  }
   return { text, urls, redacted };
 }
+// Words that say an account is being named. Matched case-insensitively.
+const ACCOUNT_WORDS = /\b(g ?mail|e-?mail|mail ?id|email ?id|yahoo|outlook|hotmail|rediff(?:mail)?|protonmail|proton ?mail|icloud|ymail|zoho|insta(?:gram)?|ig|facebook|fb|whats ?app|watsapp|whatsap|telegram|snap(?:chat)?|signal|skype|discord|twitter|x handle|linkedin|threads|messenger|user ?name|handle)\b/i;
+// Ordinary words that can follow "at" / "is" / "on" when an account is
+// mentioned, never a handle.
+const COMMON_WORDS = new Set(('home house night noon morning evening time times least last least most once twice about after again around before check checkin checkout '
+  + 'hotel villa resort property place room rooms door gate pool beach airport station arrival departure booking book booked message messages chat '
+  + 'there here where which while what when with will would could should please thank thanks sorry hello hi dear best regards good great '
+  + 'this that these those your yours mine ours theirs them they then than them have has had does done doing make made sure also just only even very '
+  + 'free busy ready okay fine well soon today tomorrow tonight yesterday week weekend month year monday tuesday wednesday thursday friday saturday sunday '
+  + 'sending send sent given give email mail number phone contact detail details address info information account available unavailable earliest latest group page profile link invite '
+  + 'guest guests host hosts family friends kids children adults people person reach reaching call calling text texting write writing reply replying '
+  + 'aerva india goa mumbai delhi pune bangalore bengaluru chennai kolkata hyderabad jaipur udaipur kerala lonavala alibaug coorg manali shimla rishikesh').split(/\s+/));
 const restoreLinks = (text, urls) => text.replace(/([-])/g, (_m, c) => urls[c.charCodeAt(0) - 0xE100]);
 
 // The main check. { displayText, wasRedacted }.

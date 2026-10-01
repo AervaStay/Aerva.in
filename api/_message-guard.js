@@ -33,7 +33,7 @@ const PROMPT = (lines) => `These are one sender's recent chat messages, oldest f
 
 ${lines}
 
-Do these messages, read together, share or build up any of these: a phone or WhatsApp number (even split into pieces, mixed with letters or junk, written as words, or spread over several messages), an email address, a social media handle or page, a UPI ID, a website, or an invitation to talk or pay off the platform?
+Do these messages, read together, share or build up any of these: a phone or WhatsApp number (even split into pieces, mixed with letters or junk, written as words, or spread over several messages), an email address (even without its @domain, like "gmail me at ravi.k"), a social media or messaging handle or page, a UPI ID, a website, or an invitation to talk or pay off the platform?
 
 Ordinary booking talk is fine: guest counts, dates, times, prices, flight numbers, room or floor numbers, directions.
 
@@ -92,8 +92,16 @@ async function guardMessage(sql, { conversationId, senderType, text }) {
   const digitsNow = rawDigitCount(result.displayText);
   const total = digitCount(result.displayText) + recent.reduce((n, m) => n + digitCount(m.display_text), 0);
   const rawTotal = digitsNow + recent.reduce((n, m) => n + rawDigitCount(m.display_text), 0);
-  const hasAt = /@/.test(result.displayText) || recent.some(m => /@/.test(m.display_text));
-  if (!(digitsNow > 0 || /@/.test(result.displayText))) return result;   // nothing new to add up
+  // An "@", or a mention of an email or messaging account (gmail, insta,
+  // telegram…), is as good a reason to look as digits are: a handle can
+  // be passed in pieces just like a number.
+  const ACCOUNT = /@|\b(g ?mail|e-?mail|mail ?id|yahoo|outlook|hotmail|rediff|protonmail|icloud|insta(?:gram)?|ig|facebook|fb|whats ?app|watsapp|telegram|snap(?:chat)?|signal|skype|discord|twitter|linkedin|threads|messenger|user ?name|handle)\b/i;
+  const recentAccount = recent.some(m => ACCOUNT.test(m.display_text));
+  const hasAt = ACCOUNT.test(result.displayText) || recentAccount;
+  // A short fragment ("tanish", "oswal", "dot k") after an account was
+  // named is a piece of a handle until Claude says otherwise.
+  const fragment = recentAccount && result.displayText.trim().split(/\s+/).length <= 4 && !/[?!]/.test(result.displayText);
+  if (!(digitsNow > 0 || ACCOUNT.test(result.displayText) || fragment || /\[contact info removed\]|\[email removed\]/.test(result.displayText))) return result;   // nothing new to add up
   if (rawTotal < ASK_FROM_DIGITS && !hasAt) return result;
 
   const texts = [...recent.map(m => m.display_text), result.displayText];
