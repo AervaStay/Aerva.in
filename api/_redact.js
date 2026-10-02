@@ -256,6 +256,8 @@ function removeLinksAndHandles(input) {
   text = text.replace(/[a-zA-Z0-9._-]{2,}@(?:ok[a-z]+|ybl|ibl|axl|apl|upi|paytm|ptyes|ptaxis|pthdfc|ptsbi|yapl|ikwik|jupiteraxis|fbl|waicici|wahdfcbank|wasbi|waaxis|kotak|icici|hdfcbank|sbi|axisbank|pingpay|freecharge)\b/gi, () => { redacted = true; return '[contact info removed]'; });
   text = text.replace(/\b(instagram|insta|ig|facebook|fb|whatsapp|whats app|watsapp|whatsap|telegram|snapchat)\b\s*(?:id|handle|no\.?|number)?\s*[:@\-]?\s*@?([a-zA-Z][a-zA-Z0-9._]{2,})/gi, (m, _w, h) => {
     if (COMMON_WORDS.has(h.toLowerCase()) && !/[._@]/.test(m.slice(_w.length))) return m;   // "telegram tomorrow", "facebook group"
+    // "whatsapp later", "insta stories": no marker (: @ - id handle) and an ordinary-looking word.
+    if (!/[:@\-]|\b(id|handle)\b/i.test(m.slice(_w.length, m.length - h.length)) && !looksLikeHandle(h) && h.length < 8 && /^[a-z]+$/i.test(h) && ORDINARY.has(h.toLowerCase())) return m;
     redacted = true; return '[contact info removed]';
   });
   text = text.replace(/\b(instagram\.com|facebook\.com|fb\.com|wa\.me|t\.me)\/[a-zA-Z0-9._]+/gi, () => { redacted = true; return '[contact info removed]'; });
@@ -269,22 +271,44 @@ function removeLinksAndHandles(input) {
     const lead = '(?:\\bat\\b|@|:|\\bis\\b|\\bid\\b|\\bon\\b|\\bdash\\b|-|\\bunderscore\\b|_)';
     text = text.replace(new RegExp(`(${lead}\\s*)(${handle})`, 'gi'), (m, l, h) => {
       if (COMMON_WORDS.has(h.toLowerCase()) || ACCOUNT_WORDS.test(h)) return m;
+      // After a word (at / is / on / id / dash), only something handle-shaped
+      // goes; after a symbol (: @ - _) anything does.
+      if (/[a-z]\s*$/i.test(l) && !looksLikeHandle(h)) return m;
       redacted = true; return l + '[contact info removed]';
     });
     // "gmail tanishoswal", "insta ravi_k": the word right after the provider.
     text = text.replace(new RegExp(`(${ACCOUNT_WORDS.source}\\s+(?:id\\s+|handle\\s+|account\\s+)?)(${handle})`, 'gi'), (m, l, _w, h) => {
       if (COMMON_WORDS.has(h.toLowerCase()) || ACCOUNT_WORDS.test(h)) return m;
+      // "whatsapp later", "insta stories": an ordinary word, unless "id" / "handle" / "account" was said.
+      if (!/\b(id|handle|account)\s+$/i.test(l) && (ORDINARY.has(h.toLowerCase()) || !looksLikeHandle(h) && /(s|ed|ing|er|ly)$/i.test(h))) return m;
       redacted = true; return l + '[contact info removed]';
     });
-    text = text.replace(new RegExp(`\\b(${handle})(\\s*(?:\\(at\\)|\\bat\\b|@|\\bon\\b)?\\s*)(gmail|yahoo|outlook|hotmail|rediff|rediffmail|protonmail|proton|icloud|ymail|zoho)\\b`, 'gi'), (m, h, mid, prov) => {
+    // "send g-mail to tanishoswal", "e-mail me ravi_k22": after to / me / as /
+    // for, only a word that cannot be ordinary English goes — one with a
+    // digit, dot or underscore, or a long word with no English ending.
+    text = text.replace(new RegExp(`(\\b(?:to|me|as|for|is)\\s+)(${handle})`, 'gi'), (m, l, h) => {
+      if (COMMON_WORDS.has(h.toLowerCase()) || ACCOUNT_WORDS.test(h) || !looksLikeHandle(h)) return m;
+      redacted = true; return l + '[contact info removed]';
+    });
+    text = text.replace(new RegExp(`\\b(${handle})(\\s*(?:\\(at\\)|\\bat\\b|@|\\bon\\b)?\\s*)(g[\\s.\\-_]?mail|yahoo|outlook|hotmail|rediff|rediffmail|protonmail|proton|icloud|ymail|zoho)\\b`, 'gi'), (m, h, mid, prov) => {
       if (COMMON_WORDS.has(h.toLowerCase())) return m;
       redacted = true; return '[contact info removed]' + mid + prov;
     });
   }
   return { text, urls, redacted };
 }
+// Short everyday words that follow a messaging app's name ("whatsapp later").
+const ORDINARY = new Set('later today now please call calls group groups video videos stories story chat chats status message messages also only works working number me us you him her them it is was'.split(' '));
+// A word that is a handle rather than ordinary English: it has a digit, dot
+// or underscore in it, or it is long (8+) with no common English ending.
+function looksLikeHandle(w) {
+  if (/[0-9._]/.test(w)) return true;
+  const x = w.toLowerCase();
+  if (x.length < 8) return false;
+  return !/(ing|tion|tions|sion|ment|ments|ness|ly|ed|ful|able|ible|ance|ence|ity|ous|ive|ise|ize|ship|less|ward|wards|self|selves|one|thing|body|where|ther|ter|ers|ies|day|days|night|nights|time|times|room|rooms)$/.test(x);
+}
 // Words that say an account is being named. Matched case-insensitively.
-const ACCOUNT_WORDS = /\b(g ?mail|e-?mail|mail ?id|email ?id|yahoo|outlook|hotmail|rediff(?:mail)?|protonmail|proton ?mail|icloud|ymail|zoho|insta(?:gram)?|ig|facebook|fb|whats ?app|watsapp|whatsap|telegram|snap(?:chat)?|signal|skype|discord|twitter|x handle|linkedin|threads|messenger|user ?name|handle)\b/i;
+const ACCOUNT_WORDS = /\b(g[\s.\-_]?mail|gee[\s.\-_]?mail|jee[\s.\-_]?mail|e[\s.\-_]?mail|mail ?id|email ?id|mail|yahoo|outlook|hotmail|rediff(?:mail)?|protonmail|proton ?mail|icloud|ymail|zoho|insta(?:gram)?|ig|facebook|fb|whats ?app|watsapp|whatsap|telegram|snap(?:chat)?|signal|skype|discord|twitter|x handle|linkedin|threads|messenger|user ?name|handle)\b/i;
 // Ordinary words that can follow "at" / "is" / "on" when an account is
 // mentioned, never a handle.
 const COMMON_WORDS = new Set(('home house night noon morning evening time times least last least most once twice about after again around before check checkin checkout '
@@ -294,6 +318,8 @@ const COMMON_WORDS = new Set(('home house night noon morning evening time times 
   + 'free busy ready okay fine well soon today tomorrow tonight yesterday week weekend month year monday tuesday wednesday thursday friday saturday sunday '
   + 'sending send sent given give email mail number phone contact detail details address info information account available unavailable earliest latest group page profile link invite '
   + 'guest guests host hosts family friends kids children adults people person reach reaching call calling text texting write writing reply replying '
+  + 'breakfast lunch dinner reception parking caretaker manager housekeeping laundry kitchen bathroom bedroom balcony terrace garden lobby restaurant '
+  + 'directions instructions documents document passport invoice receipt payment payments confirmation cancellation refund deposit '
   + 'aerva india goa mumbai delhi pune bangalore bengaluru chennai kolkata hyderabad jaipur udaipur kerala lonavala alibaug coorg manali shimla rishikesh').split(/\s+/));
 const restoreLinks = (text, urls) => text.replace(/([-])/g, (_m, c) => urls[c.charCodeAt(0) - 0xE100]);
 
@@ -364,4 +390,4 @@ function splitNumberCheck(displayText, recent) {
   return total >= 10 ? pieces : null;
 }
 
-module.exports = { redactContactInfo, isProtectedUrl, digitCount, rawDigitCount, isNumberPiece, removeAllDigits, splitNumberCheck, NUMBER_REMOVED };
+module.exports = { ACCOUNT_WORDS, looksLikeHandle, redactContactInfo, isProtectedUrl, digitCount, rawDigitCount, isNumberPiece, removeAllDigits, splitNumberCheck, NUMBER_REMOVED };

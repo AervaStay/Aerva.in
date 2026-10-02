@@ -95,7 +95,8 @@ async function guardMessage(sql, { conversationId, senderType, text }) {
   // An "@", or a mention of an email or messaging account (gmail, insta,
   // telegram…), is as good a reason to look as digits are: a handle can
   // be passed in pieces just like a number.
-  const ACCOUNT = /@|\b(g ?mail|e-?mail|mail ?id|yahoo|outlook|hotmail|rediff|protonmail|icloud|insta(?:gram)?|ig|facebook|fb|whats ?app|watsapp|telegram|snap(?:chat)?|signal|skype|discord|twitter|linkedin|threads|messenger|user ?name|handle)\b/i;
+  // Same list as _redact.js (g-mail, e mail, mail id, insta, telegram…), plus "@".
+  const ACCOUNT = new RegExp('@|' + require('./_redact').ACCOUNT_WORDS.source, 'i');
   const recentAccount = recent.some(m => ACCOUNT.test(m.display_text));
   const hasAt = ACCOUNT.test(result.displayText) || recentAccount;
   // A short fragment ("tanish", "oswal", "dot k") after an account was

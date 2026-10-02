@@ -755,7 +755,9 @@ async function handleCohostModes(req, res, accountId) {
       const panProblem = bankCheck.panNameProblem(pan, panName);
       if (panProblem) { res.status(400).json({ error: panProblem }); return true; }
       if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' }); return true; }
-      if (holder.length >= 2 && bankCheck.nameMatch(panName, holder).result === 'mismatch') { res.status(400).json({ error: `The account must be in the name on your PAN (${panName}). Payouts can only go to the PAN holder’s own account.` }); return true; }
+      const coCompany = bankCheck.companyPanProblem(pan, holder);
+      if (coCompany) { res.status(400).json({ error: coCompany }); return true; }
+      if (holder.length >= 2 && bankCheck.holderMatch(panName, holder).result === 'mismatch') { res.status(400).json({ error: `The account must be in the name on your PAN (${panName}). Payouts can only go to an account the PAN holder holds, alone or jointly.` }); return true; }
       if (gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCPE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
       if (gstin && gstin.slice(2, 12) !== pan) { res.status(400).json({ error: 'Your GSTIN should contain your PAN (characters 3 to 12).' }); return true; }
       if (holder.length < 2) { res.status(400).json({ error: 'Please enter the account holder\'s name as the bank has it.' }); return true; }
@@ -3315,8 +3317,10 @@ module.exports = async (req, res) => {
         // Payouts go only to the PAN holder: an account typed in a clearly
         // different name is refused here, before any bank check.
         const typedHolder = String(bankAccountHolderName).trim().slice(0, 100);
-        if (host.pan_name && bankCheck.nameMatch(host.pan_name, typedHolder).result === 'mismatch') {
-          return res.status(400).json({ error: `The account must be in the name on your PAN (${host.pan_name}). Payouts can only go to the PAN holder’s own account.` });
+        const companyProblem = bankCheck.companyPanProblem(host.pan_number ? decryptField(host.pan_number) : null, typedHolder);
+        if (companyProblem) return res.status(400).json({ error: companyProblem });
+        if (host.pan_name && bankCheck.holderMatch(host.pan_name, typedHolder).result === 'mismatch') {
+          return res.status(400).json({ error: `The account must be in the name on your PAN (${host.pan_name}). Payouts can only go to an account the PAN holder holds, alone or jointly.` });
         }
         // Only reset PAN/Aadhaar back to pending_review if they'd
         // actually been submitted before — nothing to "re-check" for a

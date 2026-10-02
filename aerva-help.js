@@ -226,24 +226,11 @@
       + '<div class="hc-commitments">' + (s.commitments || []).map(function(c){
           return '<div class="hc-commitment"><strong>' + esc(c.title) + '</strong><span>' + esc(c.text) + '</span></div>';
         }).join('') + '</div>'
-      + grievanceBlock()
       + '<p class="policy-note">The rules behind every answer: <a href="index.html?view=policies">Aerva Policies</a> · <a href="index.html?view=terms">Terms of Service</a> · <a href="index.html?view=privacy">Privacy</a></p>';
     root.innerHTML = frame('home', html);
     wireLinks(root);
     document.title = 'Resolution Center — Aerva';
     if(token()) loadMineSummary();
-  }
-
-  function grievanceBlock(){
-    var g = S().grievanceOfficer || {};
-    if(!g.email && !g.name) return '';
-    return '<div class="hc-grievance"><h2 class="hc-h2">Grievance Officer</h2>'
-      + '<p>For a formal complaint under the Consumer Protection (E-Commerce) Rules, 2020, raise a request and choose “Formal grievance”, or write to the Grievance Officer. You receive a reference number at once; your complaint is acknowledged within 48 hours and resolved within one month of receipt.</p>'
-      + '<dl>'
-      + (g.name ? '<dt>Name</dt><dd>' + esc(g.name) + '</dd>' : '')
-      + '<dt>Designation</dt><dd>' + esc(g.designation || 'Grievance Officer') + '</dd>'
-      + (g.email ? '<dt>Email</dt><dd><a href="mailto:' + esc(g.email) + '">' + esc(g.email) + '</a></dd>' : '')
-      + '</dl></div>';
   }
 
   async function loadMineSummary(){

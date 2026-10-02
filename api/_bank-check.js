@@ -81,6 +81,49 @@ function nameMatch(a, b) {
   return { result: 'mismatch', score };
 }
 
+// A joint account: the bank may give every holder ("RAVI SHARMA & PRIYA
+// SHARMA", "RAVI SHARMA / PRIYA SHARMA", "RAVI SHARMA JT PRIYA SHARMA").
+// The PAN holder must be one of them; any one matching is enough.
+const JOINT = /\s*(?:&|\/|,|;|\+|\band\b|\bjt\.?\b|\bjoint\b|\bw\/o\b|\bor\b)\s*/i;
+function holderNames(name) {
+  return String(name || '').split(JOINT).map(x => x.trim()).filter(x => nameTokens(x).length);
+}
+const looksJoint = (name) => holderNames(name).length > 1;
+// The best match of the PAN name against any holder of the account.
+function holderMatch(panName, accountName) {
+  const order = { match: 2, partial: 1, mismatch: 0 };
+  let best = { result: 'mismatch', score: 0, holder: null };
+  // The whole name first (a business: "ABC & SONS PVT LTD"), then each holder.
+  for (const h of [accountName].concat(holderNames(accountName))) {
+    const m = nameMatch(panName, h);
+    if (order[m.result] > order[best.result] || (m.result === best.result && m.score > best.score)) best = { ...m, holder: h };
+  }
+  return best;
+}
+
+// ---- Whose account: a company or firm, a proprietor's business, or a person ----
+// A company, LLP or partnership firm is paid only against its own PAN (4th
+// letter C for a company, F for a firm or LLP, or another non-personal
+// letter). A sole proprietorship has no PAN of its own — by law it uses the
+// owner's personal PAN — so a trading name on a personal PAN goes to an admin.
+const COMPANY_WORDS = /\b(PRIVATE|LIMITED|LLP|INCORPORATED|CORPORATION|COMPANY|PARTNERS|PARTNERSHIP|PLC|LLC|OPC)\b/;
+const TRADE_WORDS = /\b(ENTERPRISES?|TRADERS?|TRADING|AGENC(Y|IES)|STORES?|HOSPITALITY|HOTELS?|RESORTS?|STAYS?|HOMESTAYS?|VILLAS?|PROPERTIES|REALTY|VENTURES?|SOLUTIONS|SERVICES|ASSOCIATES|INDUSTRIES|GROUP|HOLIDAYS?|TOURS?|TRAVELS?|INTERNATIONAL|GLOBAL|EXPORTS?|IMPEX)\b/;
+function accountKind(name) {
+  const t = nameTokens(name).join(' ');
+  if (COMPANY_WORDS.test(t)) return 'company';
+  if (TRADE_WORDS.test(t)) return 'trade';
+  return 'person';
+}
+const PERSONAL_PAN = new Set(['P', 'H']);          // a person, a HUF
+const panLetter = (pan) => { const p = String(pan || '').trim().toUpperCase(); return /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(p) ? p[3] : null; };
+// A company or firm account against a personal PAN: refused, with this message. Else null.
+function companyPanProblem(pan, accountName) {
+  if (accountKind(accountName) === 'company' && PERSONAL_PAN.has(panLetter(pan))) {
+    return 'This is a company, LLP or firm account. Payouts to it need the business’s own PAN (4th letter C for a company, F for a firm or LLP). Add the business PAN, or use an account the PAN holder holds personally.';
+  }
+  return null;
+}
+
 // The PAN's 5th letter is the first letter of the holder's surname (a
 // person) or of the business's name. A name with no part starting with that
 // letter means the PAN or the name was typed wrong. Returns an error or null.
@@ -133,13 +176,13 @@ async function loadPayee(sql, kind, key) {
     const h = (await sql`SELECT h.id, h.name, h.email, h.pan_number, h.bank_account_number, h.bank_ifsc, h.bank_account_holder_name, h.bank_status,
                                 to_jsonb(h) AS j FROM hosts h WHERE h.id = ${key}`)[0];
     if (!h) return null;
-    return { kind, key: h.id, name: h.name, email: h.email, panName: h.j.pan_name || null, holder: h.bank_account_holder_name,
+    return { kind, key: h.id, name: h.name, email: h.email, pan: decryptField(h.pan_number), panName: h.j.pan_name || null, holder: h.bank_account_holder_name,
              account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, status: h.bank_status, checkId: h.j.bank_check_id || null, checkStatus: h.j.bank_check_status || null };
   }
-  const c = (await sql`SELECT p.guest_id, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status, g.name, g.email, to_jsonb(p) AS j
+  const c = (await sql`SELECT p.guest_id, p.pan_number, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status, g.name, g.email, to_jsonb(p) AS j
                        FROM cohost_payout_profiles p JOIN guests g ON g.id = p.guest_id WHERE p.guest_id = ${key}`)[0];
   if (!c) return null;
-  return { kind, key: c.guest_id, name: c.name, email: c.email, panName: c.j.pan_name || null, holder: c.account_holder_name,
+  return { kind, key: c.guest_id, name: c.name, email: c.email, pan: decryptField(c.pan_number), panName: c.j.pan_name || null, holder: c.account_holder_name,
            account: decryptField(c.bank_account_number), ifsc: c.bank_ifsc, status: c.status, checkId: c.j.bank_check_id || null, checkStatus: c.j.bank_check_status || null };
 }
 
@@ -252,13 +295,23 @@ async function settleCheck(sql, kind, key, v) {
   // Compared with the name on the PAN; without one on file (PANs entered
   // before this check), an admin decides.
   const against = p.panName;
-  const m = against && registered ? nameMatch(against, registered) : { result: 'partial', score: null };
+  // Any holder of a joint account may be the PAN holder.
+  const m = against && registered ? holderMatch(against, registered) : { result: 'partial', score: null };
   await saveCheck(sql, kind, key, { status: 'active', registeredName: registered, match: m.result });
   let decision = 'review', why = null;
-  if (against && m.result === 'match') decision = 'approve';
+  const companyProblem = companyPanProblem(p.pan, registered);
+  if (companyProblem) { decision = 'reject'; why = companyProblem; }
+  else if (against && m.result === 'match') decision = 'approve';
+  // A trading name on a personal PAN (a sole proprietor): an admin confirms the owner.
+  else if (against && accountKind(registered) === 'trade' && PERSONAL_PAN.has(panLetter(p.pan))) decision = 'review';
   else if (against && m.result === 'mismatch') {
-    decision = 'reject';
-    why = `This account is held in the name “${registered}”. Payouts can only go to an account in the name on your PAN (${against}). Add an account in that name.`;
+    // A joint account where the bank named only the first holder: the PAN
+    // holder may be the second. An admin confirms with a passbook or statement.
+    if (looksJoint(p.holder) && !looksJoint(registered)) decision = 'review';
+    else {
+      decision = 'reject';
+      why = `This account is held in the name “${registered}”. Payouts can only go to an account the PAN holder (${against}) holds, alone or jointly. Add an account in that name.`;
+    }
   }
   await settleStatus(sql, kind, key, decision, why);
   await logAudit(sql, { action: 'bank_check_completed', success: true, actorType: 'system', actorIdentifier: 'bank-check',
@@ -322,6 +375,6 @@ function describeCheck(row) {
 }
 
 module.exports = {
-  nameTokens, nameMatch, panNameProblem, panInUseElsewhere,
+  nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
   bankDetailsChanged, startCheck, settleCheck, pollChecks, inChangeHold, describeCheck, HOLD_HOURS_AFTER_CHANGE
 };
