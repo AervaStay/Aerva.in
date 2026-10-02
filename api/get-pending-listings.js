@@ -99,7 +99,7 @@ const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout, createD
 const { disputesForAdmin, decideDispute, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
 const support = require('./_support');
 const { safeRefund } = require('./_refunds');
-const { releaseDueDeposits } = require('./_deposits');
+const { releaseDueDeposits, notifyDepositDispute } = require('./_deposits');
 const { encryptField, decryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens, maskAccount, maskPan, UNREADABLE } = require('./_secure-fields');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES, refundSubunitForInr } = require('./_currency');
@@ -548,6 +548,28 @@ module.exports = async (req, res) => {
       if (!err.isUserFacing) console.error('decideStayDispute failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not decide this dispute.' });
     }
+  }
+
+  // ---- What needs attention, per admin tab (the counts on the sidebar) ----
+  // GET ?adminSummary=1 → { counts: { listings, verifications, deposits, compliance, payouts, trust, support, batch } }
+  // Each count is worked out on its own; one that cannot be (a table not
+  // created yet) is simply left out, never failing the rest.
+  if (req.method === 'GET' && req.query.adminSummary === '1') {
+    const counts = {};
+    const count = async (key, q) => { try { counts[key] = Number((await q)[0].n) || 0; } catch (e) { /* not available yet */ } };
+    await Promise.all([
+      count('listings', sql`SELECT count(*)::int AS n FROM listings WHERE status = 'pending' OR (to_jsonb(listings)->>'rooms_pending_review')::boolean IS TRUE`),
+      count('verifications', sql`SELECT (SELECT count(*) FROM hosts WHERE aadhaar_status = 'pending_review' OR pan_status = 'pending_review' OR bank_status = 'pending_review')
+                                      + (SELECT count(*) FROM cohost_payout_profiles WHERE status = 'pending_review') AS n`),
+      count('deposits', sql`SELECT count(*)::int AS n FROM orders WHERE deposit_status = 'disputed'`),
+      count('compliance', sql`SELECT count(*)::int AS n FROM compliance_flags WHERE resolved_at IS NULL`),
+      count('payouts', sql`SELECT (SELECT count(*) FROM payouts WHERE status = 'failed') + (SELECT count(*) FROM refunds WHERE status = 'failed') AS n`),
+      count('trust', sql`SELECT count(*)::int AS n FROM stay_disputes WHERE status IN ('open', 'host_responded')`),
+      count('support', sql`SELECT count(*)::int AS n FROM support_tickets WHERE status IN ('open', 'in_progress')
+                             AND last_user_message_at IS NOT NULL AND (last_support_message_at IS NULL OR last_user_message_at > last_support_message_at)`),
+      count('batch', sql`SELECT count(*)::int AS n FROM job_runs WHERE last_ok IS FALSE`)
+    ]);
+    return res.status(200).json({ counts });
   }
 
   // ---- Support: requests raised in the Resolution Center (_support.js) ----
@@ -1443,6 +1465,7 @@ module.exports = async (req, res) => {
           targetType: 'order', targetId: orderId,
           metadata: { compensation, guestRefundAmount, refundId, payoutId }
         });
+        await notifyDepositDispute(sql, orderId, 'resolved', { compensation, refunded: guestRefundAmount });
         return res.status(200).json({ success: true, compensation, guestRefundAmount, payoutId, warning: payoutWarning });
       } catch (err) {
         console.error('get-pending-listings (resolveDispute) error:', err);
@@ -1846,6 +1869,7 @@ module.exports = async (req, res) => {
       } catch (err) { console.error('payout profiles unavailable:', err.message); }
       const orders = await sql`
         SELECT o.id, o.suite_name, o.arrival, o.departure, o.status, o.total, o.commission_amount, o.payout_amount,
+               (o.departure > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS before_checkout,
                h.id AS host_id, h.name AS host_name, h.bank_account_holder_name AS host_holder,
                h.bank_account_number AS host_account, h.bank_ifsc AS host_ifsc, h.bank_status AS host_bank_status
         FROM orders o JOIN listings l ON l.id = o.listing_id JOIN hosts h ON h.id = l.host_id
@@ -1915,6 +1939,12 @@ module.exports = async (req, res) => {
         openRefunds = await sql`SELECT r.id, r.order_id, r.kind, r.amount, r.status, r.failure_reason, r.attempts, r.created_at, o.suite_name, o.guest_email, o.charge_currency
                                 FROM refunds r JOIN orders o ON o.id = r.order_id WHERE r.status IN ('new', 'creating', 'pending', 'failed') ORDER BY r.created_at DESC LIMIT 100`;
       } catch (err) { /* migration_refunds.sql not run yet */ }
+      // Bookings whose payout is held: a stay dispute is open (Mark paid refuses these too).
+      let heldByDispute = new Set();
+      try {
+        const ids = orders.map(o => o.id);
+        if (ids.length) heldByDispute = new Set((await sql`SELECT order_id FROM stay_disputes WHERE order_id = ANY(${ids}) AND status IN ('open', 'host_responded')`).map(r => r.order_id));
+      } catch (err) { /* stay_disputes not created yet */ }
       const owedByHost = {};
       const owedByCohost = {};
       penalties.forEach(p => {
@@ -1958,6 +1988,8 @@ module.exports = async (req, res) => {
             penaltyToDeduct: Math.round(owedByHost[o.host_id] || 0),
             hostPaid: paidMap[paidKey(o.id, 'host', null)] || null,
             orderId: o.id, listing: o.suite_name, arrival: o.arrival, departure: o.departure,
+            // Not payable yet: before the check-out day, or a stay dispute is open.
+            notDue: o.before_checkout === true || o.before_checkout === 't', onHold: heldByDispute.has(o.id),
             total: Number(o.total) || 0, commission: Number(o.commission_amount) || 0,
             hostPayout: Number(o.payout_amount) || 0, hostNet: (Number(o.payout_amount) || 0) - coTotal,
             host: { name: o.host_name, holder: o.host_holder, account: readableForAdmin(o.host_account), ifsc: o.host_ifsc,
@@ -2034,6 +2066,14 @@ module.exports = async (req, res) => {
         WHERE o.deposit_status = 'disputed'
         ORDER BY o.dispute_raised_at ASC
       `;
+      // The guest's side, if they sent it as a Resolution Center request on the booking.
+      if (disputes.length) {
+        try {
+          const reqs = await sql`SELECT id, ref, order_id, status, subject FROM support_tickets
+                                 WHERE order_id = ANY(${disputes.map(d => d.id)}) ORDER BY created_at DESC`;
+          for (const d of disputes) d.guestRequests = reqs.filter(r => r.order_id === d.id).map(r => ({ id: r.id, ref: r.ref, status: r.status, subject: r.subject }));
+        } catch (e) { /* support tables not created yet */ }
+      }
       return res.status(200).json({ disputes });
     } catch (err) {
       console.error('get-pending-listings (disputes) error:', err);

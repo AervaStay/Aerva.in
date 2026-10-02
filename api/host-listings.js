@@ -2382,6 +2382,8 @@ module.exports = async (req, res) => {
         action: 'deposit_dispute_raised', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
         targetType: 'order', targetId: orderId
       });
+      // The guest is told and invited to give their side; the support inbox is alerted.
+      await require('./_deposits').notifyDepositDispute(sql, orderId, 'raised');
 
       return res.status(200).json({ success: true });
     } catch (err) {

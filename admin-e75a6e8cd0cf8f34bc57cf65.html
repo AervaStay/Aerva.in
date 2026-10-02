@@ -137,14 +137,36 @@
     padding:9px 14px; font-size:12px; cursor:pointer; border-radius:4px; color:#1c1a17;
   }
   .admin-content{flex:1 1 auto; min-width:0;}
+  /* Sidebar groups, the "i" beside each section, and what needs attention. */
+  .admin-sidebar{flex-basis:230px;}
+  .admin-sidebar-nav{gap:16px;}
+  .nav-group{display:flex; flex-direction:column; gap:5px;}
+  .nav-group-label{font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#8a6c39; margin:0 2px 2px;}
+  .tab-row{position:relative;}
+  .tab-row .tab-btn{height:100%;}
+  .admin-sidebar .tab-row .tab-btn{padding-right:64px; display:flex; align-items:center; gap:8px;}
+  .tab-count{margin-left:auto; min-width:20px; height:20px; padding:0 6px; border-radius:999px; background:#a3402f; color:#fff;
+             font-size:11.5px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box;}
+  .tab-count[hidden]{display:none;}
+  .tab-btn.active .tab-count{background:#f4eadc; color:#1c1a17;}
+  .tab-info{position:absolute; right:8px; top:50%; transform:translateY(-50%); width:22px; height:22px; border-radius:50%;
+            border:1px solid #cdbb9c; background:#fff; color:#8a6c39; font:600 12px/20px Georgia, serif; font-style:italic;
+            cursor:help; padding:0; text-align:center;}
+  .tab-info:hover, .tab-info:focus-visible, .tab-info[aria-expanded="true"]{background:#8a6c39; color:#fff; border-color:#8a6c39; outline:none;}
+  .tab-tip{position:fixed; z-index:1000; max-width:320px; background:#1c1a17; color:#f4eadc; font-size:13px; line-height:1.55;
+           padding:12px 14px; border-radius:8px; box-shadow:0 10px 28px rgba(0,0,0,0.22); pointer-events:none;}
+  .tab-tip strong{display:block; font-family:'Bodoni Moda', serif; font-weight:500; font-size:15px; margin-bottom:4px; color:#fff;}
+  .tab-tip[hidden]{display:none;}
   /* Narrow screens: back to a wrapping row, which is the right shape there. */
   @media (max-width:880px){
     /* stretch, not flex-start: a column of flex-start items is as wide as
        its widest unbreakable content, which pushed the page sideways. */
     .admin-layout{flex-direction:column; align-items:stretch; gap:14px;}
     .admin-sidebar{position:static; flex:1 1 auto; width:100%;}
-    .admin-sidebar-nav{flex-direction:row; flex-wrap:wrap;}
-    .admin-sidebar .tab-btn{width:auto;}
+    .admin-sidebar-nav{display:grid; grid-template-columns:1fr 1fr; gap:10px 8px;}
+    .nav-group{display:contents;}
+    .nav-group-label{grid-column:1 / -1; margin-top:6px;}
+    .admin-sidebar .tab-btn{width:100%;}
     .admin-refresh-btn{width:auto;}
   }
   .deposit-section{background:white; border:1px solid #e0d5c0; padding:20px; margin-bottom:20px;}
@@ -300,21 +322,37 @@
   <div class="admin-layout">
   <nav class="admin-sidebar" aria-label="Admin sections">
     <div class="admin-sidebar-nav">
-      <button class="tab-btn active" id="tabListingsBtn" onclick="switchTab('listings')">Pending Listings</button>
-      <button class="tab-btn" id="tabLiveBtn" onclick="switchTab('live')">Live Listings</button>
-      <button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications</button>
-      <button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits</button>
-      <button class="tab-btn" id="tabComplianceBtn" onclick="switchTab('compliance')">Compliance</button>
-      <button class="tab-btn" id="tabPolicyBtn" onclick="switchTab('policy')">Review Policy</button>
-      <button class="tab-btn" id="tabSimulatorBtn" onclick="switchTab('simulator')">Simulator</button>
-      <button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs</button>
-      <button class="tab-btn" id="tabTrafficBtn" onclick="switchTab('traffic')">Traffic</button>
-      <button class="tab-btn" id="tabPayoutsBtn" onclick="switchTab('payouts')">Payouts</button>
-      <button class="tab-btn" id="tabTrustBtn" onclick="switchTab('trust')">Guest Safety</button>
-      <button class="tab-btn" id="tabSupportBtn" onclick="switchTab('support')">Support</button>
-      <button class="tab-btn" id="tabAuditBtn" onclick="switchTab('audit')">Audit Log</button>
-      <button class="tab-btn" id="tabPoliciesBtn" onclick="switchTab('policies')">Policies</button>
+      <div class="nav-group" role="group" aria-label="Listings">
+        <div class="nav-group-label">Listings</div>
+        <div class="tab-row"><button class="tab-btn active" id="tabListingsBtn" onclick="switchTab('listings')">Pending Listings<span class="tab-count" data-count="listings" hidden></span></button><button type="button" class="tab-info" data-info="listings" aria-label="What Pending Listings is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabLiveBtn" onclick="switchTab('live')">Live Listings<span class="tab-count" data-count="live" hidden></span></button><button type="button" class="tab-info" data-info="live" aria-label="What Live Listings is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabComplianceBtn" onclick="switchTab('compliance')">Compliance<span class="tab-count" data-count="compliance" hidden></span></button><button type="button" class="tab-info" data-info="compliance" aria-label="What Compliance is for">i</button></div>
+      </div>
+      <div class="nav-group" role="group" aria-label="Hosts and money">
+        <div class="nav-group-label">Hosts and money</div>
+        <div class="tab-row"><button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications<span class="tab-count" data-count="verifications" hidden></span></button><button type="button" class="tab-info" data-info="verifications" aria-label="What ID Verifications is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabPayoutsBtn" onclick="switchTab('payouts')">Payouts<span class="tab-count" data-count="payouts" hidden></span></button><button type="button" class="tab-info" data-info="payouts" aria-label="What Payouts is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits<span class="tab-count" data-count="deposits" hidden></span></button><button type="button" class="tab-info" data-info="deposits" aria-label="What Security Deposits is for">i</button></div>
+      </div>
+      <div class="nav-group" role="group" aria-label="Guests and support">
+        <div class="nav-group-label">Guests and support</div>
+        <div class="tab-row"><button class="tab-btn" id="tabSupportBtn" onclick="switchTab('support')">Support<span class="tab-count" data-count="support" hidden></span></button><button type="button" class="tab-info" data-info="support" aria-label="What Support is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabTrustBtn" onclick="switchTab('trust')">Guest Safety<span class="tab-count" data-count="trust" hidden></span></button><button type="button" class="tab-info" data-info="trust" aria-label="What Guest Safety is for">i</button></div>
+      </div>
+      <div class="nav-group" role="group" aria-label="Reviews and badges">
+        <div class="nav-group-label">Reviews and badges</div>
+        <div class="tab-row"><button class="tab-btn" id="tabPolicyBtn" onclick="switchTab('policy')">Review Policy<span class="tab-count" data-count="policy" hidden></span></button><button type="button" class="tab-info" data-info="policy" aria-label="What Review Policy is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabSimulatorBtn" onclick="switchTab('simulator')">Simulator<span class="tab-count" data-count="simulator" hidden></span></button><button type="button" class="tab-info" data-info="simulator" aria-label="What Simulator is for">i</button></div>
+      </div>
+      <div class="nav-group" role="group" aria-label="System">
+        <div class="nav-group-label">System</div>
+        <div class="tab-row"><button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs<span class="tab-count" data-count="batch" hidden></span></button><button type="button" class="tab-info" data-info="batch" aria-label="What Batch Jobs is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabTrafficBtn" onclick="switchTab('traffic')">Traffic<span class="tab-count" data-count="traffic" hidden></span></button><button type="button" class="tab-info" data-info="traffic" aria-label="What Traffic is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabAuditBtn" onclick="switchTab('audit')">Audit Log<span class="tab-count" data-count="audit" hidden></span></button><button type="button" class="tab-info" data-info="audit" aria-label="What Audit Log is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabPoliciesBtn" onclick="switchTab('policies')">Policies<span class="tab-count" data-count="policies" hidden></span></button><button type="button" class="tab-info" data-info="policies" aria-label="What Policies is for">i</button></div>
+      </div>
     </div>
+    <div class="tab-tip" id="tabTip" role="tooltip" hidden></div>
     <button type="button" class="admin-refresh-btn" onclick="refreshCurrentView()" title="This page only loads data once, on login — nothing here updates live, so a host's new submission or room-change request won't appear until you refresh.">⟳ Refresh</button>
   </nav>
 
@@ -782,6 +820,7 @@
 
   function logout(){
     localStorage.removeItem(SESSION_STORAGE_KEY);
+    try{ localStorage.removeItem('aerva_admin_name'); }catch(e){}
     sessionToken = '';
     currentAdmin = null;
     document.getElementById('mainView').style.display = 'none';
@@ -808,10 +847,14 @@
     document.getElementById('gate').style.display = 'none';
     document.getElementById('mainView').style.display = 'block';
     const greeting = document.getElementById('adminGreeting');
-    greeting.innerHTML = (currentAdmin ? 'Logged in as ' + escAdmin(currentAdmin.name || currentAdmin.email) : '') +
+    if(currentAdmin) try{ localStorage.setItem('aerva_admin_name', currentAdmin.name || currentAdmin.email || ''); }catch(e){}
+    let who = currentAdmin ? (currentAdmin.name || currentAdmin.email) : '';
+    if(!who) try{ who = localStorage.getItem('aerva_admin_name') || ''; }catch(e){}
+    greeting.innerHTML = (who ? 'Logged in as ' + escAdmin(who) : 'Logged in') +
       ' — <a href="#" onclick="logout(); return false;" style="color:#8a6c39;">Log out</a>' +
       ' · <a href="#" onclick="signOutEverywhere(); return false;" style="color:#8a6c39;">Sign out everywhere</a>';
     loadListings();
+    loadAdminSummary(true);
   }
 
   // Resume an existing session automatically (e.g. a page refresh)
@@ -1839,14 +1882,21 @@
         <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;">
           <div><strong>${escAdmin(o.listing || '')}</strong> · ${payDate(o.arrival)} → ${payDate(o.departure)} · booking #${Number(o.orderId)}</div>
           <div style="opacity:0.75; margin:4px 0;">Guest paid ${payInr(o.total)} · Aerva commission ${payInr(o.commission)} · host payout ${payInr(o.hostPayout)}</div>
-          ${(o.cohosts || []).map(c => `<div>Co-host <strong>${escAdmin(c.name)}</strong> (${Number(c.percent)}%) — <strong>${payInr(c.amount)}</strong> → ${payeeLine(c)}</div>${c.penaltyToDeduct && !c.paid ? `<div style="color:#a3402f;">Owes ${payInr(c.penaltyToDeduct)} in cancellation coupons: tick “deduct” when marking this paid.</div>` : ''}${payoutControl(o.orderId, 'cohost', c.guestId, c.paid, c.penaltyToDeduct)}`).join('')}
+          ${(o.cohosts || []).map(c => `<div>Co-host <strong>${escAdmin(c.name)}</strong> (${Number(c.percent)}%) — <strong>${payInr(c.amount)}</strong> → ${payeeLine(c)}</div>${c.penaltyToDeduct && !c.paid ? `<div style="color:#a3402f;">Owes ${payInr(c.penaltyToDeduct)} in cancellation coupons: tick “deduct” when marking this paid.</div>` : ''}${payoutGate(o, c.paid) || payoutControl(o.orderId, 'cohost', c.guestId, c.paid, c.penaltyToDeduct)}`).join('')}
           <div>Host <strong>${escAdmin(o.host && o.host.name || '')}</strong> — <strong>${payInr(o.hostNet)}</strong> → ${payeeLine(o.host)}</div>
           ${o.penaltyToDeduct && !o.hostPaid ? `<div style="color:#a3402f;">Owes ${payInr(o.penaltyToDeduct)} in cancellation coupons: tick “deduct” when marking this paid.</div>` : ''}
-          ${payoutControl(o.orderId, 'host', null, o.hostPaid, o.penaltyToDeduct)}
+          ${payoutGate(o, o.hostPaid) || payoutControl(o.orderId, 'host', null, o.hostPaid, o.penaltyToDeduct)}
         </div>`).join('') : '<p style="opacity:0.6;">No paid bookings yet.</p>';
     }catch(err){
       profilesEl.innerHTML = listEl.innerHTML = document.getElementById('depositPayoutsList').innerHTML = '<p style="color:#a3402f;">' + escAdmin(err.message) + '</p>';
     }
+  }
+  // Not payable yet: shown instead of Mark paid (the server refuses these too).
+  function payoutGate(o, paid){
+    if(paid && (paid.status === 'sent' || paid.status === 'processing')) return '';
+    if(o.onHold) return `<div style="color:#8a6c39; font-size:13.5px; margin:4px 0 10px;">On hold: a problem reported on this stay is open. Decide it in Guest Safety first.</div>`;
+    if(o.notDue) return `<div style="opacity:0.65; font-size:13.5px; margin:4px 0 10px;">Not due yet: payable from check-out day (${payDate(o.departure)}).</div>`;
+    return '';
   }
   // Mark paid: record a payout sent by hand; the host / co-host is emailed
   // and notified on the website with the payout summary.
@@ -2037,7 +2087,89 @@
       + P.localLaws.countries.map(c => '<div class="pol-sec"><h3>' + escAdmin(c.country) + '</h3>' + list(c.points)
           + (c.states ? list(c.states.map(st => st.state + ': ' + st.text)) : '') + '</div>').join('');
   }
+  // ---- What each section is for: the "i" beside every tab ----
+  const TAB_INFO = {
+    listings: ['Pending Listings', 'New listings and room changes waiting for review. Check the photos, location, price and description, then Approve (it goes live and the host is emailed) or Reject with a reason (the host is emailed and can fix and resubmit).'],
+    live: ['Live Listings', 'Every approved listing. Block pauses one (reversible); Remove takes it down. Also here: photos removed for showing contact details (with Restore), new photos taken far from the pin, and a photo test.'],
+    compliance: ['Compliance', 'Check every approved listing against one requirement. Listings that fail get a flag and 14 days to fix it; the daily job blocks them after the deadline. Open flags clear when the host fixes and saves.'],
+    verifications: ['ID Verifications', 'Host Aadhaar, PAN and bank details waiting for a human check. Approve or reject each one; the document is erased once reviewed. A host is paid only once their PAN and bank account are verified.'],
+    payouts: ['Payouts', 'What each host and co-host is owed per booking, and Mark paid for payouts sent by hand. Also: refunds that need a retry, deposit compensation, cancellation coupons owed by hosts, co-host payout details to review, and the TDS report.'],
+    deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the 7-day damage window has ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
+    support: ['Support', 'Requests from the Resolution Center. Reply within 48 hours and resolve within a month; safety requests are listed first. Replies are emailed to the person; internal notes are never shown to them.'],
+    trust: ['Guest Safety', 'Problems guests reported during a stay, with the host’s reply. Decide refund or no refund; the host’s payout for the booking is held until you do. Also: feedback hosts sent from their dashboard.'],
+    policy: ['Review Policy', 'Internal rules for reviews, badges and standing, with every threshold. Never shown to guests or hosts.'],
+    simulator: ['Simulator', 'Run hypothetical numbers through the real guest, host and property ladders to see which badge they would earn.'],
+    batch: ['Batch Jobs', 'Everything that runs on its own: payouts, refunds, deposit refunds, cancellations, reviews, calendar sync and more, with each job’s last run and result. Use Run now only when a job shows a failure.'],
+    traffic: ['Traffic', 'Visits per day, and checkouts started but never paid in the last 30 days.'],
+    audit: ['Audit Log', 'Every admin, host, co-host, guest and system action, searchable by person, action and date, and exportable as CSV. Nothing in it is ever deleted.'],
+    policies: ['Policies', 'Every policy exactly as guests and hosts see it, plus admin notes and the open items the business still has to close.']
+  };
+  const tabTip = () => document.getElementById('tabTip');
+  var tipFor = null, tipShownAt = 0;
+  function showTabTip(btn){
+    const info = TAB_INFO[btn.dataset.info];
+    const tip = tabTip();
+    if(!info || !tip) return;
+    tip.innerHTML = '<strong>' + escAdmin(info[0]) + '</strong>' + escAdmin(info[1]);
+    tip.hidden = false;
+    document.querySelectorAll('.tab-info[aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+    btn.setAttribute('aria-expanded', 'true');
+    btn.setAttribute('aria-describedby', 'tabTip');
+    tipFor = btn; tipShownAt = Date.now();
+    // Beside the icon when there is room, otherwise below it; always on screen.
+    const r = btn.getBoundingClientRect(), w = Math.min(320, window.innerWidth - 24);
+    tip.style.maxWidth = w + 'px';
+    const th = tip.offsetHeight, tw = tip.offsetWidth;
+    let left = r.right + 12, top = r.top + r.height / 2 - 22;
+    if(left + tw > window.innerWidth - 12){ left = Math.max(12, Math.min(r.right - tw, window.innerWidth - tw - 12)); top = r.bottom + 8; }
+    if(top + th > window.innerHeight - 12) top = Math.max(12, r.top - th - 8);
+    tip.style.left = left + 'px'; tip.style.top = Math.max(12, top) + 'px';
+  }
+  function hideTabTip(){
+    const tip = tabTip();
+    if(tip) tip.hidden = true;
+    if(tipFor){ tipFor.setAttribute('aria-expanded', 'false'); tipFor.removeAttribute('aria-describedby'); }
+    tipFor = null;
+  }
+  document.querySelectorAll('.tab-info').forEach(btn => {
+    btn.setAttribute('aria-expanded', 'false');
+    btn.addEventListener('mouseenter', () => showTabTip(btn));
+    btn.addEventListener('mouseleave', () => { if(document.activeElement !== btn) hideTabTip(); });
+    btn.addEventListener('focus', () => showTabTip(btn));
+    btn.addEventListener('blur', hideTabTip);
+    // A tap (phones): show it, tap again to hide. Never switches the tab.
+    btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if(tipFor === btn && !tabTip().hidden && Date.now() - tipShownAt > 400){ hideTabTip(); btn.blur(); } else showTabTip(btn); });
+  });
+  document.addEventListener('keydown', (e) => { if(e.key === 'Escape') hideTabTip(); });
+  window.addEventListener('scroll', hideTabTip, { passive: true });
+  window.addEventListener('resize', hideTabTip);
+
+  // ---- What needs attention: the counts beside the tabs ----
+  var summaryAt = 0;   // var: enterAdmin can run before this line is reached
+  async function loadAdminSummary(force){
+    if(!sessionToken) return;
+    if(!force && Date.now() - summaryAt < 15000) return;   // at most every 15 seconds
+    summaryAt = Date.now();
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?adminSummary=1', { headers: authHeaders() });
+      if(!res.ok) return;
+      const counts = (await res.json()).counts || {};
+      document.querySelectorAll('.tab-count').forEach(el => {
+        const n = Number(counts[el.dataset.count]) || 0;
+        el.hidden = !n;
+        el.textContent = n > 99 ? '99+' : String(n);
+        const label = el.parentElement.firstChild.textContent.trim();
+        el.setAttribute('aria-label', n + ' need attention');
+        el.title = n + ' ' + (el.dataset.count === 'batch' ? 'job' + (n === 1 ? '' : 's') + ' failing' : 'waiting') + ' in ' + label;
+      });
+    }catch(e){ /* counts are a convenience */ }
+  }
+
+  var currentTab = 'listings';
   function switchTab(tab){
+    currentTab = tab;
+    hideTabTip();
+    loadAdminSummary();
     document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
     document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
     document.getElementById('tabVerificationsBtn').classList.toggle('active', tab === 'verifications');
@@ -2090,17 +2222,10 @@
   // "tell it to reload" button, refreshing whichever tab is currently
   // showing rather than all four at once.
   function refreshCurrentView(){
-    if(document.getElementById('tabListingsBtn').classList.contains('active')) loadListings();
-    else if(document.getElementById('tabLiveBtn').classList.contains('active')) loadLiveListings();
-    else if(document.getElementById('tabVerificationsBtn').classList.contains('active')) loadVerifications();
-    else if(document.getElementById('tabDepositsBtn').classList.contains('active')) loadDisputes();
-    else if(document.getElementById('tabComplianceBtn').classList.contains('active')) loadComplianceFlags();
-    else if(document.getElementById('tabPolicyBtn').classList.contains('active')) loadReviewPolicy();
-    else if(document.getElementById('tabSimulatorBtn').classList.contains('active')) loadReviewPolicy();
-    // The Batch tab fetches nothing on open, so Refresh just clears the
-    // last run's output rather than re-running a job by surprise.
-    else if(document.getElementById('tabBatchBtn').classList.contains('active')) document.getElementById('batchResults').innerHTML = '';
-    else if(document.getElementById('tabTrafficBtn').classList.contains('active')) loadTraffic();
+    // The same load the tab does when it is opened, plus the sidebar counts.
+    if(currentTab === 'audit') loadAudit(true);
+    else switchTab(currentTab);
+    loadAdminSummary();
   }
 
   const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -2717,6 +2842,9 @@
           <h4>${escAdmin(d.suite_name)} — ${fmt(d.deposit_amount)} deposit</h4>
           <div class="dispute-meta">${escAdmin(dateRange)} · Host: ${escAdmin(d.host_name)} (${escAdmin(d.host_email)}) · Guest: ${escAdmin(d.guest_email)}</div>
           <div class="dispute-reason-box">"${escAdmin(d.dispute_reason)}"</div>
+          <div class="dispute-meta" style="margin:-4px 0 10px;">Raised ${escAdmin(fmtDate(d.dispute_raised_at))} · ${(d.guestRequests || []).length
+            ? 'Guest’s side: ' + d.guestRequests.map(r => `<a href="#" onclick="switchTab('support'); openSupport(${Number(r.id)}); return false;" style="color:#8a6c39;">${escAdmin(r.ref)}</a> (${escAdmin(r.subject)})`).join(', ')
+            : 'The guest has been emailed and can send their side as a Support request; none yet.'}</div>
           <div class="resolve-row">
             <label style="font-size:12.5px;">Compensate host ₹</label>
             <input type="number" id="compensation-${Number(d.id)}" min="0" max="${Number(d.deposit_amount)}" placeholder="0">
