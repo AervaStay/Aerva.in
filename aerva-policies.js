@@ -532,29 +532,32 @@ window.AERVA_POLICIES = {
 
     // The form's "What is this about?" list. Keys must match CATEGORIES in
     // api/_support.js. audience: 'guest', 'host' (hosts only) or 'both'.
+    // booking / listing: 'required', 'optional' or 'none'; bookingAs: whose
+    // booking — 'guest' (their trips), 'host' (at their listings) or 'any'.
+    // Same rules as api/_support.js; the server enforces them.
     categories: [
-      { key: 'booking_payment',       label: 'Booking or payment',                    audience: 'guest' },
-      { key: 'cancellation_refund',   label: 'Cancellation or refund',                audience: 'guest' },
-      { key: 'change_booking',        label: 'Changing a booking',                    audience: 'guest' },
-      { key: 'stay_problem',          label: 'Problem during a stay or experience',   audience: 'guest' },
-      { key: 'deposit_damage',        label: 'Security deposit',                      audience: 'guest' },
-      { key: 'coupon',                label: 'Coupon',                                audience: 'guest' },
-      { key: 'host_conduct',          label: 'A host’s behaviour',                    audience: 'guest' },
-      { key: 'payout_tds',            label: 'Payouts and TDS',                       audience: 'host' },
-      { key: 'listing_photos',        label: 'Listing, photos or approval',           audience: 'host' },
-      { key: 'calendar_availability', label: 'Calendar and availability',             audience: 'host' },
-      { key: 'damage_claim',          label: 'Damage claim',                          audience: 'host' },
-      { key: 'guest_conduct',         label: 'A guest’s behaviour',                   audience: 'host' },
-      { key: 'cohosting',             label: 'Co-hosting',                            audience: 'host' },
-      { key: 'verification',          label: 'PAN, bank or Aadhaar verification',     audience: 'host' },
-      { key: 'safety',                label: 'Safety concern',                        audience: 'both' },
-      { key: 'off_platform',          label: 'Asked to pay or talk outside Aerva',    audience: 'both' },
-      { key: 'account_signin',        label: 'Account and sign-in',                   audience: 'both' },
-      { key: 'reviews_badges',        label: 'Reviews and badges',                    audience: 'both' },
-      { key: 'report_content',        label: 'Report a listing, review or message',   audience: 'both' },
-      { key: 'privacy_data',          label: 'My personal data',                      audience: 'both' },
-      { key: 'grievance',             label: 'Formal grievance (Grievance Officer)',  audience: 'both' },
-      { key: 'other',                 label: 'Something else',                        audience: 'both' }
+      { key: 'booking_payment',       label: 'Booking or payment',                    audience: 'guest', booking: 'optional', bookingAs: 'guest', listing: 'none' },
+      { key: 'cancellation_refund',   label: 'Cancellation or refund',                audience: 'guest', booking: 'required', bookingAs: 'any', listing: 'none' },
+      { key: 'change_booking',        label: 'Changing a booking',                    audience: 'guest', booking: 'required', bookingAs: 'guest', listing: 'none' },
+      { key: 'stay_problem',          label: 'Problem during a stay or experience',   audience: 'guest', booking: 'required', bookingAs: 'guest', listing: 'none' },
+      { key: 'deposit_damage',        label: 'Security deposit',                      audience: 'guest', booking: 'required', bookingAs: 'guest', listing: 'none' },
+      { key: 'coupon',                label: 'Coupon',                                audience: 'guest', booking: 'optional', bookingAs: 'guest', listing: 'none' },
+      { key: 'host_conduct',          label: 'A host’s behaviour',                    audience: 'guest', booking: 'optional', bookingAs: 'guest', listing: 'none' },
+      { key: 'payout_tds',            label: 'Payouts and TDS',                       audience: 'host', booking: 'optional', bookingAs: 'host', listing: 'none' },
+      { key: 'listing_photos',        label: 'Listing, photos or approval',           audience: 'host', booking: 'none', bookingAs: 'any', listing: 'required' },
+      { key: 'calendar_availability', label: 'Calendar and availability',             audience: 'host', booking: 'none', bookingAs: 'any', listing: 'required' },
+      { key: 'damage_claim',          label: 'Damage claim',                          audience: 'host', booking: 'required', bookingAs: 'host', listing: 'none' },
+      { key: 'guest_conduct',         label: 'A guest’s behaviour',                   audience: 'host', booking: 'required', bookingAs: 'host', listing: 'none' },
+      { key: 'cohosting',             label: 'Co-hosting',                            audience: 'host', booking: 'none', bookingAs: 'any', listing: 'optional' },
+      { key: 'verification',          label: 'PAN, bank or Aadhaar verification',     audience: 'host', booking: 'none', bookingAs: 'any', listing: 'none' },
+      { key: 'safety',                label: 'Safety concern',                        audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
+      { key: 'off_platform',          label: 'Asked to pay or talk outside Aerva',    audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'none' },
+      { key: 'account_signin',        label: 'Account and sign-in',                   audience: 'both', booking: 'none', bookingAs: 'any', listing: 'none' },
+      { key: 'reviews_badges',        label: 'Reviews and badges',                    audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
+      { key: 'report_content',        label: 'Report a listing, review or message',   audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'none' },
+      { key: 'privacy_data',          label: 'My personal data',                      audience: 'both', booking: 'none', bookingAs: 'any', listing: 'none' },
+      { key: 'grievance',             label: 'Formal grievance (Grievance Officer)',  audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
+      { key: 'other',                 label: 'Something else',                        audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' }
     ],
 
     // Help topics. group: 'guest', 'host' or 'everyone'. category: what the

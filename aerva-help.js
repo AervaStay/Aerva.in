@@ -334,24 +334,15 @@
       return esc(b.name || 'Booking') + ' · ' + esc(dayOnly(b.arrival)) + (b.departure ? ' – ' + esc(dayOnly(b.departure)) : '')
         + (b.code ? ' · ' + esc(b.code) : ' · #' + esc(b.id)) + (b.status && b.status !== 'paid' ? ' (' + esc(b.status) + ')' : '');
     };
-    var bOpt = function(b){ return '<option value="' + esc(b.id) + '"' + (String(b.id) === wantOrder ? ' selected' : '') + '>' + bLabel(b) + '</option>'; };
     var bookings = (o.bookings || []), hostBookings = (o.hostBookings || []);
-    var bookingSelect = '<option value="">Not about a booking</option>'
-      + (bookings.length ? '<optgroup label="My trips">' + bookings.map(bOpt).join('') + '</optgroup>' : '')
-      + (hostBookings.length ? '<optgroup label="Bookings at my listings">' + hostBookings.map(bOpt).join('') + '</optgroup>' : '');
-    var wantListing = String(q.get('listing') || '');
-    var listings = o.listings || [];
-    var listingField = (o.isHost && listings.length)
-      ? '<div class="hc-field"><label for="hcListing">Which listing? <span class="label-hint">(optional)</span></label>'
-        + '<select id="hcListing"><option value="">Not about a listing</option>'
-        + listings.map(function(l){ return '<option value="' + esc(l.id) + '"' + (String(l.id) === wantListing ? ' selected' : '') + '>' + esc(l.name || ('Listing #' + l.id)) + '</option>'; }).join('')
-        + '</select></div>' : '';
+    var listings = (o.isHost && o.listings) || [];
+    var chosen = { order: String(q.get('order') || ''), listing: String(q.get('listing') || '') };
+    var ruleFor = function(key){ return cats.filter(function(c){ return c.key === key; })[0] || null; };
 
     var form = '<form class="hc-form" id="hcForm" novalidate>'
       + '<div class="hc-field"><label for="hcCategory">What is it about?</label><select id="hcCategory" required>' + catSelect + '</select>'
       + '<p class="hc-hint" id="hcTopicHint"></p></div>'
-      + '<div class="hc-field"><label for="hcOrder">Which booking? <span class="label-hint">(choose one if it is about a booking)</span></label><select id="hcOrder">' + bookingSelect + '</select></div>'
-      + listingField
+      + '<div id="hcLinks"></div>'
       + '<div class="hc-field"><label for="hcSubject">Title</label><input type="text" id="hcSubject" maxlength="' + SUBJECT_MAX + '" placeholder="For example: No hot water since check-in" autocomplete="off"></div>'
       + '<div class="hc-field"><label for="hcBody">What happened?</label>'
       + '<textarea id="hcBody" rows="8" maxlength="' + BODY_MAX + '" placeholder="What happened, when, what you have tried, and what you would like to happen."></textarea>'
@@ -375,6 +366,55 @@
       wireLinks(hint);
     };
     cat.addEventListener('change', showHint); showHint();
+
+    // Which booking or listing: follows the category. A guest topic offers
+    // the person's own trips; a host topic offers bookings at their listings,
+    // or their listings. A booking already names its listing, so once one is
+    // chosen the listing field goes. Same rules as api/_support.js.
+    var links = document.getElementById('hcLinks');
+    var linkProblem = '';
+    var drawLinks = function(){
+      var r = ruleFor(cat.value);
+      linkProblem = '';
+      if(!r){ links.innerHTML = ''; return; }
+      var html = '';
+      var mine = r.bookingAs === 'host' ? [] : bookings;
+      var theirs = r.bookingAs === 'guest' ? [] : hostBookings;
+      var eligible = mine.concat(theirs);
+      if(!eligible.some(function(b){ return String(b.id) === chosen.order; })) chosen.order = '';
+      if(r.booking !== 'none'){
+        if(eligible.length){
+          var bOpt = function(b){ return '<option value="' + esc(b.id) + '"' + (String(b.id) === chosen.order ? ' selected' : '') + '>' + bLabel(b) + '</option>'; };
+          html += '<div class="hc-field"><label for="hcOrder">' + (r.bookingAs === 'host' ? 'Which booking at your listing?' : 'Which booking?')
+            + (r.booking === 'optional' ? ' <span class="label-hint">(optional)</span>' : '') + '</label><select id="hcOrder">'
+            + '<option value="">' + (r.booking === 'required' ? 'Choose…' : 'Not about a booking') + '</option>'
+            + (mine.length ? (theirs.length ? '<optgroup label="My trips">' : '') + mine.map(bOpt).join('') + (theirs.length ? '</optgroup>' : '') : '')
+            + (theirs.length ? (mine.length ? '<optgroup label="Bookings at my listings">' : '') + theirs.map(bOpt).join('') + (mine.length ? '</optgroup>' : '') : '')
+            + '</select></div>';
+        } else if(r.booking === 'required'){
+          linkProblem = r.bookingAs === 'host' ? 'There are no bookings at your listings to choose. Choose another topic, or write to us.'
+                                               : 'You have no bookings to choose for this. Choose another topic, or write to us.';
+          html += '<p class="hc-hint hc-link-note">' + esc(linkProblem) + '</p>';
+        }
+      }
+      if(!listings.some(function(l){ return String(l.id) === chosen.listing; })) chosen.listing = '';
+      if(r.listing !== 'none' && !chosen.order){
+        if(listings.length){
+          html += '<div class="hc-field"><label for="hcListing">Which listing?' + (r.listing === 'optional' ? ' <span class="label-hint">(optional)</span>' : '') + '</label>'
+            + '<select id="hcListing"><option value="">' + (r.listing === 'required' ? 'Choose…' : 'Not about a listing') + '</option>'
+            + listings.map(function(l){ return '<option value="' + esc(l.id) + '"' + (String(l.id) === chosen.listing ? ' selected' : '') + '>' + esc(l.name || ('Listing #' + l.id)) + '</option>'; }).join('')
+            + '</select></div>';
+        } else if(r.listing === 'required'){
+          linkProblem = 'This is about a listing, and your account has none. Choose another topic, or write to us.';
+          html += '<p class="hc-hint hc-link-note">' + esc(linkProblem) + '</p>';
+        }
+      }
+      links.innerHTML = html;
+      var orderEl = document.getElementById('hcOrder'), listingEl = document.getElementById('hcListing');
+      if(orderEl) orderEl.addEventListener('change', function(){ chosen.order = orderEl.value; if(chosen.order) chosen.listing = ''; drawLinks(); });
+      if(listingEl) listingEl.addEventListener('change', function(){ chosen.listing = listingEl.value; });
+    };
+    cat.addEventListener('change', drawLinks); drawLinks();
     var body = document.getElementById('hcBody'), count = document.getElementById('hcCount');
     body.addEventListener('input', function(){ count.textContent = body.value.length; });
     var picked = wireFilePicker('hcFiles');
@@ -388,6 +428,10 @@
       var subject = document.getElementById('hcSubject').value.trim();
       var text = body.value.trim();
       if(!cat.value) return fail('Choose what your request is about.');
+      var rule = ruleFor(cat.value) || {};
+      if(linkProblem) return fail(linkProblem);
+      if(rule.booking === 'required' && !chosen.order) return fail('Choose the booking this is about.');
+      if(rule.listing === 'required' && !chosen.order && !chosen.listing) return fail('Choose the listing this is about.');
       if(subject.length < 4) return fail('Please give your request a short title.');
       if(text.length < BODY_MIN) return fail('Please describe what happened in a few sentences, so we can help the first time.');
       btn.disabled = true;
@@ -396,12 +440,11 @@
         if(picked.files.length){ btn.textContent = 'Uploading files…'; urls = await uploadFiles(picked.files); }
       }catch(err){ return fail('A file could not be uploaded: ' + (err && err.message ? err.message : 'please try again') + '.'); }
       btn.textContent = 'Sending…';
-      var listingEl = document.getElementById('hcListing');
       try{
         var out = await api('POST', '', {
           mode: 'supportCreate', category: cat.value, subject: subject, description: text,
-          orderId: document.getElementById('hcOrder').value || null,
-          listingId: listingEl && listingEl.value ? listingEl.value : null,
+          orderId: (rule.booking !== 'none' && chosen.order) || null,
+          listingId: (rule.listing !== 'none' && !chosen.order && chosen.listing) || null,
           attachments: urls, callback: document.getElementById('hcCallback').checked
         });
         renderSent(out.ref, o.email);

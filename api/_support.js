@@ -32,29 +32,34 @@ const FIRST_RESPONSE_HOURS = 48;     // acknowledged on creation; a person answe
 // What a request can be about. Kept in step by hand with
 // AERVA_POLICIES.support.categories in aerva-policies.js (the form's list).
 // audience: who the form offers it to — 'guest', 'host' or 'both'.
+// booking / listing: 'required' | 'optional' | 'none' — what the request
+// must, may or may not be linked to. bookingAs: whose booking it may be —
+// 'guest' (one of their trips), 'host' (a booking at their listing) or 'any'.
+// A request is linked to a booking OR a listing, never both: a booking
+// already names its listing. The form (aerva-help.js) applies the same rules.
 const CATEGORIES = {
-  booking_payment:       { label: 'Booking or payment', audience: 'guest' },
-  cancellation_refund:   { label: 'Cancellation or refund', audience: 'guest' },
-  change_booking:        { label: 'Changing a booking', audience: 'guest' },
-  stay_problem:          { label: 'Problem during a stay or experience', audience: 'guest' },
-  deposit_damage:        { label: 'Security deposit', audience: 'guest' },
-  coupon:                { label: 'Coupon', audience: 'guest' },
-  host_conduct:          { label: 'A host’s behaviour', audience: 'guest' },
-  payout_tds:            { label: 'Payouts and TDS', audience: 'host' },
-  listing_photos:        { label: 'Listing, photos or approval', audience: 'host' },
-  calendar_availability: { label: 'Calendar and availability', audience: 'host' },
-  damage_claim:          { label: 'Damage claim', audience: 'host' },
-  guest_conduct:         { label: 'A guest’s behaviour', audience: 'host' },
-  cohosting:             { label: 'Co-hosting', audience: 'host' },
-  verification:          { label: 'PAN, bank or Aadhaar verification', audience: 'host' },
-  safety:                { label: 'Safety concern', audience: 'both' },
-  off_platform:          { label: 'Asked to pay or talk outside Aerva', audience: 'both' },
-  account_signin:        { label: 'Account and sign-in', audience: 'both' },
-  reviews_badges:        { label: 'Reviews and badges', audience: 'both' },
-  report_content:        { label: 'Report a listing, review or message', audience: 'both' },
-  privacy_data:          { label: 'My personal data', audience: 'both' },
-  grievance:             { label: 'Formal grievance (Grievance Officer)', audience: 'both' },
-  other:                 { label: 'Something else', audience: 'both' }
+  booking_payment:       { label: 'Booking or payment', audience: 'guest', booking: 'optional', bookingAs: 'guest', listing: 'none' },
+  cancellation_refund:   { label: 'Cancellation or refund', audience: 'guest', booking: 'required', bookingAs: 'any', listing: 'none' },
+  change_booking:        { label: 'Changing a booking', audience: 'guest', booking: 'required', bookingAs: 'guest', listing: 'none' },
+  stay_problem:          { label: 'Problem during a stay or experience', audience: 'guest', booking: 'required', bookingAs: 'guest', listing: 'none' },
+  deposit_damage:        { label: 'Security deposit', audience: 'guest', booking: 'required', bookingAs: 'guest', listing: 'none' },
+  coupon:                { label: 'Coupon', audience: 'guest', booking: 'optional', bookingAs: 'guest', listing: 'none' },
+  host_conduct:          { label: 'A host’s behaviour', audience: 'guest', booking: 'optional', bookingAs: 'guest', listing: 'none' },
+  payout_tds:            { label: 'Payouts and TDS', audience: 'host', booking: 'optional', bookingAs: 'host', listing: 'none' },
+  listing_photos:        { label: 'Listing, photos or approval', audience: 'host', booking: 'none', bookingAs: 'any', listing: 'required' },
+  calendar_availability: { label: 'Calendar and availability', audience: 'host', booking: 'none', bookingAs: 'any', listing: 'required' },
+  damage_claim:          { label: 'Damage claim', audience: 'host', booking: 'required', bookingAs: 'host', listing: 'none' },
+  guest_conduct:         { label: 'A guest’s behaviour', audience: 'host', booking: 'required', bookingAs: 'host', listing: 'none' },
+  cohosting:             { label: 'Co-hosting', audience: 'host', booking: 'none', bookingAs: 'any', listing: 'optional' },
+  verification:          { label: 'PAN, bank or Aadhaar verification', audience: 'host', booking: 'none', bookingAs: 'any', listing: 'none' },
+  safety:                { label: 'Safety concern', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
+  off_platform:          { label: 'Asked to pay or talk outside Aerva', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'none' },
+  account_signin:        { label: 'Account and sign-in', audience: 'both', booking: 'none', bookingAs: 'any', listing: 'none' },
+  reviews_badges:        { label: 'Reviews and badges', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
+  report_content:        { label: 'Report a listing, review or message', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'none' },
+  privacy_data:          { label: 'My personal data', audience: 'both', booking: 'none', bookingAs: 'any', listing: 'none' },
+  grievance:             { label: 'Formal grievance (Grievance Officer)', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
+  other:                 { label: 'Something else', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' }
 };
 const HOST_CATEGORIES = Object.keys(CATEGORIES).filter(k => CATEGORIES[k].audience === 'host');
 
@@ -153,16 +158,23 @@ async function createRequest(sql, { guestId, category, subject, description, ord
 
   let role = HOST_CATEGORIES.includes(category) ? 'host' : 'guest';
   let oid = null, lid = null;
+  const rule = CATEGORIES[category];
+  if (orderId && rule.booking === 'none') orderId = null;           // not about a booking: ignored
+  if (listingId && (rule.listing === 'none' || orderId)) listingId = null;   // a booking already names its listing
+  if (rule.booking === 'required' && !orderId) throw userError('Choose the booking this is about.');
+  if (rule.listing === 'required' && !listingId) throw userError('Choose the listing this is about.');
   if (orderId) {
     const r = await bookingRole(sql, me, Number(orderId));
     if (!r) throw userError('That booking could not be found on your account.', 404);
+    if (rule.bookingAs === 'guest' && r !== 'guest') throw userError('Choose one of your own trips for this.');
+    if (rule.bookingAs === 'host' && r !== 'host') throw userError('Choose a booking at one of your listings for this.');
     oid = Number(orderId); role = r;
   }
   if (listingId) {
     const l = (await sql`SELECT id, host_id FROM listings WHERE id = ${Number(listingId)}`)[0];
-    if (!l) throw userError('That listing could not be found.', 404);
-    lid = l.id;
-    if (!oid && me.host_id && Number(l.host_id) === Number(me.host_id)) role = 'host';
+    // Only the person's own listings can be chosen (the form offers no others).
+    if (!l || !me.host_id || Number(l.host_id) !== Number(me.host_id)) throw userError('That listing could not be found on your account.', 404);
+    lid = l.id; role = 'host';
   }
   if (role === 'host' && !me.host_id) role = 'guest';
   const files = cleanFiles(attachments);
