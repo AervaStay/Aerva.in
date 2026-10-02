@@ -757,8 +757,13 @@ async function handleCohostModes(req, res, accountId) {
       if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' }); return true; }
       const coCompany = bankCheck.companyPanProblem(pan, holder);
       if (coCompany) { res.status(400).json({ error: coCompany }); return true; }
+      // A trade-name account on a personal PAN: only with the business's GSTIN under that PAN.
+      if (bankCheck.accountKind(holder) === 'trade' && bankCheck.PERSONAL_PAN.has(bankCheck.panLetter(pan))) {
+        const gp = bankCheck.tradeGstinProblem(pan, gstin || null);
+        if (gp) { res.status(400).json({ error: gp }); return true; }
+      }
       if (holder.length >= 2 && bankCheck.holderMatch(panName, holder).result === 'mismatch') { res.status(400).json({ error: `The account must be in the name on your PAN (${panName}). Payouts can only go to an account the PAN holder holds, alone or jointly.` }); return true; }
-      if (gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCPE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
+      if (gstin && !bankCheck.validGstin(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCPE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
       if (gstin && gstin.slice(2, 12) !== pan) { res.status(400).json({ error: 'Your GSTIN should contain your PAN (characters 3 to 12).' }); return true; }
       if (holder.length < 2) { res.status(400).json({ error: 'Please enter the account holder\'s name as the bank has it.' }); return true; }
       if (!/^[0-9]{9,18}$/.test(account)) { res.status(400).json({ error: 'Bank account numbers are 9 to 18 digits.' }); return true; }
@@ -3202,7 +3207,7 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'List a property first to create your host account.' });
       }
 
-      const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName, panNumber, panName, panDocumentUrl, hostName, hostPhone } = req.body || {};
+      const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName, bankGstin, panNumber, panName, panDocumentUrl, hostName, hostPhone } = req.body || {};
       // Uploaded documents: only Aerva's own storage (see isAervaBlobUrl).
       for (const u of [aadhaarDocumentUrl, panDocumentUrl]) {
         if (typeof u === 'string' && u && !isAervaBlobUrl(u)) {
@@ -3317,8 +3322,17 @@ module.exports = async (req, res) => {
         // Payouts go only to the PAN holder: an account typed in a clearly
         // different name is refused here, before any bank check.
         const typedHolder = String(bankAccountHolderName).trim().slice(0, 100);
-        const companyProblem = bankCheck.companyPanProblem(host.pan_number ? decryptField(host.pan_number) : null, typedHolder);
+        const plainPan = host.pan_number ? decryptField(host.pan_number) : null;
+        const companyProblem = bankCheck.companyPanProblem(plainPan, typedHolder);
         if (companyProblem) return res.status(400).json({ error: companyProblem });
+        // An account in a business (trade) name on a personal PAN: only with
+        // that business's GSTIN, registered under the host's own PAN.
+        const gstinGiven = typeof bankGstin === 'string' && bankGstin.trim() ? bankGstin.replace(/\s+/g, '').toUpperCase() : null;
+        const tradeAccount = bankCheck.accountKind(typedHolder) === 'trade' && bankCheck.PERSONAL_PAN.has(bankCheck.panLetter(plainPan));
+        if (tradeAccount || gstinGiven) {
+          const gp = bankCheck.tradeGstinProblem(plainPan, gstinGiven);
+          if (gp) return res.status(400).json({ error: gp });
+        }
         if (host.pan_name && bankCheck.holderMatch(host.pan_name, typedHolder).result === 'mismatch') {
           return res.status(400).json({ error: `The account must be in the name on your PAN (${host.pan_name}). Payouts can only go to an account the PAN holder holds, alone or jointly.` });
         }
@@ -3350,6 +3364,11 @@ module.exports = async (req, res) => {
           if (e.code !== '42703') throw e;
           await sql`UPDATE hosts SET razorpayx_fund_account_id = NULL WHERE id = ${guest.host_id}`;
         }
+        // The GSTIN goes with this account only (encrypted: it contains the PAN).
+        try {
+          const gstinNow = typeof bankGstin === 'string' && bankGstin.trim() ? encryptField(bankGstin.replace(/\s+/g, '').toUpperCase()) : null;
+          await sql`UPDATE hosts SET bank_gstin = ${gstinNow} WHERE id = ${guest.host_id}`;
+        } catch (e) { if (e.code !== '42703') throw e; }
         await logAudit(sql, {
           action: 'host_bank_details_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
           targetType: 'host', targetId: guest.host_id,

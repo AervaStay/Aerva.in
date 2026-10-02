@@ -124,6 +124,38 @@ function companyPanProblem(pan, accountName) {
   return null;
 }
 
+// ---- GSTIN: a proprietor's trade-name account ----
+// A GSTIN is 15 characters: state code (2), the holder's PAN (10), entity
+// number, 'Z', and a check character worked out from the first 14. Its
+// characters 3–12 being the payee's own PAN shows the business is registered
+// under that PAN, i.e. the payee's own proprietorship.
+const GSTIN_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function gstinCheckChar(first14) {
+  let sum = 0;
+  for (let i = 0; i < 14; i++) {
+    const v = GSTIN_CHARS.indexOf(first14[i]);
+    if (v < 0) return null;
+    const prod = v * (i % 2 === 0 ? 1 : 2);
+    sum += Math.floor(prod / 36) + (prod % 36);
+  }
+  return GSTIN_CHARS[(36 - (sum % 36)) % 36];
+}
+function cleanGstin(g) { return String(g || '').replace(/\s+/g, '').toUpperCase(); }
+function validGstin(g) {
+  const x = cleanGstin(g);
+  return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(x) && gstinCheckChar(x.slice(0, 14)) === x[14];
+}
+const gstinPan = (g) => cleanGstin(g).slice(2, 12);
+// For a trade-name account on a personal PAN: null if the GSTIN shows the
+// business is the payee's own, else the message to show.
+const TRADE_NEEDS = 'This account is in a business name. Payouts to it need the business’s GSTIN, registered under your own PAN. Otherwise, use your personal bank account, in the name on your personal PAN.';
+function tradeGstinProblem(pan, gstin) {
+  if (!gstin) return TRADE_NEEDS;
+  if (!validGstin(gstin)) return 'That GSTIN is not valid — check it against your GST registration certificate (15 characters, like 27ABCPS1234K1Z5).';
+  if (gstinPan(gstin) !== String(pan || '').trim().toUpperCase()) return 'That GSTIN is registered under a different PAN. The business must be registered under your own PAN, or use your personal bank account.';
+  return null;
+}
+
 // The PAN's 5th letter is the first letter of the holder's surname (a
 // person) or of the business's name. A name with no part starting with that
 // letter means the PAN or the name was typed wrong. Returns an error or null.
@@ -176,13 +208,13 @@ async function loadPayee(sql, kind, key) {
     const h = (await sql`SELECT h.id, h.name, h.email, h.pan_number, h.bank_account_number, h.bank_ifsc, h.bank_account_holder_name, h.bank_status,
                                 to_jsonb(h) AS j FROM hosts h WHERE h.id = ${key}`)[0];
     if (!h) return null;
-    return { kind, key: h.id, name: h.name, email: h.email, pan: decryptField(h.pan_number), panName: h.j.pan_name || null, holder: h.bank_account_holder_name,
+    return { kind, key: h.id, name: h.name, email: h.email, pan: decryptField(h.pan_number), gstin: h.j.bank_gstin ? decryptField(h.j.bank_gstin) : null, panName: h.j.pan_name || null, holder: h.bank_account_holder_name,
              account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, status: h.bank_status, checkId: h.j.bank_check_id || null, checkStatus: h.j.bank_check_status || null };
   }
-  const c = (await sql`SELECT p.guest_id, p.pan_number, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status, g.name, g.email, to_jsonb(p) AS j
+  const c = (await sql`SELECT p.guest_id, p.pan_number, p.gstin, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status, g.name, g.email, to_jsonb(p) AS j
                        FROM cohost_payout_profiles p JOIN guests g ON g.id = p.guest_id WHERE p.guest_id = ${key}`)[0];
   if (!c) return null;
-  return { kind, key: c.guest_id, name: c.name, email: c.email, pan: decryptField(c.pan_number), panName: c.j.pan_name || null, holder: c.account_holder_name,
+  return { kind, key: c.guest_id, name: c.name, email: c.email, pan: decryptField(c.pan_number), gstin: c.gstin ? decryptField(c.gstin) : null, panName: c.j.pan_name || null, holder: c.account_holder_name,
            account: decryptField(c.bank_account_number), ifsc: c.bank_ifsc, status: c.status, checkId: c.j.bank_check_id || null, checkStatus: c.j.bank_check_status || null };
 }
 
@@ -302,8 +334,13 @@ async function settleCheck(sql, kind, key, v) {
   const companyProblem = companyPanProblem(p.pan, registered);
   if (companyProblem) { decision = 'reject'; why = companyProblem; }
   else if (against && m.result === 'match') decision = 'approve';
-  // A trading name on a personal PAN (a sole proprietor): an admin confirms the owner.
-  else if (against && accountKind(registered) === 'trade' && PERSONAL_PAN.has(panLetter(p.pan))) decision = 'review';
+  // A trading name on a personal PAN (a sole proprietor): accepted only with
+  // the business's GSTIN, registered under the payee's own PAN.
+  else if (accountKind(registered) === 'trade' && PERSONAL_PAN.has(panLetter(p.pan))) {
+    const gp = tradeGstinProblem(p.pan, p.gstin);
+    if (gp) { decision = 'reject'; why = `${registered ? `The bank holds this account as “${registered}”. ` : ''}${gp}`; }
+    else decision = 'approve';
+  }
   else if (against && m.result === 'mismatch') {
     // A joint account where the bank named only the first holder: the PAN
     // holder may be the second. An admin confirms with a passbook or statement.
@@ -375,6 +412,6 @@ function describeCheck(row) {
 }
 
 module.exports = {
-  nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
+  nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, validGstin, gstinPan, tradeGstinProblem, PERSONAL_PAN, panLetter, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
   bankDetailsChanged, startCheck, settleCheck, pollChecks, inChangeHold, describeCheck, HOLD_HOURS_AFTER_CHANGE
 };

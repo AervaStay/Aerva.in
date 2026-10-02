@@ -237,7 +237,7 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Payouts to hosts and co-hosts', points: [
         'Payouts are made automatically to a verified bank account after check-out, after Aerva’s fees and TDS.',
-        'Payouts go only to a bank account held by the PAN holder, alone or jointly. A company, LLP or partnership firm is paid only to its own account, against its own PAN. Aerva confirms the account with the bank by sending ₹1 to it.',
+        'Payouts go only to a bank account held by the PAN holder, alone or jointly. A company, LLP or partnership firm is paid only to its own account, against its own PAN, and TDS is deducted against that PAN. Aerva confirms the account with the bank by sending ₹1 to it.',
         'When bank details change, payouts wait 48 hours, and the account owner is emailed about the change.',
         'Aerva may hold, adjust or withhold a payout for disputes, refunds, damage claims, suspected fraud or legal reasons.',
         'Aerva pays hosts and co-hosts their own shares only. Co-host shares are paid in full, without deductions. Any other money between a host and a co-host is for them to settle between themselves.'
@@ -769,7 +769,7 @@ window.AERVA_POLICIES = {
           { title: 'What you need', points: [
             'Your own PAN, with your name exactly as printed on it; a bank account in that same name; and the identity verification asked for in your account.',
             'The bank account is confirmed with your bank: ₹1 is sent to it, and the bank tells Aerva whose account it is. You must be one of its holders; a joint account is fine if you are one of the holders. An account you do not hold is not accepted.',
-            'Hosting as a company, LLP or partnership firm: use the business’s own PAN (4th letter C for a company, F for a firm or LLP) and the business’s bank account. A sole proprietor uses their personal PAN.',
+            'Hosting as a company, LLP or partnership firm: use the business’s own PAN (4th letter C for a company, F for a firm or LLP) and the business’s bank account. A sole proprietor uses their personal PAN, with a personal bank account, or a bank account in the business’s name together with the business’s GSTIN registered under that PAN.',
             'A PAN can be on one Aerva account only.'
           ]},
           { title: 'If verification is stuck', points: [

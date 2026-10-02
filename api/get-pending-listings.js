@@ -637,7 +637,9 @@ module.exports = async (req, res) => {
       const rows = await sql`
         SELECT p.id, p.order_id, p.payee_type, p.host_id, p.payee_guest_id, p.status, p.created_at, p.sent_at, p.net,
                p.tds, p.tds_rate, p.tds_reason, p.tds_base, p.tds_catchup_base, p.pan_furnished,
-               CASE WHEN p.payee_type = 'host' THEN h.name ELSE g.name END AS payee_name,
+               -- The name as per PAN (a company's name for a company PAN): what the TDS return and certificates carry.
+               CASE WHEN p.payee_type = 'host' THEN COALESCE(NULLIF(to_jsonb(h)->>'pan_name', ''), h.name)
+                    ELSE COALESCE(NULLIF(to_jsonb(cp)->>'pan_name', ''), g.name) END AS payee_name,
                CASE WHEN p.payee_type = 'host' THEN h.pan_number ELSE cp.pan_number END AS pan,
                CASE WHEN p.payee_type = 'host' THEN (to_jsonb(h)->>'pan_inoperative')::boolean ELSE (to_jsonb(cp)->>'pan_inoperative')::boolean END AS pan_inoperative
         FROM payouts p

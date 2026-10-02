@@ -1201,6 +1201,10 @@
             <input type="text" id="profileBankAccount2" placeholder="The same number again" inputmode="numeric" autocomplete="off">
           </div>
           <div class="field">
+            <label for="profileBankGstin">Business GSTIN <span style="font-weight:400; opacity:0.7;">(only if the account is in your business’s name)</span></label>
+            <input type="text" id="profileBankGstin" placeholder="e.g. 27ABCPS1234K1ZM — registered under your own PAN" maxlength="15" style="text-transform:uppercase;" autocomplete="off">
+          </div>
+          <div class="field">
             <label for="profileBankIfsc">IFSC Code</label>
             <input type="text" id="profileBankIfsc" placeholder="e.g. HDFC0001234">
           </div>
@@ -2112,6 +2116,7 @@
     document.getElementById('profileBankHolder').value = v.panName || '';
     document.getElementById('profileBankAccount').value = '';
     document.getElementById('profileBankAccount2').value = '';
+    document.getElementById('profileBankGstin').value = '';
     document.getElementById('profileBankIfsc').value = '';
     // Collapse every edit form back closed on a fresh data load.
     ['profileNameEditForm', 'profilePhoneEditForm', 'profileBankEditForm'].forEach(id => {
@@ -2726,6 +2731,7 @@
     const bankAccountNumber = document.getElementById('profileBankAccount').value.trim();
     const bankIfsc = document.getElementById('profileBankIfsc').value.trim();
     const bankAccountNumber2 = document.getElementById('profileBankAccount2').value.trim();
+    const bankGstin = (document.getElementById('profileBankGstin').value || '').trim().toUpperCase();
     if(!bankAccountHolderName || !bankAccountNumber || !bankIfsc){
       msgEl.textContent = 'Please fill in all the fields.';
       msgEl.style.color = '#a3402f';
@@ -2745,7 +2751,7 @@
       const res = await fetch(API_BASE + '/api/host-listings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-        body: JSON.stringify({ bankAccountHolderName, bankAccountNumber, bankIfsc })
+        body: JSON.stringify({ bankAccountHolderName, bankAccountNumber, bankIfsc, bankGstin: bankGstin || undefined })
       });
       const data = await res.json();
       if(res.ok){
