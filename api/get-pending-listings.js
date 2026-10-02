@@ -558,7 +558,9 @@ module.exports = async (req, res) => {
     const counts = {};
     const count = async (key, q) => { try { counts[key] = Number((await q)[0].n) || 0; } catch (e) { /* not available yet */ } };
     await Promise.all([
-      count('listings', sql`SELECT count(*)::int AS n FROM listings WHERE status = 'pending' OR (to_jsonb(listings)->>'rooms_pending_review')::boolean IS TRUE`),
+      // Exactly what the Pending Listings tab shows: new listings, and rooms with changes to review.
+      count('listings', sql`SELECT (SELECT count(*) FROM listings WHERE status = 'pending')
+                                 + (SELECT count(*) FROM listing_rooms lr JOIN listings l ON l.id = lr.listing_id WHERE lr.pending_review = TRUE) AS n`),
       count('verifications', sql`SELECT (SELECT count(*) FROM hosts WHERE aadhaar_status = 'pending_review' OR pan_status = 'pending_review' OR bank_status = 'pending_review')
                                       + (SELECT count(*) FROM cohost_payout_profiles WHERE status = 'pending_review') AS n`),
       count('deposits', sql`SELECT count(*)::int AS n FROM orders WHERE deposit_status = 'disputed'`),
