@@ -65,6 +65,7 @@
 //          check-in cutoff as cancelBooking.
 
 const { isValidPan, PAN_ERROR } = require('./_tds');
+const bankCheck = require('./_bank-check');
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const { verifyToken, createToken } = require('./_approval-token');
@@ -91,7 +92,7 @@ const crypto = require('crypto');
 const { sanitizeBody } = require('./_plain-text');
 const { AGREEMENT_VERSION } = require('./_agreements');
 const { requestContext } = require('./_audit-log');
-const { encryptField, maskPan, maskAccount, maskGstin, encryptionReady } = require('./_secure-fields');
+const { encryptField, decryptField, maskPan, maskAccount, maskGstin, encryptionReady } = require('./_secure-fields');
 const { COHOST_PERMISSIONS, FULL_ONLY, ALWAYS_LABEL, cleanPermissions, cleanEmail, resolveActingHost, cohostCan,
         cohostHasListing, describeAccess, inviteToken, readInviteToken, emailCohostInvite, cohostDetailsMissing, DETAILS_REQUIRED_MESSAGE,
         cohostManageToken } = require('./_cohosts');
@@ -714,7 +715,14 @@ async function handleCohostModes(req, res, accountId) {
     // full. Any change needs an admin's approval again before payouts.
     if (req.method === 'GET' && q.myPayoutProfile === '1') {
       let p = null;
-      try { p = (await sql`SELECT * FROM cohost_payout_profiles WHERE guest_id = ${me.id}`)[0] || null; }
+      try {
+        p = (await sql`SELECT * FROM cohost_payout_profiles WHERE guest_id = ${me.id}`)[0] || null;
+        // A bank check still running: ask RazorpayX now.
+        if (p && p.bank_check_status === 'checking') {
+          await bankCheck.pollChecks(sql, { deadlineMs: 2500, only: { kind: 'cohost', key: me.id } });
+          p = (await sql`SELECT * FROM cohost_payout_profiles WHERE guest_id = ${me.id}`)[0] || null;
+        }
+      }
       catch (err) { console.error('payout profile unavailable:', err.message); }
       res.status(200).json({ profile: p ? {
         // Stored encrypted; the co-host only ever sees it masked.
@@ -724,7 +732,11 @@ async function handleCohostModes(req, res, accountId) {
         accountMasked: maskAccount(p.bank_account_number),
         ifsc: p.bank_ifsc,
         status: p.status,
-        rejectionReason: p.status === 'rejected' ? (p.rejection_reason || null) : null
+        rejectionReason: p.status === 'rejected' ? (p.rejection_reason || null) : null,
+        panName: p.pan_name || null,
+        bankCheck: p.bank_check_status ? { status: p.bank_check_status, match: p.bank_name_match || null, message: bankCheck.describeCheck(p) } : null,
+        payoutsFrom: p.bank_changed_at && bankCheck.inChangeHold(p.bank_changed_at)
+          ? new Date(new Date(p.bank_changed_at).getTime() + bankCheck.HOLD_HOURS_AFTER_CHANGE * 3600e3).toISOString() : null
       } : null });
       return true;
     }
@@ -735,7 +747,15 @@ async function handleCohostModes(req, res, accountId) {
       const holder = String(x.accountHolderName || '').trim().slice(0, 120);
       const account = String(x.accountNumber || '').replace(/\s+/g, '');
       const ifsc = String(x.ifsc || '').trim().toUpperCase();
+      const panName = String(x.panName || '').replace(/\s+/g, ' ').trim().slice(0, 120);
       if (!isValidPan(pan)) { res.status(400).json({ error: PAN_ERROR }); return true; }
+      // Same rules as a host (_bank-check.js): the name as printed on the
+      // PAN goes with the PAN, the PAN is on no other account, and the bank
+      // account is in that name.
+      const panProblem = bankCheck.panNameProblem(pan, panName);
+      if (panProblem) { res.status(400).json({ error: panProblem }); return true; }
+      if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' }); return true; }
+      if (holder.length >= 2 && bankCheck.nameMatch(panName, holder).result === 'mismatch') { res.status(400).json({ error: `The account must be in the name on your PAN (${panName}). Payouts can only go to the PAN holder’s own account.` }); return true; }
       if (gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCPE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
       if (gstin && gstin.slice(2, 12) !== pan) { res.status(400).json({ error: 'Your GSTIN should contain your PAN (characters 3 to 12).' }); return true; }
       if (holder.length < 2) { res.status(400).json({ error: 'Please enter the account holder\'s name as the bank has it.' }); return true; }
@@ -758,10 +778,18 @@ async function handleCohostModes(req, res, accountId) {
         ON CONFLICT (guest_id) DO UPDATE SET
           pan_number = EXCLUDED.pan_number, gstin = EXCLUDED.gstin, account_holder_name = EXCLUDED.account_holder_name,
           bank_account_number = EXCLUDED.bank_account_number, bank_ifsc = EXCLUDED.bank_ifsc,
-          status = 'pending_review', rejection_reason = NULL, submitted_at = now(), reviewed_at = NULL
+          status = 'pending_review', rejection_reason = NULL, submitted_at = now(), reviewed_at = NULL,
+          razorpayx_fund_account_id = NULL
       `;
+      // A new account starts clean (no payout can go to the old one), with the 48-hour hold.
+      try {
+        await sql`UPDATE cohost_payout_profiles SET pan_name = ${panName}, bank_changed_at = now(), bank_check_id = NULL, bank_check_status = NULL,
+                                                    bank_registered_name = NULL, bank_name_match = NULL, bank_checked_at = NULL
+                  WHERE guest_id = ${me.id}`;
+      } catch (e) { if (e.code !== '42703') throw e; }
       await logAudit(sql, { action: 'cohost_payout_profile_submitted', success: true, actorType: 'guest', actorIdentifier: String(me.id), targetType: 'guest', targetId: me.id });
-      res.status(200).json({ success: true, status: 'pending_review' });
+      const check = await bankCheck.bankDetailsChanged(sql, 'cohost', me.id);
+      res.status(200).json({ success: true, status: 'pending_review', bankCheck: check.status });
       return true;
     }
 
@@ -3172,7 +3200,7 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'List a property first to create your host account.' });
       }
 
-      const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName, panNumber, panDocumentUrl, hostName, hostPhone } = req.body || {};
+      const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName, panNumber, panName, panDocumentUrl, hostName, hostPhone } = req.body || {};
       // Uploaded documents: only Aerva's own storage (see isAervaBlobUrl).
       for (const u of [aadhaarDocumentUrl, panDocumentUrl]) {
         if (typeof u === 'string' && u && !isAervaBlobUrl(u)) {
@@ -3188,11 +3216,29 @@ module.exports = async (req, res) => {
       }
       const current = await sql`
         SELECT aadhaar_status, aadhaar_document_url, aadhaar_rejection_reason,
-               bank_status, pan_status, pan_document_url, pan_rejection_reason
+               bank_status, pan_status, pan_document_url, pan_rejection_reason, pan_number,
+               to_jsonb(hosts)->>'pan_name' AS pan_name
         FROM hosts WHERE id = ${guest.host_id}
       `;
       const host = current[0];
       let didSomething = false;
+      let bankChanged = false;
+      const cleanPanName = typeof panName === 'string' ? panName.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+
+      // ---- Name as printed on the PAN, for a PAN already on file without it ----
+      // (PANs entered before this was asked.) Once only; checked against the
+      // PAN's 5th letter like a new one.
+      if (cleanPanName && !(typeof panDocumentUrl === 'string' && panDocumentUrl)) {
+        if (host.pan_name) return res.status(400).json({ error: 'The name on your PAN is already on file. Contact hello@aerva.in if it needs to change.' });
+        if (!host.pan_number) return res.status(400).json({ error: 'Add your PAN first.' });
+        const problem = bankCheck.panNameProblem(decryptField(host.pan_number), cleanPanName);
+        if (problem) return res.status(400).json({ error: problem });
+        try { await sql`UPDATE hosts SET pan_name = ${cleanPanName} WHERE id = ${guest.host_id} AND pan_name IS NULL`; }
+        catch (e) { if (e.code === '42703') return res.status(503).json({ error: 'This is not switched on yet. Please try again later.' }); throw e; }
+        await logAudit(sql, { action: 'host_pan_name_added', success: true, actorType: 'host', actorIdentifier: String(guest.host_id), targetType: 'host', targetId: guest.host_id });
+        host.pan_name = cleanPanName;
+        didSomething = true;
+      }
 
       // ---- PAN: submit once, then permanently locked ----
       if (typeof panDocumentUrl === 'string' && panDocumentUrl.startsWith('https://')) {
@@ -3205,10 +3251,26 @@ module.exports = async (req, res) => {
         if (!isValidPan(cleanPan)) {
           return res.status(400).json({ error: PAN_ERROR });
         }
-        await sql`
-          UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
-          WHERE id = ${guest.host_id}
-        `;
+        // The name as printed on the PAN: it must go with the PAN (its 5th
+        // letter), and the bank account is later checked against it.
+        const nameProblem = bankCheck.panNameProblem(cleanPan, cleanPanName);
+        if (nameProblem) return res.status(400).json({ error: nameProblem });
+        if (await bankCheck.panInUseElsewhere(sql, cleanPan, { hostId: guest.host_id, guestId })) {
+          return res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' });
+        }
+        try {
+          await sql`
+            UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_name = ${cleanPanName}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
+            WHERE id = ${guest.host_id}
+          `;
+        } catch (e) {
+          if (e.code !== '42703') throw e;      // before migration_bank_check.sql: saved without the name
+          await sql`
+            UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
+            WHERE id = ${guest.host_id}
+          `;
+        }
+        host.pan_name = cleanPanName;
         await logAudit(sql, {
           action: 'host_pan_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
           targetType: 'host', targetId: guest.host_id
@@ -3250,6 +3312,12 @@ module.exports = async (req, res) => {
         if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
           return res.status(400).json({ error: 'Please enter a valid IFSC code.' });
         }
+        // Payouts go only to the PAN holder: an account typed in a clearly
+        // different name is refused here, before any bank check.
+        const typedHolder = String(bankAccountHolderName).trim().slice(0, 100);
+        if (host.pan_name && bankCheck.nameMatch(host.pan_name, typedHolder).result === 'mismatch') {
+          return res.status(400).json({ error: `The account must be in the name on your PAN (${host.pan_name}). Payouts can only go to the PAN holder’s own account.` });
+        }
         // Only reset PAN/Aadhaar back to pending_review if they'd
         // actually been submitted before — nothing to "re-check" for a
         // PAN/Aadhaar that was never on file in the first place.
@@ -3268,11 +3336,22 @@ module.exports = async (req, res) => {
             pan_status = ${rePanStatus}, pan_rejection_reason = ${rePanReason}
           WHERE id = ${guest.host_id}
         `;
+        // A new account starts clean: the old RazorpayX payee is dropped (no
+        // payout can go to the old account), and the 48-hour hold starts.
+        try {
+          await sql`UPDATE hosts SET razorpayx_fund_account_id = NULL, bank_changed_at = now(), bank_check_id = NULL, bank_check_status = NULL,
+                                     bank_registered_name = NULL, bank_name_match = NULL, bank_checked_at = NULL
+                    WHERE id = ${guest.host_id}`;
+        } catch (e) {
+          if (e.code !== '42703') throw e;
+          await sql`UPDATE hosts SET razorpayx_fund_account_id = NULL WHERE id = ${guest.host_id}`;
+        }
         await logAudit(sql, {
           action: 'host_bank_details_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
           targetType: 'host', targetId: guest.host_id,
           metadata: { retriggeredAadhaar: aadhaarSubmitted, retriggeredPan: panSubmitted }
         });
+        bankChanged = true;
         didSomething = true;
       }
 
@@ -3299,7 +3378,11 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'Nothing to submit.' });
       }
 
-      return res.status(200).json({ success: true });
+      // The new bank account: the owner is emailed and the penny drop starts
+      // (_bank-check.js). Never fails the save.
+      let bank = null;
+      if (bankChanged) bank = await bankCheck.bankDetailsChanged(sql, 'host', guest.host_id);
+      return res.status(200).json({ success: true, bankCheck: bank ? bank.status : undefined });
     } catch (err) {
       console.error('host-listings (POST verification) error:', err);
       return res.status(500).json({ error: 'Could not save your verification info right now. Please try again.' });
@@ -3524,10 +3607,21 @@ module.exports = async (req, res) => {
     const hostRows = await sql`
       SELECT name, phone, aadhaar_status, aadhaar_rejection_reason, aadhaar_document_url,
              bank_status, bank_rejection_reason, bank_account_number, bank_account_holder_name, bank_ifsc,
-             pan_status, pan_rejection_reason, pan_document_url, pan_number
+             pan_status, pan_rejection_reason, pan_document_url, pan_number, to_jsonb(hosts) AS j
       FROM hosts WHERE id = ${guest.host_id}
     `;
-    const h = hostRows[0];
+    let h = hostRows[0];
+    // A bank check still running: ask RazorpayX now, so the page shows the
+    // result without waiting for the 5-minute job.
+    if (h && h.j && h.j.bank_check_status === 'checking') {
+      try {
+        await bankCheck.pollChecks(sql, { deadlineMs: 2500, only: { kind: 'host', key: guest.host_id } });
+        h = (await sql`SELECT name, phone, aadhaar_status, aadhaar_rejection_reason, aadhaar_document_url,
+                              bank_status, bank_rejection_reason, bank_account_number, bank_account_holder_name, bank_ifsc,
+                              pan_status, pan_rejection_reason, pan_document_url, pan_number, to_jsonb(hosts) AS j
+                       FROM hosts WHERE id = ${guest.host_id}`)[0];
+      } catch (e) { console.error('bank check poll failed:', e.message); }
+    }
     // Separate and fail-safe: before migration_agreements.sql runs, this
     // column does not exist, and My Collection must still load.
     let hostAgreementVersion = null;
@@ -3554,6 +3648,14 @@ module.exports = async (req, res) => {
       // benefits from being able to confirm exactly what's on file.
       // Kept (encrypted) for TDS; shown to the host masked.
       panNumberMasked: maskPan(h.pan_number),
+      // The name as printed on the PAN, and the bank check (_bank-check.js).
+      panName: (h.j && h.j.pan_name) || null,
+      bankCheck: h.j && h.j.bank_check_status ? {
+        status: h.j.bank_check_status, match: h.j.bank_name_match || null,
+        registeredName: h.j.bank_registered_name || null, message: bankCheck.describeCheck(h.j)
+      } : null,
+      bankPayoutsFrom: h.j && h.j.bank_changed_at && bankCheck.inChangeHold(h.j.bank_changed_at)
+        ? new Date(new Date(h.j.bank_changed_at).getTime() + bankCheck.HOLD_HOURS_AFTER_CHANGE * 3600e3).toISOString() : null,
       hostAgreementAccepted: hostAgreementVersion === AGREEMENT_VERSION,
       hostAgreementVersion: AGREEMENT_VERSION
     } : null;

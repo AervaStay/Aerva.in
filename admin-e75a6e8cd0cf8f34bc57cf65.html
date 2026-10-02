@@ -1835,8 +1835,10 @@
           <div style="font-size:13px; opacity:0.7; margin:4px 0 8px;">Co-hosts for: ${escAdmin(p.cohostsFor || '—')} · submitted ${payDate(p.submittedAt)}</div>
           <div style="font-size:14px; line-height:1.8;">PAN <strong>${escAdmin(p.pan)}</strong>${p.gstin ? ' · GSTIN <strong>' + escAdmin(p.gstin) + '</strong>' : ' · no GSTIN'}<br>
             ${escAdmin(p.holder)} · ${escAdmin(p.account)} · ${escAdmin(p.ifsc)}</div>
+          ${bankCheckBox({ bank_check_status: p.bankCheckStatus, bank_registered_name: p.bankRegisteredName, bank_name_match: p.bankNameMatch, pan_name: p.panName })}
           <div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <button class="approve-btn" onclick="reviewCohostPayout(${Number(p.guestId)}, true)">Approve</button>
+            <button class="reject-btn" style="border-color:#8a6c39 !important; color:#8a6c39;" onclick="recheckCohostBank(${Number(p.guestId)})">Ask the bank again</button>
             <input type="text" id="payoutReject${Number(p.guestId)}" placeholder="Reason, if rejecting" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:240px;">
             <button class="reject-btn" onclick="reviewCohostPayout(${Number(p.guestId)}, false)">Reject</button>
           </div>
@@ -2715,11 +2717,13 @@
           <h4>${escAdmin(v.name || v.email)} — Bank Details</h4>
           <div class="dispute-meta">${escAdmin(v.email)}${v.phone ? ' · ' + escAdmin(v.phone) : ''}</div>
           <div class="dispute-meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(v.bank_submitted_at))}</div>
-          <p>Account holder: ${escAdmin(v.bank_account_holder_name || '—')}<br>
+          <p>Account holder (as typed): ${escAdmin(v.bank_account_holder_name || '—')}<br>
              Account: ${escAdmin(v.bank_account_number || '—')}<br>
              IFSC: ${escAdmin(v.bank_ifsc || '—')}</p>
+          ${bankCheckBox(v)}
           <div class="resolve-row">
             <button type="button" class="approve-btn" onclick="decideVerification(${Number(v.id)}, 'bank', 'approve')">Approve</button>
+            <button type="button" class="reject-btn" style="border-color:#8a6c39 !important; color:#8a6c39;" onclick="recheckBank(${Number(v.id)})">Ask the bank again</button>
             <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${Number(v.id)}, 'bank')">Reject</button>
           </div>
           <span id="verifyError-${Number(v.id)}-bank" class="error"></span>
@@ -2730,7 +2734,9 @@
           <h4>${escAdmin(v.name || v.email)} — PAN</h4>
           <div class="dispute-meta">${escAdmin(v.email)}${v.phone ? ' · ' + escAdmin(v.phone) : ''}</div>
           <div class="dispute-meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(v.pan_submitted_at))}</div>
-          <p>PAN: <strong>${escAdmin(v.pan_number || '—')}</strong>${v.pan_document_url ? ` · <a href="${safeUrl(v.pan_document_url)}" target="_blank" rel="noopener noreferrer">Open the uploaded card ↗</a>` : ''}</p>
+          <p>PAN: <strong>${escAdmin(v.pan_number || '—')}</strong>${v.pan_document_url ? ` · <a href="${safeUrl(v.pan_document_url)}" target="_blank" rel="noopener noreferrer">Open the uploaded card ↗</a>` : ''}<br>
+             Name on PAN (as typed): <strong>${escAdmin(v.pan_name || 'not given')}</strong></p>
+          <p class="dispute-meta" style="margin-top:-6px;">Approve only if the number and the name both match the card exactly. The bank account is checked against this name.</p>
           <div class="resolve-row">
             <button type="button" class="approve-btn" onclick="decideVerification(${Number(v.id)}, 'pan', 'approve')">Approve</button>
             <button type="button" class="reject-btn" onclick="rejectVerificationPrompt(${Number(v.id)}, 'pan')">Reject</button>
@@ -2740,6 +2746,35 @@
       ` : '';
       return aadhaarBlock + panBlock + bankBlock;
     }).join('');
+  }
+
+  // What the bank said in the penny drop, against the name on the PAN (_bank-check.js).
+  function bankCheckBox(v){
+    const s = v.bank_check_status;
+    const matchText = { match: 'matches the name on the PAN', partial: 'only partly matches the name on the PAN — decide', mismatch: 'does NOT match the name on the PAN' };
+    let line;
+    if(s === 'active') line = `Bank says the account is held by <strong>${escAdmin(v.bank_registered_name || '—')}</strong>, which ${matchText[v.bank_name_match] || 'could not be compared (no name on the PAN yet)'}.<br>Name on PAN: ${escAdmin(v.pan_name || 'not given')}`;
+    else if(s === 'checking') line = 'The bank check (₹1 penny drop) is still running. Refresh in a few minutes.';
+    else if(s === 'invalid') line = 'The bank could not confirm this account.';
+    else if(s === 'failed' || s === 'error') line = 'The bank check did not complete. Ask the bank again, or review by hand.';
+    else if(s === 'not_set_up') line = 'Not checked with the bank: RazorpayX is not set up. Compare with a cancelled cheque or passbook before approving.';
+    else line = 'Not checked with the bank yet.';
+    const tone = s === 'active' && v.bank_name_match === 'match' ? '#2f6b3a' : (s === 'active' && v.bank_name_match === 'partial') || s === 'checking' ? '#8a6c39' : '#a3402f';
+    return `<p style="font-size:13.5px; border-left:3px solid ${tone}; padding:6px 10px; background:#faf7f2;">${line}</p>`;
+  }
+  async function recheckCohostBank(guestId){
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ recheckBank: { cohostGuestId: guestId } }) });
+    const d = await res.json().catch(() => ({}));
+    if(!res.ok) alert(d.error || 'Could not ask the bank.');
+    loadPayouts();
+  }
+  async function recheckBank(hostId){
+    const errEl = document.getElementById(`verifyError-${hostId}-bank`);
+    if(errEl) errEl.textContent = '';
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ recheckBank: { hostId } }) });
+    const d = await res.json().catch(() => ({}));
+    if(!res.ok){ if(errEl) errEl.textContent = d.error || 'Could not ask the bank.'; return; }
+    loadVerifications();
   }
 
   function rejectVerificationPrompt(hostId, field){

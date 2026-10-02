@@ -98,6 +98,7 @@ const { logAudit, adminContext, requestContext } = require('./_audit-log');
 const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout, createDepositCompensationPayout, refreshTds } = require('./_payouts');
 const { disputesForAdmin, decideDispute, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
 const support = require('./_support');
+const bankCheck = require('./_bank-check');
 const { safeRefund } = require('./_refunds');
 const { releaseDueDeposits, notifyDepositDispute } = require('./_deposits');
 const { encryptField, decryptField, isEncrypted, encryptionReady, readableForAdmin, keyOpens, maskAccount, maskPan, UNREADABLE } = require('./_secure-fields');
@@ -547,6 +548,24 @@ module.exports = async (req, res) => {
     } catch (err) {
       if (!err.isUserFacing) console.error('decideStayDispute failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not decide this dispute.' });
+    }
+  }
+
+  // ---- Bank check (penny drop) run again for a host or co-host (_bank-check.js) ----
+  // POST { recheckBank: { hostId } | { cohostGuestId } }
+  if (req.method === 'POST' && req.body && req.body.recheckBank) {
+    try {
+      const b = req.body.recheckBank;
+      const kind = b.cohostGuestId ? 'cohost' : 'host';
+      const key = Number(b.cohostGuestId || b.hostId) || 0;
+      const out = await bankCheck.startCheck(sql, kind, key);
+      await logAudit(sql, { action: 'bank_check_rerun', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: kind === 'host' ? 'host' : 'guest', targetId: key, metadata: { status: out.status } });
+      if (out.status === 'not_set_up') return res.status(409).json({ error: 'RazorpayX is not set up (RAZORPAYX_ACCOUNT_NUMBER), so the bank cannot be asked. Review by hand.' });
+      if (out.status === 'error') return res.status(502).json({ error: 'RazorpayX could not check this account: ' + (out.error || 'unknown error') });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      console.error('recheckBank failed:', err);
+      return res.status(500).json({ error: 'Could not run the bank check.' });
     }
   }
 
@@ -1547,6 +1566,14 @@ module.exports = async (req, res) => {
         } catch (e) { row = null; }
         if (!row) return res.status(404).json({ error: isDeposit ? 'No deposit compensation payout found for this booking.' : isCohost ? 'That co-host has no share in this booking.' : 'No payout found for this booking.' });
         if (row.status === 'sent') return res.status(409).json({ error: 'This payout is already marked paid.' });
+        // Bank details changed in the last 48 hours: the owner may not have
+        // seen the change email yet (_bank-check.js). Wait, as automatic payouts do.
+        try {
+          const changed = isCohost
+            ? ((await sql`SELECT to_jsonb(p)->>'bank_changed_at' AS at FROM cohost_payout_profiles p WHERE guest_id = ${payeeGuestId}`)[0] || {}).at
+            : ((await sql`SELECT to_jsonb(h)->>'bank_changed_at' AS at FROM hosts h WHERE id = ${row.host_id}`)[0] || {}).at;
+          if (bankCheck.inChangeHold(changed)) return res.status(409).json({ error: 'The bank details were changed in the last 48 hours. Wait until the hold ends before paying.' });
+        } catch (e) { /* before migration_bank_check.sql */ }
         if (row.status === 'processing') return res.status(409).json({ error: 'RazorpayX is sending this payout. Wait for it to finish.' });
         // With automatic payouts on, never pay by hand what the system pays:
         // use Retry. (Payouts created while they were off can still be
@@ -1861,7 +1888,7 @@ module.exports = async (req, res) => {
       try {
         pendingProfiles = await sql`
           SELECT p.guest_id, g.name, g.email, p.pan_number, p.gstin, p.account_holder_name, p.bank_account_number,
-                 p.bank_ifsc, p.status, p.submitted_at,
+                 p.bank_ifsc, p.status, p.submitted_at, to_jsonb(p) AS j,
                  (SELECT string_agg(DISTINCT h.name, ', ') FROM cohosts c JOIN hosts h ON h.id = c.host_id
                    WHERE c.cohost_guest_id = p.guest_id AND c.status = 'active') AS cohosts_for
           FROM cohost_payout_profiles p JOIN guests g ON g.id = p.guest_id
@@ -1873,7 +1900,8 @@ module.exports = async (req, res) => {
         SELECT o.id, o.suite_name, o.arrival, o.departure, o.status, o.total, o.commission_amount, o.payout_amount,
                (o.departure > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS before_checkout,
                h.id AS host_id, h.name AS host_name, h.bank_account_holder_name AS host_holder,
-               h.bank_account_number AS host_account, h.bank_ifsc AS host_ifsc, h.bank_status AS host_bank_status
+               h.bank_account_number AS host_account, h.bank_ifsc AS host_ifsc, h.bank_status AS host_bank_status,
+               to_jsonb(h)->>'bank_changed_at' AS host_bank_changed_at, to_jsonb(h)->>'bank_name_match' AS host_bank_match
         FROM orders o JOIN listings l ON l.id = o.listing_id JOIN hosts h ON h.id = l.host_id
         WHERE o.status = 'paid' OR (o.status = 'cancelled' AND (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE AND o.payout_amount > 0)
         ORDER BY o.arrival DESC NULLS LAST, o.id DESC
@@ -1974,7 +2002,9 @@ module.exports = async (req, res) => {
         pendingProfiles: pendingProfiles.map(p => ({
           guestId: p.guest_id, name: p.name, email: p.email, pan: readableForAdmin(p.pan_number), gstin: readableForAdmin(p.gstin),
           holder: p.account_holder_name, account: readableForAdmin(p.bank_account_number), ifsc: p.bank_ifsc,
-          submittedAt: p.submitted_at, cohostsFor: p.cohosts_for || ''
+          submittedAt: p.submitted_at, cohostsFor: p.cohosts_for || '',
+          panName: (p.j && p.j.pan_name) || null, bankCheckStatus: (p.j && p.j.bank_check_status) || null,
+          bankRegisteredName: (p.j && p.j.bank_registered_name) || null, bankNameMatch: (p.j && p.j.bank_name_match) || null
         })),
         payouts: orders.map(o => {
           const cs = (byOrder[o.id] || []).map(x => ({
@@ -1995,7 +2025,9 @@ module.exports = async (req, res) => {
             total: Number(o.total) || 0, commission: Number(o.commission_amount) || 0,
             hostPayout: Number(o.payout_amount) || 0, hostNet: (Number(o.payout_amount) || 0) - coTotal,
             host: { name: o.host_name, holder: o.host_holder, account: readableForAdmin(o.host_account), ifsc: o.host_ifsc,
-                    ready: o.host_bank_status === 'verified' || o.host_bank_status === 'approved', bankStatus: o.host_bank_status || 'missing' },
+                    ready: (o.host_bank_status === 'verified' || o.host_bank_status === 'approved') && !bankCheck.inChangeHold(o.host_bank_changed_at),
+                    bankStatus: bankCheck.inChangeHold(o.host_bank_changed_at) ? 'bank changed in the last 48 hours' : (o.host_bank_status || 'missing'),
+                    bankMatch: o.host_bank_match || null },
             cohosts: cs
           };
         })
@@ -2019,7 +2051,9 @@ module.exports = async (req, res) => {
                (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_pan_submitted' AND actor_identifier = h.id::text) AS pan_submitted_at,
                h.bank_account_number, h.bank_ifsc, h.bank_account_holder_name, h.bank_status,
                (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_aadhaar_submitted' AND actor_identifier = h.id::text) AS aadhaar_submitted_at,
-               (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_bank_details_submitted' AND actor_identifier = h.id::text) AS bank_submitted_at
+               (SELECT MAX(created_at) FROM audit_log WHERE action = 'host_bank_details_submitted' AND actor_identifier = h.id::text) AS bank_submitted_at,
+               to_jsonb(h)->>'pan_name' AS pan_name, to_jsonb(h)->>'bank_check_status' AS bank_check_status,
+               to_jsonb(h)->>'bank_registered_name' AS bank_registered_name, to_jsonb(h)->>'bank_name_match' AS bank_name_match
         FROM hosts h
         WHERE h.aadhaar_status = 'pending_review' OR h.bank_status = 'pending_review' OR h.pan_status = 'pending_review'
         ORDER BY h.id ASC

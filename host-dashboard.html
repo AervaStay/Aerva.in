@@ -1190,11 +1190,15 @@
         <div class="settings-edit-form" id="profileBankEditForm">
           <div class="field">
             <label for="profileBankHolder">Account Holder Name</label>
-            <input type="text" id="profileBankHolder" placeholder="As it appears on your bank account">
+            <input type="text" id="profileBankHolder" placeholder="The name on your PAN — the account must be in it">
           </div>
           <div class="field">
             <label for="profileBankAccount">Bank Account Number</label>
-            <input type="text" id="profileBankAccount" placeholder="New account number">
+            <input type="text" id="profileBankAccount" placeholder="New account number" inputmode="numeric" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="profileBankAccount2">Re-enter Account Number</label>
+            <input type="text" id="profileBankAccount2" placeholder="The same number again" inputmode="numeric" autocomplete="off">
           </div>
           <div class="field">
             <label for="profileBankIfsc">IFSC Code</label>
@@ -2105,8 +2109,9 @@
     document.getElementById('profileCurrentBankNote').textContent = v.bankAccountNumberMasked
       ? `${v.bankAccountNumberMasked}${v.bankAccountHolderName ? ' (' + v.bankAccountHolderName + ')' : ''}`
       : 'No bank details on file yet.';
-    document.getElementById('profileBankHolder').value = '';
+    document.getElementById('profileBankHolder').value = v.panName || '';
     document.getElementById('profileBankAccount').value = '';
+    document.getElementById('profileBankAccount2').value = '';
     document.getElementById('profileBankIfsc').value = '';
     // Collapse every edit form back closed on a fresh data load.
     ['profileNameEditForm', 'profilePhoneEditForm', 'profileBankEditForm'].forEach(id => {
@@ -2114,6 +2119,17 @@
     });
 
     renderProfileVerificationTab(v);
+  }
+
+  // The PAN's 5th letter is the first letter of the holder's surname (or of
+  // a business's name). Same check as api/_bank-check.js.
+  function panNameProblem(pan, name){
+    const parts = String(name || '').toUpperCase().replace(/[^A-Z ]+/g, ' ').split(/\s+/)
+      .filter(t => t && !['MR','MRS','MS','MISS','DR','SHRI','SRI','SHREE','SMT','KUMARI','KUM','PROF','LATE','MASTER','THE'].includes(t));
+    if(String(name || '').trim().length < 3 || !parts.length) return 'Enter your name exactly as it is printed on your PAN card.';
+    const fifth = String(pan || '')[4];
+    if(fifth && !parts.some(t => t[0] === fifth)) return `This PAN and name do not go together: the 5th letter of a PAN (${fifth}) is the first letter of the holder’s surname, or of the business’s name. Check both against your PAN card.`;
+    return null;
   }
 
   function renderProfileVerificationTab(v){
@@ -2129,9 +2145,15 @@
         </div>
         ${v.panStatus === 'rejected' && v.panRejectionReason ? `<p class="verify-rejection-note">${escH(v.panRejectionReason)}</p>` : ''}
         ${v.panSubmitted
-          ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + escH(v.panNumberMasked) + '. ' : ''}Submitted — this can't be changed here. Contact hello@aerva.in if it needs to be updated.</p>`
+          ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + escH(v.panNumberMasked) + '. ' : ''}${v.panName ? 'Name on PAN: ' + escH(v.panName) + '. ' : ''}Submitted — this can't be changed here. Contact hello@aerva.in if it needs to be updated.</p>
+             ${v.panName ? '' : `
+               <p class="verify-locked-note" style="color:#8a6c39;">Add your name exactly as it is printed on your PAN card. Your bank account is checked against it before payouts.</p>
+               <input type="text" id="panNameLaterInput" placeholder="Name as printed on your PAN card" autocomplete="name">
+               <button type="button" class="btn-small" id="submitPanNameBtn">Save name</button>
+               <p class="verify-error" id="panNameError"></p>`}`
           : `
             <input type="text" id="panNumberInput" placeholder="PAN number, e.g. ABCPE1234F" style="text-transform:uppercase;">
+            <input type="text" id="panNameInput" placeholder="Name exactly as printed on your PAN card" autocomplete="name">
             <input type="file" id="panFileInput" accept="image/*,.pdf">
             <button type="button" class="btn-small" id="submitPanBtn">Submit PAN</button>
             <p class="verify-error" id="panError"></p>
@@ -2159,6 +2181,8 @@
           <span class="verify-status verify-status-${v.bankStatus}">${verifyStatusLabel(v.bankStatus)}</span>
         </div>
         ${v.bankStatus === 'rejected' && v.bankRejectionReason ? `<p class="verify-rejection-note">${escH(v.bankRejectionReason)}</p>` : ''}
+        ${v.bankCheck && v.bankCheck.message && v.bankStatus !== 'rejected' ? `<p class="verify-locked-note">${escH(v.bankCheck.message)}</p>` : ''}
+        ${v.bankPayoutsFrom ? `<p class="verify-locked-note">Bank details changed recently: payouts resume from ${escH(new Date(v.bankPayoutsFrom).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}.</p>` : ''}
         <p class="verify-locked-note">${v.bankAccountNumberMasked ? 'Account on file: ' + escH(v.bankAccountNumberMasked) + '. ' : 'No bank details on file yet. '}Manage this under the <a href="#" id="goToPaymentTabLink" style="color:#8a6c39;">Payment Options</a> tab.</p>
       </div>
 
@@ -2170,6 +2194,25 @@
       switchProfileTab('payment');
     });
 
+    const panNameBtn = document.getElementById('submitPanNameBtn');
+    if(panNameBtn){
+      panNameBtn.addEventListener('click', async function(){
+        const errorEl = document.getElementById('panNameError');
+        errorEl.style.display = 'none';
+        const panName = (document.getElementById('panNameLaterInput').value || '').replace(/\s+/g, ' ').trim();
+        if(panName.length < 3){ errorEl.textContent = 'Enter your name exactly as it is printed on your PAN card.'; errorEl.style.display = 'block'; return; }
+        this.disabled = true;
+        try{
+          const res = await fetch(API_BASE + '/api/host-listings', { method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken }, body: JSON.stringify({ panName }) });
+          const data = await res.json().catch(() => ({}));
+          if(res.ok){ loadListings(); return; }
+          errorEl.textContent = data.error || 'Could not save. Please try again.'; errorEl.style.display = 'block';
+        }catch(e){ errorEl.textContent = 'Could not save. Please try again.'; errorEl.style.display = 'block'; }
+        this.disabled = false;
+      });
+    }
+
     const panBtn = document.getElementById('submitPanBtn');
     if(panBtn){
       panBtn.addEventListener('click', async function(){
@@ -2178,12 +2221,15 @@
         const errorEl = document.getElementById('panError');
         errorEl.style.display = 'none';
         const panNumber = numberInput.value.trim().toUpperCase();
+        const panName = (document.getElementById('panNameInput').value || '').replace(/\s+/g, ' ').trim();
         const file = fileInput.files[0];
         if(!/^[A-Z]{3}[ABCFGHJLPT][A-Z][0-9]{4}[A-Z]$/.test(panNumber)){
           errorEl.textContent = 'Please enter a valid PAN, like ABCPE1234F. The 4th letter shows who holds it (P for a person, H for a HUF, C for a company, F for a firm).';
           errorEl.style.display = 'block';
           return;
         }
+        const nameProblem = panNameProblem(panNumber, panName);
+        if(nameProblem){ errorEl.textContent = nameProblem; errorEl.style.display = 'block'; return; }
         if(!file){
           errorEl.textContent = 'Please choose a file first.';
           errorEl.style.display = 'block';
@@ -2204,7 +2250,7 @@
           const res = await fetch(API_BASE + '/api/host-listings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-            body: JSON.stringify({ panNumber, panDocumentUrl: result.url })
+            body: JSON.stringify({ panNumber, panName, panDocumentUrl: result.url })
           });
           const data = await res.json();
           if(res.ok){
@@ -2679,12 +2725,20 @@
     const bankAccountHolderName = document.getElementById('profileBankHolder').value.trim();
     const bankAccountNumber = document.getElementById('profileBankAccount').value.trim();
     const bankIfsc = document.getElementById('profileBankIfsc').value.trim();
+    const bankAccountNumber2 = document.getElementById('profileBankAccount2').value.trim();
     if(!bankAccountHolderName || !bankAccountNumber || !bankIfsc){
-      msgEl.textContent = 'Please fill in all three fields.';
+      msgEl.textContent = 'Please fill in all the fields.';
       msgEl.style.color = '#a3402f';
       msgEl.style.display = 'block';
       return;
     }
+    if(bankAccountNumber.replace(/\s/g, '') !== bankAccountNumber2.replace(/\s/g, '')){
+      msgEl.textContent = 'The two account numbers do not match. Type them again.';
+      msgEl.style.color = '#a3402f';
+      msgEl.style.display = 'block';
+      return;
+    }
+    if(!confirm('Change your payout bank account? Aerva will check it with your bank (₹1 is sent to it), and payouts wait 48 hours after any change.')) return;
     this.disabled = true;
     this.textContent = 'Saving…';
     try{
@@ -2696,6 +2750,11 @@
       const data = await res.json();
       if(res.ok){
         document.getElementById('profileBankEditForm').style.display = 'none';
+        if(data.bankCheck === 'checking'){
+          const note = document.getElementById('profileCurrentBankNote');
+          if(note) note.textContent = 'Saved. Checking with your bank — this usually takes a minute.';
+          setTimeout(loadListings, 20000);
+        }
         loadListings();
       } else {
         msgEl.textContent = data.error || 'Something went wrong. Please try again.';

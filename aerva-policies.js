@@ -237,6 +237,8 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Payouts to hosts and co-hosts', points: [
         'Payouts are made automatically to a verified bank account after check-out, after Aerva’s fees and TDS.',
+        'Payouts go only to a bank account in the payee’s own name, the name on their PAN. Aerva confirms this with the bank by sending ₹1 to the account.',
+        'When bank details change, payouts wait 48 hours, and the account owner is emailed about the change.',
         'Aerva may hold, adjust or withhold a payout for disputes, refunds, damage claims, suspected fraud or legal reasons.',
         'Aerva pays hosts and co-hosts their own shares only. Co-host shares are paid in full, without deductions. Any other money between a host and a co-host is for them to settle between themselves.'
       ]}
@@ -509,7 +511,7 @@ window.AERVA_POLICIES = {
     commitments: [
       { title: 'A reference number at once', text: 'Every request gets a reference number the moment you send it, confirmed by email.' },
       { title: 'A reply within 48 hours', text: 'A member of our support team replies within 48 hours, usually much sooner.' },
-      { title: 'Resolved within a month', text: 'We aim to resolve every request within one month of receiving it, and keep you updated along the way.' },
+      { title: 'Resolved quickly', text: 'Most requests are resolved within a few days, and we keep you updated at every step.' },
       { title: 'One place for everything', text: 'Follow your request, reply and add files under My requests. We email you whenever we reply.' }
     ],
 
@@ -687,7 +689,8 @@ window.AERVA_POLICIES = {
           ]},
           { title: 'TDS', points: [
             'TDS is deducted under section 194-O: 0.1% with a valid PAN, 5% without one. Add your PAN in your account before your first payout.',
-            'Use your own PAN, and a bank account in the same name.'
+            'Use your own PAN, enter your name exactly as printed on it, and add a bank account in that same name. Aerva confirms the account with your bank by sending ₹1 to it.',
+            'After you change your bank details, payouts wait 48 hours, and you are emailed about the change.'
           ]}
         ], docs: ['payments', 'taxes', 'service-fees'] },
 
@@ -764,11 +767,12 @@ window.AERVA_POLICIES = {
         summary: 'Verifying your identity, PAN and bank account to host and be paid.',
         sections: [
           { title: 'What you need', points: [
-            'Your own PAN, a bank account in your own name, and the identity verification asked for in your account.',
-            'The name on your bank account must match the name on your PAN.'
+            'Your own PAN, with your name exactly as printed on it; a bank account in that same name; and the identity verification asked for in your account.',
+            'The bank account is confirmed with your bank: ₹1 is sent to it, and the bank tells Aerva whose account it is. An account in any other name is not accepted.',
+            'A PAN can be on one Aerva account only.'
           ]},
           { title: 'If verification is stuck', points: [
-            'Check that each document is clear, complete and current. If it is still pending or was declined and you do not know why, raise a request.'
+            'Check that each document is clear, complete and current, and that the bank account is in the name on your PAN. If it is still pending or was declined and you do not know why, raise a request.'
           ]}
         ], docs: ['taxes', 'payments'] },
 

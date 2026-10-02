@@ -579,6 +579,9 @@ const JOBS = [
     run: (c) => runAutoPayouts(c.sql, { deadlineMs: Math.min(4000, c.remainingMs), razorpay: razorpayClient() }) },
   { name: 'template_messages', label: 'Scheduled message templates', everyMinutes: 5,
     run: (c) => sendScheduledTemplates(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  // Bank accounts being checked by penny drop: results from RazorpayX (_bank-check.js).
+  { name: 'bank_checks', label: 'Bank account checks (penny drop): collect results', everyMinutes: 5,
+    run: (c) => require('./_bank-check').pollChecks(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'deposit_refunds', label: 'Refund security deposits whose hold has ended', everyMinutes: 15,
     run: (c) => releaseDueDeposits(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'review_publish', label: 'Publish reviews (both sides in, or window closed)', everyMinutes: 15,

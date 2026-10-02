@@ -123,6 +123,9 @@ const round2 = (n) => Math.round(n * 100) / 100;
 // opts.creditAt: the date the payout is credited (its row's creation;
 // now for a new one). opts.excludeIds: { host: id, 'cohost:<guestId>': id }
 // — a payout's own row, left out when its TDS is worked out again.
+// Bank details changed in the last 48 hours: no payout yet (_bank-check.js).
+const inChangeHold = (at) => require('./_bank-check').inChangeHold(at);
+
 async function planPayouts(sql, orderId, opts = {}) {
   const creditAt = opts.creditAt || new Date();
   const excludeIds = opts.excludeIds || {};
@@ -130,7 +133,8 @@ async function planPayouts(sql, orderId, opts = {}) {
   const o = (await sql`
     SELECT o.id, o.status, (to_jsonb(o)->>'payout_on_cancel')::boolean AS payout_on_cancel, o.commission_amount, o.payout_amount, h.id AS host_id, h.name AS host_name,
            h.bank_account_holder_name, h.bank_account_number, h.bank_ifsc, h.bank_status, h.razorpayx_fund_account_id,
-           h.pan_number AS host_pan, h.pan_status AS host_pan_status, (to_jsonb(h)->>'pan_inoperative')::boolean AS host_pan_inoperative
+           h.pan_number AS host_pan, h.pan_status AS host_pan_status, (to_jsonb(h)->>'pan_inoperative')::boolean AS host_pan_inoperative,
+           to_jsonb(h)->>'bank_changed_at' AS host_bank_changed_at
     FROM orders o JOIN listings l ON l.id = o.listing_id JOIN hosts h ON h.id = l.host_id WHERE o.id = ${orderId}
   `)[0];
   // A guest-cancelled booking still pays the host the part the guest was
@@ -140,7 +144,7 @@ async function planPayouts(sql, orderId, opts = {}) {
   let shares = [];
   try {
     shares = await sql`SELECT s.cohost_guest_id, s.amount, g.name, g.email, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status AS profile_status, p.razorpayx_fund_account_id, p.pan_number AS cohost_pan,
-                              (to_jsonb(p)->>'pan_inoperative')::boolean AS cohost_pan_inoperative
+                              (to_jsonb(p)->>'pan_inoperative')::boolean AS cohost_pan_inoperative, to_jsonb(p)->>'bank_changed_at' AS bank_changed_at
                        FROM order_cohost_shares s JOIN guests g ON g.id = s.cohost_guest_id LEFT JOIN cohost_payout_profiles p ON p.guest_id = s.cohost_guest_id
                        WHERE s.order_id = ${orderId}`;
   } catch (e) { shares = []; }
@@ -183,7 +187,7 @@ async function planPayouts(sql, orderId, opts = {}) {
     tdsBase: hostT.base, tdsReason: hostT.reason, tdsCatchupBase: hostT.catchupBase, tdsFy: hostT.fy,
     net: round2(available - deductions), email: hostEmail, name: o.host_name,
     bankLabel: [o.bank_account_holder_name, maskAccount(o.bank_account_number)].filter(Boolean).join(' · '),
-    bank: { ready: o.bank_status === 'verified' && !!o.bank_account_number && !!o.bank_ifsc, holder: o.bank_account_holder_name, account: decryptField(o.bank_account_number), ifsc: o.bank_ifsc, fundAccountId: o.razorpayx_fund_account_id, table: 'hosts', key: o.host_id }
+    bank: { ready: o.bank_status === 'verified' && !!o.bank_account_number && !!o.bank_ifsc && !inChangeHold(o.host_bank_changed_at), changedRecently: inChangeHold(o.host_bank_changed_at), holder: o.bank_account_holder_name, account: decryptField(o.bank_account_number), ifsc: o.bank_ifsc, fundAccountId: o.razorpayx_fund_account_id, table: 'hosts', key: o.host_id }
   }];
   for (const x of shares) {
     // Co-host: their share, less TDS only (no other deductions).
@@ -202,7 +206,7 @@ async function planPayouts(sql, orderId, opts = {}) {
       tdsBase: coT.base, tdsReason: coT.reason, tdsCatchupBase: coT.catchupBase, tdsFy: coT.fy,
       net: round2(Number(x.amount) - coTds), email: x.email, name: x.name,
       bankLabel: [x.account_holder_name, maskAccount(x.bank_account_number)].filter(Boolean).join(' · '),
-      bank: { ready: x.profile_status === 'approved' && !!x.bank_account_number && !!x.bank_ifsc, holder: x.account_holder_name, account: decryptField(x.bank_account_number), ifsc: x.bank_ifsc, fundAccountId: x.razorpayx_fund_account_id, table: 'cohost_payout_profiles', key: x.cohost_guest_id }
+      bank: { ready: x.profile_status === 'approved' && !!x.bank_account_number && !!x.bank_ifsc && !inChangeHold(x.bank_changed_at), changedRecently: inChangeHold(x.bank_changed_at), holder: x.account_holder_name, account: decryptField(x.bank_account_number), ifsc: x.bank_ifsc, fundAccountId: x.razorpayx_fund_account_id, table: 'cohost_payout_profiles', key: x.cohost_guest_id }
     });
   }
   return plans;
@@ -255,14 +259,15 @@ async function createPayoutRows(sql, orderId) {
 // One per booking (unique index). Returns the row, or null if not created.
 async function depositPayee(sql, hostId) {
   const { decryptField, maskAccount } = require('./_secure-fields');
-  const h = (await sql`SELECT id, name, bank_account_holder_name, bank_account_number, bank_ifsc, bank_status, razorpayx_fund_account_id, pan_number, pan_status
+  const h = (await sql`SELECT id, name, bank_account_holder_name, bank_account_number, bank_ifsc, bank_status, razorpayx_fund_account_id, pan_number, pan_status,
+                              to_jsonb(hosts)->>'bank_changed_at' AS bank_changed_at
                        FROM hosts WHERE id = ${hostId}`)[0];
   if (!h) return null;
   const email = ((await sql`SELECT email FROM guests WHERE host_id = ${hostId} ORDER BY id LIMIT 1`)[0] || {}).email || null;
   return {
     payeeType: 'host', hostId: h.id, payeeGuestId: null, email, name: h.name, panFurnished: !!h.pan_number && h.pan_status !== 'rejected',
     bankLabel: [h.bank_account_holder_name, maskAccount(h.bank_account_number)].filter(Boolean).join(' · '),
-    bank: { ready: h.bank_status === 'verified' && !!h.bank_account_number && !!h.bank_ifsc, holder: h.bank_account_holder_name, account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, fundAccountId: h.razorpayx_fund_account_id, table: 'hosts', key: h.id }
+    bank: { ready: h.bank_status === 'verified' && !!h.bank_account_number && !!h.bank_ifsc && !inChangeHold(h.bank_changed_at), changedRecently: inChangeHold(h.bank_changed_at), holder: h.bank_account_holder_name, account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, fundAccountId: h.razorpayx_fund_account_id, table: 'hosts', key: h.id }
   };
 }
 async function createDepositCompensationPayout(sql, { orderId, amount }) {
@@ -370,7 +375,7 @@ async function attemptPayout(sql, payoutId, { by = 'automatic' } = {}) {
     const plan = row.kind === 'deposit'
       ? await depositPayee(sql, row.host_id)
       : (await planPayouts(sql, row.order_id)).find(p => p.payeeType === row.payee_type && (p.payeeGuestId || 0) === (row.payee_guest_id || 0));
-    if (!plan || !plan.bank.ready) return back('due', 'Waiting for approved bank details');
+    if (!plan || !plan.bank.ready) return back('due', plan && plan.bank.changedRecently ? 'Bank details changed in the last 48 hours: waiting' : 'Waiting for approved bank details');
     let fa = plan.bank.fundAccountId;
     if (!fa) {
       const contact = await razorpayx('POST', '/contacts', { name: plan.bank.holder || plan.name || 'Aerva payee', email: plan.email || undefined, type: 'vendor', reference_id: `${plan.bank.table}-${plan.bank.key}` });

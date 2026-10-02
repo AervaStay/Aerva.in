@@ -4400,7 +4400,10 @@
       const payoutStatus = !payout ? 'Add your payout details to be paid your share.'
         : payout.status === 'approved' ? 'Approved \u2014 your shares are paid to this account.'
         : payout.status === 'rejected' ? `Not approved: ${payout.rejectionReason || 'please check and resubmit.'}`
+        : (payout.bankCheck && payout.bankCheck.message) ? `${payout.bankCheck.message} Your shares are held until these are approved.`
         : 'Waiting for Aerva to check these. Your shares are held until they are approved.';
+      const payoutHold = payout && payout.payoutsFrom
+        ? `Payout details changed recently: payouts resume from ${new Date(payout.payoutsFrom).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}.` : '';
       // Invitations sent to this email (shown even if the email never arrived).
       const invites = (mine.data && mine.data.invitations) || [];
       const linkToken = pending || '';
@@ -4473,16 +4476,19 @@
           <div class="hp-section">
             <h3 class="hp-title">Payout details</h3>
             <p class="hp-meta cohost-commission">${esc(payoutStatus)}</p>
+            ${payoutHold ? `<p class="hp-meta">${esc(payoutHold)}</p>` : ''}
             ${payout ? `<p class="hp-meta">${payout.panMasked ? 'PAN ' + esc(payout.panMasked) : 'PAN on file'}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
             <div class="cohost-payout-form">
               <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCPE1234F" autocomplete="off"></label>
+              <label>Name on PAN<input type="text" data-po="panName" maxlength="120" placeholder="Exactly as printed on the card" value="${esc((payout && payout.panName) || '')}"></label>
               <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCPE1234F1Z5" autocomplete="off"></label>
-              <label>Account holder name<input type="text" data-po="holder" maxlength="120" placeholder="As on your bank account"></label>
+              <label>Account holder name<input type="text" data-po="holder" maxlength="120" placeholder="Must be the name on your PAN"></label>
               <label>Account number<input type="text" data-po="account" inputmode="numeric" maxlength="18" autocomplete="off"></label>
+              <label>Re-enter account number<input type="text" data-po="account2" inputmode="numeric" maxlength="18" autocomplete="off"></label>
               <label>IFSC<input type="text" data-po="ifsc" maxlength="11" placeholder="HDFC0001234" autocomplete="off"></label>
             </div>
             <button type="button" class="hp-more cohost-primary" data-po-save>${payout ? 'Update payout details' : 'Save payout details'}</button>
-            <p class="hp-meta" style="margin-top:8px;">Any change is checked again before your next payout.</p>
+            <p class="hp-meta" style="margin-top:8px;">The account must be in the name on your PAN. Aerva checks it with your bank (₹1 is sent to it), and payouts wait 48 hours after any change.</p>
           </div>` : ''}
         ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
 
@@ -4641,10 +4647,11 @@
       const poSave = body.querySelector('[data-po-save]');
       if(poSave) poSave.addEventListener('click', async () => {
         const v = (k) => (body.querySelector(`[data-po="${k}"]`) || {}).value || '';
+        if(v('account').replace(/\s/g, '') !== v('account2').replace(/\s/g, '')){ render('The two account numbers do not match. Type them again.'); return; }
         poSave.disabled = true;
-        const r = await call('POST', { savePayoutProfile: { pan: v('pan'), gstin: v('gstin'), accountHolderName: v('holder'), accountNumber: v('account'), ifsc: v('ifsc') } });
+        const r = await call('POST', { savePayoutProfile: { pan: v('pan'), panName: v('panName'), gstin: v('gstin'), accountHolderName: v('holder'), accountNumber: v('account'), ifsc: v('ifsc') } });
         poSave.disabled = false;
-        render(r.ok ? 'Payout details saved \u2014 Aerva will check them before your next payout.' : (r.data.error || 'Could not save your payout details.'));
+        render(r.ok ? (r.data.bankCheck === 'checking' ? 'Payout details saved. Checking with your bank \u2014 this usually takes a minute.' : 'Payout details saved \u2014 Aerva will check them before your next payout.') : (r.data.error || 'Could not save your payout details.'));
       });
       const stop = body.querySelector('[data-cohost-stop]');
       if(stop) stop.addEventListener('click', () => { window.AervaCohost.stop(); window.location.href = 'index.html?view=cohost'; });
