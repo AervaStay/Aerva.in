@@ -246,7 +246,7 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, 
 async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreementVersion = null, confirmationCodes = null){
   if (!process.env.RESEND_API_KEY) {
     console.error('RESEND_API_KEY not set — booking confirmation email not sent.');
-    return;
+    return { sent: false, error: 'RESEND_API_KEY not set' };
   }
   const itemNames = [...stays.map(s => s.suite), ...experiences.map(e => e.suite)];
   const itemsListHtml = itemNames.map(name => `<li>${name}</li>`).join('');
@@ -260,7 +260,8 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
         <p style="margin:0 0 6px; font-size:13px; color:#6b5222;">Your confirmation code${confirmationCodes.length > 1 ? 's' : ''} — show this at check-in:</p>
         ${confirmationCodes.map(c => `<p style="margin:2px 0; font-size:19px; font-weight:600; letter-spacing:0.04em; color:#1c1b19;">${c.code}${confirmationCodes.length > 1 ? ` <span style="font-size:13px; font-weight:400; color:#6b5222;">— ${c.item}</span>` : ''}</p>`).join('')}
       </div>` : ''}
-      <p>Your full booking details — dates, amounts, and everything else — are attached as a PDF to this email.</p>
+      ${pdfBuffer ? `<p>Your full booking details — dates, amounts, and everything else — are attached as a PDF to this email.</p>`
+        : `<p>You can see your full booking details any time under <a href="https://aerva.in/index.html?view=my-bookings">My Bookings</a> on aerva.in.</p>`}
       ${agreementVersion ? `<p style="font-size:13px; opacity:0.8;">You accepted Aerva’s booking agreement (version ${agreementVersion}) before paying. Read it and Aerva’s Policies at <a href="https://aerva.in/index.html?view=policies">aerva.in/policies</a>.</p>` : ''}
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Reply to this email or write to hello@aerva.in.</p>
     </div>
@@ -277,9 +278,7 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
       to: email,
       subject: 'Your Aerva Booking Confirmation',
       html,
-      attachments: [
-        { filename: 'aerva-booking-confirmation.pdf', content: pdfBuffer.toString('base64') }
-      ]
+      ...(pdfBuffer ? { attachments: [{ filename: 'aerva-booking-confirmation.pdf', content: pdfBuffer.toString('base64') }] } : {})
     })
   });
 
@@ -287,7 +286,10 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
     let detail;
     try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
     console.error('Booking confirmation email failed:', res.status, detail);
+    return { sent: false, error: `Resend ${res.status}: ${(detail && (detail.message || detail.error)) || ''}`.slice(0, 300) };
   }
+  let id = null; try { id = ((await res.json()) || {}).id || null; } catch (e) { /* sent */ }
+  return { sent: true, id };
 }
 
 
@@ -893,11 +895,24 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     }
   }
 
-  if (ctx.email) {
+  // The guest's confirmation email. A PDF that cannot be built never stops
+  // the email: it goes without the attachment. The outcome is written to
+  // Admin → Audit log (booking_confirmation_email), so a missing email can
+  // be seen and its reason read, not only in the server logs.
+  {
+    const out = { to: ctx.email || null, pdf: false, sent: false, error: null };
+    if (!ctx.email) out.error = 'no email on this checkout';
+    else {
+      let pdf = null;
+      try { pdf = await generateBookingConfirmationPdf(ctx.stays, ctx.experiences, razorpayOrderId, ctx.chargeCurrency, ctx.couponDiscount, ctx.confirmationCodes); out.pdf = true; }
+      catch (err) { console.error('confirmation PDF failed (email goes without it):', err.message); out.pdfError = String(err.message || err).slice(0, 200); }
+      try { Object.assign(out, await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version, ctx.confirmationCodes)); }
+      catch (err) { console.error('Could not send booking confirmation email:', err); out.error = String(err.message || err).slice(0, 300); }
+    }
     try {
-      const pdf = await generateBookingConfirmationPdf(ctx.stays, ctx.experiences, razorpayOrderId, ctx.chargeCurrency, ctx.couponDiscount, ctx.confirmationCodes);
-      await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version, ctx.confirmationCodes);
-    } catch (err) { console.error('Could not send booking confirmation email:', err); }
+      await logAudit(sql, { action: 'booking_confirmation_email', success: !!out.sent, actorType: 'system', targetType: 'order', targetId: written[0] && written[0].id,
+        metadata: { razorpayOrderId, ...out } });
+    } catch (e) { /* audit is best effort */ }
   }
   try {
     // The host is told who arrives: the name given at checkout and the

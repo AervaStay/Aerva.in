@@ -1,13 +1,17 @@
 {
   "functions": {
     "api/get-listings.js": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "node_modules/pdfkit/js/data/**"
     },
     "api/get-pending-listings.js": {
       "maxDuration": 60
     },
     "api/blob-upload.js": {
       "maxDuration": 60
+    },
+    "api/verify-payment.js": {
+      "includeFiles": "node_modules/pdfkit/js/data/**"
     }
   },
   "crons": [

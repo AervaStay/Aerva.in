@@ -3092,46 +3092,128 @@ footer .foot-bottom{ margin-top:0; }
   .hc-tabs .hc-tabs-login{ margin-left:0; }
 }
 
-/* ---------- Search card on tablets and desktops (Oct 2026) ----------
-   One row held Where, When, Who, three filter buttons and the search
-   button, so once dates and "3 guests, 1 infant, 1 pet" were filled in,
-   Who wrapped onto four lines and the place name was cut to a few letters.
-   Now: the fields and the search button on the first row (When and Who
-   take the width their text needs, Where takes the rest), the filter
-   buttons on a second row below a thin line. Phones keep their own
-   stacked layout above. */
+/* ---------- Search card (Oct 2026 redesign) ----------
+   One quiet white card: Where, When and Who as soft segments (small label
+   above the value, a light tint on hover, a lifted white tile while its
+   panel is open), a gold Search button, and the filter chips on a slim
+   row below. Panels (calendar, guests, more filters) are rounded white
+   sheets anchored under their field. Phones keep the stacked layout. */
+.pill-search{
+  background:#fff; border:1px solid rgba(28,27,25,0.07); border-radius:24px;
+  box-shadow:0 1px 2px rgba(20,17,14,0.06), 0 18px 48px rgba(20,17,14,0.20);
+}
+.pill-search > .search-field{ cursor:pointer; transition:background-color .18s ease, box-shadow .18s ease; }
+.pill-search > .search-field label{
+  font-family:'Jost', sans-serif; font-size:11px; font-weight:600; letter-spacing:0.14em;
+  text-transform:uppercase; color:#8a7a5f; margin:0; cursor:pointer;
+}
+.pill-search > .search-field .date-range-btn,
+.pill-search > .search-field .place-input-wrap input{
+  font-family:'Jost', sans-serif; font-size:15.5px; color:var(--ink, #1C1B19); border:none; background:transparent; padding:0; margin:0; min-height:0;
+}
+.pill-search > .search-field .date-range-btn.placeholder{ opacity:1; color:#9b917f; }
+.pill-search .place-hint{ font-size:15.5px; color:#9b917f; left:0; }
+#placeHintText:empty::before{ content:'Search a city or area'; }
+.pill-search > .search-field:focus-within,
+.pill-search > .search-field.is-active{ background:#fff; box-shadow:0 6px 22px rgba(20,17,14,0.12); }
+.pill-search-submit{
+  background:var(--gold-deep, #8a6c39); color:#fff; box-shadow:0 6px 16px rgba(138,108,57,0.35);
+  transition:background .2s ease, transform .15s ease, box-shadow .2s ease;
+}
+.pill-search-submit:hover{ background:var(--ink, #1C1B19); box-shadow:0 6px 16px rgba(20,17,14,0.3); }
+.pill-search-submit:active{ transform:scale(0.97); }
+.pill-search .filter-bar .more-filters-btn,
+.pill-search .filter-bar #showDistanceBtn{
+  height:36px; min-height:36px; padding:0 14px; border:1px solid #e6ddd0; border-radius:999px; background:#fff;
+  font-family:'Jost', sans-serif; font-size:13.5px; letter-spacing:0.01em; color:var(--ink, #1C1B19);
+  display:inline-flex; align-items:center; gap:7px; text-decoration:none; transition:border-color .2s ease, background .2s ease;
+}
+.pill-search .filter-bar .more-filters-btn:hover,
+.pill-search .filter-bar #showDistanceBtn:hover{ border-color:var(--gold-deep, #8a6c39); background:#fbf8f3; }
+.pill-search .filter-bar .more-filters-btn svg,
+.pill-search .filter-bar #showDistanceBtn svg{ width:15px; height:15px; }
+.pill-search .filter-bar #clearFiltersBtn{
+  font-family:'Jost', sans-serif; font-size:13px; color:#7b7262; text-decoration:underline; text-underline-offset:3px;
+  background:none; border:none; padding:6px 2px; cursor:pointer;
+}
+.pill-search .filter-bar #clearFiltersBtn:hover{ color:var(--ink, #1C1B19); }
+
+/* Panels */
+.calendar-dropdown, .guests-dropdown, .more-filters-dropdown{
+  border:1px solid rgba(28,27,25,0.06); border-radius:20px; box-shadow:0 2px 6px rgba(20,17,14,0.06), 0 24px 60px rgba(20,17,14,0.22);
+}
+.calendar-dropdown{ padding:22px 24px 16px; width:680px; }
+.guests-dropdown{ padding:6px 22px; width:360px; }
+.more-filters-dropdown{ padding:22px; width:360px; }
+.calendar-dropdown, .guests-dropdown, .more-filters-dropdown{ overscroll-behavior:contain; }
+.quick-date-btn{ border-color:#e6ddd0; padding:7px 15px; font-size:13px; }
+.calendar-month-label{ font-size:16px; }
+.cal-nav{ border-radius:50%; width:32px; height:32px; border-color:#e6ddd0; }
+.cal-nav:hover:not(:disabled){ border-color:var(--gold-deep, #8a6c39); }
+.calendar-weekdays{ font-size:11px; letter-spacing:0.08em; margin-bottom:6px; }
+.calendar-day{ font-size:13.5px; transition:background-color .12s ease; }
+.calendar-day.in-range{ background:#f3ebdf; }
+.calendar-day.selected-start, .calendar-day.selected-end{ background:var(--ink, #1C1B19); color:#fff; }
+.calendar-footer{ border-top-color:#efe8de; }
+#calendarHint{ font-size:12.5px; opacity:0.7; }
+.calendar-clear{ font-size:12.5px; }
+.guest-row{ padding:15px 0; }
+.guest-row-divider{ background:#efe8de; }
+.guest-step-btn{ width:32px; height:32px; border-color:#d9cfbf; }
+
 @media (min-width:641px){
-  .pill-search{ flex-wrap:wrap; border-radius:28px; align-items:center; }
-  .pill-search > .search-field{ align-self:stretch; align-items:center; }
-  .pill-search > .search-field{ flex:0 1 auto; min-width:0; padding:14px 22px; }
-  .pill-search > .search-field-where{ flex:1 1 220px; min-width:180px; }
-  .pill-search > .search-field:has(#guestsTriggerBtn){ border-right:none; }
-  .pill-search > .search-field .date-range-btn{ flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .pill-search .place-input-wrap input{ text-overflow:ellipsis; }
-  .pill-search-submit{ order:1; margin:10px 12px 10px 4px; }
-  .pill-search .filter-bar{
-    order:2; flex:1 0 100%; box-sizing:border-box; display:flex; align-items:center; gap:14px;
-    border-left:none; border-top:1px solid var(--line-dark); padding:10px 22px; opacity:1;
+  .pill-search{ flex-wrap:wrap; align-items:center; padding:8px; gap:0; }
+  .pill-search > .search-field{
+    position:relative; box-sizing:border-box; min-width:0; border:none; border-radius:18px;
+    flex-direction:column; align-items:flex-start; justify-content:center; gap:4px; padding:12px 22px; min-height:64px;
   }
-  .pill-search .filter-bar .more-filters-btn,
-  .pill-search .filter-bar #showDistanceBtn{ white-space:nowrap; }
+  .pill-search > .search-field-where{ flex:1.7 1 0; }
+  .pill-search > .search-field.date-range-wrapper{ flex:1 1 0; }
+  .pill-search > .search-field:has(#guestsTriggerBtn){ flex:1.15 1 0; }
+  /* thin separators that disappear next to a hovered or open segment */
+  .pill-search > .search-field + .search-field::before{
+    content:''; position:absolute; left:0; top:50%; height:30px; margin-top:-15px; width:1px; background:#ece4d8;
+  }
+  .pill-search > .search-field:hover{ background:#f7f3ed; }
+  .pill-search > .search-field:hover::before,
+  .pill-search > .search-field:hover + .search-field::before,
+  .pill-search > .search-field.is-active::before,
+  .pill-search > .search-field.is-active + .search-field::before{ opacity:0; }
+  .pill-search > .search-field .place-input-wrap,
+  .pill-search > .search-field .date-range-btn{ width:100%; flex:0 0 auto; }
+  .pill-search > .search-field .date-range-btn{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; cursor:pointer; }
+  .pill-search .place-input-wrap input{ width:100%; text-overflow:ellipsis; }
+  .pill-search-submit{ order:1; width:auto; height:54px; min-width:54px; margin:0 4px 0 8px; padding:0 22px; border-radius:999px; gap:8px; }
+  .pill-search .filter-bar{
+    order:2; flex:1 0 100%; box-sizing:border-box; display:flex; align-items:center; gap:10px; opacity:1;
+    margin:8px 6px 0; padding:10px 8px 4px; border:none; border-top:1px solid #f0e9df; background:transparent;
+  }
   .pill-search .filter-bar #clearFiltersBtn{ margin-left:auto; order:3; }
 }
-/* Tablets: not enough width for label + value side by side and the search
-   button on one row, so labels sit above their values, the three fields
-   share the row, and the search button moves to the filter row. */
+@media (min-width:1000px){
+  .pill-search-submit::after{ content:'Search'; font-family:'Jost', sans-serif; font-size:15px; letter-spacing:0.02em; }
+}
 @media (min-width:641px) and (max-width:999px){
-  .pill-search > .search-field{ flex-direction:column; align-items:flex-start; justify-content:center; gap:4px; padding:12px 18px; }
-  .pill-search > .search-field{ box-sizing:border-box; min-width:0; }
-  .pill-search > .search-field-where{ flex:38 1 0; }
-  .pill-search > .search-field.date-range-wrapper{ flex:27 1 0; }
-  .pill-search > .search-field:has(#guestsTriggerBtn){ flex:35 1 0; }
-  .pill-search > .search-field label{ margin-right:0; }
+  .pill-search > .search-field{ padding:12px 16px; }
+  .pill-search .filter-bar{ flex:1 1 calc(100% - 80px); }
+  .pill-search-submit{ order:3; margin:8px 4px 0 0; padding:0; width:54px; }
+}
+/* Phones: stacked, label above value, a full-width Search button. */
+@media (max-width:640px){
+  .pill-search{ border-radius:20px; }
+  .pill-search > .search-field{ flex-direction:column; align-items:flex-start; gap:4px; padding:14px 20px; border-bottom:1px solid #f0e9df; }
   .pill-search > .search-field .place-input-wrap,
   .pill-search > .search-field .date-range-btn{ width:100%; }
-  .pill-search .filter-bar{ flex:1 1 calc(100% - 90px); order:2; }
-  .pill-search-submit{ order:3; margin:8px 14px 8px 0; border-top:none; }
+  .pill-search-submit{ border-radius:14px; height:52px; gap:8px; }
+  .pill-search-submit::after{ content:'Search'; font-family:'Jost', sans-serif; font-size:15.5px; letter-spacing:0.02em; }
+  .calendar-dropdown, .guests-dropdown, .more-filters-dropdown{ border-radius:20px; width:calc(100vw - 32px); max-width:420px; box-sizing:border-box; }
+  .calendar-dropdown{ padding:58px 16px 12px; }
+  .guests-dropdown{ padding-top:50px; }
+  .more-filters-dropdown{ padding-top:58px; }
+  .calendar-dropdown-close{ top:12px; right:12px; }
 }
+/* While a panel is open the page behind it stays still. */
+html.search-panel-open, html.search-panel-open body{ overflow:hidden; }
 
 /* Cancellation request card in a booking's messages: the host's Accept /
    Confirm and Reject buttons (they had no styles on this page). */
@@ -3145,3 +3227,56 @@ footer .foot-bottom{ margin-top:0; }
 .cc-reject:hover{ border-color:#a3402f; }
 .cc-accept:disabled, .cc-reject:disabled{ opacity:0.5; cursor:default; }
 .cc-msg:empty{ display:none; }
+
+/* ---------- "Booking confirmed" screen (after payment) ---------- */
+html.bs-open, html.bs-open body{ overflow:hidden; }
+.bs-overlay{
+  position:fixed; inset:0; z-index:1000; background:rgba(28,27,25,0.55); backdrop-filter:blur(3px);
+  display:flex; align-items:center; justify-content:center; padding:24px 16px; overflow-y:auto;
+  animation:bsFade .25s ease;
+}
+.bs-card{
+  position:relative; width:100%; max-width:520px; margin:auto; background:#fff; border-radius:24px; padding:34px 32px 26px;
+  box-shadow:0 30px 80px rgba(20,17,14,0.35); font-family:'Jost', sans-serif; color:var(--ink, #1C1B19); text-align:left;
+  animation:bsRise .35s cubic-bezier(.2,.8,.2,1);
+}
+.bs-tick{ width:58px; height:58px; border-radius:50%; background:#eef5ec; display:flex; align-items:center; justify-content:center; margin:0 0 16px; }
+.bs-tick svg{ width:28px; height:28px; fill:none; stroke:#2f6b3a; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:24; stroke-dashoffset:24; animation:bsDraw .5s .2s ease forwards; }
+.bs-eyebrow{ margin:0 0 4px; font-size:11.5px; letter-spacing:0.16em; text-transform:uppercase; color:#8a7a5f; font-weight:600; }
+.bs-card h2{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:30px; line-height:1.15; margin:0 0 10px; }
+.bs-lead{ margin:0 0 20px; font-size:15px; line-height:1.55; color:#4a453e; }
+.bs-lead strong{ color:var(--ink, #1C1B19); font-weight:500; word-break:break-all; }
+.bs-item{ border:1px solid #ece4d8; border-radius:18px; padding:18px 18px 16px; margin:0 0 12px; }
+.bs-item-head h3{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:21px; margin:0; }
+.bs-item-head p{ margin:3px 0 0; font-size:14px; color:#6e675d; }
+.bs-code{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:14px 0 4px; padding:12px 14px; background:#f8f2e8; border:1px solid #eadcc3; border-radius:12px; }
+.bs-code span{ font-size:12.5px; color:#6b5222; }
+.bs-code strong{ font-size:21px; letter-spacing:0.08em; font-weight:600; }
+.bs-copy{ margin-left:auto; border:1px solid #d9c9ab; background:#fff; color:#6b5222; border-radius:999px; padding:6px 14px; font:13px 'Jost', sans-serif; cursor:pointer; }
+.bs-copy:hover{ border-color:#8a6c39; }
+.bs-dates{ display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:start; margin-top:14px; }
+.bs-dates > div > span, .bs-row > span{ display:block; font-size:11.5px; letter-spacing:0.12em; text-transform:uppercase; color:#8a7a5f; font-weight:600; margin-bottom:3px; }
+.bs-dates strong{ display:block; font-size:15.5px; font-weight:500; }
+.bs-dates em, .bs-row em{ font-style:normal; font-size:13px; color:#6e675d; }
+.bs-arrow{ color:#b9a98c; font-size:18px; padding-top:16px; }
+.bs-row{ margin-top:12px; }
+.bs-row strong{ font-size:15.5px; font-weight:500; }
+.bs-pay{ display:grid; grid-template-columns:1fr 1fr; gap:4px 16px; padding:2px 4px 6px; }
+.bs-mono{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px !important; word-break:break-all; }
+.bs-actions{ display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }
+.bs-btn{ flex:1 1 180px; display:inline-flex; align-items:center; justify-content:center; height:50px; border-radius:999px; font:500 15px 'Jost', sans-serif; letter-spacing:0.02em; cursor:pointer; text-decoration:none; transition:background .2s ease, border-color .2s ease; }
+.bs-primary{ background:var(--gold-deep, #8a6c39); color:#fff; border:1px solid var(--gold-deep, #8a6c39); }
+.bs-primary:hover{ background:var(--ink, #1C1B19); border-color:var(--ink, #1C1B19); }
+.bs-secondary{ background:#fff; color:var(--ink, #1C1B19); border:1px solid #d9cfbf; }
+.bs-secondary:hover{ border-color:var(--ink, #1C1B19); }
+.bs-note{ margin:14px 0 0; font-size:13px; color:#7b7262; text-align:center; }
+@keyframes bsFade{ from{ opacity:0; } to{ opacity:1; } }
+@keyframes bsRise{ from{ opacity:0; transform:translateY(14px) scale(.98); } to{ opacity:1; transform:none; } }
+@keyframes bsDraw{ to{ stroke-dashoffset:0; } }
+@media (max-width:520px){
+  .bs-overlay{ padding:12px; align-items:flex-end; }
+  .bs-card{ padding:28px 20px 20px; border-radius:22px; }
+  .bs-card h2{ font-size:26px; }
+  .bs-pay{ grid-template-columns:1fr; }
+}
+@media (prefers-reduced-motion:reduce){ .bs-overlay, .bs-card{ animation:none; } .bs-tick svg{ animation:none; stroke-dashoffset:0; } }

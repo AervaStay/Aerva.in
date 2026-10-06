@@ -11891,16 +11891,82 @@
   // anchored-to-trigger behavior; only mobile skips it.
   function openDropdownAsPortal(dropdownEl, wrapperEl){
     document.body.appendChild(dropdownEl);
-    dropdownEl.style.position = 'fixed';
-    if(window.innerWidth > 640){
-      const rect = wrapperEl.getBoundingClientRect();
-      dropdownEl.style.top = (rect.bottom + 10) + 'px';
-      dropdownEl.style.left = rect.left + 'px';
-    } else {
-      dropdownEl.style.top = '';
-      dropdownEl.style.left = '';
-    }
+    dropdownEl.classList.add('open');
+    openPanels.set(dropdownEl, wrapperEl);
+    document.querySelectorAll('#searchBar > .search-field.is-active').forEach(f => f.classList.remove('is-active'));
+    const seg = wrapperEl && wrapperEl.closest('#searchBar > .search-field');
+    if(seg) seg.classList.add('is-active');
+    placeSearchPanel(dropdownEl, wrapperEl, true);
+    lockPageForPanel();
   }
+
+  // Panels (calendar, guests, more filters) are anchored to the PAGE just
+  // under their field, never to the window: before, they were fixed to the
+  // window, so scrolling slid the page away and left the calendar floating
+  // over other content (and wider than the screen on a laptop). While one is
+  // open the page behind it is held still, so it stays exactly where it
+  // opened; on opening, the page first scrolls just enough for the whole
+  // panel to fit. Phones keep the centred sheet (CSS), page held still too.
+  const openPanels = new Map();
+  function headerBottom(){
+    const h = document.getElementById('siteHeader');
+    if(!h) return 0;
+    const pos = getComputedStyle(h).position;
+    return (pos === 'fixed' || pos === 'sticky') ? Math.max(0, h.getBoundingClientRect().bottom) : 0;
+  }
+  function placeSearchPanel(el, anchor, scrollToFit){
+    if(window.innerWidth <= 640 || !anchor){
+      el.style.position = 'fixed'; el.style.top = ''; el.style.left = ''; el.style.maxHeight = '';
+      return;
+    }
+    el.style.position = 'absolute';
+    el.style.maxHeight = '';
+    const gap = 10, margin = 16, top0 = headerBottom() + 12;
+    let r = anchor.getBoundingClientRect();
+    if(scrollToFit){
+      const overflowBelow = r.bottom + gap + el.offsetHeight + margin - window.innerHeight;
+      let delta = 0;
+      if(r.top < top0) delta = r.top - top0;
+      else if(overflowBelow > 0) delta = Math.min(overflowBelow, r.top - top0);
+      if(delta) { window.scrollBy({ top: delta, left: 0, behavior: 'instant' }); r = anchor.getBoundingClientRect(); }
+    }
+    const width = el.offsetWidth;
+    const minLeft = margin, maxLeft = Math.max(margin, document.documentElement.clientWidth - width - margin);
+    el.style.top = (r.bottom + gap + window.scrollY) + 'px';
+    el.style.left = (Math.min(Math.max(r.left, minLeft), maxLeft) + window.scrollX) + 'px';
+    const room = window.innerHeight - (r.bottom + gap) - margin;
+    if(room > 200 && el.offsetHeight > room){ el.style.maxHeight = room + 'px'; el.style.overflowY = 'auto'; }
+  }
+  function lockPageForPanel(){
+    const root = document.documentElement;
+    if(root.classList.contains('search-panel-open')) return;
+    const bar = window.innerWidth - root.clientWidth;
+    if(bar > 0) document.body.style.paddingRight = bar + 'px';
+    root.classList.add('search-panel-open');
+  }
+  function releasePanel(el){
+    openPanels.delete(el);
+    if(openPanels.size) return;
+    document.documentElement.classList.remove('search-panel-open');
+    document.body.style.paddingRight = '';
+    document.querySelectorAll('#searchBar > .search-field.is-active').forEach(f => f.classList.remove('is-active'));
+  }
+  window.addEventListener('resize', () => { openPanels.forEach((anchor, el) => placeSearchPanel(el, anchor, false)); });
+  document.addEventListener('keydown', (e) => {
+    if(e.key !== 'Escape' || !openPanels.size) return;
+    closeCalendar(); closeGuestsDropdown(); closeMoreFiltersDropdown();
+  });
+  // A click anywhere on a Where / When / Who segment acts on that field,
+  // not just on its small text.
+  document.querySelectorAll('#searchBar > .search-field').forEach(seg => {
+    seg.addEventListener('click', (e) => {
+      if(e.target.closest('button, input, a, select, .place-suggestions')) return;
+      const target = seg.querySelector('#searchCity, #dateRangeBtn, #guestsTriggerBtn');
+      if(!target) return;
+      e.stopPropagation();
+      if(target.tagName === 'INPUT') target.focus(); else target.click();
+    });
+  });
 
   function openCalendar(){
     closeGuestsDropdown();
@@ -11919,9 +11985,12 @@
     calViewYear = anchor.getFullYear();
     calViewMonth = anchor.getMonth();
     renderCalendar();
+    // Placed again now its months are drawn (its real height).
+    placeSearchPanel(calendarDropdown, dateRangeBtn.closest('.date-range-wrapper'), true);
   }
   function closeCalendar(){
     calendarDropdown.classList.remove('open');
+    releasePanel(calendarDropdown);
     document.getElementById('calendarDropdownBackdrop').classList.remove('open');
   }
 
@@ -12015,6 +12084,7 @@
   }
   function closeGuestsDropdown(){
     guestsDropdown.classList.remove('open');
+    releasePanel(guestsDropdown);
     document.getElementById('guestsDropdownBackdrop').classList.remove('open');
   }
 
@@ -12066,6 +12136,7 @@
   }
   function closeMoreFiltersDropdown(){
     moreFiltersDropdown.classList.remove('open');
+    releasePanel(moreFiltersDropdown);
     document.getElementById('moreFiltersDropdownBackdrop').classList.remove('open');
   }
 
@@ -12987,6 +13058,71 @@ function aervaPrefillBooking(){
   });
 }
 
+// ---- "Booking confirmed" screen ----
+// Shown over the page the moment a payment is confirmed: the code to show
+// at check-in, each booking's dates and guests, what was paid, and where the
+// confirmation email went. Built only from what verify-payment.js returns.
+function aervaShowBookingSuccess(summary, codes){
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const day = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  const money = (n, cur) => (cur && cur !== 'INR' ? cur + ' ' : '₹') + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const items = (summary && Array.isArray(summary.items) && summary.items.length) ? summary.items
+    : (codes || []).map(c => ({ name: c.item, code: c.code }));
+  const old = document.getElementById('bookingSuccess');
+  if(old) old.remove();
+  const wrap = document.createElement('div');
+  wrap.id = 'bookingSuccess';
+  wrap.className = 'bs-overlay';
+  wrap.setAttribute('role', 'dialog');
+  wrap.setAttribute('aria-modal', 'true');
+  wrap.setAttribute('aria-labelledby', 'bsTitle');
+  const itemHtml = items.map(it => {
+    const when = it.arrival
+      ? (it.experience || !it.departure || it.departure === it.arrival
+          ? `<div class="bs-row"><span>Date</span><strong>${esc(day(it.arrival))}</strong></div>`
+          : `<div class="bs-dates">
+               <div><span>Check-in</span><strong>${esc(day(it.arrival))}</strong>${it.checkIn ? `<em>from ${esc(it.checkIn)}</em>` : ''}</div>
+               <div class="bs-arrow" aria-hidden="true">→</div>
+               <div><span>Check-out</span><strong>${esc(day(it.departure))}</strong>${it.checkOut ? `<em>by ${esc(it.checkOut)}</em>` : ''}</div>
+             </div>`)
+      : '';
+    const facts = [it.nights && !it.experience ? `${it.nights} night${it.nights === 1 ? '' : 's'}` : '', it.guests ? `${it.guests} guest${it.guests === 1 ? '' : 's'}` : '', it.city || ''].filter(Boolean).join(' · ');
+    return `<div class="bs-item">
+      <div class="bs-item-head"><h3>${esc(it.name || 'Your booking')}</h3>${facts ? `<p>${esc(facts)}</p>` : ''}</div>
+      ${it.code ? `<div class="bs-code"><span>Confirmation code</span><strong>${esc(it.code)}</strong><button type="button" class="bs-copy" data-code="${esc(it.code)}">Copy</button></div>` : ''}
+      ${when}
+    </div>`;
+  }).join('');
+  const paid = summary && summary.paid != null ? `<div class="bs-row"><span>Paid</span><strong>${esc(money(summary.paid, summary.currency))}${summary.method ? ` <em>· ${esc(String(summary.method).toUpperCase())}</em>` : ''}</strong></div>` : '';
+  const payId = summary && summary.paymentId ? `<div class="bs-row"><span>Payment ID</span><strong class="bs-mono">${esc(summary.paymentId)}</strong></div>` : '';
+  wrap.innerHTML = `<div class="bs-card">
+      <div class="bs-tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7"/></svg></div>
+      <p class="bs-eyebrow">Payment received</p>
+      <h2 id="bsTitle">Your booking is confirmed</h2>
+      <p class="bs-lead">${summary && summary.email ? `We have sent the confirmation to <strong>${esc(summary.email)}</strong>.` : 'We have emailed you the confirmation.'} Show your confirmation code at check-in.</p>
+      ${itemHtml}
+      ${paid || payId ? `<div class="bs-pay">${paid}${payId}</div>` : ''}
+      <div class="bs-actions">
+        <a class="bs-btn bs-primary" href="index.html?view=my-bookings">View my bookings</a>
+        <button type="button" class="bs-btn bs-secondary" data-bs-close>Done</button>
+      </div>
+      <p class="bs-note">You can message your host, change dates or cancel from My Bookings.</p>
+    </div>`;
+  document.body.appendChild(wrap);
+  document.documentElement.classList.add('bs-open');
+  const close = () => { wrap.remove(); document.documentElement.classList.remove('bs-open'); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  wrap.addEventListener('click', (e) => { if(e.target === wrap) close(); });
+  wrap.querySelector('[data-bs-close]').addEventListener('click', close);
+  wrap.querySelectorAll('.bs-copy').forEach(b => b.addEventListener('click', async () => {
+    try{ await navigator.clipboard.writeText(b.dataset.code); b.textContent = 'Copied'; }
+    catch(e){ b.textContent = 'Select and copy'; }
+    setTimeout(() => { b.textContent = 'Copy'; }, 1800);
+  }));
+  setTimeout(() => { const p = wrap.querySelector('.bs-primary'); if(p) p.focus(); }, 50);
+}
+
 // ---- After payment: what the guest is told ----
 // verify-payment.js answers with the booking's confirmation code(s).
 function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn }){
@@ -13001,6 +13137,7 @@ function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn }){
     confirmEl.style.display = 'block';
     // Paid: the button stays off, so the same booking is never paid twice.
     if(btn){ btn.disabled = true; btn.textContent = 'Booked'; }
+    aervaShowBookingSuccess(verifyData.summary, codes);
     return;
   }
   const pending = verifyData && verifyData.pending;

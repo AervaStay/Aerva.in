@@ -60,12 +60,47 @@ module.exports = async (req, res) => {
           .map(r => ({ item: r.suite_name, code: r.confirmation_code }));
       } catch (err) { return []; }
     };
+    // What the page shows on its "Booking confirmed" screen: each booking
+    // in this payment, and what was paid. Only ever for a payment whose
+    // Razorpay signature checked out above.
+    const summaryFor = async () => {
+      try {
+        const rows = await sql`
+          SELECT o.id, o.suite_name, o.arrival, o.departure, o.nights, o.guests, o.confirmation_code, o.guest_email,
+                 o.listing_id, l.listing_type, l.check_in_time, l.check_out_time, l.city
+          FROM orders o LEFT JOIN listings l ON l.id = o.listing_id
+          WHERE o.razorpay_order_id = ${razorpay_order_id} AND o.status = 'paid' ORDER BY o.id`;
+        let paid = null, currency = 'INR', method = null;
+        try {
+          const p = await razorpay.payments.fetch(razorpay_payment_id);
+          paid = Number(p.amount) / 100; currency = p.currency || 'INR'; method = p.method || null;
+        } catch (e) { /* the summary still shows, without the amount */ }
+        // A DATE column comes back as midnight in the server's own time zone:
+        // read it back the same way, never through UTC (which can shift a day).
+        const day = (d) => {
+          if (!d) return null;
+          if (typeof d === 'string') return d.slice(0, 10);
+          const pad = (n) => String(n).padStart(2, '0');
+          return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        };
+        return {
+          email: rows[0] ? rows[0].guest_email : null,
+          paid, currency, method, paymentId: razorpay_payment_id,
+          items: rows.map(r => ({
+            orderId: r.id, name: r.suite_name, arrival: day(r.arrival), departure: day(r.departure),
+            nights: Number(r.nights) || null, guests: Number(r.guests) || null, code: r.confirmation_code || null,
+            experience: r.listing_type === 'experience', city: r.city || null,
+            checkIn: r.check_in_time || null, checkOut: r.check_out_time || null
+          }))
+        };
+      } catch (err) { console.error('booking summary failed:', err.message); return null; }
+    };
     switch (result.status) {
-      case 'confirmed': return res.status(200).json({ verified: true, confirmationCodes: result.confirmationCodes || [] });
+      case 'confirmed': return res.status(200).json({ verified: true, confirmationCodes: result.confirmationCodes || [], summary: await summaryFor() });
       case 'duplicate': {
         // Already recorded — by an earlier call, or by the reconcile job.
         const codes = await codesFor();
-        return res.status(200).json({ verified: true, alreadyConfirmed: true, confirmationCodes: codes });
+        return res.status(200).json({ verified: true, alreadyConfirmed: true, confirmationCodes: codes, summary: await summaryFor() });
       }
       // Dates or coupon taken by another payment: nothing is booked and
       // the guest is refunded in full. `message` is what the page shows.
