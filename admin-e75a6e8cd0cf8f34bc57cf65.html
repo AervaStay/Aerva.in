@@ -250,6 +250,22 @@
   .pol-sec ul{ margin:0; padding-left:20px; }
   .pol-sec li{ font-size:15px; line-height:1.65; margin:4px 0; }
   .pol-open{ border-left:3px solid #a3402f; }
+  /* Batch jobs: a run that affected people stands out. */
+  .job-hit{ margin:10px 0; padding:12px 14px; border:1px solid #e6d3a8; border-left:4px solid #a9884f; border-radius:10px; background:#fbf6ea; }
+  .job-hit-failed{ border-color:#efcfc6; border-left-color:#a3402f; background:#fbf1ee; }
+  .job-hit-head{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+  .job-hit-name{ font-weight:600; }
+  .job-hit-badge{ background:#8a6c39; color:#fff; border-radius:999px; padding:3px 10px; font-size:12.5px; font-weight:600; white-space:nowrap; }
+  .job-hit-badge.is-failed{ background:#a3402f; }
+  .job-hit-sub{ font-size:13px; opacity:0.75; margin-top:4px; }
+  .job-hit-link{ display:inline-block; margin-top:6px; font-size:13px; color:#8a6c39; }
+  .job-hit-who{ margin-top:8px; }
+  .job-hit-table{ width:100%; border-collapse:collapse; font-size:13px; background:#fff; }
+  .job-hit-table th{ text-align:left; padding:6px 8px; border-bottom:1px solid #ddd; }
+  .job-hit-table td{ padding:6px 8px; border-bottom:1px solid #f2f2f2; }
+  .job-quiet-title{ margin:16px 0 4px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.6; }
+  .job-quiet{ font-size:14px; opacity:0.75; padding:2px 0; }
+  .job-row-hit{ border-left:4px solid #a9884f !important; padding-left:10px !important; background:#fdf9f0; }
 </style>
 <!-- Free OpenStreetMap/Leaflet embed, no API key or billing needed — same
      approach already used on manage-listing.html — so an admin can see
@@ -1601,7 +1617,7 @@
       if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load jobs.') + '</p>'; return; }
       jobLabels = {}; (d.jobs || []).forEach(j => { jobLabels[j.name] = j.label; });
       box.innerHTML = d.jobs.map(j => `
-        <div style="padding:12px 0; border-bottom:1px solid #eee;${j.lastOk === false ? ' border-left:3px solid #a3402f; padding-left:10px;' : ''}">
+        <div class="${j.lastOk !== false && j.lastImpactCount && j.lastImpactAt && (Date.now() - new Date(j.lastImpactAt).getTime()) < 864e5 ? 'job-row-hit' : ''}" style="padding:12px 0; border-bottom:1px solid #eee;${j.lastOk === false ? ' border-left:3px solid #a3402f; padding-left:10px;' : ''}">
           <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;">
             <div><strong>${escAdmin(j.label)}</strong><div style="font-size:13px; opacity:0.75;">${escAdmin(j.schedule)}</div></div>
             <button class="approve-btn" ${j.running ? 'disabled' : ''} onclick="runJobNow('${escAdmin(j.name)}')">${j.running ? 'Running…' : 'Run now'}</button>
@@ -1652,6 +1668,22 @@
         </details>`).join('');
     }catch(e){ box.innerHTML = '<p>Could not load runs.</p>'; }
   }
+  // Who the latest run of a job affected, under its highlighted line.
+  async function showJobHitWho(job, link){
+    const box = document.getElementById('jobHitWho-' + job);
+    if(!box) return;
+    if(box.dataset.open === '1'){ box.dataset.open = ''; box.innerHTML = ''; link.textContent = 'See who →'; return; }
+    box.dataset.open = '1'; link.textContent = 'Hide'; box.innerHTML = '<p style="opacity:0.6; font-size:13px;">Loading…</p>';
+    try{
+      const res = await fetch(API_BASE + '/api/get-listings?jobRuns=1&job=' + encodeURIComponent(job) + '&limit=1', { headers: authHeaders() });
+      const d = await res.json();
+      const run = (d.runs || [])[0];
+      if(!res.ok || !run || !(run.affected || []).length){ box.innerHTML = '<p style="font-size:13px; opacity:0.7;">No names recorded for this run.</p>'; return; }
+      box.innerHTML = '<div style="overflow-x:auto;"><table class="job-hit-table"><thead><tr><th>Who</th><th>Name</th><th>Email</th><th>What happened</th></tr></thead><tbody>'
+        + run.affected.map(p => '<tr><td>' + escAdmin(p.who) + '</td><td>' + escAdmin(p.name) + '</td><td>' + escAdmin(p.email) + '</td><td>' + escAdmin(p.what) + '</td></tr>').join('')
+        + '</tbody></table></div>';
+    }catch(e){ box.innerHTML = '<p style="font-size:13px; color:#a3402f;">Could not load this.</p>'; }
+  }
   async function runJobNow(name){
     const res = await fetch(API_BASE + '/api/get-listings?runJob=' + encodeURIComponent(name), { headers: authHeaders() });
     const d = await res.json().catch(() => ({}));
@@ -1682,16 +1714,29 @@
         // failed: [{ job, error }], skipped: [name] } — one line per job.
         const name = (n) => escAdmin((jobLabels && jobLabels[n]) || n);
         const ran = d.ran || [], failed = d.failed || [], skipped = d.skipped || [];
+        const people = (n) => Number(n) + ' ' + (Number(n) === 1 ? 'person' : 'people');
+        // Jobs that touched someone first (most people first), highlighted,
+        // each with "See who"; then the quiet ones.
+        const touched = ran.filter(r => Number(r.affectedCount) > 0).sort((a, b) => Number(b.affectedCount) - Number(a.affectedCount));
+        const quiet = ran.filter(r => !(Number(r.affectedCount) > 0));
+        const totalPeople = touched.reduce((t, r) => t + Number(r.affectedCount), 0);
+        const detail = (r) => { const s = r.result && typeof r.result === 'object' ? jobSummary(r.result) : ''; return s && s !== 'nothing to do' ? s : ''; };
         out.innerHTML =
           '<div class="success">Finished ' + escAdmin(new Date().toLocaleString('en-IN')) + ' — '
-            + ran.length + ' ran, ' + failed.length + ' failed' + (skipped.length ? ', ' + skipped.length + ' left for the next run (time limit)' : '') + '.</div>'
+            + ran.length + ' ran, ' + failed.length + ' failed' + (skipped.length ? ', ' + skipped.length + ' left for the next run (time limit)' : '') + '.'
+            + (touched.length ? ' <strong>' + touched.length + ' job' + (touched.length === 1 ? '' : 's') + ' affected ' + people(totalPeople) + '.</strong>' : ' No one was affected.') + '</div>'
           + (ran.length || failed.length ? '' : '<div style="opacity:0.7;">Nothing was due.</div>')
-          + ran.map(r => '<div>' + name(r.job) + ' · <span style="color:#3a7d44;">OK</span> · '
-              + Number(r.affectedCount || 0) + ' ' + (Number(r.affectedCount) === 1 ? 'person' : 'people') + ' affected'
+          + failed.map(f => '<div class="job-hit job-hit-failed"><div class="job-hit-head"><span class="job-hit-name">' + name(f.job) + '</span><span class="job-hit-badge is-failed">Failed</span></div>'
+              + '<div class="job-hit-sub">' + escAdmin(f.error || 'unknown error') + (f.affectedCount ? ' · ' + people(f.affectedCount) + ' affected' : '') + '</div>'
+              + (f.affectedCount ? '<a href="#" class="job-hit-link" data-job="' + escAdmin(f.job) + '">See who →</a><div class="job-hit-who" id="jobHitWho-' + escAdmin(f.job) + '"></div>' : '') + '</div>').join('')
+          + touched.map(r => '<div class="job-hit"><div class="job-hit-head"><span class="job-hit-name">' + name(r.job) + '</span><span class="job-hit-badge">' + people(r.affectedCount) + ' affected</span></div>'
+              + (detail(r) ? '<div class="job-hit-sub">' + escAdmin(detail(r)) + '</div>' : '')
+              + '<a href="#" class="job-hit-link" data-job="' + escAdmin(r.job) + '">See who →</a><div class="job-hit-who" id="jobHitWho-' + escAdmin(r.job) + '"></div></div>').join('')
+          + (quiet.length ? '<div class="job-quiet-title">' + (touched.length || failed.length ? 'Ran with no one affected' : 'All jobs') + '</div>' : '')
+          + quiet.map(r => '<div class="job-quiet">' + name(r.job) + ' · <span style="color:#3a7d44;">OK</span>'
               + (r.result && typeof r.result === 'object' ? ' <span style="opacity:0.6;">(' + escAdmin(jobSummary(r.result)) + ')</span>' : '') + '</div>').join('')
-          + failed.map(f => '<div style="color:#a3402f;">' + name(f.job) + ' · FAILED: ' + escAdmin(f.error || 'unknown error')
-              + (f.affectedCount ? ' · ' + Number(f.affectedCount) + ' affected' : '') + '</div>').join('')
           + (skipped.length ? '<div style="opacity:0.7;">Not reached: ' + skipped.map(name).join(', ') + '</div>' : '');
+        out.querySelectorAll('.job-hit-link').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showJobHitWho(a.dataset.job, a); }));
         loadJobs();
       }
     }catch(err){
