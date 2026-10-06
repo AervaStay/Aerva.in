@@ -3301,3 +3301,36 @@ html.bs-open, html.bs-open body{ overflow:hidden; }
   .inbox-message-row .msg-actions .msg-unsend, #chatMessagesContainer .msg-actions .msg-unsend{ opacity:0; }
   .inbox-message-row:hover .msg-unsend, #chatMessagesContainer > div:hover .msg-unsend, .msg-unsend:focus-visible{ opacity:0.85; }
 }
+
+/* ---------- Smiley reactions (messages) ---------- */
+.msg-react-row{ display:flex; align-items:center; gap:6px; margin-top:4px; flex-wrap:wrap; position:relative; }
+.msg-react-row.mine{ justify-content:flex-end; }
+.inbox-message-row.mine .msg-react-row{ justify-content:flex-end; }
+.msg-react-chip{
+  display:inline-flex; align-items:center; justify-content:center; min-width:30px; height:26px; padding:0 8px;
+  border-radius:999px; background:#fff; border:1px solid #e6ddd0; font-size:15px; line-height:1; box-shadow:0 1px 2px rgba(20,17,14,0.06);
+}
+button.msg-react-chip{ cursor:pointer; font-family:inherit; }
+.msg-react-chip.is-mine{ border-color:#c9b48e; background:#fbf6ee; }
+.msg-react-add{
+  width:28px; height:28px; border-radius:50%; border:1px solid transparent; background:transparent; color:#9b917f;
+  display:inline-flex; align-items:center; justify-content:center; cursor:pointer; padding:0; transition:color .15s ease, border-color .15s ease, background .15s ease;
+}
+.msg-react-add svg{ width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; }
+.msg-react-add:hover, .msg-react-add:focus-visible{ color:#8a6c39; border-color:#e6ddd0; background:#fff; }
+.msg-react-picker{
+  display:inline-flex; gap:2px; padding:4px 6px; background:#fff; border:1px solid #ece4d8; border-radius:999px;
+  box-shadow:0 8px 24px rgba(20,17,14,0.14); animation:mrpIn .15s ease;
+}
+.msg-react-picker[hidden]{ display:none; }
+.msg-react-opt{ width:34px; height:34px; border:none; background:transparent; border-radius:50%; font-size:19px; line-height:1; cursor:pointer; transition:transform .12s ease, background .12s ease; }
+.msg-react-opt:hover, .msg-react-opt:focus-visible{ background:#f6efe3; transform:scale(1.15); }
+.msg-react-opt.is-on{ background:#f3e6cf; }
+@keyframes mrpIn{ from{ opacity:0; transform:translateY(4px) scale(.96); } to{ opacity:1; transform:none; } }
+@media (hover:hover){
+  .inbox-message-row:not(.mine) .msg-react-add, #chatMessagesContainer .msg-react-add, .tb-msg .msg-react-add{ opacity:0.55; }
+  .inbox-message-row:hover .msg-react-add, #chatMessagesContainer > div:hover .msg-react-add, .tb-msg:hover .msg-react-add, .msg-react-add:focus-visible{ opacity:1; }
+}
+
+/* "12 km away" on cards in "Places near …" (a city search). */
+.suite-distance-badge{ background:rgba(255,255,255,0.92); color:#1c1b19; }

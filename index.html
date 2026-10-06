@@ -309,7 +309,7 @@
             <div class="search-field sort-field">
               <label for="sortPrice">Sort by</label>
               <select id="sortPrice">
-                <option value="">Recommended</option>
+                <option value="">Most liked</option>
                 <option value="asc">Price: Low to High</option>
                 <option value="desc">Price: High to Low</option>
                 <option value="rating">Rating: Highest first</option>
@@ -372,6 +372,14 @@
     <div class="suite-grid" id="recentlyViewedContainer"></div>
   </div>
 
+  <div class="wrap" id="favoritesRow" style="display:none;">
+    <div class="browse-row-head">
+      <h3 id="favoritesHeading">Your favourites</h3>
+      <p style="font-size:13px; opacity:0.6; margin-top:4px;">Homes you saved within 200 km, most liked first.</p>
+    </div>
+    <div class="suite-grid" id="favoritesContainer"></div>
+  </div>
+
   <div class="wrap" id="availableSectionWrap">
     <div class="browse-row-head">
       <h3 id="availableHeading">Suites</h3>
@@ -384,6 +392,14 @@
     <div class="suite-grid" id="suitesContainer">
       <div class="suites-loading">Loading homes…</div>
     </div>
+  </div>
+
+  <div class="wrap" id="nearCityRow" style="display:none;">
+    <div class="browse-row-head">
+      <h3 id="nearCityHeading">Places nearby</h3>
+      <p id="nearCitySub" style="font-size:13px; opacity:0.6; margin-top:4px;"></p>
+    </div>
+    <div class="suite-grid" id="nearCityContainer"></div>
   </div>
 
   <div class="wrap" id="unavailableRow" style="display:none;">

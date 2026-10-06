@@ -22,6 +22,8 @@
 //   POST { mode: 'logoutAllDevices' } — ends every session of this account
 //   POST { mode: 'send', conversationId, text }
 //   POST { mode: 'unsend', conversationId, messageId, role } — own message, within 1 hour
+//   POST { mode: 'react', conversationId, messageId, emoji, role } — smiley on the other side's message
+//   GET mode=myFavorites · POST { mode: 'setFavorite', listingId(s), on } — hearted homes on the account
 //   POST { mode: 'saveTemplate', templateId?, listingId?, body }
 //   POST { mode: 'deleteTemplate', templateId }
 //   POST { mode: 'translate', text, targetLang }
@@ -190,7 +192,11 @@ function cohostOwnsTemplate(ctx, t) {
 // Unsent messages: within this many minutes of sending, and shown to both
 // sides without their text (the text stays stored for Aerva's records).
 const UNSEND_MINUTES = 60;
+// Smileys a person can put on the other side's message.
+const REACTIONS = ['👍', '❤️', '😊', '🙏', '😂', '👌'];
 function unsentView(m) {
+  if (!m.guest_reaction) delete m.guest_reaction;
+  if (!m.host_reaction) delete m.host_reaction;
   if (!m.unsent_at) { delete m.unsent_at; return m; }
   return { id: m.id, sender_type: m.sender_type, created_at: m.created_at, display_text: '', was_redacted: false, unsent: true, unsent_at: m.unsent_at };
 }
@@ -312,7 +318,7 @@ module.exports = async (req, res) => {
     const missingDetails = await cohostDetailsMissing(sql, guestId, ctx.hostId);
     if (missingDetails.length) return res.status(403).json({ error: DETAILS_REQUIRED_MESSAGE, detailsRequired: true, missing: missingDetails });
     const mode = req.method === 'GET' ? req.query.mode : (req.body || {}).mode;
-    const MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'unsend', 'translate', 'conversationTemplates'];
+    const MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'unsend', 'react', 'translate', 'conversationTemplates'];
     const TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];
     const isMessage = MESSAGE_MODES.includes(mode);
     const isTemplate = TEMPLATE_MODES.includes(mode);
@@ -448,7 +454,8 @@ module.exports = async (req, res) => {
         }
 
         const messages = (await sql`
-          SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at
+          SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at,
+                 to_jsonb(messages)->>'guest_reaction' AS guest_reaction, to_jsonb(messages)->>'host_reaction' AS host_reaction
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `).map(unsentView);
         // This endpoint is only ever called from the guest-facing chat
@@ -570,6 +577,17 @@ module.exports = async (req, res) => {
       // unread messages from the OTHER party in either direction — as
       // host waiting on a guest reply, or as guest waiting on a host reply.
       // Which listings this account has liked — so hearts render filled.
+      // The homes this account has hearted (guest_favorites), for every device.
+      if (mode === 'myFavorites') {
+        try {
+          const rows = await sql`SELECT listing_id FROM guest_favorites WHERE guest_id = ${guestId} ORDER BY created_at`;
+          return res.status(200).json({ listingIds: rows.map(r => r.listing_id), synced: true });
+        } catch (err) {
+          // Before migration_favourites_reactions.sql: the page keeps them on the device.
+          return res.status(200).json({ listingIds: [], synced: false });
+        }
+      }
+
       if (mode === 'myLikes') {
         try {
           const rows = await sql`SELECT listing_id FROM listing_likes WHERE guest_id = ${guestId}`;
@@ -609,7 +627,8 @@ module.exports = async (req, res) => {
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
 
         const messages = (await sql`
-          SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at
+          SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at,
+                 to_jsonb(messages)->>'guest_reaction' AS guest_reaction, to_jsonb(messages)->>'host_reaction' AS host_reaction
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `).map(unsentView);
         // Opening a conversation marks the OTHER party's messages read.
@@ -1109,6 +1128,30 @@ module.exports = async (req, res) => {
       // Likes only; there is no dislike. One per account per listing (the
       // table's primary key), so a double tap can never count twice. Any
       // live stay or experience can be liked, a host's own included.
+      // POST { mode: 'setFavorite', listingId, on } — heart or un-heart one home.
+      // POST { mode: 'setFavorite', listingIds: [...], on: true } — hearts saved
+      // on a device before favourites lived on the account (merged once).
+      if (mode === 'setFavorite') {
+        const b = req.body || {};
+        const on = b.on !== false;
+        const ids = (Array.isArray(b.listingIds) ? b.listingIds : [b.listingId])
+          .map(Number).filter(n => Number.isInteger(n) && n > 0).slice(0, 200);
+        if (!ids.length) return res.status(400).json({ error: 'Missing listing.' });
+        try {
+          if (on) {
+            await sql`INSERT INTO guest_favorites (guest_id, listing_id)
+                      SELECT ${guestId}, l.id FROM listings l WHERE l.id = ANY(${ids}) AND l.status = 'approved'
+                      ON CONFLICT DO NOTHING`;
+          } else {
+            await sql`DELETE FROM guest_favorites WHERE guest_id = ${guestId} AND listing_id = ANY(${ids})`;
+          }
+        } catch (err) {
+          if (/guest_favorites/.test(String(err && err.message))) return res.status(200).json({ synced: false });
+          throw err;
+        }
+        return res.status(200).json({ success: true, synced: true, favorite: on });
+      }
+
       if (mode === 'toggleLike') {
         const listingId = Number((req.body || {}).listingId);
         if (!Number.isInteger(listingId) || listingId <= 0) {
@@ -1328,6 +1371,36 @@ module.exports = async (req, res) => {
         await logAudit(sql, { action: 'message_unsent', success: true, actorType: side === 'host' ? 'host' : 'guest', actorIdentifier: String(guestId),
           targetType: 'conversation', targetId: conv.id, metadata: { messageId: m.id, sentAt: m.created_at } });
         return res.status(200).json({ success: true });
+      }
+
+      // React: one smiley per person on the OTHER side's message, to
+      // acknowledge it. POST { mode: 'react', conversationId, messageId,
+      // emoji (one of REACTIONS, or '' to take it off), role }.
+      if (mode === 'react') {
+        const { conversationId, messageId, role } = req.body || {};
+        const emoji = String((req.body || {}).emoji || '');
+        if (emoji && !REACTIONS.includes(emoji)) return res.status(400).json({ error: 'That reaction is not available.' });
+        const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${Number(conversationId) || 0}`;
+        const conv = convRows[0];
+        if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
+        const isGuest = conv.guest_id === guestId;
+        const isHost = myHostId != null && conv.host_id === myHostId;
+        if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
+        const side = role === 'guest' || role === 'host' ? role : (isHost ? 'host' : 'guest');
+        if ((side === 'guest' && !isGuest) || (side === 'host' && !isHost)) return res.status(403).json({ error: 'Not your conversation.' });
+        const m = (await sql`SELECT id, sender_type, to_jsonb(messages)->>'unsent_at' AS unsent_at FROM messages
+                             WHERE id = ${Number(messageId) || 0} AND conversation_id = ${conv.id}`)[0];
+        if (!m) return res.status(404).json({ error: 'Message not found.' });
+        if (m.sender_type === side) return res.status(400).json({ error: 'You can react to the other person\'s messages.' });
+        if (m.unsent_at) return res.status(409).json({ error: 'This message was unsent.' });
+        try {
+          if (side === 'guest') await sql`UPDATE messages SET guest_reaction = ${emoji || null} WHERE id = ${m.id}`;
+          else await sql`UPDATE messages SET host_reaction = ${emoji || null} WHERE id = ${m.id}`;
+        } catch (err) {
+          if (/_reaction/.test(String(err && err.message))) return res.status(503).json({ error: 'Reactions are being set up. Please try again later.' });
+          throw err;
+        }
+        return res.status(200).json({ success: true, emoji: emoji || null });
       }
 
       // Real machine translation via Google Cloud Translation API — a

@@ -3459,6 +3459,41 @@
       return [];
     }
   }
+  function paintFavHearts(id, on){
+    document.querySelectorAll('.fav-heart[data-fav-id="' + String(id).replace(/[^0-9]/g, '') + '"]').forEach(b => {
+      b.classList.toggle('is-fav', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+  }
+  // Hearts live on the account (guest-profile.js myFavorites / setFavorite),
+  // so they follow the guest to every device. This browser keeps a copy so
+  // cards draw filled straight away.
+  function saveFavoriteToAccount(ids, on){
+    const token = guestAuthToken();
+    if(!token) return Promise.resolve(null);
+    return fetch(SUITES_API_BASE + '/api/guest-profile', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify(Array.isArray(ids) ? { mode: 'setFavorite', listingIds: ids.map(Number), on } : { mode: 'setFavorite', listingId: Number(ids), on })
+    }).then(r => r.ok ? r.json() : null).catch(() => null);
+  }
+  async function loadAccountFavorites(){
+    const token = guestAuthToken();
+    if(!token || storageOwner === 'anon') return;
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myFavorites', { headers: { 'Authorization': 'Bearer ' + token } });
+      if(!res.ok) return;
+      const d = await res.json();
+      if(!d.synced) return; // not set up on the server yet: this device's list stays as it is
+      const server = (d.listingIds || []).map(String);
+      const local = getFavoriteIds().map(String);
+      const onlyHere = local.filter(id => !server.includes(id));
+      if(onlyHere.length) await saveFavoriteToAccount(onlyHere, true); // hearts saved on this device before
+      const all = [...new Set([...server, ...onlyHere])];
+      safeStorage.set(accountKey(FAVORITES_KEY), JSON.stringify(all));
+      document.querySelectorAll('.fav-heart[data-fav-id]').forEach(b => paintFavHearts(b.dataset.favId, all.includes(String(b.dataset.favId))));
+      try{ if(approvedListings.length) applyFiltersAndRender(); }catch(e){}
+    }catch(err){ /* the device copy is used */ }
+  }
   function toggleFavoriteId(listingId, btnEl){
     // Saving a home is personal, so it needs an account — logged out, the
     // heart asks you to log in instead of quietly saving on this device.
@@ -3468,10 +3503,8 @@
     const isFav = favs.includes(id);
     favs = isFav ? favs.filter(f => f !== id) : [...favs, id];
     safeStorage.set(accountKey(FAVORITES_KEY), JSON.stringify(favs));
-    if(btnEl){
-      btnEl.classList.toggle('is-fav', !isFav);
-      btnEl.setAttribute('aria-pressed', String(!isFav));
-    }
+    paintFavHearts(id, !isFav);
+    saveFavoriteToAccount(id, !isFav);
   }
 
   // Recent-search history — also purely client-side (localStorage). Every
@@ -5072,6 +5105,38 @@
     });
   }
 
+  // ---- Your favourites, in a place search ----
+  // When a guest searches a place (or Near Me), the homes they hearted that
+  // are in the results — within 200 km of that place — get their own row,
+  // most liked first. Homes booked for the searched dates stay in the row
+  // with the "not available" tag. Shown here, they are left out of the main
+  // list below so nothing appears twice.
+  let favoritesShownIds = new Set();
+  function renderFavoritesRow(){
+    favoritesShownIds = new Set();
+    const row = document.getElementById('favoritesRow');
+    const container = document.getElementById('favoritesContainer');
+    if(!row || !container) return;
+    const place = (document.getElementById('searchCity').value || '').split(',')[0].trim();
+    const nearMe = !!(searchStatusCounts && searchStatusCounts.suffix === 'near you');
+    const favs = new Set(getFavoriteIds().map(String));
+    if((!place && !nearMe) || !favs.size || currentCategoryFilter === 'experiences'){ row.style.display = 'none'; return; }
+    const list = approvedListings
+      .filter(l => favs.has(String(l.id)) && passesStayFilters(l) && !recentlyViewedShownIds.has('stay:' + l.id))
+      .sort((a, b) => (Number(b.like_count) || 0) - (Number(a.like_count) || 0) || (Number(b.rating) || 0) - (Number(a.rating) || 0));
+    if(!list.length){ row.style.display = 'none'; return; }
+    document.getElementById('favoritesHeading').textContent = 'Your favourites near ' + (place || 'you');
+    row.style.display = 'block';
+    container.innerHTML = '';
+    const datesSearched = !!(searchArrivalDate && searchDepartureDate);
+    list.forEach((l, i) => {
+      const card = buildSuiteCard(l, i);
+      if(datesSearched && l.is_available === false) addUnavailableCardDressing(card);
+      container.appendChild(card);
+      favoritesShownIds.add('stay:' + l.id);
+    });
+  }
+
   function renderNearbyRow(){
     const row = document.getElementById('nearbyRow');
     const container = document.getElementById('nearbyContainer');
@@ -5284,7 +5349,7 @@
     else if(o.badgeName) head = `No ${kind} with the ${esc(o.badgeName)} badge${where}${dates}.`;
     else head = `No ${kind}${where}${dates}.`;
     const note = noPetsHere ? ` ${noPetsHere} home${noPetsHere === 1 ? '' : 's'} here ${noPetsHere === 1 ? 'does' : 'do'} not allow pets.` : '';
-    if(o.freeAbove) return `Everything free${where}${dates} is in Recently viewed above.`;
+    if(o.freeAbove) return `Everything free${where}${dates} is shown above.`;
     if(o.bookedAbove && !o.unavailableCount) head = `No ${kind} are free${where}${dates} — the ${o.bookedAbove === 1 ? 'one' : 'ones'} you viewed ${o.bookedAbove === 1 ? 'is' : 'are'} booked.`;
     if(o.inRecentlyViewed && !tries.length) return 'Everything that matches is in Recently viewed above.';
     return head + note + (list ? ` Try ${list}.` : '');
@@ -5313,6 +5378,10 @@
     if(specificListingMatch && (currentCategoryFilter === 'all' || currentCategoryFilter === 'suites')){
       renderSpecificMatchRow(specificListingMatch, specificListingMatchGeo);
       if(recentlyViewedRowEl) recentlyViewedRowEl.style.display = 'none';
+      const favRowEl = document.getElementById('favoritesRow');
+      if(favRowEl) favRowEl.style.display = 'none';
+      const nearCityEl = document.getElementById('nearCityRow');
+      if(nearCityEl) nearCityEl.style.display = 'none';
       if(nearbyRowEl) nearbyRowEl.style.display = 'none';
       if(unavailableRowEl) unavailableRowEl.style.display = 'none';
       if(availableSectionWrapEl) availableSectionWrapEl.style.display = 'none';
@@ -5329,6 +5398,7 @@
     // independent of that and should always stay in sync with whatever
     // just changed (search, filter switch, currency, etc).
     renderRecentlyViewedRow();
+    renderFavoritesRow();
     renderNearbyRow();
     renderResortsRow();
 
@@ -5352,25 +5422,21 @@
     // Review count breaks ties so a 5.00 from one review does not outrank
     // a 4.90 from forty.
     const byRating = (a, b) => ratingOf(b) - ratingOf(a) || (Number(b.review_count)||0) - (Number(a.review_count)||0);
+    const byLikes = (a, b) => (Number(b.like_count) || 0) - (Number(a.like_count) || 0);
 
     if(sortOrder === 'asc') suiteList.sort((a,b) => (Number(a.nightly_rate)||0) - (Number(b.nightly_rate)||0));
     else if(sortOrder === 'desc') suiteList.sort((a,b) => (Number(b.nightly_rate)||0) - (Number(a.nightly_rate)||0));
     else if(sortOrder === 'rating') suiteList.sort(byRating);
-    else if(guestLocation){
-      // "Recommended" (no explicit price sort) becomes "nearest first" once
-      // the guest has shared their location via the Near Me button — a
-      // listing with no coordinates sorts last rather than being dropped.
-      suiteList.sort((a, b) => {
-        const da = (a.latitude && a.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(a.latitude), Number(a.longitude)) : Infinity;
-        const db = (b.latitude && b.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(b.latitude), Number(b.longitude)) : Infinity;
-        return da - db;
-      });
-    } else {
-      // "Recommended" with no location known: best reviewed first.
-      suiteList.sort(byRating);
+    else {
+      // "Most liked" (the default): the most-liked home first, then the
+      // next, and so on. Ties: nearest first once the guest's location is
+      // known (Near Me), otherwise best reviewed.
+      const near = (l) => (guestLocation && l.latitude && l.longitude) ? haversineDistanceKm(guestLocation.lat, guestLocation.lng, Number(l.latitude), Number(l.longitude)) : Infinity;
+      suiteList.sort((a, b) => byLikes(a, b) || (guestLocation ? near(a) - near(b) : byRating(a, b)));
     }
 
     const experienceList = approvedExperiences.filter(passesExperienceFilters);
+    if(!sortOrder) experienceList.sort((a, b) => byLikes(a, b) || byRating(a, b));
 
     // "All" interleaves both card types into one grid; "Suites" and
     // "Aerva Experience" are just filtered views of that exact same
@@ -5382,6 +5448,8 @@
     if(!anySearch && approvedListings.length === 0 && approvedExperiences.length === 0){
       container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="index.html?view=list-property" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
       document.getElementById('unavailableRow').style.display = 'none';
+      const nearCityEl2 = document.getElementById('nearCityRow');
+      if(nearCityEl2) nearCityEl2.style.display = 'none';
       return;
     }
 
@@ -5403,8 +5471,8 @@
     // "show what the guest actually looked at first" ordering, so that
     // one isn't changed.
     const availableSuites = (datesWereSearched ? suiteList.filter(l => l.is_available !== false) : suiteList)
-      .filter(l => !recentlyViewedShownIds.has('stay:' + l.id));
-    const unavailableSuites = datesWereSearched ? suiteList.filter(l => l.is_available === false) : [];
+      .filter(l => !recentlyViewedShownIds.has('stay:' + l.id) && !favoritesShownIds.has('stay:' + l.id));
+    const unavailableSuites = datesWereSearched ? suiteList.filter(l => l.is_available === false && !favoritesShownIds.has('stay:' + l.id)) : [];
     const availableExperiences = (datesWereSearched ? experienceList.filter(e => e.is_available !== false) : experienceList)
       .filter(e => !recentlyViewedShownIds.has('experience:' + e.id));
     const unavailableExperiences = datesWereSearched ? experienceList.filter(e => e.is_available === false) : [];
@@ -5432,8 +5500,60 @@
         statusEl.style.display = n ? 'block' : 'none';
       }
     }
+    // ---- A city search: that city first, then places nearby ----
+    // The server returns everything within 200 km of the searched place.
+    // Homes and experiences in the place itself (its name, or within 25 km
+    // of its centre) fill the main list; the rest go to "Places near …"
+    // below it, most liked first. With nothing in the place itself, the
+    // main list says so and the nearby section follows.
+    const placeName = (document.getElementById('searchCity').value || '').split(',')[0].trim();
+    const citySplit = !!(placeName && searchCenter);
+    const inPlace = (x) => {
+      const c = String(x.city || '').trim().toLowerCase();
+      if(c && c === placeName.toLowerCase()) return true;
+      return !!(x.latitude && x.longitude) && haversineDistanceKm(searchCenter.lat, searchCenter.lng, Number(x.latitude), Number(x.longitude)) <= 25;
+    };
+    const gridSuites = citySplit ? finalSuites.filter(inPlace) : finalSuites;
+    const gridExperiences = citySplit ? finalExperiences.filter(inPlace) : finalExperiences;
+    const kmFrom = (x) => (x.latitude && x.longitude) ? haversineDistanceKm(searchCenter.lat, searchCenter.lng, Number(x.latitude), Number(x.longitude)) : Infinity;
+    const nearItems = citySplit
+      ? [...finalSuites.filter(x => !inPlace(x)).map(d => ({ type: 'stay', d })), ...finalExperiences.filter(x => !inPlace(x)).map(d => ({ type: 'experience', d }))]
+          .sort((a, b) => byLikes(a.d, b.d) || kmFrom(a.d) - kmFrom(b.d))
+      : [];
+    const nearRow = document.getElementById('nearCityRow');
+    if(nearRow){
+      if(!nearItems.length) nearRow.style.display = 'none';
+      else {
+        document.getElementById('nearCityHeading').textContent = 'Places near ' + placeName;
+        document.getElementById('nearCitySub').textContent = `Outside ${placeName}, within 200 km — most liked first.`;
+        const nc = document.getElementById('nearCityContainer');
+        nc.innerHTML = '';
+        nearItems.forEach((it, i) => {
+          const card = it.type === 'stay' ? buildSuiteCard(it.d, i) : buildExperienceCard(it.d, i);
+          const km = kmFrom(it.d);
+          if(isFinite(km)){
+            const tag = document.createElement('span');
+            tag.className = 'suite-badge suite-distance-badge';
+            tag.textContent = Math.round(km) + ' km away';
+            const stack = card.querySelector('.suite-badges');
+            if(stack) stack.appendChild(tag);
+          }
+          nc.appendChild(card);
+        });
+        nearRow.style.display = 'block';
+      }
+    }
+
     container.innerHTML = '';
-    if(finalSuites.length === 0 && finalExperiences.length === 0){
+    // In the place, but already shown above (favourites / recently viewed).
+    const inPlaceAbove = citySplit ? suiteList.filter(l => (recentlyViewedShownIds.has('stay:' + l.id) || favoritesShownIds.has('stay:' + l.id)) && inPlace(l)).length : 0;
+    if(gridSuites.length === 0 && gridExperiences.length === 0 && nearItems.length){
+      const what = currentCategoryFilter === 'experiences' ? 'experiences' : currentCategoryFilter === 'suites' ? 'homes' : 'places';
+      const p = escapeMessageHtml(placeName);
+      container.innerHTML = `<div class="suites-empty">${inPlaceAbove
+        ? `Nothing else in ${p} right now — ${inPlaceAbove === 1 ? 'the one' : 'the ones'} in ${p} ${inPlaceAbove === 1 ? 'is' : 'are'} shown above. More places within 200 km below.`
+        : `No ${what} in ${p} yet — see the places within 200 km below.`}</div>`;
+    } else if(gridSuites.length === 0 && gridExperiences.length === 0){
       let message;
       const badgeSel = selectedBadge();
       const badgeName = badgeSel ? (document.getElementById('badgeFilter').selectedOptions[0] || {}).text : '';
@@ -5441,7 +5561,7 @@
       else {
         // What Recently Viewed (above) already shows decides the wording:
         // free homes there, or the booked ones tagged there, not below.
-        const shownAbove = (l, kind) => recentlyViewedShownIds.has(kind + ':' + l.id);
+        const shownAbove = (l, kind) => recentlyViewedShownIds.has(kind + ':' + l.id) || favoritesShownIds.has(kind + ':' + l.id);
         const freeAbove = [...suiteList.filter(l => shownAbove(l, 'stay') && (!datesWereSearched || l.is_available !== false)),
                            ...(showExperiences ? experienceList.filter(e => shownAbove(e, 'experience') && (!datesWereSearched || e.is_available !== false)) : [])].length;
         const bookedBelow = [...finalUnavailableSuites.filter(l => !shownAbove(l, 'stay')), ...finalUnavailableExperiences.filter(e => !shownAbove(e, 'experience'))].length;
@@ -5461,11 +5581,11 @@
       // cards trade a minor fade-in animation for eliminating that
       // entire failure mode outright.
       let index = 0;
-      finalSuites.forEach(listing => {
+      gridSuites.forEach(listing => {
         const card = buildSuiteCard(listing, index++);
         container.appendChild(card);
       });
-      finalExperiences.forEach(exp => {
+      gridExperiences.forEach(exp => {
         const card = buildExperienceCard(exp, index++);
         container.appendChild(card);
       });
@@ -6732,6 +6852,51 @@
     });
   }
 
+  // ---- Smiley reactions (all three chat views) ----
+  // Each person can put one smiley on the other person's message, to
+  // acknowledge it (server: guest-profile mode 'react'). Tapping your own
+  // smiley again takes it off.
+  const REACTION_EMOJIS = ['👍', '❤️', '😊', '🙏', '😂', '👌'];
+  const REACT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.2c.9 1.3 2.1 2 3.5 2s2.6-.7 3.5-2"/><circle cx="9" cy="10" r=".9" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r=".9" fill="currentColor" stroke="none"/></svg>';
+  function reactionRowHtml(m, isMine, viewerRole){
+    if(m.unsent || !m.id || m.sender_type === 'system') return '';
+    const other = viewerRole === 'host' ? 'guest' : 'host';
+    if(isMine){
+      const theirs = m[other + '_reaction'];
+      return theirs ? `<div class="msg-react-row mine"><span class="msg-react-chip" title="${other === 'host' ? 'Host' : 'Guest'} reacted">${escapeMessageHtml(theirs)}</span></div>` : '';
+    }
+    const mine = m[viewerRole + '_reaction'];
+    return `<div class="msg-react-row">
+        ${mine ? `<button type="button" class="msg-react-chip is-mine" data-react-msg="${Number(m.id)}" data-react-emoji="" title="Your reaction — tap to remove">${escapeMessageHtml(mine)}</button>` : ''}
+        <button type="button" class="msg-react-add" data-react-open="${Number(m.id)}" aria-label="React with a smiley" title="React">${REACT_ICON}</button>
+        <span class="msg-react-picker" data-react-picker="${Number(m.id)}" hidden>
+          ${REACTION_EMOJIS.map(e => `<button type="button" class="msg-react-opt${mine === e ? ' is-on' : ''}" data-react-msg="${Number(m.id)}" data-react-emoji="${mine === e ? '' : e}" aria-label="React ${e}">${e}</button>`).join('')}
+        </span>
+      </div>`;
+  }
+  document.addEventListener('click', (e) => { if(!e.target.closest('.msg-react-row')) document.querySelectorAll('[data-react-picker]').forEach(p => { p.hidden = true; }); });
+  function wireReactions(root, conversationId, role, after){
+    root.querySelectorAll('[data-react-open]').forEach(btn => btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const picker = root.querySelector(`[data-react-picker="${btn.dataset.reactOpen}"]`);
+      root.querySelectorAll('[data-react-picker]').forEach(p => { if(p !== picker) p.hidden = true; });
+      if(picker) picker.hidden = !picker.hidden;
+    }));
+    root.querySelectorAll('[data-react-msg]').forEach(btn => btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      btn.disabled = true;
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ mode: 'react', conversationId: typeof conversationId === 'function' ? conversationId() : conversationId, messageId: Number(btn.dataset.reactMsg), emoji: btn.dataset.reactEmoji || '', role })
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.error || 'Could not react.');
+        if(typeof after === 'function') await after();
+      } catch(err){ alert(err.message || 'Could not react.'); btn.disabled = false; }
+    }));
+  }
+
   function renderChatMessages(messages, viewerRole){
     const container = document.getElementById('chatMessagesContainer');
     if(!messages.length){
@@ -6754,15 +6919,19 @@
         <div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;">
           <div style="background:${isMine ? 'var(--ink)' : 'var(--cream-deep)'}; color:${isMine ? 'var(--cream)' : 'var(--ink)'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${renderMessageBody(m.display_text)}</div>
           ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
+          ${reactionRowHtml(m, isMine, viewerRole)}
           ${canUnsendMessage(m, isMine) ? `<div class="msg-actions">${unsendButtonHtml(m)}</div>` : ''}
         </div>
       `;
     }).join('');
-    wireUnsendButtons(container, () => chatCurrentConversationId, viewerRole, async () => {
+    const redrawChat = async () => {
+      const keep = container.scrollTop;
       const r = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${chatCurrentOrderId}`, { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
       const d = await r.json().catch(() => ({}));
-      if(r.ok) renderChatMessages(d.messages || [], d.viewerRole);
-    });
+      if(r.ok){ renderChatMessages(d.messages || [], d.viewerRole); container.scrollTop = keep; }
+    };
+    wireUnsendButtons(container, () => chatCurrentConversationId, viewerRole, redrawChat);
+    wireReactions(container, () => chatCurrentConversationId, viewerRole, redrawChat);
     container.scrollTop = container.scrollHeight;
   }
 
@@ -7211,12 +7380,14 @@
             <div class="inbox-message-bubble" data-msg-id="${m.id}">${renderMessageBody(shownText)}</div>
             ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
             ${showOriginalLink}
+            ${reactionRowHtml(m, isMine, inboxCurrentRole)}
             ${canUnsendMessage(m, isMine) ? `<div class="msg-actions">${unsendButtonHtml(m)}</div>` : ''}
           </div>
         </div>
       `;
     }).join('');
     wireUnsendButtons(container, () => inboxCurrentConversationId, inboxCurrentRole, async () => { await refreshInboxMessages(); loadInboxConversations(); });
+    wireReactions(container, () => inboxCurrentConversationId, inboxCurrentRole, async () => { const keep = container.scrollTop; await refreshInboxMessages(); container.scrollTop = keep; });
     container.querySelectorAll('.inbox-message-original-link').forEach(link => {
       link.addEventListener('click', () => {
         const wrapper = link.closest('div');
@@ -8010,6 +8181,7 @@
       : (city ? await freeForwardGeocode(city) : null);
 
     if(city) saveRecentSearch(city, geocoded ? geocoded.lat : '', geocoded ? geocoded.lng : '');
+    searchCenter = (city && geocoded) ? { lat: Number(geocoded.lat), lng: Number(geocoded.lng) } : null;
 
     const params = new URLSearchParams();
     if(geocoded){
@@ -11532,10 +11704,11 @@
               <div class="tb-msg ${m.sender_type === 'host' ? 'tb-msg-mine' : ''}">
                 <span class="tb-msg-who">${esc(m.sender_type === 'host' ? 'You' : (m.sender_type === 'system' ? 'Aerva' : r.guestName))}</span>
                 ${m.unsent ? `<span class="tb-msg-text msg-unsent-text">${unsentBubbleText(m.sender_type === 'host')}</span>`
-                  : `<span class="tb-msg-text">${esc(m.display_text || '')}</span>${canUnsendMessage(m, m.sender_type === 'host') ? unsendButtonHtml(m) : ''}`}
+                  : `<span class="tb-msg-text">${esc(m.display_text || '')}</span>${canUnsendMessage(m, m.sender_type === 'host') ? unsendButtonHtml(m) : ''}${reactionRowHtml(m, m.sender_type === 'host', 'host')}`}
               </div>`).join('')
           : '<p class="tb-muted">No messages yet. Anything you send here reaches them in their Aerva messages.</p>';
         wireUnsendButtons(thread, () => conversationId, 'host', reloadTb);
+        wireReactions(thread, () => conversationId, 'host', reloadTb);
         thread.scrollTop = thread.scrollHeight;
       };
       const reloadTb = async () => {
@@ -11769,12 +11942,14 @@
     document.getElementById('roomsNeeded').value = '';
     document.getElementById('searchStatus').style.display = 'none';
     searchStatusCounts = null;
+    searchCenter = null;
     performSearch();
   });
 
   // ---- Custom calendar date-range picker (replaces native date inputs) ----
   let searchArrivalDate = '';
   let searchStatusCounts = null;
+  let searchCenter = null; // the searched place's point (performSearch), for "in this city" vs "nearby"
   let searchDepartureDate = '';
   // Set by performSearch() when the typed/selected place resolves to one
   // specific Aerva property's own saved address (not just "somewhere in
@@ -12812,6 +12987,7 @@
           // with it, so a fresh login never shows the previous person's
           // browsing on this device.
           setRecentlyViewedOwner(data.guest.id);
+          loadAccountFavorites();
           renderNavTierBadge(data.guest.tier);
           showReviewReminder(Number(data.guest.pendingReviews) || 0);
           renderNavNotifications(data.guest.notifications || []);

@@ -1156,8 +1156,10 @@ module.exports = async (req, res) => {
             ORDER BY o.razorpay_order_id, o.listing_id, o.room_id, o.arrival, o.id
           )
           SELECT
-            -- A resort booking of two rooms is still one stay.
-            COUNT(DISTINCT (razorpay_order_id, listing_id, arrival)) FILTER (WHERE departure <= local_today) AS stays_hosted,
+            -- A resort booking of two rooms is still one stay. A stay counts
+            -- as hosted from its check-in day (it used to wait for check-out,
+            -- so the page could show guests checked in but 0 stays hosted).
+            COUNT(DISTINCT (razorpay_order_id, listing_id, arrival)) FILTER (WHERE arrival <= local_today) AS stays_hosted,
             COALESCE(SUM(guests) FILTER (
               WHERE arrival >= date_trunc('month', local_today)::date AND arrival <= local_today
             ), 0) AS checkins_this_month,
