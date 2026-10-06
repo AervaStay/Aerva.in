@@ -21,6 +21,7 @@ const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const { confirmBooking } = require('./_confirm-booking');
+const { verifyToken } = require('./_approval-token');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -32,23 +33,53 @@ module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-      return res.status(400).json({ error: 'Missing payment details' });
-    }
-    if (!verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
-      // A forged or tampered response — never confirm the booking.
-      return res.status(400).json({ verified: false });
+    let { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+    let source = 'browser';
+    // { checkOrder: <razorpay order id> } — the page asks "did my payment go
+    // through?" when Razorpay's own answer never reached it: a card paid
+    // with a bank OTP page, a window closed or timed out mid-payment, a
+    // phone that switched apps. Only the account that made the checkout may
+    // ask, and Razorpay itself is asked which payment (if any) completed.
+    if (req.body && req.body.checkOrder) {
+      const oid = String(req.body.checkOrder).slice(0, 64);
+      const auth = String(req.headers['authorization'] || '');
+      const tok = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
+      if (!tok || tok.action !== 'guest-session') return res.status(401).json({ error: 'Please log in again.' });
+      let cart = null;
+      try { cart = (await sql`SELECT guest_id FROM checkout_carts WHERE razorpay_order_id = ${oid} LIMIT 1`)[0]; } catch (e) { /* no carts table */ }
+      if (!cart || Number(cart.guest_id) !== Number(tok.listingId)) return res.status(404).json({ error: 'Payment not found.' });
+      let pay = null;
+      try {
+        const list = await razorpay.orders.fetchPayments(oid);
+        const items = (list && list.items) || [];
+        pay = items.find(p => p.status === 'captured') || items.find(p => p.status === 'authorized') || null;
+        if (!pay) {
+          const failed = items.length && items.every(p => p.status === 'failed');
+          return res.status(200).json({ verified: false, waiting: !failed, failed: !!failed });
+        }
+      } catch (err) {
+        console.error('checkOrder: Razorpay lookup failed:', oid, err.message);
+        return res.status(200).json({ verified: false, waiting: true });
+      }
+      razorpay_order_id = oid; razorpay_payment_id = pay.id; source = 'browser-check';
+    } else {
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ error: 'Missing payment details' });
+      }
+      if (!verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
+        // A forged or tampered response — never confirm the booking.
+        return res.status(400).json({ verified: false });
+      }
     }
 
     const result = await confirmBooking(sql, razorpay, {
-      razorpayOrderId: razorpay_order_id, razorpayPaymentId: razorpay_payment_id, source: 'browser'
+      razorpayOrderId: razorpay_order_id, razorpayPaymentId: razorpay_payment_id, source
     });
 
     // The booking's confirmation code(s), shown on the page straight away:

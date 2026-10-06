@@ -370,6 +370,11 @@ async function cohostGate(req, res, accountId) {
     else if (q.myPenalties === '1') { perm = 'cancel'; mode = 'myPenalties'; }
     else if (q.cancellationRequests === '1') { perm = 'cancel'; mode = 'cancellationRequests'; }
     else if (q.bookingChanges === '1') { perm = 'cancel'; mode = 'bookingChanges'; }
+    else if (q.hostCancelPreview !== undefined) {
+      perm = 'cancel'; mode = 'hostCancelPreview';
+      const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(q.hostCancelPreview) || 0}`;
+      listingId = o[0] ? o[0].listing_id : -1;
+    }
     else if (q.guestProfileForOrder !== undefined) {
       perm = 'bookings'; mode = 'guestProfile';
       const o = await sql`SELECT listing_id FROM orders WHERE id = ${Number(q.guestProfileForOrder) || 0}`;
@@ -2732,6 +2737,34 @@ module.exports = async (req, res) => {
   // For a legitimate cancellation reason (maintenance, unavailability,
   // etc.) — NOT the "prioritize a bigger booking" scenario, which
   // requires a coupon first (see cancelWithCoupon below).
+  // GET ?hostCancelPreview=<orderId> — what cancelling this booking would
+  // mean, shown BEFORE the host commits (Messages → booking details):
+  // whether it can be cancelled now, the guest's coupon the host pays for,
+  // and the host's cancellation score (cancellations in the last 12 months,
+  // out of the limit). Nothing is changed.
+  if (req.method === 'GET' && (req.query || {}).hostCancelPreview !== undefined) {
+    try {
+      const orderId = Number(req.query.hostCancelPreview) || 0;
+      const loaded = await loadCancellableOrder(orderId, true);
+      const reasons = Object.keys(HOST_CANCEL_REASONS).map(code => ({ code, label: HOST_CANCEL_REASONS[code] }));
+      if (loaded.error) return res.status(200).json({ canCancel: false, message: loaded.error, reasons });
+      const used = await hostCancellationsLastYear(sql, loaded.guest.host_id);
+      const held = (await sql`SELECT amount FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
+      const couponAmount = held ? Number(held.amount) : await cancellationCouponAmount(loaded.order, orderId);
+      return res.status(200).json({
+        canCancel: used < HOST_CANCELLATIONS_PER_YEAR,
+        message: used >= HOST_CANCELLATIONS_PER_YEAR ? HOST_LIMIT_MESSAGE : null,
+        cancellationsUsed: used, cancellationsLimit: HOST_CANCELLATIONS_PER_YEAR,
+        couponAmount, couponPaid: !!held, canDeductFromPayout: !cohostActor,
+        couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES,
+        reasons
+      });
+    } catch (err) {
+      console.error('hostCancelPreview failed:', err);
+      return res.status(500).json({ error: 'Could not check this booking right now.' });
+    }
+  }
+
   if (req.method === 'POST' && req.body && req.body.cancelBooking) {
     try {
       const { orderId, reasonCode } = req.body.cancelBooking;

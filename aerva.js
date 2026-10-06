@@ -7477,11 +7477,126 @@
             : `<p class="bd-note">Message ${esc(conv.counterpart_name || 'your host')} right here. For your safety, keep every conversation and payment on Aerva.</p>`}
         </div>
         ${!isHostView && conv.order_id ? `<a class="bd-link" href="index.html?view=my-bookings">View booking in My Bookings</a>` : ''}
+        ${isHostView && conv.order_id && conv.booking_status === 'paid' ? `
+        <div class="bd-section hc-cancel" id="hcCancel">
+          <div class="bd-section-title">Cancel this booking</div>
+          <p class="bd-note">Only if you truly cannot host this guest. You will see exactly what it means before anything happens.</p>
+          <button type="button" class="hc-cancel-open" id="hcCancelOpen">Cancel booking…</button>
+          <div id="hcCancelBody"></div>
+        </div>` : ''}
       </div>
       ${isHostView && conv.order_id ? '<div id="inboxGuestProfile" style="margin-top:24px;"></div>' : ''}
     `;
     document.getElementById('inboxPanel').classList.add('details-open');
     if(isHostView && conv.order_id) loadHostGuestProfile(conv.order_id, conv.id);
+    const openBtn = document.getElementById('hcCancelOpen');
+    if(openBtn) openBtn.addEventListener('click', () => { openBtn.hidden = true; startHostCancel(conv); });
+  }
+
+  // ---- Host cancels a booking from Messages → Details ----
+  // Step 1 says what it means — the host's cancellation score (cancellations
+  // in the last 12 months, out of the limit) and the guest's coupon the host
+  // pays for — and asks for a reason and an "I understand". Step 2, the last
+  // one, is compensating the guest: pay the coupon now, or have it taken
+  // from the next payout. Server: host-listings.js hostCancelPreview /
+  // cancelBooking / buyCouponOrder / verifyCouponPayment (the same rules as
+  // Earnings → Cancel This Booking).
+  async function startHostCancel(conv){
+    const body = document.getElementById('hcCancelBody');
+    if(!body) return;
+    const esc = escapeMessageHtml;
+    const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+    const api = (path, opts) => fetch(SUITES_API_BASE + '/api/host-listings' + (path || ''), Object.assign({ headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() } }, opts || {}))
+      .then(async r => ({ ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) }));
+    body.innerHTML = '<p class="bd-note">Checking this booking…</p>';
+    const pv = await api('?hostCancelPreview=' + Number(conv.order_id));
+    if(!pv.ok){ body.innerHTML = `<p class="hc-cancel-err">${esc(pv.data.error || 'Could not check this booking right now.')}</p>`; return; }
+    const d = pv.data;
+    if(!d.canCancel){ body.innerHTML = `<div class="hc-cancel-warn"><p>${esc(d.message || 'This booking cannot be cancelled here.')}</p></div>`; return; }
+    const used = Number(d.cancellationsUsed) || 0, limit = Number(d.cancellationsLimit) || 3, after = used + 1;
+    const amount = Number(d.couponAmount) || 0;
+    body.innerHTML = `
+      <div class="hc-cancel-warn" role="alert">
+        <p class="hc-cancel-head">Before you cancel</p>
+        <div class="hc-score">
+          <div class="hc-score-bar" aria-hidden="true">${Array.from({ length: limit }, (_, i) => `<span class="${i < used ? 'is-used' : i < after ? 'is-next' : ''}"></span>`).join('')}</div>
+          <p><strong>Your cancellation score: ${used} of ${limit}</strong> used in the last 12 months. This one would make it <strong>${after} of ${limit}</strong>.${after >= limit ? ' After this you cannot cancel any booking yourself until one is more than 12 months old.' : ''}</p>
+        </div>
+        <ul>
+          <li>Your guest is refunded in full straight away — booking and deposit.</li>
+          <li>You compensate them with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the booking), paid by you. It reaches them by email ${Number(d.couponReleaseMinutes) || 15} minutes later.</li>
+          <li>The guest is told the reason. This cannot be undone.</li>
+        </ul>
+      </div>
+      <label class="hc-label" for="hcReason">Reason</label>
+      <select id="hcReason" class="hc-input"><option value="">Choose a reason…</option>${(d.reasons || []).map(r => `<option value="${esc(r.code)}">${esc(r.label)}</option>`).join('')}</select>
+      <label class="hc-label" for="hcDetails">Details for the guest <span class="hc-opt" id="hcDetailsOpt">(optional)</span></label>
+      <textarea id="hcDetails" class="hc-input" rows="3" maxlength="800" placeholder="A short, kind explanation helps the guest."></textarea>
+      <label class="hc-check"><input type="checkbox" id="hcAgree"> I understand this counts towards my cancellation score and that I pay the guest’s ${inr(amount)} coupon.</label>
+      <div class="hc-actions"><button type="button" class="hc-btn hc-danger" id="hcNext">Continue</button><button type="button" class="hc-btn" id="hcKeep">Keep the booking</button></div>
+      <p class="hc-cancel-err" id="hcErr" hidden></p>`;
+    const err = (m) => { const e = document.getElementById('hcErr'); e.textContent = m; e.hidden = !m; };
+    document.getElementById('hcReason').addEventListener('change', (e) => { document.getElementById('hcDetailsOpt').textContent = e.target.value === 'other' ? '(required)' : '(optional)'; });
+    document.getElementById('hcKeep').addEventListener('click', () => { body.innerHTML = ''; const o = document.getElementById('hcCancelOpen'); if(o) o.hidden = false; });
+    document.getElementById('hcNext').addEventListener('click', () => {
+      const reasonCode = document.getElementById('hcReason').value, details = document.getElementById('hcDetails').value.trim();
+      if(!reasonCode) return err('Choose a reason for cancelling.');
+      if(reasonCode === 'other' && !details) return err('Add details for “Other”.');
+      if(!document.getElementById('hcAgree').checked) return err('Tick the box to confirm you understand.');
+      err('');
+      finalStep(reasonCode, details);
+    });
+
+    function finalStep(reasonCode, details){
+      body.innerHTML = `
+        <div class="hc-final">
+          <p class="hc-cancel-head">Last step: compensate your guest</p>
+          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now refunds them in full and sends it.`
+            : `Your guest gets a ${inr(amount)} Aerva coupon. Choose how you pay for it — the booking is cancelled the moment you do.`}</p>
+          <div class="hc-actions hc-col">
+            ${d.couponPaid ? `<button type="button" class="hc-btn hc-danger" data-pay="held">Cancel the booking</button>`
+              : `<button type="button" class="hc-btn hc-danger" data-pay="now">Pay ${inr(amount)} now and cancel</button>
+                 ${d.canDeductFromPayout ? `<button type="button" class="hc-btn hc-danger-soft" data-pay="later">Cancel — deduct ${inr(amount)} from my next payout</button>` : ''}`}
+            <button type="button" class="hc-btn" id="hcBack">Back</button>
+          </div>
+          <p class="hc-cancel-err" id="hcErr" hidden></p>
+        </div>`;
+      const btns = () => body.querySelectorAll('button');
+      const busy = (on) => btns().forEach(b => { b.disabled = on; });
+      document.getElementById('hcBack').addEventListener('click', () => startHostCancel(conv));
+      const cancelNow = async (extra) => {
+        const r = await api('', { method: 'POST', body: JSON.stringify({ cancelBooking: Object.assign({ orderId: Number(conv.order_id), reasonCode, details }, extra || {}) }) });
+        if(r.ok){ done(r.data); return true; }
+        err(r.data.error || 'Could not cancel this booking. Please try again.'); busy(false); return false;
+      };
+      body.querySelectorAll('[data-pay]').forEach(b => b.addEventListener('click', async () => {
+        busy(true); err('');
+        const how = b.dataset.pay;
+        if(how === 'held') return cancelNow();
+        if(how === 'later') return cancelNow({ payLater: true });
+        const buy = await api('', { method: 'POST', body: JSON.stringify({ buyCouponOrder: { bookingId: Number(conv.order_id) } }) });
+        if(!buy.ok){ err(buy.data.error || 'Could not start the coupon payment.'); busy(false); return; }
+        if(buy.data.alreadyPaid) return cancelNow();
+        if(typeof Razorpay === 'undefined'){ err('Payment is not available right now. Try again, or deduct it from your next payout.'); busy(false); return; }
+        new Razorpay({
+          key: buy.data.keyId, amount: buy.data.amount * 100, currency: 'INR', order_id: buy.data.razorpayOrderId,
+          name: 'Aerva', description: 'Guest cancellation coupon', theme: { color: '#a9884f' },
+          handler: async (resp) => {
+            const v = await api('', { method: 'POST', body: JSON.stringify({ verifyCouponPayment: Object.assign({ couponId: buy.data.couponId }, resp) }) });
+            if(!v.ok){ err(v.data.error || 'Could not confirm the coupon payment. Please contact hello@aerva.in.'); busy(false); return; }
+            cancelNow();
+          },
+          modal: { ondismiss: () => busy(false) }
+        }).open();
+      }));
+    }
+    function done(r){
+      body.innerHTML = `<div class="hc-done"><p class="hc-cancel-head">Booking cancelled</p>
+        <p>Your guest has been refunded in full and gets the ${inr(r.couponAmount || amount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes.
+        ${r.paid === 'next_payout' ? `The ${inr(r.couponAmount || amount)} will be taken from your next payout.` : ''}</p></div>`;
+      conv.booking_status = 'cancelled';
+      try{ refreshInboxMessages(); loadInboxConversations(); }catch(e){}
+    }
   }
 
   // The host's view of a guest: name and published reviews from other
@@ -13463,7 +13578,51 @@ function aervaStopCheckout(){
   aervaCheckout = null;
 }
 // Payment succeeded: the booking takes the dates; nothing to release here.
-function aervaCheckoutSucceeded(){ aervaStopCheckout(); }
+function aervaCheckoutSucceeded(){ aervaStopCheckout(); aervaStopFollowUp(); }
+
+// ---- When Razorpay's answer never arrives ----
+// A card paid on the bank's OTP page, a window closed or timed out while a
+// payment was on its way, a phone that switched apps: the page may never
+// hear back from Razorpay. After the window ends, the server is asked
+// (verify-payment.js checkOrder) whether a payment for this order went
+// through, and the guest is shown the real outcome — the booking confirmed
+// screen, or that it came too late and is being refunded. When nothing was
+// paid, the message already shown stays as it is.
+let aervaFollowUp = null;
+function aervaStopFollowUp(){ if(aervaFollowUp){ clearTimeout(aervaFollowUp.timer); aervaFollowUp = null; } }
+function aervaFollowUpPayment(orderId, msgEl, { seconds = 180, announce = false } = {}){
+  aervaStopFollowUp();
+  if(!orderId || typeof guestAuthToken !== 'function' || !guestAuthToken()) return;
+  const state = { orderId, until: Date.now() + seconds * 1000, timer: null };
+  aervaFollowUp = state;
+  if(announce && msgEl){
+    msgEl.textContent = 'If you completed the payment, we are checking it with your bank now — please keep this page open.';
+    msgEl.style.color = '#1c1b19'; msgEl.style.display = 'block';
+  }
+  const tick = async () => {
+    if(aervaFollowUp !== state) return;
+    try{
+      const r = await fetch('https://aerva-in.vercel.app/api/verify-payment', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() }, body: JSON.stringify({ checkOrder: orderId }) });
+      const d = await r.json().catch(() => ({}));
+      if(aervaFollowUp !== state) return;
+      if(r.ok && (d.verified || d.refunded || d.pending)){
+        aervaStopFollowUp();
+        aervaShowPaymentResult(d, { confirmEl: msgEl, errorEl: msgEl, btn: null });
+        if(d.verified && typeof loadMyBookings === 'function') setTimeout(loadMyBookings, 1000);
+        return;
+      }
+      if(r.ok && d.failed){ aervaStopFollowUp(); if(announce && msgEl){ msgEl.textContent = 'The payment did not go through, so nothing was booked. No money was taken.'; msgEl.style.color = '#a3402f'; } return; }
+    }catch(e){ /* try again */ }
+    if(Date.now() > state.until){
+      aervaStopFollowUp();
+      if(announce && msgEl){ msgEl.textContent = 'We could not confirm a payment yet. If money was taken from your account, the booking is confirmed — or the money refunded in full — automatically within a few minutes, and we email you either way.'; msgEl.style.color = '#1c1b19'; }
+      return;
+    }
+    state.timer = setTimeout(tick, 4000);
+  };
+  state.timer = setTimeout(tick, 2500);
+}
 // Closed, failed, timed out, released, or the price changed: end it now.
 function aervaEndCheckout(reason){
   const state = aervaCheckout;
@@ -13474,11 +13633,15 @@ function aervaEndCheckout(reason){
   // booking; one whose time ran out still can if the payment was already
   // on its way (15 seconds' grace, api/_booking-rules.js).
   if(reason === 'closed' || reason === 'failed' || reason === 'expired') aervaReleaseHold(state.orderId, reason);
+  // A payment may still have been on its way (e.g. a card at the bank's OTP
+  // step): check with the server and show the real outcome.
+  if(reason === 'expired') aervaFollowUpPayment(state.orderId, state.msgEl, { seconds: 180 });
+  else if(reason === 'closed' || reason === 'failed') aervaFollowUpPayment(state.orderId, state.msgEl, { seconds: 45 });
   const released = state.holdsDates ? ' Your dates have been released.' : '';
   const messages = {
     closed: 'Payment cancelled. Nothing was booked.' + released,
     failed: 'The payment did not go through, so nothing was booked.' + released,
-    expired: 'The 90-second payment window has ended, so nothing was booked.' + released + ' You can start again.',
+    expired: 'The 90-second payment window has ended.' + released + ' If you had already paid (for example on your bank’s OTP page), keep this page open — the result will show here in a moment. Otherwise you can start again.',
     released: 'This payment was cancelled, so nothing was booked.' + released,
     price_changed: 'Prices have been changed recently. Tap Continue to payment to see the new price.'
   };

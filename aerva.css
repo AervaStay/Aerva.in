@@ -3334,3 +3334,33 @@ button.msg-react-chip{ cursor:pointer; font-family:inherit; }
 
 /* "12 km away" on cards in "Places near …" (a city search). */
 .suite-distance-badge{ background:rgba(255,255,255,0.92); color:#1c1b19; }
+
+/* ---------- Host cancels from Messages → Details ---------- */
+.hc-cancel-open{ margin-top:6px; background:#fff; border:1px solid #e0b8ac; color:#a3402f; border-radius:999px; padding:9px 18px; font:500 14px 'Jost', sans-serif; cursor:pointer; }
+.hc-cancel-open:hover{ border-color:#a3402f; }
+.hc-cancel-warn{ margin-top:12px; padding:14px 16px; border-radius:14px; background:#fbf1ee; border:1px solid #efcfc6; color:#4a2a22; font-size:14px; line-height:1.55; }
+.hc-cancel-warn ul{ margin:8px 0 0; padding-left:18px; }
+.hc-cancel-warn li{ margin:4px 0; }
+.hc-cancel-head{ margin:0 0 8px; font-family:'Bodoni Moda', serif; font-size:18px; color:#1c1b19; }
+.hc-score{ display:flex; flex-direction:column; gap:8px; padding:10px 12px; background:#fff; border:1px solid #efd6cf; border-radius:10px; }
+.hc-score p{ margin:0; }
+.hc-score-bar{ display:flex; gap:6px; }
+.hc-score-bar span{ flex:1; height:8px; border-radius:999px; background:#f0e6e2; }
+.hc-score-bar span.is-used{ background:#a3402f; }
+.hc-score-bar span.is-next{ background:repeating-linear-gradient(135deg, #a3402f 0 4px, #e7b9ad 4px 8px); }
+.hc-label{ display:block; margin:14px 0 6px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:#8a7a5f; font-weight:600; }
+.hc-opt{ text-transform:none; letter-spacing:0; font-weight:400; opacity:0.75; }
+.hc-input{ width:100%; box-sizing:border-box; border:1px solid #ddd3c6; border-radius:10px; padding:10px 12px; font:15px 'Jost', sans-serif; background:#fff; color:#1c1b19; }
+.hc-input:focus{ outline:none; border-color:#8a6c39; }
+.hc-check{ display:flex; gap:10px; align-items:flex-start; margin-top:14px; font-size:13.5px; line-height:1.5; color:#4a453e; cursor:pointer; }
+.hc-check input{ margin-top:3px; width:18px; height:18px; accent-color:#a3402f; flex:0 0 auto; }
+.hc-actions{ display:flex; gap:10px; flex-wrap:wrap; margin-top:16px; }
+.hc-actions.hc-col{ flex-direction:column; }
+.hc-btn{ border-radius:999px; padding:11px 18px; font:500 14.5px 'Jost', sans-serif; cursor:pointer; background:#fff; color:#1c1b19; border:1px solid #d9cfbf; }
+.hc-btn:disabled{ opacity:0.55; cursor:default; }
+.hc-danger{ background:#a3402f; border-color:#a3402f; color:#fff; }
+.hc-danger:hover:not(:disabled){ background:#8a3426; }
+.hc-danger-soft{ background:#fff; border-color:#a3402f; color:#a3402f; }
+.hc-cancel-err{ color:#a3402f; font-size:13.5px; margin:10px 0 0; }
+.hc-final, .hc-done{ margin-top:12px; padding:16px; border-radius:14px; border:1px solid #ece4d8; background:#fff; font-size:14px; line-height:1.55; }
+.hc-done{ background:#eef5ec; border-color:#cfe3cc; }
