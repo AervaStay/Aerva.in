@@ -6721,6 +6721,7 @@
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(completed ? 'completed' : b.status)}</div>
               ${codeHtml}
               <div class="booking-actions">${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}</div>
+              <span class="booking-open-hint">View booking summary ›</span>
             </div>
           </div>
         `;
@@ -7501,6 +7502,30 @@
   // from the next payout. Server: host-listings.js hostCancelPreview /
   // cancelBooking / buyCouponOrder / verifyCouponPayment (the same rules as
   // Earnings → Cancel This Booking).
+  // The host's side of the cancellation policy, straight from
+  // aerva-policies.js (the same text as the Policies page), so the host
+  // reviews the actual rules next to the impact.
+  function hostCancelPolicyHtml(isExperience, open){
+    const P = window.AERVA_POLICIES;
+    const esc = escapeMessageHtml;
+    const doc = (id) => P && Array.isArray(P.documents) ? P.documents.find(d => d.id === id) : null;
+    const stays = doc('cancellation-stays'), exps = doc('cancellation-experiences'), events = doc('major-events');
+    const section = (d, title) => d && Array.isArray(d.sections) ? d.sections.find(x => x.title === title) : null;
+    const groups = [];
+    const hosts = section(stays, 'Hosts'), cohosts = section(stays, 'Co-hosts');
+    if(isExperience && section(exps, 'Rule')) groups.push(['Experiences', section(exps, 'Rule').points]);
+    if(hosts) groups.push(['Hosts', hosts.points]);
+    if(cohosts) groups.push(['Co-hosts', cohosts.points]);
+    const ev = section(events, 'What happens');
+    if(ev) groups.push(['Emergencies (floods, government orders, major damage)', ev.points]);
+    if(!groups.length) return `<p class="hc-policy-link"><a href="index.html?view=policies&doc=${isExperience ? 'cancellation-experiences' : 'cancellation-stays'}" target="_blank" rel="noopener">Read the host cancellation policy →</a></p>`;
+    return `<details class="hc-policy"${open ? ' open' : ''}>
+        <summary>Review the host cancellation policy</summary>
+        ${groups.map(([t, pts]) => `<p class="hc-policy-h">${esc(t)}</p><ul>${(pts || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>`).join('')}
+        <a class="hc-policy-link" href="index.html?view=policies&doc=${isExperience ? 'cancellation-experiences' : 'cancellation-stays'}" target="_blank" rel="noopener">Open the full policy →</a>
+      </details>`;
+  }
+
   async function startHostCancel(conv){
     const body = document.getElementById('hcCancelBody');
     if(!body) return;
@@ -7512,7 +7537,7 @@
     const pv = await api('?hostCancelPreview=' + Number(conv.order_id));
     if(!pv.ok){ body.innerHTML = `<p class="hc-cancel-err">${esc(pv.data.error || 'Could not check this booking right now.')}</p>`; return; }
     const d = pv.data;
-    if(!d.canCancel){ body.innerHTML = `<div class="hc-cancel-warn"><p>${esc(d.message || 'This booking cannot be cancelled here.')}</p></div>`; return; }
+    if(!d.canCancel){ body.innerHTML = `<div class="hc-cancel-warn"><p>${esc(d.message || 'This booking cannot be cancelled here.')}</p></div>${hostCancelPolicyHtml(!!d.isExperience, true)}`; return; }
     const used = Number(d.cancellationsUsed) || 0, limit = Number(d.cancellationsLimit) || 3, after = used + 1;
     const amount = Number(d.couponAmount) || 0;
     body.innerHTML = `
@@ -7528,6 +7553,7 @@
           <li>The guest is told the reason. This cannot be undone.</li>
         </ul>
       </div>
+      ${hostCancelPolicyHtml(!!d.isExperience, false)}
       <label class="hc-label" for="hcReason">Reason</label>
       <select id="hcReason" class="hc-input"><option value="">Choose a reason…</option>${(d.reasons || []).map(r => `<option value="${esc(r.code)}">${esc(r.label)}</option>`).join('')}</select>
       <label class="hc-label" for="hcDetails">Details for the guest <span class="hc-opt" id="hcDetailsOpt">(optional)</span></label>
@@ -11269,38 +11295,97 @@
     window.scrollTo({ top: 0 });
 
     const listing = listingsById[b.listing_id] || null;
-    const day = (d) => d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+    // Dates are calendar days ('YYYY-MM-DD'); read them as local dates so
+    // they never shift a day in another timezone.
+    const asDate = (d) => { const s = String(d || '').slice(0, 10); const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : (d ? new Date(d) : null); };
+    const day = (d) => { const x = asDate(d); return x ? x.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '—'; };
     const isExp = b.listing_type === 'experience';
-    const money = (v) => v ? fmtGuest(Number(v)) : null;
+    // A receipt shows what was actually charged, in rupees — not converted.
+    const inr = (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN');
+    const num = (v) => Math.max(0, Math.round(Number(v) || 0));
+    const isCompleted = b.status === 'paid' && b.local_today && String(b.departure).slice(0, 10) < String(b.local_today).slice(0, 10);
+    const place = b.listing_city ? (b.listing_area ? `${b.listing_area}, ${b.listing_city}` : b.listing_city) : (listing ? formatCityArea(listing) : '');
+
+    // ---- Price details (adds up to what was charged) ----
+    const subtotal = num(b.subtotal), gst = num(b.gst), fee = num(b.guest_service_fee), deposit = num(b.deposit_amount);
+    const coupon = num(b.coupon_discount), discount = num(b.discount_amount);
+    const paid = Math.max(0, (num(b.total) || subtotal + gst + fee + deposit) - coupon);
+    const unit = isExp ? `${b.guests || 1} guest${Number(b.guests) === 1 ? '' : 's'}` : `${b.nights || 1} night${Number(b.nights) === 1 ? '' : 's'}`;
+    const depositWord = { held: 'held', refunding: 'being refunded', refunded: 'refunded', disputed: 'under review', resolving: 'being settled', resolved: 'settled' }[b.deposit_status] || '';
+    const priceRows = [
+      [`${isExp ? 'Experience' : 'Stay'} · ${unit}`, inr(subtotal + discount)],
+      discount ? ['Offer applied', '−' + inr(discount)] : null,
+      fee ? ['Guest service fee', inr(fee)] : null,
+      gst ? ['GST', inr(gst)] : null,
+      deposit ? [`Refundable security deposit${depositWord ? ` <em>(${esc(depositWord)})</em>` : ''}`, inr(deposit)] : null,
+      coupon ? ['Aerva coupon', '−' + inr(coupon)] : null
+    ].filter(Boolean);
+    const refund = b.refunded && b.refunded.amount > 0 ? b.refunded : null;
+
+    // ---- Booking details ----
+    const guestName = [b.guest_first_name, b.guest_last_name].filter(Boolean).join(' ');
+    const policy = b.cancellation_policy || b.listing_cancellation_policy;
+    const policyName = isExp ? 'Experience policy' : policy === 'firm' ? 'Firm' : policy === 'flexible' ? 'Flexible' : '';
+    const policyDoc = isExp ? 'cancellation-experiences' : 'cancellation-stays';
+    const bookedOn = b.created_at ? new Date(b.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+    const pets = Array.isArray(b.pet_types) ? b.pet_types.length : 0;
+    const address = b.listing_address || (listing && listing.formatted_address) || '';
+    const detailRows = [
+      guestName ? ['Booked for', esc(guestName)] : null,
+      b.guest_email ? ['Confirmation sent to', esc(b.guest_email)] : null,
+      b.host_name ? ['Host', esc(b.host_name)] : null,
+      bookedOn ? ['Booked on', esc(bookedOn)] : null,
+      policyName ? ['Cancellation policy', `${esc(policyName)} · <a href="index.html?view=policies&doc=${policyDoc}" target="_blank" rel="noopener">Read it</a>`] : null,
+      b.razorpay_payment_id ? ['Payment ID', `<code>${esc(b.razorpay_payment_id)}</code>`] : null,
+      b.razorpay_order_id ? ['Booking reference', `<code>${esc(b.razorpay_order_id)}</code>`] : null
+    ].filter(Boolean);
+
+    const facts = isExp
+      ? [['Date', esc(day(b.arrival))],
+         b.experience_start_time ? ['Starts at', esc(b.experience_start_time)] : null,
+         b.experience_duration_hours ? ['Duration', `${esc(String(Number(b.experience_duration_hours)))} hour${Number(b.experience_duration_hours) === 1 ? '' : 's'}`] : null,
+         ['Guests', String(b.guests || 1)]]
+      : [['Check-in', `${esc(day(b.arrival))}${b.check_in_time ? `<small>from ${esc(b.check_in_time)}</small>` : ''}`],
+         ['Check-out', `${esc(day(b.departure))}${b.check_out_time ? `<small>by ${esc(b.check_out_time)}</small>` : ''}`],
+         ['Nights', String(b.nights || '—')],
+         ['Guests', `${b.guests || 1}${pets ? `<small>+ ${pets} pet${pets === 1 ? '' : 's'}</small>` : ''}`]];
 
     const actions = [];
     if(b.status === 'paid' || b.status === 'cancelled'){
-      actions.push(`<button type="button" class="filter-clear" id="bkMessage">${b.status === 'paid' ? 'Message host' : 'View messages'}</button>`);
+      actions.push(`<button type="button" class="filter-clear" id="bkMessage">${b.status === 'paid' && !isCompleted ? 'Message host' : 'View messages'}</button>`);
     }
     if(b.review_state === 'open') actions.push('<button type="button" class="filter-clear" id="bkReview">Leave a review</button>');
     if(listing) actions.push('<button type="button" class="filter-clear" id="bkListing">View the listing</button>');
+    actions.push('<button type="button" class="filter-clear" id="bkPrint">Print or save as PDF</button>');
 
     document.getElementById('bookingViewBody').innerHTML = `
+      <p class="bk-eyebrow">Booking summary</p>
       <h2 class="bk-title">${esc(b.suite_name || 'Your booking')}</h2>
-      <p class="bk-sub">${esc(statusWordGuest(b.status === 'paid' && b.local_today && String(b.departure).slice(0, 10) < String(b.local_today).slice(0, 10) ? 'completed' : b.status))}${listing ? ' · ' + esc(formatCityArea(listing)) : ''}</p>
-      <div class="bk-facts">
-        ${isExp
-          ? `<div><span>Date</span><strong>${esc(day(b.arrival))}</strong></div>`
-          : `<div><span>Check-in</span><strong>${esc(day(b.arrival))}</strong></div>
-             <div><span>Check-out</span><strong>${esc(day(b.departure))}</strong></div>
-             <div><span>Nights</span><strong>${b.nights || '—'}</strong></div>`}
-        <div><span>Guests</span><strong>${b.guests || 1}</strong></div>
-        ${money(b.total) ? `<div><span>Paid</span><strong>${money(b.total)}</strong></div>` : ''}
-        ${money(b.gst) ? `<div><span>of which GST</span><strong>${money(b.gst)}</strong></div>` : ''}
-      </div>
+      <p class="bk-sub"><span class="bk-status is-${esc(isCompleted ? 'completed' : b.status)}">${esc(statusWordGuest(isCompleted ? 'completed' : b.status))}</span>${place ? `<span class="bk-place">${esc(place)}</span>` : ''}</p>
+      ${b.status === 'cancelled' || b.status === 'refunded' ? `<div class="bk-cancelled">This booking was cancelled${b.cancelled_at ? ` on ${esc(new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}.${b.cancellation_reason ? ` Reason: ${esc(b.cancellation_reason)}.` : ''}${refund ? ` ${inr(refund.amount)} ${refund.pending ? 'is being refunded' : 'was refunded'} to your original payment method.` : ''}</div>` : ''}
+      ${b.confirmation_code && b.status === 'paid' ? `<div class="confirm-code bk-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${esc(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" id="bkCopyCode">Copy</button><span class="bk-code-hint">Show this to your host at ${isExp ? 'the start' : 'check-in'}</span></div>` : ''}
+      <div class="bk-facts">${facts.filter(Boolean).map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>
+      ${isExp && (b.meeting_point_address || b.meeting_point_details) ? `<p class="bk-note bk-meet"><strong>Meeting point:</strong> ${esc(b.meeting_point_address || '')}${b.meeting_point_details ? ` — ${esc(b.meeting_point_details)}` : ''}</p>` : ''}
       <div class="bk-actions">${actions.join('')}</div>
+      <div class="bk-summary">
+        <div class="bk-card">
+          <h3>Price details</h3>
+          ${priceRows.map(([k, v]) => `<div class="bk-row"><span>${k}</span><span>${v}</span></div>`).join('')}
+          <div class="bk-row bk-total"><span>Total paid${b.charge_currency && b.charge_currency !== 'INR' ? ` <em>(charged in ${esc(b.charge_currency)})</em>` : ''}</span><span>${inr(paid)}</span></div>
+          ${refund ? `<div class="bk-row bk-refund"><span>${refund.pending ? 'Refund in progress' : 'Refunded'}</span><span>−${inr(refund.amount)}</span></div>` : ''}
+        </div>
+        <div class="bk-card">
+          <h3>Booking details</h3>
+          ${detailRows.map(([k, v]) => `<div class="bk-row"><span>${k}</span><span>${v}</span></div>`).join('')}
+        </div>
+      </div>
       <div class="bk-cols">
         <div>
           <div class="listing-modal-section-title" style="margin-top:0;">Where it is</div>
           ${listing && listing.latitude && listing.longitude
             ? `<div class="bk-map" id="bkMap"></div>
                <p class="bk-note" style="margin-top:8px;">${esc(listing.formatted_address || formatCityArea(listing))}</p>`
-            : `<p class="bk-note">${listing ? esc(formatCityArea(listing)) : 'This listing is no longer published on Aerva, so its map and reviews are not available.'}</p>`}
+            : `<p class="bk-note">${address || place ? esc(address || place) : 'This listing is no longer published on Aerva, so its map and reviews are not available.'}</p>`}
         </div>
         <div>
           ${listing ? `<div class="listing-reviews" data-reviews-for="${Number(b.listing_id)}"></div>` : ''}
@@ -11309,6 +11394,18 @@
 
     const msgBtn = document.getElementById('bkMessage');
     if(msgBtn) msgBtn.addEventListener('click', () => openChatForOrder(Number(b.id), b.suite_name || ''));
+    const copyBtn = document.getElementById('bkCopyCode');
+    if(copyBtn) copyBtn.addEventListener('click', async () => {
+      try{ await navigator.clipboard.writeText(b.confirmation_code); copyBtn.textContent = 'Copied'; setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500); }
+      catch(err){ copyBtn.textContent = b.confirmation_code; }
+    });
+    const printBtn = document.getElementById('bkPrint');
+    if(printBtn) printBtn.addEventListener('click', () => {
+      document.body.classList.add('printing-booking');
+      const done = () => { document.body.classList.remove('printing-booking'); window.removeEventListener('afterprint', done); };
+      window.addEventListener('afterprint', done);
+      window.print();
+    });
     const revBtn = document.getElementById('bkReview');
     if(revBtn) revBtn.addEventListener('click', () => openReviewModal(b));
     const lstBtn = document.getElementById('bkListing');

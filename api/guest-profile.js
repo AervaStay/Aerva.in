@@ -746,6 +746,29 @@ module.exports = async (req, res) => {
                o.subtotal, o.discount_amount, o.gst, o.total, o.status, o.created_at,
                to_jsonb(o)->>'confirmation_code' AS confirmation_code,
                COALESCE(l.listing_type, 'stay') AS listing_type,
+               -- For the booking summary page (My Bookings → a booking).
+               -- Read through to_jsonb so a column a migration has not
+               -- added yet comes back null instead of failing the query.
+               o.guest_email, o.razorpay_order_id, o.razorpay_payment_id,
+               to_jsonb(o)->>'guest_service_fee' AS guest_service_fee,
+               to_jsonb(o)->>'deposit_amount' AS deposit_amount,
+               to_jsonb(o)->>'deposit_status' AS deposit_status,
+               to_jsonb(o)->>'coupon_discount' AS coupon_discount,
+               to_jsonb(o)->>'charge_currency' AS charge_currency,
+               to_jsonb(o)->>'cancelled_at' AS cancelled_at,
+               to_jsonb(o)->>'cancellation_reason' AS cancellation_reason,
+               to_jsonb(o)->>'cancellation_policy' AS cancellation_policy,
+               to_jsonb(o)->>'guest_first_name' AS guest_first_name,
+               to_jsonb(o)->>'guest_last_name' AS guest_last_name,
+               to_jsonb(o)->'pet_types' AS pet_types,
+               l.property_name AS listing_name, l.city AS listing_city, to_jsonb(l)->>'area' AS listing_area,
+               l.formatted_address AS listing_address, l.host_name AS host_name,
+               to_jsonb(l)->>'check_in_time' AS check_in_time, to_jsonb(l)->>'check_out_time' AS check_out_time,
+               to_jsonb(l)->>'cancellation_policy' AS listing_cancellation_policy,
+               to_jsonb(l)->>'experience_start_time' AS experience_start_time,
+               to_jsonb(l)->>'experience_duration_hours' AS experience_duration_hours,
+               to_jsonb(l)->>'experience_meeting_point_address' AS meeting_point_address,
+               to_jsonb(l)->>'experience_meeting_point_details' AS meeting_point_details,
                EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id) AS reviewed,
                (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
         FROM orders o
@@ -773,6 +796,18 @@ module.exports = async (req, res) => {
           bookings.forEach(b => { b.cancel_request_status = byOrder[b.id] || null; });
         }
       } catch (err) { /* migration_cancellation_requests.sql not run yet */ }
+
+      // Money refunded on each booking (cancellations, deposit returns),
+      // for the summary page. Only refunds Razorpay has taken on.
+      try {
+        const ids = bookings.map(b => b.id);
+        if (ids.length) {
+          const rf = await sql`SELECT order_id, COALESCE(SUM(amount), 0) AS paise, BOOL_OR(status = 'pending') AS any_pending
+                               FROM refunds WHERE order_id = ANY(${ids}) AND status IN ('pending', 'processed') GROUP BY order_id`;
+          const byOrder = {}; rf.forEach(r => { byOrder[r.order_id] = { amount: Math.round(Number(r.paise) / 100), pending: !!r.any_pending }; });
+          bookings.forEach(b => { b.refunded = byOrder[b.id] || null; });
+        }
+      } catch (err) { /* refunds table not created yet */ }
 
       // What the guest can do about a review on each booking. The page
       // shows a button only for 'open'; see index.html.
