@@ -24,7 +24,7 @@ window.AERVA_POLICIES = {
       points: [
         'Your booking is an agreement between you and the host. Aerva is the platform that connects you and takes payment.',
         'You: give true details of every guest and pet, keep a confirmed email and a phone number on your account, carry a government photo ID for every adult guest to show the host at check-in, follow the house rules and the law, and pay for any damage you or your guests cause.',
-        'Your booking is confirmed only when payment completes within the 90-second payment window. A payment that does not match the booking amount, or completes after the window, is not a booking and is refunded.',
+        'Your booking is confirmed only when payment completes within the 3-minute payment window. A payment that does not match the booking amount, or completes after the window, is not a booking and is refunded.',
         'Cancellations and changes are requests to the host through Aerva Messages, under the refund policy shown before you pay. Problems during the stay are reported through Aerva with evidence; Aerva decides.',
         'The host: provides the home or experience as described, keeps it safe and clean, and follows local laws.',
         'Aerva: takes your payment, handles refunds and complaints under Aerva’s Policies, and keeps your booking records.',
@@ -217,8 +217,8 @@ window.AERVA_POLICIES = {
         'A booking is confirmed only when payment succeeds.'
       ]},
       { title: 'The payment window', points: [
-        'When you continue to payment, the dates are held for you for 90 seconds. No one else can book or see them as available during that time.',
-        'Pay within the 90 seconds. Closing the payment window, a failed payment or the timer running out ends it at once and releases the dates.',
+        'When you continue to payment, the dates are held for you for 3 minutes. No one else can book or see them as available during that time.',
+        'Pay within the 3 minutes. Closing the payment window, a failed payment or the timer running out ends it at once and releases the dates.',
         'A payment completed after the window has ended, or after it was closed or cancelled, is not a booking. It is refunded in full.',
         'You have 5 payment attempts per listing per day.',
         'If the host changes a price after you open a listing, you are shown the new price before paying.'
@@ -314,7 +314,7 @@ window.AERVA_POLICIES = {
         'Hosts may cancel only 48 hours or more before check-in time, and must give a reason. The guest is told the reason.',
         'A host may cancel at most 3 bookings in any 12 months. Further cancellations are handled only by Aerva.',
         'When a host cancels, the guest is refunded in full at once (booking, fees and security deposit).',
-        'The guest also receives an Aerva coupon worth 10% of the booking, valid for 3 months, sent automatically 15 minutes after the cancellation. The host pays for it, before cancelling or from their next payout.',
+        'The guest also receives an Aerva coupon worth 10% of the booking, valid for 3 months, sent automatically 15 minutes after the cancellation. The host pays for it before the booking is cancelled.',
         'What a guest is not refunded after cancelling is paid to the host, less Aerva’s commission, on the usual payout day.'
       ]},
       { title: 'Co-hosts', points: [
@@ -334,7 +334,7 @@ window.AERVA_POLICIES = {
         'Choose the change in My Bookings. The new price and the difference are shown before you send it.',
         'The request goes to the host in Aerva Messages. The host accepts or rejects it. Until then, the booking stays as it is.',
         'If the new total is lower, the full difference is refunded once the host accepts.',
-        'If the new total is higher, pay the difference within 24 hours of the host accepting, through the 90-second payment window. The change applies only when that payment succeeds.',
+        'If the new total is higher, pay the difference within 24 hours of the host accepting, through the 3-minute payment window. The change applies only when that payment succeeds.',
         'If prices change before the host answers or before you pay, the request closes; send a new one.'
       ]}
     ]},
@@ -572,7 +572,7 @@ window.AERVA_POLICIES = {
         sections: [
           { title: 'Paid, but no booking shows', points: [
             'Check My Bookings and the email address on your account for the confirmation. A confirmation can take a few minutes to appear.',
-            'A payment made after the 90-second payment window ended, or after it was closed, is not a booking. It is refunded in full to the original payment method.',
+            'A payment made after the 3-minute payment window ended, or after it was closed, is not a booking. It is refunded in full to the original payment method.',
             'If money left your account and no booking appears after 30 minutes, raise a request with the payment reference, the date and the amount.'
           ]},
           { title: 'A payment that failed', points: [
@@ -965,7 +965,7 @@ window.AERVA_POLICIES = {
     'Add the Grievance Officer’s name to support.grievanceOfficer in this file (required by the E-Commerce Rules); it then shows in the Resolution Center.',
     'Resolution Center: fill in support.contacts.tollFree, whatsapp and hours in this file when the numbers are live. Until then those buttons stay hidden.',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',
-    'Have the lawyer review agreements 2026-09g: ID checked by the host at check-in (not by Aerva), the 90-second payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
+    'Have the lawyer review agreements 2026-09g: ID checked by the host at check-in (not by Aerva), the 3-minute payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
     'Erase the guest ID proofs uploaded before September 2026: Admin → ID Verifications → “Erase reviewed documents & encrypt stored numbers”.',
     'Confirm with the CA how GST is treated on the part of a booking price kept after a guest cancels.',
     'Payouts deduct TDS under section 194-O at 0.1% with a PAN and 5% without. Confirm these rates with the CA before real payouts.',

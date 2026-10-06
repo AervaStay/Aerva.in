@@ -1766,7 +1766,7 @@ module.exports = async (req, res) => {
         })
       : listings;
 
-    // A home whose dates are inside someone's 90-second payment window is
+    // A home whose dates are inside someone's 3-minute payment window is
     // not shown at all for those dates — to anyone, the payer included
     // (_booking-rules.js). It reappears the moment the window closes.
     if (arrivalFilter) {

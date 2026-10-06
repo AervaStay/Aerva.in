@@ -18,7 +18,7 @@
 //   3. Accepted, new total lower or equal → applied at once; the FULL
 //      difference is refunded.
 //      Accepted, new total higher → the guest pays the difference through
-//      the same strict 90-second payment window; the change is applied only
+//      the same strict 3-minute payment window; the change is applied only
 //      when that payment is confirmed.
 //   Rejected → nothing changes.
 //
@@ -439,7 +439,7 @@ async function respondChange(sql, razorpay, { changeId, accept, hostId, accountI
 }
 
 // ---------------------------------------------------------------------
-// The guest pays the difference: same strict 90-second window as a booking.
+// The guest pays the difference: same strict 3-minute window as a booking.
 async function startChangePayment(sql, razorpay, { changeId, guestId, ip }) {
   const c = (await sql`SELECT * FROM booking_changes WHERE id = ${changeId}`)[0];
   if (!c || c.guest_id !== guestId) throw userError('Change not found.', 404);

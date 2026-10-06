@@ -260,7 +260,7 @@ module.exports = async (req, res) => {
     return res.status(200).json({ released: true });
   }
   // Paying the difference for a change the host accepted: the same strict
-  // 90-second window as a booking (_booking-changes.js).
+  // 3-minute window as a booking (_booking-changes.js).
   // POST { payChange: <change id> } — signed-in guest only.
   if (req.body.payChange) {
     const { guestId: gid, payload } = getOptionalGuestId(req);
@@ -680,7 +680,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // Open the 90-second payment window. Stays: those dates are held from
+    // Open the 3-minute payment window. Stays: those dates are held from
     // everyone, this guest included. Experiences are not date-exclusive, so
     // each is held for THIS guest only (its room is minus the guest's id):
     // a second checkout for the same experience and date by the same guest

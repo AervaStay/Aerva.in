@@ -139,7 +139,7 @@ module.exports = { dateStr, localMidnightMs, hoursUntilCheckIn, allocatePaid, pa
 
 // ---------------------------------------------------------------------
 // 3. THE PAYMENT WINDOW (booking_holds) — strict, no exceptions
-//    • Starts when the guest taps Continue to payment; lasts 90 seconds.
+//    • Starts when the guest taps Continue to payment; lasts 3 minutes (HOLD_SECONDS).
 //    • While it runs, those dates cannot be booked or seen as available by
 //      anyone — the same guest included: hidden from search, shown as
 //      booked on calendars, and a second checkout is refused.
@@ -150,7 +150,7 @@ module.exports = { dateStr, localMidnightMs, hoursUntilCheckIn, allocatePaid, pa
 //    The database refuses two live overlapping holds
 //    (booking_holds_no_overlap), so two taps in the same instant can never
 //    both get one.
-const HOLD_SECONDS = 90;
+const HOLD_SECONDS = 180;                         // 3 minutes: enough for a card and the bank's OTP page
 const HOLD_MINUTES = HOLD_SECONDS / 60;          // kept for older callers
 const CONFIRM_GRACE_SECONDS = 15;               // network time from Razorpay to our server
 const ATTEMPTS_PER_DAY = 5;
@@ -256,7 +256,7 @@ async function holdValidForConfirmation(sql, razorpayOrderId, { heldAtCheckout }
       ? 'The host changed the price while the payment window was open, so the payment window had been closed.'
       : 'The payment window had already been closed or cancelled.' };
   }
-  if (rows.some(r => r.late)) return { ok: false, reason: `The payment was completed after the ${HOLD_SECONDS}-second payment window had ended.` };
+  if (rows.some(r => r.late)) return { ok: false, reason: `The payment was completed after the ${HOLD_SECONDS % 60 === 0 ? (HOLD_SECONDS / 60) + '-minute' : HOLD_SECONDS + '-second'} payment window had ended.` };
   return { ok: true };
 }
 

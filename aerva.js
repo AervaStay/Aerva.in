@@ -7524,7 +7524,7 @@
         </div>
         <ul>
           <li>Your guest is refunded in full straight away — booking and deposit.</li>
-          <li>You compensate them with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the booking), paid by you. It reaches them by email ${Number(d.couponReleaseMinutes) || 15} minutes later.</li>
+          <li>You compensate them with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the booking). You pay it now, as the last step; it reaches them by email ${Number(d.couponReleaseMinutes) || 15} minutes later.</li>
           <li>The guest is told the reason. This cannot be undone.</li>
         </ul>
       </div>
@@ -7552,11 +7552,11 @@
         <div class="hc-final">
           <p class="hc-cancel-head">Last step: compensate your guest</p>
           <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now refunds them in full and sends it.`
-            : `Your guest gets a ${inr(amount)} Aerva coupon. Choose how you pay for it — the booking is cancelled the moment you do.`}</p>
+            : `Your guest gets a ${inr(amount)} Aerva coupon, paid by you now. The booking is cancelled the moment your payment goes through.`}</p>
           <div class="hc-actions hc-col">
             ${d.couponPaid ? `<button type="button" class="hc-btn hc-danger" data-pay="held">Cancel the booking</button>`
               : `<button type="button" class="hc-btn hc-danger" data-pay="now">Pay ${inr(amount)} now and cancel</button>
-                 ${d.canDeductFromPayout ? `<button type="button" class="hc-btn hc-danger-soft" data-pay="later">Cancel — deduct ${inr(amount)} from my next payout</button>` : ''}`}
+`}
             <button type="button" class="hc-btn" id="hcBack">Back</button>
           </div>
           <p class="hc-cancel-err" id="hcErr" hidden></p>
@@ -7573,11 +7573,10 @@
         busy(true); err('');
         const how = b.dataset.pay;
         if(how === 'held') return cancelNow();
-        if(how === 'later') return cancelNow({ payLater: true });
         const buy = await api('', { method: 'POST', body: JSON.stringify({ buyCouponOrder: { bookingId: Number(conv.order_id) } }) });
         if(!buy.ok){ err(buy.data.error || 'Could not start the coupon payment.'); busy(false); return; }
         if(buy.data.alreadyPaid) return cancelNow();
-        if(typeof Razorpay === 'undefined'){ err('Payment is not available right now. Try again, or deduct it from your next payout.'); busy(false); return; }
+        if(typeof Razorpay === 'undefined'){ err('Payment is not available right now. Please try again in a moment.'); busy(false); return; }
         new Razorpay({
           key: buy.data.keyId, amount: buy.data.amount * 100, currency: 'INR', order_id: buy.data.razorpayOrderId,
           name: 'Aerva', description: 'Guest cancellation coupon', theme: { color: '#a9884f' },
@@ -7593,7 +7592,7 @@
     function done(r){
       body.innerHTML = `<div class="hc-done"><p class="hc-cancel-head">Booking cancelled</p>
         <p>Your guest has been refunded in full and gets the ${inr(r.couponAmount || amount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes.
-        ${r.paid === 'next_payout' ? `The ${inr(r.couponAmount || amount)} will be taken from your next payout.` : ''}</p></div>`;
+</p></div>`;
       conv.booking_status = 'cancelled';
       try{ refreshInboxMessages(); loadInboxConversations(); }catch(e){}
     }
@@ -10248,7 +10247,7 @@
     const options = {
       key: order.keyId,
       order_id: order.orderId,   // amount/currency come from the order itself — cannot be edited client-side
-      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
+      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the payment window ends
       amount: order.amount,
       currency: order.currency,
       name: 'Aerva',
@@ -10580,7 +10579,7 @@
     const options = {
       key: order.keyId,
       order_id: order.orderId,
-      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
+      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the payment window ends
       amount: order.amount,
       currency: order.currency,
       name: 'Aerva',
@@ -11116,7 +11115,7 @@
     const options = {
       key: order.keyId,
       order_id: order.orderId,
-      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the 90 seconds end
+      timeout: (order && order.holdSeconds) || undefined, // Razorpay closes its window when the payment window ends
       amount: order.amount,
       currency: order.currency,
       name: 'Aerva',
@@ -13525,7 +13524,7 @@ function bookStep(n, text){
 }
 const PAY_NOTE_HTML = '<p class="pay-note">You pay securely on the next screen by UPI, card or net banking. Your booking is confirmed by email straight after.</p>';
 
-// ---- The 90-second payment window (server: api/_booking-rules.js) ----
+// ---- The payment window, 3 minutes (server: api/_booking-rules.js HOLD_SECONDS) ----
 // Starts when the guest taps Continue to payment. A countdown sits above
 // Razorpay's window; every few seconds the server is asked whether the
 // window is still open (timed out? host changed a price?). Closing the
@@ -13539,7 +13538,7 @@ function aervaWatchCheckout(rzp, order, msgEl, opts){
   if(!order || !order.orderId) return;
   const seconds = Number(order.holdSeconds) || 0;
   const holdsDates = !(opts && opts.holdsDates === false);
-  const state = { rzp, orderId: order.orderId, msgEl, left: seconds, holdsDates };
+  const state = { rzp, orderId: order.orderId, msgEl, left: seconds, holdsDates, seconds };
   aervaCheckout = state;
   if(!seconds) return; // no window was opened (older server): nothing to time
   const bar = document.createElement('div');
@@ -13571,6 +13570,8 @@ function aervaWatchCheckout(rzp, order, msgEl, opts){
     }catch(e){ /* keep counting; the server still enforces the window */ }
   }, 4000);
 }
+// "3-minute" (or "90-second" from an older server).
+function aervaWindowLabel(sec){ sec = Number(sec) || 180; return sec % 60 === 0 ? (sec / 60) + '-minute' : sec + '-second'; }
 function aervaStopCheckout(){
   if(!aervaCheckout) return;
   clearInterval(aervaCheckout.tick); clearInterval(aervaCheckout.poll);
@@ -13641,7 +13642,7 @@ function aervaEndCheckout(reason){
   const messages = {
     closed: 'Payment cancelled. Nothing was booked.' + released,
     failed: 'The payment did not go through, so nothing was booked.' + released,
-    expired: 'The 90-second payment window has ended.' + released + ' If you had already paid (for example on your bank’s OTP page), keep this page open — the result will show here in a moment. Otherwise you can start again.',
+    expired: 'The ' + aervaWindowLabel(state.seconds) + ' payment window has ended.' + released + ' If you had already paid (for example on your bank’s OTP page), keep this page open — the result will show here in a moment. Otherwise you can start again.',
     released: 'This payment was cancelled, so nothing was booked.' + released,
     price_changed: 'Prices have been changed recently. Tap Continue to payment to see the new price.'
   };
@@ -13994,7 +13995,7 @@ async function openChangeBooking(orderId, listingName){
 }
 
 // ---- Guest: pay the difference for an accepted change ----
-// Same strict 90-second payment window as a booking.
+// Same strict payment window as a booking.
 async function aervaPayChange(changeId, btn){
   const label = btn ? btn.textContent : '';
   if(btn){ btn.disabled = true; btn.textContent = 'Preparing payment…'; }

@@ -781,7 +781,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     return { status: 'error', message: 'Could not check the payment amount right now.' };
   }
 
-  // 2b. It must have completed inside its 90-second payment window. A
+  // 2b. It must have completed inside its 3-minute payment window. A
   // payment for a window that was cancelled, closed or timed out is not a
   // booking: cancelled and refunded in full at once.
   if (ctx.heldAtCheckout) {

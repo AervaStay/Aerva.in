@@ -2755,7 +2755,7 @@ module.exports = async (req, res) => {
         canCancel: used < HOST_CANCELLATIONS_PER_YEAR,
         message: used >= HOST_CANCELLATIONS_PER_YEAR ? HOST_LIMIT_MESSAGE : null,
         cancellationsUsed: used, cancellationsLimit: HOST_CANCELLATIONS_PER_YEAR,
-        couponAmount, couponPaid: !!held, canDeductFromPayout: !cohostActor,
+        couponAmount, couponPaid: !!held, canDeductFromPayout: false, // the host always pays the coupon before cancelling
         couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES,
         reasons
       });
@@ -2797,13 +2797,17 @@ module.exports = async (req, res) => {
       //     deducted from the host's next payout (host_penalties).
       // Either way the booking and deposit are refunded in full at once.
       const held = (await sql`SELECT id, amount FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
-      const payLater = req.body.cancelBooking.payLater === true;
+      // The host always pays the guest's coupon up front, before cancelling
+      // (Razorpay: buyCouponOrder → verifyCouponPayment). Paying it from the
+      // next payout is no longer offered.
+      const payLater = false;
+      if (req.body.cancelBooking.payLater === true && !held) return [400, { error: 'Pay for the guest’s coupon first — the booking is cancelled as soon as it is paid.', needsCoupon: true, amount: await cancellationCouponAmount(loaded.order, orderId) }];
       // Co-host shares are paid in full, without deductions, so a co-host
       // pays for the coupon before cancelling.
       if (payLater && cohostActor) return [400, { error: 'Co-hosts pay for the guest’s coupon before cancelling.', needsCoupon: true }];
       if (!held && !payLater) {
         const amount = await cancellationCouponAmount(loaded.order, orderId);
-        return [402, { error: `Choose how to pay the guest’s cancellation coupon (₹${amount.toLocaleString('en-IN')}).`, needsCoupon: true, amount }];
+        return [402, { error: `Pay the guest’s cancellation coupon (₹${amount.toLocaleString('en-IN')}) to cancel.`, needsCoupon: true, amount }];
       }
       const amountLater = held ? 0 : await cancellationCouponAmount(loaded.order, orderId);
 

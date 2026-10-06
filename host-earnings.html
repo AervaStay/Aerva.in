@@ -897,7 +897,7 @@
 
   // Host cancellation. The guest is refunded in full (booking and deposit)
   // and gets an Aerva coupon worth 10% of the booking, which the host pays
-  // for: now (Razorpay), or by deduction from their next payout. The amount
+  // for up front (Razorpay) before the booking is cancelled. The amount
   // comes from the server. The host never sees the coupon code.
   async function submitCancellation(orderId){
     const reasonEl = document.getElementById('cancelReason-' + orderId);
@@ -939,7 +939,6 @@
         + '<p style="font-size:13.5px; margin:0 0 12px; opacity:0.8;">The guest is refunded in full (booking and deposit) straight away, and gets this coupon by email 15 minutes later. This cannot be undone.</p>'
         + '<div style="display:flex; gap:8px; flex-wrap:wrap;">'
         + '<button type="button" class="btn-small" data-choice="now">Pay ' + inr(amount) + ' now and cancel</button>'
-        + (isCohostMode ? '' : '<button type="button" class="dispute-btn" data-choice="later">Cancel, deduct ' + inr(amount) + ' from my next payout</button>')
         + '</div>';
       if(box.querySelector('[data-choice="later"]')) box.querySelector('[data-choice="later"]').addEventListener('click', async () => {
         box.querySelectorAll('button').forEach(b => { b.disabled = true; });
@@ -949,7 +948,7 @@
         const buy = await post({ buyCouponOrder: { bookingId: orderId } });
         if(!buy.ok){ show(buy.data.error || 'Could not start the coupon payment.'); return; }
         if(buy.data.alreadyPaid){ if(await cancelNow()) box.remove(); return; }
-        if(!window.Razorpay){ show('Payment is not available right now. Try again, or choose to deduct it from your next payout.'); return; }
+        if(!window.Razorpay){ show('Payment is not available right now. Please try again in a moment.'); return; }
         new window.Razorpay({
           key: buy.data.keyId, amount: buy.data.amount * 100, currency: 'INR', order_id: buy.data.razorpayOrderId,
           name: 'Aerva', description: 'Guest cancellation coupon',
