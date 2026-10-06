@@ -541,6 +541,12 @@
     padding:12px 16px; margin-bottom:20px; display:flex; justify-content:space-between;
     align-items:center; gap:12px; flex-wrap:wrap;
   }
+  #verificationBanner .banner-inner.needs-action{ background:#fbeeea; border-color:#e2b5aa; color:#7a2e21; }
+  #verificationBanner .banner-items{ display:flex; flex-direction:column; gap:8px; flex:1 1 320px; min-width:0; }
+  #verificationBanner .banner-item{ display:flex; flex-direction:column; gap:2px; line-height:1.5; }
+  #verificationBanner .banner-item strong{ font-weight:600; }
+  #verificationBanner .banner-item span{ opacity:0.9; }
+  #verificationBanner .banner-info{ color:#8a6c39; }
   #verificationBanner button{
     background:#1c1a17; color:#f4eadc; border:none; padding:8px 16px; font-size:13px;
     letter-spacing:0.04em; text-transform:uppercase; cursor:pointer; white-space:nowrap;
@@ -1179,7 +1185,7 @@
 
       <!-- ---- Payment Options ---- -->
       <div class="profile-tab-panel" id="profilePanelPayment" style="display:none;">
-        <div class="profile-warning">Changing your bank details will re-trigger PAN and Aadhaar verification, since a payout account change is exactly the kind of thing worth double-checking. Only the verification result is kept — the documents themselves are not stored.</div>
+        <div class="profile-warning">Changing your bank details puts payouts on hold: Aerva checks the new account with your bank (₹1 is sent to it) against the name on your PAN, and payouts wait at least 48 hours after any change. You will get an email about the change. The account must be held by the PAN holder, alone or jointly.</div>
         <div class="settings-row" style="border-bottom:none;">
           <div class="settings-row-main">
             <div class="settings-row-label">Bank Account</div>
@@ -2082,17 +2088,29 @@
     // detail now lives in the Profile modal's Verification tab.
     const allDone = isFullyVerified(v);
     const bannerEl = document.getElementById('verificationBanner');
-    if(allDone){
+    // What is pending on payout details, and whose move it is: "Action
+    // needed" items first (the host must do something), then what Aerva is
+    // checking. Same list as the header bell (api/_bank-check.js).
+    const items = (v.payoutItems || []).slice().sort((a, b) => (a.kind === 'action' ? 0 : 1) - (b.kind === 'action' ? 0 : 1));
+    if(allDone && !items.length){
       bannerEl.style.display = 'none';
     } else {
       bannerEl.style.display = 'block';
+      const needsAction = items.some(i => i.kind === 'action');
       bannerEl.innerHTML = `
-        <div class="banner-inner">
-          <span>Payouts are held until PAN, Aadhaar, and bank verification are all approved.</span>
-          <button type="button" id="verificationBannerBtn">Complete Verification</button>
+        <div class="banner-inner${needsAction ? ' needs-action' : ''}">
+          <div class="banner-items">
+            ${items.length ? items.map(i => `<div class="banner-item banner-${i.kind}"><strong>${escH(i.title)}</strong><span>${escH(i.body)}</span></div>`).join('')
+              : '<span>Payouts are held until PAN, Aadhaar, and bank verification are all approved.</span>'}
+          </div>
+          <button type="button" id="verificationBannerBtn">${needsAction ? 'Fix now' : (items.length ? 'See payout details' : 'Complete Verification')}</button>
         </div>
       `;
-      document.getElementById('verificationBannerBtn').addEventListener('click', () => openProfileModal('verification'));
+      document.getElementById('verificationBannerBtn').addEventListener('click', () => {
+        const bank = items.find(i => /bank/i.test(i.title) && i.kind === 'action');
+        if(bank){ openProfileModal('payment'); return; }
+        openProfileModal('verification');
+      });
     }
 
     // Pre-fill both the collapsed display rows AND the (hidden-by-default)

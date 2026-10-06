@@ -209,13 +209,13 @@ async function loadPayee(sql, kind, key) {
                                 to_jsonb(h) AS j FROM hosts h WHERE h.id = ${key}`)[0];
     if (!h) return null;
     return { kind, key: h.id, name: h.name, email: h.email, pan: decryptField(h.pan_number), gstin: h.j.bank_gstin ? decryptField(h.j.bank_gstin) : null, panName: h.j.pan_name || null, holder: h.bank_account_holder_name,
-             account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, status: h.bank_status, checkId: h.j.bank_check_id || null, checkStatus: h.j.bank_check_status || null };
+             account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, status: h.bank_status, checkId: h.j.bank_check_id || null, checkStatus: h.j.bank_check_status || null, changedAt: h.j.bank_changed_at || null };
   }
   const c = (await sql`SELECT p.guest_id, p.pan_number, p.gstin, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status, g.name, g.email, to_jsonb(p) AS j
                        FROM cohost_payout_profiles p JOIN guests g ON g.id = p.guest_id WHERE p.guest_id = ${key}`)[0];
   if (!c) return null;
   return { kind, key: c.guest_id, name: c.name, email: c.email, pan: decryptField(c.pan_number), gstin: c.gstin ? decryptField(c.gstin) : null, panName: c.j.pan_name || null, holder: c.account_holder_name,
-           account: decryptField(c.bank_account_number), ifsc: c.bank_ifsc, status: c.status, checkId: c.j.bank_check_id || null, checkStatus: c.j.bank_check_status || null };
+           account: decryptField(c.bank_account_number), ifsc: c.bank_ifsc, status: c.status, checkId: c.j.bank_check_id || null, checkStatus: c.j.bank_check_status || null, changedAt: c.j.bank_changed_at || null };
 }
 
 async function saveCheck(sql, kind, key, f) {
@@ -257,24 +257,91 @@ async function sendMail(to, subject, html) {
 }
 const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-// Bank details were just saved: tell the account owner (a hijacked account
-// changing where payouts go is the fraud this guards against), and start
-// the penny drop. Never throws: the details are saved either way.
-async function bankDetailsChanged(sql, kind, key) {
+// Payout details were just changed — a new bank account (what: 'bank') or
+// a new PAN (what: 'pan'). The owner is told clearly what changed, that
+// payouts are on hold and why, and the bank account is checked again from
+// scratch against the name on the PAN. Never throws: the change is saved
+// either way.
+const fmtWhen = (d) => new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' });
+async function payoutDetailsChanged(sql, kind, key, what = 'bank') {
   try {
     const p = await loadPayee(sql, kind, key);
     if (!p) return { status: 'missing' };
     const last4 = String(p.account || '').slice(-4);
-    await sendMail(p.email, 'Your payout bank account was changed',
-      `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your payout bank account was changed</h2>
-       <p>The bank account for your Aerva payouts was just set to the account ending <strong>${esc(last4)}</strong> (${esc(p.ifsc)}), in the name ${esc(p.holder)}.</p>
-       <p>Aerva checks it with your bank, and payouts wait ${HOLD_HOURS_AFTER_CHANGE} hours after any change.</p>
+    const until = fmtWhen(Date.now() + HOLD_HOURS_AFTER_CHANGE * 3600e3);
+    const where = kind === 'host' ? 'https://aerva.in/host-dashboard.html?openProfile=1&profileTab=verification' : 'https://aerva.in/index.html?view=cohost';
+    const changed = what === 'pan'
+      ? `The PAN on your Aerva account was changed${p.panName ? ` to one in the name <strong>${esc(p.panName)}</strong>` : ''}.`
+      : `The bank account for your Aerva payouts was changed to the account ending <strong>${esc(last4)}</strong> (${esc(p.ifsc)}), in the name ${esc(p.holder)}.`;
+    await sendMail(p.email, what === 'pan' ? 'Your PAN was changed — payouts on hold' : 'Your payout bank account was changed — payouts on hold',
+      `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${what === 'pan' ? 'Your PAN was changed' : 'Your payout bank account was changed'}</h2>
+       <p>${changed}</p>
+       <p><strong>Your payouts are on hold</strong> while Aerva checks your details again:</p>
+       <ul>
+         ${p.account ? '<li>your bank confirms the account is held by the person (or business) on your PAN — Aerva sends ₹1 to it to ask;</li>' : '<li>add a bank account in the name on your PAN — payouts cannot be sent without one;</li>'}
+         ${what === 'pan' ? '<li>Aerva reviews your new PAN;</li>' : ''}
+         <li>and, for your security, at least until ${esc(until)}.</li>
+       </ul>
+       <p>Nothing is lost: payouts that fall due meanwhile are sent once the checks are done. You will get an email when they are, or if anything is needed from you.</p>
+       <p style="margin:20px 0;"><a href="${where}" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">See your payout details</a></p>
        <p><strong>Did not make this change?</strong> Reply to this email or write to hello@aerva.in straight away.</p>`);
+    if (!p.account || !p.ifsc) return { status: 'missing' };
     return await startCheck(sql, kind, key);
   } catch (err) {
-    console.error('bank check not started:', err.message);
+    console.error('payout details check not started:', err.message);
     return { status: 'error' };
   }
+}
+const bankDetailsChanged = (sql, kind, key) => payoutDetailsChanged(sql, kind, key, 'bank');
+
+// ---- What the payee must do, or is waiting for (bell, dashboard banner) ----
+// kind 'action': the payee has to do something; 'info': Aerva is checking.
+// The id carries the state, so a new state shows as a new notification.
+function payoutItems(row, { who = 'host' } = {}) {
+  const items = [];
+  if (!row) return items;
+  const href = who === 'host' ? 'host-dashboard.html?openProfile=1&profileTab=verification' : 'index.html?view=cohost';
+  const holdUntil = row.bank_changed_at && inChangeHold(row.bank_changed_at)
+    ? new Date(new Date(row.bank_changed_at).getTime() + HOLD_HOURS_AFTER_CHANGE * 3600e3) : null;
+  const add = (state, kind, title, body) => items.push({ id: `payout-details:${who}:${state}:${row.bank_checked_at || row.bank_changed_at || ''}`, kind, title, body, href });
+  if (who === 'host') {
+    if (row.pan_status === 'rejected') add('pan-rejected', 'action', 'Action needed: your PAN was not approved', row.pan_rejection_reason || 'Write to hello@aerva.in to submit it again.');
+    else if (!row.pan_status || row.pan_status === 'not_submitted') add('pan-missing', 'action', 'Action needed: add your PAN', 'Payouts carry 5% TDS without a PAN, 0.1% with one. Add it in your payout details.');
+    else if (row.pan_number && !row.pan_name) add('pan-name', 'action', 'Action needed: add the name on your PAN', 'Your bank account is checked against it before payouts.');
+    if (row.bank_status === 'rejected') add('bank-rejected', 'action', 'Action needed: update your bank account', (row.bank_rejection_reason || 'Your bank account could not be verified.') + ' Payouts are on hold until a bank account is verified.');
+    else if (!row.bank_status || row.bank_status === 'not_submitted' || !row.bank_account_number) add('bank-missing', 'action', 'Action needed: add your bank account', 'Payouts are on hold until you add a bank account in the name on your PAN.');
+    else if (row.bank_status === 'pending_review' || row.pan_status === 'pending_review') add('checking', 'info', 'Your payout details are being checked',
+      `Payouts are on hold until the check is done${holdUntil ? `, and at least until ${fmtWhen(holdUntil)}` : ''}. Nothing needed from you unless we ask.`);
+    else if (holdUntil) add('hold', 'info', `Payouts resume on ${fmtWhen(holdUntil)}`, 'Your payout details changed recently, so payouts wait 48 hours for your security.');
+  } else {
+    if (row.status === 'rejected') add('rejected', 'action', 'Action needed: update your payout details', (row.rejection_reason || 'Your payout details could not be verified.') + ' Your shares are on hold until they are approved.');
+    else if (row.status === 'pending_review') add('checking', 'info', 'Your payout details are being checked',
+      `Your shares are on hold until the check is done${holdUntil ? `, and at least until ${fmtWhen(holdUntil)}` : ''}.`);
+    else if (holdUntil) add('hold', 'info', `Payouts resume on ${fmtWhen(holdUntil)}`, 'Your payout details changed recently, so payouts wait 48 hours for your security.');
+  }
+  return items;
+}
+// The bell's items for one account: as a host, and as a co-host.
+async function payoutNotifications(sql, { hostId = null, guestId = null } = {}) {
+  const out = [];
+  try {
+    if (hostId) {
+      const hasListing = (await sql`SELECT 1 FROM listings WHERE host_id = ${hostId} AND status IN ('approved', 'blocked') LIMIT 1`).length;
+      if (hasListing) {
+        const h = (await sql`SELECT pan_status, pan_rejection_reason, pan_number, bank_status, bank_rejection_reason, bank_account_number,
+                                    to_jsonb(hosts)->>'pan_name' AS pan_name, to_jsonb(hosts)->>'bank_changed_at' AS bank_changed_at,
+                                    to_jsonb(hosts)->>'bank_checked_at' AS bank_checked_at
+                             FROM hosts WHERE id = ${hostId}`)[0];
+        payoutItems(h, { who: 'host' }).forEach(i => out.push(i));
+      }
+    }
+    if (guestId) {
+      const c = (await sql`SELECT status, rejection_reason, to_jsonb(p)->>'bank_changed_at' AS bank_changed_at, to_jsonb(p)->>'bank_checked_at' AS bank_checked_at
+                           FROM cohost_payout_profiles p WHERE guest_id = ${guestId}`)[0];
+      payoutItems(c, { who: 'cohost' }).forEach(i => out.push(i));
+    }
+  } catch (err) { /* tables or columns not there yet */ }
+  return out;
 }
 
 // The penny drop. A fresh RazorpayX payee (contact + fund account) in the
@@ -359,8 +426,9 @@ async function settleCheck(sql, kind, key, v) {
 
 async function tellResult(p, decision, why) {
   if (decision === 'approve') {
+    const holdUntil = p.changedAt && inChangeHold(p.changedAt) ? fmtWhen(new Date(p.changedAt).getTime() + HOLD_HOURS_AFTER_CHANGE * 3600e3) : null;
     await sendMail(p.email, 'Your bank account is verified', `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your bank account is verified</h2>
-      <p>Your bank confirmed the account ending ${esc(String(p.account || '').slice(-4))} is in the name on your PAN. Payouts will go to it.</p>`);
+      <p>Your bank confirmed the account ending ${esc(String(p.account || '').slice(-4))} is held by the person (or business) on your PAN. Payouts will go to it${holdUntil ? `, from ${esc(holdUntil)} (48 hours after the change, for your security)` : ''}.</p>`);
   } else if (decision === 'reject') {
     await sendMail(p.email, 'Your bank account could not be verified', `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your bank account could not be verified</h2>
       <p>${esc(why)}</p><p>Update it in your Aerva account. Payouts wait until a bank account is verified.</p>`);
@@ -413,5 +481,5 @@ function describeCheck(row) {
 
 module.exports = {
   nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, validGstin, gstinPan, tradeGstinProblem, PERSONAL_PAN, panLetter, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
-  bankDetailsChanged, startCheck, settleCheck, pollChecks, inChangeHold, describeCheck, HOLD_HOURS_AFTER_CHANGE
+  bankDetailsChanged, payoutDetailsChanged, payoutItems, payoutNotifications, startCheck, settleCheck, pollChecks, inChangeHold, describeCheck, HOLD_HOURS_AFTER_CHANGE
 };

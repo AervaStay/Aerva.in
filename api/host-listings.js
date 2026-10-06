@@ -3230,6 +3230,7 @@ module.exports = async (req, res) => {
       const host = current[0];
       let didSomething = false;
       let bankChanged = false;
+      let panChanged = false;
       const cleanPanName = typeof panName === 'string' ? panName.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
 
       // ---- Name as printed on the PAN, for a PAN already on file without it ----
@@ -3278,6 +3279,9 @@ module.exports = async (req, res) => {
           `;
         }
         host.pan_name = cleanPanName;
+        // A bank account already on file is checked again against the new PAN,
+        // with payouts on hold meanwhile (see below).
+        if (host.bank_status && host.bank_status !== 'not_submitted') panChanged = true;
         await logAudit(sql, {
           action: 'host_pan_submitted', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
           targetType: 'host', targetId: guest.host_id
@@ -3339,12 +3343,12 @@ module.exports = async (req, res) => {
         // Only reset PAN/Aadhaar back to pending_review if they'd
         // actually been submitted before — nothing to "re-check" for a
         // PAN/Aadhaar that was never on file in the first place.
-        const aadhaarSubmitted = !!host.aadhaar_document_url;
-        const panSubmitted = !!host.pan_document_url;
-        const reAadhaarStatus = aadhaarSubmitted ? 'pending_review' : host.aadhaar_status;
-        const rePanStatus = panSubmitted ? 'pending_review' : host.pan_status;
-        const reAadhaarReason = aadhaarSubmitted ? null : host.aadhaar_rejection_reason;
-        const rePanReason = panSubmitted ? null : host.pan_rejection_reason;
+        // The recheck of a new account is the bank check against the name on
+        // the PAN (_bank-check.js). PAN and Aadhaar keep their status: their
+        // documents are erased once reviewed, so there would be nothing to look at again.
+        const aadhaarSubmitted = false, panSubmitted = false;
+        const reAadhaarStatus = host.aadhaar_status, rePanStatus = host.pan_status;
+        const reAadhaarReason = host.aadhaar_rejection_reason, rePanReason = host.pan_rejection_reason;
         await sql`
           UPDATE hosts SET
             bank_account_number = ${encryptField(cleanAccountNumber)}, bank_ifsc = ${cleanIfsc},
@@ -3404,7 +3408,18 @@ module.exports = async (req, res) => {
       // The new bank account: the owner is emailed and the penny drop starts
       // (_bank-check.js). Never fails the save.
       let bank = null;
-      if (bankChanged) bank = await bankCheck.bankDetailsChanged(sql, 'host', guest.host_id);
+      if (bankChanged) bank = await bankCheck.payoutDetailsChanged(sql, 'host', guest.host_id, 'bank');
+      else if (panChanged) {
+        // A new PAN with a bank account on file: the account is checked again
+        // against the new name, payouts on hold until then (48 hours at least).
+        try {
+          await sql`UPDATE hosts SET bank_status = CASE WHEN bank_status = 'verified' THEN 'pending_review' ELSE bank_status END,
+                                     razorpayx_fund_account_id = NULL, bank_changed_at = now(), bank_check_id = NULL, bank_check_status = NULL,
+                                     bank_registered_name = NULL, bank_name_match = NULL, bank_checked_at = NULL
+                    WHERE id = ${guest.host_id}`;
+        } catch (e) { if (e.code !== '42703') throw e; await sql`UPDATE hosts SET razorpayx_fund_account_id = NULL WHERE id = ${guest.host_id}`; }
+        bank = await bankCheck.payoutDetailsChanged(sql, 'host', guest.host_id, 'pan');
+      }
       return res.status(200).json({ success: true, bankCheck: bank ? bank.status : undefined });
     } catch (err) {
       console.error('host-listings (POST verification) error:', err);
@@ -3677,6 +3692,10 @@ module.exports = async (req, res) => {
         status: h.j.bank_check_status, match: h.j.bank_name_match || null,
         registeredName: h.j.bank_registered_name || null, message: bankCheck.describeCheck(h.j)
       } : null,
+      // What the host must do, or is waiting for (also in the header bell).
+      payoutItems: bankCheck.payoutItems({ pan_status: h.pan_status, pan_rejection_reason: h.pan_rejection_reason, pan_number: h.pan_number,
+        bank_status: h.bank_status, bank_rejection_reason: h.bank_rejection_reason, bank_account_number: h.bank_account_number,
+        pan_name: h.j && h.j.pan_name, bank_changed_at: h.j && h.j.bank_changed_at, bank_checked_at: h.j && h.j.bank_checked_at }, { who: 'host' }),
       bankPayoutsFrom: h.j && h.j.bank_changed_at && bankCheck.inChangeHold(h.j.bank_changed_at)
         ? new Date(new Date(h.j.bank_changed_at).getTime() + bankCheck.HOLD_HOURS_AFTER_CHANGE * 3600e3).toISOString() : null,
       hostAgreementAccepted: hostAgreementVersion === AGREEMENT_VERSION,

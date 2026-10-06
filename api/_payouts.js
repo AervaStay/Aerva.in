@@ -187,7 +187,9 @@ async function planPayouts(sql, orderId, opts = {}) {
     tdsBase: hostT.base, tdsReason: hostT.reason, tdsCatchupBase: hostT.catchupBase, tdsFy: hostT.fy,
     net: round2(available - deductions), email: hostEmail, name: o.host_name,
     bankLabel: [o.bank_account_holder_name, maskAccount(o.bank_account_number)].filter(Boolean).join(' · '),
-    bank: { ready: o.bank_status === 'verified' && !!o.bank_account_number && !!o.bank_ifsc && !inChangeHold(o.host_bank_changed_at), changedRecently: inChangeHold(o.host_bank_changed_at), holder: o.bank_account_holder_name, account: decryptField(o.bank_account_number), ifsc: o.bank_ifsc, fundAccountId: o.razorpayx_fund_account_id, table: 'hosts', key: o.host_id }
+    // On hold while the PAN is being reviewed again, or within 48 hours of a change.
+    bank: { ready: o.bank_status === 'verified' && !!o.bank_account_number && !!o.bank_ifsc && !inChangeHold(o.host_bank_changed_at) && o.host_pan_status !== 'pending_review',
+            changedRecently: inChangeHold(o.host_bank_changed_at) || o.host_pan_status === 'pending_review', holder: o.bank_account_holder_name, account: decryptField(o.bank_account_number), ifsc: o.bank_ifsc, fundAccountId: o.razorpayx_fund_account_id, table: 'hosts', key: o.host_id }
   }];
   for (const x of shares) {
     // Co-host: their share, less TDS only (no other deductions).
@@ -267,7 +269,8 @@ async function depositPayee(sql, hostId) {
   return {
     payeeType: 'host', hostId: h.id, payeeGuestId: null, email, name: h.name, panFurnished: !!h.pan_number && h.pan_status !== 'rejected',
     bankLabel: [h.bank_account_holder_name, maskAccount(h.bank_account_number)].filter(Boolean).join(' · '),
-    bank: { ready: h.bank_status === 'verified' && !!h.bank_account_number && !!h.bank_ifsc && !inChangeHold(h.bank_changed_at), changedRecently: inChangeHold(h.bank_changed_at), holder: h.bank_account_holder_name, account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, fundAccountId: h.razorpayx_fund_account_id, table: 'hosts', key: h.id }
+    bank: { ready: h.bank_status === 'verified' && !!h.bank_account_number && !!h.bank_ifsc && !inChangeHold(h.bank_changed_at) && h.pan_status !== 'pending_review',
+            changedRecently: inChangeHold(h.bank_changed_at) || h.pan_status === 'pending_review', holder: h.bank_account_holder_name, account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, fundAccountId: h.razorpayx_fund_account_id, table: 'hosts', key: h.id }
   };
 }
 async function createDepositCompensationPayout(sql, { orderId, amount }) {
@@ -375,7 +378,7 @@ async function attemptPayout(sql, payoutId, { by = 'automatic' } = {}) {
     const plan = row.kind === 'deposit'
       ? await depositPayee(sql, row.host_id)
       : (await planPayouts(sql, row.order_id)).find(p => p.payeeType === row.payee_type && (p.payeeGuestId || 0) === (row.payee_guest_id || 0));
-    if (!plan || !plan.bank.ready) return back('due', plan && plan.bank.changedRecently ? 'Bank details changed in the last 48 hours: waiting' : 'Waiting for approved bank details');
+    if (!plan || !plan.bank.ready) return back('due', plan && plan.bank.changedRecently ? 'Payout details changed recently (PAN or bank being checked, or within 48 hours): waiting' : 'Waiting for approved bank details');
     let fa = plan.bank.fundAccountId;
     if (!fa) {
       const contact = await razorpayx('POST', '/contacts', { name: plan.bank.holder || plan.name || 'Aerva payee', email: plan.email || undefined, type: 'vendor', reference_id: `${plan.bank.table}-${plan.bank.key}` });
