@@ -6811,11 +6811,17 @@
       document.getElementById('chatModalTitle').textContent = data.listingName || listingName || 'Chat';
       renderChatMessages(data.messages || [], data.viewerRole);
       showReviewPrompt('chatReviewPrompt', data.reviewPrompt);
-      showBookingDetails('chatReviewPrompt', data.booking);
-      showCancellationCard('chatReviewPrompt', data.cancellation, () => openChatForOrder(orderId, listingName));
-      showChangeCard('chatReviewPrompt', data.change, () => openChatForOrder(orderId, listingName));
-      showDisputeCard('chatReviewPrompt', data.dispute, () => openChatForOrder(orderId, listingName));
-      loadChatTemplates(data.conversationId);
+      // Booking details and the cancel / change / dispute cards sit ABOVE
+      // the messages (inserted before the message list), so the reply box
+      // always stays at the bottom of the window — on a phone they used to
+      // push it off the screen.
+      showBookingDetails('chatMessagesContainer', data.booking);
+      showCancellationCard('chatMessagesContainer', data.cancellation, () => openChatForOrder(orderId, listingName));
+      showChangeCard('chatMessagesContainer', data.change, () => openChatForOrder(orderId, listingName));
+      showDisputeCard('chatMessagesContainer', data.dispute, () => openChatForOrder(orderId, listingName));
+      // Quick-reply templates are the host's; a guest never sees them.
+      if(data.viewerRole === 'host') loadChatTemplates(data.conversationId);
+      else document.getElementById('chatTemplatesRow').innerHTML = '';
     } catch(err){
       document.getElementById('chatMessagesContainer').innerHTML = '<p class="suites-empty">Could not open this conversation. Please try again.</p>';
     }
@@ -6946,7 +6952,7 @@
       const data = await res.json();
       const templates = data.templates || [];
       if(!templates.length){ row.innerHTML = ''; return; }
-      row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${escapeMessageHtml(t.body)}" style="white-space:nowrap; flex:0 0 auto;">${escapeMessageHtml(t.body)}</button>`).join('');
+      row.innerHTML = templates.map(t => `<button type="button" class="filter-clear" data-template="${escapeMessageHtml(t.body)}" title="${escapeMessageHtml(t.body)}" style="white-space:nowrap; flex:0 0 auto; max-width:240px; overflow:hidden; text-overflow:ellipsis;">${escapeMessageHtml(t.body)}</button>`).join('');
       row.querySelectorAll('[data-template]').forEach(btn => {
         btn.addEventListener('click', () => {
           document.getElementById('chatInput').value = btn.dataset.template;
