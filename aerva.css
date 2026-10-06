@@ -1182,6 +1182,9 @@
      placeholder follows, so this reads as "the placeholder is animated"
      rather than an obviously separate overlay element. */
   #searchCity:placeholder-shown ~ .place-hint{opacity:1;}
+  /* Never over a typed or restored place name (the browser can refill the
+     field on Back without any input event). */
+  #searchCity:not(:placeholder-shown) ~ .place-hint{opacity:0 !important;}
   #placeHintText{display:inline-block; transition:opacity 0.4s ease;}
   .place-suggestions{
     position:absolute; top:100%; left:0; right:0; margin-top:6px; background:var(--cream, #f4ebe3);
@@ -3043,6 +3046,7 @@ footer .foot-bottom{ margin-top:0; }
 /* One request */
 .hc-req-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
 .hc-req-title{ font-size:34px; overflow-wrap:anywhere; }
+.hc-timeline-title{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:22px; margin:28px 0 -10px; }
 .hc-thread{ list-style:none; padding:0; margin:26px 0; display:flex; flex-direction:column; gap:14px; }
 .hc-msg{ padding:16px 18px; border-radius:14px; border:1px solid var(--hairline); max-width:86%; }
 .hc-msg.is-you{ align-self:flex-end; background:var(--surface-2); border-color:transparent; }
@@ -3057,6 +3061,20 @@ footer .foot-bottom{ margin-top:0; }
 .hc-reply{ border-top:1px solid var(--hairline); padding-top:22px; }
 .hc-close-btn{ background:#fff; }
 
+/* Feedback once resolved, and before closing */
+.hc-feedback{ margin:22px 0 0; padding:22px; border:1px solid #dccfbd; border-radius:14px; background:var(--surface-2); }
+.hc-feedback h2{ font-family:'Bodoni Moda', serif; font-weight:500; font-size:24px; margin:0 0 6px; }
+.hc-fb-panel{ margin-top:16px; display:flex; flex-direction:column; gap:12px; align-items:flex-start; }
+.hc-fb-panel .hc-field{ width:100%; }
+.hc-fb-panel[hidden], .hc-feedback[hidden]{ display:none; }
+.hc-stars{ display:inline-flex; flex-direction:row-reverse; gap:4px; }
+.hc-stars label{ cursor:pointer; font-size:30px; line-height:1; color:#d6cbbd; }
+.hc-stars input{ position:absolute; opacity:0; width:1px; height:1px; }
+.hc-stars label:hover, .hc-stars label:hover ~ label, .hc-stars input:checked ~ span, .hc-stars label:has(input:checked), .hc-stars label:has(input:checked) ~ label{ color:var(--gold); }
+.hc-stars input:focus-visible + span{ outline:2px solid var(--gold); outline-offset:2px; border-radius:4px; }
+.hc-sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+.hc-stars-static{ color:var(--gold); letter-spacing:2px; }
+.hc-stars-static span{ color:#d6cbbd; }
 @media (max-width:860px){
   .hc-new{ grid-template-columns:1fr; }
   .hc-tips{ position:static; }
@@ -3072,4 +3090,45 @@ footer .foot-bottom{ margin-top:0; }
   .hc-grievance dl{ grid-template-columns:1fr; gap:2px; }
   .hc-grievance dd{ margin-bottom:8px; }
   .hc-tabs .hc-tabs-login{ margin-left:0; }
+}
+
+/* ---------- Search card on tablets and desktops (Oct 2026) ----------
+   One row held Where, When, Who, three filter buttons and the search
+   button, so once dates and "3 guests, 1 infant, 1 pet" were filled in,
+   Who wrapped onto four lines and the place name was cut to a few letters.
+   Now: the fields and the search button on the first row (When and Who
+   take the width their text needs, Where takes the rest), the filter
+   buttons on a second row below a thin line. Phones keep their own
+   stacked layout above. */
+@media (min-width:641px){
+  .pill-search{ flex-wrap:wrap; border-radius:28px; align-items:center; }
+  .pill-search > .search-field{ align-self:stretch; align-items:center; }
+  .pill-search > .search-field{ flex:0 1 auto; min-width:0; padding:14px 22px; }
+  .pill-search > .search-field-where{ flex:1 1 220px; min-width:180px; }
+  .pill-search > .search-field:has(#guestsTriggerBtn){ border-right:none; }
+  .pill-search > .search-field .date-range-btn{ flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pill-search .place-input-wrap input{ text-overflow:ellipsis; }
+  .pill-search-submit{ order:1; margin:10px 12px 10px 4px; }
+  .pill-search .filter-bar{
+    order:2; flex:1 0 100%; box-sizing:border-box; display:flex; align-items:center; gap:14px;
+    border-left:none; border-top:1px solid var(--line-dark); padding:10px 22px; opacity:1;
+  }
+  .pill-search .filter-bar .more-filters-btn,
+  .pill-search .filter-bar #showDistanceBtn{ white-space:nowrap; }
+  .pill-search .filter-bar #clearFiltersBtn{ margin-left:auto; order:3; }
+}
+/* Tablets: not enough width for label + value side by side and the search
+   button on one row, so labels sit above their values, the three fields
+   share the row, and the search button moves to the filter row. */
+@media (min-width:641px) and (max-width:999px){
+  .pill-search > .search-field{ flex-direction:column; align-items:flex-start; justify-content:center; gap:4px; padding:12px 18px; }
+  .pill-search > .search-field{ box-sizing:border-box; min-width:0; }
+  .pill-search > .search-field-where{ flex:38 1 0; }
+  .pill-search > .search-field.date-range-wrapper{ flex:27 1 0; }
+  .pill-search > .search-field:has(#guestsTriggerBtn){ flex:35 1 0; }
+  .pill-search > .search-field label{ margin-right:0; }
+  .pill-search > .search-field .place-input-wrap,
+  .pill-search > .search-field .date-range-btn{ width:100%; }
+  .pill-search .filter-bar{ flex:1 1 calc(100% - 90px); order:2; }
+  .pill-search-submit{ order:3; margin:8px 14px 8px 0; border-top:none; }
 }

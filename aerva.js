@@ -1167,7 +1167,11 @@
         if(placeHintEl) placeHintEl.style.opacity = searchPlaceInput.value === '' ? '1' : '0';
       }
       updatePlaceHintVisibility();
-      searchPlaceInput.addEventListener('input', updatePlaceHintVisibility);
+      // 'input' covers typing; the rest cover a value the browser puts back
+      // by itself (Back/Forward, autofill), which fires no input event.
+      ['input', 'change', 'focus', 'blur'].forEach(ev => searchPlaceInput.addEventListener(ev, updatePlaceHintVisibility));
+      window.addEventListener('pageshow', updatePlaceHintVisibility);
+      setTimeout(updatePlaceHintVisibility, 0);
 
       // Google's AutocompleteService/PlacesService are only reached now if
       // Nominatim itself fails (see freeSearchSuggestions) — kept ready as
@@ -3376,12 +3380,13 @@
 
         const statusEl = document.getElementById('searchStatus');
         if(statusEl){
-          const total = approvedListings.length + approvedExperiences.length;
+          var total = approvedListings.length + approvedExperiences.length;
           statusEl.textContent = total
             ? `Showing ${total} result${total === 1 ? '' : 's'} near you.`
             : 'Nothing within 200km of you yet — showing everything instead.';
           statusEl.style.display = 'block';
         }
+        searchStatusCounts = total ? { suites: true, experiences: true, suffix: 'near you' } : null;
         // Nothing at all nearby is more useful shown as "everything" than
         // an empty grid the guest never asked to be shown — falls back to
         // a normal unfiltered reload rather than leaving it blank.
@@ -5246,6 +5251,38 @@
     return !!(b && b.key === sel.key);
   }
 
+  // The "nothing to show" line says what was actually searched (place,
+  // dates, pets) and suggests only the filters that are really in use —
+  // no "widen your price range" when no price range was set.
+  function emptyStaysMessage(o){
+    const esc = (t) => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const place = (document.getElementById('searchCity').value || '').split(',')[0].trim();
+    const pets = Number(guestCounts.pets) || 0;
+    const minEl = document.getElementById('minPrice'), maxEl = document.getElementById('maxPrice');
+    const hasPrice = !!((minEl && minEl.value) || (maxEl && maxEl.value));
+    const fmt = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    const dates = o.datesWereSearched ? ' for ' + fmt(searchArrivalDate) + ' – ' + fmt(searchDepartureDate) : '';
+    const where = place ? ' in ' + esc(place) : '';
+    const kind = pets > 0 ? 'pet-friendly homes' : 'homes';
+    // Some homes did come back for this place and dates, but don't take pets.
+    const noPetsHere = pets > 0 ? approvedListings.filter(l => l.pet_friendly !== true && (!o.datesWereSearched || l.is_available !== false)).length : 0;
+    const tries = [];
+    if(o.unavailableCount) tries.push('other dates');
+    if(place) tries.push('another place');
+    if(o.datesWereSearched && !o.unavailableCount) tries.push('other dates');
+    if(pets > 0) tries.push('a search without pets');
+    if(hasPrice) tries.push('a wider price range');
+    if(o.badgeName) tries.push('Any badge');
+    const list = tries.length > 1 ? tries.slice(0, -1).join(', ') + ' or ' + tries[tries.length - 1] : (tries[0] || '');
+    let head;
+    if(o.unavailableCount) head = `No ${kind} are free${where}${dates} — the booked ones are below.`;
+    else if(o.badgeName) head = `No ${kind} with the ${esc(o.badgeName)} badge${where}${dates}.`;
+    else head = `No ${kind}${where}${dates}.`;
+    const note = noPetsHere ? ` ${noPetsHere} home${noPetsHere === 1 ? '' : 's'} here ${noPetsHere === 1 ? 'does' : 'do'} not allow pets.` : '';
+    if(o.inRecentlyViewed && !tries.length) return 'Everything that matches is in Recently viewed above.';
+    return head + note + (list ? ` Try ${list}.` : '');
+  }
+
   function applyFiltersAndRender(){
     const container = document.getElementById('suitesContainer');
     // Guards against a cached copy of this page that still has the old
@@ -5334,7 +5371,8 @@
     const showSuites = currentCategoryFilter === 'all' || currentCategoryFilter === 'suites';
     const showExperiences = currentCategoryFilter === 'all' || currentCategoryFilter === 'experiences';
 
-    if(approvedListings.length === 0 && approvedExperiences.length === 0){
+    const anySearch = !!(document.getElementById('searchCity').value.trim() || searchArrivalDate || document.getElementById('searchGuests').value || guestCounts.pets > 0 || searchStatusCounts);
+    if(!anySearch && approvedListings.length === 0 && approvedExperiences.length === 0){
       container.innerHTML = '<div class="suites-empty">New homes are being reviewed right now — check back shortly, or <a href="index.html?view=list-property" target="_blank" rel="noopener" style="color:var(--gold-deep); text-decoration:underline;">list your own property</a>.</div>';
       document.getElementById('unavailableRow').style.display = 'none';
       return;
@@ -5377,17 +5415,23 @@
     const viewedUnavailableSuites = finalUnavailableSuites.filter(l => viewedKeys.has('stay:' + l.id));
     const viewedUnavailableExperiences = finalUnavailableExperiences.filter(e => viewedKeys.has('experience:' + e.id));
 
+    if(searchStatusCounts){
+      const statusEl = document.getElementById('searchStatus');
+      const shownStays = searchStatusCounts.suites && showSuites ? suiteList.filter(l => !datesWereSearched || l.is_available !== false).length : 0;
+      const shownExps = searchStatusCounts.experiences && showExperiences ? experienceList.filter(e => !datesWereSearched || e.is_available !== false).length : 0;
+      const n = shownStays + shownExps;
+      if(statusEl){
+        statusEl.textContent = `Showing ${n} result${n === 1 ? '' : 's'} ${searchStatusCounts.suffix || 'matching your search'}.`;
+        statusEl.style.display = n ? 'block' : 'none';
+      }
+    }
     container.innerHTML = '';
     if(finalSuites.length === 0 && finalExperiences.length === 0){
       let message;
       const badgeSel = selectedBadge();
       const badgeName = badgeSel ? (document.getElementById('badgeFilter').selectedOptions[0] || {}).text : '';
-      if(badgeSel) message = `Nothing with the ${badgeName} badge matches your other filters — try Any badge.`;
-      else if(currentCategoryFilter === 'suites' && wantsPetFriendly) message = 'No pet-friendly homes match your other filters — try widening your price range or removing pets.';
-      else if(currentCategoryFilter === 'suites') message = 'No homes match these filters — try widening your price range.';
-      else if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
-      else if(datesWereSearched && (finalUnavailableSuites.length > 0 || finalUnavailableExperiences.length > 0)) message = 'Nothing available for those dates — see what\'s unavailable below, or try different dates.';
-      else message = 'Nothing matches these filters yet — try widening your price range.';
+      if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
+      else message = emptyStaysMessage({ badgeName, datesWereSearched, unavailableCount: finalUnavailableSuites.length + finalUnavailableExperiences.length, inRecentlyViewed: recentlyViewedShownIds.size });
       container.innerHTML = `<div class="suites-empty">${message}</div>`;
     } else {
       // Suites first, then experiences — a stable, predictable order
@@ -7992,6 +8036,10 @@
           ? `Showing ${totalResults} result${totalResults === 1 ? '' : 's'} matching your search.`
           : 'Nothing matches your search — try different dates, guests, or place.';
         statusEl.style.display = 'block';
+        // Recounted after the pet, price and badge filters run (see
+        // applyFiltersAndRender), so it never says "20 results" over an
+        // empty grid.
+        searchStatusCounts = { suites: !!searchSuites, experiences: !!searchExperiences };
       }
 
       // Did the typed/selected place resolve to one specific property's
@@ -11642,11 +11690,13 @@
     document.getElementById('maxPrice').value = '';
     document.getElementById('roomsNeeded').value = '';
     document.getElementById('searchStatus').style.display = 'none';
+    searchStatusCounts = null;
     performSearch();
   });
 
   // ---- Custom calendar date-range picker (replaces native date inputs) ----
   let searchArrivalDate = '';
+  let searchStatusCounts = null;
   let searchDepartureDate = '';
   // Set by performSearch() when the typed/selected place resolves to one
   // specific Aerva property's own saved address (not just "somewhere in
@@ -12060,6 +12110,9 @@
       idx = (idx + 1) % cities.length;
       hintTextEl.style.opacity = '0';
       setTimeout(() => {
+        const field = document.getElementById('searchCity');
+        const hint = document.getElementById('placeHint');
+        if(field && hint) hint.style.opacity = field.value === '' ? '1' : '0';
         hintTextEl.textContent = 'Try “' + cities[idx] + '”';
         hintTextEl.style.opacity = '1';
       }, 400);

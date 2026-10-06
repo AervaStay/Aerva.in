@@ -891,18 +891,20 @@ module.exports = async (req, res) => {
       // POST { mode: 'supportCreate', category, subject, description, orderId?, listingId?, attachments?, callback? }
       // POST { mode: 'supportReply', ref, text, attachments? }
       // POST { mode: 'supportClose', ref }
-      if (mode === 'supportCreate' || mode === 'supportReply' || mode === 'supportClose') {
+      if (mode === 'supportCreate' || mode === 'supportReply' || mode === 'supportClose' || mode === 'supportFeedback') {
         if (actingCtx) return res.status(403).json({ error: 'Requests are raised from your own account.' });
         try {
           const b = req.body || {};
           if (mode === 'supportCreate') {
             const out = await support.createRequest(sql, { guestId, category: b.category, subject: b.subject, description: b.description,
-              orderId: Number(b.orderId) || null, listingId: Number(b.listingId) || null, attachments: b.attachments, callback: b.callback === true,
+              orderId: Number(b.orderId) || null, listingId: Number(b.listingId) || null, attachments: b.attachments, callback: b.callback === true, callbackPhone: typeof b.callbackPhone === 'string' ? b.callbackPhone : null,
               ip: (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || null });
             return res.status(200).json({ success: true, ...out });
           }
           if (mode === 'supportReply') return res.status(200).json({ request: await support.replyToRequest(sql, { guestId, ref: b.ref, text: b.text, attachments: b.attachments }) });
-          return res.status(200).json({ request: await support.closeRequest(sql, { guestId, ref: b.ref }) });
+          // POST { mode: 'supportFeedback', ref, resolved, rating?, comment? } — is it resolved? (closes, or opens again)
+          if (mode === 'supportFeedback') return res.status(200).json({ request: await support.submitFeedback(sql, { guestId, ref: b.ref, resolved: b.resolved !== false, rating: b.rating, comment: b.comment }) });
+          return res.status(200).json({ request: await support.closeRequest(sql, { guestId, ref: b.ref, rating: b.rating, comment: b.comment }) });
         } catch (err) {
           if (!err.isUserFacing) console.error(mode + ' failed:', err);
           return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now. Please try again, or email hello@aerva.in.' });

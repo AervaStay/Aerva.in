@@ -79,6 +79,10 @@
   .sup-msg-body{white-space:pre-wrap; overflow-wrap:anywhere; margin-top:4px;}
   .sup-facts{display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin:12px 0; font-size:13.5px;}
   .sup-facts > div{background:#f7f3ee; border-radius:8px; padding:10px 12px;}
+  .sup-case{border:1px solid #e0cda8; background:#fffdf8; border-radius:10px; padding:14px 16px; margin:12px 0 16px;}
+  .sup-case > label{display:flex; flex-direction:column; gap:4px; font-size:13px; margin:8px 0;}
+  .sup-case textarea{width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #ccc; border-radius:6px; font:inherit; font-size:14px;}
+  .sup-case select, .sup-case input[type=text]{padding:8px 10px; border:1px solid #ccc; border-radius:6px; font:inherit; font-size:14px;}
   .sup-reply textarea{width:100%; box-sizing:border-box; min-height:110px; padding:10px; border:1px solid #ccc; border-radius:6px; font:inherit; font-size:14px;}
   .tds-inop{display:flex; gap:6px; align-items:center; white-space:normal; font-size:12.5px;}
   .pl-grid{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px;}
@@ -536,7 +540,7 @@
     <!-- Support: requests raised in the Resolution Center (index.html?view=help). -->
     <div id="supportView" style="display:none;">
       <h2>Support requests</h2>
-      <p style="font-size:13.5px; opacity:0.75; max-width:800px;">Requests guests and hosts raised in the Resolution Center. The person was emailed a reference number at once. Reply to every new request within 48 hours (rows marked <span class="sup-flag sup-late">Overdue</span> have had no reply yet); resolve within one month. Safety requests are listed first. A reply is emailed to the person; an internal note is never shown to them. Decide under Aerva’s Policies, and do not tell the person how the decision was weighed.</p>
+      <p style="font-size:13.5px; opacity:0.75; max-width:800px;">Requests guests and hosts raised in the Resolution Center. The person was emailed a reference number at once. Reply to every new request within 48 hours (rows marked <span class="sup-flag sup-late">Overdue</span> have had no reply yet); resolve within one month. Safety requests are listed first. A reply is emailed to the person; an internal note is never shown to them. Decide under Aerva’s Policies, and do not tell the person how the decision was weighed. Fill in the <strong>case record</strong> on each request (the issue as understood, the outcome, how each side behaved) — it is needed before a request can be resolved, and every version is kept. Once resolved, the person is asked to confirm and rate it; with no answer it closes by itself after 48 hours.</p>
       <div class="tds-bar">
         <label>Show
           <select id="supStatus" onchange="loadSupport()">
@@ -2097,7 +2101,7 @@
     verifications: ['ID Verifications', 'Host Aadhaar, PAN and bank details waiting for a human check. Approve or reject each one; the document is erased once reviewed. A host is paid only once their PAN and bank account are verified.'],
     payouts: ['Payouts', 'What each host and co-host is owed per booking, and Mark paid for payouts sent by hand. Also: refunds that need a retry, deposit compensation, cancellation coupons owed by hosts, co-host payout details to review, and the TDS report.'],
     deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the 7-day damage window has ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
-    support: ['Support', 'Requests from the Resolution Center. Reply within 48 hours and resolve within a month; safety requests are listed first. Replies are emailed to the person; internal notes are never shown to them.'],
+    support: ['Support', 'Requests from the Resolution Center. Reply within 48 hours; safety requests are listed first. Keep the case record (issue as understood, outcome, how each side behaved) — a request cannot be resolved without it, and every version is kept. Once resolved, the person confirms and rates it, or it reopens; with no answer it closes by itself after 48 hours.'],
     trust: ['Guest Safety', 'Problems guests reported during a stay, with the host’s reply. Decide refund or no refund; the host’s payout for the booking is held until you do. Also: feedback hosts sent from their dashboard.'],
     policy: ['Review Policy', 'Internal rules for reviews, badges and standing, with every threshold. Never shown to guests or hosts.'],
     simulator: ['Simulator', 'Run hypothetical numbers through the real guest, host and property ladders to see which badge they would earn.'],
@@ -2501,7 +2505,7 @@
         + d.tickets.map(t => `<tr class="sup-row" onclick="openSupport(${Number(t.id)})">
             <td><strong>${escAdmin(t.ref)}</strong><div class="tds-sub">${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}</div></td>
             <td style="white-space:normal; min-width:220px;">${t.category === 'safety' ? '<span class="sup-flag sup-safety">Safety</span>' : ''}${escAdmin(t.subject)}
-              <div>${t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : ''}${t.awaiting_us ? '<span class="sup-flag sup-us">Awaiting our reply</span>' : ''}${t.callback_phone ? '<span class="sup-flag">Call back: ' + escAdmin(t.callback_phone) + '</span>' : ''}${t.order_id ? '<span class="sup-flag">Booking #' + Number(t.order_id) + '</span>' : ''}${t.listing_id ? '<span class="sup-flag">Listing #' + Number(t.listing_id) + '</span>' : ''}</div></td>
+              <div>${t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : ''}${t.awaiting_us ? '<span class="sup-flag sup-us">Awaiting our reply</span>' : ''}${t.callback_phone ? '<span class="sup-flag">Call back: ' + escAdmin(t.callback_phone) + '</span>' : ''}${t.feedback_rating ? '<span class="sup-flag" style="background:#e9f2ea; color:#2f6b3a;">' + '★'.repeat(Number(t.feedback_rating)) + '</span>' : ''}${t.auto_closed ? '<span class="sup-flag">No feedback</span>' : ''}${t.order_id ? '<span class="sup-flag">Booking #' + Number(t.order_id) + '</span>' : ''}${t.listing_id ? '<span class="sup-flag">Listing #' + Number(t.listing_id) + '</span>' : ''}</div></td>
             <td>${escAdmin(t.person_name || '—')}<div class="tds-sub">${escAdmin(t.person_email || '')}</div></td>
             <td>${escAdmin((labels[t.status]) || t.status)}</td>
             <td>${escAdmin(supDate(t.created_at))}</td>
@@ -2532,16 +2536,60 @@
       t.order_id ? `<div><strong>Booking #${Number(t.order_id)}</strong>${t.confirmation_code ? ' · ' + escAdmin(t.confirmation_code) : ''}<br>${escAdmin(t.suite_name || '')}<br>${escAdmin(day(t.arrival))} → ${escAdmin(day(t.departure))}<br>${escAdmin(t.booking_status || '')}${t.total != null ? ' · ₹' + Number(t.total).toLocaleString('en-IN') : ''}${t.booking_guest_id != null && Number(t.booking_guest_id) !== Number(t.guest_id) ? '<br><em>Raised by the host of this booking</em>' : ''}</div>` : '',
       t.property_name ? `<div><strong>Listing${t.listing_id ? ' #' + Number(t.listing_id) : ''}</strong><br>${escAdmin(t.property_name)}<br>${escAdmin(t.listing_status || '')}</div>` : ''
     ].filter(Boolean).join('');
-    const msgs = (d.messages || []).map(m => {
+    // One timeline for the reference, oldest first: the request, every message,
+    // status change, internal note, case-record save and the person's feedback.
+    const Cx = d.conduct || {};
+    const events = (d.messages || []).map(m => ({ at: m.created_at, kind: 'msg', m }))
+      .concat((d.caseNotes || []).map(n => ({ at: n.created_at, kind: 'case', n })))
+      .sort((a, b) => new Date(a.at) - new Date(b.at) || (a.kind === 'msg' ? -1 : 1));
+    const msgs = '<h4 style="margin:16px 0 4px;">Timeline <span class="tds-sub">(' + events.length + ' entries)</span></h4>' + events.map(e => {
+      if(e.kind === 'case'){
+        const n = e.n;
+        return `<div class="sup-msg internal"><strong>Case record updated</strong> <span class="tds-sub">${escAdmin(supDate(n.created_at))}${n.admin_email ? ' · ' + escAdmin(n.admin_email) : ''}</span>
+          ${n.summary ? `<div class="sup-msg-body"><em>Issue:</em> ${escAdmin(n.summary)}</div>` : ''}
+          ${n.outcome ? `<div class="sup-msg-body"><em>Outcome:</em> ${escAdmin(n.outcome)}</div>` : ''}
+          ${n.requester_conduct || n.other_party_conduct ? `<div class="sup-msg-body"><em>Behaviour:</em> ${escAdmin(t.role === 'host' ? 'host' : 'guest')} ${escAdmin(Cx[n.requester_conduct] || '—')}${n.other_party_conduct ? ' · ' + escAdmin(t.role === 'host' ? 'guest' : 'host') + ' ' + escAdmin(Cx[n.other_party_conduct] || '—') : ''}${n.conduct_note ? ' — ' + escAdmin(n.conduct_note) : ''}</div>` : ''}</div>`;
+      }
+      const m = e.m;
       if(m.sender === 'system') return `<div class="sup-msg system">${escAdmin(m.body)} · ${escAdmin(supDate(m.created_at))}</div>`;
       const cls = m.internal ? 'internal' : m.sender;
       const who = m.sender === 'user' ? (t.person_name || 'The person') : (m.internal ? 'Internal note' : 'Aerva Support') + (m.admin_email ? ' — ' + m.admin_email : '');
       return `<div class="sup-msg ${cls}"><strong>${escAdmin(who)}</strong> <span class="tds-sub">${escAdmin(supDate(m.created_at))}</span>
         <div class="sup-msg-body">${escAdmin(m.body)}</div>${(m.attachments || []).length ? '<small>' + fileLinks(m.attachments) + '</small>' : ''}</div>`;
     }).join('');
+    // The case record: current version, form for the next one, and every earlier version.
+    const C = d.conduct || {}, rec = d.caseRecord || {};
+    const opt = (sel, keys) => keys.map(k => `<option value="${k}"${sel === k ? ' selected' : ''}>${escAdmin(C[k] || k)}</option>`).join('');
+    const who = t.role === 'host' ? 'host' : 'guest', other = t.role === 'host' ? 'guest' : 'host';
+    const feedback = t.feedback_at
+      ? (t.feedback_resolved ? `<span class="sup-flag" style="background:#e9f2ea; color:#2f6b3a;">Confirmed resolved · ${'★'.repeat(Number(t.feedback_rating) || 0)}${'☆'.repeat(5 - (Number(t.feedback_rating) || 0))}</span>${t.feedback_comment ? ' “' + escAdmin(t.feedback_comment) + '”' : ''}`
+                             : `<span class="sup-flag sup-late">Said NOT resolved</span> “${escAdmin(t.feedback_comment || '')}”`)
+      : t.auto_closed ? '<span class="sup-flag">Closed automatically — no feedback</span>'
+      : t.status === 'resolved' ? `<span class="sup-flag sup-us">Waiting for the person's feedback</span> — closes by itself ${escAdmin(supDate(new Date(new Date(t.resolved_at).getTime() + 48 * 3600e3)))}` : '';
+    const history = (d.caseNotes || []).map(n => `<div class="sup-msg internal" style="margin:6px 0;">
+        <strong>${escAdmin(supDate(n.created_at))}</strong> <span class="tds-sub">${escAdmin(n.admin_email || '')}</span>
+        ${n.summary ? `<div class="sup-msg-body"><em>Issue:</em> ${escAdmin(n.summary)}</div>` : ''}
+        ${n.outcome ? `<div class="sup-msg-body"><em>Outcome:</em> ${escAdmin(n.outcome)}</div>` : ''}
+        <div class="sup-msg-body"><em>Behaviour:</em> ${escAdmin(who)} ${escAdmin(C[n.requester_conduct] || '—')}${d.otherParty ? ` · ${escAdmin(other)} ${escAdmin(C[n.other_party_conduct] || '—')}` : ''}${n.conduct_note ? ' — ' + escAdmin(n.conduct_note) : ''}</div>
+      </div>`).join('');
+    const caseBox = `<div class="sup-case">
+        <h4 style="margin:0 0 4px;">Case record <span class="tds-sub">(internal — never shown to the person; every save is kept)</span></h4>
+        ${feedback ? `<p style="margin:4px 0 10px; font-size:13.5px;">Feedback: ${feedback}</p>` : ''}
+        <label>Summary of the issue (as you understood it)<textarea id="caseSummary" rows="3">${escAdmin(rec.summary || '')}</textarea></label>
+        <label>Outcome (what was done or decided)<textarea id="caseOutcome" rows="3">${escAdmin(rec.outcome || '')}</textarea></label>
+        <div class="tds-bar">
+          <label>How the ${escAdmin(who)} behaved<select id="caseReq"><option value="">Choose…</option>${opt(rec.requester_conduct, ['cooperative', 'neutral', 'difficult', 'abusive'])}</select></label>
+          ${d.otherParty ? `<label>How the ${escAdmin(other)} behaved<select id="caseOther"><option value="">Choose…</option>${opt(rec.other_party_conduct, ['cooperative', 'neutral', 'difficult', 'abusive', 'not_involved'])}</select></label>` : ''}
+          <label style="flex:1 1 220px;">Behaviour note<input type="text" id="caseNote" value="${escAdmin(rec.conduct_note || '')}" placeholder="Optional"></label>
+          <button type="button" class="approve-btn" style="padding:9px 18px;" onclick="saveCase(${Number(t.id)})">Save case record</button>
+        </div>
+        <p id="caseErr" class="error"></p>
+        ${(d.caseNotes || []).length ? `<p class="tds-sub" style="margin:6px 0 0;">${(d.caseNotes || []).length} version${(d.caseNotes || []).length === 1 ? '' : 's'} saved — each one is in the timeline below.</p>` : ''}
+      </div>`;
     box.innerHTML = `<p><a href="#" onclick="loadSupport(); return false;">‹ All requests</a></p>
       <h3 style="margin:6px 0 2px;">${escAdmin(t.ref)} — ${escAdmin(t.subject)}</h3>
       <div class="sup-facts">${facts}</div>
+      ${caseBox}
       ${msgs}
       <div class="sup-reply" style="margin-top:16px;">
         <textarea id="supText" placeholder="Reply to the person (emailed to them), or an internal note"></textarea>
@@ -2555,6 +2603,17 @@
         </div>
         <p id="supErr" class="error"></p>
       </div>`;
+  }
+  async function saveCase(id){
+    const v = (x) => { const el = document.getElementById(x); return el ? el.value.trim() : ''; };
+    const err = document.getElementById('caseErr'); err.textContent = '';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true),
+        body: JSON.stringify({ supportCase: { ticketId: id, summary: v('caseSummary'), outcome: v('caseOutcome'), requesterConduct: v('caseReq') || null, otherConduct: v('caseOther') || null, conductNote: v('caseNote') } }) });
+      const d = await res.json().catch(() => ({}));
+      if(!res.ok){ err.textContent = d.error || 'Could not save.'; return; }
+      drawSupport(d);
+    }catch(e){ err.textContent = 'Could not save.'; }
   }
   async function sendSupport(id){
     const text = document.getElementById('supText').value.trim();

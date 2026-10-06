@@ -582,6 +582,9 @@ const JOBS = [
   // Bank accounts being checked by penny drop: results from RazorpayX (_bank-check.js).
   { name: 'bank_checks', label: 'Bank account checks (penny drop): collect results', everyMinutes: 5,
     run: (c) => require('./_bank-check').pollChecks(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  // Resolution Center: requests resolved 48 hours ago with no word from the person are closed (_support.js).
+  { name: 'support_autoclose', label: 'Close resolved support requests with no feedback after 48 hours', everyMinutes: 15,
+    run: (c) => require('./_support').autoCloseResolved(c.sql) },
   { name: 'deposit_refunds', label: 'Refund security deposits whose hold has ended', everyMinutes: 15,
     run: (c) => releaseDueDeposits(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'review_publish', label: 'Publish reviews (both sides in, or window closed)', everyMinutes: 15,

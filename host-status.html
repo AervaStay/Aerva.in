@@ -130,6 +130,11 @@
   .bookings-table td{ padding:11px 12px; border-bottom:1px solid #f1eae0; vertical-align:top; }
   .bookings-table tr:hover td{ background:#fdfbf8; }
   .bookings-table .sub{ font-size:12.5px; color:#6e675d; }
+  /* Totals stay in view at the bottom of the list, headings at the top. */
+  .bookings-scroll.has-totals{ max-height:70vh; overflow:auto; border-bottom:1px solid #e6ded3; }
+  .bookings-table thead th{ position:sticky; top:0; background:#fff; z-index:1; }
+  .bookings-table tfoot td{ position:sticky; bottom:0; background:#f7f1e7; font-weight:600; border-top:2px solid #d9c9ab; border-bottom:none; z-index:1; white-space:nowrap; }
+  .bookings-table tfoot .sub{ font-weight:400; }
   .code-cell{ font-size:13px; font-weight:600; letter-spacing:0.03em; color:#6b5222; background:#f6efe3; border:1px solid #e0cda8; border-radius:6px; padding:3px 8px; white-space:nowrap; }
   .bookings-table .sub a{ color:#7c6030; }
   .when-pill{ display:inline-block; font-size:12px; padding:3px 10px; border-radius:999px; white-space:nowrap; }
@@ -141,14 +146,22 @@
   .status-controls{ display:flex; flex-direction:column; gap:10px; margin:0 0 16px; }
   .status-filters, .status-range{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:13.5px; color:#4a453e; }
   .status-filters-title{ font-size:12px; font-weight:600; color:#6e675d; min-width:44px; }
-  .status-filter{ display:inline-flex; align-items:center; gap:7px; cursor:pointer; padding:5px 10px; border:1px solid #e6ded3; border-radius:999px; }
-  .status-filter:hover{ border-color:#c9b48e; }
-  .status-filter input{ width:16px; height:16px; accent-color:#8a6c39; margin:0; }
-  .status-filter .sw{ width:13px; height:13px; border-radius:3px; display:inline-block; }
+  /* Each chip is the switch itself (the checkbox is hidden): on = coloured
+     and outlined, off = faded and struck through. The colour tile mimics a
+     calendar night so it never reads as a second checkbox. */
+  .status-filter{ position:relative; display:inline-flex; align-items:center; gap:8px; cursor:pointer; padding:6px 13px 6px 9px; border:1px solid #c9b48e; border-radius:999px; background:#fff; user-select:none; transition:opacity .15s, border-color .15s; }
+  .status-filter:hover{ border-color:#8a6c39; }
+  .status-filter input{ position:absolute; opacity:0; width:1px; height:1px; margin:0; pointer-events:none; }
+  .status-filter:has(input:focus-visible){ outline:2px solid #8a6c39; outline-offset:2px; }
+  .status-filter:has(input:not(:checked)){ opacity:0.5; border-style:dashed; border-color:#d7d1c8; }
+  .status-filter:has(input:not(:checked)) .sw-text{ text-decoration:line-through; }
+  .status-filter .sw{ position:relative; width:24px; height:16px; border-radius:4px; display:inline-block; flex:none; }
   .sw-open{ background:#fff; border:1px solid #ddd3c6; }
   .sw-promo{ background:#eaf3e6; border:1px solid #bcd6b3; }
+  .sw-promo::before{ content:''; position:absolute; top:3px; right:3px; width:4px; height:4px; border-radius:50%; background:#5c8c50; }
   .sw-booked{ background:#f3e6d0; border:1px solid #ddc9a2; }
   .sw-blocked{ background:#f1efec; border:1px solid #d7d1c8; }
+  .sw-blocked::after{ content:''; position:absolute; left:5px; right:5px; top:50%; height:1.5px; background:#9a9287; }
   .status-filter-note{ font-size:12.5px; color:#6e675d; }
   .status-search{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:13.5px; }
   .status-search input{ flex:0 1 320px; min-width:0; width:100%; font:inherit; font-size:15px; padding:9px 14px; border:1px solid #d6cbbd; border-radius:999px; background:#fff; color:#1c1b19; }
@@ -233,11 +246,11 @@
       <span class="status-filter-note" id="searchNote" aria-live="polite"></span>
     </div>
     <div class="status-filters">
-      <span class="status-filters-title">Show</span>
-      <label class="status-filter"><input type="checkbox" id="fltOpen" checked> <span class="sw sw-open"></span> Open</label>
-      <label class="status-filter"><input type="checkbox" id="fltPromo" checked> <span class="sw sw-promo"></span> Promotion</label>
-      <label class="status-filter"><input type="checkbox" id="fltBooked" checked> <span class="sw sw-booked"></span> Booked</label>
-      <label class="status-filter"><input type="checkbox" id="fltBlocked" checked> <span class="sw sw-blocked"></span> Blocked</label>
+      <span class="status-filters-title">Show <span class="status-filter-note" style="font-weight:400;">(tap to hide)</span></span>
+      <label class="status-filter" title="Tap to show or hide open nights"><input type="checkbox" id="fltOpen" checked><span class="sw sw-open" aria-hidden="true"></span><span class="sw-text">Open</span></label>
+      <label class="status-filter" title="Tap to show or hide promotion nights"><input type="checkbox" id="fltPromo" checked><span class="sw sw-promo" aria-hidden="true"></span><span class="sw-text">Promotion</span></label>
+      <label class="status-filter" title="Tap to show or hide booked nights"><input type="checkbox" id="fltBooked" checked><span class="sw sw-booked" aria-hidden="true"></span><span class="sw-text">Booked</span></label>
+      <label class="status-filter" title="Tap to show or hide blocked nights"><input type="checkbox" id="fltBlocked" checked><span class="sw sw-blocked" aria-hidden="true"></span><span class="sw-text">Blocked</span></label>
       <span class="status-filter-note" id="filterNote"></span>
     </div>
     <div class="status-range">
@@ -1049,12 +1062,14 @@
     // the guest paid or the host's payout.
     const cohostView = isCohostView(data);
     const earned = all.reduce((t, b) => t + (Number(cohostView ? b.cohost_share : b.payout_amount) || 0), 0);
+    const sum = (k) => all.reduce((t, b) => t + (Number(b[k]) || 0), 0);
+    const nightsTotal = sum('nights'), guestsTotal = sum('guests'), paidTotal = sum('total'), depositTotal = sum('deposit_amount');
     box.innerHTML = `
       <h2 class="bookings-head">Bookings in this range</h2>
       <p style="color:#6e675d; font-size:13.5px; margin:0 0 12px;">${all.length} booking${all.length === 1 ? '' : 's'} between ${rangeText} · ${cohostView
         ? `your share totals ${money(earned)}. You see your own share only. The host's earnings are private.`
         : `your payouts total ${money(earned)} before TDS`}</p>
-      <div class="bookings-scroll"><table class="bookings-table">
+      <div class="bookings-scroll has-totals"><table class="bookings-table">
         <thead><tr><th>When</th><th>Code</th><th>Listing</th><th>Guest</th><th>Dates</th><th>Guests</th>${cohostView ? '<th>Your share</th>' : '<th>Guest paid</th><th>Your payout</th>'}<th>Deposit</th></tr></thead>
         <tbody>${all.map(b => {
           const when = bookingWhen(b, data.today);
@@ -1072,6 +1087,13 @@
             <td>${Number(b.deposit_amount) ? money(b.deposit_amount) + '<br><span class="sub">' + esc(depositLabel(b.deposit_status)) + '</span>' : '—'}</td>
           </tr>`;
         }).join('')}</tbody>
+        <tfoot><tr>
+          <td colspan="4">Total · ${all.length} booking${all.length === 1 ? '' : 's'}</td>
+          <td>${nightsTotal} night${nightsTotal === 1 ? '' : 's'}</td>
+          <td>${guestsTotal || '—'}</td>
+          ${cohostView ? `<td>${money(earned)}</td>` : `<td>${money(paidTotal)}</td><td>${money(earned)}<br><span class="sub">before TDS</span></td>`}
+          <td>${depositTotal ? money(depositTotal) : '—'}</td>
+        </tr></tfoot>
       </table></div>`;
   }
 

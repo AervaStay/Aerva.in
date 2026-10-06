@@ -612,6 +612,19 @@ module.exports = async (req, res) => {
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this request.' });
     }
   }
+  // POST { supportCase: { ticketId, summary?, outcome?, requesterConduct?, otherConduct?, conductNote? } }
+  // The case record: every save is kept, so the request's whole history stays.
+  if (req.method === 'POST' && req.body && req.body.supportCase) {
+    try {
+      const b = req.body.supportCase;
+      const out = await support.adminSaveCase(sql, { id: Number(b.ticketId) || 0, summary: b.summary, outcome: b.outcome, requesterConduct: b.requesterConduct || null,
+        otherConduct: b.otherConduct || null, conductNote: b.conductNote, adminEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('supportCase failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not save the case record.' });
+    }
+  }
   if (req.method === 'POST' && req.body && req.body.supportReply) {
     try {
       const b = req.body.supportReply;
@@ -1570,12 +1583,16 @@ module.exports = async (req, res) => {
         if (row.status === 'sent') return res.status(409).json({ error: 'This payout is already marked paid.' });
         // Bank details changed in the last 48 hours: the owner may not have
         // seen the change email yet (_bank-check.js). Wait, as automatic payouts do.
-        try {
-          const changed = isCohost
-            ? ((await sql`SELECT to_jsonb(p)->>'bank_changed_at' AS at FROM cohost_payout_profiles p WHERE guest_id = ${payeeGuestId}`)[0] || {}).at
-            : ((await sql`SELECT to_jsonb(h)->>'bank_changed_at' AS at FROM hosts h WHERE id = ${row.host_id}`)[0] || {}).at;
-          if (bankCheck.inChangeHold(changed)) return res.status(409).json({ error: 'The bank details were changed in the last 48 hours. Wait until the hold ends before paying.' });
-        } catch (e) { /* before migration_bank_check.sql */ }
+        // And never to details still being checked: a bank account not verified,
+        // a PAN under review again, or co-host details not approved.
+        const who = isCohost
+          ? (await sql`SELECT status, to_jsonb(p)->>'bank_changed_at' AS at FROM cohost_payout_profiles p WHERE guest_id = ${payeeGuestId}`)[0]
+          : (await sql`SELECT bank_status, pan_status, to_jsonb(h)->>'bank_changed_at' AS at FROM hosts h WHERE id = ${row.host_id}`)[0];
+        if (!who) return res.status(409).json({ error: 'No payout details on file for this payee.' });
+        if (isCohost ? who.status !== 'approved' : (who.bank_status !== 'verified' || who.pan_status === 'pending_review')) {
+          return res.status(409).json({ error: 'This payee’s payout details are not verified yet (being checked, or rejected). Payouts stay on hold until they are.' });
+        }
+        if (bankCheck.inChangeHold(who.at)) return res.status(409).json({ error: 'The payout details were changed in the last 48 hours. Wait until the hold ends before paying.' });
         if (row.status === 'processing') return res.status(409).json({ error: 'RazorpayX is sending this payout. Wait for it to finish.' });
         // With automatic payouts on, never pay by hand what the system pays:
         // use Retry. (Payouts created while they were off can still be

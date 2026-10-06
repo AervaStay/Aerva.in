@@ -335,8 +335,11 @@
       + '<textarea id="hcBody" rows="8" maxlength="' + BODY_MAX + '" placeholder="What happened, when, what you have tried, and what you would like to happen."></textarea>'
       + '<p class="hc-hint"><span id="hcCount">0</span> / ' + BODY_MAX + '</p></div>'
       + filePicker('hcFiles')
-      + '<label class="hc-check"><input type="checkbox" id="hcCallback"' + (o.hasPhone ? '' : ' disabled') + '>'
-      + '<span>Please call me back on the phone number on my account' + (o.hasPhone ? '' : ' <em>(add a phone number in Account Settings first)</em>') + '</span></label>'
+      + '<label class="hc-check"><input type="checkbox" id="hcCallback">'
+      + '<span>Please call me back</span></label>'
+      + '<div class="hc-field hc-callback" id="hcCallbackField" hidden><label for="hcCallbackPhone">Phone number to call</label>'
+      + '<input type="tel" id="hcCallbackPhone" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="+91 98765 43210" value="' + esc(o.phone || '') + '">'
+      + '<p class="hc-hint">Our support team will call you on this number. Add the country code if it is not an Indian number.</p></div>'
       + '<p class="hc-error" id="hcError" role="alert" hidden></p>'
       + '<div class="hc-actions"><button type="submit" class="btn solid" id="hcSubmit">Send request</button>'
       + (o.email ? '<span class="hc-muted">We will email ' + esc(o.email) + ' with your reference number.</span>' : '') + '</div>'
@@ -405,6 +408,11 @@
     var body = document.getElementById('hcBody'), count = document.getElementById('hcCount');
     body.addEventListener('input', function(){ count.textContent = body.value.length; });
     var picked = wireFilePicker('hcFiles');
+    var cb = document.getElementById('hcCallback'), cbField = document.getElementById('hcCallbackField');
+    cb.addEventListener('change', function(){
+      cbField.hidden = !cb.checked;
+      if(cb.checked){ var ph = document.getElementById('hcCallbackPhone'); if(!ph.value) ph.focus(); }
+    });
 
     document.getElementById('hcForm').addEventListener('submit', async function(e){
       e.preventDefault();
@@ -419,6 +427,8 @@
       if(linkProblem) return fail(linkProblem);
       if(rule.booking === 'required' && !chosen.order) return fail('Choose the booking this is about.');
       if(rule.listing === 'required' && !chosen.order && !chosen.listing) return fail('Choose the listing this is about.');
+      var cbPhone = (document.getElementById('hcCallbackPhone').value || '').trim();
+      if(cb.checked && cbPhone.replace(/\D/g, '').length < 8) return fail('Enter the phone number we should call you on.');
       if(subject.length < 4) return fail('Please give your request a short title.');
       if(text.length < BODY_MIN) return fail('Please describe what happened in a few sentences, so we can help the first time.');
       btn.disabled = true;
@@ -432,7 +442,7 @@
           mode: 'supportCreate', category: cat.value, subject: subject, description: text,
           orderId: (rule.booking !== 'none' && chosen.order) || null,
           listingId: (rule.listing !== 'none' && !chosen.order && chosen.listing) || null,
-          attachments: urls, callback: document.getElementById('hcCallback').checked
+          attachments: urls, callback: cb.checked, callbackPhone: cb.checked ? cbPhone : undefined
         });
         renderSent(out.ref, o.email);
       }catch(err){
@@ -554,24 +564,54 @@
       open: 'We have your request. A member of our support team will reply within 48 hours of when you raised it.',
       in_progress: 'Our support team is looking into this.',
       waiting_on_you: 'We need something from you. Please reply below.',
-      resolved: 'We have marked this resolved. If something is still not right, reply below and it opens again.',
-      closed: 'This request is closed. If you need more help, raise a new request and mention ' + r.ref + '.'
+      resolved: '',
+      closed: r.autoClosed ? 'Closed automatically 48 hours after it was resolved, with no feedback. If you need more help, raise a new request and mention ' + r.ref + '.'
+        : 'This request is closed. If you need more help, raise a new request and mention ' + r.ref + '.'
     }[r.status] || '';
+    // Resolved: is it? Their answer closes it (with a rating), or opens it again.
+    var stars = function(name){
+      return '<div class="hc-stars" role="radiogroup" aria-label="Your rating">' + [5, 4, 3, 2, 1].map(function(n){
+        return '<label><input type="radio" name="' + name + '" value="' + n + '"><span aria-hidden="true">★</span><span class="hc-sr">' + n + ' of 5</span></label>';
+      }).join('') + '</div>';
+    };
+    var closesBy = r.autoCloseAt ? fmtDateTime(r.autoCloseAt) : '';
+    var feedbackCard = r.askFeedback
+      ? '<div class="hc-feedback" id="hcFeedback"><h2>We have marked this resolved. Is it?</h2>'
+        + '<p class="hc-muted">Tell us before it closes' + (closesBy ? ' — it closes by itself on ' + esc(closesBy) + ' if we do not hear from you' : '') + '.</p>'
+        + '<div class="hc-actions"><button type="button" class="btn solid" data-fb="yes">Yes, it is resolved</button><button type="button" class="btn" data-fb="no">No, something is still wrong</button></div>'
+        + '<div class="hc-fb-panel" id="hcFbYes" hidden><p><strong>How did we do?</strong></p>' + stars('hcRating')
+        + '<div class="hc-field"><label for="hcFbComment">Anything to add? <span class="label-hint">(optional)</span></label><textarea id="hcFbComment" rows="3" maxlength="1000"></textarea></div>'
+        + '<button type="button" class="btn solid" id="hcFbConfirm">Confirm and close</button></div>'
+        + '<div class="hc-fb-panel" id="hcFbNo" hidden><div class="hc-field"><label for="hcFbWhat">What is still not right?</label><textarea id="hcFbWhat" rows="4" maxlength="1000"></textarea></div>'
+        + '<button type="button" class="btn solid" id="hcFbReopen">Open it again</button></div>'
+        + '<p class="hc-error" id="hcFbErr" role="alert" hidden></p></div>'
+      : '';
+    var feedbackDone = r.status === 'closed' && r.feedback && r.feedback.resolved
+      ? '<p class="hc-status-note hc-status-note-resolved">Your rating: <span class="hc-stars-static">' + '★★★★★'.slice(0, r.feedback.rating) + '<span>' + '★★★★★'.slice(r.feedback.rating) + '</span></span>'
+        + (r.feedback.comment ? ' — “' + esc(r.feedback.comment) + '”' : '') + '. Thank you.</p>' : '';
     var reply = r.canReply
       ? '<form class="hc-form hc-reply" id="hcReplyForm" novalidate><div class="hc-field"><label for="hcReply">Reply</label>'
         + '<textarea id="hcReply" rows="5" maxlength="' + BODY_MAX + '" placeholder="Add information, answer our question, or tell us it is sorted."></textarea></div>'
         + filePicker('hcReplyFiles')
         + '<p class="hc-error" id="hcReplyErr" role="alert" hidden></p>'
         + '<div class="hc-actions"><button type="submit" class="btn solid" id="hcReplyBtn">Send reply</button>'
-        + (r.canClose ? '<button type="button" class="btn hc-close-btn" id="hcCloseBtn">Close this request</button>' : '') + '</div></form>'
+        + (r.canClose && !r.askFeedback ? '<button type="button" class="btn hc-close-btn" id="hcCloseBtn">Close this request</button>' : '') + '</div></form>'
+        + (r.canClose && !r.askFeedback ? '<div class="hc-feedback" id="hcCloseCard" hidden><h2>Close this request</h2><p class="hc-muted">Before you close it, tell us how we did.</p>'
+          + stars('hcCloseRating')
+          + '<div class="hc-field"><label for="hcCloseComment">Anything to add? <span class="label-hint">(optional)</span></label><textarea id="hcCloseComment" rows="3" maxlength="1000"></textarea></div>'
+          + '<div class="hc-actions"><button type="button" class="btn solid" id="hcCloseConfirm">Close with this rating</button><button type="button" class="btn" id="hcCloseCancel">Keep it open</button></div>'
+          + '<p class="hc-error" id="hcCloseErr" role="alert" hidden></p></div>' : '')
       : '';
     var html = head
       + '<div class="hc-req-head"><div><div class="privacy-eyebrow">' + esc(r.ref) + ' · ' + esc(r.categoryLabel) + '</div>'
       + '<h1 class="policies-title hc-req-title">' + esc(r.subject) + '</h1>'
-      + '<p class="hc-muted">' + (about ? about + ' · ' : '') + 'Raised ' + esc(fmtDate(r.createdAt)) + '</p></div>'
+      + '<p class="hc-muted">' + (about ? about + ' · ' : '') + 'Raised ' + esc(fmtDate(r.createdAt))
+      + (r.callbackPhone ? ' · We will call you on ' + esc(r.callbackPhone) : '') + '</p></div>'
       + statusChip(r.status, r.statusLabel) + '</div>'
       + (statusNote ? '<p class="hc-status-note hc-status-note-' + esc(r.status) + '">' + esc(statusNote) + '</p>' : '')
-      + '<ol class="hc-thread">' + thread + '</ol>'
+      + feedbackDone
+      + feedbackCard
+      + '<h2 class="hc-timeline-title">Timeline</h2><ol class="hc-thread">' + thread + '</ol>'
       + reply
       + (!r.canReply ? '<div class="hc-actions">' + hlink('new=1', 'Raise a new request', 'btn solid') + '</div>' : '');
     root.innerHTML = frame('mine', html);
@@ -597,17 +637,50 @@
         drawRequest(out.request);
       }catch(x){ fail(x.message); }
     });
+    var rated = function(name){ var c = root.querySelector('input[name="' + name + '"]:checked'); return c ? Number(c.value) : 0; };
+    var showErr = function(id, msg){ var e = document.getElementById(id); e.textContent = msg; e.hidden = false; };
+    // Closing it themselves: the rating is asked first.
+    // Picking a star clears the "choose a rating" message.
+    Array.prototype.forEach.call(document.querySelectorAll('.hc-stars input'), function(el){
+      el.addEventListener('change', function(){ ['hcFbErr', 'hcCloseErr'].forEach(function(id){ var e = document.getElementById(id); if(e) e.hidden = true; }); });
+    });
     var closeBtn = document.getElementById('hcCloseBtn');
-    if(closeBtn) closeBtn.addEventListener('click', async function(){
-      if(!window.confirm('Close this request? You will not be able to reply to it again.')) return;
-      closeBtn.disabled = true;
-      try{
-        var out = await api('POST', '', { mode: 'supportClose', ref: r.ref });
-        drawRequest(out.request);
-      }catch(x){
-        closeBtn.disabled = false;
-        var err = document.getElementById('hcReplyErr'); err.textContent = x.message; err.hidden = false;
-      }
+    if(closeBtn) closeBtn.addEventListener('click', function(){
+      var card = document.getElementById('hcCloseCard'); card.hidden = false; closeBtn.hidden = true; card.scrollIntoView({ block: 'center' });
+    });
+    var closeCancel = document.getElementById('hcCloseCancel');
+    if(closeCancel) closeCancel.addEventListener('click', function(){ document.getElementById('hcCloseCard').hidden = true; closeBtn.hidden = false; });
+    var closeConfirm = document.getElementById('hcCloseConfirm');
+    if(closeConfirm) closeConfirm.addEventListener('click', async function(){
+      var n = rated('hcCloseRating');
+      if(!n) return showErr('hcCloseErr', 'Choose a rating from 1 to 5 stars first.');
+      closeConfirm.disabled = true;
+      try{ drawRequest((await api('POST', '', { mode: 'supportClose', ref: r.ref, rating: n, comment: document.getElementById('hcCloseComment').value })).request); }
+      catch(x){ closeConfirm.disabled = false; showErr('hcCloseErr', x.message); }
+    });
+    // Resolved: yes (rate and close) or no (open it again).
+    root.querySelectorAll('[data-fb]').forEach(function(b){
+      b.addEventListener('click', function(){
+        document.getElementById('hcFbYes').hidden = b.getAttribute('data-fb') !== 'yes';
+        document.getElementById('hcFbNo').hidden = b.getAttribute('data-fb') !== 'no';
+        document.getElementById('hcFbErr').hidden = true;
+      });
+    });
+    var fbConfirm = document.getElementById('hcFbConfirm');
+    if(fbConfirm) fbConfirm.addEventListener('click', async function(){
+      var n = rated('hcRating');
+      if(!n) return showErr('hcFbErr', 'Choose a rating from 1 to 5 stars first.');
+      fbConfirm.disabled = true;
+      try{ drawRequest((await api('POST', '', { mode: 'supportFeedback', ref: r.ref, resolved: true, rating: n, comment: document.getElementById('hcFbComment').value })).request); }
+      catch(x){ fbConfirm.disabled = false; showErr('hcFbErr', x.message); }
+    });
+    var fbReopen = document.getElementById('hcFbReopen');
+    if(fbReopen) fbReopen.addEventListener('click', async function(){
+      var what = document.getElementById('hcFbWhat').value.trim();
+      if(what.length < 5) return showErr('hcFbErr', 'Tell us what is still not right, so we can pick it up again.');
+      fbReopen.disabled = true;
+      try{ drawRequest((await api('POST', '', { mode: 'supportFeedback', ref: r.ref, resolved: false, comment: what })).request); }
+      catch(x){ fbReopen.disabled = false; showErr('hcFbErr', x.message); }
     });
   }
 
