@@ -6700,6 +6700,38 @@
     }
   }
 
+  // ---- Unsend (all three chat views) ----
+  // Your own message can be taken back within 1 hour (server: guest-profile
+  // mode 'unsend'). Afterwards both sides see "This message was unsent".
+  const UNSEND_MS = 60 * 60 * 1000;
+  function canUnsendMessage(m, isMine){
+    return !!(isMine && !m.unsent && m.id && m.sender_type !== 'system' && (Date.now() - new Date(m.created_at).getTime()) < UNSEND_MS);
+  }
+  function unsentBubbleText(isMine){ return isMine ? 'You unsent a message' : 'This message was unsent'; }
+  function unsendButtonHtml(m){ return `<button type="button" class="msg-unsend" data-unsend="${Number(m.id)}" title="Remove this message for both of you">Unsend</button>`; }
+  // Wires every Unsend button inside `root`; `after` re-draws the thread.
+  function wireUnsendButtons(root, conversationId, role, after){
+    root.querySelectorAll('[data-unsend]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if(!confirm('Unsend this message? It will be removed for both of you.')) return;
+        btn.disabled = true; btn.textContent = 'Unsending…';
+        try{
+          const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+            body: JSON.stringify({ mode: 'unsend', conversationId: typeof conversationId === 'function' ? conversationId() : conversationId, messageId: Number(btn.dataset.unsend), role })
+          });
+          const data = await res.json().catch(() => ({}));
+          if(!res.ok) throw new Error(data.error || 'Could not unsend this message.');
+          if(typeof after === 'function') await after();
+        } catch(err){
+          alert(err.message || 'Could not unsend this message.');
+          btn.disabled = false; btn.textContent = 'Unsend';
+        }
+      });
+    });
+  }
+
   function renderChatMessages(messages, viewerRole){
     const container = document.getElementById('chatMessagesContainer');
     if(!messages.length){
@@ -6708,6 +6740,9 @@
     }
     container.innerHTML = messages.map(m => {
       const isMine = m.sender_type === viewerRole;
+      if(m.unsent){
+        return `<div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;"><div class="msg-unsent">${unsentBubbleText(isMine)}</div></div>`;
+      }
       // Goes through renderMessageBody (escapeMessageHtml + link/image
       // handling) for exactly the same reason the inbox renderer does:
       // display_text is plain text typed by the other party, and
@@ -6719,9 +6754,15 @@
         <div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;">
           <div style="background:${isMine ? 'var(--ink)' : 'var(--cream-deep)'}; color:${isMine ? 'var(--cream)' : 'var(--ink)'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${renderMessageBody(m.display_text)}</div>
           ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
+          ${canUnsendMessage(m, isMine) ? `<div class="msg-actions">${unsendButtonHtml(m)}</div>` : ''}
         </div>
       `;
     }).join('');
+    wireUnsendButtons(container, () => chatCurrentConversationId, viewerRole, async () => {
+      const r = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${chatCurrentOrderId}`, { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
+      const d = await r.json().catch(() => ({}));
+      if(r.ok) renderChatMessages(d.messages || [], d.viewerRole);
+    });
     container.scrollTop = container.scrollHeight;
   }
 
@@ -7156,6 +7197,10 @@
       const isMine = m.sender_type === inboxCurrentRole;
       const label = isMine ? ('You · ' + (inboxCurrentRole === 'host' ? 'Host' : 'Guest')) : (inboxCurrentRole === 'host' ? 'Guest' : 'Host');
       const time = new Date(m.created_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+      if(m.unsent){
+        return `<div class="inbox-message-row${isMine ? ' mine' : ''}"><div class="inbox-message-avatar"></div><div>
+            <div class="inbox-message-meta">${label} · ${time}</div><div class="msg-unsent">${unsentBubbleText(isMine)}</div></div></div>`;
+      }
       const shownText = translated[m.id] || m.display_text;
       const showOriginalLink = translated[m.id] ? `<span class="inbox-message-original-link" data-original="${encodeURIComponent(m.display_text)}">See original</span>` : '';
       return `
@@ -7166,10 +7211,12 @@
             <div class="inbox-message-bubble" data-msg-id="${m.id}">${renderMessageBody(shownText)}</div>
             ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
             ${showOriginalLink}
+            ${canUnsendMessage(m, isMine) ? `<div class="msg-actions">${unsendButtonHtml(m)}</div>` : ''}
           </div>
         </div>
       `;
     }).join('');
+    wireUnsendButtons(container, () => inboxCurrentConversationId, inboxCurrentRole, async () => { await refreshInboxMessages(); loadInboxConversations(); });
     container.querySelectorAll('.inbox-message-original-link').forEach(link => {
       link.addEventListener('click', () => {
         const wrapper = link.closest('div');
@@ -11470,6 +11517,7 @@
       <p class="tb-muted" id="tbMsg"></p>`;
 
     let conversationId = null;
+    let tbReload = null;
     const thread = document.getElementById('tbThread');
     try{
       const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${Number(orderId)}`, {
@@ -11478,15 +11526,25 @@
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Could not open this conversation.');
       conversationId = data.conversationId;
-      const msgs = data.messages || [];
-      thread.innerHTML = msgs.length
-        ? msgs.map(m => `
-            <div class="tb-msg ${m.sender_type === 'host' ? 'tb-msg-mine' : ''}">
-              <span class="tb-msg-who">${esc(m.sender_type === 'host' ? 'You' : (m.sender_type === 'system' ? 'Aerva' : r.guestName))}</span>
-              <span class="tb-msg-text">${esc(m.display_text || '')}</span>
-            </div>`).join('')
-        : '<p class="tb-muted">No messages yet. Anything you send here reaches them in their Aerva messages.</p>';
-      thread.scrollTop = thread.scrollHeight;
+      const drawTb = (msgs) => {
+        thread.innerHTML = msgs.length
+          ? msgs.map(m => `
+              <div class="tb-msg ${m.sender_type === 'host' ? 'tb-msg-mine' : ''}">
+                <span class="tb-msg-who">${esc(m.sender_type === 'host' ? 'You' : (m.sender_type === 'system' ? 'Aerva' : r.guestName))}</span>
+                ${m.unsent ? `<span class="tb-msg-text msg-unsent-text">${unsentBubbleText(m.sender_type === 'host')}</span>`
+                  : `<span class="tb-msg-text">${esc(m.display_text || '')}</span>${canUnsendMessage(m, m.sender_type === 'host') ? unsendButtonHtml(m) : ''}`}
+              </div>`).join('')
+          : '<p class="tb-muted">No messages yet. Anything you send here reaches them in their Aerva messages.</p>';
+        wireUnsendButtons(thread, () => conversationId, 'host', reloadTb);
+        thread.scrollTop = thread.scrollHeight;
+      };
+      const reloadTb = async () => {
+        const rr = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${Number(orderId)}`, { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
+        const dd = await rr.json().catch(() => ({}));
+        if(rr.ok) drawTb(dd.messages || []);
+      };
+      tbReload = reloadTb;
+      drawTb(data.messages || []);
     } catch(err){
       thread.innerHTML = `<p class="tb-muted">${esc(err.message || 'Could not open this conversation.')}</p>`;
     }
@@ -11509,7 +11567,8 @@
         document.getElementById('tbText').value = '';
         // What was stored (contact details taken out), not what was typed.
         const shown = data.message && typeof data.message.display_text === 'string' ? data.message.display_text : text;
-        thread.insertAdjacentHTML('beforeend',
+        if(tbReload) await tbReload();
+        else thread.insertAdjacentHTML('beforeend',
           `<div class="tb-msg tb-msg-mine"><span class="tb-msg-who">You</span><span class="tb-msg-text">${esc(shown)}</span></div>`);
         if(data.message && data.message.was_redacted) note.textContent = 'Some content was removed \u2014 contact info can\u2019t be shared here.';
         thread.scrollTop = thread.scrollHeight;

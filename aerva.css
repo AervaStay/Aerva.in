@@ -1046,7 +1046,7 @@
     .pill-search{border-radius:16px; flex-direction:column;}
     .pill-search .search-field{border-right:none; border-bottom:1px solid var(--line-dark); padding:14px 20px;}
     .pill-search .filter-bar{border-left:none; border-top:1px solid var(--line-dark); padding:14px 20px;}
-    .pill-search-submit{width:100%; border-radius:10px; margin:10px 16px 16px;}
+    .pill-search > .pill-search-submit{width:100%; border-radius:10px; margin:10px 16px 16px;}
   }
 
   /* ---------- FAVORITE HEART ---------- */
@@ -2449,7 +2449,7 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
   .pill-search .filter-bar .more-filters-btn svg,
   .pill-search .filter-bar #showDistanceBtn svg{ flex:0 0 auto; }
   .pill-search .filter-bar #clearFiltersBtn{ grid-column:1 / -1; grid-row:2; justify-self:center; margin:0; padding:6px 0; }
-  .pill-search-submit{ width:auto; align-self:stretch; margin:12px 20px 18px; }
+  .pill-search > .pill-search-submit{ width:auto; align-self:stretch; margin:12px 20px 18px; }
 }
 
 /* Coupon rule under the coupon field at checkout. */
@@ -3116,12 +3116,12 @@ footer .foot-bottom{ margin-top:0; }
 #placeHintText:empty::before{ content:'Search a city or area'; }
 .pill-search > .search-field:focus-within,
 .pill-search > .search-field.is-active{ background:#fff; box-shadow:0 6px 22px rgba(20,17,14,0.12); }
-.pill-search-submit{
+.pill-search > .pill-search-submit{
   background:var(--gold-deep, #8a6c39); color:#fff; box-shadow:0 6px 16px rgba(138,108,57,0.35);
   transition:background .2s ease, transform .15s ease, box-shadow .2s ease;
 }
-.pill-search-submit:hover{ background:var(--ink, #1C1B19); box-shadow:0 6px 16px rgba(20,17,14,0.3); }
-.pill-search-submit:active{ transform:scale(0.97); }
+.pill-search > .pill-search-submit:hover{ background:var(--ink, #1C1B19); box-shadow:0 6px 16px rgba(20,17,14,0.3); }
+.pill-search > .pill-search-submit:active{ transform:scale(0.97); }
 .pill-search .filter-bar .more-filters-btn,
 .pill-search .filter-bar #showDistanceBtn{
   height:36px; min-height:36px; padding:0 14px; border:1px solid #e6ddd0; border-radius:999px; background:#fff;
@@ -3183,7 +3183,7 @@ footer .foot-bottom{ margin-top:0; }
   .pill-search > .search-field .date-range-btn{ width:100%; flex:0 0 auto; }
   .pill-search > .search-field .date-range-btn{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; cursor:pointer; }
   .pill-search .place-input-wrap input{ width:100%; text-overflow:ellipsis; }
-  .pill-search-submit{ order:1; width:auto; height:54px; min-width:54px; margin:0 4px 0 8px; padding:0 22px; border-radius:999px; gap:8px; }
+  .pill-search > .pill-search-submit{ order:1; width:auto; height:54px; min-width:54px; margin:0 4px 0 8px; padding:0 22px; border-radius:999px; gap:8px; }
   .pill-search .filter-bar{
     order:2; flex:1 0 100%; box-sizing:border-box; display:flex; align-items:center; gap:10px; opacity:1;
     margin:8px 6px 0; padding:10px 8px 4px; border:none; border-top:1px solid #f0e9df; background:transparent;
@@ -3191,12 +3191,12 @@ footer .foot-bottom{ margin-top:0; }
   .pill-search .filter-bar #clearFiltersBtn{ margin-left:auto; order:3; }
 }
 @media (min-width:1000px){
-  .pill-search-submit::after{ content:'Search'; font-family:'Jost', sans-serif; font-size:15px; letter-spacing:0.02em; }
+  .pill-search > .pill-search-submit::after{ content:'Search'; font-family:'Jost', sans-serif; font-size:15px; letter-spacing:0.02em; }
 }
 @media (min-width:641px) and (max-width:999px){
   .pill-search > .search-field{ padding:12px 16px; }
   .pill-search .filter-bar{ flex:1 1 calc(100% - 80px); }
-  .pill-search-submit{ order:3; margin:8px 4px 0 0; padding:0; width:54px; }
+  .pill-search > .pill-search-submit{ order:3; margin:8px 4px 0 0; padding:0; width:54px; }
 }
 /* Phones: stacked, label above value, a full-width Search button. */
 @media (max-width:640px){
@@ -3204,8 +3204,8 @@ footer .foot-bottom{ margin-top:0; }
   .pill-search > .search-field{ flex-direction:column; align-items:flex-start; gap:4px; padding:14px 20px; border-bottom:1px solid #f0e9df; }
   .pill-search > .search-field .place-input-wrap,
   .pill-search > .search-field .date-range-btn{ width:100%; }
-  .pill-search-submit{ border-radius:14px; height:52px; gap:8px; }
-  .pill-search-submit::after{ content:'Search'; font-family:'Jost', sans-serif; font-size:15.5px; letter-spacing:0.02em; }
+  .pill-search > .pill-search-submit{ border-radius:14px; height:52px; gap:8px; }
+  .pill-search > .pill-search-submit::after{ content:'Search'; font-family:'Jost', sans-serif; font-size:15.5px; letter-spacing:0.02em; }
   .calendar-dropdown, .guests-dropdown, .more-filters-dropdown{ border-radius:20px; width:calc(100vw - 32px); max-width:420px; box-sizing:border-box; }
   .calendar-dropdown{ padding:58px 16px 12px; }
   .guests-dropdown{ padding-top:50px; }
@@ -3280,3 +3280,24 @@ html.bs-open, html.bs-open body{ overflow:hidden; }
   .bs-pay{ grid-template-columns:1fr; }
 }
 @media (prefers-reduced-motion:reduce){ .bs-overlay, .bs-card{ animation:none; } .bs-tick svg{ animation:none; stroke-dashoffset:0; } }
+
+/* ---------- Unsend (messages) ---------- */
+.msg-actions{ display:flex; justify-content:flex-end; margin-top:3px; }
+.inbox-message-row:not(.mine) .msg-actions{ justify-content:flex-start; }
+.msg-unsend{
+  background:none; border:none; padding:2px 4px; font:12px 'Jost', sans-serif; color:#8a7f6c; cursor:pointer;
+  text-decoration:underline; text-underline-offset:2px; opacity:0.75; transition:opacity .15s ease, color .15s ease;
+}
+.msg-unsend:hover, .msg-unsend:focus-visible{ opacity:1; color:#a3402f; }
+.msg-unsend:disabled{ cursor:default; text-decoration:none; }
+.tb-msg .msg-unsend{ margin-left:6px; }
+.msg-unsent{
+  display:inline-block; padding:9px 14px; border-radius:14px; border:1px dashed #d9cfbf; background:transparent;
+  font-size:13px; font-style:italic; color:#8a7f6c; line-height:1.4;
+}
+.msg-unsent-text{ font-style:italic; color:#8a7f6c; }
+@media (hover:hover){
+  /* On a computer the link appears when you point at your message. */
+  .inbox-message-row .msg-actions .msg-unsend, #chatMessagesContainer .msg-actions .msg-unsend{ opacity:0; }
+  .inbox-message-row:hover .msg-unsend, #chatMessagesContainer > div:hover .msg-unsend, .msg-unsend:focus-visible{ opacity:0.85; }
+}

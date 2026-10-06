@@ -43,7 +43,7 @@
   if(!acting) return;
 
   // Must match the co-host allowlists in guest-profile.js.
-  var MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'translate', 'conversationTemplates'];
+  var MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'unsend', 'translate', 'conversationTemplates'];
   var TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];
   var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'resendCohostInvite', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost', 'saveCohostDetails'];
 
@@ -65,7 +65,7 @@
     try{ sessionStorage.setItem(HOST_CONVS_KEY, JSON.stringify(Object.keys(hostConvIds))); }catch(e){}
   }
   // Modes that name one conversation: routed only when it is the host's.
-  var PER_CONVERSATION = ['conversationMessages', 'hostConversationMessages', 'send', 'conversationTemplates'];
+  var PER_CONVERSATION = ['conversationMessages', 'hostConversationMessages', 'send', 'unsend', 'conversationTemplates'];
 
   var originalFetch = window.fetch ? window.fetch.bind(window) : null;
   if(originalFetch){

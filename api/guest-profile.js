@@ -21,6 +21,7 @@
 //
 //   POST { mode: 'logoutAllDevices' } — ends every session of this account
 //   POST { mode: 'send', conversationId, text }
+//   POST { mode: 'unsend', conversationId, messageId, role } — own message, within 1 hour
 //   POST { mode: 'saveTemplate', templateId?, listingId?, body }
 //   POST { mode: 'deleteTemplate', templateId }
 //   POST { mode: 'translate', text, targetLang }
@@ -186,6 +187,14 @@ function cohostOwnsTemplate(ctx, t) {
   return t.listing_id != null && cohostHasListing(ctx, t.listing_id);
 }
 
+// Unsent messages: within this many minutes of sending, and shown to both
+// sides without their text (the text stays stored for Aerva's records).
+const UNSEND_MINUTES = 60;
+function unsentView(m) {
+  if (!m.unsent_at) { delete m.unsent_at; return m; }
+  return { id: m.id, sender_type: m.sender_type, created_at: m.created_at, display_text: '', was_redacted: false, unsent: true, unsent_at: m.unsent_at };
+}
+
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -303,7 +312,7 @@ module.exports = async (req, res) => {
     const missingDetails = await cohostDetailsMissing(sql, guestId, ctx.hostId);
     if (missingDetails.length) return res.status(403).json({ error: DETAILS_REQUIRED_MESSAGE, detailsRequired: true, missing: missingDetails });
     const mode = req.method === 'GET' ? req.query.mode : (req.body || {}).mode;
-    const MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'translate', 'conversationTemplates'];
+    const MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'unsend', 'translate', 'conversationTemplates'];
     const TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];
     const isMessage = MESSAGE_MODES.includes(mode);
     const isTemplate = TEMPLATE_MODES.includes(mode);
@@ -438,10 +447,10 @@ module.exports = async (req, res) => {
           conversationId = inserted[0].id;
         }
 
-        const messages = await sql`
-          SELECT id, sender_type, display_text, was_redacted, created_at
+        const messages = (await sql`
+          SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
-        `;
+        `).map(unsentView);
         // This endpoint is only ever called from the guest-facing chat
         // widget in index.html (openChatForOrder/sendChatMessage) — so
         // when an account happens to be BOTH the guest on this booking
@@ -500,11 +509,12 @@ module.exports = async (req, res) => {
                  o.arrival, o.departure, o.status AS booking_status,
                  o.nights, o.guests, o.subtotal, o.gst, o.payout_amount,
                  (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today,
-                 (SELECT display_text FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+                 (SELECT CASE WHEN to_jsonb(m)->>'unsent_at' IS NOT NULL THEN 'Message unsent' ELSE display_text END
+                    FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
                  (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
                  (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id
                     AND m.sender_type <> (CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END)
-                    AND m.read_at IS NULL) AS unread_count
+                    AND m.read_at IS NULL AND to_jsonb(m)->>'unsent_at' IS NULL) AS unread_count
           FROM conversations c
           JOIN listings l ON l.id = c.listing_id
           LEFT JOIN guests g ON g.id = c.guest_id
@@ -577,9 +587,10 @@ module.exports = async (req, res) => {
           SELECT COUNT(*) AS count
           FROM messages m
           JOIN conversations c ON c.id = m.conversation_id
-          WHERE (c.host_id = ${myHostId} AND m.sender_type = 'guest' AND m.read_at IS NULL
+          WHERE to_jsonb(m)->>'unsent_at' IS NULL AND (
+                (c.host_id = ${myHostId} AND m.sender_type = 'guest' AND m.read_at IS NULL
                  AND (${coListings}::int[] IS NULL OR c.listing_id = ANY(${coListings}::int[])))
-             OR (c.guest_id = ${guestId} AND m.sender_type = 'host' AND m.read_at IS NULL)
+             OR (c.guest_id = ${guestId} AND m.sender_type = 'host' AND m.read_at IS NULL))
         `;
         return res.status(200).json({ count: Number(rows[0]?.count || 0) });
       }
@@ -597,10 +608,10 @@ module.exports = async (req, res) => {
         const isHost = myHostId != null && conv.host_id === myHostId;
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
 
-        const messages = await sql`
-          SELECT id, sender_type, display_text, was_redacted, created_at
+        const messages = (await sql`
+          SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
-        `;
+        `).map(unsentView);
         // Opening a conversation marks the OTHER party's messages read.
         // If this account is BOTH the guest and the host here (a
         // self-booking — booking your own listing to test, for example),
@@ -1284,6 +1295,39 @@ module.exports = async (req, res) => {
           RETURNING id, sender_type, display_text, was_redacted, created_at
         `;
         return res.status(200).json({ message: inserted[0] });
+      }
+
+      // Unsend: the sender takes back their own message within
+      // UNSEND_MINUTES of sending it. Both sides then see "This message was
+      // unsent". The text is kept in the database for Aerva's records
+      // (disputes, safety) and is never shown on either screen again.
+      if (mode === 'unsend') {
+        const { conversationId, messageId, role } = req.body || {};
+        const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${Number(conversationId) || 0}`;
+        const conv = convRows[0];
+        if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
+        const isGuest = conv.guest_id === guestId;
+        const isHost = myHostId != null && conv.host_id === myHostId;
+        if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
+        const side = role === 'guest' || role === 'host' ? role : (isHost ? 'host' : 'guest');
+        if ((side === 'guest' && !isGuest) || (side === 'host' && !isHost)) return res.status(403).json({ error: 'Not your message.' });
+        let rows;
+        try {
+          rows = await sql`SELECT id, sender_type, created_at, unsent_at FROM messages WHERE id = ${Number(messageId) || 0} AND conversation_id = ${conv.id}`;
+        } catch (err) {
+          if (/unsent_at/.test(String(err && err.message))) return res.status(503).json({ error: 'Unsending is being set up. Please try again later.' });
+          throw err;
+        }
+        const m = rows[0];
+        if (!m || m.sender_type !== side) return res.status(404).json({ error: 'You can only unsend your own messages.' });
+        if (m.unsent_at) return res.status(200).json({ success: true, already: true });
+        if (Date.now() - new Date(m.created_at).getTime() > UNSEND_MINUTES * 60000) {
+          return res.status(409).json({ error: `Messages can only be unsent within ${UNSEND_MINUTES === 60 ? '1 hour' : UNSEND_MINUTES + ' minutes'} of sending.` });
+        }
+        await sql`UPDATE messages SET unsent_at = now() WHERE id = ${m.id} AND unsent_at IS NULL`;
+        await logAudit(sql, { action: 'message_unsent', success: true, actorType: side === 'host' ? 'host' : 'guest', actorIdentifier: String(guestId),
+          targetType: 'conversation', targetId: conv.id, metadata: { messageId: m.id, sentAt: m.created_at } });
+        return res.status(200).json({ success: true });
       }
 
       // Real machine translation via Google Cloud Translation API — a
