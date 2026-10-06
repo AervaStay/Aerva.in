@@ -5063,6 +5063,11 @@
       // above already says that, and repeating it on every single card
       // was redundant clutter, not useful information.
       const card = item.type === 'stay' ? buildSuiteCard(item.data, i) : buildExperienceCard(item.data, i);
+      // Seen before, but taken for the dates now searched: it stays here
+      // (the guest is looking for it) with the same "not available" tag
+      // and "Check Availability" label as the Unavailable row, so it is
+      // never mistaken for bookable. It is then left out of that row.
+      if(searchArrivalDate && searchDepartureDate && item.data.is_available === false) addUnavailableCardDressing(card);
       container.appendChild(card);
     });
   }
@@ -5279,6 +5284,8 @@
     else if(o.badgeName) head = `No ${kind} with the ${esc(o.badgeName)} badge${where}${dates}.`;
     else head = `No ${kind}${where}${dates}.`;
     const note = noPetsHere ? ` ${noPetsHere} home${noPetsHere === 1 ? '' : 's'} here ${noPetsHere === 1 ? 'does' : 'do'} not allow pets.` : '';
+    if(o.freeAbove) return `Everything free${where}${dates} is in Recently viewed above.`;
+    if(o.bookedAbove && !o.unavailableCount) head = `No ${kind} are free${where}${dates} — the ${o.bookedAbove === 1 ? 'one' : 'ones'} you viewed ${o.bookedAbove === 1 ? 'is' : 'are'} booked.`;
     if(o.inRecentlyViewed && !tries.length) return 'Everything that matches is in Recently viewed above.';
     return head + note + (list ? ` Try ${list}.` : '');
   }
@@ -5431,7 +5438,16 @@
       const badgeSel = selectedBadge();
       const badgeName = badgeSel ? (document.getElementById('badgeFilter').selectedOptions[0] || {}).text : '';
       if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
-      else message = emptyStaysMessage({ badgeName, datesWereSearched, unavailableCount: finalUnavailableSuites.length + finalUnavailableExperiences.length, inRecentlyViewed: recentlyViewedShownIds.size });
+      else {
+        // What Recently Viewed (above) already shows decides the wording:
+        // free homes there, or the booked ones tagged there, not below.
+        const shownAbove = (l, kind) => recentlyViewedShownIds.has(kind + ':' + l.id);
+        const freeAbove = [...suiteList.filter(l => shownAbove(l, 'stay') && (!datesWereSearched || l.is_available !== false)),
+                           ...(showExperiences ? experienceList.filter(e => shownAbove(e, 'experience') && (!datesWereSearched || e.is_available !== false)) : [])].length;
+        const bookedBelow = [...finalUnavailableSuites.filter(l => !shownAbove(l, 'stay')), ...finalUnavailableExperiences.filter(e => !shownAbove(e, 'experience'))].length;
+        const bookedAbove = finalUnavailableSuites.length + finalUnavailableExperiences.length - bookedBelow;
+        message = emptyStaysMessage({ badgeName, datesWereSearched, unavailableCount: bookedBelow, bookedAbove, freeAbove, inRecentlyViewed: recentlyViewedShownIds.size });
+      }
       container.innerHTML = `<div class="suites-empty">${message}</div>`;
     } else {
       // Suites first, then experiences — a stable, predictable order
@@ -5465,7 +5481,8 @@
     const unavailableContainer = document.getElementById('unavailableContainer');
     const hasAnyUnavailable = finalUnavailableSuites.length > 0 || finalUnavailableExperiences.length > 0;
 
-    if(!datesWereSearched || !hasAnyUnavailable){
+    const hasAnyLeft = [...finalUnavailableSuites.map(l => 'stay:' + l.id), ...finalUnavailableExperiences.map(e => 'experience:' + e.id)].some(k => !recentlyViewedShownIds.has(k));
+    if(!datesWereSearched || !hasAnyUnavailable || !hasAnyLeft){
       unavailableRow.style.display = 'none';
     } else {
       unavailableRow.style.display = 'block';
@@ -5474,8 +5491,10 @@
       // Viewed-and-unavailable listings lead the row; everything else
       // unavailable follows after, same two arrays just reordered so the
       // guest's own recently-viewed picks are the first thing they see.
-      const orderedSuites = [...viewedUnavailableSuites, ...finalUnavailableSuites.filter(l => !viewedKeys.has('stay:' + l.id))];
-      const orderedExperiences = [...viewedUnavailableExperiences, ...finalUnavailableExperiences.filter(e => !viewedKeys.has('experience:' + e.id))];
+      // Anything already shown (tagged) in Recently Viewed is not repeated here.
+      const notShownAbove = (key) => !recentlyViewedShownIds.has(key);
+      const orderedSuites = [...viewedUnavailableSuites, ...finalUnavailableSuites.filter(l => !viewedKeys.has('stay:' + l.id))].filter(l => notShownAbove('stay:' + l.id));
+      const orderedExperiences = [...viewedUnavailableExperiences, ...finalUnavailableExperiences.filter(e => !viewedKeys.has('experience:' + e.id))].filter(e => notShownAbove('experience:' + e.id));
       orderedSuites.forEach(listing => {
         const card = buildSuiteCard(listing, uIndex++);
         addUnavailableCardDressing(card);
@@ -5500,7 +5519,7 @@
     card.classList.add('suite-card--unavailable');
     const badge = document.createElement('span');
     badge.className = 'suite-badge suite-unavailable-badge';
-    badge.textContent = 'Not Available';
+    badge.textContent = 'Not available for your dates';
     const badgeStack = card.querySelector('.suite-badges');
     if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
     const photoEl = card.querySelector('.suite-photo');

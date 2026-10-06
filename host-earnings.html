@@ -65,6 +65,23 @@
   .an-legend{display:flex; gap:14px; flex-wrap:wrap; font-size:11px; opacity:0.7; margin-top:10px;}
   .an-legend span{display:flex; align-items:center; gap:5px;}
   .an-swatch{width:10px; height:10px; border-radius:2px; display:inline-block;}
+  .an-lrows{ display:flex; flex-direction:column; gap:4px; }
+  .an-lrow{ display:grid; grid-template-columns:minmax(130px, 220px) 1fr minmax(130px, auto); align-items:center; gap:16px; padding:10px 4px; border-bottom:1px solid #f1eae0; }
+  .an-lrow:last-child{ border-bottom:none; }
+  .an-lname{ font-size:14px; color:#1c1a17; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .an-ltag{ font-size:11px; color:#8a6c39; border:1px solid #e6d8bd; border-radius:999px; padding:1px 7px; margin-left:4px; vertical-align:1px; }
+  .an-ltrack{ height:10px; background:#f3eee6; border-radius:999px; overflow:hidden; }
+  .an-lfill{ height:100%; background:#3a7d44; border-radius:999px; cursor:default; transition:opacity .12s ease; }
+  .an-lfill.is-exp{ background:#8a6c39; }
+  .an-lrows:hover .an-lfill{ opacity:0.6; }
+  .an-lrows .an-lfill:hover{ opacity:1; }
+  .an-lval{ display:flex; flex-direction:column; align-items:flex-end; line-height:1.25; white-space:nowrap; }
+  .an-lval strong{ font-size:15px; font-weight:600; color:#1c1a17; font-variant-numeric:tabular-nums; }
+  .an-lval span{ font-size:12px; color:#8a7f6c; }
+  @media (max-width:560px){
+    .an-lrow{ grid-template-columns:1fr auto; grid-template-areas:'name val' 'track track'; gap:6px 12px; }
+    .an-lname{ grid-area:name; } .an-lval{ grid-area:val; } .an-ltrack{ grid-area:track; }
+  }
   .an-empty{text-align:center; opacity:0.55; padding:26px 0; font-size:13px;}
   .an-toggle{display:flex; gap:6px; margin-bottom:12px;}
   .an-toggle button{font-size:12px; padding:5px 12px; border:1px solid #e0d5c0; background:white; cursor:pointer; font-family:inherit; color:inherit;}
@@ -1161,19 +1178,20 @@
     const list = Object.values(agg).sort((x,y) => y.payout - x.payout);
     if(!list.length) return '<p class="an-empty">No bookings in this period.</p>';
     const max = Math.max(...list.map(l => l.payout), 1);
-    const rowH = 30, W = 720, padLl = 150, padR = 86;
-    const H = Math.max(list.length*rowH + 10, 40);
-    const plotW = W - padLl - padR;
-    let out = '';
-    list.forEach((l, i) => {
-      const y = i*rowH + 6;
-      const w = (l.payout/max)*plotW;
-      const nm = l.name && l.name.length > 22 ? l.name.slice(0,21) + '…' : (l.name || 'Untitled');
-      out += `<text x="${padLl-8}" y="${y+14}" text-anchor="end" font-size="11" fill="#1c1a17">${anEsc(nm)}</text>`;
-      out += `<rect class="an-bar" data-tip="${anEsc(l.name + ' · ' + anMoneyFull(l.payout) + ' · ' + l.bookings + (l.bookings===1?' booking':' bookings') + ' · ' + l.nights + (l.nights===1?' night':' nights'))}" x="${padLl}" y="${y+3}" width="${Math.max(w,2).toFixed(1)}" height="15" rx="2" fill="${l.type === 'experience' ? '#8a6c39' : '#3a7d44'}"></rect>`;
-      out += `<text x="${padLl+Math.max(w,2)+7}" y="${y+15}" font-size="10" fill="#8a7f6c">${anMoney(l.payout)} · ${l.bookings} bkg</text>`;
-    });
-    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${AN_MONEY_WORD} by listing">${out}</svg>`;
+    // One row per listing: its name, a rounded bar on a soft track, and
+    // the amount with the bookings and nights written out in full.
+    const rows = list.map(l => {
+      const pct = Math.max(l.payout > 0 ? 2 : 0, (l.payout / max) * 100);
+      const bk = `${l.bookings} booking${l.bookings === 1 ? '' : 's'}`;
+      const nt = `${l.nights} night${l.nights === 1 ? '' : 's'}`;
+      const tip = `${l.name || 'Untitled'} · ${anMoneyFull(l.payout)} · ${bk} · ${nt}`;
+      return `<div class="an-lrow">
+        <div class="an-lname" title="${anEsc(l.name || 'Untitled')}">${anEsc(l.name || 'Untitled')}${l.type === 'experience' ? ' <span class="an-ltag">Experience</span>' : ''}</div>
+        <div class="an-ltrack"><div class="an-bar an-lfill ${l.type === 'experience' ? 'is-exp' : ''}" style="width:${pct.toFixed(1)}%" data-tip="${anEsc(tip)}"></div></div>
+        <div class="an-lval"><strong>${anMoneyFull(l.payout)}</strong><span>${bk} · ${nt}</span></div>
+      </div>`;
+    }).join('');
+    return `<div class="an-lrows" role="list" aria-label="${AN_MONEY_WORD} by listing">${rows}</div>`;
   }
 
   function anTotalsStrip(t, caption){
