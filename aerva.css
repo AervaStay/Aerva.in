@@ -3132,3 +3132,16 @@ footer .foot-bottom{ margin-top:0; }
   .pill-search .filter-bar{ flex:1 1 calc(100% - 90px); order:2; }
   .pill-search-submit{ order:3; margin:8px 14px 8px 0; border-top:none; }
 }
+
+/* Cancellation request card in a booking's messages: the host's Accept /
+   Confirm and Reject buttons (they had no styles on this page). */
+.cc-accept, .cc-reject{
+  font-family:'Jost', sans-serif; font-size:13.5px; letter-spacing:0.02em; line-height:1;
+  padding:9px 16px; min-height:36px; border-radius:999px; cursor:pointer; transition:background .2s ease, border-color .2s ease;
+}
+.cc-accept{ background:var(--gold-deep, #8a6c39); color:#fff; border:1px solid var(--gold-deep, #8a6c39); }
+.cc-accept:hover{ background:var(--ink, #1C1B19); border-color:var(--ink, #1C1B19); }
+.cc-reject{ background:#fff; color:#a3402f; border:1px solid #e0b8ac; }
+.cc-reject:hover{ border-color:#a3402f; }
+.cc-accept:disabled, .cc-reject:disabled{ opacity:0.5; cursor:default; }
+.cc-msg:empty{ display:none; }

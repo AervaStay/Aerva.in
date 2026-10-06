@@ -81,7 +81,13 @@ async function safeRefund(sql, razorpay, { orderId, paymentId, amountSubunit, ki
   } catch (err) {
     // Unknown outcome: mark failed. A retry re-checks Razorpay first, so a
     // refund that did go through is found and adopted, never repeated.
-    await sql`UPDATE refunds SET status = 'failed', failure_reason = ${String(err.message || err).slice(0, 300)} WHERE id = ${row.id} AND status = 'creating'`;
+    const why = (err && err.error && err.error.description) || String((err && err.message) || err);
+    await sql`UPDATE refunds SET status = 'failed', failure_reason = ${why.slice(0, 300)} WHERE id = ${row.id} AND status = 'creating'`;
+    // Razorpay said no (unknown payment, already refunded, a test-mode
+    // payment on another key...): say why, instead of a bare "try again".
+    if (!err.isUserFacing && (err.error || err.statusCode)) {
+      throw Object.assign(new Error(`Razorpay could not make the refund: ${why.replace(/\.$/, '')}. Nothing was cancelled and the booking stands. It is listed in Admin → Refunds.`), { isUserFacing: true, status: 502, cause: err });
+    }
     throw err;
   }
 }
