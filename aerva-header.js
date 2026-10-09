@@ -110,6 +110,7 @@
 
   function menuLinks(){
     return '<a href="index.html?view=profile">Profile</a>' +
+      '<a href="index.html?view=wishlist">Wishlist</a>' +
       '<a href="index.html?view=my-bookings">My Bookings</a>' +
       // My Collection and My Earnings: hosts with a live listing, and active
       // co-hosts (the listings they were given live there). Status is the

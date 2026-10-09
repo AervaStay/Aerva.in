@@ -3505,6 +3505,7 @@
       safeStorage.set(accountKey(FAVORITES_KEY), JSON.stringify(all));
       document.querySelectorAll('.fav-heart[data-fav-id]').forEach(b => paintFavHearts(b.dataset.favId, all.includes(String(b.dataset.favId))));
       try{ if(approvedListings.length) applyFiltersAndRender(); }catch(e){}
+      renderWishlistIfOpen();
     }catch(err){ /* the device copy is used */ }
   }
   function toggleFavoriteId(listingId, btnEl){
@@ -3518,6 +3519,7 @@
     safeStorage.set(accountKey(FAVORITES_KEY), JSON.stringify(favs));
     paintFavHearts(id, !isFav);
     saveFavoriteToAccount(id, !isFav);
+    renderWishlistIfOpen();
   }
 
   // Recent-search history — also purely client-side (localStorage). Every
@@ -4988,6 +4990,7 @@
     // identity — the viewed row, the saved hearts, the search history.
     try{ renderRecentlyViewedRow(); }catch(e){}
     try{ applyFiltersAndRender(); }catch(e){}
+    try{ renderWishlistIfOpen(); }catch(e){}
   }
 
   // Logged out, the site is strictly fresh: nothing a person viewed, saved
@@ -5080,6 +5083,7 @@
       // Filtered here, before the 3-card cap, so a filtered-out listing
       // doesn't consume one of the three slots and leave the row looking
       // emptier than it should.
+      if(entry.type === 'stay' && favoritesShownIds.has('stay:' + entry.id)) return; // already in My favourite
       if(entry.type === 'stay' && listingsById[entry.id] && passesStayFilters(listingsById[entry.id])) cards.push({ type: 'stay', data: listingsById[entry.id] });
       else if(entry.type === 'experience' && experiencesById[entry.id] && passesExperienceFilters(experiencesById[entry.id])) cards.push({ type: 'experience', data: experiencesById[entry.id] });
     });
@@ -5118,12 +5122,12 @@
     });
   }
 
-  // ---- Your favourites, in a place search ----
-  // When a guest searches a place (or Near Me), the homes they hearted that
-  // are in the results — within 200 km of that place — get their own row,
-  // most liked first. Homes booked for the searched dates stay in the row
-  // with the "not available" tag. Shown here, they are left out of the main
-  // list below so nothing appears twice.
+  // ---- My favourite, in a place search ----
+  // When a guest searches a place (or Near Me), the homes they hearted
+  // within 200 km of that place get their own row, "My favourite", above
+  // Recently viewed, most liked first. Homes booked for the searched dates
+  // stay in the row with the "not available" tag. Shown here, they are left
+  // out of Recently viewed and the main list below so nothing appears twice.
   let favoritesShownIds = new Set();
   function renderFavoritesRow(){
     favoritesShownIds = new Set();
@@ -5134,11 +5138,15 @@
     const nearMe = !!(searchStatusCounts && searchStatusCounts.suffix === 'near you');
     const favs = new Set(getFavoriteIds().map(String));
     if((!place && !nearMe) || !favs.size || currentCategoryFilter === 'experiences'){ row.style.display = 'none'; return; }
+    const center = searchCenter || (nearMe && guestLocation ? { lat: Number(guestLocation.lat), lng: Number(guestLocation.lng) } : null);
+    const within200 = (l) => !center || (l.latitude && l.longitude && haversineDistanceKm(center.lat, center.lng, Number(l.latitude), Number(l.longitude)) <= 200);
     const list = approvedListings
-      .filter(l => favs.has(String(l.id)) && passesStayFilters(l) && !recentlyViewedShownIds.has('stay:' + l.id))
+      .filter(l => favs.has(String(l.id)) && passesStayFilters(l) && within200(l))
       .sort((a, b) => (Number(b.like_count) || 0) - (Number(a.like_count) || 0) || (Number(b.rating) || 0) - (Number(a.rating) || 0));
     if(!list.length){ row.style.display = 'none'; return; }
-    document.getElementById('favoritesHeading').textContent = 'Your favourites near ' + (place || 'you');
+    document.getElementById('favoritesHeading').textContent = 'My favourite';
+    const sub = document.getElementById('favoritesSub');
+    if(sub) sub.textContent = 'Homes you saved within 200 km of ' + (place || 'you') + ', most liked first.';
     row.style.display = 'block';
     container.innerHTML = '';
     const datesSearched = !!(searchArrivalDate && searchDepartureDate);
@@ -5410,8 +5418,8 @@
     // return for its own empty states, but these two rows are
     // independent of that and should always stay in sync with whatever
     // just changed (search, filter switch, currency, etc).
-    renderRecentlyViewedRow();
     renderFavoritesRow();
+    renderRecentlyViewedRow();
     renderNearbyRow();
     renderResortsRow();
 
@@ -11689,7 +11697,7 @@
   // Today's had left out the profile, so Today "did nothing" when clicked
   // from the profile (it opened underneath it, out of sight).
   const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
-    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'policiesView', 'privacyView', 'termsView', 'helpView'];
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'wishlistView', 'policiesView', 'privacyView', 'termsView', 'helpView'];
 
   // ---- Agreements shown before payment and before listing ----
   // The guest booking agreement sits directly above every Book button; the
@@ -11893,6 +11901,81 @@
       const el = document.getElementById(id);
       if(el) el.style.display = 'none';
     });
+  }
+
+  // ---- Wishlist ----
+  // Every home this account has hearted, newest first, from the profile
+  // menu (?view=wishlist). Hearts are the same ones as on every card
+  // (getFavoriteIds / toggleFavoriteId), so un-hearting here removes the
+  // home from the list at once, and the list follows the guest to every
+  // device (guest-profile.js myFavorites). Drawn from the full set of live
+  // homes, not just the last search's results.
+  let wishlistListingsById = null;
+  async function showWishlistView(){
+    document.body.classList.remove('showing-hero');
+    hideMainViews();
+    document.getElementById('wishlistView').style.display = 'block';
+    document.title = 'Wishlist — Aerva';
+    BROWSE_TABS.concat(['catToday']).forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.classList.remove('active');
+    });
+    window.scrollTo({ top: 0 });
+    const container = document.getElementById('wishlistContainer');
+    if(!guestAuthToken()){
+      container.innerHTML = '<div class="wishlist-empty"><p>Log in to see the homes you have saved.</p><a class="btn" href="guest-login.html">Log in</a></div>';
+      return;
+    }
+    if(!wishlistListingsById){
+      container.innerHTML = '<p class="loading">Loading your wishlist…</p>';
+      try{
+        await hiddenListingsReady;
+        const res = await fetch(SUITES_API_BASE + '/api/get-listings');
+        if(!res.ok) throw new Error('load failed');
+        const data = await res.json();
+        wishlistListingsById = {};
+        visibleOnly(data.listings || []).forEach(l => { wishlistListingsById[l.id] = l; });
+      }catch(err){
+        container.innerHTML = '<div class="wishlist-empty"><p>Your wishlist could not be loaded right now. Please refresh in a moment.</p></div>';
+        return;
+      }
+    }
+    renderWishlist();
+  }
+  function renderWishlistIfOpen(){
+    const view = document.getElementById('wishlistView');
+    if(view && view.style.display === 'block' && wishlistListingsById) renderWishlist();
+  }
+  function renderWishlist(){
+    const container = document.getElementById('wishlistContainer');
+    const countEl = document.getElementById('wishlistCount');
+    if(!container) return;
+    // Signed in, but the account is still being confirmed (page just
+    // opened): the hearts arrive in a moment (setRecentlyViewedOwner).
+    if(storageOwner === 'anon'){ container.innerHTML = '<p class="loading">Loading your wishlist…</p>'; return; }
+    const ids = getFavoriteIds().map(String).reverse(); // newest first
+    const homes = ids.map(id => wishlistListingsById[id]).filter(Boolean);
+    const gone = ids.length - homes.length;
+    if(countEl) countEl.textContent = homes.length ? `${homes.length} saved home${homes.length === 1 ? '' : 's'}` : '';
+    if(!homes.length){
+      container.innerHTML = `<div class="wishlist-empty"><p>${gone ? 'The homes you saved are no longer listed.' : 'Nothing saved yet.'} Tap the heart on any home to keep it here.</p><a class="btn" href="index.html">Browse homes</a></div>`;
+      return;
+    }
+    container.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'suite-grid';
+    homes.forEach((l, i) => {
+      const card = buildSuiteCard(l, i);
+      card.classList.add('in');
+      grid.appendChild(card);
+    });
+    container.appendChild(grid);
+    if(gone){
+      const note = document.createElement('p');
+      note.className = 'wishlist-note';
+      note.textContent = `${gone} saved home${gone === 1 ? ' is' : 's are'} no longer listed, so ${gone === 1 ? 'it is' : 'they are'} not shown.`;
+      container.appendChild(note);
+    }
   }
 
   // Who you are on Aerva: your photo, a few lines about you, where you
@@ -13130,6 +13213,8 @@
       document.getElementById('my-bookings').style.display = 'block';
       document.title = 'My Bookings — Aerva';
       loadMyBookings();
+    } else if(requestedView === 'wishlist'){
+      showWishlistView();
     } else if(requestedView === 'suites'){
       setCategoryFilter('suites');
     } else if(requestedView === 'experiences'){
