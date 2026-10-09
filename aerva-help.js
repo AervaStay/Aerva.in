@@ -21,7 +21,7 @@
 (function(){
   'use strict';
 
-  var API = 'https://aerva-in.vercel.app';
+  var API = (window.AERVA_API || 'https://aerva-in.vercel.app');
   var MAX_FILES = 5, MAX_FILE_BYTES = 8 * 1024 * 1024;
   var SUBJECT_MAX = 120, BODY_MIN = 20, BODY_MAX = 4000;
   var FILE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
@@ -173,10 +173,16 @@
   function contactBlock(){
     var c = S().contacts || {};
     var cards = [];
+    // Aerva Support in Messages: the assistant answers at once; an agent
+    // (chat, call or call back) once it has tried.
     cards.push('<div class="hc-contact hc-contact-primary">'
+      + '<h3>Message Aerva Support</h3>'
+      + '<p>Get an answer straight away from our assistant, which knows our policies and your bookings. If it cannot sort it out, speak to an agent — by chat or phone.</p>'
+      + '<button type="button" class="btn solid" data-open-support>Open Aerva Support</button></div>');
+    cards.push('<div class="hc-contact">'
       + '<h3>Raise a request</h3>'
       + '<p>Tracked from start to finish, with a reference number. Best for anything about a booking, a stay or a payout.</p>'
-      + hlink('new=1', 'Raise a request', 'btn solid') + '</div>');
+      + hlink('new=1', 'Raise a request', 'btn') + '</div>');
     if(c.tollFree){
       cards.push('<div class="hc-contact"><h3>Call us, toll-free</h3>'
         + '<p>Speak to our support team. Have your booking or request reference ready.</p>'
@@ -229,6 +235,9 @@
       + '<p class="policy-note">The rules behind every answer: <a href="index.html?view=policies">Aerva Policies</a> · <a href="index.html?view=terms">Terms of Service</a> · <a href="index.html?view=privacy">Privacy</a></p>';
     root.innerHTML = frame('home', html);
     wireLinks(root);
+    root.querySelectorAll('[data-open-support]').forEach(function(b){
+      b.addEventListener('click', function(){ if(window.aervaOpenSupportChat) window.aervaOpenSupportChat(); });
+    });
     document.title = 'Resolution Center — Aerva';
     if(token()) loadMineSummary();
   }

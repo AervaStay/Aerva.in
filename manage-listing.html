@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Manage listing — Aerva</title>
+<script src="aerva-env.js?v=2026-10-09a"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <meta name="robots" content="noindex, nofollow">
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
@@ -247,6 +248,7 @@
   .cs-form input, .cs-form select{ padding:10px 12px; border:1px solid #d9cfc2; border-radius:8px; font-family:'Jost', sans-serif; font-size:14.5px; }
   .cs-msg{ font-size:14px; margin-top:10px; }
   @media (max-width:640px){ .cs-form{ grid-template-columns:1fr; } }
+.price-pending-note{margin-top:8px; padding:8px 12px; border-radius:8px; background:#fbf3e4; color:#7a5a1e; font-size:13px; line-height:1.45;}
 </style>
 <!--
   Testing OpenStreetMap via Leaflet.js here ONLY (manage-listing.html) —
@@ -353,7 +355,8 @@
       <div class="field" id="nightlyRateField">
         <label for="nightlyRate"><span id="nightlyRateLabel">Nightly Rate (₹)</span></label>
         <input id="nightlyRate" type="number" min="1" required>
-        <p class="price-history-note">Every change here is recorded, so you can always see your rate history.</p>
+        <p class="price-history-note">Every change here is recorded, so you can always see your rate history. A very large drop, a very low price or a discount above half waits for Aerva's approval before guests see it.</p>
+        <div id="pendingPriceNote" class="price-pending-note" hidden></div>
       </div>
 
       <div class="field" id="maxGuestsField">
@@ -586,7 +589,7 @@
 </div>
 
 <script>
-  const API_BASE = 'https://aerva-in.vercel.app';
+  const API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
   // Anything a host, guest or admin typed is escaped before it becomes
   // page markup.
   function escM(t){
@@ -1715,6 +1718,14 @@
       }
       const data = await res.json();
       const l = data.listing;
+      // Unusual price changes waiting for Aerva's approval (_price-review.js).
+      (function(){
+        const el = document.getElementById('pendingPriceNote');
+        const list = Array.isArray(data.pendingPriceChanges) ? data.pendingPriceChanges : [];
+        if(!el) return;
+        el.hidden = !list.length;
+        el.textContent = list.length ? 'Waiting for Aerva\'s approval: ' + list.map(p => p.text).join('; ') + '. Guests see your current price until then.' : '';
+      })();
 
       // A listing auto-blocked by the compliance system (see
       // _compliance.js on the backend) is a deliberate exception here —
@@ -2270,7 +2281,7 @@
 // calendars from Airbnb, Agoda, Booking.com, Vrbo and others. Server side:
 // update-listing-pricing.js (calendarSync) and _calendar-sync.js.
 (function(){
-  const API = 'https://aerva-in.vercel.app/api/update-listing-pricing';
+  const API = (window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/update-listing-pricing';
   const token = new URLSearchParams(window.location.search).get('token');
   if(!token) return;
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));

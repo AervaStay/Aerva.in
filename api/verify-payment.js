@@ -17,6 +17,7 @@
 //   'refunded' — _deposits.js (scheduler / admin).
 //   'resolved' — admin resolves a dispute (get-pending-listings.js).
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');

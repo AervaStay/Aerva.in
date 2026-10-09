@@ -235,6 +235,44 @@ async function createRequest(sql, { guestId, category, subject, description, ord
   return { ref: ticket.ref, status: ticket.status };
 }
 
+// A request raised from the Aerva Support chat in Messages, when the
+// assistant hands the conversation to a person (_support-chat.js). The
+// whole conversation so far comes with it (via 'chat-transcript'), so the
+// team never asks the person to repeat themselves. A booking is linked only
+// if it is the person's own (as guest, or at their listing as host).
+async function createChatRequest(sql, { guestId, category, subject, transcript, orderId = null, callbackPhone = null }) {
+  if (!CATEGORIES[category]) category = 'other';
+  const me = (await sql`SELECT id, name, email, host_id, deleted_at FROM guests WHERE id = ${guestId}`)[0];
+  if (!me || me.deleted_at) throw userError('Please log in again.', 401);
+  const recent = await countRecentAttempts(sql, { action: 'support_request_created', windowMinutes: 24 * 60, byActor: String(guestId) });
+  if (recent >= MAX_NEW_PER_DAY) throw userError('You have raised several requests today. Please keep writing here on the open one.', 429);
+  let oid = null, role = HOST_CATEGORIES.includes(category) && me.host_id ? 'host' : 'guest';
+  if (orderId) { const r = await bookingRole(sql, me, Number(orderId)); if (r) { oid = Number(orderId); role = r; } }
+  let subj = clean(subject, 80);
+  if (subj.length < SUBJECT_MIN) subj = CATEGORIES[category].label;
+  const text = clean(transcript, BODY_MAX) || '(no messages)';
+  let ticket;
+  for (let i = 0; i < 20 && !ticket; i++) {
+    ticket = (await sql`
+      INSERT INTO support_tickets (ref, guest_id, role, category, subject, order_id, callback_phone, last_user_message_at, channel)
+      VALUES (${randomRef()}, ${me.id}, ${role}, ${category}, ${subj}, ${oid}, ${callbackPhone}, now(), 'chat')
+      ON CONFLICT (ref) DO NOTHING RETURNING *`)[0];
+  }
+  if (!ticket) throw new Error('could not draw a free reference number');
+  await sql`INSERT INTO support_messages (ticket_id, sender, body, created_at, via) VALUES (${ticket.id}, 'system',
+              ${`Request raised from the Aerva Support chat: ${CATEGORIES[category].label}. Reference ${ticket.ref}.${callbackPhone ? ` Call back asked for on ${callbackPhone}.` : ''}`}, now() - interval '1 millisecond', 'chat')`;
+  await sql`INSERT INTO support_messages (ticket_id, sender, body, via) VALUES (${ticket.id}, 'user', ${text}, 'chat-transcript')`;
+  await logAudit(sql, { action: 'support_request_created', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+    targetType: 'support_ticket', targetId: ticket.id, metadata: { ref: ticket.ref, category, role, orderId: oid, via: 'chat' } });
+  await sendEmail(SUPPORT_INBOX(), `${callbackPhone ? 'CALL BACK — ' : ''}New chat request ${ticket.ref}: ${CATEGORIES[category].label}`,
+    `<p><strong>${esc(subj)}</strong> · ${esc(CATEGORIES[category].label)} · from ${esc(me.name || '')} (${esc(me.email || 'no email')})${oid ? ' · booking #' + oid : ''}</p>
+     ${callbackPhone ? `<p style="font-size:16px;"><strong>Call them back on ${esc(callbackPhone)}</strong></p>` : ''}
+     <p>The assistant handed this conversation over:</p>
+     <blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(text)}</blockquote>
+     <p>Answer it in Admin → Support — your reply appears in their Aerva Support chat in Messages.</p>`);
+  return ticket;
+}
+
 function ticketView(t) {
   return {
     ref: t.ref, category: t.category, categoryLabel: (CATEGORIES[t.category] || {}).label || 'Request',
@@ -295,19 +333,27 @@ async function replyToRequest(sql, { guestId, ref, text, attachments }) {
   if (!body && !files.length) throw userError('Write your reply first.');
   const recent = await countRecentAttempts(sql, { action: 'support_request_reply', windowMinutes: 60, byActor: String(guestId) });
   if (recent >= MAX_REPLIES_PER_HOUR) throw userError('Too many replies in a short time. Please wait a little and try again.', 429);
-  await sql`INSERT INTO support_messages (ticket_id, sender, body, attachments) VALUES (${t.id}, 'user', ${body || '(files attached)'}, ${JSON.stringify(files)}::jsonb)`;
-  // A reply opens the request again for the team (a resolved one too).
+  await appendUserMessage(sql, t, { body, files, actor: String(guestId) });
+  return getRequest(sql, guestId, t.ref);
+}
+
+// The person adds to their request (web, or the Support chat with via = 'chat').
+// It opens again for the team if it was waiting on them or resolved.
+async function appendUserMessage(sql, t, { body, files = [], actor, via = null, notify = true }) {
+  const row = via
+    ? (await sql`INSERT INTO support_messages (ticket_id, sender, body, attachments, via) VALUES (${t.id}, 'user', ${body || '(files attached)'}, ${JSON.stringify(files)}::jsonb, ${via}) RETURNING id`)[0]
+    : (await sql`INSERT INTO support_messages (ticket_id, sender, body, attachments) VALUES (${t.id}, 'user', ${body || '(files attached)'}, ${JSON.stringify(files)}::jsonb) RETURNING id`)[0];
   await sql`UPDATE support_tickets SET last_user_message_at = now(), updated_at = now(), user_last_seen_at = now(),
               status = CASE WHEN status IN ('waiting_on_you', 'resolved') THEN 'open' ELSE status END,
               resolved_at = CASE WHEN status = 'resolved' THEN NULL ELSE resolved_at END
             WHERE id = ${t.id}`;
-  await logAudit(sql, { action: 'support_request_reply', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-    targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, files: files.length } });
-  await sendEmail(SUPPORT_INBOX(), `Reply on ${t.ref}: ${t.subject}`,
-    `<p>The person replied on <strong>${esc(t.ref)}</strong> (${esc(t.subject)}):</p>
+  await logAudit(sql, { action: 'support_request_reply', success: true, actorType: 'guest', actorIdentifier: String(actor || ''),
+    targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, files: files.length, via: via || 'web' } });
+  if (notify) await sendEmail(SUPPORT_INBOX(), `Reply on ${t.ref}: ${t.subject}`,
+    `<p>The person replied${via === 'chat' ? ' in the Support chat' : ''} on <strong>${esc(t.ref)}</strong> (${esc(t.subject)}):</p>
      <blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(body)}</blockquote>
      ${files.length ? `<p>${files.length} file${files.length === 1 ? '' : 's'} attached.</p>` : ''}<p>Answer it in Admin → Support.</p>`);
-  return getRequest(sql, guestId, t.ref);
+  return row;
 }
 
 // The person's feedback, and with it the end of the request.
@@ -318,11 +364,18 @@ async function replyToRequest(sql, { guestId, ref, text, attachments }) {
 //                   message to the support team.
 async function submitFeedback(sql, { guestId, ref, resolved, rating, comment }) {
   const t = await ownTicket(sql, guestId, ref);
+  await applyFeedback(sql, t, { resolved, rating, comment, actor: String(guestId) });
+  return getRequest(sql, guestId, t.ref);
+}
+
+// The feedback itself, for a ticket row (web or the Support chat). via: how it came in.
+async function applyFeedback(sql, t, { resolved, rating, comment, actor, via = null }) {
   if (t.status === 'closed') throw userError('This request is already closed.', 409);
   const note = clean(comment, 1000);
   if (resolved === false) {
     if (note.length < 5) throw userError('Tell us what is still not right, so we can pick it up again.');
-    await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${t.id}, 'user', ${note})`;
+    if (via) await sql`INSERT INTO support_messages (ticket_id, sender, body, via) VALUES (${t.id}, 'user', ${note}, ${via})`;
+    else await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${t.id}, 'user', ${note})`;
     try {
       await sql`UPDATE support_tickets SET status = 'open', resolved_at = NULL, updated_at = now(), last_user_message_at = now(), user_last_seen_at = now(),
                   feedback_resolved = false, feedback_rating = NULL, feedback_comment = ${note}, feedback_at = now()
@@ -332,11 +385,11 @@ async function submitFeedback(sql, { guestId, ref, resolved, rating, comment }) 
       await sql`UPDATE support_tickets SET status = 'open', resolved_at = NULL, updated_at = now(), last_user_message_at = now(), user_last_seen_at = now() WHERE id = ${t.id}`;
     }
     await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${t.id}, 'system', 'You said this is not resolved. It is open again.')`;
-    await logAudit(sql, { action: 'support_feedback', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-      targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, resolved: false } });
+    await logAudit(sql, { action: 'support_feedback', success: true, actorType: 'guest', actorIdentifier: String(actor || ''),
+      targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, resolved: false, via: via || 'web' } });
     await sendEmail(SUPPORT_INBOX(), `Reopened ${t.ref}: not resolved`, `<p>The person says <strong>${esc(t.ref)}</strong> (${esc(t.subject)}) is not resolved:</p>
       <blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(note)}</blockquote><p>It is open again in Admin → Support.</p>`);
-    return getRequest(sql, guestId, t.ref);
+    return { reopened: true };
   }
   const stars = Math.round(Number(rating));
   if (!(stars >= 1 && stars <= 5)) throw userError('Choose a rating from 1 to 5 stars first.');
@@ -348,10 +401,10 @@ async function submitFeedback(sql, { guestId, ref, resolved, rating, comment }) 
     if (!notReady(err)) throw err;        // before migration_support_cases.sql: closed, rating kept in the message below
     await sql`UPDATE support_tickets SET status = 'closed', closed_at = now(), updated_at = now() WHERE id = ${t.id} AND status <> 'closed'`;
   }
-  await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${t.id}, 'system', ${`You confirmed this is resolved and closed it. Your rating: ${stars} of 5.`})`;
-  await logAudit(sql, { action: 'support_feedback', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-    targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, resolved: true, rating: stars } });
-  return getRequest(sql, guestId, t.ref);
+  await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${t.id}, 'system', ${`You confirmed this is resolved and closed it. Your rating: ${stars} of 5.${note ? ' Comment: ' + note : ''}`})`;
+  await logAudit(sql, { action: 'support_feedback', success: true, actorType: 'guest', actorIdentifier: String(actor || ''),
+    targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, resolved: true, rating: stars, via: via || 'web' } });
+  return { closed: true, rating: stars };
 }
 // Closing it themselves: the same feedback is asked for.
 const closeRequest = (sql, { guestId, ref, rating, comment }) => submitFeedback(sql, { guestId, ref, resolved: true, rating, comment });
@@ -414,6 +467,7 @@ async function adminList(sql, { status = 'active', q = '' } = {}) {
   try {
     rows = await sql`
       SELECT t.id, t.ref, t.category, t.subject, t.status, t.role, t.order_id, t.listing_id, t.callback_phone,
+             COALESCE(to_jsonb(t)->>'channel', 'web') AS channel,
              (to_jsonb(t)->>'feedback_rating')::int AS feedback_rating, (to_jsonb(t)->>'auto_closed')::boolean AS auto_closed,
              t.created_at, t.updated_at, t.first_response_at, t.last_user_message_at, t.last_support_message_at,
              g.name AS person_name, g.email AS person_email,
@@ -437,12 +491,18 @@ async function adminGet(sql, id) {
   const t = (await sql`
     SELECT t.*, g.name AS person_name, g.email AS person_email, g.phone AS person_phone,
            o.suite_name, o.arrival, o.departure, o.status AS booking_status, o.confirmation_code, o.total, o.guest_id AS booking_guest_id,
+           to_jsonb(o)->>'deposit_amount' AS deposit_amount, to_jsonb(o)->>'deposit_status' AS deposit_status, o.payout_amount, to_jsonb(o)->>'guest_service_fee' AS guest_service_fee,
            l.property_name, l.status AS listing_status
     FROM support_tickets t LEFT JOIN guests g ON g.id = t.guest_id
     LEFT JOIN orders o ON o.id = t.order_id LEFT JOIN listings l ON l.id = COALESCE(t.listing_id, o.listing_id)
     WHERE t.id = ${Number(id) || 0}`)[0];
   if (!t) throw userError('Request not found.', 404);
-  const msgs = await sql`SELECT id, sender, internal, admin_email, body, attachments, created_at FROM support_messages WHERE ticket_id = ${t.id} ORDER BY created_at, id`;
+  const msgs = await sql`SELECT m.id, m.sender, m.internal, m.admin_email, m.body, m.attachments, m.created_at, to_jsonb(m)->>'via' AS via
+                         FROM support_messages m WHERE m.ticket_id = ${t.id} ORDER BY m.created_at, m.id`;
+  // The timeline in numbers: how long until the first reply, and until resolved.
+  const mins = (a, b) => (a && b ? Math.max(0, Math.round((new Date(b) - new Date(a)) / 60000)) : null);
+  t.timings = { firstResponseMinutes: mins(t.created_at, t.first_response_at), resolvedMinutes: mins(t.created_at, t.resolved_at || t.closed_at),
+                firstResponseDueAt: new Date(new Date(t.created_at).getTime() + FIRST_RESPONSE_HOURS * 3600e3).toISOString() };
   let caseNotes = [];
   try { caseNotes = await sql`SELECT * FROM support_case_notes WHERE ticket_id = ${t.id} ORDER BY created_at DESC, id DESC`; } catch (err) { if (!notReady(err)) throw err; }
   return { ticket: { ...t, categoryLabel: (CATEGORIES[t.category] || {}).label || t.category }, messages: msgs, statuses: STATUS_LABELS,
@@ -526,7 +586,8 @@ async function adminReply(sql, { id, text, status = null, internal = false, admi
        ${button(requestLink(t.ref), next === 'closed' ? 'View your request' : next === 'resolved' ? 'Tell us how we did' : 'View and reply')}
        <p style="font-size:13px; color:#6e675d;">Please reply on the request page rather than to this email, so everything stays in one place.</p>`);
   }
-  return adminGet(sql, t.id);
+  const out = await adminGet(sql, t.id);
+  return out;
 }
 
 // Deleting an account: what the person wrote goes; the record that a
@@ -537,6 +598,7 @@ async function eraseForAccount(sql, guestId) {
               FROM support_tickets t WHERE m.ticket_id = t.id AND t.guest_id = ${guestId} AND m.sender = 'user'`;
     await sql`UPDATE support_tickets SET subject = '[deleted]', callback_phone = NULL WHERE guest_id = ${guestId}`;
     try { await sql`UPDATE support_tickets SET feedback_comment = NULL WHERE guest_id = ${guestId}`; } catch (e) { /* before migration_support_cases.sql */ }
+    try { await sql`DELETE FROM support_chat_messages WHERE guest_id = ${guestId}`; } catch (e) { /* before the support chat migration */ }
   } catch (err) { if (!notReady(err)) throw err; }
 }
 
@@ -544,5 +606,6 @@ module.exports = {
   CATEGORIES, STATUS_LABELS, STATUSES, FIRST_RESPONSE_HOURS, MAX_NEW_PER_DAY,
   CONDUCT, FEEDBACK_HOURS,
   requestOptions, createRequest, listRequests, getRequest, replyToRequest, closeRequest, submitFeedback, autoCloseResolved, bellNotifications,
+  createChatRequest, appendUserMessage, applyFeedback, ticketView, bookingRole,
   adminList, adminGet, adminReply, adminSaveCase, eraseForAccount, cleanFiles
 };

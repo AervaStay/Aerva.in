@@ -28,9 +28,10 @@
 // console — not the same as a phone number SID), and PHONE_LOGIN_ENABLED
 // = true. Without that flag every mode is refused with a clear message.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
-const { sessionStatus, newSessionToken, reactivateIfPaused } = require('./_accounts');
+const { sessionStatus, newSessionToken, reactivateIfPaused, assertNotSuspended } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { E164_PATTERN, normalizeToE164, phoneMatchSuffix } = require('./_phone-validation');
@@ -263,6 +264,7 @@ module.exports = async (req, res) => {
         const payload = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
         const st = await sessionStatus(sql, payload);
         if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.' });
+        if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. Please contact hello@aerva.in.' });
         if (st === 'error') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
         const meId = st === 'ok' ? Number(payload.listingId) : 0;
         if (!meId) return res.status(401).json({ error: 'Please log in again.' });
@@ -347,6 +349,7 @@ module.exports = async (req, res) => {
       // The number is proved, so the account is linked to it from here on.
       await markProved(guest.id);
       // Logging in un-pauses an account that was paused (_accounts.js).
+      await assertNotSuspended(sql, guest.id);   // suspended by Aerva: no sign-in
       await reactivateIfPaused(sql, guest.id);
 
       const sessionToken = await newSessionToken(sql, guest.id, SESSION_LIFETIME_MS);
@@ -357,6 +360,7 @@ module.exports = async (req, res) => {
 
       return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
     } catch (err) {
+      if (err.suspended) return res.status(403).json({ error: err.message });
       console.error('guest-phone-auth (verify) error:', err);
       await logAudit(sql, {
         action: 'guest_phone_otp_verified', success: false, actorType: 'guest', actorIdentifier: cleanPhone,

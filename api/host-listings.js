@@ -64,6 +64,7 @@
 //          the coupon has to be bought and confirmed FIRST. Same 48-hour
 //          check-in cutoff as cancelBooking.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { isValidPan, PAN_ERROR } = require('./_tds');
 const bankCheck = require('./_bank-check');
 const { neon } = require('@neondatabase/serverless');
@@ -2747,7 +2748,11 @@ module.exports = async (req, res) => {
       const orderId = Number(req.query.hostCancelPreview) || 0;
       const loaded = await loadCancellableOrder(orderId, true);
       const reasons = Object.keys(HOST_CANCEL_REASONS).map(code => ({ code, label: HOST_CANCEL_REASONS[code] }));
-      if (loaded.error) return res.status(200).json({ canCancel: false, message: loaded.error, reasons });
+      // Which cancellation policy applies (shown to the host alongside the impact).
+      let isExperience = false;
+      try { isExperience = ((await sql`SELECT l.listing_type FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0] || {}).listing_type === 'experience'; }
+      catch (e) { /* stays policy */ }
+      if (loaded.error) return res.status(200).json({ canCancel: false, message: loaded.error, reasons, isExperience });
       const used = await hostCancellationsLastYear(sql, loaded.guest.host_id);
       const held = (await sql`SELECT amount FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
       const couponAmount = held ? Number(held.amount) : await cancellationCouponAmount(loaded.order, orderId);
@@ -2757,7 +2762,7 @@ module.exports = async (req, res) => {
         cancellationsUsed: used, cancellationsLimit: HOST_CANCELLATIONS_PER_YEAR,
         couponAmount, couponPaid: !!held, canDeductFromPayout: false, // the host always pays the coupon before cancelling
         couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES,
-        reasons
+        reasons, isExperience
       });
     } catch (err) {
       console.error('hostCancelPreview failed:', err);

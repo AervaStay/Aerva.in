@@ -37,6 +37,7 @@
 // host without an actual booking. See redactContactInfo() below for the
 // message-filtering approach and its real, worth-knowing limitations.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { daysSinceCheckout, submissionOpen, reviewWindowState, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
@@ -53,6 +54,7 @@ const emailOtp = require('./_email-otp');
 const photoGuard = require('./_photo-guard');
 const { raiseDispute, openDisputeFor, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
 const support = require('./_support');
+const supportChat = require('./_support-chat');
 // The problem-report card at the top of a booking's thread.
 async function disputeCard(sql, conversationId, role) {
   try {
@@ -221,7 +223,8 @@ module.exports = async (req, res) => {
   {
     const st = await sessionStatus(sql, session);
     if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.' });
-    if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
+    if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. Please contact hello@aerva.in.', suspended: true });
+      if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
     if (st !== 'ok') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
   }
 
@@ -388,6 +391,25 @@ module.exports = async (req, res) => {
         } catch (err) {
           if (!err.isUserFacing) console.error(mode + ' failed:', err);
           return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this right now. Please try again.' });
+        }
+      }
+
+      // GET ?mode=myHiddenListings — listings Aerva keeps away from this account (the site hides them)
+      if (mode === 'myHiddenListings') {
+        return res.status(200).json({ ids: await require('./_support-actions').blockedListingIds(sql, guestId) });
+      }
+
+      // ---- Aerva Support chat in Messages (_support-chat.js) ----
+      // GET ?mode=supportChat        — the whole conversation and where it stands
+      // GET ?mode=supportChatSummary — preview + unseen replies, for the conversation list
+      if (mode === 'supportChat' || mode === 'supportChatSummary') {
+        if (actingCtx) return res.status(403).json({ error: 'Aerva Support is reached from your own account.' });
+        try {
+          if (mode === 'supportChatSummary') return res.status(200).json(await supportChat.summary(sql, guestId));
+          return res.status(200).json(await supportChat.getThread(sql, guestId));
+        } catch (err) {
+          if (!err.isUserFacing) console.error(mode + ' failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load Aerva Support right now.' });
         }
       }
 
@@ -970,6 +992,20 @@ module.exports = async (req, res) => {
           // POST { mode: 'supportFeedback', ref, resolved, rating?, comment? } — is it resolved? (closes, or opens again)
           if (mode === 'supportFeedback') return res.status(200).json({ request: await support.submitFeedback(sql, { guestId, ref: b.ref, resolved: b.resolved !== false, rating: b.rating, comment: b.comment }) });
           return res.status(200).json({ request: await support.closeRequest(sql, { guestId, ref: b.ref, rating: b.rating, comment: b.comment }) });
+        } catch (err) {
+          if (!err.isUserFacing) console.error(mode + ' failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now. Please try again, or email hello@aerva.in.' });
+        }
+      }
+
+      // POST { mode: 'supportChatSend', text } — to the assistant, or to the team once handed over
+      // POST { mode: 'supportChatHandoff', how: 'chat'|'callback', phone?, note? } — "Speak to an agent"
+      if (mode === 'supportChatSend' || mode === 'supportChatHandoff') {
+        if (actingCtx) return res.status(403).json({ error: 'Aerva Support is reached from your own account.' });
+        try {
+          const b = req.body || {};
+          if (mode === 'supportChatSend') return res.status(200).json(await supportChat.send(sql, guestId, b.text));
+          return res.status(200).json(await supportChat.handoff(sql, guestId, { note: b.note, how: b.how === 'callback' ? 'callback' : 'chat', phone: typeof b.phone === 'string' ? b.phone : '' }));
         } catch (err) {
           if (!err.isUserFacing) console.error(mode + ' failed:', err);
           return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now. Please try again, or email hello@aerva.in.' });

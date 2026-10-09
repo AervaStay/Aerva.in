@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — Aerva</title>
 <meta name="robots" content="noindex, nofollow">
+<script src="aerva-env.js?v=2026-10-09a"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <!-- Only what this page actually loads: its own files, Leaflet (unpkg),
      Google Fonts, the API, map tiles, and listing photos from Aerva's own
@@ -71,6 +72,8 @@
   .sup-us{background:#f4ecdc; color:#7c6030;}
   .sup-safety{background:#a3402f; color:#fff;}
   .sup-row{cursor:pointer;} .sup-row:hover td{background:#faf6f0;}
+  .sup-flag.sup-wa{background:#e3f4e8; color:#1f7a3d;}
+  .sup-msg.sup-transcript{background:#fbf8f2; border:1px dashed #d8c8a8;}
   .sup-msg{border:1px solid #e6ded3; border-radius:10px; padding:10px 14px; margin:10px 0; font-size:14px;}
   .sup-msg.user{background:#f7f3ee; border-color:transparent;}
   .sup-msg.support{border-left:3px solid #a9884f;}
@@ -266,6 +269,101 @@
   .job-quiet-title{ margin:16px 0 4px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.6; }
   .job-quiet{ font-size:14px; opacity:0.75; padding:2px 0; }
   .job-row-hit{ border-left:4px solid #a9884f !important; padding-left:10px !important; background:#fdf9f0; }
+
+
+  .env-badge{display:inline-block; vertical-align:middle; margin-left:10px; font:600 11px/1 sans-serif; letter-spacing:0.08em; text-transform:uppercase; padding:5px 9px; border-radius:999px;}
+  .env-badge.is-production{background:#1c1a17; color:#f4eadc;}
+  .env-badge.is-uat{background:#7a2e25; color:#fff;}
+  .env-badge.is-local{background:#e7dfd2; color:#5a5349;}
+  .db-row{border-top:1px solid #efe7da; padding:12px 14px; font-size:13.5px;}
+  .db-row:first-child{border-top:0;}
+  .db-row-head{display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center;}
+  .db-row-head code{font-size:13px; font-weight:600;}
+  .db-row pre{background:#faf6ef; border:1px solid #eee3d1; padding:10px 12px; font-size:12px; line-height:1.5; overflow:auto; max-height:320px; margin:10px 0 0; white-space:pre;}
+  .db-warn{color:#93392b; font-size:12.5px;}
+  .db-apply{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:14px 0 18px;}
+
+  .role-badge{display:inline-block; font:600 10.5px/1 sans-serif; letter-spacing:0.08em; text-transform:uppercase; padding:4px 8px; border-radius:999px; background:#e7dfd2; color:#5a5349; margin-right:4px; vertical-align:1px;}
+  .role-badge.is-admin{background:#1c1a17; color:#f4eadc;} .role-badge.is-reviewer{background:#e6eef6; color:#28507a;} .role-badge.is-agent{background:#e3f4e8; color:#1f7a3d;}
+  .ap-card{border:1px solid #e0d5c0; background:#fff; padding:14px 16px; margin:0 0 12px;}
+  .ap-card.is-pending{border-color:#1c1a17;}
+  .ap-head{display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; margin-bottom:8px; font-size:14px;}
+  .ap-grid{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.3fr); gap:14px;}
+  @media (max-width:760px){ .ap-grid{grid-template-columns:1fr;} }
+  .ap-what{font-size:14px; font-weight:600; margin-bottom:8px;}
+  .ap-label{font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--gold-deep); margin:8px 0 3px;}
+  .ap-text{font-size:13.5px; white-space:pre-wrap;}
+  .ap-summary{font-size:13.5px; line-height:1.55; background:#faf6ef; border:1px solid #eee3d1; padding:10px 12px; white-space:pre-wrap;}
+  .ap-decide{margin-top:10px;}
+  .pp-box{border-style:dashed;}
+  .lk-form select{padding:8px 10px; border:1px solid #ccc; font:inherit; font-size:14px;}
+  .lk-form input[type=email], .lk-form input[type=text]{padding:8px 10px; border:1px solid #ccc; font:inherit; font-size:14px; min-width:220px;}
+  /* ---------- Lookup (Oct 2026) ---------- */
+  .lk-search{display:flex; gap:8px; margin:14px 0 18px; max-width:760px;}
+  .lk-search input{flex:1; min-width:0; padding:12px 14px; font-size:15px; border:1px solid #cdbfa8; font-family:inherit; border-radius:0;}
+  .lk-search input:focus{outline:2px solid var(--gold); outline-offset:-1px;}
+  .lk-sec{margin:0 0 22px;}
+  .lk-sec h3{font-size:16px; margin:0 0 8px; display:flex; gap:8px; align-items:baseline;}
+  .lk-sec h3 small{font-family:sans-serif; font-size:12px; opacity:0.6;}
+  .lk-list{border:1px solid #e0d5c0; background:#fff;}
+  .lk-item{display:grid; grid-template-columns:minmax(0,2.2fr) minmax(0,1.6fr) minmax(0,1.2fr) auto; gap:4px 14px; align-items:center;
+           padding:10px 14px; border-top:1px solid #efe7da; cursor:pointer; font-size:13.5px; background:none; width:100%; text-align:left; border-left:0; border-right:0; border-bottom:0; font-family:inherit; color:inherit;}
+  .lk-item:first-child{border-top:0;}
+  .lk-item:hover, .lk-item:focus-visible{background:#faf6ef;}
+  .lk-item strong{font-weight:600;}
+  .lk-sub{display:block; font-size:12px; opacity:0.62; margin-top:2px; overflow:hidden; text-overflow:ellipsis;}
+  .lk-go{font-size:12px; color:var(--gold-deep); white-space:nowrap;}
+  .lk-chip{display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; letter-spacing:0.04em; text-transform:uppercase; background:#eef3ec; color:#2f6b3a; white-space:nowrap;}
+  .lk-chip.is-cancelled, .lk-chip.is-refunded, .lk-chip.is-suspended, .lk-chip.is-blocked, .lk-chip.is-removed, .lk-chip.is-deleted, .lk-chip.is-failed{background:#f8e9e6; color:#93392b;}
+  .lk-chip.is-completed, .lk-chip.is-deactivated, .lk-chip.is-pending, .lk-chip.is-rejected, .lk-chip.is-sent, .lk-chip.is-processed{background:#f0ece5; color:#5a5349;}
+  .lk-chip.is-due, .lk-chip.is-new, .lk-chip.is-creating{background:#fbf2dc; color:#7a5a12;}
+  .lk-empty{padding:14px; font-size:13px; opacity:0.65; background:#fff; border:1px dashed #e0d5c0;}
+  .lk-back{background:none; border:0; padding:0; color:var(--gold-deep); cursor:pointer; font-size:13px; margin:0 0 12px; font-family:inherit;}
+  .lk-head{display:flex; flex-wrap:wrap; gap:8px 14px; align-items:baseline; margin-bottom:4px;}
+  .lk-head h2{margin:0; font-size:24px;}
+  .lk-meta{font-size:13px; opacity:0.7; margin:0 0 16px;}
+  .lk-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px; margin-bottom:18px;}
+  .lk-card{border:1px solid #e0d5c0; background:#fffdf9; padding:14px 16px;}
+  .lk-card h4{margin:0 0 8px; font-size:14px; letter-spacing:0.02em;}
+  .lk-kv{display:flex; justify-content:space-between; gap:12px; font-size:13px; padding:3px 0;}
+  .lk-kv > span:first-child{opacity:0.62; flex:0 0 auto;}
+  .lk-kv > span:last-child{text-align:right; word-break:break-word; min-width:0;}
+  .lk-kv code{font-size:12px;}
+  .lk-kv.is-total{border-top:1px solid #e0d5c0; margin-top:4px; padding-top:7px; font-weight:600;}
+  .lk-links{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;}
+  .lk-link{background:none; border:1px solid #d9cbb2; padding:5px 10px; font-size:12px; cursor:pointer; color:inherit; font-family:inherit;}
+  .lk-link:hover{border-color:var(--ink);}
+  .lk-actions{border:1px solid #1c1a17; background:#fff; padding:16px 18px; margin:0 0 18px;}
+  .lk-actions > h3{margin:0 0 4px; font-size:17px;}
+  .lk-actions > p{font-size:12.5px; opacity:0.7; margin:0 0 12px;}
+  .lk-act{border-top:1px solid #eee5d8; padding:14px 0 4px;}
+  .lk-act:first-of-type{border-top:0; padding-top:4px;}
+  .lk-act h4{margin:0 0 6px; font-size:14.5px;}
+  .lk-act p.lk-hint{font-size:12.5px; opacity:0.72; margin:0 0 10px; line-height:1.5;}
+  .lk-form{display:flex; flex-wrap:wrap; gap:10px 16px; align-items:flex-end; font-size:13px;}
+  .lk-form label{display:flex; flex-direction:column; gap:4px;}
+  .lk-form label.lk-check{flex-direction:row; align-items:center; gap:6px;}
+  .lk-form input[type=number]{width:120px; padding:8px 10px; border:1px solid #ccc; font-size:14px; font-family:inherit;}
+  .lk-form textarea{width:100%; min-height:56px; padding:8px 10px; border:1px solid #ccc; font-size:13.5px; font-family:inherit; box-sizing:border-box; resize:vertical;}
+  .lk-form .lk-wide{flex:1 1 100%;}
+  .lk-btn{padding:9px 18px; font-size:13px; border:none; cursor:pointer; background:#1c1a17; color:#f4eadc; font-family:inherit;}
+  .lk-btn.is-danger{background:#a3402f; color:#fff;}
+  .lk-btn.is-ghost{background:transparent; color:#1c1a17; border:1px solid #bfb19a;}
+  .lk-btn:disabled{opacity:0.5; cursor:default;}
+  .lk-preview{margin-top:10px; font-size:13px; background:#f7f2ea; padding:10px 12px; display:none;}
+  .lk-msg{font-size:13px; margin-top:8px; min-height:1em;}
+  .lk-msg.is-err{color:#a3402f;} .lk-msg.is-ok{color:#2f6b3a;}
+  .lk-hist{font-size:12.5px; border:1px solid #e0d5c0; background:#fff;}
+  .lk-hist div{padding:7px 12px; border-top:1px solid #f0e9de; display:grid; grid-template-columns:150px 1fr; gap:10px;}
+  .lk-hist div:first-child{border-top:0;}
+  .lk-hist span:first-child{opacity:0.6;}
+  @media (max-width:760px){
+    .lk-item{grid-template-columns:1fr auto; }
+    .lk-item > :nth-child(2), .lk-item > :nth-child(3){grid-column:1 / 2;}
+    .lk-item > .lk-go{grid-column:2; grid-row:1;}
+    .lk-hist div{grid-template-columns:1fr;}
+    .lk-search input{font-size:16px;}
+  }
 </style>
 <!-- Free OpenStreetMap/Leaflet embed, no API key or billing needed — same
      approach already used on manage-listing.html — so an admin can see
@@ -339,9 +437,19 @@
 <div class="wrap" id="mainView" style="display:none;">
   <h1>Aerva Admin</h1>
   <p id="adminGreeting" style="font-size:13px; opacity:0.7; margin-top:-16px; margin-bottom:20px;"></p>
+  <script>
+    // Production or UAT, always visible at the top of Admin.
+    (function(){ var e = window.AERVA_ENV || 'production'; var el = document.createElement('span');
+      el.className = 'env-badge is-' + e; el.textContent = e === 'production' ? 'Production' : e === 'uat' ? 'UAT' : 'Local';
+      var h = document.currentScript.previousElementSibling.previousElementSibling; if(h && h.tagName === 'H1') h.appendChild(el); })();
+  </script>
   <div class="admin-layout">
   <nav class="admin-sidebar" aria-label="Admin sections">
     <div class="admin-sidebar-nav">
+      <div class="nav-group" role="group" aria-label="Find">
+        <div class="nav-group-label">Find</div>
+        <div class="tab-row"><button class="tab-btn" id="tabLookupBtn" onclick="switchTab('lookup')">Lookup<span class="tab-count" data-count="lookup" hidden></span></button><button type="button" class="tab-info" data-info="lookup" aria-label="What Lookup is for">i</button></div>
+      </div>
       <div class="nav-group" role="group" aria-label="Listings">
         <div class="nav-group-label">Listings</div>
         <div class="tab-row"><button class="tab-btn active" id="tabListingsBtn" onclick="switchTab('listings')">Pending Listings<span class="tab-count" data-count="listings" hidden></span></button><button type="button" class="tab-info" data-info="listings" aria-label="What Pending Listings is for">i</button></div>
@@ -357,6 +465,7 @@
       <div class="nav-group" role="group" aria-label="Guests and support">
         <div class="nav-group-label">Guests and support</div>
         <div class="tab-row"><button class="tab-btn" id="tabSupportBtn" onclick="switchTab('support')">Support<span class="tab-count" data-count="support" hidden></span></button><button type="button" class="tab-info" data-info="support" aria-label="What Support is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabApprovalsBtn" onclick="switchTab('approvals')">Approvals<span class="tab-count" data-count="approvals" hidden></span></button><button type="button" class="tab-info" data-info="approvals" aria-label="What Approvals is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabTrustBtn" onclick="switchTab('trust')">Guest Safety<span class="tab-count" data-count="trust" hidden></span></button><button type="button" class="tab-info" data-info="trust" aria-label="What Guest Safety is for">i</button></div>
       </div>
       <div class="nav-group" role="group" aria-label="Reviews and badges">
@@ -368,6 +477,8 @@
         <div class="nav-group-label">System</div>
         <div class="tab-row"><button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs<span class="tab-count" data-count="batch" hidden></span></button><button type="button" class="tab-info" data-info="batch" aria-label="What Batch Jobs is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabTrafficBtn" onclick="switchTab('traffic')">Traffic<span class="tab-count" data-count="traffic" hidden></span></button><button type="button" class="tab-info" data-info="traffic" aria-label="What Traffic is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabTeamBtn" onclick="switchTab('team')">Team<span class="tab-count" data-count="team" hidden></span></button><button type="button" class="tab-info" data-info="team" aria-label="What Team is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabDbBtn" onclick="switchTab('db')">Database updates<span class="tab-count" data-count="migrations" hidden></span></button><button type="button" class="tab-info" data-info="db" aria-label="What Database updates is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabAuditBtn" onclick="switchTab('audit')">Audit Log<span class="tab-count" data-count="audit" hidden></span></button><button type="button" class="tab-info" data-info="audit" aria-label="What Audit Log is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabPoliciesBtn" onclick="switchTab('policies')">Policies<span class="tab-count" data-count="policies" hidden></span></button><button type="button" class="tab-info" data-info="policies" aria-label="What Policies is for">i</button></div>
       </div>
@@ -377,6 +488,39 @@
   </nav>
 
   <div class="admin-content">
+
+  <div id="approvalsView" style="display:none;">
+    <h2>Approvals</h2>
+    <p style="font-size:13.5px; opacity:0.75; max-width:820px; margin-top:-6px;">Proposed by customer representatives, decided by a reviewer or admin. Approving carries the action out at once (refunds go through Razorpay with the usual checks). Nobody can approve their own proposal.</p>
+    <div class="tds-bar"><label>Show <select id="apStatus" onchange="loadApprovals()"><option value="pending">Waiting for approval</option><option value="done">Decided</option><option value="all">All</option></select></label></div>
+    <h3 style="margin:18px 0 6px;">Price changes</h3>
+    <p class="lk-sub" style="margin:0 0 10px;" id="apPriceRules">A host's unusual change on a live listing waits here; guests keep seeing the current price until it is approved.</p>
+    <div id="apPriceBody"><p class="lk-empty">Loading…</p></div>
+    <h3 style="margin:22px 0 6px;">Proposed actions</h3>
+    <div id="apBody"><p class="lk-empty">Loading…</p></div>
+  </div>
+
+  <div id="teamView" style="display:none;">
+    <h2>Team</h2>
+    <p style="font-size:13.5px; opacity:0.75; max-width:820px; margin-top:-6px;"><strong>Admin</strong>: everything. <strong>Reviewer</strong>: Support, Lookup and Approvals — approves or rejects proposed actions. <strong>Customer representative</strong>: Support and Lookup — answers requests, calls customers back and proposes actions. New team members sign up on the login page with the admin secret and start as customer representatives.</p>
+    <div id="teamBody"><p class="lk-empty">Loading…</p></div>
+  </div>
+
+  <div id="dbView" style="display:none;">
+    <h2>Database updates <span id="dbEnv"></span></h2>
+    <p style="font-size:13.5px; opacity:0.75; max-width:820px; margin-top:-6px;">Every change to the database is a <code>.sql</code> file in the <code>migrations/</code> folder, released with the code. Apply pending files here: on <strong>UAT</strong> first, test, then on <strong>production</strong> after merging <code>uat</code> into <code>main</code>. Files run in name order, each in one transaction — if anything in a file fails, nothing in it is applied and later files wait. You never need to run SQL in Neon.</p>
+    <div id="dbBody"><p class="lk-empty">Loading…</p></div>
+  </div>
+
+  <div id="lookupView" style="display:none;">
+    <h2>Lookup</h2>
+    <p style="font-size:13.5px; opacity:0.75; max-width:800px; margin-top:-6px;">Search by <strong>confirmation code</strong>, <strong>booking ID</strong>, Razorpay <strong>order or payment ID</strong>, <strong>email</strong>, <strong>phone number</strong>, <strong>listing name</strong>, city or ID. Open a result to act on the booking, the guest or the listing. Every action needs a reason and is recorded in the Audit Log.</p>
+    <form class="lk-search" onsubmit="event.preventDefault(); lkSearch();">
+      <input type="search" id="lkQ" autocomplete="off" placeholder="e.g. 43189228 · pay_Qx81… · gita@gmail.com · 98765 43210 · Boho Vibes">
+      <button type="submit" class="process-btn">Search</button>
+    </form>
+    <div id="lkBody"></div>
+  </div>
 
   <div id="listingsView">
     <div id="listingsContainer"><p class="empty">Loading…</p></div>
@@ -659,7 +803,7 @@
 
 <script>
   // API_BASE should match the Vercel deployment running your backend functions.
-  const API_BASE = 'https://aerva-in.vercel.app';
+  const API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
   const SESSION_STORAGE_KEY = 'aerva_admin_session';
   let sessionToken = localStorage.getItem(SESSION_STORAGE_KEY) || '';
   let currentAdmin = null;
@@ -873,7 +1017,8 @@
     greeting.innerHTML = (who ? 'Logged in as ' + escAdmin(who) : 'Logged in') +
       ' — <a href="#" onclick="logout(); return false;" style="color:#8a6c39;">Log out</a>' +
       ' · <a href="#" onclick="signOutEverywhere(); return false;" style="color:#8a6c39;">Sign out everywhere</a>';
-    loadListings();
+    // The role decides which tabs show (applyRole, in the Approvals script below).
+    if(typeof window.applyRole === 'function') window.applyRole(); else document.addEventListener('DOMContentLoaded', () => window.applyRole());
     loadAdminSummary(true);
   }
 
@@ -2140,6 +2285,10 @@
   }
   // ---- What each section is for: the "i" beside every tab ----
   const TAB_INFO = {
+    approvals: ['Approvals', 'Unusual price changes from hosts (a sharp drop, a very low price or a very large discount), held until approved. And actions a customer representative proposed — refunds, cancellations, deposit refunds, reports, blocks — each with a summary of the conversation and what it would do. A reviewer or admin approves (it is carried out at once) or rejects with a note. Nobody approves their own proposal.'],
+    team: ['Team', 'Who has access to Admin and their role: Admin (everything), Reviewer (approves proposed actions; Support, Lookup) or Customer representative (Support, Lookup, proposes actions). A changed role signs that person out so it applies at once.'],
+    db: ['Database updates', 'Changes to the database ship as .sql files in the migrations/ folder with the code. Apply them here — first on UAT, then on production after the release — instead of running SQL in Neon. Each file runs in one transaction: all of it or none of it.'],
+    lookup: ['Lookup', 'Find a booking, guest or listing by confirmation code, booking ID, Razorpay order or payment ID, email, phone number, listing name, city or ID. Open it to cancel a booking with a refund, refund an amount without cancelling, suspend or sign out an account, or block a listing. Every action needs a reason and is kept in the Audit Log.'],
     listings: ['Pending Listings', 'New listings and room changes waiting for review. Check the photos, location, price and description, then Approve (it goes live and the host is emailed) or Reject with a reason (the host is emailed and can fix and resubmit).'],
     live: ['Live Listings', 'Every approved listing. Block pauses one (reversible); Remove takes it down. Also here: photos removed for showing contact details (with Restore), new photos taken far from the pin, and a photo test.'],
     compliance: ['Compliance', 'Check every approved listing against one requirement. Listings that fail get a flag and 14 days to fix it; the daily job blocks them after the deadline. Open flags clear when the host fixes and saves.'],
@@ -2221,6 +2370,20 @@
     currentTab = tab;
     hideTabTip();
     loadAdminSummary();
+    if(window.ADMIN_ROLE && window.ADMIN_ROLE !== 'admin' && !(window.ROLE_TABS[window.ADMIN_ROLE] || []).includes(tab)) tab = 'support';
+    currentTab = tab;
+    document.getElementById('tabApprovalsBtn').classList.toggle('active', tab === 'approvals');
+    document.getElementById('approvalsView').style.display = tab === 'approvals' ? 'block' : 'none';
+    if(tab === 'approvals') loadApprovals();
+    document.getElementById('tabTeamBtn').classList.toggle('active', tab === 'team');
+    document.getElementById('teamView').style.display = tab === 'team' ? 'block' : 'none';
+    if(tab === 'team') loadTeam();
+    document.getElementById('tabDbBtn').classList.toggle('active', tab === 'db');
+    document.getElementById('dbView').style.display = tab === 'db' ? 'block' : 'none';
+    if(tab === 'db') loadDbUpdates();
+    document.getElementById('tabLookupBtn').classList.toggle('active', tab === 'lookup');
+    document.getElementById('lookupView').style.display = tab === 'lookup' ? 'block' : 'none';
+    if(tab === 'lookup') setTimeout(() => { const i = document.getElementById('lkQ'); if(i && !lkState.detail) i.focus(); }, 0);
     document.getElementById('tabListingsBtn').classList.toggle('active', tab === 'listings');
     document.getElementById('tabLiveBtn').classList.toggle('active', tab === 'live');
     document.getElementById('tabVerificationsBtn').classList.toggle('active', tab === 'verifications');
@@ -2550,7 +2713,7 @@
         + d.tickets.map(t => `<tr class="sup-row" onclick="openSupport(${Number(t.id)})">
             <td><strong>${escAdmin(t.ref)}</strong><div class="tds-sub">${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}</div></td>
             <td style="white-space:normal; min-width:220px;">${t.category === 'safety' ? '<span class="sup-flag sup-safety">Safety</span>' : ''}${escAdmin(t.subject)}
-              <div>${t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : ''}${t.awaiting_us ? '<span class="sup-flag sup-us">Awaiting our reply</span>' : ''}${t.callback_phone ? '<span class="sup-flag">Call back: ' + escAdmin(t.callback_phone) + '</span>' : ''}${t.feedback_rating ? '<span class="sup-flag" style="background:#e9f2ea; color:#2f6b3a;">' + '★'.repeat(Number(t.feedback_rating)) + '</span>' : ''}${t.auto_closed ? '<span class="sup-flag">No feedback</span>' : ''}${t.order_id ? '<span class="sup-flag">Booking #' + Number(t.order_id) + '</span>' : ''}${t.listing_id ? '<span class="sup-flag">Listing #' + Number(t.listing_id) + '</span>' : ''}</div></td>
+              <div>${t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : ''}${t.awaiting_us ? '<span class="sup-flag sup-us">Awaiting our reply</span>' : ''}${t.channel === 'chat' ? '<span class="sup-flag sup-wa">Chat</span>' : ''}${t.callback_phone ? '<span class="sup-flag sup-late">Call back: ' + escAdmin(t.callback_phone) + '</span>' : ''}${t.feedback_rating ? '<span class="sup-flag" style="background:#e9f2ea; color:#2f6b3a;">' + '★'.repeat(Number(t.feedback_rating)) + '</span>' : ''}${t.auto_closed ? '<span class="sup-flag">No feedback</span>' : ''}${t.order_id ? '<span class="sup-flag">Booking #' + Number(t.order_id) + '</span>' : ''}${t.listing_id ? '<span class="sup-flag">Listing #' + Number(t.listing_id) + '</span>' : ''}</div></td>
             <td>${escAdmin(t.person_name || '—')}<div class="tds-sub">${escAdmin(t.person_email || '')}</div></td>
             <td>${escAdmin((labels[t.status]) || t.status)}</td>
             <td>${escAdmin(supDate(t.created_at))}</td>
@@ -2576,7 +2739,8 @@
     const box = document.getElementById('supDetail');
     const day = (v) => v ? String(v).slice(0, 10) : '';
     const facts = [
-      `<div><strong>Person</strong><br>${escAdmin(t.person_name || 'Deleted account')}<br>${escAdmin(t.person_email || '')}${t.person_phone ? '<br>' + escAdmin(t.person_phone) : ''}${t.callback_phone ? '<br><strong style="color:#a3402f;">Asked for a call back: ' + escAdmin(t.callback_phone) + '</strong>' : ''}</div>`,
+      `<div><strong>Person</strong><br>${escAdmin(t.person_name || 'Deleted account')}<br>${escAdmin(t.person_email || '')}${t.person_phone ? '<br>' + escAdmin(t.person_phone) : ''}${t.channel === 'chat' ? '<br><span class="sup-flag sup-wa">Chat</span> <span class="tds-sub">Your replies appear in their Aerva Support chat in Messages (and by email).</span>' : ''}${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them back: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>`,
+      t.timings ? `<div><strong>Timeline</strong><br>First reply: ${t.timings.firstResponseMinutes != null ? escAdmin(supDur(t.timings.firstResponseMinutes)) : `<span style="color:${new Date(t.timings.firstResponseDueAt) < new Date() ? '#a3402f' : 'inherit'};">due by ${escAdmin(supDate(t.timings.firstResponseDueAt))}</span>`}<br>Resolved: ${t.timings.resolvedMinutes != null ? 'after ' + escAdmin(supDur(t.timings.resolvedMinutes)) : '—'}</div>` : '',
       `<div><strong>Request</strong><br>${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}<br>Status: ${escAdmin(labels[t.status] || t.status)}<br>Raised ${escAdmin(supDate(t.created_at))}${t.first_response_at ? '<br>First reply ' + escAdmin(supDate(t.first_response_at)) : '<br><span style="color:#a3402f;">No reply yet</span>'}</div>`,
       t.order_id ? `<div><strong>Booking #${Number(t.order_id)}</strong>${t.confirmation_code ? ' · ' + escAdmin(t.confirmation_code) : ''}<br>${escAdmin(t.suite_name || '')}<br>${escAdmin(day(t.arrival))} → ${escAdmin(day(t.departure))}<br>${escAdmin(t.booking_status || '')}${t.total != null ? ' · ₹' + Number(t.total).toLocaleString('en-IN') : ''}${t.booking_guest_id != null && Number(t.booking_guest_id) !== Number(t.guest_id) ? '<br><em>Raised by the host of this booking</em>' : ''}</div>` : '',
       t.property_name ? `<div><strong>Listing${t.listing_id ? ' #' + Number(t.listing_id) : ''}</strong><br>${escAdmin(t.property_name)}<br>${escAdmin(t.listing_status || '')}</div>` : ''
@@ -2599,7 +2763,10 @@
       if(m.sender === 'system') return `<div class="sup-msg system">${escAdmin(m.body)} · ${escAdmin(supDate(m.created_at))}</div>`;
       const cls = m.internal ? 'internal' : m.sender;
       const who = m.sender === 'user' ? (t.person_name || 'The person') : (m.internal ? 'Internal note' : 'Aerva Support') + (m.admin_email ? ' — ' + m.admin_email : '');
-      return `<div class="sup-msg ${cls}"><strong>${escAdmin(who)}</strong> <span class="tds-sub">${escAdmin(supDate(m.created_at))}</span>
+      if(m.via === 'chat-transcript') return `<div class="sup-msg user sup-transcript"><strong>Conversation with the assistant</strong> <span class="tds-sub">handed over ${escAdmin(supDate(m.created_at))}</span>
+        <div class="sup-msg-body">${escAdmin(m.body)}</div></div>`;
+      const via = m.via === 'chat' ? ' <span class="sup-flag sup-wa">Chat</span>' : '';
+      return `<div class="sup-msg ${cls}"><strong>${escAdmin(who)}</strong>${via} <span class="tds-sub">${escAdmin(supDate(m.created_at))}</span>
         <div class="sup-msg-body">${escAdmin(m.body)}</div>${(m.attachments || []).length ? '<small>' + fileLinks(m.attachments) + '</small>' : ''}</div>`;
     }).join('');
     // The case record: current version, form for the next one, and every earlier version.
@@ -2635,9 +2802,10 @@
       <h3 style="margin:6px 0 2px;">${escAdmin(t.ref)} — ${escAdmin(t.subject)}</h3>
       <div class="sup-facts">${facts}</div>
       ${caseBox}
+      <div id="supPropose"></div>
       ${msgs}
       <div class="sup-reply" style="margin-top:16px;">
-        <textarea id="supText" placeholder="Reply to the person (emailed to them), or an internal note"></textarea>
+        <textarea id="supText" placeholder="${t.channel === 'chat' ? 'Reply to the person (appears in their Aerva Support chat, and is emailed), or an internal note' : 'Reply to the person (emailed to them), or an internal note'}"></textarea>
         <div class="tds-bar">
           <label>Status after this
             <select id="supNext"><option value="">${t.status === 'closed' ? 'Leave closed' : 'Automatic (a reply → waiting for the person)'}</option>
@@ -2648,7 +2816,16 @@
         </div>
         <p id="supErr" class="error"></p>
       </div>`;
+    // Propose an action for a reviewer, from the request itself.
+    if(typeof mountPropose === 'function' && (t.order_id || t.listing_id || t.guest_id)) {
+      mountPropose(document.getElementById('supPropose'), { ticketId: t.id, orderId: t.order_id || null,
+        listingId: t.order_id ? null : (t.listing_id || null), guestId: t.order_id || t.listing_id ? null : (t.guest_id || null),
+        booking: t.order_id ? { status: t.booking_status, deposit: t.deposit_amount, depositStatus: t.deposit_status, refundable: t.refundable, payout: t.payout_amount, fee: t.guest_service_fee } : null,
+        after: () => openSupport(t.id) });
+    }
   }
+  // 75 → "1 h 15 min", 3000 → "2 d 2 h"
+  function supDur(min){ const m = Math.round(Number(min) || 0); if(m < 60) return m + ' min'; if(m < 1440) return Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : ''); return Math.floor(m / 1440) + ' d' + (Math.floor((m % 1440) / 60) ? ' ' + Math.floor((m % 1440) / 60) + ' h' : ''); }
   async function saveCase(id){
     const v = (x) => { const el = document.getElementById(x); return el ? el.value.trim() : ''; };
     const err = document.getElementById('caseErr'); err.textContent = '';
@@ -2667,7 +2844,7 @@
     const err = document.getElementById('supErr'), btn = document.getElementById('supSend');
     err.textContent = '';
     if(!text && !status){ err.textContent = 'Write a reply or note, or choose a status.'; return; }
-    if(text && !internal && !confirm('Send this reply to the person by email?')) return;
+    if(text && !internal && !confirm(document.querySelector('#supDetail .sup-wa') ? 'Send this reply to the person? It appears in their Aerva Support chat and is emailed.' : 'Send this reply to the person by email?')) return;
     btn.disabled = true;
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true),
@@ -3118,5 +3295,594 @@
   }
 </script>
 
+
+<script>
+// ---------- Admin → Lookup ----------
+// One search box for everything a caller might give you; open a result to
+// see it whole and act on it. Server: get-pending-listings.js → _admin-lookup.js.
+const lkState = { q: '', results: null, detail: null, stack: [] };
+const lkEsc = (t) => escAdmin(t == null ? '' : String(t));
+const lkInr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+const lkDay = (d) => { if(!d) return '—'; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d)); const x = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(d); return x.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); };
+const lkWhen = (d) => d ? new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+const lkToday = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
+function lkBookingState(b){
+  if(b.status === 'paid' && String(b.departure).slice(0, 10) < lkToday()) return 'completed';
+  return b.status;
+}
+const LK_WORD = { paid: 'Confirmed', completed: 'Completed', cancelled: 'Cancelled', refunded: 'Refunded', approved: 'Live', blocked: 'Blocked', removed: 'Removed', pending: 'Pending', rejected: 'Rejected', suspended: 'Suspended', deactivated: 'Paused', deleted: 'Deleted', active: 'Active' };
+const lkChip = (st) => `<span class="lk-chip is-${lkEsc(st)}">${lkEsc(LK_WORD[st] || st || '—')}</span>`;
+const lkKv = (k, v, cls) => `<div class="lk-kv${cls ? ' ' + cls : ''}"><span>${k}</span><span>${v}</span></div>`;
+async function lkGet(qs){
+  const r = await fetch(API_BASE + '/api/get-pending-listings?' + qs, { headers: authHeaders() });
+  const d = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(d.error || 'Request failed.');
+  return d;
+}
+async function lkPost(body){
+  const r = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(d.error || 'Request failed.');
+  return d;
+}
+
+async function lkSearch(){
+  const q = document.getElementById('lkQ').value.trim();
+  const body = document.getElementById('lkBody');
+  if(q.length < 2){ body.innerHTML = '<p class="lk-empty">Type at least two characters.</p>'; return; }
+  lkState.q = q; lkState.detail = null; lkState.stack = [];
+  body.innerHTML = '<p class="lk-empty">Searching…</p>';
+  try{
+    lkState.results = await lkGet('lookup=' + encodeURIComponent(q));
+    lkRenderResults();
+  }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
+}
+function lkBookingRow(b){
+  const st = lkBookingState(b);
+  return `<button type="button" class="lk-item" onclick="lkOpen('booking', ${Number(b.id)})">
+      <span><strong>${lkEsc(b.suite_name)}</strong> ${lkChip(st)}<span class="lk-sub">${lkDay(b.arrival)}${String(b.departure).slice(0, 10) !== String(b.arrival).slice(0, 10) ? ' → ' + lkDay(b.departure) : ''} · ${Number(b.guests) || 1} guest${Number(b.guests) === 1 ? '' : 's'}</span></span>
+      <span>${lkEsc(b.booked_name || b.account_name || '—')}<span class="lk-sub">${lkEsc(b.guest_email || '')}</span></span>
+      <span>${b.code ? `<code>${lkEsc(b.code)}</code>` : '—'}<span class="lk-sub">#${Number(b.id)} · ${lkInr(b.total)}</span></span>
+      <span class="lk-go">Open ›</span></button>`;
+}
+function lkGuestRow(g){
+  const st = g.deleted_at ? 'deleted' : (g.account_status || 'active');
+  return `<button type="button" class="lk-item" onclick="lkOpen('guest', ${Number(g.id)})">
+      <span><strong>${lkEsc(g.name || '(no name)')}</strong> ${lkChip(st)}${g.host_id ? ' <span class="lk-chip is-pending">Host</span>' : ''}<span class="lk-sub">Account #${Number(g.id)} · joined ${lkDay(g.created_at)}</span></span>
+      <span>${lkEsc(g.email || '—')}<span class="lk-sub">${lkEsc(g.phone || 'no phone')}</span></span>
+      <span>${Number(g.bookings) || 0} booking${Number(g.bookings) === 1 ? '' : 's'}</span>
+      <span class="lk-go">Open ›</span></button>`;
+}
+function lkListingRow(l){
+  return `<button type="button" class="lk-item" onclick="lkOpen('listing', ${Number(l.id)})">
+      <span><strong>${lkEsc(l.property_name)}</strong> ${lkChip(l.status)}<span class="lk-sub">#${Number(l.id)} · ${lkEsc(l.listing_type === 'experience' ? 'Experience' : 'Stay')}</span></span>
+      <span>${lkEsc([l.area, l.city].filter(Boolean).join(', ') || '—')}</span>
+      <span>${lkEsc(l.host_name || '—')}<span class="lk-sub">${lkEsc(l.host_email || '')}</span></span>
+      <span class="lk-go">Open ›</span></button>`;
+}
+function lkRenderResults(){
+  const d = lkState.results; const body = document.getElementById('lkBody');
+  if(!d){ body.innerHTML = ''; return; }
+  const sec = (title, rows, fn, empty) => `<div class="lk-sec"><h3>${title} <small>${rows.length}${rows.length >= 20 ? '+' : ''}</small></h3>${rows.length ? `<div class="lk-list">${rows.map(fn).join('')}</div>` : `<p class="lk-empty">${empty}</p>`}</div>`;
+  const total = d.bookings.length + d.guests.length + d.listings.length;
+  body.innerHTML = (total ? '' : `<p class="lk-empty">Nothing matched “${lkEsc(d.query)}”. Try the confirmation code, the email, or the last 10 digits of the phone number.</p>`)
+    + (total ? sec('Bookings', d.bookings, lkBookingRow, 'No bookings matched.') + sec('Guests and hosts', d.guests, lkGuestRow, 'No accounts matched.') + sec('Listings', d.listings, lkListingRow, 'No listings matched.') : '');
+  // A single exact hit opens straight away (e.g. a confirmation code).
+  if(d.bookings.length === 1 && (d.matchedAs === 'id' || /^[A-Za-z0-9-]{6,}$/.test(d.query)) && d.bookings[0].code && String(d.bookings[0].code).toUpperCase() === d.query.toUpperCase()) lkOpen('booking', d.bookings[0].id);
+}
+function lkOpen(kind, id, push = true){
+  if(push && lkState.detail) lkState.stack.push(lkState.detail);
+  lkState.detail = { kind, id: Number(id) };
+  lkLoadDetail();
+}
+function lkBack(){
+  lkState.detail = lkState.stack.pop() || null;
+  if(lkState.detail) lkLoadDetail(); else lkRenderResults();
+}
+async function lkLoadDetail(){
+  const body = document.getElementById('lkBody'); const { kind, id } = lkState.detail;
+  body.innerHTML = '<p class="lk-empty">Loading…</p>';
+  try{
+    const qs = kind === 'booking' ? 'lookupBooking=' : kind === 'guest' ? 'lookupGuest=' : 'lookupListing=';
+    const d = await lkGet(qs + id);
+    const back = `<button type="button" class="lk-back" onclick="lkBack()">‹ Back${lkState.stack.length ? '' : lkState.results ? ' to results' : ''}</button>`;
+    body.innerHTML = back + (kind === 'booking' ? lkBookingHtml(d) : kind === 'guest' ? lkGuestHtml(d) : lkListingHtml(d));
+    if(window.lkAfterRender) window.lkAfterRender(kind, d);
+    window.scrollTo({ top: document.getElementById('lookupView').offsetTop - 20, behavior: 'smooth' });
+  }catch(err){ body.innerHTML = `<button type="button" class="lk-back" onclick="lkBack()">‹ Back</button><p class="lk-empty error">${lkEsc(err.message)}</p>`; }
+}
+function lkHistoryHtml(rows){
+  if(!rows || !rows.length) return '';
+  return `<div class="lk-sec"><h3>History <small>latest ${rows.length}</small></h3><div class="lk-hist">${rows.map(h => {
+    const m = h.metadata || {}; const bits = [m.reason, m.amount != null ? lkInr(m.amount) : null, m.percent != null ? m.percent + '%' : null].filter(Boolean).join(' · ');
+    return `<div><span>${lkWhen(h.created_at)}</span><span>${lkEsc(String(h.action).replace(/_/g, ' '))}${h.success === false ? ' <span class="lk-chip is-failed">failed</span>' : ''}${bits ? ` — ${lkEsc(bits)}` : ''}<span class="lk-sub">${lkEsc(h.actor_type || '')}${h.actor_identifier ? ' · ' + lkEsc(h.actor_identifier) : ''}</span></span></div>`;
+  }).join('')}</div></div>`;
+}
+
+// ---- One booking ----
+function lkBookingHtml(d){
+  const b = d.booking, m = d.money || {}; const st = lkBookingState(b);
+  const isExp = b.listing_type === 'experience' || b.order_type === 'experience';
+  const guestName = [b.guest_first_name, b.guest_last_name].filter(Boolean).join(' ') || b.account_name || '—';
+  const refundsHtml = (d.refunds || []).length ? d.refunds.map(r => lkKv(`${lkEsc(r.kind)} · ${lkDay(r.created_at)}`, `${lkInr(Number(r.amount) / 100)} ${lkChip(r.status)}`)).join('') : '<p class="lk-sub">No refunds.</p>';
+  const payoutsHtml = (d.payouts || []).length ? d.payouts.map(p => lkKv(`${lkEsc(p.kind)} payout · ${lkDay(p.created_at)}`, `${lkInr(p.net != null ? p.net : p.gross)} ${lkChip(p.status)}`)).join('') : '<p class="lk-sub">No payout planned yet.</p>';
+  const canCancel = b.status === 'paid';
+  const canRefund = ['paid', 'cancelled'].includes(b.status) && b.razorpay_payment_id && Number(m.refundable) > 0;
+  const sentPayout = (d.payouts || []).some(p => p.kind === 'booking' && !['due', 'failed'].includes(p.status));
+  return `
+    <div class="lk-head"><h2>${lkEsc(b.suite_name)}</h2>${lkChip(st)}${b.code || b.confirmation_code ? ` <code style="font-size:15px;">${lkEsc(b.confirmation_code || b.code)}</code>` : ''}</div>
+    <p class="lk-meta">Booking #${Number(b.id)} · ${isExp ? lkDay(b.arrival) : `${lkDay(b.arrival)} → ${lkDay(b.departure)} · ${Number(b.nights) || 0} night${Number(b.nights) === 1 ? '' : 's'}`} · ${Number(b.guests) || 1} guest${Number(b.guests) === 1 ? '' : 's'} · booked ${lkWhen(b.created_at)}${b.cancellation_reason ? `<br><strong>${lkEsc(b.cancellation_reason)}</strong>${b.cancelled_at ? ' · ' + lkWhen(b.cancelled_at) : ''}` : ''}</p>
+    <div class="lk-grid">
+      <div class="lk-card"><h4>Guest</h4>
+        ${lkKv('Booked for', lkEsc(guestName))}${lkKv('Email', lkEsc(b.guest_email || '—'))}${lkKv('Phone', lkEsc(b.account_phone || '—'))}
+        ${b.account_status ? lkKv('Account', lkChip(b.account_status)) : ''}
+        <div class="lk-links">${b.guest_id ? `<button type="button" class="lk-link" onclick="lkOpen('guest', ${Number(b.guest_id)})">Open guest ›</button>` : '<span class="lk-sub">Booked without an account</span>'}</div></div>
+      <div class="lk-card"><h4>Listing and host</h4>
+        ${lkKv('Listing', `${lkEsc(b.property_name || b.suite_name)} ${b.listing_status ? lkChip(b.listing_status) : ''}`)}${lkKv('Place', lkEsc([b.area, b.city].filter(Boolean).join(', ') || '—'))}
+        ${lkKv('Host', lkEsc(b.host_name || '—'))}${lkKv('Host email', lkEsc(b.host_email || '—'))}${lkKv('Host phone', lkEsc(b.host_phone || '—'))}
+        <div class="lk-links">${b.listing_id ? `<button type="button" class="lk-link" onclick="lkOpen('listing', ${Number(b.listing_id)})">Open listing ›</button>` : ''}${b.host_guest_id ? `<button type="button" class="lk-link" onclick="lkOpen('guest', ${Number(b.host_guest_id)})">Open host account ›</button>` : ''}</div></div>
+      <div class="lk-card"><h4>Money</h4>
+        ${lkKv('Booking price', lkInr(b.subtotal))}${Number(b.gst) ? lkKv('GST', lkInr(b.gst)) : ''}${Number(b.guest_service_fee) ? lkKv('Service fee', lkInr(b.guest_service_fee)) : ''}
+        ${Number(b.deposit_amount) ? lkKv('Deposit', `${lkInr(b.deposit_amount)} <span class="lk-sub" style="display:inline;">${lkEsc(b.deposit_status || '')}</span>`) : ''}
+        ${Number(b.coupon_discount) ? lkKv('Coupon', '−' + lkInr(b.coupon_discount)) : ''}
+        ${lkKv('Charged', lkInr(m.charged), 'is-total')}${lkKv('Refunded so far', lkInr(m.refunded))}${lkKv('Still refundable', `<strong>${lkInr(m.refundable)}</strong>`)}
+        ${lkKv('Host payout', lkInr(b.payout_amount))}${b.refund_percent != null ? lkKv('Refund %', lkEsc(b.refund_percent) + '%') : ''}</div>
+      <div class="lk-card"><h4>Payment</h4>
+        ${lkKv('Razorpay order', `<code>${lkEsc(b.razorpay_order_id || '—')}</code>`)}${lkKv('Payment ID', `<code>${lkEsc(b.razorpay_payment_id || '—')}</code>`)}
+        ${b.charge_currency && b.charge_currency !== 'INR' ? lkKv('Charged in', lkEsc(b.charge_currency)) : ''}${lkKv('Policy', lkEsc(b.cancellation_policy || 'flexible'))}
+        ${(d.linked || []).length ? lkKv('Same payment', d.linked.map(x => `<button type="button" class="lk-link" style="padding:2px 6px;" onclick="lkOpen('booking', ${Number(x.id)})">#${Number(x.id)} ${lkEsc(x.suite_name)}</button>`).join(' ')) : ''}</div>
+    </div>
+    ${(window.ADMIN_ROLE || 'admin') === 'admin' && (canCancel || canRefund) ? `<div class="lk-actions"><h3>Act directly (admin)</h3><p>The guest and the host are emailed, and a note from Aerva is added to their message thread. Refunds go to the original payment method; Razorpay is checked first, so nothing is refunded twice.</p>
+      ${canCancel ? `<div class="lk-act"><h4>Cancel this booking</h4>
+        <p class="lk-hint">The deposit (if still held) is always returned in full. The percentage applies to the booking price and its GST; a part paid by coupon comes back as a coupon. Whatever is not refunded goes to the host, less commission.${(d.linked || []).length ? ' <strong>The linked booking on the same payment is cancelled with it.</strong>' : ''}${sentPayout ? ' <strong style="color:#a3402f;">The host has already been paid for this booking, so it cannot be cancelled here — use “Refund without cancelling”.</strong>' : ''}</p>
+        <div class="lk-form">
+          <label>Refund of booking price (%)<input type="number" id="lkPct" min="0" max="100" step="1" value="100" oninput="lkHidePreview()"></label>
+          <label class="lk-check"><input type="checkbox" id="lkFee" onchange="lkHidePreview()"> Also refund Aerva’s service fee${Number(b.guest_service_fee) ? ` (${lkInr(b.guest_service_fee)})` : ''}</label>
+          <label class="lk-check" title="Use when Aerva cancels for the host (e.g. a host emergency within 48 hours)"><input type="checkbox" id="lkHostCount"> Count as the host’s cancellation</label>
+          <label class="lk-wide">Reason (the guest and host see this)<textarea id="lkCancelReason" maxlength="400" placeholder="e.g. Host emergency — flooding in the area; full refund agreed"></textarea></label>
+          <button type="button" class="lk-btn is-ghost" onclick="lkCancelPreview(${Number(b.id)})">Preview the refund</button>
+          <button type="button" class="lk-btn is-danger" id="lkCancelBtn" onclick="lkCancel(${Number(b.id)})">Cancel booking</button>
+        </div>
+        <div class="lk-preview" id="lkPreview"></div><p class="lk-msg" id="lkCancelMsg"></p></div>` : ''}
+      ${canRefund ? `<div class="lk-act"><h4>Refund without cancelling</h4>
+        <p class="lk-hint">For a problem during or after the stay. The booking stays as it is. Up to <strong>${lkInr(m.refundable)}</strong> can still be refunded.</p>
+        <div class="lk-form">
+          <label>Amount (₹)<input type="number" id="lkAmt" min="1" max="${Number(m.refundable)}" step="1" placeholder="e.g. 1500"></label>
+          <label class="lk-check"><input type="radio" name="lkPayer" value="aerva" checked> Aerva pays</label>
+          <label class="lk-check" ${sentPayout ? 'title="The host has already been paid for this booking"' : ''}><input type="radio" name="lkPayer" value="host" ${sentPayout ? 'disabled' : ''}> Take it from the host’s payout (${lkInr(b.payout_amount)})</label>
+          <label class="lk-wide">Reason (the guest sees this)<textarea id="lkRefundReason" maxlength="400" placeholder="e.g. Air-conditioning was not working on the first night"></textarea></label>
+          <button type="button" class="lk-btn" id="lkRefundBtn" onclick="lkRefund(${Number(b.id)}, ${Number(m.refundable)})">Refund</button>
+        </div><p class="lk-msg" id="lkRefundMsg"></p></div>` : ''}
+    </div>` : ''}
+    <div id="lkPropose"></div>
+    <div id="lkRecords"></div>
+    <div class="lk-grid">
+      <div class="lk-card"><h4>Refunds</h4>${refundsHtml}</div>
+      <div class="lk-card"><h4>Payouts</h4>${payoutsHtml}</div>
+    </div>
+    ${lkHistoryHtml(d.history)}`;
+}
+function lkHidePreview(){ const p = document.getElementById('lkPreview'); if(p) p.style.display = 'none'; }
+function lkCancelBody(id, preview){
+  return { adminCancelBooking: { orderId: id, refundPercent: Number(document.getElementById('lkPct').value), refundFee: document.getElementById('lkFee').checked,
+           countAgainstHost: document.getElementById('lkHostCount').checked, reason: document.getElementById('lkCancelReason').value.trim(), preview } };
+}
+async function lkCancelPreview(id){
+  const box = document.getElementById('lkPreview'), msg = document.getElementById('lkCancelMsg');
+  msg.textContent = ''; msg.className = 'lk-msg';
+  const pct = Number(document.getElementById('lkPct').value);
+  if(!(pct >= 0 && pct <= 100)){ msg.textContent = 'Enter 0 to 100%.'; msg.className = 'lk-msg is-err'; return null; }
+  try{
+    const d = await lkPost(lkCancelBody(id, true));
+    box.innerHTML = `<strong>If you cancel now (${d.percent}%):</strong> guest gets <strong>${lkInr(d.refundCash)}</strong> back to their payment method`
+      + `${d.couponBack ? ` + ${lkInr(d.couponBack)} as a coupon` : ''}`
+      + `${[d.deposit ? `the ${lkInr(d.deposit)} deposit` : '', d.feeRefunded ? `the ${lkInr(d.feeRefunded)} service fee` : ''].filter(Boolean).map((x, i, a) => (i === 0 ? ' (includes ' : ' and ') + x + (i === a.length - 1 ? ')' : '')).join('')}`
+      + `${!d.feeRefunded && d.feeKept ? `; the ${lkInr(d.feeKept)} service fee is kept` : ''}.`
+      + `${d.alreadyRefunded ? ` ${lkInr(d.alreadyRefunded)} refunded earlier counts toward this, so that much less goes out now.` : ''}`
+      + ` Host is paid <strong>${lkInr(d.hostPayout)}</strong>.${(d.items || []).length > 1 ? ` Cancels: ${d.items.map(lkEsc).join(' + ')}.` : ''}`;
+    box.style.display = 'block';
+    return d;
+  }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; return null; }
+}
+async function lkCancel(id){
+  const msg = document.getElementById('lkCancelMsg'); const reason = document.getElementById('lkCancelReason').value.trim();
+  if(reason.length < 5){ msg.textContent = 'Write the reason first — the guest and host are told it.'; msg.className = 'lk-msg is-err'; return; }
+  const p = await lkCancelPreview(id); if(!p) return;
+  if(!confirm(`Cancel this booking and refund ${lkInr(p.refundCash)} to the guest${p.couponBack ? ` (+ ${lkInr(p.couponBack)} coupon)` : ''}? This cannot be undone.`)) return;
+  const btn = document.getElementById('lkCancelBtn'); btn.disabled = true; btn.textContent = 'Cancelling…';
+  try{
+    const d = await lkPost(lkCancelBody(id, false));
+    msg.textContent = `Cancelled. ${lkInr(d.refundCash)} refunded${d.couponBack ? ` + ${lkInr(d.couponBack)} coupon` : ''}. Guest and host emailed.`; msg.className = 'lk-msg is-ok';
+    setTimeout(lkLoadDetail, 1400);
+  }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; btn.disabled = false; btn.textContent = 'Cancel booking'; }
+}
+async function lkRefund(id, max){
+  const msg = document.getElementById('lkRefundMsg'); msg.className = 'lk-msg';
+  const amount = Math.round(Number(document.getElementById('lkAmt').value));
+  const reason = document.getElementById('lkRefundReason').value.trim();
+  const hostPays = (document.querySelector('input[name=lkPayer]:checked') || {}).value === 'host';
+  if(!(amount >= 1)){ msg.textContent = 'Enter the amount.'; msg.className = 'lk-msg is-err'; return; }
+  if(amount > max){ msg.textContent = `At most ${lkInr(max)} can be refunded.`; msg.className = 'lk-msg is-err'; return; }
+  if(reason.length < 5){ msg.textContent = 'Write the reason — the guest is told it.'; msg.className = 'lk-msg is-err'; return; }
+  if(!confirm(`Refund ${lkInr(amount)} to the guest${hostPays ? ', taken from the host’s payout' : ', paid by Aerva'}? The booking stays as it is.`)) return;
+  const btn = document.getElementById('lkRefundBtn'); btn.disabled = true; btn.textContent = 'Refunding…';
+  try{
+    await lkPost({ adminPartialRefund: { orderId: id, amount, reason, hostPays } });
+    msg.textContent = `${lkInr(amount)} refunded. The guest has been emailed.`; msg.className = 'lk-msg is-ok';
+    setTimeout(lkLoadDetail, 1400);
+  }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; btn.disabled = false; btn.textContent = 'Refund'; }
+}
+
+// ---- One account ----
+function lkGuestHtml(d){
+  const g = d.guest; const st = g.deleted_at ? 'deleted' : (g.account_status || 'active');
+  const bookings = d.bookings || [];
+  const upcoming = bookings.filter(b => b.status === 'paid' && String(b.departure).slice(0, 10) >= lkToday()).length;
+  return `
+    <div class="lk-head"><h2>${lkEsc(g.name || '(no name)')}</h2>${lkChip(st)}${g.host_id ? ' <span class="lk-chip is-pending">Host</span>' : ''}</div>
+    <p class="lk-meta">Account #${Number(g.id)} · joined ${lkDay(g.created_at)} · ${bookings.length} booking${bookings.length === 1 ? '' : 's'}${upcoming ? ` (${upcoming} upcoming)` : ''}</p>
+    <div class="lk-grid">
+      <div class="lk-card"><h4>Contact</h4>
+        ${lkKv('Email', `${lkEsc(g.email || '—')}${g.email_verified ? ' ✓' : ''}`)}${lkKv('Phone', `${lkEsc(g.phone || '—')}${g.phone_verified === 'true' ? ' ✓' : ''}`)}
+        ${lkKv('ID check', lkEsc(g.id_status || 'not uploaded'))}</div>
+      ${d.host ? `<div class="lk-card"><h4>Hosting</h4>${lkKv('Host #', Number(d.host.id))}${lkKv('Hosting', lkEsc(d.host.hosting_status || 'active'))}
+        ${lkKv('PAN', lkEsc(d.host.pan_status || '—'))}${lkKv('Bank', lkEsc(d.host.bank_status || '—'))}${lkKv('Aadhaar', lkEsc(d.host.aadhaar_status || '—'))}
+        ${(d.listings || []).length ? `<div class="lk-links">${d.listings.map(l => `<button type="button" class="lk-link" onclick="lkOpen('listing', ${Number(l.id)})">${lkEsc(l.property_name)} ›</button>`).join('')}</div>` : ''}</div>` : ''}
+      ${(d.tickets || []).length ? `<div class="lk-card"><h4>Support requests</h4>${d.tickets.map(t => lkKv(lkEsc(t.ref || '#' + t.id), `${lkEsc(t.subject || '')} ${lkChip(t.status)}`)).join('')}</div>` : ''}
+    </div>
+    ${g.deleted_at || (window.ADMIN_ROLE || 'admin') !== 'admin' ? '' : `<div class="lk-actions"><h3>Act directly (admin)</h3><p>A suspended account cannot sign in or book, and is signed out everywhere at once. Bookings already made stay as they are — cancel them separately if needed. Listings stay live — block them separately.</p>
+      <div class="lk-act"><div class="lk-form">
+        <label class="lk-wide">Reason${st === 'suspended' ? '' : ' (emailed to them when suspending)'}<textarea id="lkAccReason" maxlength="500" placeholder="e.g. Repeated abusive messages to hosts"></textarea></label>
+        ${st === 'suspended'
+          ? `<button type="button" class="lk-btn" onclick="lkAccount(${Number(g.id)}, 'unsuspend')">Unsuspend</button>`
+          : `<button type="button" class="lk-btn is-danger" onclick="lkAccount(${Number(g.id)}, 'suspend')">Suspend account</button>`}
+        <button type="button" class="lk-btn is-ghost" onclick="lkAccount(${Number(g.id)}, 'signOut')">Sign out everywhere</button>
+      </div><p class="lk-msg" id="lkAccMsg"></p></div></div>`}
+    <div id="lkPropose"></div>
+    <div id="lkRecords"></div>
+    <div class="lk-sec"><h3>Bookings <small>${bookings.length}</small></h3>${bookings.length ? `<div class="lk-list">${bookings.map(lkBookingRow).join('')}</div>` : '<p class="lk-empty">No bookings.</p>'}</div>
+    ${lkHistoryHtml(d.history)}`;
+}
+async function lkAccount(id, action){
+  const msg = document.getElementById('lkAccMsg'); msg.className = 'lk-msg';
+  const reason = document.getElementById('lkAccReason').value.trim();
+  if(action !== 'signOut' && reason.length < 5){ msg.textContent = 'Write the reason first.'; msg.className = 'lk-msg is-err'; return; }
+  const ask = action === 'suspend' ? 'Suspend this account? They are signed out everywhere and cannot sign in or book.'
+    : action === 'unsuspend' ? 'Unsuspend this account? They can sign in again.' : 'Sign this account out on every device?';
+  if(!confirm(ask)) return;
+  try{
+    await lkPost({ adminAccount: { guestId: id, action, reason } });
+    msg.textContent = action === 'suspend' ? 'Suspended and signed out everywhere.' : action === 'unsuspend' ? 'Active again.' : 'Signed out everywhere.'; msg.className = 'lk-msg is-ok';
+    setTimeout(lkLoadDetail, 1200);
+  }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; }
+}
+
+// ---- One listing ----
+function lkListingHtml(d){
+  const l = d.listing; const bookings = d.bookings || [];
+  const isExp = l.listing_type === 'experience';
+  const actions = l.status === 'approved' ? [['block', 'Block', ''], ['remove', 'Remove', 'is-danger']]
+    : l.status === 'blocked' ? [['unblock', 'Unblock', ''], ['remove', 'Remove', 'is-danger']]
+    : l.status === 'removed' ? [['restore', 'Restore', '']] : [];
+  const upcoming = bookings.filter(b => b.status === 'paid' && String(b.departure).slice(0, 10) >= lkToday());
+  return `
+    <div class="lk-head"><h2>${lkEsc(l.property_name)}</h2>${lkChip(l.status)}</div>
+    <p class="lk-meta">${isExp ? 'Experience' : 'Stay'} #${Number(l.id)} · ${lkEsc([l.area, l.city].filter(Boolean).join(', ') || '—')} · listed ${lkDay(l.created_at)}${l.admin_status_reason ? `<br><strong>Why it is ${lkEsc(LK_WORD[l.status] || l.status).toLowerCase()}:</strong> ${lkEsc(l.admin_status_reason)}` : ''}</p>
+    <div class="lk-grid">
+      <div class="lk-card"><h4>Host</h4>${lkKv('Name', lkEsc(l.host_name || '—'))}${lkKv('Email', lkEsc(l.host_email || '—'))}${lkKv('Phone', lkEsc(l.host_phone || '—'))}
+        <div class="lk-links">${l.host_guest_id ? `<button type="button" class="lk-link" onclick="lkOpen('guest', ${Number(l.host_guest_id)})">Open host account ›</button>` : ''}
+        <a class="lk-link" style="text-decoration:none;" href="index.html?${isExp ? 'experience' : 'listing'}=${Number(l.id)}" target="_blank" rel="noopener">View on the site ↗</a></div></div>
+      <div class="lk-card"><h4>Listing</h4>${lkKv('Address', lkEsc(l.formatted_address || '—'))}${!isExp && l.nightly_rate ? lkKv('Nightly rate', lkInr(l.nightly_rate)) : ''}
+        ${l.max_guests ? lkKv('Max guests', Number(l.max_guests)) : ''}${lkKv('Cancellation policy', lkEsc(l.cancellation_policy || 'flexible'))}${lkKv('Upcoming bookings', upcoming.length)}</div>
+    </div>
+    ${actions.length && (window.ADMIN_ROLE || 'admin') === 'admin' ? `<div class="lk-actions"><h3>Act directly (admin)</h3><p>Blocking or removing hides the listing from guests at once and emails the host. Existing bookings are not cancelled — open each one below to cancel it if needed.${upcoming.length ? ` <strong>This listing has ${upcoming.length} upcoming booking${upcoming.length === 1 ? '' : 's'}.</strong>` : ''}</p>
+      <div class="lk-act"><div class="lk-form">
+        <label class="lk-wide">Reason (emailed to the host when blocking or removing)<textarea id="lkLstReason" maxlength="500" placeholder="e.g. Photos do not match the property; guest complaint"></textarea></label>
+        ${actions.map(([a, label, cls]) => `<button type="button" class="lk-btn ${cls}" onclick="lkListingStatus(${Number(l.id)}, '${a}')">${label}</button>`).join('')}
+      </div><p class="lk-msg" id="lkLstMsg"></p></div></div>` : ''}
+    <div id="lkPropose"></div>
+    <div id="lkRecords"></div>
+    <div class="lk-sec"><h3>Bookings <small>${bookings.length}${bookings.length >= 80 ? '+' : ''} · upcoming first</small></h3>${bookings.length ? `<div class="lk-list">${bookings.map(lkBookingRow).join('')}</div>` : '<p class="lk-empty">No bookings yet.</p>'}</div>
+    ${lkHistoryHtml(d.history)}`;
+}
+async function lkListingStatus(id, action){
+  const msg = document.getElementById('lkLstMsg'); msg.className = 'lk-msg';
+  const reason = document.getElementById('lkLstReason').value.trim();
+  if((action === 'block' || action === 'remove') && reason.length < 5){ msg.textContent = 'Write the reason — the host is told it.'; msg.className = 'lk-msg is-err'; return; }
+  if(!confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} this listing?`)) return;
+  try{
+    await lkPost({ setListingStatus: { listingId: id, action, reason } });
+    msg.textContent = 'Done. The host has been emailed.'; msg.className = 'lk-msg is-ok';
+    setTimeout(lkLoadDetail, 1200);
+  }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; }
+}
+</script>
+
+<script>
+// ---------- Admin → Database updates (server: _migrations.js) ----------
+let dbState = null;
+async function loadDbUpdates(){
+  const body = document.getElementById('dbBody');
+  try{
+    const d = await lkGet('dbMigrations=1'); dbState = d;
+    document.getElementById('dbEnv').innerHTML = `<span class="env-badge is-${lkEsc(d.environment)}">${d.environment === 'production' ? 'Production' : d.environment === 'uat' ? 'UAT' : 'Local'}</span>`;
+    if(!d.folderFound){ body.innerHTML = '<p class="lk-empty">No migrations/ folder was found in this deployment. Upload the folder with the code (and check vercel.json includes it).</p>'; return; }
+    const pending = d.migrations.filter(m => !m.applied);
+    body.innerHTML = `
+      <div class="db-apply">${pending.length
+        ? `<button type="button" class="lk-btn${d.environment === 'production' ? ' is-danger' : ''}" id="dbApplyBtn" onclick="applyDbUpdates()">Apply ${pending.length} pending update${pending.length === 1 ? '' : 's'}${d.environment === 'production' ? ' to PRODUCTION' : d.environment === 'uat' ? ' to UAT' : ''}</button>`
+        : '<span class="lk-chip">Up to date</span>'}<span class="lk-msg" id="dbMsg"></span></div>
+      <div class="lk-list">${d.migrations.slice().reverse().map((m, i) => `
+        <div class="db-row"><div class="db-row-head">
+          <code>${lkEsc(m.name)}</code>
+          ${m.applied ? `<span class="lk-chip">Applied</span><span class="lk-sub" style="display:inline;">${lkWhen(m.appliedAt)}${m.appliedBy ? ' · ' + lkEsc(m.appliedBy) : ''}${m.durationMs != null ? ' · ' + Number(m.durationMs) + ' ms' : ''}</span>` : '<span class="lk-chip is-due">Pending</span>'}
+          <span class="lk-sub" style="display:inline;">${Number(m.statements)} statement${m.statements === 1 ? '' : 's'}</span>
+          <button type="button" class="lk-link" onclick="this.closest('.db-row').querySelector('pre').hidden ^= true">SQL</button>
+        </div>
+        ${m.deletesData ? `<p class="db-warn">Refused: this file would delete data (${lkEsc(m.deletesData)}). Database updates never delete anything, so it will not run.</p>` : ''}
+        ${m.changedSinceApplied ? '<p class="db-warn">This file was edited after it was applied — the edit has NOT run. Put changes in a new file instead.</p>' : ''}
+        <pre hidden>${lkEsc(m.sql)}</pre></div>`).join('') || '<p class="lk-empty">No .sql files in migrations/ yet.</p>'}</div>
+      ${(d.missing || []).length ? `<p class="db-warn" style="margin-top:12px;">Applied earlier but no longer in the folder: ${d.missing.map(x => lkEsc(x.name)).join(', ')}</p>` : ''}`;
+  }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
+}
+async function applyDbUpdates(){
+  const d = dbState; if(!d) return;
+  const pending = d.migrations.filter(m => !m.applied);
+  let confirmText = '';
+  if(d.environment === 'production'){
+    confirmText = prompt(`Apply ${pending.length} update${pending.length === 1 ? '' : 's'} to the PRODUCTION database?\n\n${pending.map(m => '• ' + m.name).join('\n')}\n\nThey should already have been applied and tested on UAT. Type PRODUCTION to go ahead.`) || '';
+    if(confirmText.trim().toUpperCase() !== 'PRODUCTION') return;
+  } else if(!confirm(`Apply ${pending.length} update${pending.length === 1 ? '' : 's'}?\n\n${pending.map(m => '• ' + m.name).join('\n')}`)) return;
+  const btn = document.getElementById('dbApplyBtn'), msg = document.getElementById('dbMsg');
+  btn.disabled = true; btn.textContent = 'Applying…'; msg.className = 'lk-msg'; msg.textContent = '';
+  try{
+    const out = await lkPost({ applyMigrations: { confirm: confirmText } });
+    await loadDbUpdates(); loadAdminSummary();
+    const m2 = document.getElementById('dbMsg'); m2.className = 'lk-msg is-ok'; m2.textContent = `Applied ${out.applied.length}: ${out.applied.map(a => a.name).join(', ')}`;
+  }catch(err){
+    await loadDbUpdates(); loadAdminSummary();
+    const m2 = document.getElementById('dbMsg'); m2.className = 'lk-msg is-err'; m2.textContent = err.message;
+  }
+}
+</script>
+
+<script>
+// ---------- Roles, Approvals, Team, proposing actions (server: _support-actions.js) ----------
+window.ADMIN_ROLE = null;
+window.ROLE_TABS = { agent: ['lookup', 'support', 'approvals'], reviewer: ['lookup', 'support', 'approvals'] };
+const ROLE_LABEL = { admin: 'Admin', reviewer: 'Reviewer', agent: 'Customer representative' };
+const TAB_BTN = { lookup: 'tabLookupBtn', support: 'tabSupportBtn', approvals: 'tabApprovalsBtn' };
+let ADMIN_ME_INFO = null;
+window.applyRole = async function(){
+  let me = null;
+  try{
+    const r = await fetch(API_BASE + '/api/get-pending-listings?adminMe=1', { headers: authHeaders() });
+    if(r.status === 401){ loadListings(); return; }        // its 401 handling sends them to the login form
+    if(r.ok) me = await r.json();
+  }catch(e){ /* fall back to admin view; the server still checks every call */ }
+  ADMIN_ME_INFO = me;
+  window.ADMIN_ROLE = (me && me.role) || 'admin';
+  document.body.dataset.role = window.ADMIN_ROLE;
+  const g = document.getElementById('adminGreeting');
+  if(g && !g.querySelector('.role-badge')) g.insertAdjacentHTML('afterbegin', `<span class="role-badge is-${lkEsc(window.ADMIN_ROLE)}">${lkEsc(ROLE_LABEL[window.ADMIN_ROLE] || window.ADMIN_ROLE)}</span> `);
+  if(window.ADMIN_ROLE === 'admin'){ loadListings(); return; }
+  // Only the tabs this role can use.
+  const keep = new Set((window.ROLE_TABS[window.ADMIN_ROLE] || []).map(t => TAB_BTN[t]));
+  document.querySelectorAll('.admin-sidebar .tab-row').forEach(row => {
+    const b = row.querySelector('.tab-btn');
+    row.style.display = b && keep.has(b.id) ? '' : 'none';
+  });
+  document.querySelectorAll('.admin-sidebar .nav-group').forEach(gr => {
+    gr.style.display = [...gr.querySelectorAll('.tab-row')].some(r => r.style.display !== 'none') ? '' : 'none';
+  });
+  switchTab('support');
+};
+const isAdminRole = () => (window.ADMIN_ROLE || 'admin') === 'admin';
+const canReview = () => ['admin', 'reviewer'].includes(window.ADMIN_ROLE || 'admin');
+
+// ---- Approvals ----
+async function loadPriceReviews(){
+  const body = document.getElementById('apPriceBody');
+  const status = document.getElementById('apStatus').value;
+  try{
+    const d = await lkGet('priceReviews=1&status=' + encodeURIComponent(status));
+    const R = d.rules || {};
+    document.getElementById('apPriceRules').textContent = `Held when a live listing's price drops by more than ${R.maxDropPct}%, goes below ₹${R.minStay} a night (₹${R.minExperience} for an experience), or a discount or promotion is above ${R.maxDiscountPct}%. Guests keep seeing the current price until it is approved; the host is emailed either way.`;
+    if(!d.reviews.length){ body.innerHTML = `<p class="lk-empty">${status === 'pending' ? 'No price changes waiting.' : 'Nothing here yet.'}</p>`; return; }
+    body.innerHTML = d.reviews.map(r => {
+      const pend = r.status === 'pending';
+      const chip = { pending: 'is-due', approved: '', rejected: 'is-cancelled', superseded: 'is-completed' }[r.status] || '';
+      const word = { pending: 'Waiting', approved: 'Approved · live', rejected: 'Rejected', superseded: 'Replaced by a newer change' }[r.status] || r.status;
+      return `<div class="ap-card${pend ? ' is-pending' : ''}">
+        <div class="ap-head"><strong>${lkEsc(r.kindLabel)} · <button type="button" class="lk-link" onclick="apOpen('listing', ${Number(r.listing_id)})">${lkEsc(r.property_name || 'Listing #' + r.listing_id)} ›</button></strong> <span class="lk-chip ${chip}">${lkEsc(word)}</span>
+          <span class="lk-sub" style="display:inline;">asked by ${lkEsc(r.requested_by || r.host_email || '—')} · ${lkWhen(r.requested_at)}</span></div>
+        <div class="ap-grid"><div>${lkKv('Now', lkEsc(r.oldText))}${lkKv('Asked for', '<strong>' + lkEsc(r.newText) + '</strong>')}</div>
+          <div><div class="ap-label">Why it was held</div><div class="ap-text">${lkEsc(r.reason)}</div></div></div>
+        ${!pend && r.reviewed_by ? `<p class="lk-sub" style="margin-top:8px;">Decided by ${lkEsc(r.reviewed_by)} · ${lkWhen(r.reviewed_at)}${r.review_note ? ' — “' + lkEsc(r.review_note) + '”' : ''}</p>` : ''}
+        ${pend && canReview() ? `<div class="lk-form ap-decide">
+            <label class="lk-wide">Note (required to reject; the host is emailed it)<textarea id="prNote${Number(r.id)}" maxlength="500"></textarea></label>
+            <button type="button" class="lk-btn" onclick="prDecide(${Number(r.id)}, true)">Approve — make it live</button>
+            <button type="button" class="lk-btn is-ghost" onclick="prDecide(${Number(r.id)}, false)">Reject</button></div><p class="lk-msg" id="prMsg${Number(r.id)}"></p>` : ''}
+        ${pend && !canReview() ? '<p class="lk-sub">Waiting for a reviewer or admin.</p>' : ''}
+      </div>`;
+    }).join('');
+  }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
+}
+async function prDecide(id, approve){
+  const note = document.getElementById('prNote' + id).value.trim();
+  const msg = document.getElementById('prMsg' + id); msg.className = 'lk-msg'; msg.textContent = '';
+  if(!approve && note.length < 5){ msg.className = 'lk-msg is-err'; msg.textContent = 'Write why it is rejected — the host is emailed it.'; return; }
+  if(!confirm(approve ? 'Approve this price change? It goes live for guests at once.' : 'Reject this price change? The current price stays.')) return;
+  try{ await lkPost({ decidePriceReview: { id, approve, note } }); loadPriceReviews(); loadAdminSummary(true); }
+  catch(err){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; }
+}
+async function loadApprovals(){
+  loadPriceReviews();
+  const body = document.getElementById('apBody');
+  body.innerHTML = '<p class="lk-empty">Loading…</p>';
+  try{
+    const d = await lkGet('supportActions=1&status=' + encodeURIComponent(document.getElementById('apStatus').value));
+    if(!d.actions.length){ body.innerHTML = `<p class="lk-empty">${document.getElementById('apStatus').value === 'pending' ? 'Nothing is waiting for approval.' : 'Nothing here yet.'}</p>`; return; }
+    const meId = Number(d.meId) || 0;
+    body.innerHTML = d.actions.map(a => {
+      const mine = Number(a.proposed_by) === meId;
+      const pend = a.status === 'pending';
+      const stChip = { pending: 'is-due', approving: 'is-due', done: '', failed: 'is-failed', rejected: 'is-cancelled', withdrawn: 'is-completed' }[a.status] || '';
+      const stWord = { pending: 'Waiting', approving: 'Being carried out', done: 'Approved · done', failed: 'Approved · failed', rejected: 'Rejected', withdrawn: 'Withdrawn' }[a.status] || a.status;
+      return `<div class="ap-card${pend ? ' is-pending' : ''}">
+        <div class="ap-head"><strong>#${Number(a.id)} · ${lkEsc(a.kindLabel)}</strong> <span class="lk-chip ${stChip}">${lkEsc(stWord)}</span>
+          <span class="lk-sub" style="display:inline;">proposed by ${lkEsc(a.proposed_by_email || '—')} · ${lkWhen(a.proposed_at)}</span></div>
+        <div class="ap-grid">
+          <div>${a.order_id ? `<div class="lk-kv"><span>Booking</span><span><button type="button" class="lk-link" onclick="apOpen('booking', ${Number(a.order_id)})">#${Number(a.order_id)} ${lkEsc(a.suite_name || '')} ›</button></span></div>` : ''}
+            ${a.code ? lkKv('Code', `<code>${lkEsc(a.code)}</code>`) : ''}${a.arrival ? lkKv('Dates', `${lkDay(a.arrival)} → ${lkDay(a.departure)}`) : ''}
+            ${a.guest_name || a.guest_email ? `<div class="lk-kv"><span>Guest</span><span><button type="button" class="lk-link" onclick="apOpen('guest', ${Number(a.guest_id)})">${lkEsc(a.guest_name || a.guest_email)} ›</button></span></div>` : ''}
+            ${a.property_name && !a.order_id ? `<div class="lk-kv"><span>Listing</span><span><button type="button" class="lk-link" onclick="apOpen('listing', ${Number(a.listing_id)})">${lkEsc(a.property_name)} ›</button></span></div>` : ''}
+            ${a.ticket_ref ? `<div class="lk-kv"><span>Request</span><span><button type="button" class="lk-link" onclick="apOpenTicket(${Number(a.ticket_id)})">${lkEsc(a.ticket_ref)} ›</button></span></div>` : ''}</div>
+          <div><div class="ap-what">${lkEsc(a.description || '')}</div>
+            <div class="ap-label">Reason</div><div class="ap-text">${lkEsc(a.reason)}</div></div>
+        </div>
+        ${a.summary ? `<div class="ap-label">Conversation summary</div><div class="ap-summary">${lkEsc(a.summary)}</div>` : ''}
+        ${a.status !== 'pending' && a.reviewed_by_email ? `<p class="lk-sub" style="margin-top:8px;">${a.status === 'withdrawn' ? 'Withdrawn' : 'Decided by ' + lkEsc(a.reviewed_by_email)} · ${lkWhen(a.reviewed_at)}${a.review_note ? ' — “' + lkEsc(a.review_note) + '”' : ''}${a.error ? `<br><span class="error">${lkEsc(a.error)}</span>` : ''}</p>` : ''}
+        ${pend && canReview() && !mine ? `<div class="lk-form ap-decide">
+            <label class="lk-wide">Note (required to reject; the representative sees it)<textarea id="apNote${Number(a.id)}" maxlength="1000"></textarea></label>
+            <button type="button" class="lk-btn" onclick="apDecide(${Number(a.id)}, true)">Approve and carry out</button>
+            <button type="button" class="lk-btn is-ghost" onclick="apDecide(${Number(a.id)}, false)">Reject</button></div><p class="lk-msg" id="apMsg${Number(a.id)}"></p>` : ''}
+        ${pend && mine ? `<p class="lk-sub">Waiting for another reviewer — you cannot approve your own proposal. <button type="button" class="lk-link" onclick="apWithdraw(${Number(a.id)})">Withdraw</button></p>` : ''}
+        ${pend && !canReview() && !mine ? '<p class="lk-sub">Waiting for a reviewer.</p>' : ''}
+      </div>`;
+    }).join('');
+  }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
+}
+function apOpen(kind, id){ switchTab('lookup'); lkState.stack = []; lkOpen(kind, id, false); }
+function apOpenTicket(id){ switchTab('support'); setTimeout(() => openSupport(id), 50); }
+async function apDecide(id, approve){
+  const note = document.getElementById('apNote' + id).value.trim();
+  const msg = document.getElementById('apMsg' + id); msg.className = 'lk-msg'; msg.textContent = '';
+  if(!approve && note.length < 5){ msg.className = 'lk-msg is-err'; msg.textContent = 'Write why it is rejected.'; return; }
+  if(!confirm(approve ? 'Approve and carry this out now? Money moves at once for refunds and cancellations.' : 'Reject this proposal?')) return;
+  try{
+    await lkPost({ reviewAction: { id, approve, note } });
+    loadApprovals(); loadAdminSummary(true);
+  }catch(err){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; loadAdminSummary(true); }
+}
+async function apWithdraw(id){
+  if(!confirm('Withdraw this proposal?')) return;
+  try{ await lkPost({ withdrawAction: { id } }); loadApprovals(); loadAdminSummary(true); }catch(err){ alert(err.message); }
+}
+
+// ---- Team ----
+async function loadTeam(){
+  const body = document.getElementById('teamBody');
+  try{
+    const d = await lkGet('adminTeam=1');
+    const meId = ADMIN_ME_INFO ? Number(ADMIN_ME_INFO.id) : 0;
+    body.innerHTML = `<div class="lk-list">${d.team.map(m => `<div class="lk-item" style="cursor:default; grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) auto;">
+        <span><strong>${lkEsc(m.name || m.email)}</strong>${Number(m.id) === meId ? ' <span class="lk-chip">You</span>' : ''}<span class="lk-sub">${lkEsc(m.email)} · since ${lkDay(m.created_at)}</span></span>
+        <span><select id="role${Number(m.id)}" style="padding:7px 8px; font:inherit;">${Object.keys(d.roles).map(r => `<option value="${r}"${m.role === r ? ' selected' : ''}>${lkEsc(d.roles[r])}</option>`).join('')}</select></span>
+        <span><button type="button" class="lk-btn" onclick="saveRole(${Number(m.id)})">Save</button></span></div>`).join('')}</div><p class="lk-msg" id="teamMsg"></p>`;
+  }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
+}
+async function saveRole(id){
+  const role = document.getElementById('role' + id).value, msg = document.getElementById('teamMsg');
+  if(!confirm(`Make this person a ${ROLE_LABEL[role]}? They are signed out so the change applies at once.`)) return;
+  try{ await lkPost({ setAdminRole: { adminId: id, role } }); await loadTeam(); const m = document.getElementById('teamMsg'); m.className = 'lk-msg is-ok'; m.textContent = 'Saved.'; }
+  catch(err){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; }
+}
+
+// ---- "Propose an action" (Support requests and Lookup pages) ----
+// ctx: { ticketId, orderId, guestId, listingId, booking: { status, deposit, depositStatus, refundable, payout, fee } }
+const KIND_LABEL = { cancel_refund: 'Cancel the booking with a refund', partial_refund: 'Refund without cancelling', deposit_refund: 'Refund the security deposit',
+  report_guest: 'Report the guest', report_host: 'Report the host', block_guest_listing: 'Block the guest from this listing' };
+function mountPropose(el, ctx){
+  if(!el) return;
+  const b = ctx.booking || {};
+  const kinds = ctx.orderId
+    ? ['cancel_refund', 'partial_refund', 'deposit_refund', 'report_guest', 'report_host', 'block_guest_listing']
+        .filter(k => k !== 'cancel_refund' || b.status === 'paid').filter(k => k !== 'deposit_refund' || ['held', 'disputed'].includes(b.depositStatus))
+        .filter(k => k !== 'partial_refund' || Number(b.refundable) > 0)
+    : ctx.guestId ? ['report_guest', 'block_guest_listing'] : ctx.listingId ? ['report_host', 'block_guest_listing'] : [];
+  if(!kinds.length){ el.innerHTML = ''; return; }
+  const id = 'pp' + Math.random().toString(36).slice(2, 8);
+  el.innerHTML = `<div class="lk-actions pp-box"><h3>Propose an action</h3>
+    <p>Sent to a reviewer with a summary of the conversation; nothing happens until it is approved.${isAdminRole() ? ' As an admin you can also act directly on the booking, guest or listing page.' : ''}</p>
+    <div class="lk-form">
+      <label>What should be done<select id="${id}k">${kinds.map(k => `<option value="${k}">${lkEsc(KIND_LABEL[k])}</option>`).join('')}</select></label>
+      <span class="pp-f" data-for="cancel_refund"><label>Refund of booking price (%)<input type="number" id="${id}pct" min="0" max="100" value="100"></label></span>
+      <label class="lk-check pp-f" data-for="cancel_refund"><input type="checkbox" id="${id}fee"> Also refund the service fee${b.fee ? ' (' + lkInr(b.fee) + ')' : ''}</label>
+      <label class="lk-check pp-f" data-for="cancel_refund"><input type="checkbox" id="${id}host"> Count as the host's cancellation</label>
+      <span class="pp-f" data-for="partial_refund"><label>Amount (₹)${b.refundable ? ' — up to ' + lkInr(b.refundable) : ''}<input type="number" id="${id}amt" min="1"></label></span>
+      <label class="lk-check pp-f" data-for="partial_refund"><input type="checkbox" id="${id}hp"> Take it from the host's payout${b.payout != null ? ' (' + lkInr(b.payout) + ')' : ''}</label>
+      <span class="pp-f" data-for="deposit_refund"><label>Back to the guest (₹, of ${lkInr(b.deposit || 0)} deposit; the rest goes to the host)<input type="number" id="${id}dep" min="0" max="${Number(b.deposit) || 0}" value="${Number(b.deposit) || 0}"></label></span>
+      ${!ctx.guestId && !ctx.orderId ? `<span class="pp-f" data-for="block_guest_listing"><label>Guest's email<input type="email" id="${id}ge" placeholder="guest@example.com"></label></span>` : ''}
+      ${!ctx.listingId && !ctx.orderId ? `<span class="pp-f" data-for="block_guest_listing"><label>Listing ID<input type="number" id="${id}li" min="1"></label></span>` : ''}
+      <label class="lk-wide">Reason — what you found and why this is right (the reviewer decides on it)<textarea id="${id}r" maxlength="1500"></textarea></label>
+      <button type="button" class="lk-btn" id="${id}go">Send for approval</button>
+    </div><p class="lk-msg" id="${id}m"></p></div>`;
+  const sel = document.getElementById(id + 'k');
+  const show = () => el.querySelectorAll('.pp-f').forEach(f => { f.style.display = f.dataset.for === sel.value ? '' : 'none'; });
+  sel.addEventListener('change', show); show();
+  document.getElementById(id + 'go').addEventListener('click', async () => {
+    const m = document.getElementById(id + 'm'); m.className = 'lk-msg'; m.textContent = '';
+    const kind = sel.value, v = (x) => { const e = document.getElementById(id + x); return e ? e.value.trim() : ''; }, c = (x) => { const e = document.getElementById(id + x); return !!(e && e.checked); };
+    const params = { orderId: ctx.orderId || null, guestId: ctx.guestId || null, listingId: ctx.listingId || (v('li') ? Number(v('li')) : null) };
+    if(kind === 'cancel_refund') Object.assign(params, { refundPercent: Number(v('pct')), refundFee: c('fee'), countAgainstHost: c('host') });
+    if(kind === 'partial_refund') Object.assign(params, { amount: Number(v('amt')), hostPays: c('hp') });
+    if(kind === 'deposit_refund') Object.assign(params, { amount: v('dep') === '' ? null : Number(v('dep')) });
+    if(kind === 'block_guest_listing' && v('ge')) params.guestEmail = v('ge');
+    if(v('r').length < 10){ m.className = 'lk-msg is-err'; m.textContent = 'Explain the reason in a sentence or two.'; return; }
+    const btn = document.getElementById(id + 'go'); btn.disabled = true; btn.textContent = 'Sending…';
+    try{
+      const out = await lkPost({ proposeAction: { kind, params, reason: v('r'), ticketId: ctx.ticketId || null } });
+      m.className = 'lk-msg is-ok'; m.textContent = `Sent for approval as #${out.action.id}. A reviewer has been notified.`;
+      document.getElementById(id + 'r').value = '';
+      loadAdminSummary(true);
+      if(typeof ctx.after === 'function') setTimeout(ctx.after, 900);
+    }catch(err){ m.className = 'lk-msg is-err'; m.textContent = err.message; }
+    btn.disabled = false; btn.textContent = 'Send for approval';
+  });
+}
+
+// ---- Lookup pages: records, proposals, and the admin's block tools ----
+window.lkAfterRender = function(kind, d){
+  const slot = document.getElementById('lkPropose'), rec = document.getElementById('lkRecords');
+  const r = d.records || { reports: [], blocks: [], actions: [] };
+  if(kind === 'booking'){
+    const b = d.booking, m = d.money || {};
+    mountPropose(slot, { orderId: b.id, booking: { status: b.status, deposit: b.deposit_amount, depositStatus: b.deposit_status, refundable: m.refundable, payout: b.payout_amount, fee: b.guest_service_fee }, after: lkLoadDetail });
+  } else if(kind === 'guest'){
+    mountPropose(slot, { guestId: d.guest.id, after: lkLoadDetail });
+  } else {
+    mountPropose(slot, { listingId: d.listing.id, after: lkLoadDetail });
+  }
+  if(!rec) return;
+  const admin = isAdminRole();
+  const blockTool = !admin ? '' : kind === 'booking' && d.booking.guest_id && d.booking.listing_id
+      ? `<div class="lk-form" style="margin-top:8px;"><label class="lk-wide">Reason<input type="text" id="blkReason" placeholder="Why this guest should no longer see or book this listing"></label><button type="button" class="lk-btn is-ghost" onclick="lkBlock(${Number(d.booking.listing_id)}, ${Number(d.booking.guest_id)}, null)">Block this guest from this listing</button></div>`
+    : kind === 'listing'
+      ? `<div class="lk-form" style="margin-top:8px;"><label>Guest's email<input type="email" id="blkEmail" placeholder="guest@example.com"></label><label class="lk-wide">Reason<input type="text" id="blkReason"></label><button type="button" class="lk-btn is-ghost" onclick="lkBlock(${Number(d.listing.id)}, null, document.getElementById('blkEmail').value)">Block a guest from this listing</button></div>`
+    : kind === 'guest'
+      ? `<div class="lk-form" style="margin-top:8px;"><label>Listing ID<input type="number" id="blkListing" min="1"></label><label class="lk-wide">Reason<input type="text" id="blkReason"></label><button type="button" class="lk-btn is-ghost" onclick="lkBlock(Number(document.getElementById('blkListing').value), ${Number(d.guest.id)}, null)">Block from a listing</button></div>` : '';
+  rec.innerHTML = `<div class="lk-grid">
+      <div class="lk-card"><h4>Proposed actions</h4>${r.actions.length ? r.actions.map(a => lkKv(`#${Number(a.id)} ${lkEsc(a.kindLabel)}`, `<span class="lk-chip ${a.status === 'pending' ? 'is-due' : a.status === 'failed' || a.status === 'rejected' ? 'is-failed' : ''}">${lkEsc(a.status)}</span>`)).join('') + '<div class="lk-links"><button type="button" class="lk-link" onclick="switchTab(\'approvals\')">Open Approvals ›</button></div>' : '<p class="lk-sub">None.</p>'}</div>
+      <div class="lk-card"><h4>Reports</h4>${r.reports.length ? r.reports.map(x => `<div class="lk-kv"><span>${lkDay(x.created_at)} · ${lkEsc(x.kind)}</span><span>${lkEsc(x.reason).slice(0, 140)} <span class="lk-chip ${x.status === 'open' ? 'is-due' : ''}">${lkEsc(x.status)}</span>${admin && x.status === 'open' ? ` <button type="button" class="lk-link" onclick="lkReport(${Number(x.id)}, 'actioned')">Actioned</button> <button type="button" class="lk-link" onclick="lkReport(${Number(x.id)}, 'dismissed')">Dismiss</button>` : ''}</span></div>`).join('') : '<p class="lk-sub">None.</p>'}</div>
+      <div class="lk-card"><h4>Blocked from listings</h4>${r.blocks.length ? r.blocks.map(x => `<div class="lk-kv"><span>${lkEsc(x.property_name)} — ${lkEsc(x.guest_name || x.guest_email || '')}</span><span>${lkEsc(x.reason || '')}${admin ? ` <button type="button" class="lk-link" onclick="lkUnblock(${Number(x.listing_id)}, ${Number(x.guest_id)})">Unblock</button>` : ''}</span></div>`).join('') : '<p class="lk-sub">None.</p>'}${blockTool}</div>
+    </div>`;
+};
+async function lkBlock(listingId, guestId, guestEmail){
+  const reason = (document.getElementById('blkReason') || {}).value || '';
+  if(reason.trim().length < 5){ alert('Write the reason first.'); return; }
+  if(!listingId){ alert('Enter the listing ID.'); return; }
+  if(!confirm('Block this guest from this listing? It disappears for them, and they cannot book it or ask about it.')) return;
+  try{ await lkPost({ blockGuestListing: { listingId, guestId, guestEmail, reason } }); lkLoadDetail(); }catch(err){ alert(err.message); }
+}
+async function lkUnblock(listingId, guestId){
+  if(!confirm('Unblock? The listing shows to this guest again.')) return;
+  try{ await lkPost({ unblockGuestListing: { listingId, guestId } }); lkLoadDetail(); }catch(err){ alert(err.message); }
+}
+async function lkReport(id, status){
+  const note = prompt(status === 'actioned' ? 'What was done?' : 'Why dismiss it?') || '';
+  try{ await lkPost({ resolveReport: { id, status, note } }); lkLoadDetail(); }catch(err){ alert(err.message); }
+}
+</script>
 </body>
 </html>

@@ -29,11 +29,13 @@
 //     server-side in create-order.js so a guest genuinely can't book
 //     over them, not just hidden from the calendar UI.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { readCohostManageToken } = require('./_cohosts');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
 const photoGuard = require('./_photo-guard');
+const priceReview = require('./_price-review');
 const { recordPhotoLocations } = require('./_photo-location');
 const { timezoneForAddress, localTodayIn } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
@@ -354,7 +356,8 @@ module.exports = async (req, res) => {
       } catch (err) { /* holds table not created yet */ }
 
       // The property's own today, for the page's calendars.
-      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions, customFields, rooms, bookedRanges, today: localTodayIn(listing.timezone) });
+      const pendingPriceChanges = await priceReview.pendingFor(sql, listingId);
+      return res.status(200).json({ listing, paidAmenities, blockedDates, promotions, customFields, rooms, bookedRanges, pendingPriceChanges, today: localTodayIn(listing.timezone) });
     } catch (err) {
       console.error('update-listing-pricing (GET) error:', err);
       return res.status(500).json({ error: 'Could not load your listing right now. Please try again.' });
@@ -510,7 +513,8 @@ module.exports = async (req, res) => {
       const before = await sql`
         SELECT nightly_rate, exterior_photo_urls, interior_photo_urls, cover_photo_url, property_name,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
-               property_type, bedrooms, status, rooms_pending_review, status_before_compliance_block
+               property_type, bedrooms, status, rooms_pending_review, status_before_compliance_block,
+               listing_type, experience_price_unit, discount_type, discount_value, discount_min_nights, discount_description, host_email
         FROM listings WHERE id = ${listingId}
       `;
       if (!before[0]) return res.status(404).json({ error: 'This listing could not be found.' });
@@ -530,7 +534,29 @@ module.exports = async (req, res) => {
             : 'Your listing is still awaiting review — you\'ll be able to manage your rooms and pricing here once it\'s approved.'
         });
       }
-      const rateChanged = Number(before[0].nightly_rate) !== rate;
+      // ---- Unusual price changes wait for approval (_price-review.js) ----
+      // On a live listing, a sharp drop, a price below the minimum or a
+      // very large discount is held: the current one stays live and the
+      // new one waits in Admin → Approvals. Resort rooms are reviewed
+      // through their own pending_changes, so a resort's rate is not.
+      const isLive = before[0].status === 'approved';
+      const isExperience = before[0].listing_type === 'experience';
+      const requester = access.isCohost ? `co-host #${access.cohostId}` : (before[0].host_email || null);
+      const actorKind = access.isCohost ? 'cohost' : 'host';
+      const priceNotes = [];
+      let liveRate = rate;
+      if (isLive && before[0].property_type !== 'Resort') {
+        const why = priceReview.rateReason({ oldRate: before[0].nightly_rate, newRate: rate, isExperience });
+        if (why) {
+          const unit = (experiencePriceUnit === 'per_person' || experiencePriceUnit === 'flat') ? experiencePriceUnit : before[0].experience_price_unit;
+          const newValue = { rate, isExperience, unit: isExperience ? unit : null };
+          const held = await priceReview.hold(sql, { listingId, listingName: before[0].property_name, kind: 'rate',
+            oldValue: { rate: Number(before[0].nightly_rate), isExperience, unit: isExperience ? before[0].experience_price_unit : null },
+            newValue, reason: why, requestedBy: requester, actorType: actorKind });
+          if (held) { liveRate = Number(before[0].nightly_rate); priceNotes.push(priceReview.heldMessage('rate', newValue, why)); }
+        }
+      }
+      const rateChanged = Number(before[0].nightly_rate) !== liveRate;
 
       // Only Aerva's own Blob URLs are accepted (_listing-rules.js) — any
       // other address, "javascript:" above all, is dropped. undefined (not
@@ -596,7 +622,18 @@ module.exports = async (req, res) => {
       const finalSecurityDeposit = sent('securityDeposit')
         ? (securityDeposit && Number(securityDeposit) > 0 ? Number(securityDeposit) : null)
         : before[0].security_deposit;
-      const discountSent = sent('discountType') || sent('discountValue') || sent('discountMinNights') || sent('discountDescription');
+      let discountSent = sent('discountType') || sent('discountValue') || sent('discountMinNights') || sent('discountDescription');
+      if (discountSent && isLive) {
+        const newDisc = { type: discountType || null, value: discountValue ? Number(discountValue) : null, minNights: discountMinNights ? Number(discountMinNights) : null, description: discountDescription || null };
+        const changed = (newDisc.type || null) !== (before[0].discount_type || null) || Number(newDisc.value || 0) !== Number(before[0].discount_value || 0);
+        const why = changed ? priceReview.discountReason({ type: newDisc.type, value: newDisc.value, baseRate: liveRate }) : null;
+        if (why) {
+          const held = await priceReview.hold(sql, { listingId, listingName: before[0].property_name, kind: 'discount',
+            oldValue: { type: before[0].discount_type, value: before[0].discount_value, minNights: before[0].discount_min_nights, description: before[0].discount_description },
+            newValue: newDisc, reason: why, requestedBy: requester, actorType: actorKind });
+          if (held) { discountSent = false; priceNotes.push(priceReview.heldMessage('discount', newDisc, why)); }
+        }
+      }
 
       // Guest-info fields — used to fill in @checkin/@checkout/@wifiname/
       // @wifipassword/@accesscode when a host inserts a quick-reply
@@ -642,7 +679,7 @@ module.exports = async (req, res) => {
 
       const updated = await sql`
         UPDATE listings SET
-          nightly_rate = ${rate},
+          nightly_rate = ${liveRate},
           property_name = COALESCE(${safeName}, property_name),
           -- Re-derived whenever the address changes: a listing that moves
           -- country must move clock with it.
@@ -689,7 +726,7 @@ module.exports = async (req, res) => {
       }
 
       if (rateChanged) {
-        await sql`INSERT INTO price_history (listing_id, nightly_rate) VALUES (${listingId}, ${rate})`;
+        await sql`INSERT INTO price_history (listing_id, nightly_rate) VALUES (${listingId}, ${liveRate})`;
       }
 
       // Checked right after the save that actually changed max_guests
@@ -1135,7 +1172,8 @@ module.exports = async (req, res) => {
       let promotionsError = null;
       if (Array.isArray(promotions)) {
         try {
-          const existingRows = await sql`SELECT id FROM listing_promotions WHERE listing_id = ${listingId}`;
+          const existingRows = await sql`SELECT id, discount_type, discount_value, start_date, end_date FROM listing_promotions WHERE listing_id = ${listingId}`;
+          const existingById = new Map(existingRows.map(r => [r.id, r]));
           const existingIds = new Set(existingRows.map(r => r.id));
           const submittedIds = new Set();
           // Same stale-overwrite guard as blocked dates: only promotions
@@ -1163,6 +1201,24 @@ module.exports = async (req, res) => {
             // room_id changes only when the page sends roomId (older pages
             // don't, and must not flatten a room promotion to the listing).
             const roomIdSent = Object.prototype.hasOwnProperty.call(p, 'roomId');
+            // A very large promotion on a live listing waits for approval
+            // (_price-review.js); an existing one keeps its current terms.
+            if (isLive) {
+              const cur = p.id ? existingById.get(Number(p.id)) : null;
+              const changed = !cur || cur.discount_type !== discType || Number(cur.discount_value) !== discValue;
+              const why = changed ? priceReview.discountReason({ type: discType, value: discValue, baseRate: liveRate }) : null;
+              if (why) {
+                const newValue = { promotionId: cur ? Number(p.id) : null, roomId: roomOf(p), name, discountType: discType, discountValue: discValue, minNights, startDate, endDate, isActive };
+                const held = await priceReview.hold(sql, { listingId, listingName: before[0].property_name, kind: 'promotion',
+                  oldValue: cur ? { name, discountType: cur.discount_type, discountValue: Number(cur.discount_value), startDate: String(cur.start_date).slice(0, 10), endDate: String(cur.end_date).slice(0, 10) } : null,
+                  newValue, reason: why, requestedBy: requester, actorType: actorKind, promotionId: cur ? Number(p.id) : null });
+                if (held) {
+                  priceNotes.push(priceReview.heldMessage('promotion', newValue, why));
+                  if (cur) submittedIds.add(Number(p.id));
+                  continue;
+                }
+              }
+            }
             if (p.id && existingIds.has(Number(p.id))) {
               await sql`
                 UPDATE listing_promotions SET
@@ -1221,11 +1277,11 @@ module.exports = async (req, res) => {
       await logAudit(sql, {
         action: 'listing_pricing_updated', success: true, actorType: 'host', actorIdentifier: listing.host_email,
         targetType: 'listing', targetId: listingId,
-        metadata: { newRate: rate, rateChanged, discountType: discountType || null, paidAmenitiesError: !!paidAmenitiesError, blockedDatesError: !!blockedDatesError, promotionsError: !!promotionsError }
+        metadata: { newRate: liveRate, askedRate: rate, rateChanged, priceHeld: priceNotes.length, discountType: discountType || null, paidAmenitiesError: !!paidAmenitiesError, blockedDatesError: !!blockedDatesError, promotionsError: !!promotionsError }
       });
 
-      const warning = [paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning].filter(Boolean).join(' ') || undefined;
-      return res.status(200).json({ success: true, warning });
+      const warning = [...priceNotes, paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning].filter(Boolean).join(' ') || undefined;
+      return res.status(200).json({ success: true, warning, priceHeld: priceNotes.length ? priceNotes : undefined });
     } catch (err) {
       console.error('update-listing-pricing (POST) error:', err);
       await logAudit(sql, {

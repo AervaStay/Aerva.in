@@ -57,6 +57,7 @@ async function createInquiry(sql, { guestId, listingId, text, arrival, departure
                               (SELECT g.email FROM guests g WHERE g.host_id = l.host_id ORDER BY g.id LIMIT 1) AS host_email
                        FROM listings l JOIN hosts h ON h.id = l.host_id WHERE l.id = ${listingId}`)[0];
   if (!l || l.status !== 'approved') throw userError('This listing is not taking questions right now.', 404);
+  if (await require('./_support-actions').isBlocked(sql, guestId, l.id)) throw userError('This listing is not taking questions right now.', 404);
   const me = (await sql`SELECT id, name, email, host_id FROM guests WHERE id = ${guestId} AND deleted_at IS NULL`)[0];
   if (!me) throw userError('Please log in again.', 401);
   if (me.host_id && Number(me.host_id) === Number(l.host_id)) throw userError('This is your own listing.');

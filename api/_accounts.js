@@ -50,15 +50,27 @@ async function isAccountDeleted(sql, guestId) {
 async function sessionStatus(sql, payload) {
   if (!payload || payload.action !== 'guest-session' || !payload.listingId) return 'revoked';
   try {
-    const r = (await sql`SELECT to_jsonb(g)->>'deleted_at' AS deleted_at, to_jsonb(g)->>'session_version' AS sv
+    const r = (await sql`SELECT to_jsonb(g)->>'deleted_at' AS deleted_at, to_jsonb(g)->>'session_version' AS sv,
+                                to_jsonb(g)->>'account_status' AS account_status
                          FROM guests g WHERE g.id = ${payload.listingId}`)[0];
     if (!r) return 'revoked';
     if (r.deleted_at) return 'deleted';
+    // Suspended by Aerva (Admin → Lookup): every session ends at once.
+    if (r.account_status === 'suspended') return 'suspended';
     return (Number(payload.sv) || 0) === (Number(r.sv) || 0) ? 'ok' : 'revoked';
   } catch (err) {
     console.error('sessionStatus check failed:', err.message);
     return 'error';
   }
+}
+
+// Signing in to a suspended account is refused with this message.
+const SUSPENDED_MESSAGE = 'This account has been suspended. Please contact hello@aerva.in.';
+async function assertNotSuspended(sql, guestId) {
+  let st = null;
+  try { st = ((await sql`SELECT to_jsonb(g)->>'account_status' AS s FROM guests g WHERE g.id = ${guestId}`)[0] || {}).s; }
+  catch (err) { return; }
+  if (st === 'suspended') throw Object.assign(new Error(SUSPENDED_MESSAGE), { isUserFacing: true, status: 403, suspended: true });
 }
 
 // The simple form for endpoints: true = refuse this request as not signed
@@ -225,5 +237,5 @@ async function reactivateIfPaused(sql, guestId) {
   }
 }
 
-module.exports = { isAccountDeleted, deletionBlockers, deleteAccount, reactivateIfPaused, DELETED_NAME,
+module.exports = { assertNotSuspended, SUSPENDED_MESSAGE, isAccountDeleted, deletionBlockers, deleteAccount, reactivateIfPaused, DELETED_NAME,
                    sessionStatus, isSessionRevoked, newSessionToken, bumpSessionVersion };
