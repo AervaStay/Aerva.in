@@ -252,7 +252,12 @@ async function clearUnsentPayouts(sql, ids) {
 // Cancels a booking (and its linked half) at `pct`, refunding through
 // _refunds.js. by: 'guest' (a fixed tier) | 'host_decision' | 'timeout'.
 // Returns { ok, refundCash, couponBack } or throws a user-facing error.
-async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note = '' }) {
+// by 'admin': Aerva cancels from Admin → Lookup. note is the admin's reason
+// (required by the endpoint); refundFee also returns Aerva's service fee;
+// countAgainstHost records it as one of the host's cancellations (their
+// 3-a-year limit), e.g. an Aerva cancellation done for a host in an emergency.
+// preview: true works everything out and changes nothing.
+async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note = '', refundFee = false, countAgainstHost = false, adminLabel = null, preview = false }) {
   const { main, rows } = await loadRows(sql, orderId);
   if (!main) throw Object.assign(new Error('Booking not found.'), { isUserFacing: true, status: 404 });
   if (main.status !== 'paid') throw Object.assign(new Error('This booking has already been cancelled.'), { isUserFacing: true, status: 409 });
@@ -262,7 +267,9 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   try { await sql`SELECT refund_percent, payout_on_cancel, cancel_claim FROM orders LIMIT 0`; }
   catch (err) { throw Object.assign(new Error('Cancellations are being set up. Please try again later or contact hello@aerva.in.'), { isUserFacing: true, status: 503 }); }
 
-  const reason = by === 'timeout_no_refund'
+  const reason = by === 'admin'
+    ? `Cancelled by Aerva${note ? ' — ' + note : ''}`
+    : by === 'timeout_no_refund'
     ? `Cancelled at the guest’s request — the host did not answer within ${HOST_DECISION_TIMEOUT_HOURS} hours, so no refund of the booking price`
     : by === 'timeout_policy'
       ? `Cancelled at the guest’s request — ${percent}% refund under the booking’s terms (the host did not answer within ${HOST_DECISION_TIMEOUT_HOURS} hours)`
@@ -276,8 +283,42 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
 
   // Worked out from the rows as they are BEFORE anything changes.
   const paid = await paidByOrderRow(sql, main.razorpay_order_id);
-  const splits = new Map(rows.map(r => [Number(r.id), splitRow(r, (paid[r.id] || {}).couponAbsorbed, percent)]));
+  // Refunds already made on these bookings without cancelling (Admin →
+  // Lookup "goodwill" refunds) count toward this refund: the guest never
+  // gets more back in total than the cancellation gives. If the host paid
+  // for one of them, the part this refund does not cover stays theirs.
+  const ids0 = rows.map(r => Number(r.id));
+  const goodwill = {}, hostPaid = {};
+  try {
+    (await sql`SELECT order_id, COALESCE(sum(amount), 0)::bigint AS p FROM refunds
+               WHERE order_id = ANY(${ids0}) AND kind LIKE 'goodwill-%' AND status <> 'failed' GROUP BY order_id`)
+      .forEach(x => { goodwill[x.order_id] = Math.round(Number(x.p) / 100); });
+    (await sql`SELECT target_id AS order_id, COALESCE(sum((metadata->>'amount')::numeric), 0) AS n FROM audit_log
+               WHERE action = 'admin_partial_refund' AND success = true AND target_type = 'order' AND target_id = ANY(${ids0})
+                 AND (metadata->>'hostPays')::boolean IS TRUE GROUP BY target_id`)
+      .forEach(x => { hostPaid[x.order_id] = Math.round(Number(x.n) || 0); });
+  } catch (e) { /* tables not there yet: nothing refunded this way */ }
+  const splits = new Map(rows.map(r => {
+    const s = splitRow(r, (paid[r.id] || {}).couponAbsorbed, percent);
+    // Aerva's own fee, returned only when an admin chooses to.
+    if (by === 'admin' && refundFee && s.feeKept > 0) { s.refundCash += s.feeKept; s.feeRefunded = s.feeKept; s.feeKept = 0; }
+    const already = goodwill[r.id] || 0;
+    if (already > 0) {
+      const covered = Math.min(already, s.refundCash);
+      s.alreadyRefunded = already;
+      s.refundCash -= covered;
+      const notCovered = already - covered;              // given beyond what this cancellation refunds
+      const hostPart = Math.min(notCovered, hostPaid[r.id] || 0);
+      if (hostPart > 0) s.hostPayout = Math.max(0, s.hostPayout - hostPart);
+    }
+    return [Number(r.id), s];
+  }));
   const ids = rows.map(r => Number(r.id));
+  if (preview) {
+    const t = (k) => [...splits.values()].reduce((a, s) => a + (s[k] || 0), 0);
+    return { preview: true, percent, items: rows.map(r => r.suite_name), refundCash: t('refundCash'), couponBack: t('couponBack'), deposit: t('deposit'),
+             feeKept: t('feeKept'), feeRefunded: t('feeRefunded'), alreadyRefunded: t('alreadyRefunded'), hostPayout: t('hostPayout'), policy: policyKey(main.policy), daysBefore: Number(main.days_before) };
+  }
   const claim = await claimForCancellation(sql, ids);
   let done = [];
   const refundIds = new Map();
@@ -347,11 +388,22 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     const s = splits.get(Number(r.id));
     try { await sql`UPDATE order_cohost_shares SET amount = round(${s.hostPayout}::numeric * percent / 100) WHERE order_id = ${r.id}`; }
     catch (err) { /* no co-host shares table */ }
+    if (by === 'admin') {
+      await logAudit(sql, { action: 'booking_cancelled_by_admin', success: true, actorType: 'admin', actorIdentifier: adminLabel || 'admin',
+        targetType: 'order', targetId: r.id, metadata: { percent, reason: note, refundCash: s.refundCash, couponBack: s.couponBack, feeRefunded: s.feeRefunded || 0, hostPayout: s.hostPayout, countAgainstHost: !!countAgainstHost } });
+      // Counts toward the host's yearly limit (hostCancellationsLastYear) —
+      // once per purchase, like a host's own cancellation.
+      if (countAgainstHost && Number(r.id) === Number(main.id)) {
+        await logAudit(sql, { action: 'booking_cancelled_by_host', success: true, actorType: 'admin', actorIdentifier: String(main.host_id || ''),
+          targetType: 'order', targetId: r.id, metadata: { byAdmin: adminLabel || 'admin', reason: note } });
+      }
+      continue;
+    }
     await logAudit(sql, { action: 'booking_cancelled_by_guest', success: true, actorType: 'system', actorIdentifier: String(main.guest_id || ''),
       targetType: 'order', targetId: r.id, metadata: { percent, by, refundCash: s.refundCash, couponBack: s.couponBack, hostPayout: s.hostPayout, policy: policyKey(main.policy) } });
   }
 
-  const sum = (k) => done.reduce((t, r) => t + splits.get(Number(r.id))[k], 0);
+  const sum = (k) => done.reduce((t, r) => t + (splits.get(Number(r.id))[k] || 0), 0);
   const refundCash = sum('refundCash'), couponBack = sum('couponBack'), hostShare = sum('hostPayout');
   if (couponBack > 0) await returnCouponValue(sql, { razorpayOrderId: main.razorpay_order_id, amount: couponBack, sourceOrderId: main.id, guestEmail: main.guest_email, suiteName: main.suite_name });
 
@@ -359,14 +411,14 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   await email(main.guest_email, `Your booking at ${main.suite_name} is cancelled`,
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your booking is cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)})</p><p>${escH(reason)}.</p>
-      <p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}. Refunds usually arrive in 5–7 working days. Aerva’s service fee is non-refundable.</p>
+      <p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}. Refunds usually arrive in 5–7 working days.${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Contact hello@aerva.in.</p></div>`);
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${main.host_id} ORDER BY id LIMIT 1`)[0];
   await email(host && host.email, `Booking cancelled: ${main.suite_name}`,
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">A booking was cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)}) — the dates are open again.</p>
       ${hostShare > 0 ? `<p>Your payout for this booking: <strong>${inr(hostShare)}</strong>, on the usual payout day.</p>` : ''}</div>`);
-  await postThreadMessage(sql, main.id, 'host', `Cancellation confirmed. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}.`);
+  await postThreadMessage(sql, main.id, by === 'admin' ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}.`);
   return { ok: true, refundCash, couponBack, percent };
 }
 

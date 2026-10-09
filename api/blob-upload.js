@@ -23,6 +23,7 @@
 // one account may take at most UPLOADS_PER_DAY in 24 hours, so a signed-in
 // account cannot turn Aerva's storage into free file hosting either.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { handleUpload } = require('@vercel/blob/client');
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');

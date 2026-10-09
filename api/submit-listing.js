@@ -21,10 +21,12 @@
 // to match together — a shared name alone, or a shared photo alone,
 // isn't enough to block anything.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
 const { isSessionRevoked } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
+const priceReview = require('./_price-review');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
 const photoGuard = require('./_photo-guard');
 const { recordPhotoLocations, tagListing } = require('./_photo-location');
@@ -282,7 +284,9 @@ module.exports = async (req, res) => {
     // verify it's really this host's own draft before touching it.
     let existingDraft = null;
     if (listingId) {
-      const rows = await sql`SELECT id, host_id, status, listing_type, property_name, exterior_photo_urls, interior_photo_urls, cover_photo_url FROM listings WHERE id = ${listingId}`;
+      const rows = await sql`SELECT id, host_id, status, listing_type, property_name, exterior_photo_urls, interior_photo_urls, cover_photo_url,
+                                    nightly_rate, experience_price_unit, discount_type, discount_value, discount_min_nights, discount_description
+                             FROM listings WHERE id = ${listingId}`;
       existingDraft = rows[0];
       if (!existingDraft || existingDraft.host_id !== hostId) {
         return res.status(403).json({ error: 'You do not have permission to edit this listing.' });
@@ -726,6 +730,34 @@ module.exports = async (req, res) => {
     const safePhotoHashesToStore = Array.isArray(photoHashes) ? photoHashes.filter(h => typeof h === 'string' && h) : [];
 
     let listing;
+    // A live experience edited here: an unusual price or discount change
+    // waits for approval (_price-review.js) — the current one stays live.
+    const priceNotes = [];
+    let liveDiscount = { type: discountType || null, value: discountValue ? Number(discountValue) : null,
+                         minNights: discountMinNights ? Number(discountMinNights) : null, description: discountDescription || null };
+    if (existingDraft && existingDraft.status === 'approved' && !isDraft) {
+      const isExp = existingDraft.listing_type === 'experience';
+      const why = propertyType === 'Resort' ? null : priceReview.rateReason({ oldRate: existingDraft.nightly_rate, newRate: rate, isExperience: isExp });
+      if (why) {
+        const newValue = { rate, isExperience: isExp, unit: isExp ? safeExperiencePriceUnit : null };
+        const held = await priceReview.hold(sql, { listingId: existingDraft.id, listingName: existingDraft.property_name, kind: 'rate',
+          oldValue: { rate: Number(existingDraft.nightly_rate), isExperience: isExp, unit: isExp ? existingDraft.experience_price_unit : null },
+          newValue, reason: why, requestedBy: authenticatedHostEmail, actorType: 'host' });
+        if (held) { rate = Number(existingDraft.nightly_rate); priceNotes.push(priceReview.heldMessage('rate', newValue, why)); }
+      }
+      const discChanged = (liveDiscount.type || null) !== (existingDraft.discount_type || null) || Number(liveDiscount.value || 0) !== Number(existingDraft.discount_value || 0);
+      const dWhy = discChanged ? priceReview.discountReason({ type: liveDiscount.type, value: liveDiscount.value, baseRate: rate }) : null;
+      if (dWhy) {
+        const held = await priceReview.hold(sql, { listingId: existingDraft.id, listingName: existingDraft.property_name, kind: 'discount',
+          oldValue: { type: existingDraft.discount_type, value: existingDraft.discount_value, minNights: existingDraft.discount_min_nights, description: existingDraft.discount_description },
+          newValue: liveDiscount, reason: dWhy, requestedBy: authenticatedHostEmail, actorType: 'host' });
+        if (held) {
+          priceNotes.push(priceReview.heldMessage('discount', liveDiscount, dWhy));
+          liveDiscount = { type: existingDraft.discount_type, value: existingDraft.discount_value, minNights: existingDraft.discount_min_nights, description: existingDraft.discount_description };
+        }
+      }
+    }
+
     if (existingDraft) {
       // Resubmitting a rejected listing clears the old rejection_reason —
       // it no longer applies once the host has made changes and put it
@@ -738,8 +770,8 @@ module.exports = async (req, res) => {
           bedrooms = ${bedrooms || null}, max_guests = ${normalizeMaxGuests(maxGuests)}, nightly_rate = ${rate},
           description = ${description || null}, amenities = ${JSON.stringify(amenities || [])}, services = ${JSON.stringify(services || [])},
           host_name = ${hostName || null}, host_phone = ${hostPhone || null},
-          discount_type = ${discountType || null}, discount_value = ${discountValue ? Number(discountValue) : null},
-          discount_min_nights = ${discountMinNights ? Number(discountMinNights) : null}, discount_description = ${discountDescription || null},
+          discount_type = ${liveDiscount.type || null}, discount_value = ${liveDiscount.value ? Number(liveDiscount.value) : null},
+          discount_min_nights = ${liveDiscount.minNights ? Number(liveDiscount.minNights) : null}, discount_description = ${liveDiscount.description || null},
           exterior_photo_urls = ${JSON.stringify(safeExteriorUrls)}, interior_photo_urls = ${JSON.stringify(safeInteriorUrls)},
           pet_friendly = ${safePetFriendly}, max_pets_allowed = ${safeMaxPets},
           allowed_pet_types = ${JSON.stringify(safePetTypes)}, pet_fee = ${safePetFee},
@@ -936,7 +968,9 @@ module.exports = async (req, res) => {
         if (added.length) bits.push(`${added.length} new photo${added.length === 1 ? '' : 's'} added.`);
         if (removed) bits.push(`${removed} photo${removed === 1 ? '' : 's'} removed.`);
         if (coverChanged) bits.push('Cover photo changed.');
-        changeNote = bits.length ? bits.join(' ') : 'Details edited (no photo or name change).';
+        if (Number(existingDraft.nightly_rate) !== Number(rate)) bits.push(`Price changed from ₹${escHtml(existingDraft.nightly_rate)} to ₹${escHtml(rate)}.`);
+        if (priceNotes.length) bits.push('An unusual price or discount change is waiting in Admin → Approvals.');
+        changeNote = bits.length ? bits.join(' ') : 'Details edited (no photo, name or price change).';
         if (added.length || removed || renamed || coverChanged) {
           await logAudit(sql, {
             action: 'listing_photos_changed', success: true, actorType: 'host', actorIdentifier: authenticatedHostEmail,
@@ -953,7 +987,8 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.status(200).json({ success: true, id: listing.id, isDraft: !!isDraft, status: listing.status });
+    return res.status(200).json({ success: true, id: listing.id, isDraft: !!isDraft, status: listing.status,
+      warning: priceNotes.length ? priceNotes.join(' ') : undefined, priceHeld: priceNotes.length ? priceNotes : undefined });
   } catch (err) {
     console.error('submit-listing error:', err);
     return res.status(500).json({ error: 'Could not save listing' });

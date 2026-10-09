@@ -14,7 +14,7 @@
 (function(){
   'use strict';
 
-  var API_BASE = 'https://aerva-in.vercel.app';
+  var API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
   var SESSION_KEY = 'aerva_guest_session';
   var CURRENCY_KEY = 'aerva_currency';           // same key as aerva.js
   var NOTIF_READ_KEY = 'aerva_notifications_read'; // same key as aerva.js

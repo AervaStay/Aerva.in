@@ -58,10 +58,11 @@
 //     load so a returning guest with a stored token gets logged in
 //     automatically, without typing their password again.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const bcrypt = require('bcryptjs');
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
-const { isAccountDeleted, reactivateIfPaused, sessionStatus, newSessionToken, bumpSessionVersion } = require('./_accounts');
+const { isAccountDeleted, reactivateIfPaused, sessionStatus, newSessionToken, bumpSessionVersion, assertNotSuspended } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
@@ -152,6 +153,7 @@ async function hostFlags(sql, guest) {
 // current session_version (see _accounts.js) and the account, with its
 // host flags. Also un-pauses a paused account (logging in brings it back).
 async function signedIn(sql, guest) {
+  await assertNotSuspended(sql, guest.id);   // suspended by Aerva: no sign-in
   await reactivateIfPaused(sql, guest.id);
   const sessionToken = await newSessionToken(sql, guest.id, SESSION_LIFETIME_MS);
   return { sessionToken, guest: { ...safeGuest(guest), ...(await hostFlags(sql, guest)) } };
@@ -387,7 +389,8 @@ module.exports = async (req, res) => {
         });
         return res.status(200).json(out);
       } catch (err) {
-        console.error('guest-auth (verify) error:', err);
+        if (err.suspended) return res.status(403).json({ error: err.message });
+      console.error('guest-auth (verify) error:', err);
         return res.status(500).json({ error: 'Could not verify your email right now. Please try again.' });
       }
     }
@@ -407,6 +410,7 @@ module.exports = async (req, res) => {
     {
       const st = await sessionStatus(sql, payload);
       if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.', deleted: true });
+      if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. Please contact hello@aerva.in.', suspended: true });
       if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
       if (st !== 'ok') return res.status(503).json({ error: 'Could not check your session right now.' });
     }
@@ -765,6 +769,7 @@ module.exports = async (req, res) => {
       });
       return res.status(200).json(out);
     } catch (err) {
+      if (err.suspended) return res.status(403).json({ error: err.message });
       console.error('guest-auth (reset-password) error:', err);
       return res.status(500).json({ error: 'Could not reset your password right now. Please try again.' });
     }
@@ -794,6 +799,7 @@ module.exports = async (req, res) => {
       return res.status(200).json(out);
     } catch (err) {
       if (err.needsConsent) return res.status(400).json({ error: err.message, needsConsent: true, termsVersion: TERMS_VERSION });
+      if (err.suspended) return res.status(403).json({ error: err.message });
       console.error('guest-auth (google) error:', err);
       await logAudit(sql, {
         action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: verified.email,
@@ -1010,6 +1016,7 @@ module.exports = async (req, res) => {
 
       return res.status(200).json(out);
     } catch (err) {
+      if (err.suspended) return res.status(403).json({ error: err.message });
       console.error('guest-auth (login) error:', err);
       await logAudit(sql, {
         action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: cleanEmail,

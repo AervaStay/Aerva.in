@@ -43,6 +43,7 @@
 // unaffected by this feature. charge_currency/charge_amount exist purely
 // to record what the guest's own statement will show.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
@@ -114,7 +115,7 @@ async function sessionRefusal(payload) {
   if (!payload) return null;
   const st = await sessionStatus(sql, payload);
   if (st === 'ok') return null;
-  return st === 'deleted' ? 'This account has been deleted.' : 'Please log in again.';
+  return st === 'deleted' ? 'This account has been deleted.' : st === 'suspended' ? 'This account has been suspended. Please contact hello@aerva.in.' : 'Please log in again.';
 }
 
 // Price quotes need no account, so they are limited per address instead:
@@ -370,6 +371,14 @@ module.exports = async (req, res) => {
         if (err.isUserFacing) return res.status(err.status).json({ error: err.message, needs: err.needs || [] });
         throw err;
       }
+    }
+
+    // A guest Aerva has kept away from a listing cannot book it (Admin →
+    // Lookup, _support-actions.js). Said plainly, without the reason.
+    if (guestId && !quoteOnly) {
+      const ids = [...new Set([].concat(safeStays.map(x => Number(x && x.listingId))).concat(safeExperiences.map(x => Number(x && x.listingId))))].filter(Boolean);
+      const blocked = await require('./_support-actions').blockedListingIds(sql, guestId);
+      if (ids.some(id => blocked.includes(id))) return res.status(403).json({ error: 'This listing is not available to book from your account. Please contact Aerva Support if you think this is a mistake.' });
     }
 
     // Hosts and co-hosts cannot book listings they run: a self-booking pays

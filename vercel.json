@@ -5,13 +5,18 @@
       "includeFiles": "node_modules/pdfkit/js/data/**"
     },
     "api/get-pending-listings.js": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "migrations/**"
     },
     "api/blob-upload.js": {
       "maxDuration": 60
     },
     "api/verify-payment.js": {
       "includeFiles": "node_modules/pdfkit/js/data/**"
+    },
+    "api/guest-profile.js": {
+      "maxDuration": 30,
+      "includeFiles": "aerva-policies.js"
     }
   },
   "crons": [

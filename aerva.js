@@ -49,7 +49,20 @@
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 
   // ---- Pricing constants (display only; the server decides the charge) ----
-  const SUITES_API_BASE = 'https://aerva-in.vercel.app';
+  const SUITES_API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
+  // Listings Aerva keeps away from this account (Admin → Lookup). They are
+  // left out of every list and search here; the server refuses booking and
+  // questions for them whatever the page does.
+  const hiddenListingIds = new Set();
+  const hiddenListingsReady = (async () => {
+    let t = null; try{ t = localStorage.getItem('aerva_guest_session'); }catch(e){}
+    if(!t) return;
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=myHiddenListings', { headers: { 'Authorization': 'Bearer ' + t } });
+      if(r.ok){ const d = await r.json(); (d.ids || []).forEach(id => hiddenListingIds.add(Number(id))); }
+    }catch(e){ /* nothing hidden then */ }
+  })();
+  function visibleOnly(list){ return hiddenListingIds.size ? (list || []).filter(l => !hiddenListingIds.has(Number(l && l.id))) : (list || []); }
   const EXTRA_GUEST_RATE = 1500;
   const BASE_OCCUPANCY = 2;
   // GST — DISPLAY ONLY. What a guest is actually charged is decided by
@@ -313,13 +326,13 @@
   // ---- Razorpay checkout (secure: order created server-side) ----
   // The public Key ID comes back from create-order.js with each order
   // (keyId), from the server's own settings — never written in here.
-  const API_BASE = 'https://aerva-in.vercel.app'; // your deployed api/ functions
+  const API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app'); // your deployed api/ functions
 
   // ---- List Your Property form ----
   // Saved through api/submit-listing.js, which also emails the admin.
 
   // The deployed api/ functions (same backend as API_BASE above).
-  const LISTINGS_API_BASE = 'https://aerva-in.vercel.app';
+  const LISTINGS_API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
 
   const listingForm = document.getElementById('listingForm');
   const listingSubmitBtn = document.getElementById('listingSubmitBtn');
@@ -2990,7 +3003,7 @@
         if(res.ok){
           confirmEl.textContent = editingExperienceId
             ? (data.status === 'approved'
-                ? 'Changes saved — already live under Aerva Experience.'
+                ? 'Changes saved — already live under Aerva Experience.' + (data.warning ? ' ' + data.warning : '')
                 : 'Changes saved — we\'ll review it again and it\'ll go back live once approved.')
             : 'Thank you — we\'ve received your experience. Our team reviews every submission personally and will follow up by email within a few days.';
           confirmEl.style.display = 'block';
@@ -3358,7 +3371,7 @@
           const listingsRes = await fetch(SUITES_API_BASE + `/api/get-listings?lat=${guestLocation.lat}&lng=${guestLocation.lng}&radiusKm=200`);
           if(listingsRes.ok){
             const listingsData = await listingsRes.json();
-            approvedListings = listingsData.listings || [];
+            approvedListings = visibleOnly(listingsData.listings || []);
             listingsById = {};
             approvedListings.forEach(l => { listingsById[l.id] = l; });
           }
@@ -3369,7 +3382,7 @@
           const expRes = await fetch(SUITES_API_BASE + `/api/get-listings?experiences=1&lat=${guestLocation.lat}&lng=${guestLocation.lng}&radiusKm=200`);
           if(expRes.ok){
             const expData = await expRes.json();
-            approvedExperiences = expData.experiences || [];
+            approvedExperiences = visibleOnly(expData.experiences || []);
             experiencesById = {};
             approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
             experiencesLoaded = true;
@@ -3546,7 +3559,7 @@
       const res = await fetch(SUITES_API_BASE + '/api/get-listings?experiences=1');
       if(!res.ok) throw new Error('Failed to load experiences');
       const data = await res.json();
-      approvedExperiences = data.experiences || [];
+      approvedExperiences = visibleOnly(data.experiences || []);
       experiencesById = {};
       approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
       experiencesLoaded = true;
@@ -6834,6 +6847,12 @@
   function canUnsendMessage(m, isMine){
     return !!(isMine && !m.unsent && m.id && m.sender_type !== 'system' && (Date.now() - new Date(m.created_at).getTime()) < UNSEND_MS);
   }
+  // A notice from Aerva itself in a booking thread (e.g. Aerva cancelled
+  // the booking from Admin) — centred, never shown as either person.
+  function systemNoticeHtml(m){
+    const time = m.created_at ? new Date(m.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+    return `<div class="msg-system"><span class="msg-system-who">Aerva${time ? ' · ' + escapeMessageHtml(time) : ''}</span>${escapeMessageHtml(m.display_text || '')}</div>`;
+  }
   function unsentBubbleText(isMine){ return isMine ? 'You unsent a message' : 'This message was unsent'; }
   function unsendButtonHtml(m){ return `<button type="button" class="msg-unsend" data-unsend="${Number(m.id)}" title="Remove this message for both of you">Unsend</button>`; }
   // Wires every Unsend button inside `root`; `after` re-draws the thread.
@@ -6912,6 +6931,7 @@
     }
     container.innerHTML = messages.map(m => {
       const isMine = m.sender_type === viewerRole;
+      if(m.sender_type === 'system') return systemNoticeHtml(m);
       if(m.unsent){
         return `<div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;"><div class="msg-unsent">${unsentBubbleText(isMine)}</div></div>`;
       }
@@ -7101,6 +7121,7 @@
     loadInboxConversations();
   }
   function closeInboxOverlay(){
+    closeSupportPane();
     document.getElementById('inboxOverlay').classList.remove('open');
     document.getElementById('inboxPanel').classList.remove('details-open', 'chat-open');
     document.body.style.overflow = '';
@@ -7182,6 +7203,7 @@
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Failed to load');
       inboxConversations = data.conversations || [];
+      await loadSupportSummary();
       renderInboxConversationList();
     } catch(err){
       listEl.innerHTML = '<p style="padding:20px 22px; font-size:13px; color:#a3402f;">Could not load your conversations right now.'
@@ -7200,8 +7222,13 @@
         (c.property_name || '').toLowerCase().includes(inboxSearchTerm)
       );
     }
+    // Aerva Support is always first (unless a search or the Unread filter rules it out).
+    const showSupport = (!inboxSearchTerm || 'aerva support help assistant agent'.includes(inboxSearchTerm))
+      && (inboxFilter !== 'unread' || (supportSummary && supportSummary.unread > 0));
+    const supportCard = showSupport ? supportCardHtml() : '';
     if(!items.length){
-      listEl.innerHTML = `<p style="padding:20px 22px; font-size:13px; opacity:0.6;">${inboxConversations.length ? 'No conversations match.' : 'No conversations yet — these open automatically once you message a host, or a guest with a confirmed booking messages you.'}</p>`;
+      listEl.innerHTML = supportCard + `<p style="padding:20px 22px; font-size:13px; opacity:0.6;">${inboxConversations.length ? 'No conversations match.' : 'No conversations with hosts or guests yet — these open automatically once you message a host, or a guest with a confirmed booking messages you.'}</p>`;
+      wireSupportCard(listEl);
       return;
     }
     const inboxHasBothRoles = inboxConversations.some(c => c.my_role === 'host') && inboxConversations.some(c => c.my_role !== 'host');
@@ -7243,6 +7270,8 @@
         </div>
       `;
     }).join('');
+    listEl.insertAdjacentHTML('afterbegin', supportCard);
+    wireSupportCard(listEl);
     listEl.querySelectorAll('[data-conv-id]').forEach(card => {
       card.addEventListener('click', () => openInboxChat(Number(card.dataset.convId)));
     });
@@ -7257,6 +7286,7 @@
     inboxTranslationCache = {}; // fresh conversation, fresh cache
     document.getElementById('inboxPanel').classList.add('chat-open'); // mobile: swap to chat pane
     document.getElementById('inboxPanel').classList.remove('details-open'); // stale details for the PREVIOUS conversation shouldn't linger
+    closeSupportPane();
     document.getElementById('inboxChatPlaceholder').style.display = 'none';
     document.getElementById('inboxChatContent').style.display = 'flex';
     document.getElementById('inboxChatName').textContent = conv.property_name || 'Aerva';
@@ -7281,6 +7311,226 @@
     document.getElementById('inboxPanel').classList.remove('chat-open');
     document.getElementById('inboxPanel').classList.remove('details-open');
   });
+
+  // ---- Aerva Support (pinned at the top of Messages) ----
+  // The assistant answers first. Once the person has described the issue
+  // and the assistant has answered, "Speak to an agent" opens: live chat
+  // here, a call to Aerva Support, or a call back. Server: guest-profile.js
+  // modes supportChat* → api/_support-chat.js.
+  let supportSummary = null, supportState = null, supportOpen = false, supportPoll = null, supportBusy = false;
+  async function loadSupportSummary(){
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=supportChatSummary', { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
+      supportSummary = r.ok ? await r.json() : null;
+    }catch(e){ supportSummary = null; }
+  }
+  function supportCardHtml(){
+    const sm = supportSummary || {};
+    const preview = sm.status ? `With an agent · ${sm.status}` : (sm.preview || 'Ask our assistant anything — an agent is a tap away');
+    return `<div class="inbox-conv-card support-card${supportOpen ? ' active' : ''}" data-support-card="1" role="button" tabindex="0">
+        <span class="inbox-conv-thumb support-avatar" aria-hidden="true">Æ</span>
+        <div class="inbox-conv-info">
+          <div class="inbox-conv-topline"><span class="inbox-status-tag tag-support">Help</span><span>Pinned</span></div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <div class="inbox-conv-name">Aerva Support</div>
+            <span class="inbox-conv-time">${sm.at ? inboxRelativeTime(sm.at) : ''}</span>
+          </div>
+          <div class="inbox-conv-counterpart">Assistant and agents</div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <div class="inbox-conv-preview">${escapeMessageHtml(preview)}</div>
+            ${sm.unread > 0 ? '<span class="inbox-conv-unread-dot"></span>' : ''}
+          </div>
+        </div>
+      </div>`;
+  }
+  function wireSupportCard(root){
+    const c = root.querySelector('[data-support-card]');
+    if(!c) return;
+    c.addEventListener('click', () => openSupportChat());
+    c.addEventListener('keydown', (e) => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openSupportChat(); } });
+  }
+  function closeSupportPane(){
+    supportOpen = false;
+    if(supportPoll){ clearInterval(supportPoll); supportPoll = null; }
+    const pane = document.getElementById('supportChatContent');
+    if(pane) pane.style.display = 'none';
+  }
+  async function openSupportChat(){
+    inboxCurrentConversationId = null;
+    supportOpen = true;
+    document.getElementById('inboxPanel').classList.add('chat-open');
+    document.getElementById('inboxPanel').classList.remove('details-open');
+    document.getElementById('inboxChatPlaceholder').style.display = 'none';
+    document.getElementById('inboxChatContent').style.display = 'none';
+    document.getElementById('supportChatContent').style.display = 'flex';
+    renderInboxConversationList();
+    document.getElementById('supportMessages').innerHTML = '<p class="loading" style="font-size:13px; opacity:0.6;">Loading…</p>';
+    await refreshSupportChat();
+    if(supportPoll) clearInterval(supportPoll);
+    // An agent's reply appears without reloading (checked every 10 seconds while open).
+    supportPoll = setInterval(() => { if(supportOpen && !supportBusy && supportState && supportState.mode !== 'ai') refreshSupportChat(true); }, 10000);
+    setTimeout(() => { const i = document.getElementById('supportInput'); if(i && window.innerWidth > 760) i.focus(); }, 50);
+  }
+  // Opens Messages straight on Aerva Support (Resolution Center, help links).
+  window.aervaOpenSupportChat = function(){
+    if(!guestAuthToken()){ window.location.href = 'guest-login.html?next=' + encodeURIComponent('index.html?openSupport=1'); return; }
+    openInboxOverlay();
+    openSupportChat();
+  };
+  async function refreshSupportChat(quiet){
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=supportChat', { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok) throw new Error(d.error || 'Could not load Aerva Support.');
+      const changed = !supportState || JSON.stringify(d.messages.slice(-3)) !== JSON.stringify(supportState.messages.slice(-3)) || d.mode !== supportState.mode;
+      supportState = d;
+      if(!quiet || changed) renderSupportChat();
+      if(changed){ await loadSupportSummary(); renderInboxConversationList(); refreshMessagesBadge(); }
+    }catch(err){
+      if(!quiet) document.getElementById('supportMessages').innerHTML = `<p style="font-size:13px; color:#a3402f;">${escapeMessageHtml(err.message)}</p>`;
+    }
+  }
+  function supportFirstName(){
+    try{ const n = localStorage.getItem('aerva_guest_name') || ''; return n && !n.includes('@') ? String(n).trim().split(' ')[0] : ''; }catch(e){ return ''; }
+  }
+  function renderSupportChat(){
+    const d = supportState; if(!d) return;
+    const box = document.getElementById('supportMessages');
+    const sub = document.getElementById('supportChatSub');
+    sub.textContent = d.mode === 'human' ? `Agent · ${d.ticket.ref} · ${d.ticket.statusLabel}${d.callbackPhone ? ' · call back on ' + d.callbackPhone : ''}`
+      : d.mode === 'feedback' ? `Agent · ${d.ticket.ref} · Resolved` : 'Assistant · instant answers';
+    const human = document.getElementById('supportHumanBtn');
+    human.hidden = !(d.mode === 'ai' && d.canAskAgent);
+    human.textContent = 'Speak to an agent';
+    const when = (iso) => new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+    const welcome = `<div class="sup-row"><div class="sup-who">Aerva Assistant</div><div class="sup-bubble sup-ai">Hi${supportFirstName() ? ' ' + escapeMessageHtml(supportFirstName()) : ''} 👋 I’m Aerva’s assistant. Tell me what you need help with — a booking, a payment or refund, a change, your deposit, or hosting. I know Aerva’s policies and can see your own bookings. If I can’t sort it out, you can speak to an agent.</div></div>`;
+    const html = d.messages.map((m, i) => {
+      if(m.from === 'system') return `<div class="msg-system"><span class="msg-system-who">Aerva Support${m.at ? ' · ' + escapeMessageHtml(when(m.at)) : ''}</span>${escapeMessageHtml(m.body)}</div>`;
+      if(m.from === 'you') return `<div class="sup-row mine"><div class="sup-bubble sup-you">${renderMessageBody(m.body)}</div><div class="sup-time">${when(m.at)}</div></div>`;
+      const isAgent = m.from === 'support';
+      const last = i === d.messages.length - 1;
+      return `<div class="sup-row"><div class="sup-who">${isAgent ? 'Aerva Support agent' : 'Aerva Assistant'}</div>
+        <div class="sup-bubble ${isAgent ? 'sup-agent' : 'sup-ai'}">${renderMessageBody(m.body)}${(m.files || []).length ? '<div class="sup-files">' + m.files.map((u, k) => `<a href="${escapeMessageHtml(u)}" target="_blank" rel="noopener">File ${k + 1}</a>`).join(' ') + '</div>' : ''}</div>
+        <div class="sup-time">${when(m.at)}</div>
+        ${last && d.mode === 'ai' && d.canAskAgent && (m.handoff || d.suggestHandoff) ? '<button type="button" class="sup-agent-cta" data-agent-open="1">Speak to an agent</button>' : ''}</div>`;
+    }).join('');
+    box.innerHTML = welcome + html + (supportBusy ? '<div class="sup-row"><div class="sup-who">Aerva Assistant</div><div class="sup-bubble sup-ai sup-typing"><span></span><span></span><span></span></div></div>' : '');
+    box.querySelectorAll('[data-agent-open]').forEach(b => b.addEventListener('click', openAgentSheet));
+    box.scrollTop = box.scrollHeight;
+    // Suggestions only before the first question.
+    const chips = document.getElementById('supportChips');
+    const asked = d.messages.some(m => m.from === 'you');
+    chips.innerHTML = asked || d.mode !== 'ai' ? '' : ['Where is my refund?', 'How do I cancel a booking?', 'Can I change my dates?', 'When is my host payout?']
+      .map(t => `<button type="button" class="sup-chip">${escapeMessageHtml(t)}</button>`).join('');
+    chips.querySelectorAll('.sup-chip').forEach(c => c.addEventListener('click', () => { document.getElementById('supportInput').value = c.textContent; sendSupportMessage(); }));
+    document.getElementById('supportInput').placeholder = d.mode === 'human' ? 'Write to the agent…' : d.mode === 'feedback' ? 'Write here to reopen it, or answer below…' : 'Ask about a booking, payment, refund or hosting…';
+    renderSupportFeedback();
+  }
+  async function sendSupportMessage(){
+    const input = document.getElementById('supportInput');
+    const text = input.value.trim();
+    const hint = document.getElementById('supportHint');
+    if(!text || supportBusy) return;
+    hint.hidden = true;
+    supportBusy = supportState && supportState.mode === 'ai';
+    // Shown at once; the server's copy replaces it.
+    if(supportState) supportState.messages.push({ key: 'tmp' + Date.now(), from: 'you', body: text, at: new Date().toISOString() });
+    input.value = ''; input.style.height = 'auto';
+    renderSupportChat();
+    const btn = document.getElementById('supportSendBtn'); btn.disabled = true;
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+        body: JSON.stringify({ mode: 'supportChatSend', text }) });
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok) throw new Error(d.error || 'Could not send. Please try again.');
+      supportState = d;
+    }catch(err){
+      if(supportState) supportState.messages = supportState.messages.filter(m => !String(m.key).startsWith('tmp'));
+      input.value = text;
+      hint.textContent = err.message; hint.hidden = false;
+    }
+    supportBusy = false; btn.disabled = false;
+    renderSupportChat();
+    loadSupportSummary().then(renderInboxConversationList);
+  }
+  document.getElementById('supportSendBtn').addEventListener('click', sendSupportMessage);
+  document.getElementById('supportInput').addEventListener('keydown', (e) => { if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendSupportMessage(); } });
+  document.getElementById('supportInput').addEventListener('input', function(){ this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 110) + 'px'; });
+  document.getElementById('supportChatBackBtn').addEventListener('click', () => { closeSupportPane(); document.getElementById('inboxPanel').classList.remove('chat-open'); renderInboxConversationList(); });
+  document.getElementById('supportHumanBtn').addEventListener('click', openAgentSheet);
+
+  // "Speak to an agent": live chat, a call, or a call back.
+  function openAgentSheet(){
+    const d = supportState; if(!d || !d.canAskAgent) return;
+    const c = (window.AERVA_POLICIES && window.AERVA_POLICIES.support && window.AERVA_POLICIES.support.contacts) || {};
+    const phone = c.phone || c.tollFree || '';
+    const fb = document.getElementById('supportFeedback');
+    fb.hidden = false;
+    fb.innerHTML = `<div class="sup-sheet" role="dialog" aria-label="Speak to an agent">
+        <div class="sup-sheet-head"><strong>Speak to an agent</strong><button type="button" class="sup-x" data-sheet-close aria-label="Close">×</button></div>
+        <p class="sup-sheet-note">Your conversation with the assistant goes with you, so you will not have to repeat yourself.</p>
+        <button type="button" class="sup-opt" data-how="chat"><span class="sup-opt-t">Chat with an agent here</span><span class="sup-opt-d">An agent replies in this chat. We also email you.</span></button>
+        ${phone ? `<a class="sup-opt" href="tel:${escapeMessageHtml(String(phone).replace(/[^\d+]/g, ''))}"><span class="sup-opt-t">Call Aerva Support · ${escapeMessageHtml(phone)}</span><span class="sup-opt-d">${escapeMessageHtml(c.hours ? 'Lines open ' + c.hours : 'Speak to our support team now.')}</span></a>` : ''}
+        <button type="button" class="sup-opt" data-how="callback"><span class="sup-opt-t">Ask us to call you back</span><span class="sup-opt-d">An agent calls you on the number below.</span></button>
+        <div class="sup-cb" hidden>
+          <label>Number to call<input type="tel" id="supCbPhone" value="${escapeMessageHtml(d.accountPhone || '')}" placeholder="+91 98765 43210" inputmode="tel"></label>
+          <button type="button" class="btn solid" data-cb-go>Request call back</button>
+        </div>
+        <p class="sup-sheet-err" hidden></p>
+      </div>`;
+    const err = fb.querySelector('.sup-sheet-err');
+    const go = async (how, phoneNum) => {
+      fb.querySelectorAll('button').forEach(b => b.disabled = true); err.hidden = true;
+      try{
+        const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ mode: 'supportChatHandoff', how, phone: phoneNum || '' }) });
+        const out = await r.json().catch(() => ({}));
+        if(!r.ok) throw new Error(out.error || 'Could not reach an agent. Please try again.');
+        supportState = out; fb.hidden = true; fb.innerHTML = '';
+        renderSupportChat(); loadSupportSummary().then(renderInboxConversationList);
+      }catch(e){ err.textContent = e.message; err.hidden = false; fb.querySelectorAll('button').forEach(b => b.disabled = false); }
+    };
+    fb.querySelector('[data-sheet-close]').addEventListener('click', () => { fb.hidden = true; fb.innerHTML = ''; renderSupportFeedback(); });
+    fb.querySelector('[data-how="chat"]').addEventListener('click', () => go('chat'));
+    fb.querySelector('[data-how="callback"]').addEventListener('click', () => { fb.querySelector('.sup-cb').hidden = false; fb.querySelector('#supCbPhone').focus(); });
+    fb.querySelector('[data-cb-go]').addEventListener('click', () => go('callback', fb.querySelector('#supCbPhone').value.trim()));
+  }
+
+  // Resolved by the agent: is it sorted? Then a rating.
+  function renderSupportFeedback(){
+    const d = supportState, fb = document.getElementById('supportFeedback');
+    if(fb.querySelector('.sup-sheet')) return;            // the agent sheet is open
+    if(!d || d.mode !== 'feedback'){ fb.hidden = true; fb.innerHTML = ''; return; }
+    fb.hidden = false;
+    fb.innerHTML = `<div class="sup-fb"><strong>${escapeMessageHtml(d.ticket.ref)} is marked resolved. Is everything sorted?</strong>
+        <div class="sup-fb-row"><button type="button" class="btn solid" data-fb="yes">Yes, resolved</button><button type="button" class="filter-clear" data-fb="no">No, not yet</button></div>
+        <div class="sup-fb-yes" hidden><div class="sup-stars" role="radiogroup" aria-label="Rate our help">${[1, 2, 3, 4, 5].map(n => `<button type="button" role="radio" aria-checked="false" data-star="${n}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}</div>
+          <textarea rows="2" maxlength="1000" placeholder="Anything to add? (optional)"></textarea><button type="button" class="btn solid" data-fb-send>Send</button></div>
+        <div class="sup-fb-no" hidden><textarea rows="2" maxlength="1000" placeholder="What is still not right?"></textarea><button type="button" class="btn solid" data-fb-reopen>Send</button></div>
+        <p class="sup-sheet-err" hidden></p></div>`;
+    let rating = 0;
+    const err = fb.querySelector('.sup-sheet-err');
+    fb.querySelector('[data-fb="yes"]').addEventListener('click', () => { fb.querySelector('.sup-fb-yes').hidden = false; fb.querySelector('.sup-fb-no').hidden = true; });
+    fb.querySelector('[data-fb="no"]').addEventListener('click', () => { fb.querySelector('.sup-fb-no').hidden = false; fb.querySelector('.sup-fb-yes').hidden = true; fb.querySelector('.sup-fb-no textarea').focus(); });
+    fb.querySelectorAll('[data-star]').forEach(b => b.addEventListener('click', () => {
+      rating = Number(b.dataset.star);
+      fb.querySelectorAll('[data-star]').forEach(x => { const on = Number(x.dataset.star) <= rating; x.classList.toggle('on', on); x.setAttribute('aria-checked', String(Number(x.dataset.star) === rating)); });
+    }));
+    const send = async (body) => {
+      err.hidden = true;
+      try{
+        const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ mode: 'supportFeedback', ref: d.ticket.ref, ...body }) });
+        const out = await r.json().catch(() => ({}));
+        if(!r.ok) throw new Error(out.error || 'Could not send.');
+        fb.hidden = true; fb.innerHTML = '';
+        await refreshSupportChat();
+      }catch(e){ err.textContent = e.message; err.hidden = false; }
+    };
+    fb.querySelector('[data-fb-send]').addEventListener('click', () => { if(!rating){ err.textContent = 'Choose 1 to 5 stars.'; err.hidden = false; return; } send({ resolved: true, rating, comment: fb.querySelector('.sup-fb-yes textarea').value.trim() }); });
+    fb.querySelector('[data-fb-reopen]').addEventListener('click', () => send({ resolved: false, comment: fb.querySelector('.sup-fb-no textarea').value.trim() }));
+  }
+  if(/[?&]openSupport=1/.test(window.location.search)) setTimeout(() => { if(guestAuthToken()) window.aervaOpenSupportChat(); }, 400);
 
   // ---- Message body rendering ----
   // Messages are stored as PLAIN TEXT and must be escaped before they
@@ -7371,6 +7621,7 @@
     }
     container.innerHTML = messages.map(m => {
       const isMine = m.sender_type === inboxCurrentRole;
+      if(m.sender_type === 'system') return systemNoticeHtml(m);
       const label = isMine ? ('You · ' + (inboxCurrentRole === 'host' ? 'Host' : 'Guest')) : (inboxCurrentRole === 'host' ? 'Guest' : 'Host');
       const time = new Date(m.created_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
       if(m.unsent){
@@ -8368,7 +8619,7 @@
         const res = await fetch(url);
         if(!res.ok) throw new Error('Search failed');
         const data = await res.json();
-        approvedListings = data.listings || [];
+        approvedListings = visibleOnly(data.listings || []);
         listingsById = {};
         approvedListings.forEach(l => { listingsById[l.id] = l; });
         suitesCount = approvedListings.length;
@@ -8398,7 +8649,7 @@
           const expRes = await fetch(SUITES_API_BASE + '/api/get-listings?' + expParams.toString());
           if(expRes.ok){
             const expData = await expRes.json();
-            approvedExperiences = expData.experiences || [];
+            approvedExperiences = visibleOnly(expData.experiences || []);
             experiencesById = {};
             approvedExperiences.forEach(e => { experiencesById[e.id] = e; });
             experiencesLoaded = true;
@@ -11223,6 +11474,7 @@
   }
 
   function showExperienceDetailPage(exp){
+    if(exp && hiddenListingIds.has(Number(exp.id))){ alert('This experience is not available.'); return; }
     trackRecentlyViewed('experience', exp.id);
     document.body.classList.remove('showing-hero');
     document.getElementById('suites').style.display = 'none';
@@ -12003,6 +12255,7 @@
   }
 
   function showFullListingPage(listing){
+    if(listing && hiddenListingIds.has(Number(listing.id))){ alert('This listing is not available.'); return; }
     trackRecentlyViewed('stay', listing.id);
     document.body.classList.remove('showing-hero');
     document.getElementById('suites').style.display = 'none';
@@ -12799,10 +13052,11 @@
 
   async function initSite(){
     try{
+      await hiddenListingsReady;
       const res = await fetch(SUITES_API_BASE + '/api/get-listings');
       if(!res.ok) throw new Error('Failed to load listings');
       const data = await res.json();
-      approvedListings = data.listings || [];
+      approvedListings = visibleOnly(data.listings || []);
       listingsById = {};
       approvedListings.forEach(l => { listingsById[l.id] = l; });
       startPlaceHintRotation();
@@ -13404,7 +13658,7 @@
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show); else show();
   const body = overlay.querySelector('.payout-body');
   if(!token){ body.innerHTML = '<p class="payout-muted">Log in to see this payout.</p><p><a href="guest-login.html">Log in</a></p>'; return; }
-  fetch('https://aerva-in.vercel.app/api/host-listings?payoutDetail=' + encodeURIComponent(id), { headers: { 'Authorization': 'Bearer ' + token } })
+  fetch((window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/host-listings?payoutDetail=' + encodeURIComponent(id), { headers: { 'Authorization': 'Bearer ' + token } })
     .then(r => r.json().then(d => ({ ok: r.ok, d })))
     .then(({ ok, d }) => {
       if(!ok || !d.payout){ body.innerHTML = '<p class="payout-muted">' + esc(d.error || 'This payout could not be found.') + '</p>'; return; }
@@ -13466,7 +13720,7 @@ const aervaQuoteSeq = {};
 function aervaQuote(slot, body){
   const n = (aervaQuoteSeq[slot] = (aervaQuoteSeq[slot] || 0) + 1);
   const headers = { 'Content-Type': 'application/json' };
-  return fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST', headers,
+  return fetch((window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/create-order', { method: 'POST', headers,
       body: JSON.stringify(Object.assign({}, body, { quoteOnly: true })) })
     .then(async r => {
       const d = await r.json().catch(() => ({}));
@@ -13515,7 +13769,7 @@ function aervaPrefillBooking(){
   const token = (typeof guestAuthToken === 'function') ? guestAuthToken() : null;
   if(!token) return;
   if(!aervaPrefillPromise){
-    aervaPrefillPromise = fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST',
+    aervaPrefillPromise = fetch((window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/create-order', { method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ prefill: true }) })
       .then(r => r.ok ? r.json() : {}).catch(() => ({}));
   }
@@ -13665,7 +13919,7 @@ function aervaWatchCheckout(rzp, order, msgEl, opts){
   }, 1000);
   state.poll = setInterval(async () => {
     try{
-      const r = await fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ holdStatus: state.orderId }) });
+      const r = await fetch((window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ holdStatus: state.orderId }) });
       const d = await r.json();
       if(aervaCheckout !== state) return;
       if(d && d.active === false) aervaEndCheckout(d.reason || 'released');
@@ -13706,7 +13960,7 @@ function aervaFollowUpPayment(orderId, msgEl, { seconds = 180, announce = false 
   const tick = async () => {
     if(aervaFollowUp !== state) return;
     try{
-      const r = await fetch('https://aerva-in.vercel.app/api/verify-payment', { method: 'POST',
+      const r = await fetch((window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/verify-payment', { method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() }, body: JSON.stringify({ checkOrder: orderId }) });
       const d = await r.json().catch(() => ({}));
       if(aervaFollowUp !== state) return;
@@ -13791,7 +14045,7 @@ function aervaShowPriceChange(msgEl, data, btn){
 function aervaReleaseHold(orderId, reason){
   if(!orderId) return;
   try{
-    fetch('https://aerva-in.vercel.app/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    fetch((window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ releaseHold: orderId, reason: reason || 'closed' }), keepalive: true }).catch(function(){});
   }catch(e){}
 }

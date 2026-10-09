@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Status — Aerva</title>
+<script src="aerva-env.js?v=2026-10-09a"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <meta name="robots" content="noindex, nofollow">
 <style>
@@ -340,7 +341,7 @@
 </div>
 
 <script>
-  const API_BASE = 'https://aerva-in.vercel.app';
+  const API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
   const safeStorage = {
     get(key){ try { return localStorage.getItem(key); } catch(e){ return null; } },
     set(key, value){ try { localStorage.setItem(key, value); } catch(e){ /* no-op */ } },

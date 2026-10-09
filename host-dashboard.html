@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Collection — Aerva</title>
+<script src="aerva-env.js?v=2026-10-09a"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <meta name="robots" content="noindex, nofollow">
 <style>
@@ -1375,7 +1376,7 @@
 </div>
 
 <script>
-  const API_BASE = 'https://aerva-in.vercel.app';
+  const API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
   // localStorage can throw (Safari private mode, blocked storage): every
   // read and write on this page goes through these.
   const safeStorage = {
@@ -4475,7 +4476,7 @@
 // it to a co-host anyway.
 (function(){
   if(window.AervaCohost && window.AervaCohost.get()) return;
-  const API = 'https://aerva-in.vercel.app/api/host-listings';
+  const API = (window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/host-listings';
   let token = null;
   try{ token = localStorage.getItem('aerva_guest_session'); }catch(e){}
   if(!token) return;
@@ -4645,7 +4646,7 @@
   let token = null;
   try{ token = localStorage.getItem('aerva_guest_session'); }catch(e){}
   if(!A || !token) return;
-  const API = 'https://aerva-in.vercel.app/api/host-listings';
+  const API = (window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/host-listings';
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   fetch(API + '?hostAgreement=1', { headers: { 'Authorization': 'Bearer ' + token } })
     .then(r => r.json()).then(d => {
@@ -4677,7 +4678,7 @@
 <script>
 // ---- Account: deactivate / reactivate hosting, delete account ----
 (function(){
-  const API = 'https://aerva-in.vercel.app/api';
+  const API = (window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api';
   const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
   window.AervaCohostActive = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
   if(!token) return;

@@ -89,6 +89,7 @@
 // (razorpay.payments.refund) — make sure this has been tested against a
 // real Razorpay test-mode payment before relying on it in production.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { listRemovals, restoreRemoval, checkPhoto } = require('./_photo-guard');
 const { judgeLocation, flaggedPhotoLocations } = require('./_photo-location');
@@ -98,6 +99,12 @@ const { logAudit, adminContext, requestContext } = require('./_audit-log');
 const { createPayoutRows, markPayoutSent, razorpayxReady, attemptPayout, createDepositCompensationPayout, refreshTds } = require('./_payouts');
 const { disputesForAdmin, decideDispute, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
 const support = require('./_support');
+const lookup = require('./_admin-lookup');
+const migrations = require('./_migrations');
+const actions = require('./_support-actions');
+const priceReview = require('./_price-review');
+const { ENV: AERVA_ENV } = require('./_env');
+const { executePolicyCancellation } = require('./_cancellations');
 const bankCheck = require('./_bank-check');
 const { safeRefund } = require('./_refunds');
 const { releaseDueDeposits, notifyDepositDispute } = require('./_deposits');
@@ -384,9 +391,19 @@ module.exports = async (req, res) => {
         VALUES (${cleanEmail}, ${passwordHash}, ${name || null})
         RETURNING id, email, name
       `;
+      // A new team member starts as a customer representative (an admin
+      // changes it in Admin → Team), unless there is no admin at all yet.
+      let role = 'agent';
+      try {
+        const admins = (await sql`SELECT count(*)::int AS n FROM admins a WHERE id <> ${inserted[0].id} AND COALESCE(to_jsonb(a)->>'role', 'admin') = 'admin'`)[0].n;
+        const asked = req.body.adminSignup.role;
+        role = admins === 0 ? 'admin' : (['admin', 'reviewer', 'agent'].includes(asked) ? asked : 'agent');
+        await sql`UPDATE admins SET role = ${role} WHERE id = ${inserted[0].id}`;
+      } catch (e) { role = 'admin'; /* before the roles update: everyone is an admin */ }
+      inserted[0].role = role;
       await logAudit(sql, {
         action: 'admin_account_created', success: true, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
-        targetType: 'admin', targetId: inserted[0].id
+        targetType: 'admin', targetId: inserted[0].id, metadata: { role }
       });
       return res.status(200).json({ success: true, admin: inserted[0] });
     } catch (err) {
@@ -498,6 +515,80 @@ module.exports = async (req, res) => {
   const ADMIN_AUDIT = await adminContext(sql, req, sessionPayload, hasValidSecret);
   const ADMIN_ACTOR = ADMIN_AUDIT.actorIdentifier;
 
+  // ---- Roles (_support-actions.js): admin / reviewer / customer representative ----
+  // A representative or reviewer reaches only Support, Lookup and Approvals;
+  // anything else answers 403 here, whatever the page shows.
+  const ADMIN_ROLE = await actions.roleOf(sql, sessionPayload, hasValidSecret);
+  if (!actions.allowed(ADMIN_ROLE, req)) {
+    return res.status(403).json({ error: `Your role (${actions.ROLES[ADMIN_ROLE] || 'none'}) cannot do this. Ask an admin.`, role: ADMIN_ROLE });
+  }
+  const ADMIN_ME = { id: sessionPayload ? Number(sessionPayload.listingId) : 0, email: ADMIN_ACTOR };
+
+  // GET ?adminMe=1 — who is signed in, and their role (the page shows only what it allows)
+  if (req.method === 'GET' && req.query.adminMe === '1') return res.status(200).json(await actions.me(sql, sessionPayload, ADMIN_ROLE));
+  // GET ?adminTeam=1 · POST { setAdminRole: { adminId, role } } — admins only (see allowed())
+  if (req.method === 'GET' && req.query.adminTeam === '1') return res.status(200).json(await actions.team(sql));
+  // Proposed actions and approvals
+  // GET ?supportActions=1[&status=pending|done|all]
+  // POST { proposeAction: { kind, params, reason, ticketId? } } · { withdrawAction: { id } }
+  // POST { reviewAction: { id, approve, note } } — reviewer or admin, never the proposer
+  // POST { blockGuestListing: { listingId, guestId, reason } } · { unblockGuestListing: { listingId, guestId } } — admin
+  // POST { resolveReport: { id, status: 'actioned'|'dismissed', note } } — admin
+  if (req.method === 'GET' && req.query.supportActions === '1') {
+    try { return res.status(200).json({ ...(await actions.list(sql, { status: String(req.query.status || 'pending') })), role: ADMIN_ROLE, meId: ADMIN_ME.id }); }
+    catch (err) { console.error('supportActions failed:', err); return res.status(500).json({ error: 'Could not load approvals. Has the roles database update been applied?' }); }
+  }
+  // Unusual price changes held for approval (_price-review.js)
+  // GET ?priceReviews=1[&status=pending|done|all] — every role can see them
+  // POST { decidePriceReview: { id, approve, note } } — reviewer or admin
+  if (req.method === 'GET' && req.query.priceReviews === '1') {
+    try { return res.status(200).json({ reviews: await priceReview.list(sql, { status: String(req.query.status || 'pending') }), rules: priceReview.RULES, role: ADMIN_ROLE }); }
+    catch (err) { console.error('priceReviews failed:', err); return res.status(500).json({ error: 'Could not load price changes. Has the price review database update been applied?' }); }
+  }
+  if (req.method === 'POST' && req.body && req.body.decidePriceReview) {
+    try {
+      const x = req.body.decidePriceReview;
+      return res.status(200).json({ success: true, ...(await priceReview.decide(sql, { id: x.id, approve: x.approve === true, note: x.note, admin: ADMIN_ME, audit: ADMIN_AUDIT })) });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('decidePriceReview failed:', err);
+      return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
+    }
+  }
+  if (req.method === 'POST' && req.body && (req.body.setAdminRole || req.body.proposeAction || req.body.withdrawAction || req.body.reviewAction
+      || req.body.blockGuestListing || req.body.unblockGuestListing || req.body.resolveReport)) {
+    try {
+      const b = req.body;
+      if (b.setAdminRole) return res.status(200).json(await actions.setRole(sql, { adminId: b.setAdminRole.adminId, role: b.setAdminRole.role, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
+      if (b.proposeAction) {
+        const x = b.proposeAction;
+        const row = await actions.propose(sql, { kind: x.kind, params: x.params || {}, reason: x.reason, ticketId: x.ticketId, admin: ADMIN_ME, audit: ADMIN_AUDIT });
+        return res.status(200).json({ success: true, action: row });
+      }
+      if (b.withdrawAction) return res.status(200).json(await actions.withdraw(sql, { id: b.withdrawAction.id, admin: ADMIN_ME, audit: ADMIN_AUDIT }));
+      if (b.reviewAction) {
+        const x = b.reviewAction;
+        return res.status(200).json({ success: true, ...(await actions.review(sql, razorpay, { id: x.id, approve: x.approve === true, note: x.note, admin: ADMIN_ME, audit: ADMIN_AUDIT })) });
+      }
+      if (b.blockGuestListing) {
+        const x = b.blockGuestListing;
+        if (String(x.reason || '').trim().length < 5) return res.status(400).json({ error: 'Write the reason.' });
+        return res.status(200).json({ success: true, ...(await actions.blockGuest(sql, { listingId: x.listingId, guestId: x.guestId, guestEmail: x.guestEmail, reason: String(x.reason).trim().slice(0, 500), by: ADMIN_ACTOR, audit: ADMIN_AUDIT })) });
+      }
+      if (b.unblockGuestListing) return res.status(200).json({ success: true, ...(await actions.unblockGuest(sql, { listingId: b.unblockGuestListing.listingId, guestId: b.unblockGuestListing.guestId, audit: ADMIN_AUDIT })) });
+      if (b.resolveReport) {
+        const x = b.resolveReport;
+        if (!['actioned', 'dismissed'].includes(x.status)) return res.status(400).json({ error: 'Choose actioned or dismissed.' });
+        const r = await sql`UPDATE user_reports SET status = ${x.status}, resolved_by = ${ADMIN_ACTOR}, resolved_at = now(), resolution = ${String(x.note || '').slice(0, 500) || null} WHERE id = ${Number(x.id) || 0} RETURNING id`;
+        if (!r.length) return res.status(404).json({ error: 'Report not found.' });
+        await logAudit(sql, { action: 'user_report_resolved', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'user_report', targetId: r[0].id, metadata: { status: x.status } });
+        return res.status(200).json({ success: true });
+      }
+    } catch (err) {
+      if (!err.isUserFacing) console.error('support action failed:', err);
+      return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
+    }
+  }
+
   // ---- Sign out everywhere ----
   // Ends every session of the signed-in admin, this one included.
   if (req.method === 'POST' && req.body && req.body.adminSignOutEverywhere) {
@@ -551,6 +642,98 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- Database updates (_migrations.js): migrations/*.sql applied from here, never by hand ----
+  // GET ?dbMigrations=1 · POST { applyMigrations: { onlyName?, confirm } }
+  if (req.method === 'GET' && req.query.dbMigrations === '1') {
+    try { return res.status(200).json({ environment: AERVA_ENV, ...(await migrations.status(sql)) }); }
+    catch (err) { console.error('dbMigrations failed:', err); return res.status(500).json({ error: 'Could not read the database updates: ' + String(err.message || err).slice(0, 200) }); }
+  }
+  if (req.method === 'POST' && req.body && req.body.applyMigrations) {
+    const b = req.body.applyMigrations;
+    // On production the admin types the environment name, as a deliberate step.
+    if (AERVA_ENV === 'production' && String(b.confirm || '').trim().toUpperCase() !== 'PRODUCTION') {
+      return res.status(400).json({ error: 'Type PRODUCTION to confirm.' });
+    }
+    try {
+      const out = await migrations.applyPending(sql, { adminLabel: ADMIN_ACTOR, onlyName: b.onlyName || null });
+      for (const a of out.applied) {
+        await logAudit(sql, { action: 'db_migration_applied', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'migration', targetId: null, metadata: { name: a.name, statements: a.statements, ms: a.ms, environment: AERVA_ENV } });
+      }
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      await logAudit(sql, { action: 'db_migration_applied', success: false, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'migration', targetId: null,
+        metadata: { name: err.failed || null, error: String(err.message || err).slice(0, 400), environment: AERVA_ENV } });
+      if (!err.isUserFacing) console.error('applyMigrations failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not apply the database updates.', applied: err.applied || [] });
+    }
+  }
+
+  // ---- Lookup: find a booking, guest or listing by anything, and act (_admin-lookup.js) ----
+  // GET ?lookup=<text> · ?lookupBooking=<id> · ?lookupGuest=<id> · ?lookupListing=<id>
+  // POST { adminCancelBooking: { orderId, refundPercent, refundFee, countAgainstHost, reason, preview } }
+  // POST { adminPartialRefund: { orderId, amount, reason, hostPays } }
+  // POST { adminAccount: { guestId, action: 'signOut'|'suspend'|'unsuspend', reason } }
+  if (req.method === 'GET' && (req.query.lookup || req.query.lookupBooking || req.query.lookupGuest || req.query.lookupListing)) {
+    try {
+      if (req.query.lookup) return res.status(200).json(await lookup.search(sql, req.query.lookup));
+      if (req.query.lookupBooking) {
+        const out = await lookup.bookingDetail(sql, req.query.lookupBooking);
+        out.records = await actions.recordsFor(sql, { orderId: out.booking.id });
+        out.role = ADMIN_ROLE;
+        await logAudit(sql, { action: 'admin_lookup_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'order', targetId: out.booking.id });
+        return res.status(200).json(out);
+      }
+      if (req.query.lookupGuest) {
+        const out = await lookup.guestDetail(sql, req.query.lookupGuest);
+        out.records = await actions.recordsFor(sql, { guestId: out.guest.id });
+        out.role = ADMIN_ROLE;
+        await logAudit(sql, { action: 'admin_lookup_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'guest', targetId: out.guest.id });
+        return res.status(200).json(out);
+      }
+      const lst = await lookup.listingDetail(sql, req.query.lookupListing);
+      lst.records = await actions.recordsFor(sql, { listingId: lst.listing.id });
+      lst.role = ADMIN_ROLE;
+      return res.status(200).json(lst);
+    } catch (err) {
+      if (!err.isUserFacing) console.error('lookup failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Lookup failed.' });
+    }
+  }
+  if (req.method === 'POST' && req.body && req.body.adminCancelBooking) {
+    try {
+      const b = req.body.adminCancelBooking;
+      const pct = Number(b.refundPercent);
+      if (!(pct >= 0 && pct <= 100)) return res.status(400).json({ error: 'Refund must be 0 to 100%.' });
+      const reason = String(b.reason || '').trim().slice(0, 400);
+      if (!b.preview && reason.length < 5) return res.status(400).json({ error: 'Write the reason — the guest and host are told it.' });
+      const out = await executePolicyCancellation(sql, razorpay, { orderId: Number(b.orderId) || 0, pct, by: 'admin', note: reason,
+        refundFee: b.refundFee === true, countAgainstHost: b.countAgainstHost === true, adminLabel: ADMIN_ACTOR, preview: b.preview === true });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('adminCancelBooking failed:', err);
+      return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking. Nothing was refunded unless Admin → Refunds shows it.' });
+    }
+  }
+  if (req.method === 'POST' && req.body && req.body.adminPartialRefund) {
+    try {
+      const b = req.body.adminPartialRefund;
+      const out = await lookup.partialRefund(sql, razorpay, { orderId: b.orderId, amount: b.amount, reason: String(b.reason || '').slice(0, 400), hostPays: b.hostPays === true, adminLabel: ADMIN_ACTOR });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('adminPartialRefund failed:', err);
+      return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not make this refund.' });
+    }
+  }
+  if (req.method === 'POST' && req.body && req.body.adminAccount) {
+    try {
+      const b = req.body.adminAccount;
+      return res.status(200).json({ success: true, ...(await lookup.accountAction(sql, { guestId: b.guestId, action: String(b.action || ''), reason: b.reason, adminLabel: ADMIN_ACTOR })) });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('adminAccount failed:', err);
+      return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not update this account.' });
+    }
+  }
+
   // ---- Bank check (penny drop) run again for a host or co-host (_bank-check.js) ----
   // POST { recheckBank: { hostId } | { cohostGuestId } }
   if (req.method === 'POST' && req.body && req.body.recheckBank) {
@@ -588,7 +771,10 @@ module.exports = async (req, res) => {
       count('trust', sql`SELECT count(*)::int AS n FROM stay_disputes WHERE status IN ('open', 'host_responded')`),
       count('support', sql`SELECT count(*)::int AS n FROM support_tickets WHERE status IN ('open', 'in_progress')
                              AND last_user_message_at IS NOT NULL AND (last_support_message_at IS NULL OR last_user_message_at > last_support_message_at)`),
-      count('batch', sql`SELECT count(*)::int AS n FROM job_runs WHERE last_ok IS FALSE`)
+      count('batch', sql`SELECT count(*)::int AS n FROM job_runs WHERE last_ok IS FALSE`),
+      migrations.pendingCount(sql).then(n => { if (n != null) counts.migrations = n; }),
+      count('approvals', sql`SELECT count(*)::int AS n FROM support_actions WHERE status = 'pending'`)
+        .then(() => priceReview.pendingCount(sql)).then(n => { if (n) counts.approvals = (counts.approvals || 0) + n; })
     ]);
     return res.status(200).json({ counts });
   }
@@ -605,6 +791,8 @@ module.exports = async (req, res) => {
   if (req.method === 'GET' && req.query.supportTicket) {
     try {
       const out = await support.adminGet(sql, Number(req.query.supportTicket));
+      if (out.ticket.order_id) { try { out.ticket.refundable = (await lookup.moneyState(sql, out.ticket.order_id)).refundable; } catch (e) { /* shown without it */ } }
+      out.role = ADMIN_ROLE;
       await logAudit(sql, { action: 'support_request_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'support_ticket', targetId: out.ticket.id, metadata: { ref: out.ticket.ref } });
       return res.status(200).json(out);
     } catch (err) {

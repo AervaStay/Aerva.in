@@ -31,6 +31,7 @@
 // submit-listing.js: if RESEND_API_KEY isn't set, it's skipped quietly
 // rather than failing the approval/rejection itself.
 
+require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken, secretMatches } = require('./_approval-token');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
@@ -646,6 +647,12 @@ module.exports = async (req, res) => {
     }
     if (!hasValidSession && !hasValidSecret) {
       return res.status(401).json({ error: 'Unauthorized' });
+    }
+    // Approving or rejecting listings is for admins only (not reviewers or
+    // customer representatives — see _support-actions.js).
+    if (hasValidSession && !hasValidSecret) {
+      const role = await require('./_support-actions').roleOf(sql, sessionPayload, false);
+      if (role !== 'admin') return res.status(403).json({ error: 'Only an admin can approve or reject listings.' });
     }
 
     try {
