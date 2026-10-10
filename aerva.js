@@ -5146,7 +5146,7 @@
     if(!list.length){ row.style.display = 'none'; return; }
     document.getElementById('favoritesHeading').textContent = 'My favourite';
     const sub = document.getElementById('favoritesSub');
-    if(sub) sub.textContent = 'Homes you saved within 200 km of ' + (place || 'you') + ', most liked first.';
+    if(sub) sub.textContent = 'Homes you loved, near ' + (place || 'you');
     row.style.display = 'block';
     container.innerHTML = '';
     const datesSearched = !!(searchArrivalDate && searchDepartureDate);
@@ -11535,6 +11535,7 @@
     document.getElementById('suites').style.display = 'block';
     document.body.classList.add('showing-hero');
     document.title = 'Aerva — Stay Elegant';
+    resetSeoMeta();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
   document.getElementById('experienceFullViewBackLink').addEventListener('click', (e) => {
@@ -11545,6 +11546,7 @@
     if(expSection) expSection.style.display = 'none';
     document.body.classList.add('showing-hero');
     document.title = 'Aerva — Stay Elegant';
+    resetSeoMeta();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
@@ -12337,6 +12339,30 @@
     }
   }
 
+  // ---- Search-engine details for the page on screen ----
+  // A home opened here (index.html?listing=<id>) names its own page for
+  // Google as canonical — /stays/<name>-<city>, built by api/_seo.js with
+  // the same slug rule — and carries its own description. Going back to
+  // the homepage puts the site's own back.
+  const SITE_DESCRIPTION = (document.querySelector('meta[name="description"]') || {}).content || '';
+  function seoSlug(s){
+    return String(s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  }
+  function stayPathFor(l){
+    const name = seoSlug(l.property_name), city = seoSlug(l.city);
+    return '/stays/' + ((!city || name.split('-').join(' ').includes(city.split('-').join(' '))) ? (name || String(l.id)) : name + '-' + city);
+  }
+  function setSeoMeta(description, canonicalPath){
+    let d = document.querySelector('meta[name="description"]');
+    if(!d){ d = document.createElement('meta'); d.name = 'description'; document.head.appendChild(d); }
+    d.content = description || SITE_DESCRIPTION;
+    let c = document.querySelector('link[rel="canonical"]');
+    if(!c){ c = document.createElement('link'); c.rel = 'canonical'; document.head.appendChild(c); }
+    c.href = 'https://aerva.in' + (canonicalPath || '/');
+  }
+  function resetSeoMeta(){ setSeoMeta(SITE_DESCRIPTION, '/'); }
+
   function showFullListingPage(listing){
     if(listing && hiddenListingIds.has(Number(listing.id))){ alert('This listing is not available.'); return; }
     trackRecentlyViewed('stay', listing.id);
@@ -12346,6 +12372,10 @@
     loadListingReviews(document.getElementById('listingFullViewBody'), listing.id);
     document.getElementById('listingFullView').style.display = 'block';
     document.title = listing.property_name + ' — Aerva';
+    try{
+      const where = [listing.area, listing.city].filter(Boolean).join(', ');
+      setSeoMeta(`${listing.property_name}: ${listing.property_type || 'home'} in ${where}` + (listing.nightly_rate ? `, from ₹${Math.round(Number(listing.nightly_rate)).toLocaleString('en-IN')} a night` : '') + '. Hand-picked and personally reviewed by Aerva.', stayPathFor(listing));
+    }catch(e){}
     if(listing.property_type === 'Resort'){
       renderResortBookingCalendar(listing);
       renderRoomAwarePhotos(listing, []);
