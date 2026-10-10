@@ -43,7 +43,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="aerva.css?v=2026-10-10i">
+<link rel="stylesheet" href="aerva.css?v=2026-10-10h">
 <script src="aerva-cohost.js"></script>
 </head>
 <body class="showing-hero">
@@ -133,10 +133,9 @@
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Collection</a>
           <a href="host-status.html" id="statusMenuLink" style="display:none;">Status</a>
           <a href="host-earnings.html" id="earningsMenuLink" style="display:none;">My Earnings</a>
-          <a href="host-payouts.html" id="payoutsMenuLink" class="menu-sub-link" style="display:none;">Payout details</a>
           <a href="index.html?view=cohost">Co-hosting</a>
           <a href="index.html?view=help">Help &amp; Support</a>
-          <a href="index.html?view=settings" class="account-settings-link">Account Settings</a>
+          <a href="index.html?view=profile" class="account-settings-link">Account Settings</a>
           <div class="menu-divider"></div>
           <a href="#" id="guestLogoutLink">Log out</a>
         </div>
@@ -177,9 +176,8 @@
     <a href="host-dashboard.html" id="myListingsLinkMobile" style="display:none;">My Collection</a>
     <a href="host-status.html" id="statusMenuLinkMobile" style="display:none;">Status</a>
     <a href="host-earnings.html" id="earningsMenuLinkMobile" style="display:none;">My Earnings</a>
-    <a href="host-payouts.html" id="payoutsMenuLinkMobile" class="menu-sub-link" style="display:none;">Payout details</a>
     <a href="index.html?view=cohost">Co-hosting</a>
-    <a href="index.html?view=settings" class="account-settings-link">Account Settings</a>
+    <a href="index.html?view=profile" class="account-settings-link">Account Settings</a>
     <div style="height:1px; background:var(--line-dark); margin:-8px 0;"></div>
     <a href="#" id="guestLogoutLinkMobile">Log out</a>
   </span>
@@ -603,49 +601,12 @@
       <div id="profileReviews"></div>
     </div>
 
-    <p class="profile-hint profile-settings-pointer">Privacy, logging out of other devices and closing your account are in <a href="index.html?view=settings">Account Settings</a>.</p>
-  </div>
-</section>
-
-<!-- ================= ACCOUNT SETTINGS =================
-     Separate from Profile: Profile is what other people see about you;
-     Account Settings is how your account works. Hosts have theirs on My
-     Collection (personal details, privacy, verification); this page is
-     everyone else's, and a host who lands here is pointed there. -->
-<section class="pad" id="settingsView" style="background:var(--band); display:none;">
-  <div class="wrap profile-wrap">
-    <h2 class="profile-name settings-heading">Account Settings</h2>
-    <p class="profile-meta" id="settingsEmail"></p>
-
-    <div class="profile-section" id="settingsHostPointer" style="display:none;">
-      <div class="profile-section-title">Hosting</div>
-      <p class="profile-hint">Your personal details and verification are with your homes. Bank details for payouts are under My Earnings.</p>
-      <div class="settings-links">
-        <a class="filter-clear" href="host-dashboard.html?openProfile=1">Personal details &amp; verification</a>
-        <a class="filter-clear" href="host-payouts.html">Payout details</a>
-      </div>
-    </div>
-
-    <div class="profile-section">
-      <div class="profile-section-title">Privacy</div>
-      <div id="settingsPrivacyBox"></div>
-    </div>
-
     <!-- Signs this account out everywhere, e.g. after using a shared or lost device. -->
     <div class="profile-section" id="profileAccountSection">
       <div class="profile-section-title">Your account</div>
       <p class="profile-hint">Logged in on a device you no longer use? Log out everywhere, including here.</p>
       <button type="button" class="filter-clear profile-logout-all" id="profileLogoutAll">Log out of all devices</button>
       <p class="profile-msg" id="profileLogoutAllMsg"></p>
-
-      <p class="profile-hint settings-gap"><strong>Pause</strong> takes no new bookings and hides any homes you list. Nothing is erased, and logging in again brings it all back.
-        <strong>Delete</strong> erases your personal details for good and cannot be undone. Bookings already paid for go ahead either way.</p>
-      <div class="settings-links">
-        <button type="button" class="filter-clear" id="settingsPauseBtn">Pause account</button>
-        <button type="button" class="filter-clear settings-danger" id="settingsDeleteBtn">Delete account</button>
-      </div>
-      <div id="settingsDeletePanel" class="settings-delete-panel" hidden></div>
-      <p class="profile-msg" id="settingsAccountMsg"></p>
     </div>
   </div>
 </section>
@@ -1548,8 +1509,7 @@
 <script src="aerva-photo-location.js" defer></script>
 <script src="aerva-policies.js?v=2026-10-10h" defer></script>
 <script src="aerva-help.js" defer></script>
-<script src="aerva-privacy.js?v=2026-10-10i" defer></script>
-<script src="aerva.js?v=2026-10-10i" defer></script>
+<script src="aerva.js?v=2026-10-10h" defer></script>
 
 </body>
 </html>
