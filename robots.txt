@@ -1,0 +1,11 @@
+# Aerva — https://aerva.in
+User-agent: *
+Allow: /
+Disallow: /guest-login.html
+Disallow: /host-login.html
+Disallow: /host-dashboard.html
+Disallow: /host-earnings.html
+Disallow: /host-status.html
+Disallow: /manage-listing.html
+
+Sitemap: https://aerva.in/sitemap.xml

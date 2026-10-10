@@ -59,7 +59,7 @@
 // below extracts the largest number found either way, so filtering works
 // correctly against old and new data alike.
 
-require('./_env'); // production vs UAT safety rails — must load first
+const { IS_PROD: IS_PROD_ENV } = require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
         propertyCutoffs, PROPERTY_TIERS, experienceTier, EXPERIENCE_FACTORS,
@@ -837,6 +837,54 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
+
+  // ---- Pages for search engines (_seo.js) ----
+  // GET ?seo=stay&slug=… · ?seo=city&city=… · ?seo=sitemap — reached through
+  // the clean addresses in vercel.json (/stays/…, /stays-in/…, /sitemap.xml).
+  // Built from this endpoint's own public listing answer, asked in-process,
+  // so they show exactly what the site shows.
+  if (req.method === 'GET' && typeof req.query.seo === 'string') {
+    const seo = require('./_seo');
+    const self = module.exports;
+    const ask = (query) => new Promise((resolve) => {
+      const r = { code: 200, setHeader() {}, status(c) { this.code = c; return this; },
+        json(b) { resolve(this.code === 200 ? b : null); return this; }, end() { resolve(null); return this; }, send() { resolve(null); return this; } };
+      Promise.resolve(self({ method: 'GET', query, headers: {} }, r)).catch(() => resolve(null));
+    });
+    const send = (code, type, body, cacheSeconds) => {
+      res.setHeader('Content-Type', type);
+      res.setHeader('Cache-Control', `public, max-age=0, s-maxage=${cacheSeconds}, stale-while-revalidate=86400`);
+      if (!IS_PROD_ENV) res.setHeader('X-Robots-Tag', 'noindex, nofollow'); // UAT and previews never in search
+      return res.status(code).send(body);
+    };
+    try {
+      const data = await ask({});
+      const listings = (data && Array.isArray(data.listings) ? data.listings : []).filter(l => (l.listing_type || 'stay') !== 'experience');
+      const slugs = seo.slugMap(listings);
+      if (req.query.seo === 'sitemap') return send(200, 'application/xml; charset=utf-8', seo.sitemap(listings, slugs), 3600);
+      if (req.query.seo === 'stay') {
+        const slug = String(req.query.slug || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 120);
+        let l = slugs.map.get(slug);
+        // An old or hand-typed address ending in the listing number still finds it.
+        if (!l) { const m = slug.match(/(?:^|-)(\d+)$/); if (m) l = listings.find(x => x.id === Number(m[1])); }
+        if (!l) return send(404, 'text/html; charset=utf-8', seo.notFoundPage('This home is not on Aerva right now'), 300);
+        const canonicalSlug = slugs.byId.get(l.id);
+        if (canonicalSlug !== slug) { res.setHeader('Location', '/stays/' + canonicalSlug); return res.status(301).end(); }
+        const reviews = await ask({ reviewsFor: String(l.id), limit: '6' });
+        return send(200, 'text/html; charset=utf-8', seo.stayPage(l, reviews, { slug: canonicalSlug, cityHasPage: !!l.city }), 900);
+      }
+      if (req.query.seo === 'city') {
+        const want = seo.slugify(req.query.city);
+        const info = seo.citySummary(listings).find(c => c.slug === want);
+        if (!info) return send(404, 'text/html; charset=utf-8', seo.notFoundPage('No Aerva homes here yet'), 300);
+        return send(200, 'text/html; charset=utf-8', seo.cityPage(info, listings, slugs), 900);
+      }
+      return res.status(404).json({ error: 'Unknown page.' });
+    } catch (err) {
+      console.error('seo page failed:', err);
+      return res.status(500).send('Something went wrong. Please try again.');
+    }
+  }
 
   // ---- The scheduler (see JOBS above and _scheduler.js) ----
   // GET ?runSchedules=1 (cron secret): ONE external pinger every 5 minutes

@@ -28,5 +28,19 @@
       "path": "/api/get-listings?reviewSweep=1",
       "schedule": "0 2 * * *"
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/stays/:slug",
+      "destination": "/api/get-listings?seo=stay&slug=:slug"
+    },
+    {
+      "source": "/stays-in/:city",
+      "destination": "/api/get-listings?seo=city&city=:city"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api/get-listings?seo=sitemap"
+    }
   ]
 }
