@@ -118,9 +118,12 @@
       '<a href="host-dashboard.html" class="ah-host-only" data-ah-cohost hidden>My Collection</a>' +
       '<a href="host-status.html" class="ah-host-only" hidden>Status</a>' +
       '<a href="host-earnings.html" class="ah-host-only" data-ah-cohost hidden>My Earnings</a>' +
+      // Payout details: the bank account payouts go to. Hosts only — a
+      // co-host's bank details live in the Co-hosting centre.
+      '<a href="host-payouts.html" class="ah-host-only ah-sub" hidden>Payout details</a>' +
       '<a href="index.html?view=cohost">Co-hosting</a>' +
       '<a href="index.html?view=help">Help &amp; Support</a>' +
-      '<a href="host-dashboard.html?openProfile=1" data-ah-settings>Account Settings</a>' +
+      '<a href="index.html?view=settings" data-ah-settings>Account Settings</a>' +
       '<hr>' +
       '<a href="#" data-ah-logout>Log Out</a>';
   }
@@ -206,6 +209,12 @@
       el.hidden = !(isHost || (isCohost && el.hasAttribute('data-ah-cohost')));
     });
     document.getElementById('ahToday').hidden = !(isHost || isCohost);
+    // Account Settings: a host's (personal details, privacy, verification)
+    // are on My Collection; everyone else's are on index.html. The same
+    // rule as index.html's own menu.
+    if(isHost || guest.accountType === 'guest_host' || guest.account_type === 'guest_host'){
+      document.querySelectorAll('#ahHeader [data-ah-settings]').forEach(function(a){ a.setAttribute('href', 'host-dashboard.html?openProfile=1'); });
+    }
     document.getElementById('ahLogin').hidden = true;
     document.getElementById('ahLoginMobile').hidden = true;
     document.getElementById('ahAccount').hidden = false;
@@ -287,8 +296,12 @@
     // place instead of reloading the page to do the same thing.
     header.querySelectorAll('[data-ah-settings]').forEach(function(a){
       a.addEventListener('click', function(e){
-        var trigger = document.getElementById('hostProfileTrigger');
-        if(trigger){ e.preventDefault(); document.getElementById('ahMenu').classList.remove('is-open'); trigger.click(); }
+        if(typeof window.openProfileModal === 'function' && /host-dashboard\.html/.test(a.getAttribute('href') || '')){
+          e.preventDefault();
+          document.getElementById('ahMenu').classList.remove('is-open');
+          var panel = document.getElementById('ahPanel'); if(panel) panel.classList.remove('is-open');
+          window.openProfileModal('personal');
+        }
       });
     });
     var mobileNotifBtn = document.getElementById('ahNotifMobileBtn');

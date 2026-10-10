@@ -11855,7 +11855,7 @@
   // Today's had left out the profile, so Today "did nothing" when clicked
   // from the profile (it opened underneath it, out of sight).
   const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
-    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'wishlistView', 'policiesView', 'privacyView', 'termsView', 'helpView'];
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'wishlistView', 'settingsView', 'policiesView', 'privacyView', 'termsView', 'helpView'];
 
   // ---- Agreements shown before payment and before listing ----
   // The guest booking agreement sits directly above every Book button; the
@@ -12273,6 +12273,94 @@
         msg.style.color = '#8a2b2b';
         btn.disabled = false; btn.textContent = 'Log out of all devices';
       }
+    });
+  })();
+
+  // ---- Account Settings (?view=settings) ----
+  // Separate from Profile: privacy switches (aerva-privacy.js), log out
+  // everywhere, pause and delete. A host's personal details and
+  // verification stay on My Collection; this page links there.
+  function showSettingsView(){
+    document.body.classList.remove('showing-hero');
+    hideMainViews();
+    document.getElementById('settingsView').style.display = 'block';
+    document.title = 'Account Settings — Aerva';
+    BROWSE_TABS.concat(['catToday']).forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.classList.remove('active');
+    });
+    window.scrollTo({ top: 0 });
+    const box = document.getElementById('settingsPrivacyBox');
+    if(!guestAuthToken()){
+      box.innerHTML = '<p class="profile-hint">Log in to see your account settings.</p><a class="btn" href="guest-login.html">Log in</a>';
+      document.getElementById('profileAccountSection').style.display = 'none';
+      return;
+    }
+    document.getElementById('settingsEmail').textContent = safeStorage.get('aerva_guest_email') || '';
+    if(window.AervaPrivacy) window.AervaPrivacy.mount(box);
+  }
+
+  (function wireSettingsAccount(){
+    const pauseBtn = document.getElementById('settingsPauseBtn');
+    const delBtn = document.getElementById('settingsDeleteBtn');
+    const panel = document.getElementById('settingsDeletePanel');
+    const msg = document.getElementById('settingsAccountMsg');
+    if(!pauseBtn || !delBtn) return;
+    const post = (body) => fetch(SUITES_API_BASE + '/api/guest-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+      body: JSON.stringify(body)
+    });
+    const leave = () => {
+      if(typeof window.aervaClearGuestSession === 'function') window.aervaClearGuestSession();
+      else safeStorage.remove('aerva_guest_session');
+      window.location.href = 'index.html';
+    };
+    pauseBtn.addEventListener('click', async () => {
+      if(!confirm('Pause your account? You will be logged out everywhere. Nothing is erased: log in again to bring it all back.')) return;
+      pauseBtn.disabled = true; msg.textContent = '';
+      try{
+        const r = await post({ mode: 'deactivateAccount' });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok) throw new Error(d.error || 'Could not pause your account right now.');
+        alert('Your account is paused. Log in again whenever you want it back.');
+        leave();
+      }catch(err){
+        msg.textContent = err.message; msg.style.color = '#8a2b2b'; pauseBtn.disabled = false;
+      }
+    });
+    delBtn.addEventListener('click', async () => {
+      const esc = escapeMessageHtml;
+      panel.hidden = false;
+      panel.innerHTML = '<p class="profile-hint">Checking…</p>';
+      let blockers = [];
+      try{
+        const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=deletionCheck', { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
+        blockers = (await r.json()).blockers || [];
+      }catch(e){ blockers = ['Could not check right now. Try again.']; }
+      if(blockers.length){
+        panel.innerHTML = '<p><strong>Your account cannot be deleted yet:</strong></p><ul>' + blockers.map(b => `<li>${esc(b)}</li>`).join('') + '</ul>';
+        return;
+      }
+      panel.innerHTML = `<p>Deleting your account removes your name, contact details, photos, profile, sign-in and messages. Booking and payment records are kept without your details, as the law requires. This cannot be undone.</p>
+        <label class="settings-delete-confirm">Type DELETE to confirm <input id="settingsDeleteConfirm" autocomplete="off"></label>
+        <button type="button" class="settings-danger-solid" id="settingsDeleteGo">Delete my account</button>
+        <p class="profile-msg" id="settingsDeleteMsg" style="color:#8a2b2b;"></p>`;
+      document.getElementById('settingsDeleteGo').addEventListener('click', async () => {
+        const out = document.getElementById('settingsDeleteMsg');
+        if(document.getElementById('settingsDeleteConfirm').value.trim() !== 'DELETE'){ out.textContent = 'Type DELETE to confirm.'; return; }
+        const r = await post({ mode: 'deleteAccount', confirm: 'DELETE' });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok){ out.textContent = (d.blockers && d.blockers.join(' ')) || d.error || 'Could not delete your account.'; return; }
+        // This account's own saved lists in this browser go too.
+        try{
+          const part = String(guestAuthToken() || '').split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+          const id = (JSON.parse(atob(part + '==='.slice((part.length + 3) % 4))) || {}).listingId;
+          if(id != null) ['aerva_recently_viewed', 'aerva_favorite_listings', 'aerva_recent_searches'].forEach(k => safeStorage.remove(k + ':' + id));
+        }catch(e){}
+        alert('Your account has been deleted.');
+        leave();
+      });
     });
   })();
 
@@ -13440,6 +13528,8 @@
       showTodayView();
     } else if(requestedView === 'profile'){
       showProfileView();
+    } else if(requestedView === 'settings'){
+      showSettingsView();
     } else if(requestedView === 'policies'){
       showPoliciesView();
     } else if(requestedView === 'privacy'){
@@ -13825,12 +13915,20 @@
           // on the host dashboard; everyone else's account is their profile.
           if(data.guest.hasActiveListing === true || data.guest.accountType === 'guest_host'){
             document.querySelectorAll('.account-settings-link').forEach(a => { a.href = 'host-dashboard.html?openProfile=1'; });
+            const pointer = document.getElementById('settingsHostPointer');
+            if(pointer) pointer.style.display = 'block';
           }
           if(data.guest.hasActiveListing === true){
             const statusMenuLink = document.getElementById('statusMenuLink');
             const statusMenuLinkMobile = document.getElementById('statusMenuLinkMobile');
             if(statusMenuLink) statusMenuLink.style.display = 'block';
             if(statusMenuLinkMobile) statusMenuLinkMobile.style.display = 'block';
+            // Payout details (host-payouts.html), under My Earnings: the
+            // host's own bank account. A co-host's is in the Co-hosting centre.
+            ['payoutsMenuLink', 'payoutsMenuLinkMobile'].forEach(id => {
+              const el = document.getElementById(id);
+              if(el) el.style.display = 'block';
+            });
           }
           // Messages is available to every logged-in account now, not
           // just hosts — a guest-only account can still have an active

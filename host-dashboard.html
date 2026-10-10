@@ -719,8 +719,9 @@
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="aerva-header.css">
+<link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
 <script src="aerva-cohost.js"></script>
+<script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-policies.js"></script>
 </head>
 <body>
@@ -1100,7 +1101,7 @@
     <button type="button" class="profile-modal-close" id="profileModalCloseBtn" aria-label="Close">&times;</button>
     <div class="profile-modal-tabs">
       <button type="button" class="profile-tab-btn active" data-profile-tab="personal" id="profileTabPersonalBtn">Personal Details</button>
-      <button type="button" class="profile-tab-btn" data-profile-tab="payment" id="profileTabPaymentBtn">Payment Options</button>
+      <button type="button" class="profile-tab-btn" data-profile-tab="privacy" id="profileTabPrivacyBtn">Privacy</button>
       <button type="button" class="profile-tab-btn" data-profile-tab="verification" id="profileTabVerificationBtn">Verification</button>
     </div>
     <div class="profile-modal-body">
@@ -1184,43 +1185,11 @@
         <div id="deleteAccountPanel" style="display:none; margin-top:12px; font-size:14px;"></div>
       </div>
 
-      <!-- ---- Payment Options ---- -->
-      <div class="profile-tab-panel" id="profilePanelPayment" style="display:none;">
-        <div class="profile-warning">Changing your bank details puts payouts on hold: Aerva checks the new account with your bank (₹1 is sent to it) against the name on your PAN, and payouts wait at least 48 hours after any change. You will get an email about the change. The account must be held by the PAN holder, alone or jointly.</div>
-        <div class="settings-row" style="border-bottom:none;">
-          <div class="settings-row-main">
-            <div class="settings-row-label">Bank Account</div>
-            <div class="settings-row-value" id="profileCurrentBankNote">No bank details on file yet.</div>
-          </div>
-          <button type="button" class="settings-edit-link" data-edit-target="profileBankEditForm">Edit</button>
-        </div>
-        <div class="settings-edit-form" id="profileBankEditForm">
-          <div class="field">
-            <label for="profileBankHolder">Account Holder Name</label>
-            <input type="text" id="profileBankHolder" placeholder="The name on your PAN — the account must be in it">
-          </div>
-          <div class="field">
-            <label for="profileBankAccount">Bank Account Number</label>
-            <input type="text" id="profileBankAccount" placeholder="New account number" inputmode="numeric" autocomplete="off">
-          </div>
-          <div class="field">
-            <label for="profileBankAccount2">Re-enter Account Number</label>
-            <input type="text" id="profileBankAccount2" placeholder="The same number again" inputmode="numeric" autocomplete="off">
-          </div>
-          <div class="field">
-            <label for="profileBankGstin">Business GSTIN <span style="font-weight:400; opacity:0.7;">(only if the account is in your business’s name)</span></label>
-            <input type="text" id="profileBankGstin" placeholder="e.g. 27ABCPS1234K1ZM — registered under your own PAN" maxlength="15" style="text-transform:uppercase;" autocomplete="off">
-          </div>
-          <div class="field">
-            <label for="profileBankIfsc">IFSC Code</label>
-            <input type="text" id="profileBankIfsc" placeholder="e.g. HDFC0001234">
-          </div>
-          <div class="settings-edit-actions">
-            <button type="button" class="settings-save-btn" id="profileBankSaveBtn">Save</button>
-            <button type="button" class="settings-cancel-btn" data-cancel-target="profileBankEditForm">Cancel</button>
-          </div>
-          <p class="profile-save-msg" id="profileBankMsg"></p>
-        </div>
+      <!-- ---- Privacy (aerva-privacy.js) ----
+           Bank details moved to their own page: Payout details
+           (host-payouts.html), under My Earnings in the menu. -->
+      <div class="profile-tab-panel" id="profilePanelPrivacy" style="display:none;">
+        <div id="privacySettingsBox"></div>
       </div>
 
       <!-- ---- Verification ---- -->
@@ -2109,7 +2078,7 @@
       `;
       document.getElementById('verificationBannerBtn').addEventListener('click', () => {
         const bank = items.find(i => /bank/i.test(i.title) && i.kind === 'action');
-        if(bank){ openProfileModal('payment'); return; }
+        if(bank){ window.location.href = 'host-payouts.html'; return; }
         openProfileModal('verification');
       });
     }
@@ -2129,16 +2098,8 @@
     document.getElementById('profilePhoneDisplay').textContent = phoneVal || 'Not provided';
     document.getElementById('profilePhone').value = phoneVal;
     document.getElementById('profileEmailValue').textContent = gp.email || hostEmail || '—';
-    document.getElementById('profileCurrentBankNote').textContent = v.bankAccountNumberMasked
-      ? `${v.bankAccountNumberMasked}${v.bankAccountHolderName ? ' (' + v.bankAccountHolderName + ')' : ''}`
-      : 'No bank details on file yet.';
-    document.getElementById('profileBankHolder').value = v.panName || '';
-    document.getElementById('profileBankAccount').value = '';
-    document.getElementById('profileBankAccount2').value = '';
-    document.getElementById('profileBankGstin').value = '';
-    document.getElementById('profileBankIfsc').value = '';
     // Collapse every edit form back closed on a fresh data load.
-    ['profileNameEditForm', 'profilePhoneEditForm', 'profileBankEditForm'].forEach(id => {
+    ['profileNameEditForm', 'profilePhoneEditForm'].forEach(id => {
       document.getElementById(id).style.display = 'none';
     });
 
@@ -2207,16 +2168,12 @@
         ${v.bankStatus === 'rejected' && v.bankRejectionReason ? `<p class="verify-rejection-note">${escH(v.bankRejectionReason)}</p>` : ''}
         ${v.bankCheck && v.bankCheck.message && v.bankStatus !== 'rejected' ? `<p class="verify-locked-note">${escH(v.bankCheck.message)}</p>` : ''}
         ${v.bankPayoutsFrom ? `<p class="verify-locked-note">Bank details changed recently: payouts resume from ${escH(new Date(v.bankPayoutsFrom).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}.</p>` : ''}
-        <p class="verify-locked-note">${v.bankAccountNumberMasked ? 'Account on file: ' + escH(v.bankAccountNumberMasked) + '. ' : 'No bank details on file yet. '}Manage this under the <a href="#" id="goToPaymentTabLink" style="color:#8a6c39;">Payment Options</a> tab.</p>
+        <p class="verify-locked-note">${v.bankAccountNumberMasked ? 'Account on file: ' + escH(v.bankAccountNumberMasked) + '. ' : 'No bank details on file yet. '}Manage it on <a href="host-payouts.html" style="color:#8a6c39;">Payout details</a>.</p>
       </div>
 
       <p style="margin:14px 0 0; font-size:13.5px; opacity:0.65;">Payouts are held until all three steps show Approved.</p>
     `;
 
-    document.getElementById('goToPaymentTabLink').addEventListener('click', (e) => {
-      e.preventDefault();
-      switchProfileTab('payment');
-    });
 
     const panNameBtn = document.getElementById('submitPanNameBtn');
     if(panNameBtn){
@@ -2348,10 +2305,17 @@
     document.getElementById('profileModalOverlay').style.display = 'none';
   }
   function switchProfileTab(tab){
-    ['personal', 'payment', 'verification'].forEach(t => {
+    // Bank details are on their own page now (host-payouts.html); an old
+    // link to the Payment Options tab goes there.
+    if(tab === 'payment'){ window.location.href = 'host-payouts.html'; return; }
+    ['personal', 'privacy', 'verification'].forEach(t => {
       document.getElementById('profileTab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn').classList.toggle('active', t === tab);
       document.getElementById('profilePanel' + t.charAt(0).toUpperCase() + t.slice(1)).style.display = t === tab ? 'block' : 'none';
     });
+    // Log out / pause / delete belong with the personal details only.
+    const controls = document.getElementById('accountControls');
+    if(controls) controls.style.display = tab === 'personal' ? 'block' : 'none';
+    if(tab === 'privacy' && window.AervaPrivacy) window.AervaPrivacy.mount(document.getElementById('privacySettingsBox'));
   }
 
   // ---- List Experience modal — deliberately its OWN separate overlay,
@@ -2727,59 +2691,6 @@
       const data = await res.json();
       if(res.ok){
         document.getElementById('profilePhoneEditForm').style.display = 'none';
-        loadListings();
-      } else {
-        msgEl.textContent = data.error || 'Something went wrong. Please try again.';
-        msgEl.style.color = '#a3402f';
-        msgEl.style.display = 'block';
-      }
-    } catch(err){
-      msgEl.textContent = 'Something went wrong. Please try again.';
-      msgEl.style.color = '#a3402f';
-      msgEl.style.display = 'block';
-    }
-    this.disabled = false;
-    this.textContent = 'Save';
-  });
-
-  // ---- Payment Options (bank details) save ----
-  document.getElementById('profileBankSaveBtn').addEventListener('click', async function(){
-    const msgEl = document.getElementById('profileBankMsg');
-    msgEl.style.display = 'none';
-    const bankAccountHolderName = document.getElementById('profileBankHolder').value.trim();
-    const bankAccountNumber = document.getElementById('profileBankAccount').value.trim();
-    const bankIfsc = document.getElementById('profileBankIfsc').value.trim();
-    const bankAccountNumber2 = document.getElementById('profileBankAccount2').value.trim();
-    const bankGstin = (document.getElementById('profileBankGstin').value || '').trim().toUpperCase();
-    if(!bankAccountHolderName || !bankAccountNumber || !bankIfsc){
-      msgEl.textContent = 'Please fill in all the fields.';
-      msgEl.style.color = '#a3402f';
-      msgEl.style.display = 'block';
-      return;
-    }
-    if(bankAccountNumber.replace(/\s/g, '') !== bankAccountNumber2.replace(/\s/g, '')){
-      msgEl.textContent = 'The two account numbers do not match. Type them again.';
-      msgEl.style.color = '#a3402f';
-      msgEl.style.display = 'block';
-      return;
-    }
-    if(!confirm('Change your payout bank account? Aerva will check it with your bank (₹1 is sent to it), and payouts wait 48 hours after any change.')) return;
-    this.disabled = true;
-    this.textContent = 'Saving…';
-    try{
-      const res = await fetch(API_BASE + '/api/host-listings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-        body: JSON.stringify({ bankAccountHolderName, bankAccountNumber, bankIfsc, bankGstin: bankGstin || undefined })
-      });
-      const data = await res.json();
-      if(res.ok){
-        document.getElementById('profileBankEditForm').style.display = 'none';
-        if(data.bankCheck === 'checking'){
-          const note = document.getElementById('profileCurrentBankNote');
-          if(note) note.textContent = 'Saved. Checking with your bank — this usually takes a minute.';
-          setTimeout(loadListings, 20000);
-        }
         loadListings();
       } else {
         msgEl.textContent = data.error || 'Something went wrong. Please try again.';
@@ -4459,7 +4370,7 @@
     // a Profile tab).
     const deepLinkParams = new URLSearchParams(window.location.search);
     if(deepLinkParams.get('openProfile') === '1'){
-      const validTabs = ['personal', 'payment', 'verification'];
+      const validTabs = ['personal', 'privacy', 'verification', 'payment'];
       const requestedTab = deepLinkParams.get('profileTab');
       openProfileModal(validTabs.includes(requestedTab) ? requestedTab : 'personal');
     }
@@ -4772,6 +4683,6 @@
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
 </script>
-<script src="aerva-header.js?v=2026-10-09b" defer></script>
+<script src="aerva-header.js?v=2026-10-10a" defer></script>
 </body>
 </html>

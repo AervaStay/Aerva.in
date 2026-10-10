@@ -34,6 +34,52 @@ const PROFILE_QUESTIONS = [
 
 const FIELD_MAX = 400;
 
+// ---- Privacy (Account Settings → Privacy) ----
+// Each is ON unless its owner switched it off; stored as the switched-off
+// ones in guests.privacy_settings, so a profile nobody has touched looks
+// exactly as it always has.
+//   'browse' — the host profile anyone signed in can open from "Hosted by"
+//              on a listing, before any booking (get-listings ?hostProfile).
+//   'booked' — the profile the other side sees once you share a booking.
+// A guest who has booked with a host still sees the host's full profile:
+// they are about to stay in that person's home.
+const PRIVACY_OPTIONS = [
+  { id: 'show_photo',          scope: 'browse', hostOnly: true,  label: 'Your photo',                         hint: 'Off: your initial is shown instead.' },
+  { id: 'show_about',          scope: 'browse', hostOnly: true,  label: 'Your "Get to know me" answers',      hint: 'Your work, hobbies and answers.' },
+  { id: 'show_member_since',   scope: 'browse', hostOnly: true,  label: 'The year you joined Aerva',          hint: '' },
+  { id: 'show_hosting_cities', scope: 'browse', hostOnly: true,  label: 'The cities you host in',             hint: '' },
+  { id: 'show_other_listings', scope: 'browse', hostOnly: true,  label: 'Your other homes and experiences',   hint: 'Off: only the home a guest came from is listed. Reviews of all your homes still show.' },
+  { id: 'show_travels',        scope: 'booked', hostOnly: false, label: "Places you've travelled with Aerva", hint: 'Cities only, never dates. Shown to the people you book with or host.' }
+];
+
+// Every option as true/false, from the stored object (or nothing).
+function privacyOf(stored) {
+  const s = stored && typeof stored === 'object' ? stored : {};
+  const out = {};
+  PRIVACY_OPTIONS.forEach(o => { out[o.id] = s[o.id] !== false; });
+  return out;
+}
+
+// Only known options, only booleans: exactly what should be stored.
+function sanitizePrivacy(body) {
+  const incoming = body && typeof body === 'object' ? body : {};
+  const out = {};
+  PRIVACY_OPTIONS.forEach(o => { if (incoming[o.id] === false) out[o.id] = false; });
+  return out;
+}
+
+// One account's settings. Before the database update adds the column,
+// everything reads as ON — today's behaviour — rather than failing.
+async function readPrivacy(sql, guestId) {
+  if (!guestId) return privacyOf(null);
+  try {
+    const rows = await sql`SELECT privacy_settings FROM guests WHERE id = ${guestId}`;
+    return privacyOf(rows[0] && rows[0].privacy_settings);
+  } catch (err) {
+    return privacyOf(null);
+  }
+}
+
 // Trims, caps length, and keeps only answers to questions that still
 // exist. Returns exactly what should be written — never the raw input.
 function sanitizeProfileInput(body) {
@@ -231,6 +277,10 @@ async function buildProfile(sql, account, { own = false } = {}) {
     listings,
     reviews
   };
+  if (!own) {
+    const privacy = await readPrivacy(sql, account.id);
+    if (!privacy.show_travels) profile.places = Object.assign({}, places, { stayed: [] });
+  }
   if (own) {
     // The form needs every question, answered or not, and the answers in
     // raw form to fill the fields.
@@ -257,7 +307,7 @@ async function shareABooking(sql, { guestId, hostId }) {
 }
 
 module.exports = {
-  PROFILE_QUESTIONS, FIELD_MAX,
+  PROFILE_QUESTIONS, FIELD_MAX, PRIVACY_OPTIONS, privacyOf, sanitizePrivacy, readPrivacy,
   sanitizeProfileInput, answeredQuestions, placesWithAerva, reviewsAboutPerson,
   buildProfile, shareABooking, liveListingsForHost
 };

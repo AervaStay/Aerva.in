@@ -85,7 +85,7 @@ const { decryptField } = require('./_secure-fields');
 const { parseMaxGuests } = require('./_pricing');
 const { enforceComplianceDeadlines, runAllComplianceScans } = require('./_compliance');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
-const { answeredQuestions, placesWithAerva } = require('./_profiles');
+const { answeredQuestions, placesWithAerva, readPrivacy } = require('./_profiles');
 const { logAudit } = require('./_audit-log');
 const { recordTierChange, pendingTierRecomputes, clearTierRecomputes,
         lastSnapshotRun, markSnapshotRun, standingBefore } = require('./_tier-history');
@@ -859,7 +859,9 @@ module.exports = async (req, res) => {
     };
     try {
       const data = await ask({});
-      const listings = (data && Array.isArray(data.listings) ? data.listings : []).filter(l => (l.listing_type || 'stay') !== 'experience');
+      const { cleanCity } = require('./_city-names');
+      const listings = (data && Array.isArray(data.listings) ? data.listings : []).filter(l => (l.listing_type || 'stay') !== 'experience')
+        .map(l => ({ ...l, city: cleanCity(l.city, l.latitude, l.longitude) })); // one page per place, even before the clean-up update
       const slugs = seo.slugMap(listings);
       if (req.query.seo === 'sitemap') return send(200, 'application/xml; charset=utf-8', seo.sitemap(listings, slugs), 3600);
       if (req.query.seo === 'stay') {
@@ -1151,16 +1153,18 @@ module.exports = async (req, res) => {
           LIMIT 24
         ` : [];
         const joined = a.account_created_at || a.host_created_at;
+        // What the host chose to show here (Account Settings → Privacy).
+        const privacy = await readPrivacy(sql, a.account_id);
         return res.status(200).json({
           profile: {
             name: String(a.account_name || a.host_record_name || a.listing_host_name || '').trim() || 'Aerva host',
-            photoUrl: a.profile_photo_url || null,
-            memberSince: joined ? String(new Date(joined).getFullYear()) : null,
-            work: a.profile_work || null,
-            hobbies: a.profile_hobbies || null,
-            answers: answeredQuestions(a.profile_about),
-            hostingIn: places.hosting || [],
-            listings: hostListings.map(l => ({
+            photoUrl: privacy.show_photo ? (a.profile_photo_url || null) : null,
+            memberSince: privacy.show_member_since && joined ? String(new Date(joined).getFullYear()) : null,
+            work: privacy.show_about ? (a.profile_work || null) : null,
+            hobbies: privacy.show_about ? (a.profile_hobbies || null) : null,
+            answers: privacy.show_about ? answeredQuestions(a.profile_about) : [],
+            hostingIn: privacy.show_hosting_cities ? (places.hosting || []) : [],
+            listings: hostListings.filter(l => privacy.show_other_listings || Number(l.id) === listingId).map(l => ({
               id: l.id,
               name: l.property_name,
               place: [l.area, l.city].filter(Boolean).join(', '),

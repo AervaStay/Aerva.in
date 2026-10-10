@@ -269,7 +269,10 @@ async function payoutDetailsChanged(sql, kind, key, what = 'bank') {
     if (!p) return { status: 'missing' };
     const last4 = String(p.account || '').slice(-4);
     const until = fmtWhen(Date.now() + HOLD_HOURS_AFTER_CHANGE * 3600e3);
-    const where = kind === 'host' ? 'https://aerva.in/host-dashboard.html?openProfile=1&profileTab=verification' : 'https://aerva.in/index.html?view=cohost';
+    // A host's bank account is on Payout details (under My Earnings); a
+    // PAN change is checked on the Verification tab.
+    const where = kind !== 'host' ? 'https://aerva.in/index.html?view=cohost'
+      : what === 'pan' ? 'https://aerva.in/host-dashboard.html?openProfile=1&profileTab=verification' : 'https://aerva.in/host-payouts.html';
     const changed = what === 'pan'
       ? `The PAN on your Aerva account was changed${p.panName ? ` to one in the name <strong>${esc(p.panName)}</strong>` : ''}.`
       : `The bank account for your Aerva payouts was changed to the account ending <strong>${esc(last4)}</strong> (${esc(p.ifsc)}), in the name ${esc(p.holder)}.`;

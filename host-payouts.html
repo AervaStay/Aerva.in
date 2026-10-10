@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Payout details — Aerva</title>
+<script src="aerva-env.js?v=2026-10-09b"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
+<meta name="robots" content="noindex, nofollow">
+<!--
+  host-payouts.html — Payout details: the bank account a host's payouts go
+  to, and the payouts already sent. Moved out of the Account Settings
+  window on My Collection (it was the "Payment Options" tab) so money
+  matters sit together under My Earnings in the menu.
+
+  Same API as before: GET /api/host-listings (its `verification` block)
+  to show what is on file, POST /api/host-listings { bankAccountHolderName,
+  bankAccountNumber, bankIfsc, bankGstin } to change it, and
+  ?myPayouts=1 for payouts sent. A co-host's bank details are in the
+  Co-hosting centre, not here.
+-->
+<style>
+  body{font-family:'Jost', sans-serif; background:#ffffff; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased; -webkit-text-size-adjust:100%; text-size-adjust:100%;}
+  .wrap{max-width:760px; margin:0 auto;}
+  .back-home{display:inline-block; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:20px;}
+  .back-home:hover{opacity:1;}
+  h1{font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:32px; margin:0 0 6px;}
+  .lead{font-size:14.5px; opacity:0.75; margin:0 0 26px; line-height:1.6;}
+  .card{background:#fff; border:1px solid #ece4d8; border-radius:12px; padding:18px 20px; margin:0 0 22px;}
+  .card h2{font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 10px;}
+  .warn{background:#fbf6ee; border:1px solid #eadcc4; border-radius:10px; padding:12px 14px; font-size:13.5px; line-height:1.6; color:#5c4a2c; margin:0 0 14px;}
+  .row{display:flex; justify-content:space-between; align-items:center; gap:14px; padding:12px 0; border-top:1px solid #f0e9df;}
+  .row:first-of-type{border-top:none;}
+  .row-label{font-size:12px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.6;}
+  .row-value{font-size:15px; margin-top:3px; word-break:break-word;}
+  .status{font-size:12px; letter-spacing:0.06em; text-transform:uppercase; padding:4px 10px; border-radius:999px; background:#f1ece4; white-space:nowrap;}
+  .status-approved{background:#e5f1e6; color:#2f6b37;}
+  .status-rejected{background:#f8e4e0; color:#a3402f;}
+  .status-pending{background:#fbf1dc; color:#8a6c39;}
+  .note{font-size:13.5px; opacity:0.75; line-height:1.55; margin:8px 0 0;}
+  .note.bad{color:#a3402f; opacity:1;}
+  .btn-line{background:none; border:1px solid #d9cfc2; border-radius:999px; padding:10px 18px; cursor:pointer; font:inherit; font-size:14px; min-height:44px; color:#1c1a17; text-decoration:none; display:inline-flex; align-items:center; white-space:nowrap; line-height:1.2;}
+  .btn-solid{background:#1c1a17; color:#fff; border:none; border-radius:999px; padding:11px 20px; cursor:pointer; font:inherit; font-size:14px; min-height:44px;}
+  .btn-solid:disabled{opacity:0.6; cursor:default;}
+  .field{margin:0 0 14px;}
+  .field label{display:block; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.7; margin-bottom:6px;}
+  .field input{width:100%; box-sizing:border-box; padding:11px 12px; border:1px solid #d9cfc2; border-radius:8px; font:inherit; font-size:16px; background:#fff;}
+  .actions{display:flex; gap:10px; flex-wrap:wrap; margin-top:6px;}
+  #bankForm{display:none; margin-top:14px; padding-top:14px; border-top:1px solid #f0e9df;}
+  .msg{font-size:13.5px; margin:10px 0 0; min-height:18px;}
+  .payout{display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-top:1px solid #f0e9df; color:inherit; text-decoration:none; font-size:14.5px;}
+  .payout:first-of-type{border-top:none;}
+  .payout .sub{opacity:0.7;}
+  .payout .when{opacity:0.7; text-align:right; flex:0 0 auto;}
+  .loading, .empty{font-size:14px; opacity:0.7;}
+  @media (max-width:600px){
+    body{padding:28px 16px;}
+    h1{font-size:27px;}
+    .row{flex-wrap:wrap;}
+    .payout{flex-direction:column; gap:4px;}
+    .payout .when{text-align:left;}
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
+<script src="aerva-cohost.js"></script>
+</head>
+<body>
+
+<div class="wrap">
+  <a href="host-earnings.html" class="back-home">&larr; My Earnings</a>
+  <h1>Payout details</h1>
+  <p class="lead">Where Aerva sends your earnings, and the payouts already sent.</p>
+
+  <div id="payoutsBody"><p class="loading">Loading…</p></div>
+</div>
+
+<script>
+(function(){
+  const API = (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/host-listings';
+  const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
+  const body = document.getElementById('payoutsBody');
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const statusLabel = (s) => ({ approved: 'Approved', rejected: 'Needs attention', pending: 'Being checked', not_submitted: 'Not added' }[s] || (s ? String(s).replace(/_/g, ' ') : 'Not added'));
+  const inr = (n) => '\u20b9' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
+
+  if(!token){ window.location.replace('guest-login.html'); return; }
+  // A co-host's own bank details are kept with their co-hosting.
+  const IS_COHOST = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
+
+  async function load(){
+    let v = null;
+    try{
+      const res = await fetch(API, { headers: { 'Authorization': 'Bearer ' + token } });
+      if(res.status === 401){ try{ localStorage.removeItem('aerva_guest_session'); }catch(e){} window.location.replace('guest-login.html'); return; }
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'failed');
+      v = data.verification || null;
+    }catch(err){
+      body.innerHTML = '<p class="empty">Could not load your payout details. Please refresh.</p>';
+      return;
+    }
+    if(IS_COHOST || !v){
+      body.innerHTML = '<div class="card"><h2>Bank account</h2><p class="note">' + (IS_COHOST
+        ? 'As a co-host, your bank account for your share is in the <a href="index.html?view=cohost">Co-hosting centre</a>.'
+        : 'Your bank account is added once you list a home. <a href="index.html?view=cohost">Co-hosting?</a> Your bank account is in the Co-hosting centre.') + '</p></div><div id="sentBox"></div>';
+      loadSent();
+      return;
+    }
+    const s = v.bankStatus || 'not_submitted';
+    const cls = s === 'approved' ? 'status-approved' : s === 'rejected' ? 'status-rejected' : s === 'pending' ? 'status-pending' : '';
+    body.innerHTML = `
+      <div class="card">
+        <h2>Bank account</h2>
+        <div class="warn">Changing your bank details puts payouts on hold: Aerva checks the new account with your bank (\u20b91 is sent to it) against the name on your PAN, and payouts wait at least 48 hours after any change. You will get an email about the change. The account must be held by the PAN holder, alone or jointly.</div>
+        <div class="row">
+          <div><div class="row-label">Account</div>
+            <div class="row-value" id="bankNote">${v.bankAccountNumberMasked ? esc(v.bankAccountNumberMasked) + (v.bankAccountHolderName ? ' (' + esc(v.bankAccountHolderName) + ')' : '') : 'No bank details on file yet.'}</div></div>
+          <span class="status ${cls}">${esc(statusLabel(s))}</span>
+        </div>
+        ${v.bankIfsc ? `<div class="row"><div><div class="row-label">IFSC</div><div class="row-value">${esc(v.bankIfsc)}</div></div></div>` : ''}
+        ${s === 'rejected' && v.bankRejectionReason ? `<p class="note bad">${esc(v.bankRejectionReason)}</p>` : ''}
+        ${v.bankCheck && v.bankCheck.message && s !== 'rejected' ? `<p class="note">${esc(v.bankCheck.message)}</p>` : ''}
+        ${v.bankPayoutsFrom ? `<p class="note">Bank details changed recently: payouts resume from ${esc(new Date(v.bankPayoutsFrom).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}.</p>` : ''}
+        <div class="actions" style="margin-top:14px;">
+          <button type="button" class="btn-line" id="bankEditBtn">${v.bankAccountNumberMasked ? 'Change bank account' : 'Add bank account'}</button>
+          <a class="btn-line" href="host-dashboard.html?openProfile=1&profileTab=verification">PAN &amp; Aadhaar verification</a>
+        </div>
+        <div id="bankForm">
+          <div class="field"><label for="bankHolder">Account holder name</label>
+            <input type="text" id="bankHolder" placeholder="The name on your PAN — the account must be in it" value="${esc(v.panName || '')}"></div>
+          <div class="field"><label for="bankAccount">Bank account number</label>
+            <input type="text" id="bankAccount" placeholder="New account number" inputmode="numeric" autocomplete="off"></div>
+          <div class="field"><label for="bankAccount2">Re-enter account number</label>
+            <input type="text" id="bankAccount2" placeholder="The same number again" inputmode="numeric" autocomplete="off"></div>
+          <div class="field"><label for="bankGstin">Business GSTIN <span style="text-transform:none; letter-spacing:0;">(only if the account is in your business\u2019s name)</span></label>
+            <input type="text" id="bankGstin" placeholder="e.g. 27ABCPS1234K1ZM" maxlength="15" style="text-transform:uppercase;" autocomplete="off"></div>
+          <div class="field"><label for="bankIfsc">IFSC code</label>
+            <input type="text" id="bankIfsc" placeholder="e.g. HDFC0001234" autocomplete="off"></div>
+          <div class="actions">
+            <button type="button" class="btn-solid" id="bankSaveBtn">Save</button>
+            <button type="button" class="btn-line" id="bankCancelBtn">Cancel</button>
+          </div>
+          <p class="msg" id="bankMsg"></p>
+        </div>
+      </div>
+      <div id="sentBox"></div>`;
+    const form = document.getElementById('bankForm');
+    document.getElementById('bankEditBtn').addEventListener('click', () => { form.style.display = form.style.display === 'block' ? 'none' : 'block'; });
+    document.getElementById('bankCancelBtn').addEventListener('click', () => { form.style.display = 'none'; });
+    document.getElementById('bankSaveBtn').addEventListener('click', save);
+    loadSent();
+  }
+
+  async function save(){
+    const btn = document.getElementById('bankSaveBtn');
+    const msg = document.getElementById('bankMsg');
+    const bad = (t) => { msg.textContent = t; msg.style.color = '#a3402f'; };
+    msg.textContent = '';
+    const bankAccountHolderName = document.getElementById('bankHolder').value.trim();
+    const bankAccountNumber = document.getElementById('bankAccount').value.trim();
+    const bankAccountNumber2 = document.getElementById('bankAccount2').value.trim();
+    const bankIfsc = document.getElementById('bankIfsc').value.trim();
+    const bankGstin = (document.getElementById('bankGstin').value || '').trim().toUpperCase();
+    if(!bankAccountHolderName || !bankAccountNumber || !bankIfsc) return bad('Please fill in all the fields.');
+    if(bankAccountNumber.replace(/\s/g, '') !== bankAccountNumber2.replace(/\s/g, '')) return bad('The two account numbers do not match. Type them again.');
+    if(!confirm('Change your payout bank account? Aerva will check it with your bank (\u20b91 is sent to it), and payouts wait 48 hours after any change.')) return;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      const res = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ bankAccountHolderName, bankAccountNumber, bankIfsc, bankGstin: bankGstin || undefined })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){ bad(data.error || 'Something went wrong. Please try again.'); btn.disabled = false; btn.textContent = 'Save'; return; }
+      if(data.bankCheck === 'checking') setTimeout(load, 20000);
+      await load();
+      const note = document.getElementById('bankNote');
+      if(note && data.bankCheck === 'checking') note.textContent = 'Saved. Checking with your bank — this usually takes a minute.';
+    }catch(err){
+      bad('Something went wrong. Please try again.');
+      btn.disabled = false; btn.textContent = 'Save';
+    }
+  }
+
+  // Payouts sent to this account (as host or co-host). Each opens its
+  // summary: index.html?payout=<id>.
+  async function loadSent(){
+    const box = document.getElementById('sentBox');
+    if(!box) return;
+    try{
+      const res = await fetch(API + '?myPayouts=1', { headers: { 'Authorization': 'Bearer ' + token } });
+      const data = await res.json();
+      const list = (res.ok && data.payouts) || [];
+      box.innerHTML = '<div class="card"><h2>Payouts sent</h2>' + (list.length
+        ? list.map(p => `<a class="payout" href="index.html?payout=${Number(p.id)}">
+            <span><strong>${inr(p.amount)}</strong>${p.mine ? (p.as === 'cohost' ? ' · to you, as co-host' : ' · to you') : ' · to ' + esc(p.payeeName || (p.as === 'cohost' ? 'co-host' : 'host'))}<br><span class="sub">${p.kind === 'deposit' ? 'Security deposit compensation · ' : ''}${esc(p.listing || '')} · ${esc(day(p.arrival))} – ${esc(day(p.departure))}</span></span>
+            <span class="when">Sent ${esc(day(p.sentAt))}${p.arrivingBy ? '<br>Arriving by ' + esc(day(p.arrivingBy)) : ''}</span></a>`).join('')
+        : '<p class="empty">No payouts yet. Each one appears here once it is sent.</p>') + '</div>';
+    }catch(err){ /* leave the page as it is */ }
+  }
+
+  load();
+})();
+</script>
+<script src="aerva-header.js?v=2026-10-10a" defer></script>
+</body>
+</html>

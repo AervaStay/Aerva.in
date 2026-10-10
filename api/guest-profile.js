@@ -41,7 +41,7 @@ require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { daysSinceCheckout, submissionOpen, reviewWindowState, REVIEW_WINDOW_DAYS } = require('./_review-policy');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
-const { buildProfile, sanitizeProfileInput } = require('./_profiles');
+const { buildProfile, sanitizeProfileInput, PRIVACY_OPTIONS, sanitizePrivacy, readPrivacy } = require('./_profiles');
 const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
 const { isAccountDeleted, deletionBlockers, deleteAccount, sessionStatus, bumpSessionVersion, newSessionToken } = require('./_accounts');
@@ -226,6 +226,26 @@ module.exports = async (req, res) => {
     if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. Please contact hello@aerva.in.', suspended: true });
       if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
     if (st !== 'ok') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
+  }
+
+  // ---- Privacy (Account Settings) ----
+  // GET ?mode=privacy → { options, settings, isHost }; POST { mode: 'savePrivacy', settings: { id: bool } }.
+  // See _profiles.js PRIVACY_OPTIONS for what each one hides, and where.
+  if (req.method === 'GET' && (req.query || {}).mode === 'privacy') {
+    const me = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0] || {};
+    return res.status(200).json({ options: PRIVACY_OPTIONS, settings: await readPrivacy(sql, guestId), isHost: !!me.host_id });
+  }
+  if (req.method === 'POST' && req.body && req.body.mode === 'savePrivacy') {
+    const stored = sanitizePrivacy(req.body.settings);
+    try {
+      await sql`UPDATE guests SET privacy_settings = ${JSON.stringify(stored)}::jsonb WHERE id = ${guestId}`;
+    } catch (err) {
+      console.error('savePrivacy failed:', err);
+      return res.status(503).json({ error: 'Privacy settings are not available yet. Please try again later.' });
+    }
+    await logAudit(sql, { action: 'privacy_settings_changed', success: true, actorType: 'guest', actorIdentifier: String(guestId),
+      targetType: 'guest', targetId: guestId, metadata: { off: Object.keys(stored) } });
+    return res.status(200).json({ success: true, settings: await readPrivacy(sql, guestId) });
   }
 
   // ---- Log out of all devices ----

@@ -241,7 +241,7 @@
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="aerva-header.css">
+<link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
 <script src="aerva-cohost.js"></script>
 </head>
 <body>
@@ -249,7 +249,7 @@
 <div class="wrap">
   <a href="host-dashboard.html" class="back-home">&larr; Back to My Collection</a>
   <div class="top-row">
-    <div><h1 id="earnTitle">My Earnings</h1><p id="cohostShareNote" style="display:none; font-size:14px; opacity:0.75; margin:6px 0 0;">You see your own share only. The host's earnings are private.</p></div>
+    <div><h1 id="earnTitle">My Earnings</h1><a href="host-payouts.html" id="payoutDetailsLink" style="display:inline-block; font-size:13px; letter-spacing:0.06em; text-transform:uppercase; color:#8a6c39; margin-top:6px;">Payout details &rarr;</a><p id="cohostShareNote" style="display:none; font-size:14px; opacity:0.75; margin:6px 0 0;">You see your own share only. The host's earnings are private.</p></div>
   </div>
 
   <!-- The same action-needed warning as the dashboard. Earnings is the
@@ -283,6 +283,8 @@
   // or what the guest paid. Every money figure on this page then shows
   // that share, and says so.
   const IS_COHOST = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
+  // Payout details is the host's own bank account; a co-host's is in the Co-hosting centre.
+  if(IS_COHOST){ const pl = document.getElementById('payoutDetailsLink'); if(pl) pl.style.display = 'none'; }
   if(IS_COHOST){
     document.getElementById('earnTitle').textContent = 'Your share';
     document.getElementById('earnSectionHeading').textContent = 'Your share by booking';
@@ -1543,6 +1545,6 @@ async function loadBookingChanges(){
 }
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadBookingChanges); else loadBookingChanges();
 </script>
-<script src="aerva-header.js?v=2026-10-09b" defer></script>
+<script src="aerva-header.js?v=2026-10-10a" defer></script>
 </body>
 </html>
