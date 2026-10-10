@@ -253,7 +253,7 @@ function cityPage(cityInfo, allListings, slugs) {
     { '@type': 'ListItem', position: 1, name: 'Aerva', item: base + '/' },
     { '@type': 'ListItem', position: 2, name: `Stays in ${city}`, item: canonical }] };
   const body = `
-<div class="crumbs"><a href="/">Aerva</a> › Stays in ${esc(city)}</div>
+<div class="crumbs"><a href="/">Aerva</a> › <a href="/stays-in/">Places to stay</a> › Stays in ${esc(city)}</div>
 <h1>${esc(headline)}</h1>
 <p class="intro">${homes.length} hand-picked ${homes.length === 1 ? 'home' : 'homes'} in ${esc(city)}${from ? `, from ${inr(from)} a night` : ''}. Every stay on Aerva is reviewed personally before it is listed — never a template, never bulk-listed.</p>
 <div class="grid">${homes.map(l => cardHtml(l, pathOf(l))).join('')}</div>
@@ -261,6 +261,29 @@ ${nearby.length ? `<h2>Also near ${esc(city)}</h2><div class="grid">${nearby.map
 ${others.length ? `<h2>More places to stay</h2><div class="places">${others.map(c => `<a href="${esc(cityPath(c.name))}">${esc(c.name)} (${c.homes.length})</a>`).join('')}</div>` : ''}
 <p style="margin-top:34px"><a class="btn" style="display:inline-block" href="/index.html">Search dates on Aerva</a></p>`;
   return page({ title, description, canonical, image: photosOf(homes[0] || {})[0], jsonLd: [list, crumbs], body });
+}
+
+// ---- Every place (/stays-in/) ----
+function citiesPage(allListings, slugs) {
+  const base = siteBase();
+  const canonical = base + '/stays-in/';
+  const cities = citySummary(allListings);
+  const title = 'Places to stay across India — hand-picked homes | Aerva';
+  const description = `Hand-picked villas, apartments and boutique homes in ${cities.slice(0, 6).map(c => c.name).join(', ')}${cities.length > 6 ? ' and more' : ''}. Every Aerva stay is personally reviewed.`;
+  const list = { '@context': 'https://schema.org', '@type': 'ItemList', name: 'Places to stay on Aerva',
+    itemListElement: cities.map((c, i) => ({ '@type': 'ListItem', position: i + 1, url: base + cityPath(c.name), name: `Stays in ${c.name}` })) };
+  const body = `
+<div class="crumbs"><a href="/">Aerva</a> › Places to stay</div>
+<h1>Places to stay</h1>
+<p class="intro">${allListings.length} hand-picked ${allListings.length === 1 ? 'home' : 'homes'} in ${cities.length} ${cities.length === 1 ? 'place' : 'places'} across India. Every stay on Aerva is reviewed personally before it is listed.</p>
+${cities.map(c => {
+  const homes = [...c.homes].sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).slice(0, 3);
+  return `<h2><a href="${esc(cityPath(c.name))}" style="text-decoration:none">${esc(cityHeadline(c.homes, c.name))} ›</a></h2>
+<div class="grid">${homes.map(l => cardHtml(l, '/stays/' + slugs.byId.get(l.id))).join('')}</div>
+${c.homes.length > 3 ? `<p style="margin-top:12px"><a href="${esc(cityPath(c.name))}">See all ${c.homes.length} homes in ${esc(c.name)} ›</a></p>` : ''}`;
+}).join('')}
+${cities.length ? '' : '<p class="intro">New homes are being added — check back soon.</p>'}`;
+  return page({ title, description, canonical, image: photosOf((cities[0] && cities[0].homes[0]) || {})[0], jsonLd: list, body });
 }
 
 function notFoundPage(what) {
@@ -272,7 +295,7 @@ function notFoundPage(what) {
 function sitemap(listings, slugs) {
   const base = siteBase();
   const day = (d) => { const x = d ? new Date(d) : null; return x && !isNaN(x) ? x.toISOString().slice(0, 10) : null; };
-  const urls = [{ loc: base + '/', priority: '1.0' }];
+  const urls = [{ loc: base + '/', priority: '1.0' }, { loc: base + '/stays-in/', priority: '0.9' }];
   citySummary(listings).forEach(c => urls.push({ loc: base + cityPath(c.name), priority: '0.8' }));
   listings.forEach(l => urls.push({ loc: base + '/stays/' + slugs.byId.get(l.id), lastmod: day(l.price_changed_at || l.created_at), priority: '0.7' }));
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
@@ -280,4 +303,4 @@ function sitemap(listings, slugs) {
     `\n</urlset>\n`;
 }
 
-module.exports = { slugify, staySlug, stayPath, cityPath, slugMap, citySummary, stayPage, cityPage, notFoundPage, sitemap, siteBase };
+module.exports = { slugify, staySlug, stayPath, cityPath, slugMap, citySummary, stayPage, cityPage, citiesPage, notFoundPage, sitemap, siteBase };

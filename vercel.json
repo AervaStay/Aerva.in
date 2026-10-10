@@ -31,6 +31,14 @@
   ],
   "rewrites": [
     {
+      "source": "/stays-in",
+      "destination": "/api/get-listings?seo=cities"
+    },
+    {
+      "source": "/stays-in/",
+      "destination": "/api/get-listings?seo=cities"
+    },
+    {
       "source": "/stays/:slug",
       "destination": "/api/get-listings?seo=stay&slug=:slug"
     },
