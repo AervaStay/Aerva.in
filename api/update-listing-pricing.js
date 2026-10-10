@@ -36,6 +36,7 @@ const { readCohostManageToken } = require('./_cohosts');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
 const photoGuard = require('./_photo-guard');
 const priceReview = require('./_price-review');
+const { cleanCity } = require('./_city-names');
 const { recordPhotoLocations } = require('./_photo-location');
 const { timezoneForAddress, localTodayIn } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
@@ -76,12 +77,12 @@ function normalizeMaxGuests(raw) {
 // live straight away on an approved listing. Until there is a proper
 // re-review step, the admin is told every time they change, so a bad
 // photo (a phone number, someone else's property) is seen within hours.
-async function notifyAdminOfListingChange(listingId, listingName, hostEmail, changes, actorType) {
+async function notifyAdminOfListingChange(listingId, listingName, hostEmail, changes, actorType, { email = true } = {}) {
   try {
     await logAudit(sql, { action: 'listing_photos_changed', success: true, actorType, actorIdentifier: hostEmail || null,
       targetType: 'listing', targetId: listingId, metadata: changes });
   } catch (err) { console.error('listing change audit failed:', err.message); }
-  if (!process.env.RESEND_API_KEY) return;
+  if (!email || !process.env.RESEND_API_KEY) return;
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const lines = [];
   if (changes.nameFrom !== undefined) lines.push(`Name: "${esc(changes.nameFrom)}" → "${esc(changes.nameTo)}"`);
@@ -466,7 +467,8 @@ module.exports = async (req, res) => {
       if (!rate || rate <= 0) {
         return res.status(400).json({ error: 'Please enter a valid nightly rate.' });
       }
-      const safeCity = typeof city === 'string' ? city.trim().slice(0, 100) : '';
+      // One clean name per place (_city-names.js): "Pune Division" → "Pune".
+      const safeCity = typeof city === 'string' ? String(cleanCity(city.trim(), latitude, longitude) || '').slice(0, 100) : '';
       if (!safeCity) {
         return res.status(400).json({ error: 'Please enter a city.' });
       }
@@ -930,6 +932,7 @@ module.exports = async (req, res) => {
             const submittedIds = new Set();
             const roomsStagedForReview = [];
             const roomsSkippedAlreadyPending = [];
+            const roomsPhotosLive = [];
 
             for (let i = 0; i < rooms.length; i++) {
               const r = rooms[i];
@@ -964,6 +967,28 @@ module.exports = async (req, res) => {
                   !samePhotos
                 );
                 if (!hasChange) continue; // genuinely unchanged — left completely untouched
+                // Photos (added, removed, re-ordered) and switching the room
+                // on or off need no review: they go live at once. Every
+                // photo is still checked by _photo-guard.js — on upload, and
+                // again by the sweep at the end of this save — and one
+                // showing a phone number, email, address or other contact
+                // detail is taken down and listed in Admin → Removed photos.
+                // Only a change to the room's name, guests, price or
+                // description waits for review.
+                const detailsChanged = (
+                  roomName !== (cur.room_name || '') ||
+                  maxOccupancy !== (cur.max_occupancy == null ? null : Number(cur.max_occupancy)) ||
+                  roomRate !== (cur.nightly_rate == null ? null : Number(cur.nightly_rate)) ||
+                  description !== (cur.description || '')
+                );
+                if (!detailsChanged) {
+                  await sql`
+                    UPDATE listing_rooms SET cover_photo_url = ${coverPhotoUrl}, photo_urls = ${JSON.stringify(photoUrls)}, is_active = ${isActive}
+                    WHERE id = ${Number(r.id)} AND listing_id = ${listingId} AND pending_review IS NOT TRUE
+                  `;
+                  if (!samePhotos) roomsPhotosLive.push(roomName || cur.room_name || `Room ${i + 1}`);
+                  continue;
+                }
                 // Staged onto this one room only: its OWN current fields
                 // (room_name, price, etc.) stay exactly as they are —
                 // that's what "still live" means for this room's
@@ -1267,10 +1292,14 @@ module.exports = async (req, res) => {
         const removed = oldPhotos.filter(u => !newPhotos.includes(u)).length;
         const coverChanged = (safeCoverUrl || null) !== (before[0].cover_photo_url || null) && !!safeCoverUrl;
         const renamed = safeName && safeName !== String(before[0].property_name || '').trim();
+        // Photos alone no longer email the admin: every photo is checked
+        // by _photo-guard.js, and only one showing a contact detail or an
+        // address reaches the admin (Admin → Removed photos, plus an
+        // email). A new name still does. Both stay in the audit log.
         if (added.length || removed || coverChanged || renamed) {
           const changes = { photosAdded: added, photosRemoved: removed, coverChanged };
           if (renamed) { changes.nameFrom = before[0].property_name; changes.nameTo = safeName; }
-          await notifyAdminOfListingChange(listingId, listing.property_name, listing.host_email, changes, access.isCohost ? 'cohost' : 'host');
+          await notifyAdminOfListingChange(listingId, listing.property_name, listing.host_email, changes, access.isCohost ? 'cohost' : 'host', { email: !!renamed });
         }
       }
 

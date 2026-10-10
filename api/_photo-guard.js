@@ -1,7 +1,7 @@
 // /api/_photo-guard.js — keeps contact details out of photos. Not an endpoint.
 //
 // Guests must book and talk through Aerva, so a phone number, email,
-// website, social handle, WhatsApp/UPI detail or QR code inside a photo is
+// website, social handle, WhatsApp/UPI detail, address or QR code inside a photo is
 // not allowed. Every listing, room and profile photo is read by Claude
 // (vision). A photo that shows a contact detail is REMOVED AT ONCE and
 // SILENTLY — the host or guest is not told — and the admin is emailed and
@@ -94,12 +94,13 @@ Count:
 - WhatsApp, Telegram or similar mentions with a number or name
 - UPI IDs and any QR code
 - signs such as "call", "book direct" or "DM us" that come with a detail
+- addresses of any kind: a street or postal address, a building or society name with its road or area, a PIN code, map coordinates, or a screenshot of a map or location pin
 - a photographer's watermark only if it shows one of the above
 
-Do not count: house, flat, room or floor numbers; street addresses; dates, times or prices; brand names or logos on products; text on books, art, posters or screens that has none of the above; the word Aerva.
+Do not count: a house, flat, room or floor number shown on its own (a door plate, a room sign); dates, times or prices; brand names or logos on products; text on books, art, posters or screens that has none of the above; the word Aerva.
 
 Reply with JSON only, no other text:
-{"contact": true or false, "items": [{"type": "phone|email|website|social|whatsapp|upi|qr|other", "text": "exactly what you can read"}]}`;
+{"contact": true or false, "items": [{"type": "phone|email|website|social|whatsapp|upi|qr|address|other", "text": "exactly what you can read"}]}`;
 
 function mediaTypeOf(contentType, bytes) {
   const ct = String(contentType || '').toLowerCase().split(';')[0].trim();
