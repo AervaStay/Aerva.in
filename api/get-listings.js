@@ -873,6 +873,7 @@ module.exports = async (req, res) => {
         const reviews = await ask({ reviewsFor: String(l.id), limit: '6' });
         return send(200, 'text/html; charset=utf-8', seo.stayPage(l, reviews, { slug: canonicalSlug, cityHasPage: !!l.city }), 900);
       }
+      if (req.query.seo === 'cities') return send(200, 'text/html; charset=utf-8', seo.citiesPage(listings, slugs), 900);
       if (req.query.seo === 'city') {
         const want = seo.slugify(req.query.city);
         const info = seo.citySummary(listings).find(c => c.slug === want);
