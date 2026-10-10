@@ -4943,6 +4943,17 @@
       toggleFavoriteId(listing.id, favBtn);
     });
     wireLikeButton(card);
+    // Check availability on every home: which dates are free, without
+    // leaving the results (openAvailabilityPeek).
+    const photo = card.querySelector('.suite-photo');
+    if(photo){
+      const ca = document.createElement('button');
+      ca.type = 'button';
+      ca.className = 'suite-check-availability is-button';
+      ca.textContent = 'Check availability →';
+      ca.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openAvailabilityPeek(listing.id); });
+      photo.appendChild(ca);
+    }
     return card;
   }
 
@@ -5122,9 +5133,10 @@
     });
   }
 
-  // ---- My favourite, in a place search ----
-  // When a guest searches a place (or Near Me), the homes they hearted
-  // within 200 km of that place get their own row, "My favourite", above
+  // ---- My favourite ----
+  // Before any search, every home the guest hearted, newest first. When they
+  // search a place (or Near Me), only the hearted homes within 200 km of
+  // that place, in the same row, "My favourite", above
   // Recently viewed, most liked first. Homes booked for the searched dates
   // stay in the row with the "not available" tag. Shown here, they are left
   // out of Recently viewed and the main list below so nothing appears twice.
@@ -5137,16 +5149,22 @@
     const place = (document.getElementById('searchCity').value || '').split(',')[0].trim();
     const nearMe = !!(searchStatusCounts && searchStatusCounts.suffix === 'near you');
     const favs = new Set(getFavoriteIds().map(String));
-    if((!place && !nearMe) || !favs.size || currentCategoryFilter === 'experiences'){ row.style.display = 'none'; return; }
-    const center = searchCenter || (nearMe && guestLocation ? { lat: Number(guestLocation.lat), lng: Number(guestLocation.lng) } : null);
+    if(!favs.size || currentCategoryFilter === 'experiences'){ row.style.display = 'none'; return; }
+    // No search yet: every saved home, most recently saved first. After a
+    // place search (or Near me): only those within 200 km, most liked first.
+    const searched = !!(place || nearMe);
+    const center = searched ? (searchCenter || (nearMe && guestLocation ? { lat: Number(guestLocation.lat), lng: Number(guestLocation.lng) } : null)) : null;
     const within200 = (l) => !center || (l.latitude && l.longitude && haversineDistanceKm(center.lat, center.lng, Number(l.latitude), Number(l.longitude)) <= 200);
+    const savedOrder = getFavoriteIds().map(String);
     const list = approvedListings
       .filter(l => favs.has(String(l.id)) && passesStayFilters(l) && within200(l))
-      .sort((a, b) => (Number(b.like_count) || 0) - (Number(a.like_count) || 0) || (Number(b.rating) || 0) - (Number(a.rating) || 0));
+      .sort(searched
+        ? (a, b) => (Number(b.like_count) || 0) - (Number(a.like_count) || 0) || (Number(b.rating) || 0) - (Number(a.rating) || 0)
+        : (a, b) => savedOrder.indexOf(String(b.id)) - savedOrder.indexOf(String(a.id)));
     if(!list.length){ row.style.display = 'none'; return; }
     document.getElementById('favoritesHeading').textContent = 'My favourite';
     const sub = document.getElementById('favoritesSub');
-    if(sub) sub.textContent = 'Homes you loved, near ' + (place || 'you');
+    if(sub) sub.textContent = searched ? 'Homes you loved, near ' + (place || 'you') : 'Homes you loved';
     row.style.display = 'block';
     container.innerHTML = '';
     const datesSearched = !!(searchArrivalDate && searchDepartureDate);
@@ -5498,8 +5516,11 @@
       .filter(e => !recentlyViewedShownIds.has('experience:' + e.id));
     const unavailableExperiences = datesWereSearched ? experienceList.filter(e => e.is_available === false) : [];
 
-    const finalSuites = showSuites ? availableSuites : [];
-    const finalExperiences = showExperiences ? availableExperiences : [];
+    // Booked-for-these-dates results stay in the same list, after the free
+    // ones, tagged on the card (addUnavailableCardDressing) — no separate row.
+    const notAbove = (key) => !recentlyViewedShownIds.has(key);
+    const finalSuites = showSuites ? [...availableSuites, ...unavailableSuites.filter(l => notAbove('stay:' + l.id))] : [];
+    const finalExperiences = showExperiences ? [...availableExperiences, ...unavailableExperiences.filter(e => notAbove('experience:' + e.id))] : [];
     const finalUnavailableSuites = showSuites ? unavailableSuites : [];
     const finalUnavailableExperiences = showExperiences ? unavailableExperiences : [];
 
@@ -5539,7 +5560,7 @@
     const kmFrom = (x) => (x.latitude && x.longitude) ? haversineDistanceKm(searchCenter.lat, searchCenter.lng, Number(x.latitude), Number(x.longitude)) : Infinity;
     const nearItems = citySplit
       ? [...finalSuites.filter(x => !inPlace(x)).map(d => ({ type: 'stay', d })), ...finalExperiences.filter(x => !inPlace(x)).map(d => ({ type: 'experience', d }))]
-          .sort((a, b) => byLikes(a.d, b.d) || kmFrom(a.d) - kmFrom(b.d))
+          .sort((a, b) => ((a.d.is_available === false) - (b.d.is_available === false)) || byLikes(a.d, b.d) || kmFrom(a.d) - kmFrom(b.d))
       : [];
     const nearRow = document.getElementById('nearCityRow');
     if(nearRow){
@@ -5551,6 +5572,7 @@
         nc.innerHTML = '';
         nearItems.forEach((it, i) => {
           const card = it.type === 'stay' ? buildSuiteCard(it.d, i) : buildExperienceCard(it.d, i);
+          if(datesWereSearched && it.d.is_available === false) addUnavailableCardDressing(card);
           const km = kmFrom(it.d);
           if(isFinite(km)){
             const tag = document.createElement('span');
@@ -5604,10 +5626,12 @@
       let index = 0;
       gridSuites.forEach(listing => {
         const card = buildSuiteCard(listing, index++);
+        if(datesWereSearched && listing.is_available === false) addUnavailableCardDressing(card);
         container.appendChild(card);
       });
       gridExperiences.forEach(exp => {
         const card = buildExperienceCard(exp, index++);
+        if(datesWereSearched && exp.is_available === false) addUnavailableCardDressing(card);
         container.appendChild(card);
       });
     }
@@ -5623,7 +5647,8 @@
     const hasAnyUnavailable = finalUnavailableSuites.length > 0 || finalUnavailableExperiences.length > 0;
 
     const hasAnyLeft = [...finalUnavailableSuites.map(l => 'stay:' + l.id), ...finalUnavailableExperiences.map(e => 'experience:' + e.id)].some(k => !recentlyViewedShownIds.has(k));
-    if(!datesWereSearched || !hasAnyUnavailable || !hasAnyLeft){
+    // Retired: booked results are now in the main list itself (above).
+    if(true || !datesWereSearched || !hasAnyUnavailable || !hasAnyLeft){
       unavailableRow.style.display = 'none';
     } else {
       unavailableRow.style.display = 'block';
@@ -5664,12 +5689,102 @@
     const badgeStack = card.querySelector('.suite-badges');
     if(badgeStack) badgeStack.insertBefore(badge, badgeStack.firstChild);
     const photoEl = card.querySelector('.suite-photo');
-    if(photoEl){
-      const checkBtn = document.createElement('span');
-      checkBtn.className = 'suite-check-availability';
-      checkBtn.textContent = 'Check Availability →';
+    if(photoEl && !photoEl.querySelector('.suite-check-availability')){
+      // A home: a real button showing which dates are free (openAvailabilityPeek).
+      // An experience: a label — the card itself opens its page and calendar.
+      const isStay = card.dataset.listingId && !card.dataset.experienceId;
+      const checkBtn = document.createElement(isStay ? 'button' : 'span');
+      checkBtn.className = 'suite-check-availability' + (isStay ? ' is-button' : '');
+      checkBtn.textContent = 'Check availability →';
+      if(isStay){
+        checkBtn.type = 'button';
+        checkBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openAvailabilityPeek(card.dataset.listingId); });
+      }
       photoEl.appendChild(checkBtn);
     }
+  }
+
+  // ---- Check availability, from the card ----
+  // Two months of this home's calendar (booked and host-blocked nights
+  // greyed out), the next free stays of the length the guest searched, and
+  // one tap to open the home with those dates filled in.
+  async function openAvailabilityPeek(listingId){
+    const listing = listingsById[listingId] || (typeof wishlistListingsById !== 'undefined' && wishlistListingsById && wishlistListingsById[listingId]) || { id: listingId };
+    let ov = document.getElementById('availPeek');
+    if(!ov){
+      ov = document.createElement('div');
+      ov.id = 'availPeek';
+      ov.className = 'avail-peek-overlay';
+      ov.innerHTML = '<div class="avail-peek" role="dialog" aria-modal="true" aria-labelledby="availPeekTitle"><button type="button" class="avail-peek-close" aria-label="Close">×</button><div class="avail-peek-scroll" id="availPeekBody"></div></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener('click', (e) => { if(e.target === ov || e.target.closest('.avail-peek-close')) closeAvailabilityPeek(); });
+      document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && ov.style.display === 'flex') closeAvailabilityPeek(); });
+    }
+    const body = document.getElementById('availPeekBody');
+    body.innerHTML = `<h3 id="availPeekTitle">${escapeMessageHtml(listing.property_name || 'Availability')}</h3><p class="loading">Loading dates…</p>`;
+    ov.style.display = 'flex';
+    document.documentElement.classList.add('avail-peek-open');
+    let taken = new Set();
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
+      if(!res.ok) throw new Error('load');
+      const d = await res.json();
+      [...(d.bookedRanges || []), ...(d.blockedRanges || [])].forEach(r => { if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => taken.add(n)); });
+    }catch(err){
+      body.innerHTML = `<h3 id="availPeekTitle">${escapeMessageHtml(listing.property_name || 'Availability')}</h3><p>Dates could not be loaded right now. <button type="button" class="link" id="availPeekOpen">Open the home</button></p>`;
+      document.getElementById('availPeekOpen').onclick = () => { closeAvailabilityPeek(); openListingDetail(listingId); };
+      return;
+    }
+    const today = toLocalDateStr(new Date());
+    const nights = (searchArrivalDate && searchDepartureDate) ? Math.max(1, Math.round((new Date(searchDepartureDate + 'T00:00:00Z') - new Date(searchArrivalDate + 'T00:00:00Z')) / 864e5)) : 2;
+    const start = (searchArrivalDate && searchArrivalDate > today) ? searchArrivalDate : today;
+    // The next three free stays of that length, from the searched date on.
+    const free = [];
+    for(let i = 0, day = start; i < 270 && free.length < 3; i++, day = isoAddDays(day, 1)){
+      let ok = true;
+      for(let k = 0; k < nights; k++){ if(taken.has(isoAddDays(day, k))){ ok = false; break; } }
+      if(ok && (!free.length || day >= free[free.length - 1].departure)) free.push({ arrival: day, departure: isoAddDays(day, nights) });
+    }
+    const fmt = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    let wantedFree = !!(searchArrivalDate && searchDepartureDate);
+    if(wantedFree) getNightsInRangeClient(searchArrivalDate, searchDepartureDate).forEach(n => { if(taken.has(n)) wantedFree = false; });
+    const monthHtml = (first) => {
+      const y = first.getFullYear(), m = first.getMonth();
+      const days = new Date(y, m + 1, 0).getDate();
+      const lead = (new Date(y, m, 1).getDay() + 6) % 7; // Monday first
+      let cells = '';
+      for(let i = 0; i < lead; i++) cells += '<span></span>';
+      for(let dd = 1; dd <= days; dd++){
+        const iso = toLocalDateStr(new Date(y, m, dd));
+        const past = iso < today, busy = taken.has(iso);
+        const wanted = searchArrivalDate && searchDepartureDate && iso >= searchArrivalDate && iso < searchDepartureDate;
+        cells += `<span class="ap-day${past ? ' is-past' : busy ? ' is-taken' : ' is-free'}${wanted ? ' is-wanted' : ''}">${dd}</span>`;
+      }
+      return `<div class="ap-month"><div class="ap-mname">${first.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</div><div class="ap-grid"><b>M</b><b>T</b><b>W</b><b>T</b><b>F</b><b>S</b><b>S</b>${cells}</div></div>`;
+    };
+    const base = new Date((start || today) + 'T00:00:00');
+    const m1 = new Date(base.getFullYear(), base.getMonth(), 1), m2 = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+    body.innerHTML = `<h3 id="availPeekTitle">${escapeMessageHtml(listing.property_name || 'Availability')}</h3>
+      ${searchArrivalDate && searchDepartureDate
+        ? (wantedFree ? `<p class="ap-note is-ok">Free for your dates (${fmt(searchArrivalDate)} – ${fmt(searchDepartureDate)}).</p>` : `<p class="ap-note">Not available for your dates (${fmt(searchArrivalDate)} – ${fmt(searchDepartureDate)}). Free dates are shown in full colour.</p>`)
+        : '<p class="ap-note">Free dates are shown in full colour. Pick a stay below, or open the home to choose any dates.</p>'}
+      <div class="ap-months">${monthHtml(m1)}${monthHtml(m2)}</div>
+      <div class="ap-legend"><span><i class="is-free"></i>Free</span><span><i class="is-taken"></i>Booked</span>${searchArrivalDate ? '<span><i class="is-wanted"></i>Your dates</span>' : ''}</div>
+      ${free.length ? `<div class="ap-next"><div class="ap-label">Next free ${nights}-night stay${free.length > 1 ? 's' : ''}</div>${free.map((f, i) => `<button type="button" class="ap-pick" data-i="${i}">${fmt(f.arrival)} – ${fmt(f.departure)}</button>`).join('')}</div>` : `<p class="ap-note">No free ${nights}-night stay in the next 9 months.</p>`}
+      <div class="ap-foot"><button type="button" class="btn ap-open" id="availPeekOpen">Open this home</button></div>`;
+    body.querySelectorAll('.ap-pick').forEach(b => b.addEventListener('click', () => {
+      const f = free[Number(b.dataset.i)];
+      searchArrivalDate = f.arrival; searchDepartureDate = f.departure;
+      try{ updateDateRangeBtn(); }catch(e){}
+      closeAvailabilityPeek();
+      openListingDetail(listingId);
+    }));
+    document.getElementById('availPeekOpen').onclick = () => { closeAvailabilityPeek(); openListingDetail(listingId); };
+  }
+  function closeAvailabilityPeek(){
+    const ov = document.getElementById('availPeek');
+    if(ov) ov.style.display = 'none';
+    document.documentElement.classList.remove('avail-peek-open');
   }
 
   // Real address suggestions for the search Place field are wired up in
@@ -6173,7 +6288,11 @@
   // The figures are public and come from completed stays. The visit ping
   // is sent once per browser per day: enough for "how busy were we
   // yesterday", without following anybody around.
+  // Hidden on the homepage for now — the same numbers are in Admin →
+  // Traffic. Set to true to show them to guests again.
+  const SHOW_LIVE_PROOF = false;
   async function loadLiveProof(){
+    if(!SHOW_LIVE_PROOF) return;
     try{
       const res = await fetch(SUITES_API_BASE + '/api/get-listings?publicStats=1');
       if(!res.ok) return;

@@ -859,7 +859,9 @@ module.exports = async (req, res) => {
     };
     try {
       const data = await ask({});
-      const listings = (data && Array.isArray(data.listings) ? data.listings : []).filter(l => (l.listing_type || 'stay') !== 'experience');
+      const { cleanCity } = require('./_city-names');
+      const listings = (data && Array.isArray(data.listings) ? data.listings : []).filter(l => (l.listing_type || 'stay') !== 'experience')
+        .map(l => ({ ...l, city: cleanCity(l.city, l.latitude, l.longitude) })); // one page per place, even before the clean-up update
       const slugs = seo.slugMap(listings);
       if (req.query.seo === 'sitemap') return send(200, 'application/xml; charset=utf-8', seo.sitemap(listings, slugs), 3600);
       if (req.query.seo === 'stay') {

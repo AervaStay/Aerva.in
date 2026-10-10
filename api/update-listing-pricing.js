@@ -36,6 +36,7 @@ const { readCohostManageToken } = require('./_cohosts');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
 const photoGuard = require('./_photo-guard');
 const priceReview = require('./_price-review');
+const { cleanCity } = require('./_city-names');
 const { recordPhotoLocations } = require('./_photo-location');
 const { timezoneForAddress, localTodayIn } = require('./_timezones');
 const { logAudit } = require('./_audit-log');
@@ -466,7 +467,8 @@ module.exports = async (req, res) => {
       if (!rate || rate <= 0) {
         return res.status(400).json({ error: 'Please enter a valid nightly rate.' });
       }
-      const safeCity = typeof city === 'string' ? city.trim().slice(0, 100) : '';
+      // One clean name per place (_city-names.js): "Pune Division" → "Pune".
+      const safeCity = typeof city === 'string' ? String(cleanCity(city.trim(), latitude, longitude) || '').slice(0, 100) : '';
       if (!safeCity) {
         return res.status(400).json({ error: 'Please enter a city.' });
       }

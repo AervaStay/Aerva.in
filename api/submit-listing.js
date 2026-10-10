@@ -27,6 +27,7 @@ const { createToken, verifyToken } = require('./_approval-token');
 const { isSessionRevoked } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const priceReview = require('./_price-review');
+const { cleanCity } = require('./_city-names');
 const { findNameClashInPincode, nameClashMessage, isAervaBlobUrl, aervaBlobUrlsOnly } = require('./_listing-rules');
 const photoGuard = require('./_photo-guard');
 const { recordPhotoLocations, tagListing } = require('./_photo-location');
@@ -637,7 +638,8 @@ module.exports = async (req, res) => {
     // way it does for stays); a without-stay experience with no hosting
     // property genuinely has no city, which is fine now that the column
     // allows null (see schema.sql).
-    const safeCity = isExperience ? (hostingListing ? hostingListing.city : (city || null)) : (city || null);
+    // One clean name per place (_city-names.js): "Pune Division" → "Pune".
+    const safeCity = isExperience ? (hostingListing ? hostingListing.city : (cleanCity(city, latitude, longitude) || null)) : (cleanCity(city, latitude, longitude) || null);
     // Same idea for the actual map location — a with-stay experience
     // borrows the hosting property's coordinates (required there
     // already, see validation above); a without-stay one submits its

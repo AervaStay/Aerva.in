@@ -741,6 +741,11 @@
   <div id="policiesAdminView" style="display:none;"><div id="policiesAdminBody"></div></div>
   <div id="trafficView" style="display:none;">
     <div class="deposit-section">
+      <h3>Stays and check-ins</h3>
+      <p>The figures the homepage used to show guests (hidden from the homepage for now). Real paid stays only.</p>
+      <div id="trafficProof"><p class="empty">Loading…</p></div>
+    </div>
+    <div class="deposit-section">
       <h3>Who came</h3>
       <p>Visits to the site, counted once per browser per day. A count only — no addresses, accounts or tracking of individuals. Sixty days are kept.</p>
       <div id="trafficVisits"><p class="empty">Loading…</p></div>
@@ -1891,6 +1896,17 @@
   }
 
   async function loadTraffic(){
+    // Stays hosted and guests checked in this month (get-listings.js publicStats).
+    (async () => {
+      const box = document.getElementById('trafficProof');
+      try{
+        const r = await fetch(API_BASE + '/api/get-listings?publicStats=1');
+        const p = await r.json();
+        if(!r.ok || typeof p.staysHosted !== 'number') throw new Error('not available');
+        box.innerHTML = '<div class="process-results"><div><strong>' + Number(p.staysHosted).toLocaleString('en-IN') + '</strong> stays hosted</div>'
+          + '<div><strong>' + Number(p.checkinsThisMonth).toLocaleString('en-IN') + '</strong> guests checked in this month</div></div>';
+      }catch(err){ box.innerHTML = '<p class="empty">Could not load these figures right now.</p>'; }
+    })();
     const vis = document.getElementById('trafficVisits');
     const ab = document.getElementById('trafficAbandoned');
     try{

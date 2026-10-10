@@ -3496,3 +3496,59 @@ button.msg-react-chip{ cursor:pointer; font-family:inherit; }
 .wishlist-empty{max-width:460px; margin:10px auto 0; text-align:center; font-size:14.5px; line-height:1.6;}
 .wishlist-empty p{margin-bottom:16px; opacity:0.8;}
 .wishlist-note{margin-top:18px; font-size:13px; opacity:0.6; text-align:center;}
+/* "Check Availability" bar sits beside the like button, not under it. */
+.suite-card--unavailable .suite-photo .like-btn ~ .suite-check-availability,
+.suite-card--unavailable .suite-check-availability{ left:auto; right:12px; width:auto; max-width:calc(100% - 96px); }
+
+/* ---- Check availability from a card (aerva.js openAvailabilityPeek) ---- */
+/* The button: on every home card, bottom-right of the photo, beside the like button. */
+.suite-photo .suite-check-availability.is-button{
+  position:absolute; right:12px; bottom:12px; left:auto; z-index:6; width:auto; max-width:calc(100% - 96px);
+  pointer-events:auto; cursor:pointer; border:none; border-radius:999px;
+  background:rgba(20,17,14,0.72); color:#f4ebe3; font-family:'Jost', sans-serif; font-size:12.5px; letter-spacing:0.02em;
+  height:32px; padding:0 13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.suite-photo .suite-check-availability.is-button:hover{ background:rgba(20,17,14,0.9); }
+.suite-card--unavailable .suite-photo .suite-check-availability.is-button{ background:rgba(28,26,23,0.9); }
+html.avail-peek-open, html.avail-peek-open body{ overflow:hidden; overscroll-behavior:none; }
+
+/* The window: centred card on desktop, a bottom sheet on phones. */
+.avail-peek-overlay{ position:fixed; inset:0; z-index:3000; background:rgba(20,17,14,0.55); display:none; align-items:center; justify-content:center; padding:16px; }
+.avail-peek{ position:relative; display:flex; flex-direction:column; background:#fff; color:var(--ink, #1c1b19); border-radius:16px;
+  width:100%; max-width:640px; max-height:calc(100vh - 32px); max-height:calc(100dvh - 32px); overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.25); }
+.avail-peek-scroll{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; padding:24px 24px 0; flex:1 1 auto; min-height:0; }
+.avail-peek h3{ font-family:'Bodoni Moda', Georgia, serif; font-weight:400; font-size:24px; line-height:1.2; margin:0 36px 6px 0; overflow-wrap:anywhere; }
+.avail-peek-close{ position:absolute; top:10px; right:10px; z-index:2; width:40px; height:40px; border:none; background:#fff; border-radius:50%; font-size:26px; line-height:1; cursor:pointer; color:#6e675d; }
+.ap-note{ font-size:13.5px; color:#4a453e; margin:0 0 14px; }
+.ap-note.is-ok{ color:#2f6b3a; }
+.ap-months{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:22px; }
+.ap-mname{ font-size:13px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:8px; color:#7c6030; }
+.ap-grid{ display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:3px; text-align:center; font-size:13px; }
+.ap-grid b{ font-weight:500; font-size:11px; color:#6e675d; padding-bottom:4px; }
+.ap-day{ padding:6px 0; border-radius:6px; min-width:0; }
+.ap-day.is-free{ background:#f3eee6; color:#1c1b19; }
+.ap-day.is-taken{ color:#b9b2a8; text-decoration:line-through; }
+.ap-day.is-past{ color:#d6d0c7; }
+.ap-day.is-wanted{ box-shadow:inset 0 0 0 1.5px #a3402f; }
+.ap-legend{ display:flex; gap:8px 16px; flex-wrap:wrap; font-size:12.5px; color:#4a453e; margin:14px 0 4px; }
+.ap-legend i{ display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+.ap-legend i.is-free{ background:#f3eee6; } .ap-legend i.is-taken{ background:#fff; border:1px solid #d6d0c7; } .ap-legend i.is-wanted{ box-shadow:inset 0 0 0 1.5px #a3402f; }
+.ap-next{ margin:14px 0 6px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.ap-label{ width:100%; font-size:13px; color:#4a453e; }
+.ap-pick{ border:1px solid #c6ad84; background:#fff; border-radius:999px; padding:9px 14px; min-height:40px; font-family:'Jost', sans-serif; font-size:14px; cursor:pointer; color:#1c1b19; }
+.ap-pick:hover{ background:#f3eee6; }
+.ap-foot{ position:sticky; bottom:0; background:#fff; padding:12px 0 18px; margin-top:6px; border-top:1px solid #efe8de; }
+.ap-open{ width:100%; min-height:46px; }
+@media (max-width:600px){
+  .avail-peek-overlay{ align-items:flex-end; padding:0; }
+  .avail-peek{ max-width:none; border-radius:18px 18px 0 0; max-height:92vh; max-height:92dvh; }
+  .avail-peek-scroll{ padding:20px 16px 0; padding-bottom:env(safe-area-inset-bottom); }
+  .ap-foot{ padding-bottom:calc(14px + env(safe-area-inset-bottom)); }
+  .ap-months{ grid-template-columns:minmax(0, 1fr); gap:18px; }
+  .avail-peek h3{ font-size:21px; }
+  .ap-day{ padding:8px 0; }
+}
+@media (max-height:520px) and (orientation:landscape){
+  .avail-peek{ max-height:calc(100dvh - 16px); }
+  .ap-day{ padding:3px 0; }
+}
