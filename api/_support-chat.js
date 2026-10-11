@@ -308,4 +308,50 @@ async function handoff(sql, guestId, { note = '', how = 'chat', phone = '' } = {
   return getThread(sql, guestId);
 }
 
-module.exports = { getThread, summary, send, handoff, loadPolicies, personContext, _internals: { HANDOFF_RE, RULES } };
+// ---------------------------------------------------------------- reply suggestions for the team
+
+// Admin → Support: three replies the agent could send next, drafted from
+// the request so far, Aerva's policies and the person's own bookings. The
+// agent picks one, edits it if needed, and presses Send — nothing is ever
+// sent by itself. Internal notes are shown to the model as the team's own
+// context, never quoted back to the person.
+const SUGGEST_RULES = () => `You help a member of Aerva's support team reply to a customer. Aerva (aerva.in) is a boutique platform in India for booking hand-picked homes ("stays") and experiences, and for hosts to list them.
+
+Write THREE different replies the agent could send next, to the customer's latest message. Make them genuinely different: for example one that answers directly, one that asks for the one detail still needed, and one that reassures and says what happens next.
+
+Rules:
+- Use ONLY Aerva's policies and help topics below and the person's own account details. Never invent rules, amounts, dates or timelines.
+- Do not promise a refund, an exception, a waiver or a decision. If one is needed, say the agent will check and come back, or that it has been passed to the team that decides.
+- Never ask for card numbers, OTPs, passwords or full bank details. Never share another person's details.
+- If anyone may be in danger, the first reply tells them to call 112 now.
+- Warm, calm and professional, as a person writing (not "As an AI"). Address the person by first name when known. At most about 70 words each. Plain text only: no markdown.
+- Reply in the language the customer is writing in.
+- Internal notes in the conversation are the team's own context: use them, never mention or quote them.
+
+Reply with JSON only, no other text: {"suggestions": ["…", "…", "…"]}`;
+
+async function suggestReplies(sql, ticketId) {
+  const t = (await sql`SELECT id, ref, subject, category, guest_id, status FROM support_tickets WHERE id = ${Number(ticketId) || 0}`)[0];
+  if (!t) throw userError('Request not found.', 404);
+  const msgs = await sql`SELECT sender, internal, body, created_at, to_jsonb(m)->>'via' AS via
+                         FROM support_messages m WHERE ticket_id = ${t.id} ORDER BY created_at DESC, id DESC LIMIT 40`;
+  const lines = msgs.reverse().filter(m => m.body).map(m => {
+    const who = m.sender === 'user' ? 'Customer' : m.sender === 'system' ? 'System' : (m.internal ? 'Internal note (team only)' : 'Aerva Support');
+    return `${who}: ${String(m.body).slice(0, 3000)}`;
+  });
+  let person = '';
+  try { if (t.guest_id) person = (await personContext(sql, t.guest_id)).text; } catch (e) { person = ''; }
+  const system = SUGGEST_RULES() + '\n\n# The customer\n' + (person || 'Account details unavailable.') + '\n\n# Aerva policies and help topics\n' + loadPolicies().slice(0, 60000);
+  const user = `Request ${t.ref} — ${t.subject} (category: ${t.category}, status: ${t.status}).\n\nConversation so far, oldest first:\n${lines.join('\n\n') || '(no messages yet)'}\n\nWrite the three suggested replies now.`;
+  let text;
+  try { text = await askModel(system, [{ role: 'user', content: user }]); }
+  catch (err) { if (err.unavailable) throw userError('Suggestions are not available right now.', 503); throw err; }
+  const m = String(text || '').match(/\{[\s\S]*\}/);
+  let list = [];
+  try { list = m ? JSON.parse(m[0]).suggestions : []; } catch (e) { list = []; }
+  list = (Array.isArray(list) ? list : []).map(x => String(x || '').trim()).filter(Boolean).slice(0, 3).map(x => x.slice(0, 1200));
+  if (!list.length) throw userError('No suggestions this time. Try again.', 502);
+  return { suggestions: list };
+}
+
+module.exports = { getThread, summary, send, handoff, loadPolicies, personContext, suggestReplies, _internals: { HANDOFF_RE, RULES } };

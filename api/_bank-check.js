@@ -482,7 +482,37 @@ function describeCheck(row) {
   return s ? (map[s] || null) : null;
 }
 
+// ---- IFSC → bank and branch ----
+// Razorpay's public IFSC directory (ifsc.razorpay.com, free, no key): the
+// bank, branch and city for an IFSC, so a host sees at once that the code
+// they typed is their own branch. { found: true, bank, branch, city, … },
+// { found: false } for a code that does not exist, or null when the
+// directory could not be reached (then nothing is refused because of it).
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ifscCache = new Map();
+async function lookupIfsc(code) {
+  const ifsc = String(code || '').trim().toUpperCase();
+  if (!IFSC_RE.test(ifsc)) return { found: false };
+  if (ifscCache.has(ifsc)) return ifscCache.get(ifsc);
+  const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const r = await fetch('https://ifsc.razorpay.com/' + encodeURIComponent(ifsc), { signal: ctrl.signal });
+    if (r.status === 404) { const out = { found: false }; ifscCache.set(ifsc, out); return out; }
+    if (!r.ok) return null;
+    const d = await r.json();
+    const t = (v) => String(v == null ? '' : v).trim().slice(0, 200);
+    const out = { found: true, ifsc, bank: t(d.BANK), branch: t(d.BRANCH), city: t(d.CITY), district: t(d.DISTRICT), state: t(d.STATE), address: t(d.ADDRESS) };
+    if (ifscCache.size > 500) ifscCache.clear();
+    ifscCache.set(ifsc, out);
+    return out;
+  } catch (err) {
+    return null;
+  } finally { clearTimeout(timer); }
+}
+const IFSC_NOT_FOUND = 'We could not find this IFSC. Check it on your cheque book or passbook, or ask your branch.';
+
 module.exports = {
+  lookupIfsc, IFSC_NOT_FOUND,
   nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, validGstin, gstinPan, tradeGstinProblem, PERSONAL_PAN, panLetter, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
   bankDetailsChanged, payoutDetailsChanged, payoutItems, payoutNotifications, startCheck, settleCheck, pollChecks, inChangeHold, describeCheck, HOLD_HOURS_AFTER_CHANGE
 };

@@ -800,6 +800,26 @@ module.exports = async (req, res) => {
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this request.' });
     }
   }
+  // GET ?supportTicketLive=<id> — the same as ?supportTicket, read every few
+  // seconds while a request is open in Admin → Support so new messages
+  // appear without refreshing. Not logged as a view each time (the open
+  // itself already was).
+  if (req.method === 'GET' && req.query.supportTicketLive) {
+    try { return res.status(200).json(await support.adminGet(sql, Number(req.query.supportTicketLive))); }
+    catch (err) {
+      if (!err.isUserFacing) console.error('supportTicketLive failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this request.' });
+    }
+  }
+  // POST { supportSuggest: { ticketId } } — three replies the agent could
+  // send next (_support-chat.js suggestReplies). Never sent by itself.
+  if (req.method === 'POST' && req.body && req.body.supportSuggest) {
+    try { return res.status(200).json(await require('./_support-chat').suggestReplies(sql, Number(req.body.supportSuggest.ticketId) || 0)); }
+    catch (err) {
+      if (!err.isUserFacing) console.error('supportSuggest failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Suggestions are not available right now.' });
+    }
+  }
   // POST { supportCase: { ticketId, summary?, outcome?, requesterConduct?, otherConduct?, conductNote? } }
   // The case record: every save is kept, so the request's whole history stays.
   if (req.method === 'POST' && req.body && req.body.supportCase) {

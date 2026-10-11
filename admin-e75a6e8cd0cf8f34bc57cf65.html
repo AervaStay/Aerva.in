@@ -74,6 +74,21 @@
   .sup-row{cursor:pointer;} .sup-row:hover td{background:#faf6f0;}
   .sup-flag.sup-wa{background:#e3f4e8; color:#1f7a3d;}
   .sup-msg.sup-transcript{background:#fbf8f2; border:1px dashed #d8c8a8;}
+  .sup-suggest{border:1px solid #e6ded3; border-radius:10px; padding:10px 12px; margin:0 0 10px; background:#fcfaf6;}
+  .sup-suggest-head{display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; font-size:13.5px; margin-bottom:8px;}
+  .sup-suggest-more{margin-left:auto; background:none; border:1px solid #d9cfc2; border-radius:999px; padding:5px 12px; font:inherit; font-size:12.5px; cursor:pointer;}
+  .sup-suggestion{display:block; width:100%; text-align:left; background:#fff; border:1px solid #e6ded3; border-radius:8px; padding:9px 12px; margin:0 0 6px; font:inherit; font-size:13.5px; line-height:1.5; cursor:pointer; white-space:pre-wrap;}
+  .sup-suggestion:hover, .sup-suggestion:focus-visible{border-color:#a9884f; background:#fffdf8;}
+  .sup-suggest-wait{font-size:13px; opacity:0.65; margin:2px 0 8px;}
+  .sup-quick{display:flex; flex-wrap:wrap; gap:6px; margin-top:4px;}
+  .sup-chip{background:#f3ede4; border:none; border-radius:999px; padding:6px 12px; font:inherit; font-size:12.5px; cursor:pointer;}
+  .sup-chip:hover{background:#e9e0d2;}
+  .sup-send{padding:9px 22px; min-width:96px;}
+  .sup-live{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#2f6b3a; margin-left:4px;}
+  .sup-live-dot{width:8px; height:8px; border-radius:50%; background:#3a9a4c; box-shadow:0 0 0 0 rgba(58,154,76,0.5); animation:supPulse 2s infinite;}
+  .sup-live.is-off{color:#a3402f;} .sup-live.is-off .sup-live-dot{background:#a3402f; animation:none;}
+  @keyframes supPulse{0%{box-shadow:0 0 0 0 rgba(58,154,76,0.5);} 70%{box-shadow:0 0 0 7px rgba(58,154,76,0);} 100%{box-shadow:0 0 0 0 rgba(58,154,76,0);}}
+  .sup-msg.sup-new{outline:2px solid #a9884f; transition:outline-color 1s;}
   .sup-msg{border:1px solid #e6ded3; border-radius:10px; padding:10px 14px; margin:10px 0; font-size:14px;}
   .sup-msg.user{background:#f7f3ee; border-color:transparent;}
   .sup-msg.support{border-left:3px solid #a9884f;}
@@ -740,6 +755,11 @@
   </div>
   <div id="policiesAdminView" style="display:none;"><div id="policiesAdminBody"></div></div>
   <div id="trafficView" style="display:none;">
+    <div class="deposit-section">
+      <h3>Stays and check-ins</h3>
+      <p>The figures the homepage used to show guests (hidden from the homepage for now). Real paid stays only.</p>
+      <div id="trafficProof"><p class="empty">Loading…</p></div>
+    </div>
     <div class="deposit-section">
       <h3>Who came</h3>
       <p>Visits to the site, counted once per browser per day. A count only — no addresses, accounts or tracking of individuals. Sixty days are kept.</p>
@@ -1891,6 +1911,17 @@
   }
 
   async function loadTraffic(){
+    // Stays hosted and guests checked in this month (get-listings.js publicStats).
+    (async () => {
+      const box = document.getElementById('trafficProof');
+      try{
+        const r = await fetch(API_BASE + '/api/get-listings?publicStats=1');
+        const p = await r.json();
+        if(!r.ok || typeof p.staysHosted !== 'number') throw new Error('not available');
+        box.innerHTML = '<div class="process-results"><div><strong>' + Number(p.staysHosted).toLocaleString('en-IN') + '</strong> stays hosted</div>'
+          + '<div><strong>' + Number(p.checkinsThisMonth).toLocaleString('en-IN') + '</strong> guests checked in this month</div></div>';
+      }catch(err){ box.innerHTML = '<p class="empty">Could not load these figures right now.</p>'; }
+    })();
     const vis = document.getElementById('trafficVisits');
     const ab = document.getElementById('trafficAbandoned');
     try{
@@ -2694,11 +2725,13 @@
   // ---- Support tab: Resolution Center requests (api/_support.js) ----
   let supOpenId = null;
   const supDate = (v) => v ? new Date(v).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  async function loadSupport(){
+  async function loadSupport(silent){
     const list = document.getElementById('supList');
     document.getElementById('supDetail').style.display = 'none';
     list.style.display = 'block';
     supOpenId = null;
+    clearInterval(supLiveTimer);
+    supStartListLive();
     const status = document.getElementById('supStatus').value;
     const q = document.getElementById('supQ').value.trim();
     try{
@@ -2734,17 +2767,23 @@
       drawSupport(d);
     }catch(e){ box.innerHTML = '<p class="error">Could not load the request.</p>'; }
   }
-  function drawSupport(d){
+  // The facts row (person, timeline, request, booking, listing). Redrawn on
+  // its own when a live update changes the status.
+  function supFactsHtml(d){
     const t = d.ticket, labels = d.statuses || {};
-    const box = document.getElementById('supDetail');
     const day = (v) => v ? String(v).slice(0, 10) : '';
-    const facts = [
+    return [
       `<div><strong>Person</strong><br>${escAdmin(t.person_name || 'Deleted account')}<br>${escAdmin(t.person_email || '')}${t.person_phone ? '<br>' + escAdmin(t.person_phone) : ''}${t.channel === 'chat' ? '<br><span class="sup-flag sup-wa">Chat</span> <span class="tds-sub">Your replies appear in their Aerva Support chat in Messages (and by email).</span>' : ''}${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them back: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>`,
       t.timings ? `<div><strong>Timeline</strong><br>First reply: ${t.timings.firstResponseMinutes != null ? escAdmin(supDur(t.timings.firstResponseMinutes)) : `<span style="color:${new Date(t.timings.firstResponseDueAt) < new Date() ? '#a3402f' : 'inherit'};">due by ${escAdmin(supDate(t.timings.firstResponseDueAt))}</span>`}<br>Resolved: ${t.timings.resolvedMinutes != null ? 'after ' + escAdmin(supDur(t.timings.resolvedMinutes)) : '—'}</div>` : '',
       `<div><strong>Request</strong><br>${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}<br>Status: ${escAdmin(labels[t.status] || t.status)}<br>Raised ${escAdmin(supDate(t.created_at))}${t.first_response_at ? '<br>First reply ' + escAdmin(supDate(t.first_response_at)) : '<br><span style="color:#a3402f;">No reply yet</span>'}</div>`,
       t.order_id ? `<div><strong>Booking #${Number(t.order_id)}</strong>${t.confirmation_code ? ' · ' + escAdmin(t.confirmation_code) : ''}<br>${escAdmin(t.suite_name || '')}<br>${escAdmin(day(t.arrival))} → ${escAdmin(day(t.departure))}<br>${escAdmin(t.booking_status || '')}${t.total != null ? ' · ₹' + Number(t.total).toLocaleString('en-IN') : ''}${t.booking_guest_id != null && Number(t.booking_guest_id) !== Number(t.guest_id) ? '<br><em>Raised by the host of this booking</em>' : ''}</div>` : '',
       t.property_name ? `<div><strong>Listing${t.listing_id ? ' #' + Number(t.listing_id) : ''}</strong><br>${escAdmin(t.property_name)}<br>${escAdmin(t.listing_status || '')}</div>` : ''
     ].filter(Boolean).join('');
+  }
+  // The timeline, oldest first. Redrawn on its own by the live updates, so
+  // whatever is being typed below it is never lost.
+  function supTimelineHtml(d){
+    const t = d.ticket;
     // One timeline for the reference, oldest first: the request, every message,
     // status change, internal note, case-record save and the person's feedback.
     const Cx = d.conduct || {};
@@ -2769,6 +2808,18 @@
       return `<div class="sup-msg ${cls}"><strong>${escAdmin(who)}</strong>${via} <span class="tds-sub">${escAdmin(supDate(m.created_at))}</span>
         <div class="sup-msg-body">${escAdmin(m.body)}</div>${(m.attachments || []).length ? '<small>' + fileLinks(m.attachments) + '</small>' : ''}</div>`;
     }).join('');
+    return msgs;
+  }
+  // What changed since the last draw: new messages, notes, status.
+  function supSignature(d){
+    const m = d.messages || [], last = m[m.length - 1] || {};
+    return [m.length, last.id || '', (d.caseNotes || []).length, d.ticket.status, d.ticket.updated_at || ''].join('|');
+  }
+  function drawSupport(d){
+    const t = d.ticket, labels = d.statuses || {};
+    const box = document.getElementById('supDetail');
+    const facts = supFactsHtml(d);
+    const msgs = supTimelineHtml(d);
     // The case record: current version, form for the next one, and every earlier version.
     const C = d.conduct || {}, rec = d.caseRecord || {};
     const opt = (sel, keys) => keys.map(k => `<option value="${k}"${sel === k ? ' selected' : ''}>${escAdmin(C[k] || k)}</option>`).join('');
@@ -2800,22 +2851,35 @@
       </div>`;
     box.innerHTML = `<p><a href="#" onclick="loadSupport(); return false;">‹ All requests</a></p>
       <h3 style="margin:6px 0 2px;">${escAdmin(t.ref)} — ${escAdmin(t.subject)}</h3>
-      <div class="sup-facts">${facts}</div>
+      <div class="sup-facts" id="supFacts">${facts}</div>
       ${caseBox}
       <div id="supPropose"></div>
-      ${msgs}
+      <div id="supTimeline">${msgs}</div>
       <div class="sup-reply" style="margin-top:16px;">
-        <textarea id="supText" placeholder="${t.channel === 'chat' ? 'Reply to the person (appears in their Aerva Support chat, and is emailed), or an internal note' : 'Reply to the person (emailed to them), or an internal note'}"></textarea>
+        <div class="sup-suggest" id="supSuggest">
+          <div class="sup-suggest-head"><strong>Suggested replies</strong> <span class="tds-sub">tap one to put it in the box, edit it if you like, then Send</span>
+            <button type="button" class="sup-suggest-more" onclick="loadSuggestions(${Number(t.id)}, true)">New suggestions</button></div>
+          <div id="supSuggestList"></div>
+          <div class="sup-quick" id="supQuick"></div>
+        </div>
+        <textarea id="supText" placeholder="${t.channel === 'chat' ? 'Reply to the person (appears in their Aerva Support chat, and is emailed), or an internal note. Enter sends, Shift+Enter for a new line.' : 'Reply to the person (emailed to them), or an internal note'}"></textarea>
         <div class="tds-bar">
           <label>Status after this
             <select id="supNext"><option value="">${t.status === 'closed' ? 'Leave closed' : 'Automatic (a reply → waiting for the person)'}</option>
               ${Object.keys(labels).map(k => `<option value="${escAdmin(k)}">${escAdmin(labels[k])}</option>`).join('')}</select>
           </label>
-          <label style="flex-direction:row; align-items:center; gap:8px;"><input type="checkbox" id="supInternal"> Internal note (never shown to the person)</label>
-          <button type="button" class="approve-btn" style="padding:9px 18px;" id="supSend" onclick="sendSupport(${Number(t.id)})">Save</button>
+          <label style="flex-direction:row; align-items:center; gap:8px;"><input type="checkbox" id="supInternal" onchange="supSendLabel()"> Internal note (never shown to the person)</label>
+          <button type="button" class="approve-btn sup-send" id="supSend" onclick="sendSupport(${Number(t.id)})">Send</button>
+          <span class="sup-live" id="supLive" title="New messages appear here by themselves"><span class="sup-live-dot"></span> Live</span>
         </div>
         <p id="supErr" class="error"></p>
       </div>`;
+    supSig = supSignature(d);
+    supLastUserMsgId = supLastUserId(d);
+    supWireComposer(t);
+    supQuickReplies(t);
+    loadSuggestions(t.id, false);
+    supStartLive();
     // Propose an action for a reviewer, from the request itself.
     if(typeof mountPropose === 'function' && (t.order_id || t.listing_id || t.guest_id)) {
       mountPropose(document.getElementById('supPropose'), { ticketId: t.id, orderId: t.order_id || null,
@@ -2824,6 +2888,121 @@
         after: () => openSupport(t.id) });
     }
   }
+  // ---- Live: new messages appear by themselves ----
+  // While a request is open, it is read again every 4 seconds (only while
+  // this tab is in view). When something changed, only the timeline and
+  // the facts are redrawn, so a half-typed reply, the case record and an
+  // open proposal are left exactly as they are. The list of requests is
+  // refreshed every 15 seconds the same way.
+  let supSig = '', supLastUserMsgId = null, supLiveTimer = null, supListTimer = null, supUnseen = 0;
+  const supBaseTitle = document.title;
+  function supLastUserId(d){
+    const u = (d.messages || []).filter(m => m.sender === 'user' && !m.internal);
+    return u.length ? u[u.length - 1].id : null;
+  }
+  function supStartLive(){
+    clearInterval(supLiveTimer);
+    supLiveTimer = setInterval(supLiveTick, 4000);
+  }
+  async function supLiveTick(){
+    const box = document.getElementById('supDetail');
+    if(supOpenId == null || !box || box.style.display === 'none' || !box.offsetParent){ return; }
+    const id = supOpenId;
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?supportTicketLive=' + Number(id), { headers: authHeaders() });
+      if(!res.ok) return;
+      const d = await res.json();
+      if(id !== supOpenId) return;
+      const sig = supSignature(d);
+      const live = document.getElementById('supLive'); if(live) live.classList.remove('is-off');
+      if(sig === supSig) return;
+      supSig = sig;
+      // Keep the reader's place: stay at the bottom if they were there.
+      const nearBottom = (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 160;
+      const tl = document.getElementById('supTimeline'), facts = document.getElementById('supFacts');
+      const tlBottom = tl ? tl.getBoundingClientRect().bottom : 0;
+      if(facts) facts.innerHTML = supFactsHtml(d);
+      if(tl) tl.innerHTML = supTimelineHtml(d);
+      if(tl && !nearBottom){ window.scrollBy(0, tl.getBoundingClientRect().bottom - tlBottom); }
+      const lastUser = supLastUserId(d);
+      if(lastUser !== supLastUserMsgId){
+        supLastUserMsgId = lastUser;
+        if(document.hidden){ supUnseen++; document.title = '(' + supUnseen + ') New message — ' + supBaseTitle; }
+        if(tl){ const items = tl.querySelectorAll('.sup-msg.user'); const el = items[items.length - 1]; if(el){ el.classList.add('sup-new'); setTimeout(() => el.classList.remove('sup-new'), 2500); } }
+        loadSuggestions(d.ticket.id, false);
+      }
+    }catch(e){ const live = document.getElementById('supLive'); if(live) live.classList.add('is-off'); }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if(!document.hidden){ supUnseen = 0; document.title = supBaseTitle; if(supOpenId != null) supLiveTick(); }
+  });
+  function supStartListLive(){
+    clearInterval(supListTimer);
+    supListTimer = setInterval(() => {
+      const list = document.getElementById('supList');
+      if(supOpenId != null || !list || list.style.display === 'none' || !list.offsetParent || document.hidden) return;
+      loadSupport(true);
+    }, 15000);
+  }
+
+  // ---- Composer: Send, Enter to send, suggestions ----
+  function supSendLabel(){
+    const btn = document.getElementById('supSend'); if(!btn) return;
+    const text = (document.getElementById('supText') || {}).value || '';
+    const internal = (document.getElementById('supInternal') || {}).checked;
+    btn.textContent = internal ? 'Add note' : (!text.trim() && (document.getElementById('supNext') || {}).value ? 'Update status' : 'Send');
+  }
+  function supWireComposer(t){
+    const ta = document.getElementById('supText');
+    if(!ta) return;
+    ta.addEventListener('input', () => { supSendLabel(); ta.style.height = 'auto'; ta.style.height = Math.min(320, Math.max(110, ta.scrollHeight + 2)) + 'px'; });
+    // Enter sends; Shift+Enter is a new line (as in any chat).
+    ta.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); sendSupport(t.id); }
+    });
+    const next = document.getElementById('supNext'); if(next) next.addEventListener('change', supSendLabel);
+    supSendLabel();
+  }
+  function supUse(text){
+    const ta = document.getElementById('supText'); if(!ta) return;
+    ta.value = text;
+    ta.dispatchEvent(new Event('input'));
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+  // Short replies the team uses all the time — no waiting for anything.
+  function supQuickReplies(t){
+    const box = document.getElementById('supQuick'); if(!box) return;
+    const first = String(t.person_name || '').trim().split(/\s+/)[0] || '';
+    const hi = first ? 'Hi ' + first + ', ' : 'Hi, ';
+    const list = [
+      ['Greeting', hi + 'thank you for reaching out to Aerva. I\u2019m looking into this for you now.'],
+      ['Booking ID', 'Could you please share your booking ID or confirmation code, so I can check the details?'],
+      ['Checking', 'Thank you for your patience. I\u2019m checking this with the team and will update you here shortly.'],
+      ['Screenshot', 'Could you share a screenshot of what you are seeing? You can attach it here in the chat.'],
+      ['Anything else', 'Is there anything else I can help you with today?'],
+      ['Closing', 'Glad I could help. I\u2019ll mark this as resolved \u2014 if anything else comes up, just reply here.']
+    ];
+    box.innerHTML = list.map((q, i) => `<button type="button" class="sup-chip" data-q="${i}">${escAdmin(q[0])}</button>`).join('');
+    box.querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => supUse(list[Number(b.getAttribute('data-q'))][1])));
+  }
+  let supSuggestFor = null;
+  async function loadSuggestions(id, force){
+    const box = document.getElementById('supSuggestList'); if(!box) return;
+    const key = id + ':' + supLastUserMsgId;
+    if(!force && supSuggestFor === key) return;
+    supSuggestFor = key;
+    box.innerHTML = '<p class="sup-suggest-wait">Drafting suggestions\u2026</p>';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ supportSuggest: { ticketId: id } }) });
+      const d = await res.json().catch(() => ({}));
+      if(id !== supOpenId) return;
+      if(!res.ok){ box.innerHTML = '<p class="sup-suggest-wait">' + escAdmin(d.error || 'Suggestions are not available right now.') + '</p>'; return; }
+      box.innerHTML = (d.suggestions || []).map((x, i) => `<button type="button" class="sup-suggestion" data-s="${i}">${escAdmin(x)}</button>`).join('');
+      box.querySelectorAll('[data-s]').forEach(b => b.addEventListener('click', () => supUse(d.suggestions[Number(b.getAttribute('data-s'))])));
+    }catch(e){ if(id === supOpenId) box.innerHTML = '<p class="sup-suggest-wait">Suggestions are not available right now.</p>'; }
+  }
+
   // 75 → "1 h 15 min", 3000 → "2 d 2 h"
   function supDur(min){ const m = Math.round(Number(min) || 0); if(m < 60) return m + ' min'; if(m < 1440) return Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : ''); return Math.floor(m / 1440) + ' d' + (Math.floor((m % 1440) / 60) ? ' ' + Math.floor((m % 1440) / 60) + ' h' : ''); }
   async function saveCase(id){
@@ -2844,15 +3023,28 @@
     const err = document.getElementById('supErr'), btn = document.getElementById('supSend');
     err.textContent = '';
     if(!text && !status){ err.textContent = 'Write a reply or note, or choose a status.'; return; }
-    if(text && !internal && !confirm(document.querySelector('#supDetail .sup-wa') ? 'Send this reply to the person? It appears in their Aerva Support chat and is emailed.' : 'Send this reply to the person by email?')) return;
-    btn.disabled = true;
+    // A live chat reply goes straight out, like any chat. An email-only
+    // request still asks first, since an email cannot be taken back.
+    const isChat = !!document.querySelector('#supFacts .sup-wa');
+    if(text && !internal && !isChat && !confirm('Send this reply to the person by email?')) return;
+    if(btn.disabled) return;
+    btn.disabled = true; btn.textContent = 'Sending\u2026';
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true),
         body: JSON.stringify({ supportReply: { ticketId: id, text, status, internal } }) });
       const d = await res.json().catch(() => ({}));
-      if(!res.ok){ err.textContent = d.error || 'Could not save.'; btn.disabled = false; return; }
-      drawSupport(d);
-    }catch(e){ err.textContent = 'Could not save.'; btn.disabled = false; }
+      if(!res.ok){ err.textContent = d.error || 'Could not send.'; btn.disabled = false; supSendLabel(); return; }
+      // Only the timeline and facts change; the box is emptied for the next message.
+      document.getElementById('supText').value = '';
+      document.getElementById('supText').style.height = '';
+      document.getElementById('supNext').value = '';
+      document.getElementById('supInternal').checked = false;
+      document.getElementById('supFacts').innerHTML = supFactsHtml(d);
+      document.getElementById('supTimeline').innerHTML = supTimelineHtml(d);
+      supSig = supSignature(d);
+      btn.disabled = false; supSendLabel();
+      document.getElementById('supText').focus();
+    }catch(e){ err.textContent = 'Could not send.'; btn.disabled = false; supSendLabel(); }
   }
 
   // ---- Guest Safety tab: stay disputes ----
