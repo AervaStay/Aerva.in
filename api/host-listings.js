@@ -754,6 +754,10 @@ async function handleCohostModes(req, res, accountId) {
       const account = String(x.accountNumber || '').replace(/\s+/g, '');
       const ifsc = String(x.ifsc || '').trim().toUpperCase();
       const panName = String(x.panName || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      // Typed twice on the form; a page that sends both must send the same.
+      if (x.accountNumberConfirm != null && String(x.accountNumberConfirm).replace(/\s+/g, '') !== account) {
+        res.status(400).json({ error: 'The two account numbers do not match. Type them again.' }); return true;
+      }
       if (!isValidPan(pan)) { res.status(400).json({ error: PAN_ERROR }); return true; }
       // Same rules as a host (_bank-check.js): the name as printed on the
       // PAN goes with the PAN, the PAN is on no other account, and the bank
@@ -774,6 +778,7 @@ async function handleCohostModes(req, res, accountId) {
       if (holder.length < 2) { res.status(400).json({ error: 'Please enter the account holder\'s name as the bank has it.' }); return true; }
       if (!/^[0-9]{9,18}$/.test(account)) { res.status(400).json({ error: 'Bank account numbers are 9 to 18 digits.' }); return true; }
       if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) { res.status(400).json({ error: 'Please enter a valid IFSC, like HDFC0001234.' }); return true; }
+      { const known = await bankCheck.lookupIfsc(ifsc); if (known && known.found === false) { res.status(400).json({ error: bankCheck.IFSC_NOT_FOUND }); return true; } }
       const isCohost = await sql`SELECT 1 FROM cohosts WHERE cohost_guest_id = ${me.id} AND status = 'active' LIMIT 1`;
       if (!isCohost.length) { res.status(403).json({ error: 'Payout details are for active co-hosts.' }); return true; }
       // PAN, GSTIN (which contains the PAN) and account number are stored
@@ -1155,6 +1160,15 @@ module.exports = async (req, res) => {
   // (isSessionRevoked covers deleted accounts and fails closed).
   if (await isSessionRevoked(sql, session.payload)) return res.status(401).json({ error: 'Please log in again.' });
   const accountId = guestId; // the person actually signed in, always
+
+  // ---- IFSC → bank and branch (Payout details, co-host payout form) ----
+  // GET ?ifsc=HDFC0001234 → { found, bank, branch, city, state, … }
+  if (req.method === 'GET' && req.query && req.query.ifsc !== undefined) {
+    const info = await bankCheck.lookupIfsc(req.query.ifsc);
+    if (!info) return res.status(503).json({ error: 'Could not look up the branch right now.' });
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    return res.status(200).json(info);
+  }
 
   // ---- Host agreement: one-time acceptance for hosts who listed before
   // it existed (new hosts accept it when submitting a listing) ----
@@ -3249,7 +3263,7 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'List a property first to create your host account.' });
       }
 
-      const { aadhaarDocumentUrl, bankAccountNumber, bankIfsc, bankAccountHolderName, bankGstin, panNumber, panName, panDocumentUrl, hostName, hostPhone } = req.body || {};
+      const { aadhaarDocumentUrl, bankAccountNumber, bankAccountNumberConfirm, bankIfsc, bankAccountHolderName, bankGstin, panNumber, panName, panDocumentUrl, hostName, hostPhone } = req.body || {};
       // Uploaded documents: only Aerva's own storage (see isAervaBlobUrl).
       for (const u of [aadhaarDocumentUrl, panDocumentUrl]) {
         if (typeof u === 'string' && u && !isAervaBlobUrl(u)) {
@@ -3359,12 +3373,21 @@ module.exports = async (req, res) => {
       if (hasBankInfo) {
         const cleanAccountNumber = String(bankAccountNumber).replace(/\s/g, '');
         const cleanIfsc = String(bankIfsc).trim().toUpperCase();
-        if (!/^\d{6,20}$/.test(cleanAccountNumber)) {
-          return res.status(400).json({ error: 'Please enter a valid bank account number.' });
+        // Indian bank account numbers are 9 to 18 digits (same rule as a
+        // co-host's, above). Typed twice on the form; both must match.
+        if (bankAccountNumberConfirm != null && String(bankAccountNumberConfirm).replace(/\s/g, '') !== cleanAccountNumber) {
+          return res.status(400).json({ error: 'The two account numbers do not match. Type them again.' });
+        }
+        if (!/^\d{9,18}$/.test(cleanAccountNumber)) {
+          return res.status(400).json({ error: 'Bank account numbers are 9 to 18 digits.' });
         }
         if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
           return res.status(400).json({ error: 'Please enter a valid IFSC code.' });
         }
+        // A code that does not exist is refused; if the directory cannot
+        // be reached, the bank check (penny drop) still catches it.
+        const knownIfsc = await bankCheck.lookupIfsc(cleanIfsc);
+        if (knownIfsc && knownIfsc.found === false) return res.status(400).json({ error: bankCheck.IFSC_NOT_FOUND });
         // Payouts go only to the PAN holder: an account typed in a clearly
         // different name is refused here, before any bank check.
         const typedHolder = String(bankAccountHolderName).trim().slice(0, 100);

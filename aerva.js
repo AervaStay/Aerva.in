@@ -45,7 +45,11 @@
 
   const io = new IntersectionObserver((entries) => {
     entries.forEach(e => { if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
-  }, { threshold: 0.15 });
+  // Fades in as soon as any part of it is on screen. (A share of the
+  // element — 15% — never happened for something taller than about seven
+  // screens, like the List Property form on a phone, which then stayed
+  // invisible.)
+  }, { threshold: 0, rootMargin: '0px 0px -40px 0px' });
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 
   // ---- Pricing constants (display only; the server decides the charge) ----
@@ -4698,11 +4702,18 @@
         render(r.ok ? `Proposed ${pct}% \u2014 the host will approve or decline it.` : (r.data.error || 'Could not send the proposal.'));
       }));
       const poSave = body.querySelector('[data-po-save]');
+      // Checked as they type, like a bank's own form (aerva-bank-fields.js).
+      const poField = (k) => body.querySelector(`[data-po="${k}"]`);
+      const poForm = (poSave && window.AervaBankFields) ? window.AervaBankFields.wire({
+        holder: poField('holder'), account: poField('account'), account2: poField('account2'),
+        ifsc: poField('ifsc'), gstin: poField('gstin'), save: poSave
+      }) : null;
       if(poSave) poSave.addEventListener('click', async () => {
         const v = (k) => (body.querySelector(`[data-po="${k}"]`) || {}).value || '';
+        if(poForm && !poForm.valid()) return;
         if(v('account').replace(/\s/g, '') !== v('account2').replace(/\s/g, '')){ render('The two account numbers do not match. Type them again.'); return; }
         poSave.disabled = true;
-        const r = await call('POST', { savePayoutProfile: { pan: v('pan'), panName: v('panName'), gstin: v('gstin'), accountHolderName: v('holder'), accountNumber: v('account'), ifsc: v('ifsc') } });
+        const r = await call('POST', { savePayoutProfile: { pan: v('pan'), panName: v('panName'), gstin: v('gstin'), accountHolderName: v('holder'), accountNumber: v('account'), accountNumberConfirm: v('account2'), ifsc: v('ifsc') } });
         poSave.disabled = false;
         render(r.ok ? (r.data.bankCheck === 'checking' ? 'Payout details saved. Checking with your bank \u2014 this usually takes a minute.' : 'Payout details saved \u2014 Aerva will check them before your next payout.') : (r.data.error || 'Could not save your payout details.'));
       });
@@ -7531,8 +7542,9 @@
     document.getElementById('supportMessages').innerHTML = '<p class="loading" style="font-size:13px; opacity:0.6;">Loading…</p>';
     await refreshSupportChat();
     if(supportPoll) clearInterval(supportPoll);
-    // An agent's reply appears without reloading (checked every 10 seconds while open).
-    supportPoll = setInterval(() => { if(supportOpen && !supportBusy && supportState && supportState.mode !== 'ai') refreshSupportChat(true); }, 10000);
+    // An agent's reply appears without reloading: checked every 4 seconds
+    // while the chat is open with an agent and the page is in view.
+    supportPoll = setInterval(() => { if(supportOpen && !supportBusy && !document.hidden && supportState && supportState.mode !== 'ai') refreshSupportChat(true); }, 4000);
     setTimeout(() => { const i = document.getElementById('supportInput'); if(i && window.innerWidth > 760) i.focus(); }, 50);
   }
   // Opens Messages straight on Aerva Support (Resolution Center, help links).
