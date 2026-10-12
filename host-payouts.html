@@ -105,9 +105,10 @@
       return;
     }
     if(IS_COHOST || !v){
-      body.innerHTML = '<div class="card"><h2>Bank account</h2><p class="note">' + (IS_COHOST
-        ? 'As a co-host, your bank account for your share is in the <a href="index.html?view=cohost">Co-hosting centre</a>.'
-        : 'Your bank account is added once you list a home. <a href="index.html?view=cohost">Co-hosting?</a> Your bank account is in the Co-hosting centre.') + '</p></div><div id="sentBox"></div>';
+      // Not a host here: only the co-host's own payout details (if any).
+      body.innerHTML = '<div id="coBox"></div><div id="sentBox"></div>';
+      const isCo = await loadCohostPayout();
+      if(!isCo) $('coBox').innerHTML = '<div class="card"><h2>Bank account</h2><p class="note">Your payout details are added once you list a home, or once you co-host for someone.</p></div>';
       loadSent();
       return;
     }
@@ -189,6 +190,7 @@
           <p class="msg" id="bankMsg"></p>
         </div>
       </div>
+      <div id="coBox"></div>
       <div id="sentBox"></div>`;
     const form = document.getElementById('bankForm');
     document.getElementById('bankEditBtn').addEventListener('click', () => { form.style.display = form.style.display === 'block' ? 'none' : 'block'; });
@@ -200,6 +202,7 @@
       ifsc: document.getElementById('bankIfsc'), gstin: document.getElementById('bankGstin')
     }) : null;
     wirePayee();
+    loadCohostPayout();
     loadSent();
   }
 
@@ -322,6 +325,85 @@
       const note = $('bankNote');
       if(note && data.bankCheck === 'checking') note.textContent = 'Saved. Checking with your bank — this usually takes a minute.';
     }catch(err){ done('Something went wrong. Please try again.'); }
+  }
+
+  // ---- A co-host's own payout details (their share of what they help earn) ----
+  // Separate from a host's own: a person can be both. Saved with
+  // savePayoutProfile; the PAN is optional, as for a host.
+  async function loadCohostPayout(){
+    const box = $('coBox'); if(!box) return false;
+    let hosts = [], prof = null;
+    try{
+      const [a, b] = await Promise.all([
+        fetch(API + '?myCohosting=1', { headers: { 'Authorization': 'Bearer ' + token } }).then(r => r.json()).catch(() => ({})),
+        fetch(API + '?myPayoutProfile=1', { headers: { 'Authorization': 'Bearer ' + token } }).then(r => r.json()).catch(() => ({}))
+      ]);
+      hosts = (a && a.cohosting) || []; prof = (b && b.profile) || null;
+    }catch(e){ return false; }
+    if(!hosts.length && !prof) { box.innerHTML = ''; return false; }
+    const st = prof ? prof.status : 'not_submitted';
+    const cls = st === 'approved' ? 'status-approved' : st === 'rejected' ? 'status-rejected' : st === 'pending_review' ? 'status-pending' : '';
+    const label = { approved: 'Verified', rejected: 'Needs attention', pending_review: 'Being verified', not_submitted: 'Not added' }[st] || 'Not added';
+    const name = (prof && (prof.panName || prof.accountHolderName)) || '';
+    const words = name.trim().split(/\s+/).filter(Boolean);
+    box.innerHTML = `
+      <div class="card">
+        <h2>As a co-host</h2>
+        <p class="note" style="margin:0 0 12px;">Where your own share is paid, for the listings you co-host${hosts.length ? ' for ' + esc(hosts.map(h => h.hostName).join(', ')) : ''}. Enter your name exactly as your bank account holds it. If you add a PAN, it must be in that same name.</p>
+        <div class="row">
+          <div><div class="row-label">Payout name</div><div class="row-value">${name ? esc(name) : 'Not added yet'}</div></div>
+          ${prof && prof.panMasked ? `<div style="text-align:right;"><div class="row-label">PAN</div><div class="row-value">${esc(prof.panMasked)}</div></div>` : ''}
+        </div>
+        <div class="row">
+          <div><div class="row-label">Bank account</div><div class="row-value">${prof && prof.accountMasked ? esc(prof.accountMasked) + (prof.ifsc ? ' · ' + esc(prof.ifsc) : '') : 'No bank details on file yet.'}</div></div>
+          <span class="status ${cls}">${esc(label)}</span>
+        </div>
+        ${prof && prof.rejectionReason ? `<p class="note bad">${esc(prof.rejectionReason)}</p>` : ''}
+        ${prof && prof.bankCheck && prof.bankCheck.message && st !== 'rejected' ? `<p class="note">${esc(prof.bankCheck.message)}</p>` : ''}
+        ${prof && prof.payoutsFrom ? `<p class="note">Details changed recently: payouts resume from ${esc(new Date(prof.payoutsFrom).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}.</p>` : ''}
+        ${hosts.length ? `<div class="actions" style="margin-top:14px;"><button type="button" class="btn-line" id="coEditBtn">${prof ? 'Change payout details' : 'Add payout details'}</button></div>
+        <div id="coForm" style="display:none; margin-top:14px; padding-top:14px; border-top:1px solid #f0e9df;">
+          <div class="warn">Changing these details puts your payouts on hold until the new account is verified, and for at least 48 hours.</div>
+          <div class="two">
+            <div class="field"><label for="coFirst">First name <span class="opt">(and middle name)</span></label><input type="text" id="coFirst" autocomplete="given-name" value="${esc(words.slice(0, -1).join(' '))}" placeholder="As the bank account holds it"></div>
+            <div class="field"><label for="coLast">Last name <span class="opt">(surname)</span></label><input type="text" id="coLast" autocomplete="family-name" value="${esc(words.slice(-1)[0] || '')}" placeholder="As the bank account holds it"></div>
+          </div>
+          <div class="field"><label for="coPan">PAN <span class="opt">(optional: 0.1% TDS with it, 5% without)</span></label><input type="text" id="coPan" maxlength="10" autocomplete="off" style="text-transform:uppercase;" placeholder="e.g. ABCPS1234K"></div>
+          <div class="field"><label for="coAccount">Bank account number</label><input type="text" id="coAccount" inputmode="numeric" autocomplete="off"></div>
+          <div class="field"><label for="coAccount2">Re-enter account number</label><input type="text" id="coAccount2" inputmode="numeric" autocomplete="off"></div>
+          <div class="field"><label for="coIfsc">IFSC code</label><input type="text" id="coIfsc" autocomplete="off" placeholder="e.g. HDFC0001234"></div>
+          <div class="field"><label for="coGstin">GSTIN <span class="opt">(only with a PAN, for an account in a trading name)</span></label><input type="text" id="coGstin" maxlength="15" autocomplete="off" style="text-transform:uppercase;"></div>
+          <div class="actions"><button type="button" class="btn-solid" id="coSave">Save</button><button type="button" class="btn-line" id="coCancel">Cancel</button></div>
+          <p class="msg" id="coMsg"></p>
+        </div>` : ''}
+      </div>`;
+    if(!hosts.length) return true;
+    const f = $('coForm');
+    $('coEditBtn').addEventListener('click', () => { f.style.display = f.style.display === 'block' ? 'none' : 'block'; });
+    $('coCancel').addEventListener('click', () => { f.style.display = 'none'; });
+    const coBank = window.AervaBankFields ? window.AervaBankFields.wire({ holder: $('coLast'), account: $('coAccount'), account2: $('coAccount2'), ifsc: $('coIfsc'), gstin: $('coGstin'), save: $('coSave') }) : null;
+    $('coPan').addEventListener('input', () => { $('coPan').value = $('coPan').value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10); });
+    $('coSave').addEventListener('click', async () => {
+      const msg = $('coMsg'); const bad = (t) => { msg.textContent = t; msg.style.color = '#a3402f'; };
+      msg.textContent = '';
+      if(coBank && !coBank.valid()) return bad('Please correct the fields marked in red.');
+      const first = $('coFirst').value.replace(/\s+/g, ' ').trim(), last = $('coLast').value.replace(/\s+/g, ' ').trim();
+      const pan = $('coPan').value.trim().toUpperCase();
+      if(!first || !last) return bad('Enter your first and last name exactly as your bank account holds them.');
+      if(pan && (!PAN_RE.test(pan) || !panFits(pan, 'person', last, ''))) return bad(NO_MATCH);
+      const nm = first + ' ' + last;
+      if(!confirm('Save these payout details? Your share will be paid to ' + nm + ' once the account is verified.')) return;
+      $('coSave').disabled = true;
+      try{
+        const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ savePayoutProfile: { pan, panName: nm, accountHolderName: nm, payeeLastName: last, gstin: $('coGstin').value.trim(),
+            accountNumber: $('coAccount').value.trim(), accountNumberConfirm: $('coAccount2').value.trim(), ifsc: $('coIfsc').value.trim() } }) });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok){ bad(d.error || 'Could not save your payout details.'); if(coBank) coBank.refresh(); else $('coSave').disabled = false; return; }
+        await loadCohostPayout();
+      }catch(e){ bad('Something went wrong. Please try again.'); $('coSave').disabled = false; }
+    });
+    return true;
   }
 
   // Payouts sent to this account (as host or co-host). Each opens its

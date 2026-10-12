@@ -1283,18 +1283,23 @@
               <option value="after_checkin">After check-in</option>
               <option value="before_checkout">Before check-out</option>
               <option value="after_checkout">After check-out</option>
-              <option value="checkin_day">On check-in day (morning)</option>
-              <option value="checkout_day">On check-out day (morning)</option>
+              <option value="checkin_day">On check-in day, at a set time</option>
+              <option value="checkout_day">On check-out day, at a set time</option>
             </select>
             <div id="tplDaysWrap" style="display:none;">
-              <label class="tpl-label" for="tplDays">How long</label>
+              <label class="tpl-label" for="tplDays" id="tplDaysLabel">How long</label>
               <div style="display:flex; gap:8px;">
                 <input type="number" id="tplDays" class="tpl-input" min="1" max="30" value="2" inputmode="numeric" style="flex:1;">
                 <select id="tplUnit" class="tpl-input" style="flex:1;">
+                  <option value="minutes">Minutes</option>
                   <option value="hours">Hours</option>
                   <option value="days" selected>Days</option>
                 </select>
               </div>
+            </div>
+            <div id="tplAtWrap" style="display:none;">
+              <label class="tpl-label" for="tplAt" id="tplAtLabel">At</label>
+              <input type="time" id="tplAt" class="tpl-input" step="300">
             </div>
             <p class="tpl-hint" id="tplTimingNote" style="display:none;"></p>
             <div id="inboxTemplateScheduleOptions" style="display:none;">
@@ -1550,7 +1555,7 @@
 <script src="aerva-help.js" defer></script>
 <script src="aerva-privacy.js?v=2026-10-10i" defer></script>
 <script src="aerva-bank-fields.js?v=2026-10-13a" defer></script>
-<script src="aerva.js?v=2026-10-13a" defer></script>
+<script src="aerva.js?v=2026-10-13b" defer></script>
 
 </body>
 </html>

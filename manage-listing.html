@@ -546,13 +546,34 @@
 
       <div class="eyebrow" style="margin-top:0;">Scheduling</div>
       <p style="font-size:11.5px; opacity:0.6; margin-top:-4px; margin-bottom:10px;">Send the preview above to the guest automatically, using whatever is filled in at the time.</p>
-      <div class="field" style="margin-bottom:24px;">
+      <div class="field">
         <label for="checkinScheduleTrigger">When should this send?</label>
         <select id="checkinScheduleTrigger">
           <option value="">Don't send automatically</option>
-          <option value="on_booking_confirmed">The moment a guest confirms their booking</option>
+          <option value="booking_confirmed">As soon as a booking is confirmed</option>
+          <option value="before_checkin">A set time before check-in</option>
+          <option value="checkin_day">On the morning of check-in day (7:30 am)</option>
         </select>
       </div>
+      <div class="field" id="checkinOffsetWrap" style="display:none;">
+        <label for="checkinOffsetValue" id="checkinOffsetLabel">How long before check-in?</label>
+        <div style="display:flex; gap:8px;">
+          <input type="number" id="checkinOffsetValue" min="0" max="720" value="1" inputmode="numeric" style="flex:1;">
+          <select id="checkinOffsetUnit" style="flex:1;">
+            <option value="minutes">Minutes</option>
+            <option value="hours">Hours</option>
+            <option value="days" selected>Days</option>
+          </select>
+        </div>
+      </div>
+      <div class="field" id="checkinAtWrap" style="display:none;">
+        <label for="checkinAtTime" id="checkinAtLabel">At (optional, a time of day)</label>
+        <input type="time" id="checkinAtTime" step="300">
+      </div>
+      <label id="checkinAlsoWrap" style="display:none; align-items:flex-start; gap:10px; font-size:13.5px; margin:0 0 10px; cursor:pointer;">
+        <input type="checkbox" id="checkinAlsoOnConfirm" style="margin-top:3px; width:auto;"> <span>Also send them straight away when a booking is confirmed</span>
+      </label>
+      <p id="checkinScheduleNote" style="font-size:12.5px; line-height:1.6; opacity:0.75; margin:0 0 24px;"></p>
     </div>
 
 
@@ -590,6 +611,50 @@
 
 <script>
   const API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
+
+  // ---- Guest Check-In Info → Scheduling ----
+  // Shows only what the chosen option needs, and says in plain words when
+  // guests will get the instructions.
+  function checkinOffsetMinutes(){
+    const v = Math.max(0, Math.floor(Number(document.getElementById('checkinOffsetValue').value) || 0));
+    return v * ({ minutes: 1, hours: 60, days: 1440 }[document.getElementById('checkinOffsetUnit').value] || 1);
+  }
+  function clock12(v){ const m = String(v || '').match(/^(\d{1,2}):(\d{2})$/); if(!m) return ''; const h = Number(m[1]); return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'am' : 'pm'}`; }
+  function updateCheckinSchedule(){
+    const trig = document.getElementById('checkinScheduleTrigger').value;
+    const unitSel = document.getElementById('checkinOffsetUnit'), valEl = document.getElementById('checkinOffsetValue'), atEl = document.getElementById('checkinAtTime');
+    const confirm = trig === 'booking_confirmed', before = trig === 'before_checkin', dayOf = trig === 'checkin_day';
+    unitSel.querySelector('option[value="days"]').hidden = confirm;
+    if(confirm && unitSel.value === 'days') unitSel.value = 'minutes';
+    document.getElementById('checkinOffsetWrap').style.display = confirm || before ? 'block' : 'none';
+    document.getElementById('checkinOffsetLabel').textContent = confirm ? 'Send after (0 = straight away)' : 'How long before check-in?';
+    valEl.min = confirm ? 0 : 1;
+    valEl.max = { minutes: 720, hours: 72, days: 30 }[unitSel.value] || 30;
+    const showAt = dayOf || (before && unitSel.value === 'days');
+    document.getElementById('checkinAtWrap').style.display = showAt ? 'block' : 'none';
+    document.getElementById('checkinAtLabel').textContent = dayOf ? 'At' : 'At (optional, a time of day)';
+    if(dayOf && !atEl.value) atEl.value = '07:30';
+    document.getElementById('checkinAlsoWrap').style.display = (before || dayOf) ? 'flex' : 'none';
+    const also = document.getElementById('checkinAlsoOnConfirm').checked && !confirm;
+    const inTime = document.getElementById('checkInTime').value;
+    const n = Number(valEl.value) || 0, word = { minutes: 'minute', hours: 'hour', days: 'day' }[unitSel.value];
+    const amount = `${n || 1} ${word}${(n || 1) === 1 ? '' : 's'}`;
+    const note = {
+      '': 'Guests only get these details if you send them yourself (type @checkininfo in a message).',
+      booking_confirmed: n > 0 ? `Guests get them in Aerva Messages ${amount} after their booking is confirmed.` : 'Guests get them in Aerva Messages as soon as their booking is confirmed.',
+      before_checkin: (unitSel.value === 'days' && atEl.value)
+        ? `Guests get them ${amount} before check-in, at ${clock12(atEl.value)}, on your property’s local time. Anyone who books later than that gets them straight away.`
+        : `Guests get them ${amount} before check-in${inTime ? ' (check-in is at ' + time24To12(inTime) + ')' : ''}, on your property’s local time. Anyone who books later than that gets them straight away.`,
+      checkin_day: `Guests get them at ${clock12(atEl.value || '07:30')} on the day they arrive, on your property’s local time. Anyone who books later that day gets them straight away.`
+    }[trig] || '';
+    document.getElementById('checkinScheduleNote').textContent = note + (also ? ' They also get them once as soon as their booking is confirmed.' : '');
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    ['checkinScheduleTrigger', 'checkinOffsetValue', 'checkinOffsetUnit', 'checkinAtTime', 'checkinAlsoOnConfirm', 'checkInTime'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el){ el.addEventListener('change', updateCheckinSchedule); el.addEventListener('input', updateCheckinSchedule); }
+    });
+  });
   // Anything a host, guest or admin typed is escaped before it becomes
   // page markup.
   function escM(t){
@@ -1810,7 +1875,20 @@
       document.getElementById('wifiName').value = l.wifi_name || '';
       document.getElementById('wifiPassword').value = l.wifi_password || '';
       document.getElementById('accessCode').value = l.access_code || '';
-      document.getElementById('checkinScheduleTrigger').value = l.auto_send_checkin_instructions === true ? 'on_booking_confirmed' : '';
+      document.getElementById('checkinScheduleTrigger').value = ['booking_confirmed', 'before_checkin', 'checkin_day'].includes(l.checkin_send_trigger)
+        ? l.checkin_send_trigger : (l.auto_send_checkin_instructions === true ? 'booking_confirmed' : '');
+      {
+        // Minutes on the server; shown in the largest whole unit.
+        const m = Number(l.checkin_send_offset_minutes) || 0;
+        const trig0 = document.getElementById('checkinScheduleTrigger').value;
+        const [v, u] = m === 0 ? [trig0 === 'booking_confirmed' ? 0 : 1, trig0 === 'booking_confirmed' ? 'minutes' : 'days']
+          : m % 1440 === 0 ? [m / 1440, 'days'] : m % 60 === 0 ? [m / 60, 'hours'] : [m, 'minutes'];
+        document.getElementById('checkinOffsetValue').value = v;
+        document.getElementById('checkinOffsetUnit').value = u;
+        document.getElementById('checkinAtTime').value = l.checkin_send_at_time || '';
+      }
+      document.getElementById('checkinAlsoOnConfirm').checked = l.checkin_send_also_on_confirm === true;
+      updateCheckinSchedule();
 
       customFieldRows = (data.customFields || []).map(f => ({ id: f.id, label: f.field_label, value: f.field_value || '' }));
       renderCommonCheckinFields();
@@ -2020,7 +2098,11 @@
           wifiPassword: document.getElementById('wifiPassword').value,
           accessCode: document.getElementById('accessCode').value,
           customFields: customFieldRows,
-          autoSendCheckinInstructions: document.getElementById('checkinScheduleTrigger').value === 'on_booking_confirmed',
+          autoSendCheckinInstructions: !!document.getElementById('checkinScheduleTrigger').value,
+          checkinSendTrigger: document.getElementById('checkinScheduleTrigger').value,
+          checkinSendOffsetMinutes: checkinOffsetMinutes(),
+          checkinSendAtTime: document.getElementById('checkinAtTime').value || null,
+          checkinSendAlsoOnConfirm: document.getElementById('checkinAlsoOnConfirm').checked,
           checkinPhotos,
           rooms: roomRows,
           // Where each new photo was taken (api/_photo-location.js).

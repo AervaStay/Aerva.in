@@ -286,6 +286,10 @@
   // Payout details is the host's own bank account; a co-host's is in the Co-hosting centre.
   if(IS_COHOST){ const pl = document.getElementById('payoutDetailsLink'); if(pl) pl.style.display = 'none'; }
   if(IS_COHOST){
+    const acting = window.AervaCohost.get() || {};
+    if(acting.access === 'full' || (acting.permissions || []).includes('host_earnings')){
+      document.getElementById('cohostShareNote').textContent = 'Your own share, and what the host earns from the listings you co-host.';
+    }
     document.getElementById('earnTitle').textContent = 'Your share';
     document.getElementById('earnSectionHeading').textContent = 'Your share by booking';
     document.getElementById('cohostShareNote').style.display = 'block';
@@ -553,6 +557,9 @@
     }
 
     const escA = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    // A co-host whose host shares their earnings for these listings also
+    // sees what the host gets from each booking.
+    const HOSTFIG = IS_COHOST && bookings.some(b => b.payout_amount !== undefined);
     const rows = bookings.map(b => {
       const guestPaidForStay = (Number(b.subtotal) || 0) + (Number(b.gst) || 0);
       // Dates arrive as ISO strings; only the YYYY-MM-DD part is the stay
@@ -572,7 +579,10 @@
         const releaseDate = b.deposit_release_at ? new Date(b.deposit_release_at) : null;
         // The server says whether the window is open (the listing's own
         // calendar, release day included); the date check is a fallback.
-        const canDispute = b.deposit_status === 'held' && releaseDate
+        // A co-host raises a claim only when their host allowed it.
+        const coActing = IS_COHOST ? (window.AervaCohost.get() || {}) : null;
+        const coMayClaim = !coActing || coActing.access === 'full' || (coActing.permissions || []).includes('deposits');
+        const canDispute = coMayClaim && b.deposit_status === 'held' && releaseDate
           && (typeof b.deposit_window_open === 'boolean' ? b.deposit_window_open : new Date() < new Date(releaseDate.getTime() + 86400000));
         const releaseLabel = releaseDate
           ? releaseDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -702,6 +712,7 @@
             ? `<span class="earn-cost">− ${fmt(myCoupon)}</span><small style="display:block; opacity:0.6;">guest coupon</small>`
             : '—'}</td>
           ` : ''}
+          ${HOSTFIG && !cancelled ? `<td data-label="Host’s payout" class="num">${b.payout_amount !== undefined ? fmt(Math.max(0, (Number(b.payout_amount) || 0) - myShare)) : '—'}</td>` : ''}
           <td data-label="Your share" class="num payout-value">${myShare > 0 ? fmt(myShare) : '—'}</td>
           <td data-label="Status">${statusBadgeHtml(b.status)}</td>
           <td data-label="" class="${detailHtml.trim() ? '' : 'is-blank'}">${detailHtml.trim()
@@ -709,7 +720,7 @@
             : ''}</td>
         </tr>
         ${detailHtml.trim() && isOpen
-          ? `<tr class="earn-detail"><td colspan="${cancelled ? 7 : 5}">${detailHtml}</td></tr>`
+          ? `<tr class="earn-detail"><td colspan="${cancelled ? 7 : (HOSTFIG ? 6 : 5)}">${detailHtml}</td></tr>`
           : ''}
       `;
 
@@ -789,7 +800,7 @@
         ? `<th>Booking</th><th>Stay</th><th>Cancelled</th>
            <th class="num">Refund to guest</th><th class="num">Cost to you</th>
            <th class="num">Your share</th><th>Status</th><th></th>`
-        : `<th>Booking</th><th>Stay</th><th class="num">Your share</th><th>Status</th><th></th>`)
+        : `<th>Booking</th><th>Stay</th>${HOSTFIG ? '<th class="num">Host’s payout</th>' : ''}<th class="num">Your share</th><th>Status</th><th></th>`)
       : cancelled
       ? `<th>Booking</th><th>Stay</th><th>Cancelled</th>
          <th class="num">Refund to guest</th><th class="num">Cost to you</th>
@@ -804,6 +815,7 @@
          ${cancelled ? `<td class="is-blank"></td>
          <td class="num" data-label="Refunded to guests">${refundTotal ? fmt(Math.round(refundTotal)) : '—'}</td>
          <td class="num earn-cost" data-label="Cost to you">${t.myCoupon > 0 ? '− ' + fmt(t.myCoupon) : '—'}</td>` : ''}
+         ${HOSTFIG && !cancelled ? `<td class="num" data-label="Host’s payout">${fmt(Math.max(0, t.payout))}</td>` : ''}
          <td class="num payout-value" data-label="Your share">${fmt(t.share)}</td>
          <td class="is-blank"></td><td class="is-blank"></td>`
       : cancelled

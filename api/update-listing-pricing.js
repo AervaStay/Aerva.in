@@ -293,7 +293,11 @@ module.exports = async (req, res) => {
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
                auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason, timezone,
                COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
-               COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough
+               COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough,
+               to_jsonb(listings)->>'checkin_send_trigger' AS checkin_send_trigger,
+               (to_jsonb(listings)->>'checkin_send_offset_minutes')::int AS checkin_send_offset_minutes,
+               COALESCE((to_jsonb(listings)->>'checkin_send_also_on_confirm')::boolean, false) AS checkin_send_also_on_confirm,
+               to_jsonb(listings)->>'checkin_send_at_time' AS checkin_send_at_time
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -457,7 +461,7 @@ module.exports = async (req, res) => {
               latitude, longitude, formattedAddress, city, area, pincode, maxGuests,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
-              customFields, autoSendCheckinInstructions, checkinPhotos, rooms, bedrooms, cancellationPolicy, promotionsLoadedIds } = req.body || {};
+              customFields, autoSendCheckinInstructions, checkinSendTrigger, checkinSendOffsetMinutes, checkinSendAlsoOnConfirm, checkinSendAtTime, checkinPhotos, rooms, bedrooms, cancellationPolicy, promotionsLoadedIds } = req.body || {};
       // "Sent" means the key is in the request at all. A page that saves
       // only part of the form (the dashboard's calendar sidebar, the
       // experience calendar) must never wipe what it didn't send.
@@ -717,6 +721,32 @@ module.exports = async (req, res) => {
         RETURNING id, property_name, host_email, max_guests
       `;
       const listing = updated[0];
+
+      // When the check-in instructions go out (Manage → Guest Check-In Info
+      // → Scheduling; _template-scheduling.js). Saved apart, so a save
+      // still works before the database update adds these columns.
+      if (checkinSendTrigger !== undefined) {
+        const TRIG = ['booking_confirmed', 'before_checkin', 'checkin_day'];
+        const trig = TRIG.includes(checkinSendTrigger) ? checkinSendTrigger : null;
+        const rawOff = Math.floor(Number(checkinSendOffsetMinutes) || 0);
+        // On confirmation: 0 (straight away) to 72 hours later. Before
+        // check-in: 1 minute to 30 days. The check-in day uses its time only.
+        const off = trig === 'booking_confirmed' ? Math.max(0, Math.min(72 * 60, rawOff))
+          : trig === 'before_checkin' ? Math.max(1, Math.min(30 * 1440, rawOff || 1440)) : null;
+        const atOk = typeof checkinSendAtTime === 'string' && /^([01]?\d|2[0-3]):[0-5]\d$/.test(checkinSendAtTime.trim());
+        const at = atOk && (trig === 'checkin_day' || (trig === 'before_checkin' && off % 1440 === 0)) ? checkinSendAtTime.trim().padStart(5, '0') : null;
+        const also = trig && trig !== 'booking_confirmed' && checkinSendAlsoOnConfirm === true;
+        try {
+          await sql`UPDATE listings SET checkin_send_trigger = ${trig}, checkin_send_offset_minutes = ${off}, checkin_send_also_on_confirm = ${!!also},
+                                        auto_send_checkin_instructions = ${!!trig}
+                    WHERE id = ${listingId}`;
+          try { await sql`UPDATE listings SET checkin_send_at_time = ${at} WHERE id = ${listingId}`; } catch (e2) { if (e2.code !== '42703') throw e2; }
+        } catch (e) {
+          if (e.code !== '42703') throw e;
+          // Before the database update: only "on confirmation" exists.
+          await sql`UPDATE listings SET auto_send_checkin_instructions = ${trig === 'booking_confirmed'} WHERE id = ${listingId}`;
+        }
+      }
 
       // Refund policy (Flexible / Firm). Applies to NEW bookings only: each
       // paid booking keeps the policy it was bought under (_cancellations.js).
