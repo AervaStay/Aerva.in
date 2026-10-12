@@ -740,7 +740,7 @@ async function handleCohostModes(req, res, accountId) {
         status: p.status,
         rejectionReason: p.status === 'rejected' ? (p.rejection_reason || null) : null,
         panName: p.pan_name || null,
-        bankCheck: p.bank_check_status ? { status: p.bank_check_status, match: p.bank_name_match || null, message: bankCheck.describeCheck(p) } : null,
+        bankCheck: p.bank_check_status ? { status: p.bank_check_status, message: bankCheck.describeCheck(p) } : null,
         payoutsFrom: p.bank_changed_at && bankCheck.inChangeHold(p.bank_changed_at)
           ? new Date(new Date(p.bank_changed_at).getTime() + bankCheck.HOLD_HOURS_AFTER_CHANGE * 3600e3).toISOString() : null
       } : null });
@@ -758,21 +758,28 @@ async function handleCohostModes(req, res, accountId) {
       if (x.accountNumberConfirm != null && String(x.accountNumberConfirm).replace(/\s+/g, '') !== account) {
         res.status(400).json({ error: 'The two account numbers do not match. Type them again.' }); return true;
       }
-      if (!isValidPan(pan)) { res.status(400).json({ error: PAN_ERROR }); return true; }
-      // Same rules as a host (_bank-check.js): the name as printed on the
-      // PAN goes with the PAN, the PAN is on no other account, and the bank
-      // account is in that name.
-      const panProblem = bankCheck.panNameProblem(pan, panName);
-      if (panProblem) { res.status(400).json({ error: panProblem }); return true; }
-      if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' }); return true; }
-      const coCompany = bankCheck.companyPanProblem(pan, holder);
-      if (coCompany) { res.status(400).json({ error: coCompany }); return true; }
-      // A trade-name account on a personal PAN: only with the business's GSTIN under that PAN.
-      if (bankCheck.accountKind(holder) === 'trade' && bankCheck.PERSONAL_PAN.has(bankCheck.panLetter(pan))) {
-        const gp = bankCheck.tradeGstinProblem(pan, gstin || null);
-        if (gp) { res.status(400).json({ error: gp }); return true; }
+      // The PAN is optional (5% TDS without one, 0.1% with). When given, it
+      // must be valid, belong with the payout name, and be on no other
+      // account; the bank account is verified against the payout name
+      // either way (_bank-check.js).
+      const hasPan = !!pan;
+      if (hasPan && !isValidPan(pan)) { res.status(400).json({ error: PAN_ERROR }); return true; }
+      if (hasPan) {
+        const lastName = String(x.payeeLastName || '').trim();
+        const panProblem = (lastName && pan.charAt(3) === 'P' && pan.charAt(4) !== lastName.charAt(0).toUpperCase())
+          ? 'The PAN and the name do not match. Check both against your PAN card.' : bankCheck.panNameProblem(pan, panName);
+        if (panProblem) { res.status(400).json({ error: panProblem }); return true; }
+        if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' }); return true; }
+        const coCompany = bankCheck.companyPanProblem(pan, holder);
+        if (coCompany) { res.status(400).json({ error: coCompany }); return true; }
+        // A trade-name account on a personal PAN: only with the business's GSTIN under that PAN.
+        if (bankCheck.accountKind(holder) === 'trade' && bankCheck.PERSONAL_PAN.has(bankCheck.panLetter(pan))) {
+          const gp = bankCheck.tradeGstinProblem(pan, gstin || null);
+          if (gp) { res.status(400).json({ error: gp }); return true; }
+        }
+        if (holder.length >= 2 && bankCheck.accountKind(holder) !== 'trade' && !bankCheck.sameName(panName, holder)) { res.status(400).json({ error: `The payout name must be the same as the name on your PAN (${panName}).` }); return true; }
       }
-      if (holder.length >= 2 && bankCheck.holderMatch(panName, holder).result === 'mismatch') { res.status(400).json({ error: `The account must be in the name on your PAN (${panName}). Payouts can only go to an account the PAN holder holds, alone or jointly.` }); return true; }
+      if (gstin && !hasPan) { res.status(400).json({ error: 'A GSTIN goes with a PAN. Add the PAN too, or leave the GSTIN empty.' }); return true; }
       if (gstin && !bankCheck.validGstin(gstin)) { res.status(400).json({ error: 'That GSTIN does not look right — it is 15 characters, like 27ABCPE1234F1Z5. Leave it empty if you do not have one.' }); return true; }
       if (gstin && gstin.slice(2, 12) !== pan) { res.status(400).json({ error: 'Your GSTIN should contain your PAN (characters 3 to 12).' }); return true; }
       if (holder.length < 2) { res.status(400).json({ error: 'Please enter the account holder\'s name as the bank has it.' }); return true; }
@@ -787,7 +794,7 @@ async function handleCohostModes(req, res, accountId) {
         console.error('DATA_ENCRYPTION_KEY missing or invalid — refused to save co-host payout details.');
         res.status(503).json({ error: ENCRYPTION_UNAVAILABLE }); return true;
       }
-      const encPan = encryptField(pan);
+      const encPan = hasPan ? encryptField(pan) : null;
       const encAccount = encryptField(account);
       const encGstin = gstin ? encryptField(gstin) : null;
       await sql`
@@ -801,7 +808,7 @@ async function handleCohostModes(req, res, accountId) {
       `;
       // A new account starts clean (no payout can go to the old one), with the 48-hour hold.
       try {
-        await sql`UPDATE cohost_payout_profiles SET pan_name = ${panName}, bank_changed_at = now(), bank_check_id = NULL, bank_check_status = NULL,
+        await sql`UPDATE cohost_payout_profiles SET pan_name = ${hasPan ? panName : null}, bank_changed_at = now(), bank_check_id = NULL, bank_check_status = NULL,
                                                     bank_registered_name = NULL, bank_name_match = NULL, bank_checked_at = NULL
                   WHERE guest_id = ${me.id}`;
       } catch (e) { if (e.code !== '42703') throw e; }
@@ -3263,7 +3270,25 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'List a property first to create your host account.' });
       }
 
-      const { aadhaarDocumentUrl, bankAccountNumber, bankAccountNumberConfirm, bankIfsc, bankAccountHolderName, bankGstin, panNumber, panName, panDocumentUrl, hostName, hostPhone } = req.body || {};
+      const { aadhaarDocumentUrl, bankAccountNumber, bankAccountNumberConfirm, bankIfsc, bankAccountHolderName, bankGstin, panNumber, panName, panDocumentUrl, hostName, hostPhone,
+              payeeType, payeeFirstName, payeeLastName } = req.body || {};
+      // Payout details (host-payouts.html): the person or business paid —
+      // the host or someone else. A person is asked for first and last
+      // name. The PAN is optional (without it TDS is 5% instead of 0.1%);
+      // when one is given, its name must be the payout name, and the bank
+      // account is verified against that name either way (_bank-check.js).
+      // Messages say WHAT does not match, never how it is worked out.
+      if (payeeType === 'person') {
+        const last = String(payeeLastName || '').replace(/\s+/g, ' ').trim();
+        const first = String(payeeFirstName || '').replace(/\s+/g, ' ').trim();
+        if (!first || !last) return res.status(400).json({ error: 'Enter the first and last name exactly as the bank account holds them.' });
+        if (typeof panNumber === 'string' && panNumber.trim()) {
+          const panU = panNumber.trim().toUpperCase();
+          if (panU.charAt(3) !== 'P' || panU.charAt(4) !== last.charAt(0).toUpperCase()) {
+            return res.status(400).json({ error: 'The PAN and the name do not match. Check both against the PAN card.' });
+          }
+        }
+      }
       // Uploaded documents: only Aerva's own storage (see isAervaBlobUrl).
       for (const u of [aadhaarDocumentUrl, panDocumentUrl]) {
         if (typeof u === 'string' && u && !isAervaBlobUrl(u)) {
@@ -3280,7 +3305,7 @@ module.exports = async (req, res) => {
       const current = await sql`
         SELECT aadhaar_status, aadhaar_document_url, aadhaar_rejection_reason,
                bank_status, pan_status, pan_document_url, pan_rejection_reason, pan_number,
-               to_jsonb(hosts)->>'pan_name' AS pan_name
+               bank_account_holder_name, to_jsonb(hosts)->>'pan_name' AS pan_name
         FROM hosts WHERE id = ${guest.host_id}
       `;
       const host = current[0];
@@ -3295,6 +3320,9 @@ module.exports = async (req, res) => {
       if (cleanPanName && !(typeof panDocumentUrl === 'string' && panDocumentUrl)) {
         if (host.pan_name) return res.status(400).json({ error: 'The name on your PAN is already on file. Contact hello@aerva.in if it needs to change.' });
         if (!host.pan_number) return res.status(400).json({ error: 'Add your PAN first.' });
+        if (host.bank_account_holder_name && !bankCheck.sameName(cleanPanName, host.bank_account_holder_name)) {
+          return res.status(400).json({ error: `The name on the PAN must be the same as your payout name (${host.bank_account_holder_name}). Check the name, or change the payout details first.` });
+        }
         const problem = bankCheck.panNameProblem(decryptField(host.pan_number), cleanPanName);
         if (problem) return res.status(400).json({ error: problem });
         try { await sql`UPDATE hosts SET pan_name = ${cleanPanName} WHERE id = ${guest.host_id} AND pan_name IS NULL`; }
@@ -3319,6 +3347,12 @@ module.exports = async (req, res) => {
         // letter), and the bank account is later checked against it.
         const nameProblem = bankCheck.panNameProblem(cleanPan, cleanPanName);
         if (nameProblem) return res.status(400).json({ error: nameProblem });
+        // The PAN's name must be the payout name: the one sent with it, or
+        // the one already on file when the PAN comes later (Verification).
+        const payoutNameNow = (bankAccountNumber && bankAccountHolderName) ? String(bankAccountHolderName) : host.bank_account_holder_name;
+        if (payoutNameNow && !bankCheck.sameName(cleanPanName, payoutNameNow)) {
+          return res.status(400).json({ error: `The name on the PAN must be the same as your payout name (${payoutNameNow}). Check the name, or change the payout details first.` });
+        }
         if (await bankCheck.panInUseElsewhere(sql, cleanPan, { hostId: guest.host_id, guestId })) {
           return res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' });
         }
@@ -3335,6 +3369,8 @@ module.exports = async (req, res) => {
           `;
         }
         host.pan_name = cleanPanName;
+        host.pan_number = encryptField(cleanPan);      // the bank details below are checked against this PAN
+        host.pan_status = 'pending_review';           // and the bank save below must not put back the old status
         // A bank account already on file is checked again against the new PAN,
         // with payouts on hold meanwhile (see below).
         if (host.bank_status && host.bank_status !== 'not_submitted') panChanged = true;
@@ -3402,8 +3438,14 @@ module.exports = async (req, res) => {
           const gp = bankCheck.tradeGstinProblem(plainPan, gstinGiven);
           if (gp) return res.status(400).json({ error: gp });
         }
-        if (host.pan_name && bankCheck.holderMatch(host.pan_name, typedHolder).result === 'mismatch') {
-          return res.status(400).json({ error: `The account must be in the name on your PAN (${host.pan_name}). Payouts can only go to an account the PAN holder holds, alone or jointly.` });
+        // The payout name, the PAN and the bank account must be the same
+        // person: the name typed for the account must BE the name on the PAN
+        // (not merely close to it). The bank's own name for the account is
+        // then checked against it by the ₹1 check (_bank-check.js).
+        // (A sole proprietor's account in its trading name is the exception,
+        // allowed above only with that business's GSTIN under this PAN.)
+        if (host.pan_name && !tradeAccount && !bankCheck.sameName(host.pan_name, typedHolder)) {
+          return res.status(400).json({ error: `The payout name must be the same as the name on your PAN (${host.pan_name}), and the bank account must be held in that name, alone or jointly.` });
         }
         // Only reset PAN/Aadhaar back to pending_review if they'd
         // actually been submitted before — nothing to "re-check" for a
@@ -3754,8 +3796,9 @@ module.exports = async (req, res) => {
       // The name as printed on the PAN, and the bank check (_bank-check.js).
       panName: (h.j && h.j.pan_name) || null,
       bankCheck: h.j && h.j.bank_check_status ? {
-        status: h.j.bank_check_status, match: h.j.bank_name_match || null,
-        registeredName: h.j.bank_registered_name || null, message: bankCheck.describeCheck(h.j)
+        // Only the outcome: how an account is verified, and what the bank
+        // holds it as, stay with Aerva's team (Admin).
+        status: h.j.bank_check_status, message: bankCheck.describeCheck(h.j)
       } : null,
       // What the host must do, or is waiting for (also in the header bell).
       payoutItems: bankCheck.payoutItems({ pan_status: h.pan_status, pan_rejection_reason: h.pan_rejection_reason, pan_number: h.pan_number,

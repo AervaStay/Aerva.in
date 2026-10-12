@@ -101,6 +101,59 @@ function holderMatch(panName, accountName) {
   return best;
 }
 
+// The payout name typed on Aerva's own form must BE the name on the PAN:
+// the same words, in any order, ignoring case, dots and spacing — no
+// initials or short forms (those only the bank's own record may use). For a
+// joint account typed as "A & B", one of the holders must be that name.
+function sameName(panName, typed) {
+  const want = nameTokens(panName).slice().sort().join(' ');
+  if (!want) return false;
+  return [typed].concat(holderNames(typed)).some(h => nameTokens(h).slice().sort().join(' ') === want);
+}
+
+// ---- The bank's name for the account, against the payout name ----
+// For a person the payout name is "first (middle) last". It matches the
+// bank's name when, for the same holder (any holder of a joint account):
+//   • the bank's first name is the same first name, in full, and
+//   • the bank's surname is the same last name when the bank gives it in
+//     full, or its initial when the bank gives only one letter ("PRIYA M"
+//     for Priya Mehta) — banks often shorten the surname that way.
+// Middle names are not needed. When a PAN is on file, the last name's
+// initial must also be the PAN's 5th letter (the surname's initial on a
+// person's PAN). A different first name is refused; the right first name
+// with a different surname goes to an admin. Businesses keep the general
+// comparison (holderMatch).
+function personBankMatch(payoutName, bankName, pan) {
+  const want = nameTokens(payoutName);
+  if (want.length < 2) return holderMatch(payoutName, bankName);
+  const first = want[0], last = want[want.length - 1];
+  const p = String(pan || '').trim().toUpperCase();
+  if (/^[A-Z]{3}P[A-Z][0-9]{4}[A-Z]$/.test(p) && p[4] !== last[0]) return { result: 'mismatch', score: 0, holder: null, why: 'pan' };
+  // The bank's first name must always be the first name given: its first
+  // word, or its last word when the bank puts the surname first ("MEHTA
+  // PRIYA"). Without that, the account is not this payee's.
+  let firstFound = false;
+  for (const h of [bankName].concat(holderNames(bankName))) {
+    const t = nameTokens(h);
+    if (t.length < 2) continue;
+    const surnameOk = (w) => w.length === 1 ? w === last[0] : w === last;
+    let bankLast = null;
+    if (t[0] === first) bankLast = t[t.length - 1];
+    else if (t[t.length - 1] === first && surnameOk(t[0])) bankLast = t[0];
+    if (!bankLast) continue;
+    firstFound = true;
+    // The bank's surname: in full it must be the same last name; as a
+    // single letter it must be the last name's initial.
+    if (surnameOk(bankLast)) return { result: 'match', score: 100, holder: h };
+  }
+  // First name right but surname different: a person decides (spelling, a
+  // changed surname). First name different: not this payee.
+  return firstFound ? { result: 'partial', score: 50, holder: null } : { result: 'mismatch', score: 0, holder: null };
+}
+function payeeBankMatch(payoutName, bankName, pan) {
+  return accountKind(payoutName) === 'person' ? personBankMatch(payoutName, bankName, pan) : holderMatch(payoutName, bankName);
+}
+
 // ---- Whose account: a company or firm, a proprietor's business, or a person ----
 // A company, LLP or partnership firm is paid only against its own PAN (4th
 // letter C for a company, F for a firm or LLP, or another non-personal
@@ -119,7 +172,7 @@ const panLetter = (pan) => { const p = String(pan || '').trim().toUpperCase(); r
 // A company or firm account against a personal PAN: refused, with this message. Else null.
 function companyPanProblem(pan, accountName) {
   if (accountKind(accountName) === 'company' && PERSONAL_PAN.has(panLetter(pan))) {
-    return 'This is a company, LLP or firm account. Payouts to it need the business’s own PAN (4th letter C for a company, F for a firm or LLP). Add the business PAN, or use an account the PAN holder holds personally.';
+    return 'This account is in a business’s name. Choose “A business” and give the business’s own PAN, or use a personal account.';
   }
   return null;
 }
@@ -166,7 +219,7 @@ function panNameProblem(pan, panName) {
   if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(p)) return null;               // the format check reports this
   const fifth = p[4];
   if (!tokens.some(t => t[0] === fifth)) {
-    return `This PAN and name do not go together: the 5th letter of a PAN (${fifth}) is the first letter of the holder’s surname, or of the business’s name. Check both against your PAN card.`;
+    return 'The PAN and the name do not match. Check both against the PAN card.';
   }
   return null;
 }
@@ -281,7 +334,7 @@ async function payoutDetailsChanged(sql, kind, key, what = 'bank') {
        <p>${changed}</p>
        <p><strong>Your payouts are on hold</strong> while Aerva checks your details again:</p>
        <ul>
-         ${p.account ? '<li>your bank confirms the account is held by the person (or business) on your PAN — Aerva sends ₹1 to it to ask;</li>' : '<li>add a bank account in the name on your PAN — payouts cannot be sent without one;</li>'}
+         ${p.account ? '<li>Aerva verifies the new account;</li>' : '<li>add a bank account in the name on your PAN — payouts cannot be sent without one;</li>'}
          ${what === 'pan' ? '<li>Aerva reviews your new PAN;</li>' : ''}
          <li>and, for your security, at least until ${esc(until)}.</li>
        </ul>
@@ -309,10 +362,10 @@ function payoutItems(row, { who = 'host' } = {}) {
   const add = (state, kind, title, body) => items.push({ id: `payout-details:${who}:${state}:${row.bank_checked_at || row.bank_changed_at || ''}`, kind, title, body, href });
   if (who === 'host') {
     if (row.pan_status === 'rejected') add('pan-rejected', 'action', 'Action needed: your PAN was not approved', row.pan_rejection_reason || 'Write to hello@aerva.in to submit it again.');
-    else if (!row.pan_status || row.pan_status === 'not_submitted') add('pan-missing', 'action', 'Action needed: add your PAN', 'Payouts carry 5% TDS without a PAN, 0.1% with one. Add it in your payout details.');
-    else if (row.pan_number && !row.pan_name) add('pan-name', 'action', 'Action needed: add the name on your PAN', 'Your bank account is checked against it before payouts.');
+    else if (!row.pan_status || row.pan_status === 'not_submitted') add('pan-missing', 'action', 'Add your PAN to pay less TDS', 'Payouts carry 5% TDS without a PAN, 0.1% with one. Add it in your payout details.');
+    else if (row.pan_number && !row.pan_name) add('pan-name', 'action', 'Action needed: add the name on your PAN', 'Add it under Verification. It must be the same as your payout name.');
     if (row.bank_status === 'rejected') add('bank-rejected', 'action', 'Action needed: update your bank account', (row.bank_rejection_reason || 'Your bank account could not be verified.') + ' Payouts are on hold until a bank account is verified.');
-    else if (!row.bank_status || row.bank_status === 'not_submitted' || !row.bank_account_number) add('bank-missing', 'action', 'Action needed: add your bank account', 'Payouts are on hold until you add a bank account in the name on your PAN.');
+    else if (!row.bank_status || row.bank_status === 'not_submitted' || !row.bank_account_number) add('bank-missing', 'action', 'Action needed: add your payout details', 'Payouts are on hold until you add who is paid and their bank account.');
     else if (row.bank_status === 'pending_review' || row.pan_status === 'pending_review') add('checking', 'info', 'Your payout details are being checked',
       `Payouts are on hold until the check is done${holdUntil ? `, and at least until ${fmtWhen(holdUntil)}` : ''}. Nothing needed from you unless we ask.`);
     else if (holdUntil) add('hold', 'info', `Payouts resume on ${fmtWhen(holdUntil)}`, 'Your payout details changed recently, so payouts wait 48 hours for your security.');
@@ -394,11 +447,12 @@ async function settleCheck(sql, kind, key, v) {
     await tellResult(p, 'reject', why);
     return { status: 'invalid' };
   }
-  // Compared with the name on the PAN; without one on file (PANs entered
-  // before this check), an admin decides.
-  const against = p.panName;
+  // Compared with the name on the PAN, or — when no PAN was given — with
+  // the payout name the payee entered (first and last name, or the
+  // business's name).
+  const against = p.panName || p.holder || null;
   // Any holder of a joint account may be the PAN holder.
-  const m = against && registered ? holderMatch(against, registered) : { result: 'partial', score: null };
+  const m = against && registered ? payeeBankMatch(against, registered, p.pan) : { result: 'partial', score: null };
   await saveCheck(sql, kind, key, { status: 'active', registeredName: registered, match: m.result });
   let decision = 'review', why = null;
   const companyProblem = companyPanProblem(p.pan, registered);
@@ -417,7 +471,7 @@ async function settleCheck(sql, kind, key, v) {
     if (looksJoint(p.holder) && !looksJoint(registered)) decision = 'review';
     else {
       decision = 'reject';
-      why = `This account is held in the name “${registered}”. Payouts can only go to an account the PAN holder (${against}) holds, alone or jointly. Add an account in that name.`;
+      why = `We could not verify this account in the payout name (${against}). Check the name and the account, or add an account held in that name.`;
     }
   }
   await settleStatus(sql, kind, key, decision, why);
@@ -472,12 +526,12 @@ function describeCheck(row) {
   const s = row && row.bank_check_status;
   const m = row && row.bank_name_match;
   const map = {
-    checking: 'Checking with your bank…',
-    not_set_up: 'Waiting for Aerva to review.',
-    error: 'Waiting for Aerva to review.',
-    failed: 'Your bank did not respond. Waiting for Aerva to review.',
-    invalid: 'Your bank could not confirm this account.',
-    active: m === 'match' ? 'Confirmed by your bank, in the name on your PAN.' : m === 'mismatch' ? 'The account is not in the name on your PAN.' : 'Confirmed by your bank. Aerva is checking the name.'
+    checking: 'Being verified…',
+    not_set_up: 'Being verified.',
+    error: 'Being verified.',
+    failed: 'Being verified.',
+    invalid: 'We could not verify this account. Check the account number and IFSC.',
+    active: m === 'match' ? 'Verified.' : m === 'mismatch' ? 'We could not verify this account in the payout name.' : 'Being verified.'
   };
   return s ? (map[s] || null) : null;
 }
@@ -512,7 +566,7 @@ async function lookupIfsc(code) {
 const IFSC_NOT_FOUND = 'We could not find this IFSC. Check it on your cheque book or passbook, or ask your branch.';
 
 module.exports = {
-  lookupIfsc, IFSC_NOT_FOUND,
+  lookupIfsc, IFSC_NOT_FOUND, sameName, payeeBankMatch,
   nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, validGstin, gstinPan, tradeGstinProblem, PERSONAL_PAN, panLetter, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
   bankDetailsChanged, payoutDetailsChanged, payoutItems, payoutNotifications, startCheck, settleCheck, pollChecks, inChangeHold, describeCheck, HOLD_HOURS_AFTER_CHANGE
 };
