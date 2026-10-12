@@ -1401,8 +1401,9 @@ async function loadPayoutDeductions(){
       box = document.createElement('div');
       box.id = 'payoutDeductionNote';
       box.style.cssText = 'margin:0 0 24px; padding:14px 18px; background:#fff; border:1px solid #ece4d8; border-left:3px solid #a3402f; border-radius:10px; font-size:14.5px;';
-      const wrap = document.querySelector('.wrap') || document.body;
-      wrap.insertBefore(box, wrap.firstChild);
+      // Under the page title, not above it.
+      const top = document.querySelector('.wrap .top-row');
+      if(top) top.after(box); else (document.querySelector('.wrap') || document.body).prepend(box);
     }
     box.textContent = 'To be deducted from your next payout: ₹' + Number(data.total).toLocaleString('en-IN') + ' (guest cancellation coupons).';
   }catch(err){ /* leave the page as it is */ }
@@ -1425,9 +1426,9 @@ async function loadMyPayouts(){
       box = document.createElement('section');
       box.id = 'myPayoutsSection';
       box.style.cssText = 'margin:0 0 28px; background:#fff; border:1px solid #ece4d8; border-radius:12px; padding:16px 18px;';
-      const wrap = document.querySelector('.wrap') || document.body;
-      const note = document.getElementById('payoutDeductionNote');
-      wrap.insertBefore(box, note ? note.nextSibling : wrap.firstChild);
+      // Under the page title (and the deduction note, when there is one).
+      const after = document.getElementById('payoutDeductionNote') || document.querySelector('.wrap .top-row');
+      if(after) after.after(box); else (document.querySelector('.wrap') || document.body).prepend(box);
     }
     const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
@@ -1458,8 +1459,9 @@ async function loadCancellationRequests(){
       box = document.createElement('section');
       box.id = 'cancelRequestsSection';
       box.style.cssText = 'margin:0 0 28px; background:#fff; border:1px solid #ece4d8; border-left:3px solid #a3402f; border-radius:12px; padding:16px 18px;';
-      const wrap = document.querySelector('.wrap') || document.body;
-      wrap.insertBefore(box, wrap.firstChild);
+      // Right under the page title: these need an answer.
+      const top = document.querySelector('.wrap .top-row');
+      if(top) top.after(box); else (document.querySelector('.wrap') || document.body).prepend(box);
     }
     const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
@@ -1518,8 +1520,9 @@ async function loadBookingChanges(){
       box = document.createElement('section');
       box.id = 'bookingChangesSection';
       box.style.cssText = 'margin:0 0 28px; background:#fff; border:1px solid #ece4d8; border-left:3px solid #a9884f; border-radius:12px; padding:16px 18px;';
-      const wrap = document.querySelector('.wrap') || document.body;
-      wrap.insertBefore(box, wrap.firstChild);
+      // Right under the page title: these need an answer.
+      const top = document.querySelector('.wrap .top-row');
+      if(top) top.after(box); else (document.querySelector('.wrap') || document.body).prepend(box);
     }
     const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const inr = (n) => '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
