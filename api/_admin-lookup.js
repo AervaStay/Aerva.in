@@ -144,7 +144,8 @@ async function guestDetail(sql, id) {
     SELECT id, name, email, phone, created_at, host_id, email_verified, profile_photo_url,
            to_jsonb(guests)->>'account_status' AS account_status, to_jsonb(guests)->>'deactivated_at' AS deactivated_at,
            to_jsonb(guests)->>'deleted_at' AS deleted_at, to_jsonb(guests)->>'id_status' AS id_status,
-           to_jsonb(guests)->>'phone_verified' AS phone_verified, to_jsonb(guests)->>'session_version' AS session_version
+           to_jsonb(guests)->>'phone_verified' AS phone_verified, to_jsonb(guests)->>'session_version' AS session_version,
+           to_jsonb(guests)->'id_verification' AS id_verification
     FROM guests WHERE id = ${Number(id) || 0}`)[0];
   if (!g) throw userError('Account not found.', 404);
   const [bookings, listings, tickets, history, host] = await Promise.all([

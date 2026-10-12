@@ -181,6 +181,7 @@ window.AERVA_POLICIES = {
         'Details you give: name, email, phone, profile, bookings, messages and reviews.',
         'Photos and documents you send as evidence when reporting a problem with a stay, and what you send in a Resolution Center request.',
         'From hosts and co-hosts: verification results, PAN, bank details and listing details.',
+        'ID verification, if you choose to verify: the result only (the type of ID, your name as on it, its last 4 characters and when it was verified). The ID itself is checked automatically and is never stored.',
         'Payment references. Card and UPI details are handled by the payment provider, not Aerva.',
         'Technical data such as IP address and device, for security.'
       ]},
@@ -190,7 +191,7 @@ window.AERVA_POLICIES = {
       ]},
       { id: 'share', title: 'Who receives it', points: [
         'The other party to your booking, as needed for the stay.',
-        'Service providers that operate Aerva, such as payment, email, hosting and sign-in providers.',
+        'Service providers that operate Aerva, such as payment, email, hosting, sign-in and automated checking providers (an ID you verify is read by one, and not kept by it or by Aerva).',
         'Authorities, where the law requires.'
       ]},
       { id: 'keep', title: 'How long', points: [
@@ -342,7 +343,8 @@ window.AERVA_POLICIES = {
       { title: 'To book', points: [
         'An Aerva account with a confirmed email address and a mobile number.',
         'Your name, mobile number and the number of guests are shared with the host.',
-        'Carry a government photo ID for every adult guest. The host checks it at check-in. Guests from outside India carry their passport.'
+        'Carry a government photo ID for every adult guest. The host checks it at check-in. Guests from outside India carry their passport.',
+        'You can also verify your ID on Aerva (Account Settings → ID verification) with Aadhaar, a passport, driving licence or voter ID. It takes under a minute, your ID is not stored, and hosts see that you are verified.'
       ]},
       { title: 'Late-night bookings', points: [
         'Between 12:00 AM and 6:00 AM, where the property is, you may still book the night that has already begun. It counts as the previous day’s night, with check-out that day or later. Once booked, you may check in straight away.'
@@ -768,7 +770,8 @@ window.AERVA_POLICIES = {
         summary: 'Verifying your identity, PAN and bank account to host and be paid.',
         sections: [
           { title: 'What you need', points: [
-            'The name of the person or business to be paid, exactly as their bank account holds it; that bank account; optionally their PAN, in the same name; and the identity verification asked for in your account.',
+            'The name of the person or business to be paid, exactly as their bank account holds it; that bank account; optionally their PAN, in the same name; and your identity and address proof.',
+            'Identity and address proof: verify your Aadhaar, passport, driving licence or voter ID in Account Settings → Verification. It is checked in under a minute and the ID is never stored.',
             'Aerva verifies the bank account before paying into it. The payee must be one of its holders; a joint account is fine. An account the payee does not hold is not accepted.',
             'Hosting as a company, LLP or partnership firm: use the business’s own PAN and the business’s bank account. A sole proprietor uses their personal PAN, with a personal bank account, or a bank account in the business’s name together with the business’s GSTIN registered under that PAN.',
             'A PAN can be on one Aerva account only.'
@@ -944,8 +947,9 @@ window.AERVA_POLICIES = {
       'Immigration and Foreigners Act, 2025: hosts file Form III for foreign guests within 24 hours; ₹50,000 penalty per case.'
     ]},
     { title: 'How Aerva stores sensitive data', points: [
-      'Aadhaar: document deleted on approve or reject; only the status is kept. Aadhaar numbers are never collected.',
-      'Guest ID proof: no longer collected. The host checks a government photo ID at check-in. Files uploaded before this change are erased from ID Verifications, or when the account is deleted.',
+      'ID verification (guests, hosts and co-hosts): the ID is read in memory by an automated check and never stored, uploaded or logged. Only the result is kept: type of ID, name as on it, last 4 characters, date. Full ID numbers are never kept.',
+      'Aadhaar documents uploaded for a manual check before October 2026: deleted on approve or reject, or as soon as the host verifies instantly; only the status is kept.',
+      'Guest ID proofs uploaded before September 2026: erased from ID Verifications, or when the account is deleted.',
       'PAN: card image deleted on review; number kept encrypted (AES-256-GCM, key in Vercel).',
       'Bank account and co-host GSTIN: kept encrypted.',
       'Audit log: every admin, host, co-host and system action is recorded and never deleted.'

@@ -5,9 +5,12 @@
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
     "@vercel/blob": "latest",
+    "@xmldom/xmldom": "0.8.10",
+    "@zip.js/zip.js": "2.7.57",
     "bcryptjs": "^2.4.3",
     "jsdom": "^30.0.1",
     "pdfkit": "^0.20.2",
-    "razorpay": "^2.9.4"
+    "razorpay": "^2.9.4",
+    "xml-crypto": "6.1.2"
   }
 }

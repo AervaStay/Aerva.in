@@ -67,6 +67,7 @@
 require('./_env'); // production vs UAT safety rails — must load first
 const { isValidPan, PAN_ERROR } = require('./_tds');
 const bankCheck = require('./_bank-check');
+const idVerify = require('./_id-verify');
 const { neon } = require('@neondatabase/serverless');
 const Razorpay = require('razorpay');
 const { verifyToken, createToken } = require('./_approval-token');
@@ -3393,14 +3394,14 @@ module.exports = async (req, res) => {
       // ---- Aadhaar: submit once, then permanently locked (same policy
       // as PAN above — no more resubmitting after a rejection either) ----
       if (typeof aadhaarDocumentUrl === 'string' && aadhaarDocumentUrl.startsWith('https://')) {
+        // ID documents are no longer uploaded or stored: the instant check
+        // (Account Settings → Verification, _id-verify.js) replaces this.
+        if (!process.env.ALLOW_ID_DOCUMENT_UPLOAD) {
+          return res.status(400).json({ error: 'Verify your ID in Account Settings → Verification instead. It takes under a minute and your ID is not stored.' });
+        }
         if (host.aadhaar_status && host.aadhaar_status !== 'not_submitted') {
           return res.status(400).json({ error: 'Your Aadhaar has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
         }
-        // Uploading a file only confirms a file was uploaded — it says
-        // nothing about whose document it actually is. Real verification
-        // happens as a human admin review (see get-pending-listings.js's
-        // ?verifications=1 mode) — pending_review is the correct state
-        // until that review happens.
         await sql`
           UPDATE hosts SET aadhaar_document_url = ${aadhaarDocumentUrl}, aadhaar_status = 'pending_review', aadhaar_rejection_reason = NULL
           WHERE id = ${guest.host_id}
@@ -3753,6 +3754,16 @@ module.exports = async (req, res) => {
       b.can_cancel = b.status === 'paid' && h >= CANCELLATION_CUTOFF_HOURS;
       delete b.listing_timezone; delete b.listing_check_in_time;
     });
+
+    // Identity & address proof: an ID verified on the account (as a guest,
+    // before hosting, or here) counts for hosting too (_id-verify.js).
+    try {
+      const idv = await idVerify.readVerification(sql, guestId);
+      if (idv && idVerify.provesHostAddress(idv)) {
+        await sql`UPDATE hosts SET aadhaar_status = 'verified', aadhaar_rejection_reason = NULL
+                  WHERE id = ${guest.host_id} AND aadhaar_status IS DISTINCT FROM 'verified'`;
+      }
+    } catch (e) { console.error('ID carry-over skipped:', e.message); }
 
     // Verification status for the checklist. Bank account number is
     // masked to its last 4 digits — even the host's own dashboard never

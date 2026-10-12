@@ -3592,3 +3592,4 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 /* Payout details sits under My Earnings in the account menu. */
 .nav-account-menu a.menu-sub-link{ padding-left:34px; font-size:11.5px; opacity:0.8; }
 .mobile-nav-panel a.menu-sub-link{ padding-left:16px; font-size:0.9em; opacity:0.8; }
+.id-ok{ color:#2f6b37; opacity:1; font-weight:500; white-space:nowrap; }

@@ -3716,9 +3716,9 @@ function lkGuestHtml(d){
     <div class="lk-grid">
       <div class="lk-card"><h4>Contact</h4>
         ${lkKv('Email', `${lkEsc(g.email || '—')}${g.email_verified ? ' ✓' : ''}`)}${lkKv('Phone', `${lkEsc(g.phone || '—')}${g.phone_verified === 'true' ? ' ✓' : ''}`)}
-        ${lkKv('ID check', lkEsc(g.id_status || 'not uploaded'))}</div>
+        ${lkKv('ID verified', g.id_verification && g.id_verification.verifiedAt ? lkEsc((g.id_verification.method === 'aadhaar_offline' ? 'Aadhaar e-KYC' : String(g.id_verification.docType || 'ID').replace('_', ' ')) + (g.id_verification.last4 ? ' ••' + g.id_verification.last4 : '') + ' · ' + (g.id_verification.name || '') + ' · ' + lkDay(g.id_verification.verifiedAt)) : 'no')}</div>
       ${d.host ? `<div class="lk-card"><h4>Hosting</h4>${lkKv('Host #', Number(d.host.id))}${lkKv('Hosting', lkEsc(d.host.hosting_status || 'active'))}
-        ${lkKv('PAN', lkEsc(d.host.pan_status || '—'))}${lkKv('Bank', lkEsc(d.host.bank_status || '—'))}${lkKv('Aadhaar', lkEsc(d.host.aadhaar_status || '—'))}
+        ${lkKv('PAN', lkEsc(d.host.pan_status || '—'))}${lkKv('Bank', lkEsc(d.host.bank_status || '—'))}${lkKv('ID & address', lkEsc(d.host.aadhaar_status || '—'))}
         ${(d.listings || []).length ? `<div class="lk-links">${d.listings.map(l => `<button type="button" class="lk-link" onclick="lkOpen('listing', ${Number(l.id)})">${lkEsc(l.property_name)} ›</button>`).join('')}</div>` : ''}</div>` : ''}
       ${(d.tickets || []).length ? `<div class="lk-card"><h4>Support requests</h4>${d.tickets.map(t => lkKv(lkEsc(t.ref || '#' + t.id), `${lkEsc(t.subject || '')} ${lkChip(t.status)}`)).join('')}</div>` : ''}
     </div>
