@@ -278,18 +278,13 @@
   const sessionToken = safeStorage.get('aerva_guest_session');
   if(!sessionToken) window.location.replace('guest-login.html');
 
-  // Co-host mode: the server sends only the co-host's own share of each
-  // booking (cohost_share / share), never the host's payout, commission
-  // or what the guest paid. Every money figure on this page then shows
-  // that share, and says so.
+  // Co-host mode: the server sends the co-host's own share of each booking
+  // (cohost_share / share) and, for the listings they co-host only, the
+  // booking total and the host's payout — never the host's bank, PAN or TDS.
   const IS_COHOST = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
-  // Payout details is the host's own bank account; a co-host's is in the Co-hosting centre.
-  if(IS_COHOST){ const pl = document.getElementById('payoutDetailsLink'); if(pl) pl.style.display = 'none'; }
+  // Payout details: for a co-host, their own bank account for their share (host-payouts.html).
   if(IS_COHOST){
-    const acting = window.AervaCohost.get() || {};
-    if(acting.access === 'full' || (acting.permissions || []).includes('host_earnings')){
-      document.getElementById('cohostShareNote').textContent = 'Your own share, and what the host earns from the listings you co-host.';
-    }
+    document.getElementById('cohostShareNote').textContent = 'Your own share, and what the listings you co-host earn.';
     document.getElementById('earnTitle').textContent = 'Your share';
     document.getElementById('earnSectionHeading').textContent = 'Your share by booking';
     document.getElementById('cohostShareNote').style.display = 'block';

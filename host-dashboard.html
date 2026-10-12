@@ -3058,7 +3058,7 @@
     const ymd = (v) => new Date(String(v || '').slice(0, 10) + 'T00:00:00');
     const arrival = ymd(booking.arrival).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     const departure = ymd(booking.departure).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    // A co-host is never sent the host's figures, only their own share.
+    // A co-host sees the booking's total and the host's payout (their own listings only) and their own share.
     const isCohost = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
     document.getElementById('bookingDetailsBody').innerHTML = `
       <h3 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:19px; margin-bottom:4px;">${escH(booking.guest_name || booking.guest_email)}</h3>
@@ -3077,11 +3077,24 @@
         </div>
       </div>
       ${isCohost ? `
+      ${booking.subtotal !== undefined ? `
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:14px;">Guest paid</div>
+          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst))}</div>
+        </div>
+      </div>` : ''}
+      ${booking.payout_amount !== undefined ? `
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:14px;">Host’s payout</div>
+          <div class="settings-row-value">${fmt(booking.payout_amount)}</div>
+        </div>
+      </div>` : ''}
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Your share</div>
           <div class="settings-row-value payout-value">${Number(booking.cohost_share) > 0 ? fmt(booking.cohost_share) : '—'}</div>
-          <div style="font-size:12.5px; opacity:0.6; margin-top:2px;">You see your own share only. The host's earnings are private.</div>
         </div>
       </div>` : `
       <div class="settings-row">

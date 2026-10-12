@@ -759,6 +759,7 @@ window.AERVA_POLICIES = {
           { title: 'Basics', points: [
             'Invite a co-host from Co-hosting. They accept with their own Aerva account.',
             'Aerva pays each co-host their own share, in full. Anything else between a host and a co-host is for them to settle.',
+            'Every co-host sees what the listings they co-host earn: each booking\u2019s total and the host\u2019s payout, next to their own share. They never see other listings, or the host\u2019s bank details, PAN or tax.',
             'A host can remove a co-host, and a co-host can leave, at any time. Shares already earned are still paid.'
           ]}
         ], docs: ['payments', 'accounts'] },
