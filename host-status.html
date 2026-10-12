@@ -1059,19 +1059,21 @@
     }
     const money = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
     const fmt = formatDateLong;
-    // A co-host is sent only their own share of each booking, never what
-    // the guest paid or the host's payout.
+    // A co-host sees each booking's total and the host's payout for the
+    // listings they co-host, and their own share.
     const cohostView = isCohostView(data);
+    const hostFig = cohostView && all.some(b => b.payout_amount !== undefined);
+    const hostPaid = all.reduce((t, b) => t + (Number(b.payout_amount) || 0), 0);
     const earned = all.reduce((t, b) => t + (Number(cohostView ? b.cohost_share : b.payout_amount) || 0), 0);
     const sum = (k) => all.reduce((t, b) => t + (Number(b[k]) || 0), 0);
     const nightsTotal = sum('nights'), guestsTotal = sum('guests'), paidTotal = sum('total'), depositTotal = sum('deposit_amount');
     box.innerHTML = `
       <h2 class="bookings-head">Bookings in this range</h2>
       <p style="color:#6e675d; font-size:13.5px; margin:0 0 12px;">${all.length} booking${all.length === 1 ? '' : 's'} between ${rangeText} · ${cohostView
-        ? `your share totals ${money(earned)}. You see your own share only. The host's earnings are private.`
+        ? (hostFig ? `bookings total ${money(paidTotal)}, the host's payouts ${money(hostPaid)}, your share ${money(earned)}` : `your share totals ${money(earned)}`)
         : `your payouts total ${money(earned)} before TDS`}</p>
       <div class="bookings-scroll has-totals"><table class="bookings-table">
-        <thead><tr><th>When</th><th>Code</th><th>Listing</th><th>Guest</th><th>Dates</th><th>Guests</th>${cohostView ? '<th>Your share</th>' : '<th>Guest paid</th><th>Your payout</th>'}<th>Deposit</th></tr></thead>
+        <thead><tr><th>When</th><th>Code</th><th>Listing</th><th>Guest</th><th>Dates</th><th>Guests</th>${cohostView ? (hostFig ? '<th>Guest paid</th><th>Host’s payout</th>' : '') + '<th>Your share</th>' : '<th>Guest paid</th><th>Your payout</th>'}<th>Deposit</th></tr></thead>
         <tbody>${all.map(b => {
           const when = bookingWhen(b, data.today);
           return `<tr>
@@ -1082,7 +1084,7 @@
             <td>${fmt(b.start_date)} – ${fmt(b.end_date)}<br><span class="sub">${Number(b.nights) || ''} night${Number(b.nights) === 1 ? '' : 's'}</span></td>
             <td>${esc(b.guests || '—')}</td>
             ${cohostView
-              ? `<td>${Number(b.cohost_share) > 0 ? money(b.cohost_share) : '—'}</td>`
+              ? (hostFig ? `<td>${money(b.total)}</td><td>${money(b.payout_amount)}</td>` : '') + `<td>${Number(b.cohost_share) > 0 ? money(b.cohost_share) : '—'}</td>`
               : `<td>${money(b.total)}</td>
             <td>${money(b.payout_amount)}</td>`}
             <td>${Number(b.deposit_amount) ? money(b.deposit_amount) + '<br><span class="sub">' + esc(depositLabel(b.deposit_status)) + '</span>' : '—'}</td>
@@ -1092,7 +1094,7 @@
           <td colspan="4">Total · ${all.length} booking${all.length === 1 ? '' : 's'}</td>
           <td>${nightsTotal} night${nightsTotal === 1 ? '' : 's'}</td>
           <td>${guestsTotal || '—'}</td>
-          ${cohostView ? `<td>${money(earned)}</td>` : `<td>${money(paidTotal)}</td><td>${money(earned)}<br><span class="sub">before TDS</span></td>`}
+          ${cohostView ? (hostFig ? `<td>${money(paidTotal)}</td><td>${money(hostPaid)}</td>` : '') + `<td>${money(earned)}</td>` : `<td>${money(paidTotal)}</td><td>${money(earned)}<br><span class="sub">before TDS</span></td>`}
           <td>${depositTotal ? money(depositTotal) : '—'}</td>
         </tr></tfoot>
       </table></div>`;

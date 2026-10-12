@@ -17,20 +17,19 @@ const { createToken, verifyToken } = require('./_approval-token');
 
 // What EVERY co-host can do, limited or full: the Manage page (everything
 // except renaming the listing), analytics, calendars, prices, blocking
-// dates, and cancelling bookings.
-const ALWAYS_PERMISSIONS = ['manage', 'analytics', 'calendar', 'rates', 'cancel'];
-const ALWAYS_LABEL = 'Manage the listing (except renaming it), see analytics and calendars, change prices, block dates and cancel bookings';
+// dates, cancelling bookings, and seeing what their listings earn — the
+// booking totals and the host's payout for THOSE listings only (never any
+// other listing, the bank account, PAN or TDS), next to their own share.
+const ALWAYS_PERMISSIONS = ['manage', 'analytics', 'calendar', 'rates', 'cancel', 'host_earnings'];
+const ALWAYS_LABEL = 'Manage the listing (except renaming it), see analytics, calendars and what these listings earn, change prices, block dates and cancel bookings';
 
 // The extra choices a host can tick for a limited co-host. `byDefault`
-// ones start ticked on a new invitation. A co-host always sees their own
-// share of what these listings earn; "host_earnings" adds the host's
-// figures for the same listings (never for any other listing).
+// ones start ticked on a new invitation.
 const COHOST_PERMISSIONS = [
   { key: 'bookings',      label: 'See arrivals and bookings' },
   { key: 'messages',      label: 'Reply to guest messages' },
   { key: 'templates',     label: 'Edit message templates' },
   { key: 'status',        label: 'See the Status page (each night’s price, bookings and blocks)' },
-  { key: 'host_earnings', label: 'See your earnings for these listings (they always see their own share)', byDefault: true },
   { key: 'deposits',      label: 'Raise security-deposit claims' },
   { key: 'review_guests', label: 'Review guests after their stay' }
 ];

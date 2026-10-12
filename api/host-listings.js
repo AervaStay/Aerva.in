@@ -541,9 +541,10 @@ function trimForCohost(ctx, mode, body) {
   const shareOf = (orderId) => (ctx.shareByOrder && ctx.shareByOrder.get(Number(orderId))) || 0;
   if (mode === 'dashboard') {
     const seesBookings = cohostCan(ctx, 'bookings');
-    // The host's own figures for these listings only, when the host allowed it.
+    // What these listings earn (booking total, the host's payout), for the
+    // co-host's own listings only — every co-host sees it.
     const seesHostMoney = cohostCan(ctx, 'host_earnings');
-    const HOST_FIGURES = ['total', 'payout_amount', 'commission_amount', 'commission_rate', 'not_earned', 'guest_service_fee'];
+    const HOST_FIGURES = ['total', 'subtotal', 'gst', 'payout_amount', 'commission_amount', 'commission_rate', 'not_earned', 'guest_service_fee'];
     const out = {
       // Every co-host gets the Manage page, through their own link: it
       // stops working when they are removed and cannot rename the listing.
@@ -584,16 +585,18 @@ function trimForCohost(ctx, mode, body) {
       rows: (body.rows || []).filter(r => inScope(r.listingId)).map(r => ({
         ...pickKeys(r, ['month', 'stayMonth', 'listingId', 'listingName', 'listingType', 'bucket', 'status', 'nights', 'bookings']),
         share: (ctx.shareByBucket && ctx.shareByBucket.get(shareBucketKey(r))) || 0,
-        // The host's payout in the same bucket, when the host allowed it.
+        // The host's payout in the same bucket (these listings only).
         ...(seesHostMoneyA ? { hostEarned: Number(r.payout) || 0 } : {})
       })),
       listings: Array.isArray(body.listings) ? body.listings.filter(l => inScope(l.id)) : body.listings,
       shareOnly: true });
   }
   if (mode === 'statusCalendar') {
+    // Each booking's total and the host's payout, for these listings only.
+    const CAL_FIGURES = cohostCan(ctx, 'host_earnings') ? ['total', 'payout_amount'] : [];
     return stripHostMoney({ ...body, shareOnly: true, rows: (body.rows || []).filter(r => inScope(r.listingId)).map(r => ({
-      ...r, bookings: (r.bookings || []).map(b => ({ ...pickKeys(b, COHOST_CALENDAR_BOOKING_KEYS), cohost_share: shareOf(b.id) }))
-    })) }, new Set(['cohost_share']));
+      ...r, bookings: (r.bookings || []).map(b => ({ ...pickKeys(b, COHOST_CALENDAR_BOOKING_KEYS), ...pickKeys(b, CAL_FIGURES), cohost_share: shareOf(b.id) }))
+    })) }, new Set(['cohost_share'].concat(CAL_FIGURES)));
   }
   // myPenalties is the co-host's own coupon deductions (payer_guest_id is
   // them), so its total is theirs to see.
