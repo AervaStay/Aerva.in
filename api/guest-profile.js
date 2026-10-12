@@ -712,7 +712,8 @@ module.exports = async (req, res) => {
           send_trigger: t.send_trigger || (t.send_on_booking_confirmed ? 'booking_confirmed' : 'manual'),
           send_offset_days: Number(t.send_offset_days) || 0,
           send_offset_unit: t.send_offset_unit || (Number(t.send_offset_days) > 0 ? 'days' : null),
-          send_offset_value: t.send_offset_minutes ? (t.send_offset_unit === 'hours' ? Math.round(t.send_offset_minutes / 60) : Math.round(t.send_offset_minutes / 1440)) : (Number(t.send_offset_days) || 0),
+          send_offset_value: t.send_offset_minutes ? (t.send_offset_unit === 'minutes' ? Number(t.send_offset_minutes) : t.send_offset_unit === 'hours' ? Math.round(t.send_offset_minutes / 60) : Math.round(t.send_offset_minutes / 1440)) : (Number(t.send_offset_days) || 0),
+          send_at_time: t.send_at_time || null,
           send_on_booking_confirmed: !!t.send_on_booking_confirmed,
           auto_send_listing_ids: t.auto_send_listing_ids || []
         })) });
@@ -1554,21 +1555,30 @@ module.exports = async (req, res) => {
       }
 
       if (mode === 'saveTemplate') {
-        const { templateId, listingId, body, sendOnBookingConfirmed, autoSendListingIds, title, sendTrigger, sendOffsetDays, sendOffsetValue, sendOffsetUnit } = req.body || {};
+        const { templateId, listingId, body, sendOnBookingConfirmed, autoSendListingIds, title, sendTrigger, sendOffsetDays, sendOffsetValue, sendOffsetUnit, sendAtTime } = req.body || {};
         const safeBody = typeof body === 'string' ? body.trim().slice(0, 1500) : '';
         if (!safeBody) return res.status(400).json({ error: 'Template text can\'t be empty.' });
         const safeTitle = typeof title === 'string' ? title.trim().slice(0, 80) : '';
         // When it is sent. Older pages send only sendOnBookingConfirmed.
         const TRIGGERS = ['manual', 'booking_confirmed', 'before_checkin', 'after_checkin', 'before_checkout', 'after_checkout', 'checkin_day', 'checkout_day'];
         const safeTrigger = TRIGGERS.includes(sendTrigger) ? sendTrigger : (sendOnBookingConfirmed === true ? 'booking_confirmed' : 'manual');
-        // Before / after check-in or check-out: a number of hours (1–72) or
-        // days (1–30), measured from the listing's check-in / check-out time.
+        // Before / after check-in or check-out: minutes (1–720), hours
+        // (1–72) or days (1–30), from the listing's check-in / check-out
+        // time — in days, optionally at an exact time of day. On
+        // confirmation: straight away, or after a delay in minutes or hours.
+        // On check-in / check-out day: at an exact time (default 07:30).
         const timed = ['before_checkin', 'after_checkin', 'before_checkout', 'after_checkout'].includes(safeTrigger);
-        const safeUnit = sendOffsetUnit === 'hours' ? 'hours' : 'days';
+        const confirmDelay = safeTrigger === 'booking_confirmed' && Number(sendOffsetValue) > 0;
+        const safeUnit = sendOffsetUnit === 'minutes' ? 'minutes' : sendOffsetUnit === 'hours' ? 'hours' : (confirmDelay ? 'minutes' : 'days');
         const rawValue = Math.floor(Number(sendOffsetValue !== undefined ? sendOffsetValue : sendOffsetDays)) || 1;
-        const safeValue = safeUnit === 'hours' ? Math.max(1, Math.min(72, rawValue)) : Math.max(1, Math.min(30, rawValue));
-        const safeMinutes = timed ? safeValue * (safeUnit === 'hours' ? 60 : 1440) : null;
+        const cap = { minutes: 720, hours: 72, days: 30 }[safeUnit];
+        const safeValue = Math.max(1, Math.min(cap, rawValue));
+        const perUnit = { minutes: 1, hours: 60, days: 1440 }[safeUnit];
+        const safeMinutes = (timed || (confirmDelay && safeUnit !== 'days')) ? safeValue * perUnit : null;
         const safeOffset = timed && safeUnit === 'days' ? safeValue : 0; // legacy whole-day column
+        const atOk = typeof sendAtTime === 'string' && /^([01]?\d|2[0-3]):[0-5]\d$/.test(sendAtTime.trim());
+        const safeAtTime = atOk && ((timed && safeUnit === 'days') || safeTrigger === 'checkin_day' || safeTrigger === 'checkout_day')
+          ? sendAtTime.trim().padStart(5, '0') : null;
 
         if (listingId) {
           // listings.host_id is a hosts.id (see myHostId's comment up
@@ -1602,6 +1612,12 @@ module.exports = async (req, res) => {
             return res.status(400).json({ error: 'Choose at least one of the listings you co-host for this template.' });
           }
         }
+        // The exact time of day, kept apart so a save still works before the
+        // database update adds the column.
+        async function saveTemplateTime(id) {
+          try { await sql`UPDATE message_templates SET send_at_time = ${safeAtTime} WHERE id = ${id}`; }
+          catch (e) { if (e.code !== '42703') throw e; }
+        }
         // The page never sends listingId: leaving it out keeps the listing
         // the template already has, rather than clearing it.
         const listingGiven = Object.prototype.hasOwnProperty.call(req.body || {}, 'listingId');
@@ -1612,18 +1628,20 @@ module.exports = async (req, res) => {
               listing_id = CASE WHEN ${listingGiven} THEN ${listingId || null}::int ELSE listing_id END,
               send_on_booking_confirmed = ${safeSendOnBooking},
               send_trigger = ${safeTrigger}, send_offset_days = ${safeOffset},
-              send_offset_minutes = ${safeMinutes}, send_offset_unit = ${timed ? safeUnit : null},
+              send_offset_minutes = ${safeMinutes}, send_offset_unit = ${timed || safeMinutes ? safeUnit : null},
               auto_send_listing_ids = ${JSON.stringify(safeAutoSendListingIds)}
             WHERE id = ${templateId} AND host_id = ${guestId} RETURNING id
           `;
           if (!updated.length) return res.status(404).json({ error: 'Template not found.' });
+          await saveTemplateTime(updated[0].id);
           return res.status(200).json({ id: updated[0].id });
         }
         const inserted = await sql`
           INSERT INTO message_templates (host_id, listing_id, title, body, send_on_booking_confirmed, send_trigger, send_offset_days, send_offset_minutes, send_offset_unit, auto_send_listing_ids)
-          VALUES (${guestId}, ${listingId || null}, ${safeTitle || null}, ${safeBody}, ${safeSendOnBooking}, ${safeTrigger}, ${safeOffset}, ${safeMinutes}, ${timed ? safeUnit : null}, ${JSON.stringify(safeAutoSendListingIds)})
+          VALUES (${guestId}, ${listingId || null}, ${safeTitle || null}, ${safeBody}, ${safeSendOnBooking}, ${safeTrigger}, ${safeOffset}, ${safeMinutes}, ${timed || safeMinutes ? safeUnit : null}, ${JSON.stringify(safeAutoSendListingIds)})
           RETURNING id
         `;
+        await saveTemplateTime(inserted[0].id);
         return res.status(200).json({ id: inserted[0].id });
       }
 

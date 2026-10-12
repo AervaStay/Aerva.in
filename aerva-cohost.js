@@ -45,7 +45,7 @@
   // Must match the co-host allowlists in guest-profile.js.
   var MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'unsend', 'react', 'translate', 'conversationTemplates'];
   var TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];
-  var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'resendCohostInvite', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost', 'saveCohostDetails'];
+  var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'resendCohostInvite', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost', 'saveCohostDetails', 'savePayoutProfile', 'proposeCommission'];
 
   function bodyJson(init){
     try{ return init && typeof init.body === 'string' ? JSON.parse(init.body) : null; }catch(e){ return null; }
@@ -96,7 +96,7 @@
             // Managing co-hosts, or one's own co-hosting, is never done
             // "as" someone else.
             // Nor are one's own payouts (as host or co-host): personal, like myCohosting.
-            if(u.searchParams.get('cohosts') || u.searchParams.get('myCohosting') || u.searchParams.get('myPayouts') || u.searchParams.has('payoutDetail')) route = false;
+            if(u.searchParams.get('cohosts') || u.searchParams.get('myCohosting') || u.searchParams.get('myPayouts') || u.searchParams.get('myPayoutProfile') || u.searchParams.has('ifsc') || u.searchParams.has('payoutDetail')) route = false;
             if(body && COHOST_ADMIN.some(function(k){ return body[k]; })) route = false;
           }
           if(route){

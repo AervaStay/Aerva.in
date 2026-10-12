@@ -339,8 +339,8 @@ const COHOST_ACTIONS = {
   respondBookingChange: { perm: 'cancel', changeFrom: b => b.changeId },
   respondStayDispute: { perm: 'cancel', disputeFrom: b => b.disputeId },
   verifyCouponPayment:{ perm: 'cancel', couponFrom: b => b.couponId },
-  raiseDispute:       { perm: FULL_ONLY, orderFrom: b => b.orderId },
-  reviewGuest:        { perm: FULL_ONLY, orderFrom: b => b.orderId }
+  raiseDispute:       { perm: 'deposits', orderFrom: b => b.orderId },
+  reviewGuest:        { perm: 'review_guests', orderFrom: b => b.orderId }
 };
 
 function cohostDenied(res, msg) {
@@ -366,7 +366,7 @@ async function cohostGate(req, res, accountId) {
   if (req.method === 'GET') {
     const q = req.query || {};
     if (q.analytics === '1') { perm = 'analytics'; mode = 'analytics'; }
-    else if (q.statusCalendar === '1') { perm = 'calendar'; mode = 'statusCalendar'; }
+    else if (q.statusCalendar === '1') { perm = 'status'; mode = 'statusCalendar'; }
     // The co-host's own cancellation-coupon deductions (never the host's).
     else if (q.myPenalties === '1') { perm = 'cancel'; mode = 'myPenalties'; }
     else if (q.cancellationRequests === '1') { perm = 'cancel'; mode = 'cancellationRequests'; }
@@ -541,6 +541,9 @@ function trimForCohost(ctx, mode, body) {
   const shareOf = (orderId) => (ctx.shareByOrder && ctx.shareByOrder.get(Number(orderId))) || 0;
   if (mode === 'dashboard') {
     const seesBookings = cohostCan(ctx, 'bookings');
+    // The host's own figures for these listings only, when the host allowed it.
+    const seesHostMoney = cohostCan(ctx, 'host_earnings');
+    const HOST_FIGURES = ['total', 'payout_amount', 'commission_amount', 'commission_rate', 'not_earned', 'guest_service_fee'];
     const out = {
       // Every co-host gets the Manage page, through their own link: it
       // stops working when they are removed and cannot rename the listing.
@@ -549,7 +552,7 @@ function trimForCohost(ctx, mode, body) {
       // Rebuilt from the allowlist, with the co-host's OWN share and the
       // coupons they paid for — never the host's figures.
       bookings: seesBookings ? (body.bookings || []).filter(b => inScope(b.listing_id))
-        .map(b => ({ ...pickKeys(b, COHOST_BOOKING_KEYS), cohost_share: shareOf(b.id),
+        .map(b => ({ ...pickKeys(b, COHOST_BOOKING_KEYS), ...(seesHostMoney ? pickKeys(b, HOST_FIGURES) : {}), cohost_share: shareOf(b.id),
                      my_coupon_cost: (ctx.couponByOrder && ctx.couponByOrder.get(Number(b.id))) || 0 })) : [],
       // Which period was fetched, so the co-host's page knows what it is
       // holding. The counts are deliberately NOT carried over: they
@@ -570,16 +573,19 @@ function trimForCohost(ctx, mode, body) {
           .map(r => ({ ...pickKeys(r, COHOST_TODAY_KEYS), share: shareOf(r.orderId) }));
       }
     }
-    const keep = new Set(['cohost_share', 'verification']);
+    const keep = new Set(['cohost_share', 'verification'].concat(seesHostMoney ? HOST_FIGURES : []));
     return stripHostMoney(out, keep);
   }
   if (mode === 'analytics') {
     // Counts stay (bookings, nights); the host's gross, payout and
     // commission go; `share` is the co-host's own share in the same bucket.
+    const seesHostMoneyA = cohostCan(ctx, 'host_earnings');
     return stripHostMoney({ ...body,
       rows: (body.rows || []).filter(r => inScope(r.listingId)).map(r => ({
         ...pickKeys(r, ['month', 'stayMonth', 'listingId', 'listingName', 'listingType', 'bucket', 'status', 'nights', 'bookings']),
-        share: (ctx.shareByBucket && ctx.shareByBucket.get(shareBucketKey(r))) || 0
+        share: (ctx.shareByBucket && ctx.shareByBucket.get(shareBucketKey(r))) || 0,
+        // The host's payout in the same bucket, when the host allowed it.
+        ...(seesHostMoneyA ? { hostEarned: Number(r.payout) || 0 } : {})
       })),
       listings: Array.isArray(body.listings) ? body.listings.filter(l => inScope(l.id)) : body.listings,
       shareOnly: true });

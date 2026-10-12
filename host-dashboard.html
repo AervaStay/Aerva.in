@@ -4480,7 +4480,8 @@
       section.querySelector('#chEmailWrap').style.display = c ? 'none' : 'block';
       section.querySelector('#chSave').textContent = c ? 'Save changes' : 'Send invitation';
       section.querySelector(`input[name=chAccess][value=${c && c.access === 'full' ? 'full' : 'limited'}]`).checked = true;
-      section.querySelectorAll('input[name=chPerm]').forEach(b => { b.checked = !!(c && c.permissions.includes(b.value)); });
+      // A new invitation starts with the default choices ticked (e.g. seeing your earnings for their listings).
+      section.querySelectorAll('input[name=chPerm]').forEach(b => { b.checked = c ? c.permissions.includes(b.value) : !!(state.labels.find(l => l.key === b.value) || {}).byDefault; });
       section.querySelectorAll('input[name=chListing]').forEach(b => { b.checked = !!(c && c.listingIds.includes(Number(b.value))); });
       syncAccess();
     };

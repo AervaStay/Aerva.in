@@ -4282,7 +4282,7 @@
 
     // Where a co-host starts for a host: the same page the host sees.
     const startPageFor = (h) => h.access === 'full' || (h.permissions || []).includes('bookings') ? 'host-dashboard.html'
-      : ((h.permissions || []).includes('calendar') ? 'host-status.html'
+      : ((h.permissions || []).includes('status') ? 'host-status.html'
       : ((h.permissions || []).includes('analytics') ? 'host-earnings.html' : 'host-dashboard.html'));
 
     // Arrived from the invitation's "Accept invitation" link (now signed
@@ -4363,7 +4363,7 @@
             <label><input type="radio" name="${prefix}-access" value="full" ${c && c.access === 'full' ? 'checked' : ''}> Full access</label>
           </div>
           <div class="cohost-invite-group" data-perms ${c && c.access === 'full' ? 'hidden' : ''}><span>They can always ${esc((team.alwaysLabel || 'manage your listings').toLowerCase())}. Also:</span>
-            ${permLabels.map(p => `<label><input type="checkbox" data-perm value="${esc(p.key)}" ${c && (c.permissions || []).includes(p.key) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}
+            ${permLabels.map(p => `<label><input type="checkbox" data-perm value="${esc(p.key)}" ${(c ? (c.permissions || []).includes(p.key) : !!p.byDefault) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}
           </div>
           <div class="cohost-invite-group"><span>Listings</span>
             ${listingChoices.map(l => `<label><input type="checkbox" data-listing value="${Number(l.id)}" ${c && (c.listingIds || []).map(Number).includes(Number(l.id)) ? 'checked' : ''}> ${esc(l.name)}</label>`).join('')}
@@ -4684,7 +4684,7 @@
         if(!h) return;
         window.AervaCohost.start({ hostId: h.hostId, hostName: h.hostName, access: h.access, permissions: h.permissions });
         window.location.href = h.access === 'full' || h.permissions.includes('bookings') ? 'host-dashboard.html'
-          : (h.permissions.includes('calendar') ? 'host-status.html'
+          : (h.permissions.includes('status') ? 'host-status.html'
           : (h.permissions.includes('analytics') ? 'host-earnings.html' : 'index.html?view=messages'));
       }));
       body.querySelectorAll('[data-cohost-leave]').forEach(b => b.addEventListener('click', async () => {
@@ -8520,16 +8520,23 @@
     { title: 'WiFi', trigger: 'manual', days: 0, body: '@wifi' }
   ];
   const TIMED_TRIGGER_WORDS = { before_checkin: 'before check-in', after_checkin: 'after check-in', before_checkout: 'before check-out', after_checkout: 'after check-out' };
+  // "18:00" → "6:00 pm"
+  function tplClock(v){
+    const m = String(v || '').match(/^(\d{1,2}):(\d{2})$/); if(!m) return '';
+    const h = Number(m[1]); return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'am' : 'pm'}`;
+  }
   function templateWhen(t){
+    const n = Number(t.send_offset_value) || Number(t.send_offset_days) || 1;
+    const unitWord = (u) => ({ minutes: 'minute', hours: 'hour' }[u] || 'day');
     if(TIMED_TRIGGER_WORDS[t.send_trigger]){
-      const unit = t.send_offset_unit === 'hours' ? 'hour' : 'day';
-      const n = Number(t.send_offset_value) || Number(t.send_offset_days) || 1;
-      return `Sent ${n} ${unit}${n === 1 ? '' : 's'} ${TIMED_TRIGGER_WORDS[t.send_trigger]}`;
+      const u = unitWord(t.send_offset_unit);
+      return `Sent ${n} ${u}${n === 1 ? '' : 's'} ${TIMED_TRIGGER_WORDS[t.send_trigger]}${t.send_offset_unit !== 'minutes' && t.send_offset_unit !== 'hours' && t.send_at_time ? ', at ' + tplClock(t.send_at_time) : ''}`;
     }
     switch(t.send_trigger){
-      case 'booking_confirmed': return 'Sent when a booking is confirmed';
-      case 'checkin_day': return 'Sent on the morning of check-in day';
-      case 'checkout_day': return 'Sent on the morning of check-out day';
+      case 'booking_confirmed': return Number(t.send_offset_value) > 0 && (t.send_offset_unit === 'minutes' || t.send_offset_unit === 'hours')
+        ? `Sent ${n} ${unitWord(t.send_offset_unit)}${n === 1 ? '' : 's'} after a booking is confirmed` : 'Sent when a booking is confirmed';
+      case 'checkin_day': return `Sent on check-in day at ${tplClock(t.send_at_time || '07:30')}`;
+      case 'checkout_day': return `Sent on check-out day at ${tplClock(t.send_at_time || '07:30')}`;
       default: return 'Sent when you tap it';
     }
   }
@@ -8539,16 +8546,32 @@
   function syncTemplateTriggerFields(){
     const trig = document.getElementById('tplTrigger').value;
     const needsDays = !!TIMED_TRIGGER_WORDS[trig];
-    const timed = needsDays || trig === 'checkin_day' || trig === 'checkout_day';
-    document.getElementById('tplDaysWrap').style.display = needsDays ? 'block' : 'none';
-    const note = document.getElementById('tplTimingNote');
-    note.textContent = needsDays
-      ? ('Counted from the listing’s ' + (trig.endsWith('checkin') ? 'check-in' : 'check-out') + ' time, in the property’s time zone.'
-         + (trig.startsWith('before_') ? ' Booked later than that? Sent as soon as the booking is confirmed.' : ''))
-      : timed ? 'Sent from 7:30 am on the day, in the property’s time zone.' : '';
+    const dayOf = trig === 'checkin_day' || trig === 'checkout_day';
+    const confirm = trig === 'booking_confirmed';
     const unitEl = document.getElementById('tplUnit'), daysEl = document.getElementById('tplDays');
-    if(unitEl && daysEl) daysEl.max = unitEl.value === 'hours' ? 72 : 30;
-    note.style.display = timed ? 'block' : 'none';
+    const atEl = document.getElementById('tplAt');
+    // On confirmation: straight away (0) or after some minutes or hours.
+    unitEl.querySelector('option[value="days"]').hidden = confirm;
+    if(confirm && unitEl.value === 'days') unitEl.value = 'minutes';
+    document.getElementById('tplDaysWrap').style.display = needsDays || confirm ? 'block' : 'none';
+    document.getElementById('tplDaysLabel').textContent = confirm ? 'Send after (0 = straight away)' : 'How long';
+    daysEl.min = confirm ? 0 : 1;
+    daysEl.max = { minutes: 720, hours: 72, days: 30 }[unitEl.value] || 30;
+    // An exact time: on the day itself, or "N days before/after, at …".
+    const showAt = dayOf || (needsDays && unitEl.value === 'days');
+    document.getElementById('tplAtWrap').style.display = showAt ? 'block' : 'none';
+    document.getElementById('tplAtLabel').textContent = dayOf ? 'At' : 'At (optional, a time of day)';
+    if(dayOf && !atEl.value) atEl.value = '07:30';
+    const note = document.getElementById('tplTimingNote');
+    const n = Number(daysEl.value) || 0, unitWord = { minutes: 'minute', hours: 'hour', days: 'day' }[unitEl.value];
+    note.textContent = needsDays
+      ? ((unitEl.value === 'days' && atEl.value)
+          ? `Sent ${n || 1} ${unitWord}${(n || 1) === 1 ? '' : 's'} ${TIMED_TRIGGER_WORDS[trig]}, at ${tplClock(atEl.value)}, in the property’s time zone.`
+          : 'Counted from the listing’s ' + (trig.endsWith('checkin') ? 'check-in' : 'check-out') + ' time, in the property’s time zone.')
+        + (trig.startsWith('before_') ? ' Booked later than that? Sent as soon as the booking is confirmed.' : '')
+      : dayOf ? `Sent at ${tplClock(atEl.value || '07:30')} on the day, in the property’s time zone. Booked later that day? Sent straight away.`
+      : confirm ? (n > 0 ? `Sent ${n} ${unitWord}${n === 1 ? '' : 's'} after the booking is confirmed (within about 5 minutes of that time).` : 'Sent the moment the booking is confirmed.') : '';
+    note.style.display = note.textContent ? 'block' : 'none';
     document.getElementById('inboxTemplateScheduleOptions').style.display = trig === 'manual' ? 'none' : 'block';
     if(trig !== 'manual' && !inboxTemplateScheduleListingsLoaded) return loadInboxTemplateScheduleListings();
     return Promise.resolve();
@@ -8574,6 +8597,7 @@
     document.getElementById('tplTrigger').value = 'manual';
     document.getElementById('tplDays').value = 2;
     document.getElementById('tplUnit').value = 'days';
+    document.getElementById('tplAt').value = '';
     document.querySelectorAll('.inbox-template-schedule-listing').forEach(cb => { cb.checked = false; });
     syncTemplateTriggerFields();
   }
@@ -8586,8 +8610,9 @@
     document.getElementById('inboxTemplateTitleInput').value = t.title || '';
     document.getElementById('inboxTemplateBodyInput').value = t.body || '';
     document.getElementById('tplTrigger').value = t.send_trigger || 'manual';
-    document.getElementById('tplDays').value = Number(t.send_offset_value) || Number(t.send_offset_days) || 2;
-    document.getElementById('tplUnit').value = t.send_offset_unit === 'hours' ? 'hours' : 'days';
+    document.getElementById('tplUnit').value = ['minutes', 'hours'].includes(t.send_offset_unit) ? t.send_offset_unit : 'days';
+    document.getElementById('tplDays').value = t.send_trigger === 'booking_confirmed' ? (Number(t.send_offset_value) || 0) : (Number(t.send_offset_value) || Number(t.send_offset_days) || 2);
+    document.getElementById('tplAt').value = t.send_at_time || '';
     await syncTemplateTriggerFields();
     const ids = (t.auto_send_listing_ids || []).map(Number);
     document.querySelectorAll('.inbox-template-schedule-listing').forEach(cb => { cb.checked = ids.includes(Number(cb.value)); });
@@ -8704,19 +8729,22 @@
     }));
     document.getElementById('tplTrigger').addEventListener('change', syncTemplateTriggerFields);
     document.getElementById('tplUnit').addEventListener('change', syncTemplateTriggerFields);
+    document.getElementById('tplDays').addEventListener('input', syncTemplateTriggerFields);
+    document.getElementById('tplAt').addEventListener('input', syncTemplateTriggerFields);
     document.getElementById('tplCancelEdit').addEventListener('click', closeTemplateForm);
     document.getElementById('inboxAddTemplateBtn').addEventListener('click', async () => {
       const title = document.getElementById('inboxTemplateTitleInput').value.trim();
       const body = bodyEl.value.trim();
       if(!body){ showTemplateMsg('Write the message first.', false); return; }
       const trigger = document.getElementById('tplTrigger').value;
-      const days = Number(document.getElementById('tplDays').value) || 1;
-      const unit = document.getElementById('tplUnit').value === 'hours' ? 'hours' : 'days';
+      const unit = ['minutes', 'hours'].includes(document.getElementById('tplUnit').value) ? document.getElementById('tplUnit').value : 'days';
+      const days = trigger === 'booking_confirmed' ? Math.max(0, Number(document.getElementById('tplDays').value) || 0) : (Number(document.getElementById('tplDays').value) || 1);
+      const atTime = document.getElementById('tplAt').value || '';
       const ids = trigger === 'manual' ? [] : Array.from(document.querySelectorAll('.inbox-template-schedule-listing:checked')).map(cb => Number(cb.value));
       const btn = document.getElementById('inboxAddTemplateBtn');
       btn.disabled = true;
       try{
-        await saveTemplatePayload({ templateId: templateEditingId || undefined, title, body, sendTrigger: trigger, sendOffsetValue: days, sendOffsetUnit: unit, sendOffsetDays: unit === 'days' ? days : undefined, autoSendListingIds: ids });
+        await saveTemplatePayload({ templateId: templateEditingId || undefined, title, body, sendTrigger: trigger, sendOffsetValue: days, sendOffsetUnit: unit, sendOffsetDays: unit === 'days' ? days : undefined, sendAtTime: atTime || undefined, autoSendListingIds: ids });
         const msg = templateEditingId ? 'Changes saved.' : 'Template created.';
         closeTemplateForm();
         showTemplateMsg(msg, true);
@@ -13930,6 +13958,15 @@
             const earningsMenuLinkMobile = document.getElementById('earningsMenuLinkMobile');
             if(earningsMenuLink) earningsMenuLink.style.display = 'block';
             if(earningsMenuLinkMobile) earningsMenuLinkMobile.style.display = 'block';
+            // Payout details: a host's bank account, or a co-host's own (for their share).
+            ['payoutsMenuLink', 'payoutsMenuLinkMobile'].forEach(id => { const el = document.getElementById(id); if(el) el.style.display = 'block'; });
+          }
+          // Status for a co-host whose host allowed it (in co-host mode).
+          {
+            const acting = window.AervaCohost && typeof window.AervaCohost.get === 'function' ? window.AervaCohost.get() : null;
+            if(acting && (acting.access === 'full' || (acting.permissions || []).includes('status'))){
+              ['statusMenuLink', 'statusMenuLinkMobile'].forEach(id => { const el = document.getElementById(id); if(el) el.style.display = 'block'; });
+            }
           }
           // Account Settings: a host's settings (payouts, verification) live
           // on the host dashboard; everyone else's account is their profile.

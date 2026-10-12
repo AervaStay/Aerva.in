@@ -118,9 +118,9 @@
       '<a href="host-dashboard.html" class="ah-host-only" data-ah-cohost hidden>My Collection</a>' +
       '<a href="host-status.html" class="ah-host-only" hidden>Status</a>' +
       '<a href="host-earnings.html" class="ah-host-only" data-ah-cohost hidden>My Earnings</a>' +
-      // Payout details: the bank account payouts go to. Hosts only — a
-      // co-host's bank details live in the Co-hosting centre.
-      '<a href="host-payouts.html" class="ah-host-only ah-sub" hidden>Payout details</a>' +
+      // Payout details: the bank account payouts go to — a host's, or a
+      // co-host's own for their share.
+      '<a href="host-payouts.html" class="ah-host-only ah-sub" data-ah-cohost hidden>Payout details</a>' +
       '<a href="index.html?view=cohost">Co-hosting</a>' +
       '<a href="index.html?view=help">Help &amp; Support</a>' +
       '<a href="index.html?view=settings" data-ah-settings>Account Settings</a>' +
@@ -209,6 +209,11 @@
       el.hidden = !(isHost || (isCohost && el.hasAttribute('data-ah-cohost')));
     });
     document.getElementById('ahToday').hidden = !(isHost || isCohost);
+    // Status for a co-host whose host allowed it, while working for that host.
+    var acting = window.AervaCohost && typeof window.AervaCohost.get === 'function' ? window.AervaCohost.get() : null;
+    if(acting && (acting.access === 'full' || (acting.permissions || []).indexOf('status') !== -1)){
+      document.querySelectorAll('#ahHeader a[href="host-status.html"]').forEach(function(el){ el.hidden = false; });
+    }
     // Account Settings: a host's (personal details, privacy, verification)
     // are on My Collection; everyone else's are on index.html. The same
     // rule as index.html's own menu.
