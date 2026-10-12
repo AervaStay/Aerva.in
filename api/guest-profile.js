@@ -50,6 +50,7 @@ const { sanitizeBody } = require('./_plain-text');
 const { cancellationQuote, createCancellationRequest, cancellationCard } = require('./_cancellations');
 const { changeOptions, quoteChange, requestChange, withdrawChange, openChangeFor, loadBooking } = require('./_booking-changes');
 const { idSummary } = require('./_guest-id');
+const idVerify = require('./_id-verify');
 const emailOtp = require('./_email-otp');
 const photoGuard = require('./_photo-guard');
 const { raiseDispute, openDisputeFor, REASONS: DISPUTE_REASONS } = require('./_stay-disputes');
@@ -226,6 +227,27 @@ module.exports = async (req, res) => {
     if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. Please contact hello@aerva.in.', suspended: true });
       if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
     if (st !== 'ok') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
+  }
+
+  // ---- ID verification (Account Settings) — see _id-verify.js ----
+  // GET ?mode=idVerification → the outcome, the ID types, whether the Aadhaar ZIP option is on.
+  // POST { mode: 'verifyId', docType, name, dob, last4, files: [{ type, data }] }
+  // POST { mode: 'verifyAadhaarZip', zip, zipPassword }
+  // The document is checked in memory and never stored; only the outcome is.
+  if (req.method === 'GET' && (req.query || {}).mode === 'idVerification' && (req.query || {}).actingHost === undefined) {
+    return res.status(200).json(await idVerify.status(sql, guestId));
+  }
+  if (req.method === 'POST' && req.body && (req.body.mode === 'verifyId' || req.body.mode === 'verifyAadhaarZip') && (req.query || {}).actingHost === undefined) {
+    try {
+      const out = req.body.mode === 'verifyId'
+        ? await idVerify.verifyDocument(sql, logAudit, guestId, req.body)
+        : await idVerify.verifyAadhaarZip(sql, logAudit, guestId, req.body);
+      return res.status(200).json(Object.assign({ success: true }, out));
+    } catch (err) {
+      if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
+      console.error('ID verification failed:', err);
+      return res.status(500).json({ error: 'ID verification is not available right now. Please try again later.' });
+    }
   }
 
   // ---- Privacy (Account Settings) ----

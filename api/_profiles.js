@@ -260,10 +260,12 @@ async function liveListingsForHost(sql, hostId) {
 // their own — that version carries the raw fields for the edit form and
 // the unanswered questions, so they can see what else they could add.
 async function buildProfile(sql, account, { own = false } = {}) {
-  const [places, reviews, listings] = await Promise.all([
+  const [places, reviews, listings, idVerified] = await Promise.all([
     placesWithAerva(sql, { guestId: account.id, hostId: account.host_id }),
     reviewsAboutPerson(sql, { guestId: account.id, hostId: account.host_id }),
-    liveListingsForHost(sql, account.host_id)
+    liveListingsForHost(sql, account.host_id),
+    // "ID verified" (and with which kind of ID) — never the ID itself (_id-verify.js).
+    require('./_id-verify').badgeFor(sql, account.id).catch(() => null)
   ]);
   const profile = {
     name: String(account.name || '').trim() || 'Guest',
@@ -275,7 +277,8 @@ async function buildProfile(sql, account, { own = false } = {}) {
     answers: answeredQuestions(account.profile_about),
     places,
     listings,
-    reviews
+    reviews,
+    idVerified
   };
   if (!own) {
     const privacy = await readPrivacy(sql, account.id);

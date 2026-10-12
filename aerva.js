@@ -4112,7 +4112,7 @@
         <div>
           <div class="hp-eyebrow">Your host</div>
           <h2 class="hp-name">${esc(p.name)}</h2>
-          <div class="hp-meta">Host${p.memberSince ? ' · on Aerva since ' + esc(p.memberSince) : ''}</div>
+          <div class="hp-meta">Host${p.memberSince ? ' · on Aerva since ' + esc(p.memberSince) : ''}${p.idVerified ? ' · <span class="id-ok">\u2713 ID verified</span>' : ''}</div>
           ${badgeHtml ? `<div class="hp-badge">${badgeHtml}</div>` : ''}
           ${ratingHtml}
         </div>
@@ -4361,6 +4361,7 @@
           <div class="cohost-invite-group"><span>Access</span>
             <label><input type="radio" name="${prefix}-access" value="limited" ${!c || c.access !== 'full' ? 'checked' : ''}> Limited: choose what they can do</label>
             <label><input type="radio" name="${prefix}-access" value="full" ${c && c.access === 'full' ? 'checked' : ''}> Full access</label>
+            <p class="hp-meta" style="margin:4px 0 0;">Full access: everything you can do on these listings, except renaming them and your payouts, bank details, account settings and co-hosts. Limited: the essentials, plus only what you tick.</p>
           </div>
           <div class="cohost-invite-group" data-perms ${c && c.access === 'full' ? 'hidden' : ''}><span>They can always ${esc((team.alwaysLabel || 'manage your listings').toLowerCase())}. Also:</span>
             ${permLabels.map(p => `<label><input type="checkbox" data-perm value="${esc(p.key)}" ${(c ? (c.permissions || []).includes(p.key) : !!p.byDefault) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}
@@ -4401,7 +4402,7 @@
             ${p.work ? `<p><strong>Work:</strong> ${esc(p.work)}</p>` : ''}
             ${p.hobbies ? `<p><strong>Interests:</strong> ${esc(p.hobbies)}</p>` : ''}
             ${(p.answers || []).slice(0, 3).map(a => `<p><strong>${esc(a.label)}</strong> ${esc(a.answer)}</p>`).join('')}
-            ${p.memberSince ? `<p class="hp-meta">On Aerva since ${esc(fmtDay(p.memberSince))}</p>` : ''}
+            ${p.memberSince ? `<p class="hp-meta">On Aerva since ${esc(fmtDay(p.memberSince))}${p.idVerified ? ' \u00b7 \u2713 ID verified' : ''}</p>` : ''}
             ${!p.work && !p.hobbies && !(p.answers || []).length && !(c.pending || []).length ? '<p class="hp-meta">They have not filled in their profile yet.</p>' : ''}
           </div>` : ''}
           ${(c.pending || []).length ? `<p class="cohost-pending">Waiting for their details: ${esc(c.pending.map(k => ({ phone: 'phone', about: 'about them', commission: 'proposed commission' }[k] || k)).join(', '))}.</p>` : ''}
@@ -8082,7 +8083,9 @@
       const sm = data.summary || { count: 0 };
       el.innerHTML = `
         <div class="listing-modal-section-title" style="margin-top:0;">Guest profile</div>
-        <p style="font-size:15px; margin:0 0 10px;">${escapeMessageHtml(data.guest && data.guest.name || 'Guest')}</p>
+        <p style="font-size:15px; margin:0 0 10px;">${escapeMessageHtml(data.guest && data.guest.name || 'Guest')}${data.profile && data.profile.idVerified
+          ? ` <span class="id-ok" style="font-size:12.5px; margin-left:6px;">\u2713 ID verified (${escapeMessageHtml(data.profile.idVerified.document)})</span>`
+          : ' <span style="font-size:12.5px; margin-left:6px; opacity:0.6;">ID not verified on Aerva \u2014 check a photo ID at check-in</span>'}</p>
         ${sm.count ? `
           <div class="rv-summary">
             ${sm.score ? `<span class="rv-summary-score">${Number(sm.score).toFixed(1)} out of 5</span> &middot; ` : ''}
@@ -12217,7 +12220,7 @@
     profileQuestions = p.questions || [];
     document.getElementById('profileName').textContent = p.name || 'Your profile';
     document.getElementById('profileMeta').textContent =
-      [p.isHost ? 'Host' : 'Guest', p.memberSince ? 'on Aerva since ' + p.memberSince : ''].filter(Boolean).join(' · ');
+      [p.isHost ? 'Host' : 'Guest', p.memberSince ? 'on Aerva since ' + p.memberSince : '', p.idVerified ? '\u2713 ID verified' : ''].filter(Boolean).join(' · ');
     const circle = document.getElementById('profilePhotoCircle');
     circle.innerHTML = p.photoUrl
       ? `<img src="${esc(p.photoUrl)}" alt="">`
@@ -12342,10 +12345,14 @@
     if(!guestAuthToken()){
       box.innerHTML = '<p class="profile-hint">Log in to see your account settings.</p><a class="btn" href="guest-login.html">Log in</a>';
       document.getElementById('profileAccountSection').style.display = 'none';
+      const idSec = document.getElementById('settingsIdSection'); if(idSec) idSec.style.display = 'none';
       return;
     }
     document.getElementById('settingsEmail').textContent = safeStorage.get('aerva_guest_email') || '';
     if(window.AervaPrivacy) window.AervaPrivacy.mount(box);
+    // ID verification (aerva-id-verify.js): checked in seconds, never stored.
+    const idSec = document.getElementById('settingsIdSection'); if(idSec) idSec.style.display = '';
+    if(window.AervaIdVerify) window.AervaIdVerify.mount(document.getElementById('settingsIdBox'));
   }
 
   (function wireSettingsAccount(){

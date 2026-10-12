@@ -722,6 +722,7 @@
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
+<script src="aerva-id-verify.js?v=2026-10-13a"></script>
 <script src="aerva-policies.js"></script>
 </head>
 <body>
@@ -2147,17 +2148,14 @@
 
       <div class="verify-step">
         <div class="verify-step-head">
-          <strong>Step 2: Aadhaar Verification</strong>
+          <strong>Step 2: Identity &amp; address proof</strong>
           <span class="verify-status verify-status-${v.aadhaarStatus}">${verifyStatusLabel(v.aadhaarStatus)}</span>
         </div>
-        ${v.aadhaarStatus === 'rejected' && v.aadhaarRejectionReason ? `<p class="verify-rejection-note">${escH(v.aadhaarRejectionReason)}</p>` : ''}
-        ${v.aadhaarSubmitted
-          ? `<p class="verify-locked-note">Submitted — this can't be changed here. Contact hello@aerva.in if it needs to be updated.</p>`
-          : `
-            <input type="file" id="aadhaarFileInput" accept="image/*,.pdf">
-            <button type="button" class="btn-small" id="submitAadhaarBtn">Submit Document</button>
-            <p class="verify-error" id="aadhaarError"></p>
-          `}
+        ${v.aadhaarStatus === 'verified'
+          ? `<p class="verify-locked-note">Verified. Your ID was checked once and not stored.</p>`
+          : (v.aadhaarStatus === 'pending_review'
+            ? `<p class="verify-locked-note">A document you sent earlier is waiting for a check. To be verified now instead, use any ID below; the earlier document is then deleted.</p>` : '')}
+        ${v.aadhaarStatus === 'verified' ? '' : '<div id="hostIdVerifyBox"></div>'}
       </div>
 
       <div class="verify-step" style="border-bottom:none;">
@@ -2251,49 +2249,9 @@
       });
     }
 
-    const aadhaarBtn = document.getElementById('submitAadhaarBtn');
-    if(aadhaarBtn){
-      aadhaarBtn.addEventListener('click', async function(){
-        const fileInput = document.getElementById('aadhaarFileInput');
-        const errorEl = document.getElementById('aadhaarError');
-        errorEl.style.display = 'none';
-        const file = fileInput.files[0];
-        if(!file){
-          errorEl.textContent = 'Please choose a file first.';
-          errorEl.style.display = 'block';
-          return;
-        }
-        this.disabled = true;
-        this.textContent = 'Uploading…';
-        try{
-          const { upload } = await import('https://esm.sh/@vercel/blob/client');
-          const result = await upload(file.name, file, {
-            access: 'public',
-            handleUploadUrl: API_BASE + '/api/blob-upload',
-            clientPayload: uploadClientPayload('aadhaar-verification')
-          });
-          const res = await fetch(API_BASE + '/api/host-listings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-            body: JSON.stringify({ aadhaarDocumentUrl: result.url })
-          });
-          const data = await res.json();
-          if(res.ok){
-            loadListings();
-          } else {
-            errorEl.textContent = data.error || 'Something went wrong. Please try again.';
-            errorEl.style.display = 'block';
-            this.disabled = false;
-            this.textContent = 'Submit Document';
-          }
-        } catch(err){
-          errorEl.textContent = 'Upload failed. Please try again.';
-          errorEl.style.display = 'block';
-          this.disabled = false;
-          this.textContent = 'Submit Document';
-        }
-      });
-    }
+    // Identity & address proof: checked in seconds, never stored (aerva-id-verify.js).
+    const idBox = document.getElementById('hostIdVerifyBox');
+    if(idBox && window.AervaIdVerify) window.AervaIdVerify.mount(idBox, { onVerified: () => loadListings() });
   }
 
   // ---- Profile modal open/close/tabs ----
@@ -4460,6 +4418,7 @@
           <p class="ch-note">They get an email with a link to accept. If they are new to Aerva, they can sign up with this address first.</p>
         </div>
         <label class="ch-field">Access</label>
+        <p class="ch-note" style="margin:0 0 8px;">Full access: everything you can do on these listings, except renaming them and your payouts, bank details, account settings and co-hosts. Limited: the essentials, plus only what you tick.</p>
         <div class="ch-choices">
           <label><input type="radio" name="chAccess" value="full"> Full access — everything you can do with these listings, except renaming them, your account settings, payouts, bank details and co-hosts</label>
           <label><input type="radio" name="chAccess" value="limited" checked> Limited — ${esc(state.always || 'the essentials')}, plus anything I tick below</label>
