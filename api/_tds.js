@@ -34,7 +34,7 @@ const PAN_KINDS = { P: 'Individual', H: 'HUF', C: 'Company', F: 'Firm / LLP', A:
 const cleanPan = (p) => String(p || '').trim().toUpperCase();
 const isValidPan = (p) => PAN_PATTERN.test(cleanPan(p));
 const panKind = (p) => (isValidPan(p) ? cleanPan(p)[3] : null);
-const PAN_ERROR = 'Please enter a valid PAN, like ABCPE1234F. The 4th letter shows who holds it (P for a person, H for a HUF, C for a company, F for a firm).';
+const PAN_ERROR = 'Please enter a valid PAN, like ABCPE1234F.';
 
 // Financial year a moment falls in (Indian time): 2026 means April 2026 – March 2027.
 function financialYear(at) {

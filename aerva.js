@@ -4536,16 +4536,16 @@
             ${payoutHold ? `<p class="hp-meta">${esc(payoutHold)}</p>` : ''}
             ${payout ? `<p class="hp-meta">${payout.panMasked ? 'PAN ' + esc(payout.panMasked) : 'PAN on file'}${payout.gstin ? ' \u00b7 GSTIN ' + esc(payout.gstin) : ''} \u00b7 ${esc(payout.accountHolderName)} \u00b7 ${esc(payout.accountMasked)} \u00b7 ${esc(payout.ifsc)}</p>` : ''}
             <div class="cohost-payout-form">
-              <label>PAN<input type="text" data-po="pan" maxlength="10" placeholder="ABCPE1234F" autocomplete="off"></label>
-              <label>Name on PAN<input type="text" data-po="panName" maxlength="120" placeholder="Exactly as printed on the card" value="${esc((payout && payout.panName) || '')}"></label>
+              <label>First name <span>(and middle name)</span><input type="text" data-po="first" maxlength="80" autocomplete="given-name" value="${esc(String((payout && payout.panName) || '').trim().split(/\s+/).slice(0, -1).join(' '))}"></label>
+              <label>Last name <span>(surname)</span><input type="text" data-po="last" maxlength="60" autocomplete="family-name" value="${esc(String((payout && payout.panName) || '').trim().split(/\s+/).slice(-1)[0] || '')}"></label>
+              <label>PAN <span>(optional: 0.1% TDS with it, 5% without)</span><input type="text" data-po="pan" maxlength="10" placeholder="ABCPE1234F" autocomplete="off"></label>
               <label>GSTIN <span>(if you have one)</span><input type="text" data-po="gstin" maxlength="15" placeholder="27ABCPE1234F1Z5" autocomplete="off"></label>
-              <label>Account holder name<input type="text" data-po="holder" maxlength="120" placeholder="Must be the name on your PAN"></label>
               <label>Account number<input type="text" data-po="account" inputmode="numeric" maxlength="18" autocomplete="off"></label>
               <label>Re-enter account number<input type="text" data-po="account2" inputmode="numeric" maxlength="18" autocomplete="off"></label>
               <label>IFSC<input type="text" data-po="ifsc" maxlength="11" placeholder="HDFC0001234" autocomplete="off"></label>
             </div>
             <button type="button" class="hp-more cohost-primary" data-po-save>${payout ? 'Update payout details' : 'Save payout details'}</button>
-            <p class="hp-meta" style="margin-top:8px;">The account must be in the name on your PAN. Aerva checks it with your bank (₹1 is sent to it), and payouts wait 48 hours after any change.</p>
+            <p class="hp-meta" style="margin-top:8px;">Enter your name exactly as your bank account holds it. If you add a PAN, it must be in that same name. Payouts start once the account is verified, and wait 48 hours after any change.</p>
           </div>` : ''}
         ${current ? `<div class="hp-section"><button type="button" class="hp-more" data-cohost-stop>Stop co-hosting for ${esc(current.hostName || 'this host')}</button></div>` : ''}`;
 
@@ -4705,15 +4705,23 @@
       // Checked as they type, like a bank's own form (aerva-bank-fields.js).
       const poField = (k) => body.querySelector(`[data-po="${k}"]`);
       const poForm = (poSave && window.AervaBankFields) ? window.AervaBankFields.wire({
-        holder: poField('holder'), account: poField('account'), account2: poField('account2'),
+        holder: poField('last'), account: poField('account'), account2: poField('account2'),
         ifsc: poField('ifsc'), gstin: poField('gstin'), save: poSave
       }) : null;
       if(poSave) poSave.addEventListener('click', async () => {
         const v = (k) => (body.querySelector(`[data-po="${k}"]`) || {}).value || '';
         if(poForm && !poForm.valid()) return;
         if(v('account').replace(/\s/g, '') !== v('account2').replace(/\s/g, '')){ render('The two account numbers do not match. Type them again.'); return; }
+        // One name for the PAN and the bank account: first + last, as on the PAN.
+        const first = v('first').replace(/\s+/g, ' ').trim(), last = v('last').replace(/\s+/g, ' ').trim();
+        const pan = v('pan').trim().toUpperCase();
+        if(!first || !last){ render('Enter your first and last name exactly as your bank account holds them.'); return; }
+        if(pan && (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan) || pan.charAt(3) !== 'P' || pan.charAt(4) !== last.charAt(0).toUpperCase())){
+          render('The PAN and the name do not match. Check both against your PAN card.'); return;
+        }
+        const name = first + ' ' + last;
         poSave.disabled = true;
-        const r = await call('POST', { savePayoutProfile: { pan: v('pan'), panName: v('panName'), gstin: v('gstin'), accountHolderName: v('holder'), accountNumber: v('account'), accountNumberConfirm: v('account2'), ifsc: v('ifsc') } });
+        const r = await call('POST', { savePayoutProfile: { pan, panName: name, gstin: v('gstin'), accountHolderName: name, payeeLastName: last, accountNumber: v('account'), accountNumberConfirm: v('account2'), ifsc: v('ifsc') } });
         poSave.disabled = false;
         render(r.ok ? (r.data.bankCheck === 'checking' ? 'Payout details saved. Checking with your bank \u2014 this usually takes a minute.' : 'Payout details saved \u2014 Aerva will check them before your next payout.') : (r.data.error || 'Could not save your payout details.'));
       });

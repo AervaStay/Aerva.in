@@ -8,16 +8,9 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23f4ebe3'/><text x='50' y='68' font-family='Georgia,serif' font-size='60' text-anchor='middle' fill='%23A9885A'>A</text></svg>">
 <meta name="robots" content="noindex, nofollow">
 <!--
-  host-payouts.html — Payout details: the bank account a host's payouts go
-  to, and the payouts already sent. Moved out of the Account Settings
-  window on My Collection (it was the "Payment Options" tab) so money
-  matters sit together under My Earnings in the menu.
-
-  Same API as before: GET /api/host-listings (its `verification` block)
-  to show what is on file, POST /api/host-listings { bankAccountHolderName,
-  bankAccountNumber, bankIfsc, bankGstin } to change it, and
-  ?myPayouts=1 for payouts sent. A co-host's bank details are in the
-  Co-hosting centre, not here.
+  host-payouts.html — Payout details: who is paid (the host or someone
+  else), their PAN (optional) and their bank account, and the payouts
+  already sent. A co-host's details are in the Co-hosting centre.
 -->
 <style>
   body{font-family:'Jost', sans-serif; background:#ffffff; color:#1c1a17; margin:0; padding:40px 20px; -webkit-font-smoothing:antialiased; -webkit-text-size-adjust:100%; text-size-adjust:100%;}
@@ -53,7 +46,15 @@
   .payout .sub{opacity:0.7;}
   .payout .when{opacity:0.7; text-align:right; flex:0 0 auto;}
   .loading, .empty{font-size:14px; opacity:0.7;}
+  .two{display:grid; grid-template-columns:1fr 1fr; gap:0 14px;}
+  .opt{text-transform:none; letter-spacing:0; opacity:0.8;}
+  .seg{display:flex; gap:8px; flex-wrap:wrap;}
+  .seg label{white-space:nowrap; display:inline-flex; align-items:center; gap:8px; border:1px solid #d9cfc2; border-radius:999px; padding:9px 16px; font-size:14px; letter-spacing:0; text-transform:none; opacity:1; cursor:pointer; margin:0;}
+  .seg label:has(input:checked){border-color:#1c1a17; background:#faf6ef;}
+  .field input[type=file]{padding:9px; font-size:14px;}
+  .field input[readonly]{background:#f4efe7; color:#4a443c;}
   @media (max-width:600px){
+    .two{grid-template-columns:1fr;}
     body{padding:28px 16px;}
     h1{font-size:27px;}
     .row{flex-wrap:wrap;}
@@ -65,7 +66,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
 <script src="aerva-cohost.js"></script>
-<script src="aerva-bank-fields.js?v=2026-10-11b"></script>
+<script src="aerva-bank-fields.js?v=2026-10-13a"></script>
 </head>
 <body>
 
@@ -112,34 +113,75 @@
     }
     const s = v.bankStatus || 'not_submitted';
     const cls = s === 'approved' ? 'status-approved' : s === 'rejected' ? 'status-rejected' : s === 'pending' ? 'status-pending' : '';
+    // Who is paid: one person (or business) — the host or someone else —
+    // whose name, PAN and bank account must all be the same. Once a PAN is
+    // on file the name is the name on that PAN and cannot be changed here.
+    const panOnFile = !!v.panSubmitted;
+    const lockedName = panOnFile ? (v.panName || '') : '';
+    // The payout name on file: the PAN's name, or (without a PAN) the name given.
+    const currentName = lockedName || v.bankAccountHolderName || '';
+    const words = currentName.trim().split(/\s+/).filter(Boolean);
+    const lockedFirst = words.length > 1 ? words.slice(0, -1).join(' ') : '';
+    const lockedLast = words.length ? words[words.length - 1] : '';
+    const bc = v.bankCheck || null;
     body.innerHTML = `
       <div class="card">
-        <h2>Bank account</h2>
-        <div class="warn">Changing your bank details puts payouts on hold: Aerva checks the new account with your bank (\u20b91 is sent to it) against the name on your PAN, and payouts wait at least 48 hours after any change. You will get an email about the change. The account must be held by the PAN holder, alone or jointly.</div>
+        <h2>Who is paid</h2>
+        <p class="note" style="margin:0 0 12px;">Payouts go to one person or business — you, or someone else such as a family member or your company. Enter their name exactly as their bank account holds it. If you add a PAN, it must be in that same name.</p>
         <div class="row">
-          <div><div class="row-label">Account</div>
-            <div class="row-value" id="bankNote">${v.bankAccountNumberMasked ? esc(v.bankAccountNumberMasked) + (v.bankAccountHolderName ? ' (' + esc(v.bankAccountHolderName) + ')' : '') : 'No bank details on file yet.'}</div></div>
+          <div><div class="row-label">Payout name</div><div class="row-value">${currentName ? esc(currentName) : 'Not added yet'}</div></div>
+          ${v.panNumberMasked ? `<div style="text-align:right;"><div class="row-label">PAN</div><div class="row-value">${esc(v.panNumberMasked)}</div></div>` : ''}
+        </div>
+        <div class="row">
+          <div><div class="row-label">Bank account</div>
+            <div class="row-value" id="bankNote">${v.bankAccountNumberMasked ? esc(v.bankAccountNumberMasked) + (v.bankIfsc ? ' · ' + esc(v.bankIfsc) : '') : 'No bank details on file yet.'}</div></div>
           <span class="status ${cls}">${esc(statusLabel(s))}</span>
         </div>
-        ${v.bankIfsc ? `<div class="row"><div><div class="row-label">IFSC</div><div class="row-value">${esc(v.bankIfsc)}</div></div></div>` : ''}
         ${s === 'rejected' && v.bankRejectionReason ? `<p class="note bad">${esc(v.bankRejectionReason)}</p>` : ''}
-        ${v.bankCheck && v.bankCheck.message && s !== 'rejected' ? `<p class="note">${esc(v.bankCheck.message)}</p>` : ''}
+        ${bc && bc.message && s !== 'rejected' ? `<p class="note">${esc(bc.message)}</p>` : ''}
         ${v.bankPayoutsFrom ? `<p class="note">Bank details changed recently: payouts resume from ${esc(new Date(v.bankPayoutsFrom).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}.</p>` : ''}
         <div class="actions" style="margin-top:14px;">
-          <button type="button" class="btn-line" id="bankEditBtn">${v.bankAccountNumberMasked ? 'Change bank account' : 'Add bank account'}</button>
-          <a class="btn-line" href="host-dashboard.html?openProfile=1&profileTab=verification">PAN &amp; Aadhaar verification</a>
+          <button type="button" class="btn-line" id="bankEditBtn">${v.bankAccountNumberMasked ? 'Change bank account' : 'Add payout details'}</button>
+          <a class="btn-line" href="host-dashboard.html?openProfile=1&profileTab=verification">Aadhaar verification</a>
         </div>
         <div id="bankForm">
-          <div class="field"><label for="bankHolder">Account holder name</label>
-            <input type="text" id="bankHolder" placeholder="The name on your PAN — the account must be in it" value="${esc(v.panName || '')}"></div>
+          <div class="warn">Changing these details puts payouts on hold until the new account is verified, and for at least 48 hours. You will get an email about the change.</div>
+          ${panOnFile && !lockedName ? `<p class="note bad" style="margin:0 0 12px;">First add the name exactly as printed on your PAN card, under <a href="host-dashboard.html?openProfile=1&profileTab=verification">Verification</a>. The bank account is checked against it.</p>` : ''}${panOnFile ? `<p class="note" style="margin:0 0 12px;">Payouts go to <strong>${esc(lockedName || 'the PAN holder')}</strong>, the name on the PAN on file. A new account must be held in that name. To pay a different person, write to hello@aerva.in.</p>` : `
+          <div class="field" role="radiogroup" aria-label="Paid to">
+            <label style="margin-bottom:8px;">Paid to</label>
+            <div class="seg">
+              <label><input type="radio" name="payeeType" value="person" checked> A person</label>
+              <label><input type="radio" name="payeeType" value="business"> A business</label>
+            </div>
+          </div>`}
+          <div id="personFields">
+            <div class="two">
+              <div class="field"><label for="payeeFirst">First name <span class="opt">(and middle name)</span></label>
+                <input type="text" id="payeeFirst" autocomplete="given-name" value="${esc(lockedFirst)}" ${panOnFile ? 'readonly' : ''} placeholder="As the bank account holds it"></div>
+              <div class="field"><label for="payeeLast">Last name <span class="opt">(surname)</span></label>
+                <input type="text" id="payeeLast" autocomplete="family-name" value="${esc(lockedLast)}" ${panOnFile ? 'readonly' : ''} placeholder="As the bank account holds it"></div>
+            </div>
+          </div>
+          <div id="businessFields" style="display:none;">
+            <div class="field"><label for="payeeBusiness">Business name <span class="opt">(as on its PAN)</span></label>
+              <input type="text" id="payeeBusiness" autocomplete="organization" placeholder="e.g. Sharma Hospitality Private Limited"></div>
+          </div>
+          ${panOnFile ? '' : `
+          <div class="two">
+            <div class="field"><label for="payeePan">PAN <span class="opt">(optional)</span></label>
+              <input type="text" id="payeePan" maxlength="10" autocomplete="off" style="text-transform:uppercase;" placeholder="e.g. ABCPS1234K"></div>
+            <div class="field" id="panFileField" style="display:none;"><label for="payeePanFile">Photo or PDF of the PAN card</label>
+              <input type="file" id="payeePanFile" accept="image/*,.pdf"></div>
+          </div>
+          <p class="note" style="margin:-4px 0 14px;">Without a PAN, 5% TDS is deducted from payouts; with one, 0.1%. It must be in the same name as above.</p>`}
           <div class="field"><label for="bankAccount">Bank account number</label>
-            <input type="text" id="bankAccount" placeholder="New account number" inputmode="numeric" autocomplete="off"></div>
+            <input type="text" id="bankAccount" placeholder="Account number" inputmode="numeric" autocomplete="off"></div>
           <div class="field"><label for="bankAccount2">Re-enter account number</label>
             <input type="text" id="bankAccount2" placeholder="The same number again" inputmode="numeric" autocomplete="off"></div>
-          <div class="field"><label for="bankGstin">Business GSTIN <span style="text-transform:none; letter-spacing:0;">(only if the account is in your business\u2019s name)</span></label>
-            <input type="text" id="bankGstin" placeholder="e.g. 27ABCPS1234K1ZM" maxlength="15" style="text-transform:uppercase;" autocomplete="off"></div>
           <div class="field"><label for="bankIfsc">IFSC code</label>
             <input type="text" id="bankIfsc" placeholder="e.g. HDFC0001234" autocomplete="off"></div>
+          <div class="field" id="gstinField"><label for="bankGstin">GSTIN <span class="opt">(only for an account in a trading name on a personal PAN)</span></label>
+            <input type="text" id="bankGstin" placeholder="e.g. 27ABCPS1234K1ZM" maxlength="15" style="text-transform:uppercase;" autocomplete="off"></div>
           <div class="actions">
             <button type="button" class="btn-solid" id="bankSaveBtn">Save</button>
             <button type="button" class="btn-line" id="bankCancelBtn">Cancel</button>
@@ -152,46 +194,134 @@
     document.getElementById('bankEditBtn').addEventListener('click', () => { form.style.display = form.style.display === 'block' ? 'none' : 'block'; });
     document.getElementById('bankCancelBtn').addEventListener('click', () => { form.style.display = 'none'; });
     document.getElementById('bankSaveBtn').addEventListener('click', save);
+    payee = { panOnFile, lockedName, panLetter: (v.panNumberMasked || '').charAt(4) };
     bankForm = window.AervaBankFields ? window.AervaBankFields.wire({
-      holder: document.getElementById('bankHolder'), account: document.getElementById('bankAccount'),
-      account2: document.getElementById('bankAccount2'), ifsc: document.getElementById('bankIfsc'),
-      gstin: document.getElementById('bankGstin'), save: document.getElementById('bankSaveBtn')
+      account: document.getElementById('bankAccount'), account2: document.getElementById('bankAccount2'),
+      ifsc: document.getElementById('bankIfsc'), gstin: document.getElementById('bankGstin')
     }) : null;
+    wirePayee();
     loadSent();
+  }
+
+  // ---- The payee: name and (optional) PAN, checked as they are typed ----
+  let payee = null;
+  const PAN_RE = /^[A-Z]{3}[ABCFGHJLPT][A-Z][0-9]{4}[A-Z]$/;
+  const $ = (id) => document.getElementById(id);
+  function payeeType(){ const r = document.querySelector('input[name="payeeType"]:checked'); return r ? r.value : 'person'; }
+  function payeeName(){
+    if(payee && payee.panOnFile) return payee.lockedName;
+    if(payeeType() === 'business') return ($('payeeBusiness').value || '').replace(/\s+/g, ' ').trim();
+    return [$('payeeFirst').value, $('payeeLast').value].map(x => String(x || '').replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ');
+  }
+  function hint(el, state, text){
+    if(!el) return;
+    let h = el.parentNode.querySelector('.abf-hint');
+    if(!h){ h = document.createElement('span'); h.className = 'abf-hint'; h.setAttribute('aria-live', 'polite'); el.after(h); }
+    h.textContent = text || ''; h.className = 'abf-hint' + (state === 'bad' ? ' is-bad' : state === 'good' ? ' is-good' : '');
+    el.classList.toggle('abf-bad', state === 'bad'); el.classList.toggle('abf-good', state === 'good');
+  }
+  const NO_MATCH = 'The PAN and the name do not match. Check both against the PAN card.';
+  function panFits(pan, type, last, biz){
+    const k = pan.charAt(3), f = pan.charAt(4);
+    if(type === 'person') return k === 'P' && !!last && f === last.charAt(0).toUpperCase();
+    const n = biz.replace(/^(M\/S\.?|THE)\s+/i, '');
+    return k !== 'P' && !!n && f === n.charAt(0).toUpperCase();
+  }
+  function payeeOk(touch){
+    if(payee && payee.panOnFile) return true;
+    const type = payeeType();
+    const pan = ($('payeePan').value || '').toUpperCase();
+    const first = ($('payeeFirst').value || '').trim(), last = ($('payeeLast').value || '').trim();
+    const biz = ($('payeeBusiness').value || '').trim();
+    let ok = true;
+    if(type === 'person'){
+      if(first.length < 1){ ok = false; hint($('payeeFirst'), touch.first ? 'bad' : '', touch.first ? 'Enter the first name as the bank account holds it.' : ''); } else hint($('payeeFirst'), '', '');
+      if(last.length < 1){ ok = false; hint($('payeeLast'), touch.last ? 'bad' : '', touch.last ? 'Enter the last name as the bank account holds it.' : ''); } else hint($('payeeLast'), '', '');
+    } else if(biz.length < 3){ ok = false; hint($('payeeBusiness'), touch.biz ? 'bad' : '', touch.biz ? 'Enter the business name as its bank account holds it.' : ''); } else hint($('payeeBusiness'), '', '');
+    // The PAN is optional; a card photo is needed only with one.
+    $('panFileField').style.display = pan ? 'block' : 'none';
+    const named = type === 'person' ? last : biz;
+    if(!pan){ hint($('payeePan'), '', ''); }
+    else if(!PAN_RE.test(pan)){ ok = false; hint($('payeePan'), pan.length === 10 || touch.pan ? 'bad' : '', 'Enter a valid PAN, like ABCPS1234K.'); }
+    else if(named && !panFits(pan, type, last, biz)){ ok = false; hint($('payeePan'), 'bad', NO_MATCH); }
+    else hint($('payeePan'), named ? 'good' : '', named ? '✓' : '');
+    if(pan){
+      if(!($('payeePanFile').files || [])[0]){ ok = false; hint($('payeePanFile'), touch.file ? 'bad' : '', touch.file ? 'Add a photo or PDF of the PAN card.' : 'Seen only by Aerva, then deleted.'); }
+      else hint($('payeePanFile'), 'good', '✓ ' + $('payeePanFile').files[0].name);
+    }
+    return ok;
+  }
+  let touched = {};
+  function refresh(all){
+    if(all) touched = { first: true, last: true, biz: true, pan: true, file: true };
+    const a = payeeOk(touched), b = bankForm ? bankForm.refresh() : true;
+    const btn = $('bankSaveBtn'); if(btn && btn.textContent === 'Save') btn.disabled = !(a && b);
+    return a && b;
+  }
+  function wirePayee(){
+    const sync = () => {
+      const biz = payeeType() === 'business';
+      // With a PAN on file the payout name is that PAN's name, shown above.
+      $('personFields').style.display = payee.panOnFile || biz ? 'none' : 'block';
+      $('businessFields').style.display = !payee.panOnFile && biz ? 'block' : 'none';
+      refresh();
+    };
+    document.querySelectorAll('input[name="payeeType"]').forEach(r => r.addEventListener('change', sync));
+    [['payeeFirst', 'first'], ['payeeLast', 'last'], ['payeeBusiness', 'biz'], ['payeePan', 'pan'], ['payeePanFile', 'file']].forEach(([id, k]) => {
+      const el = $(id); if(!el || el.readOnly) return;
+      if(id === 'payeePan') el.addEventListener('input', () => { el.value = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10); });
+      el.addEventListener('input', () => refresh());
+      el.addEventListener('change', () => { touched[k] = true; refresh(); });
+      el.addEventListener('blur', () => { touched[k] = true; refresh(); });
+    });
+    ['bankAccount', 'bankAccount2', 'bankIfsc', 'bankGstin'].forEach(id => { const el = $(id); if(el){ el.addEventListener('input', () => setTimeout(refresh, 0)); el.addEventListener('blur', () => setTimeout(refresh, 0)); } });
+    // The bank and branch arrive a moment after the IFSC is typed.
+    setInterval(() => { if($('bankForm') && $('bankForm').style.display === 'block') refresh(); }, 700);
+    sync();
   }
 
   let bankForm = null;
   async function save(){
-    const btn = document.getElementById('bankSaveBtn');
-    const msg = document.getElementById('bankMsg');
+    const btn = $('bankSaveBtn');
+    const msg = $('bankMsg');
     const bad = (t) => { msg.textContent = t; msg.style.color = '#a3402f'; };
     msg.textContent = '';
-    const bankAccountHolderName = document.getElementById('bankHolder').value.trim();
-    const bankAccountNumber = document.getElementById('bankAccount').value.trim();
-    const bankAccountNumber2 = document.getElementById('bankAccount2').value.trim();
-    const bankIfsc = document.getElementById('bankIfsc').value.trim();
-    const bankGstin = (document.getElementById('bankGstin').value || '').trim().toUpperCase();
-    if(bankForm && !bankForm.valid()) return bad('Please correct the fields marked in red.');
-    if(!bankAccountHolderName || !bankAccountNumber || !bankIfsc) return bad('Please fill in all the fields.');
-    if(bankAccountNumber.replace(/\s/g, '') !== bankAccountNumber2.replace(/\s/g, '')) return bad('The two account numbers do not match. Type them again.');
-    if(!confirm('Change your payout bank account? Aerva will check it with your bank (\u20b91 is sent to it), and payouts wait 48 hours after any change.')) return;
+    if(!refresh(true) || (bankForm && !bankForm.valid())) return bad('Please correct the fields marked in red.');
+    const name = payeeName();
+    const bankAccountNumber = $('bankAccount').value.trim();
+    const bankAccountNumber2 = $('bankAccount2').value.trim();
+    const bankIfsc = $('bankIfsc').value.trim();
+    const bankGstin = ($('bankGstin').value || '').trim().toUpperCase();
+    if(!name || !bankAccountNumber || !bankIfsc) return bad('Please fill in all the fields.');
+    if(!confirm('Save these payout details? Payouts will go to ' + name + ' once the account is verified, and wait at least 48 hours after any change.')) return;
     btn.disabled = true; btn.textContent = 'Saving…';
+    const done = (t) => { if(t) bad(t); btn.textContent = 'Save'; refresh(); };
     try{
-      const res = await fetch(API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ bankAccountHolderName, bankAccountNumber, bankAccountNumberConfirm: bankAccountNumber2, bankIfsc, bankGstin: bankGstin || undefined })
-      });
+      const payload = { bankAccountHolderName: name, bankAccountNumber, bankAccountNumberConfirm: bankAccountNumber2, bankIfsc, bankGstin: bankGstin || undefined };
+      if(!payee.panOnFile){
+        payload.payeeType = payeeType();
+        if(payeeType() === 'person'){ payload.payeeFirstName = $('payeeFirst').value.trim(); payload.payeeLastName = $('payeeLast').value.trim(); }
+      }
+      if(!payee.panOnFile && $('payeePan').value.trim()){
+        // The PAN card first, then everything together.
+        const file = $('payeePanFile').files[0];
+        let url;
+        try{
+          const { upload } = await import('https://esm.sh/@vercel/blob/client');
+          const r = await upload(file.name, file, { access: 'public', handleUploadUrl: (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/blob-upload',
+            clientPayload: JSON.stringify({ purpose: 'aadhaar-verification', token }) });
+          url = r.url;
+        }catch(e){ return done('The PAN card could not be uploaded. Please try again.'); }
+        Object.assign(payload, { panNumber: $('payeePan').value.trim().toUpperCase(), panName: name, panDocumentUrl: url });
+      }
+      const res = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(payload) });
       const data = await res.json().catch(() => ({}));
-      if(!res.ok){ bad(data.error || 'Something went wrong. Please try again.'); btn.textContent = 'Save'; if(bankForm) bankForm.refresh(); else btn.disabled = false; return; }
+      if(!res.ok) return done(data.error || 'Something went wrong. Please try again.');
       if(data.bankCheck === 'checking') setTimeout(load, 20000);
       await load();
-      const note = document.getElementById('bankNote');
+      const note = $('bankNote');
       if(note && data.bankCheck === 'checking') note.textContent = 'Saved. Checking with your bank — this usually takes a minute.';
-    }catch(err){
-      bad('Something went wrong. Please try again.');
-      btn.textContent = 'Save'; if(bankForm) bankForm.refresh(); else btn.disabled = false;
-    }
+    }catch(err){ done('Something went wrong. Please try again.'); }
   }
 
   // Payouts sent to this account (as host or co-host). Each opens its
