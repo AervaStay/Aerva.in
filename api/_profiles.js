@@ -49,7 +49,8 @@ const PRIVACY_OPTIONS = [
   { id: 'show_member_since',   scope: 'browse', hostOnly: true,  label: 'The year you joined Aerva',          hint: '' },
   { id: 'show_hosting_cities', scope: 'browse', hostOnly: true,  label: 'The cities you host in',             hint: '' },
   { id: 'show_other_listings', scope: 'browse', hostOnly: true,  label: 'Your other homes and experiences',   hint: 'Off: only the home a guest came from is listed. Reviews of all your homes still show.' },
-  { id: 'show_travels',        scope: 'booked', hostOnly: false, label: "Places you've travelled with Aerva", hint: 'Cities only, never dates. Shown to the people you book with or host.' }
+  { id: 'show_travels',        scope: 'booked', hostOnly: false, label: "Places you've travelled with Aerva", hint: 'Cities only, never dates. Shown to the people you book with or host.' },
+  { id: 'offers_email',        scope: 'email',  hostOnly: false, label: 'Offers from Aerva by email',         hint: 'About once a quarter. Emails about your bookings always come.' }
 ];
 
 // Every option as true/false, from the stored object (or nothing).

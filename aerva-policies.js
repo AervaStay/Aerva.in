@@ -187,6 +187,7 @@ window.AERVA_POLICIES = {
       ]},
       { id: 'use', title: 'Why', points: [
         'To run your account, bookings, payments, payouts and messages, to keep Aerva safe, and to meet legal duties.',
+        'To send guests who have not booked lately an offers email about once a quarter. Switch it off in Account Settings → Privacy, or with the unsubscribe link in the email.',
         'Aerva does not sell your information.'
       ]},
       { id: 'share', title: 'Who receives it', points: [
@@ -246,14 +247,14 @@ window.AERVA_POLICIES = {
     ]},
     { id: 'service-fees', title: 'Service Fees Policy', summary: 'How Aerva’s service fees are charged to hosts and guests.', sections: [
       { title: 'Guests', points: [
-        'A guest service fee of 8% of the booking price is added to your total and shown before you pay.'
+        'A guest service fee of 5% of the booking price is added to your total and shown before you pay.'
       ]},
       { title: 'Hosts', points: [
-        'Aerva’s commission is 10% of the stay price and 5% of paid amenities and pet fees. It is deducted from your payout.'
+        'Aerva’s commission is 5% of the stay price, paid amenities and pet fees. It is deducted from your payout.'
       ]},
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',
-        'The guest service fee is not refunded when a guest cancels. It is refunded when a host cancels, when a stay issue is upheld (for the nights refunded), or where Aerva decides or the law requires.',
+        'Aerva’s guest service fee is not refunded: not when a guest or a host cancels, when Aerva cancels, when a booking is changed to a lower price, or when a stay issue is upheld. Only in an exceptional case may Aerva, at its sole discretion, decide to refund it.',
         'Aerva may change its fees. The fees shown when you book apply to that booking.'
       ]}
     ]},
@@ -268,6 +269,7 @@ window.AERVA_POLICIES = {
         'Do not ask for, offer or accept payment outside Aerva for a stay or experience found on Aerva.',
         'Do not use contact details from Aerva to book or pay outside it.',
         'Keep messages about a booking on Aerva.',
+        'Once a booking is confirmed, the guest and host may share a phone number in its Aerva Messages, for the stay only. Other contact details (email addresses, links, social media or messaging accounts, UPI IDs) are not allowed in messages.',
         'Aerva may cancel bookings and suspend accounts that break this policy.'
       ]}
     ]},
@@ -314,7 +316,7 @@ window.AERVA_POLICIES = {
       { title: 'Hosts', points: [
         'Hosts may cancel only 48 hours or more before check-in time, and must give a reason. The guest is told the reason.',
         'A host may cancel at most 3 bookings in any 12 months. Further cancellations are handled only by Aerva.',
-        'When a host cancels, the guest is refunded in full at once (booking, fees and security deposit).',
+        'When a host cancels, the guest is refunded at once: the booking price, its GST and the security deposit. Aerva’s service fee is not refunded.',
         'The guest also receives an Aerva coupon worth 10% of the booking, valid for 3 months, sent automatically 15 minutes after the cancellation. The host pays for it before the booking is cancelled.',
         'What a guest is not refunded after cancelling is paid to the host, less Aerva’s commission, on the usual payout day.'
       ]},
@@ -353,7 +355,7 @@ window.AERVA_POLICIES = {
     { id: 'cancellation-experiences', title: 'Cancellation Policy for Experiences', summary: 'How cancellations work for experiences.', sections: [
       { title: 'Rule', points: [
         'Each experience shows its own refund terms before booking. Those terms apply.',
-        'If a host or co-host cancels, the guest is refunded in full and, 15 minutes later, receives an Aerva coupon worth 10% of the booking, paid for by whoever cancelled.'
+        'If a host or co-host cancels, the guest is refunded (except Aerva’s service fee) and, 15 minutes later, receives an Aerva coupon worth 10% of the booking, paid for by whoever cancelled.'
       ]}
     ]},
     { id: 'major-events', title: 'Major Disruptive Events Policy', summary: 'When events beyond anyone’s control stop a booking.', sections: [
@@ -372,7 +374,7 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Aerva’s decision', points: [
         'Aerva reviews the guest’s report, the evidence and the host’s response, and decides whether a refund is due.',
-        'If upheld, the nights from the day the problem was reported to check-out are refunded, with their GST and service fee. The host is paid for the nights already used, less Aerva’s commission.',
+        'If upheld, the nights from the day the problem was reported to check-out are refunded, with their GST. Aerva’s service fee is not refunded. The host is paid for the nights already used, less Aerva’s commission.',
         'The security deposit is handled separately under the Security Deposit and Damage Policy.',
         'Aerva’s decision is full and final.'
       ]}
@@ -596,7 +598,7 @@ window.AERVA_POLICIES = {
             'For an emergency, a hazard or a travel restriction, choose that reason when you cancel.'
           ]},
           { title: 'If the host cancels', points: [
-            'You are refunded in full at once, and receive an Aerva coupon shortly after.'
+            'You are refunded at once, except Aerva’s service fee, and receive an Aerva coupon shortly after.'
           ]},
           { title: 'Waiting for a refund', points: [
             'Refunds go to the original payment method. Banks and card issuers usually take several working days to show them.',
@@ -723,7 +725,7 @@ window.AERVA_POLICIES = {
           { title: 'Rules', points: [
             'Cancel only 48 hours or more before check-in, and give a reason. The guest is told the reason.',
             'At most 3 cancellations in any 12 months. Beyond that, write to us.',
-            'The guest is refunded in full and receives a coupon worth 10% of the booking, paid for by you.'
+            'The guest is refunded (except Aerva’s service fee, which is not refunded) and receives a coupon worth 10% of the booking, paid for by you.'
           ]},
           { title: 'Instead of cancelling', points: [
             'If something at the property has gone wrong, raise a request before cancelling. We may be able to help the guest another way.'

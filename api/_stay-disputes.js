@@ -7,7 +7,7 @@
 //   3. Aerva decides. The host's account is given more weight: the guest is
 //      refunded only when their evidence stands and the host cannot justify.
 //   4. Refund decided → the nights from the day the dispute was raised to
-//      check-out are refunded (their booking price, GST and service fee).
+//      check-out are refunded (their booking price and GST; Aerva's service fee is never refunded).
 //      The host is paid for the nights already used, less Aerva's commission
 //      on those nights. The security deposit is not part of this.
 //   While a dispute is open, the host's payout for the booking is held
@@ -135,7 +135,7 @@ async function decideDispute(sql, razorpay, { disputeId, refund, note = '', admi
     const couponBack = Math.round(absorbed * share);
     const bookingCash = Math.round((subtotal - absorbed) * share);
     const gstBack = Math.round(Number(o.gst) * share);
-    const feeBack = Math.round(Number(o.guest_service_fee) * share);
+    const feeBack = 0;   // Aerva's service fee is never refunded
     const cashCap = Math.max(0, Math.round(Number(paid.paid) || 0) - Math.round(Number(o.deposit_amount) || 0));
     const cash = Math.min(bookingCash + gstBack + feeBack, cashCap);
     const total = cash + couponBack;

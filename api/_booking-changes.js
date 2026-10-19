@@ -170,6 +170,9 @@ async function quoteChange(sql, orderId, guestId, input) {
       if (sp.error) throw userError(sp.error.replace(/^Stay 1: /, ''));
       st = sp.detail;
     }
+    // Aerva's service fee is never refunded: a cheaper change keeps the fee already paid.
+    x.guestServiceFee = Math.max(Number(x.guestServiceFee) || 0, Math.round(Number(o.guest_service_fee) || 0));
+    if (st && o.stayRow) st.guestServiceFee = Math.max(Number(st.guestServiceFee) || 0, Math.round(Number(o.stayRow.guest_service_fee) || 0));
     // Whole rupees, as stored (a listing's deposit may have paise).
     const newTotal = Math.round(x.subtotal + x.gst + x.guestServiceFee + (st ? st.subtotal + st.gst + st.guestServiceFee + Number(st.depositAmount) : 0));
     if (arrival !== o.arrivalStr) parts.push(`Date: ${niceDate(o.arrivalStr)} → ${niceDate(arrival)}${o.kind === 'pair' ? ' (with the included stay)' : ''}`);
@@ -196,6 +199,8 @@ async function quoteChange(sql, orderId, guestId, input) {
   const priced = await priceStay(sql, s, 0, { excludeOrderId: o.id });
   if (priced.error) throw userError(priced.error.replace(/^Stay 1: /, ''));
   const q = priced.detail;
+  // Aerva's service fee is never refunded: a cheaper change keeps the fee already paid.
+  q.guestServiceFee = Math.max(Number(q.guestServiceFee) || 0, Math.round(Number(o.guest_service_fee) || 0));
   // Whole rupees, as stored (a listing's deposit may have paise).
   const newTotal = Math.round(q.subtotal + q.gst + q.guestServiceFee + Number(q.depositAmount));
   if (arrival !== o.arrivalStr || departure !== o.departureStr) parts.push(`Dates: ${niceDate(o.arrivalStr)} – ${niceDate(o.departureStr)} → ${niceDate(arrival)} – ${niceDate(departure)}`);

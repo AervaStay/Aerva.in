@@ -593,6 +593,15 @@ const JOBS = [
   // Photos showing contact details (phone, email, website, social, QR):
   // removed silently, admin told (_photo-guard.js). Mostly already done at
   // upload; this checks photos in use that were never checked.
+  // Phone numbers shared in a booking's chat are removed once check-out has
+  // passed or the booking is cancelled, silently (_message-guard.js).
+  // One offers email a quarter to guests who are not booking (_offers-email.js).
+  // Hourly in daytime (10 am – 7 pm India time), a batch each run.
+  { name: 'offers_email', label: 'Quarterly offers email to guests who have not booked lately', everyMinutes: 60, heavy: true, lockMinutes: 10,
+    run: (c) => { const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours(); return h >= 10 && h < 19
+      ? require('./_offers-email').sendQuarterlyOffers(c.sql, { deadlineMs: Math.min(6000, c.remainingMs) }) : { waiting: 'sends between 10 am and 7 pm' }; } },
+  { name: 'chat_number_cleanup', label: 'Remove phone numbers from chats of finished or cancelled bookings', everyMinutes: 15,
+    run: (c) => require('./_message-guard').scrubEndedConversations(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'photo_scan', label: 'Check photos for contact details (and remove any that show them)', everyMinutes: 5, lockMinutes: 3,
     run: (c) => runPhotoScan(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) },
   { name: 'calendar_sync', label: 'Sync external calendars (Airbnb, Booking.com, Agoda…)', everyMinutes: 60, heavy: true, lockMinutes: 10,
@@ -921,6 +930,23 @@ module.exports = async (req, res) => {
   // everything, coupon release included (due 15 minutes after a
   // cancellation, so released within 15–20 minutes), and the daily Vercel
   // cron (?reviewSweep=1) is the backstop if the pinger stops.
+
+  // ---- Unsubscribe from offers emails: ?unsubscribeOffers=<signed token> ----
+  // GET from the link in the email, or POST (one-click unsubscribe in Gmail etc.).
+  if ((req.method === 'GET' || req.method === 'POST') && typeof req.query.unsubscribeOffers === 'string') {
+    const offers = require('./_offers-email');
+    const id = offers.readUnsubscribeToken(req.query.unsubscribeOffers);
+    let done = false;
+    if (id) { try { done = await offers.optOut(sql, id); } catch (e) { console.error('unsubscribe failed:', e.message); } }
+    if (done) await logAudit(sql, { action: 'offers_email_unsubscribed', success: true, actorType: 'guest', actorIdentifier: String(id), targetType: 'guest', targetId: id });
+    if (req.method === 'POST') return res.status(done ? 200 : 400).json({ ok: done });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(done ? 200 : 400).send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Aerva</title></head>
+      <body style="font-family:Georgia,serif; background:#f6f1ea; color:#1c1a17; display:flex; min-height:100vh; align-items:center; justify-content:center; margin:0; padding:16px;">
+      <div style="max-width:420px; text-align:center;"><h1 style="font-weight:500;">${done ? 'You are unsubscribed' : 'This link has expired'}</h1>
+      <p style="font-family:sans-serif; line-height:1.6;">${done ? 'You will not get offers from Aerva by email any more. Emails about your bookings still come. You can switch offers back on in Account Settings → Privacy.' : 'Switch off “Offers from Aerva by email” in Account Settings → Privacy instead.'}</p>
+      <p><a href="https://aerva.in" style="color:#8a6c39;">Go to Aerva</a></p></div></body></html>`);
+  }
 
   // ---- Calendar export: GET ?ical=<secret token> ----
   // A listing's (or resort room's) calendar for Airbnb, Agoda, Booking.com,

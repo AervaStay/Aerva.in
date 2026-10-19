@@ -567,7 +567,7 @@ module.exports = async (req, res) => {
       if (b.withdrawAction) return res.status(200).json(await actions.withdraw(sql, { id: b.withdrawAction.id, admin: ADMIN_ME, audit: ADMIN_AUDIT }));
       if (b.reviewAction) {
         const x = b.reviewAction;
-        return res.status(200).json({ success: true, ...(await actions.review(sql, razorpay, { id: x.id, approve: x.approve === true, note: x.note, admin: ADMIN_ME, audit: ADMIN_AUDIT })) });
+        return res.status(200).json({ success: true, ...(await actions.review(sql, razorpay, { id: x.id, approve: x.approve === true, note: x.note, admin: Object.assign({ role: ADMIN_ROLE }, ADMIN_ME), audit: ADMIN_AUDIT })) });
       }
       if (b.blockGuestListing) {
         const x = b.blockGuestListing;
@@ -707,7 +707,7 @@ module.exports = async (req, res) => {
       const reason = String(b.reason || '').trim().slice(0, 400);
       if (!b.preview && reason.length < 5) return res.status(400).json({ error: 'Write the reason — the guest and host are told it.' });
       const out = await executePolicyCancellation(sql, razorpay, { orderId: Number(b.orderId) || 0, pct, by: 'admin', note: reason,
-        refundFee: b.refundFee === true, countAgainstHost: b.countAgainstHost === true, adminLabel: ADMIN_ACTOR, preview: b.preview === true });
+        refundFee: b.refundFee === true && ADMIN_ROLE === 'admin', feeReason: b.feeReason, countAgainstHost: b.countAgainstHost === true, adminLabel: ADMIN_ACTOR, preview: b.preview === true });
       return res.status(200).json({ success: true, ...out });
     } catch (err) {
       if (!err.isUserFacing) console.error('adminCancelBooking failed:', err);
@@ -831,6 +831,25 @@ module.exports = async (req, res) => {
     } catch (err) {
       if (!err.isUserFacing) console.error('supportCase failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not save the case record.' });
+    }
+  }
+  // ---- Raise a request on a customer's behalf (Lookup) — every role ----
+  // GET ?supportCategories=1 · POST { raiseForCustomer: { guestId, category, subject, description, orderId?, listingId?, callback? } }
+  // The customer gets the reference number by email; it then goes through
+  // Support (and Approvals, for anything a representative proposes) like any request.
+  if (req.method === 'GET' && req.query.supportCategories === '1') return res.status(200).json({ categories: support.categoryList() });
+  if (req.method === 'POST' && req.body && req.body.raiseForCustomer) {
+    try {
+      const b = req.body.raiseForCustomer;
+      const me = await actions.me(sql, sessionPayload, ADMIN_ROLE);
+      const out = await support.createRequest(sql, { guestId: Number(b.guestId) || 0, category: b.category, subject: b.subject, description: b.description,
+        orderId: b.orderId ? Number(b.orderId) : null, listingId: b.listingId ? Number(b.listingId) : null, attachments: [], callback: b.callback === true,
+        raisedBy: { email: ADMIN_ACTOR, name: me && me.name } });
+      const t = (await sql`SELECT id FROM support_tickets WHERE ref = ${out.ref}`)[0];
+      return res.status(200).json({ success: true, ref: out.ref, ticketId: t ? t.id : null });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('raiseForCustomer failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message.replace(/your account/g, 'this customer’s account').replace(/^Please log in again\.$/, 'That customer account could not be found.') : 'Could not raise this request.' });
     }
   }
   if (req.method === 'POST' && req.body && req.body.supportReply) {
