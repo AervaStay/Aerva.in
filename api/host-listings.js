@@ -168,7 +168,7 @@ async function sendCancellationEmail(order, opts = {}){
       <h2 style="font-family:Georgia,serif;">Your booking has been cancelled</h2>
       <p>${lead}</p>
       ${opts.reasonLabel ? `<p><strong>Reason:</strong> ${esc(opts.reasonLabel)}${opts.details ? ' — ' + esc(opts.details) : ''}</p>` : ''}
-      <p>Your full payment has been refunded to your original payment method. It should appear within 5–7 business days, depending on your bank.</p>
+      <p>Your payment has been refunded to your original payment method, except Aerva’s service fee, which is non-refundable. It should appear within 5–7 business days, depending on your bank.</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you have questions about this cancellation, please contact hello@aerva.in.</p>
     </div>
   `;
@@ -2492,7 +2492,7 @@ module.exports = async (req, res) => {
   // row sharing the payment is a separate booking in the same cart.
   async function linkedSiblings(orderId){
     return await sql`
-      SELECT o2.id, o2.total, o2.charge_currency, o2.deposit_status, o2.deposit_amount, o2.razorpay_payment_id
+      SELECT o2.id, o2.total, o2.charge_currency, o2.deposit_status, o2.deposit_amount, o2.razorpay_payment_id, o2.guest_service_fee
       FROM orders o1
       JOIN orders o2 ON o2.razorpay_order_id = o1.razorpay_order_id AND o2.id <> o1.id
                     AND o2.status = 'paid' AND o2.arrival = o1.arrival
@@ -2563,7 +2563,7 @@ module.exports = async (req, res) => {
     }
     const rows = await sql`
       SELECT o.id, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_id, o.status,
-             o.total, o.deposit_status, o.deposit_amount, o.charge_currency, o.razorpay_payment_id, o.razorpay_order_id,
+             o.total, o.deposit_status, o.deposit_amount, o.charge_currency, o.razorpay_payment_id, o.razorpay_order_id, o.guest_service_fee,
              l.timezone, l.check_in_time,
              (o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS stay_ended
       FROM orders o
@@ -2676,7 +2676,9 @@ module.exports = async (req, res) => {
     const depositOf = new Map([[Number(orderId), order]].concat(siblings.map(r => [Number(r.id), r])));
     const refundSubunit = async (id, currency) => {
       const row = depositOf.get(Number(id)) || {};
-      const inr = Math.max(0, ((paidMap[id] || {}).paid || 0) - (depositStillHeld(row) ? 0 : Math.round(Number(row.deposit_amount) || 0)));
+      // Aerva's service fee is never refunded, even when the host cancels.
+      const inr = Math.max(0, ((paidMap[id] || {}).paid || 0) - (depositStillHeld(row) ? 0 : Math.round(Number(row.deposit_amount) || 0))
+                              - Math.round(Number(row.guest_service_fee) || 0));
       if (currency === 'INR') return Math.round(inr * 100);
       // The same share of what was actually captured, never re-converted at
       // today's rate (_currency.js). null = no record of the charge: refuse.
@@ -2881,7 +2883,7 @@ module.exports = async (req, res) => {
   // then cancels) is replaced: every host cancellation now refunds in full
   // AND gives the guest a 10% coupon, charged to the host's next payout.
   if (req.method === 'POST' && req.body && req.body.cancelWithCoupon) {
-    return res.status(410).json({ error: 'Use Cancel Booking. The guest now always receives a full refund plus a 10% Aerva coupon.' });
+    return res.status(410).json({ error: 'Use Cancel Booking. The guest is refunded (except Aerva’s service fee) and gets a 10% Aerva coupon.' });
   }
 
   // GET ?myPenalties=1 — cancellation coupons to be deducted from this

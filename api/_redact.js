@@ -324,10 +324,13 @@ const COMMON_WORDS = new Set(('home house night noon morning evening time times 
 const restoreLinks = (text, urls) => text.replace(/([-])/g, (_m, c) => urls[c.charCodeAt(0) - 0xE100]);
 
 // The main check. { displayText, wasRedacted }.
-function redactContactInfo(input) {
+// keepNumbers: phone numbers stay (a live booking's chat — see
+// _message-guard.js); emails, links and handles still go.
+function redactContactInfo(input, { keepNumbers = false } = {}) {
   const first = removeLinksAndHandles(input);
   let text = first.text;
   let redacted = first.redacted;
+  if (keepNumbers) return { displayText: restoreLinks(text, first.urls), wasRedacted: redacted };
   const safe = safeSpans(text);
   const groups = findNumbers(text, safe);
   const total = groups.reduce((n, g) => n + g.digits, 0);

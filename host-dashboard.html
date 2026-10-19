@@ -1804,6 +1804,9 @@
       ? `<a class="manage-link" href="index.html?view=list-property&edit=${itemId}">Edit &amp; Resubmit</a>`
       : `<a class="manage-link" href="${escH(manageHref || 'null')}">Manage</a>`;
     const cloneLink = `<button type="button" class="manage-link card-action-btn" onclick="event.stopPropagation(); cloneListing(${itemId})">Clone</button>`;
+    // Aerva calendar link for Airbnb, Booking.com, Agoda… (Manage → Calendar sync has the rest).
+    const calLink = item.status === 'approved' && manageHref
+      ? `<button type="button" class="manage-link card-action-btn" title="Paste it into another site's Import calendar" onclick="event.stopPropagation(); copyCalendarLink(${itemId}, this)">Copy calendar link</button>` : '';
     // A Resort has no calendar here at all — only Manage and Clone.
     // Its availability is per-ROOM, and this sidebar is built around one
     // calendar for one bookable unit, so a resort could only ever be
@@ -1831,6 +1834,7 @@
         </div>
         <div class="card-actions" style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
           ${actionLink}
+          ${calLink}
           ${cloneLink}
           ${ownerActions}
         </div>
@@ -1967,6 +1971,35 @@
   // property_name is deliberately left blank rather than copied, so two
   // configurations of the same property (e.g. "3BHK" vs "2BHK") don't
   // launch with an identical, confusing name.
+  // Copies this listing's Aerva calendar link (iCal) for other booking
+  // sites. The link is fetched as the click happens; ClipboardItem with a
+  // promise keeps Safari's "only on a click" rule happy.
+  function copyCalendarLink(listingId, btn){
+    const listing = currentListings.find(l => l.id === listingId);
+    const m = listing && listing.manageLink && listing.manageLink.match(/[?&]token=([^&]+)/);
+    if(!m) return;
+    const label = btn.textContent;
+    const linkPromise = fetch(API_BASE + '/api/update-listing-pricing?token=' + encodeURIComponent(decodeURIComponent(m[1])) + '&calendarSync=1')
+      .then(r => r.json().then(d => { if(!r.ok) throw new Error(d.error || 'failed'); return d; }))
+      .then(d => {
+        const links = d.exportLinks || [];
+        const whole = links.find(l => !l.roomId) || links[0];
+        if(!whole) throw new Error('no link');
+        return whole.url;
+      });
+    const done = (ok) => { btn.textContent = ok ? 'Copied ✓' : 'Open Manage → Calendar sync'; setTimeout(() => { btn.textContent = label; }, 2500); };
+    btn.textContent = 'Copying…';
+    try{
+      if(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write){
+        navigator.clipboard.write([new ClipboardItem({ 'text/plain': linkPromise.then(u => new Blob([u], { type: 'text/plain' })) })])
+          .then(() => done(true)).catch(() => linkPromise.then(u => navigator.clipboard.writeText(u)).then(() => done(true)).catch(() => done(false)));
+      } else {
+        linkPromise.then(u => navigator.clipboard.writeText(u)).then(() => done(true)).catch(() => done(false));
+      }
+    }catch(e){ done(false); }
+  }
+  window.copyCalendarLink = copyCalendarLink;
+
   function cloneListing(listingId){
     const listing = currentListings.find(l => l.id === listingId);
     if(!listing) return;
@@ -2912,7 +2945,7 @@
   // own commission_rate column any more: that column is vestigial (see
   // create-order.js), and older listings still carry 15 in it, which made
   // this preview quote a commission the host was never actually charged.
-  const BASE_COMMISSION_RATE = 10;
+  const BASE_COMMISSION_RATE = 5;
   let sbCommissionRate = BASE_COMMISSION_RATE;
 
   // Live "what will I actually get" preview — recalculates on every

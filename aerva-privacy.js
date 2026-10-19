@@ -64,7 +64,8 @@
     var settings = data.settings || {};
     var opts = (data.options || []).filter(function(o){ return data.isHost || !o.hostOnly; });
     var browse = opts.filter(function(o){ return o.scope === 'browse'; });
-    var booked = opts.filter(function(o){ return o.scope !== 'browse'; });
+    var booked = opts.filter(function(o){ return o.scope === 'booked'; });
+    var emails = opts.filter(function(o){ return o.scope === 'email'; });
     el.innerHTML =
       (browse.length ? '<div class="apv-group"><div class="apv-group-title">Your host profile</div>'
         + '<p class="apv-group-note">What guests see when they open your profile from one of your homes, before they book. Your name, your homes’ reviews and rating always show. Once a guest books with you, they see your full profile.</p>'
@@ -72,6 +73,8 @@
       + (booked.length ? '<div class="apv-group"><div class="apv-group-title">' + (browse.length ? 'Once you share a booking' : 'Your profile') + '</div>'
         + '<p class="apv-group-note">Your profile is only ever shown to a host once you book with them' + (data.isHost ? ', and to guests who book with you' : '') + '.</p>'
         + booked.map(function(o){ return row(o, settings[o.id] !== false); }).join('') + '</div>' : '')
+      + (emails.length ? '<div class="apv-group"><div class="apv-group-title">Emails from Aerva</div>'
+        + emails.map(function(o){ return row(o, settings[o.id] !== false); }).join('') + '</div>' : '')
       + '<p class="apv-msg" aria-live="polite"></p>';
     var msg = el.querySelector('.apv-msg');
     el.querySelectorAll('.apv-switch').forEach(function(sw){

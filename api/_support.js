@@ -151,7 +151,11 @@ async function bookingRole(sql, me, orderId) {
   return null;
 }
 
-async function createRequest(sql, { guestId, category, subject, description, orderId, listingId, attachments, callback, callbackPhone: askedPhone, ip }) {
+// raisedBy: { email, name } when Aerva's support team raises the request on
+// the customer's behalf (Admin → Lookup), e.g. after a phone call. It is
+// the customer's request in every way (their reference number, their
+// emails), and says who raised it.
+async function createRequest(sql, { guestId, category, subject, description, orderId, listingId, attachments, callback, callbackPhone: askedPhone, ip, raisedBy = null }) {
   if (!CATEGORIES[category]) throw userError('Choose what your request is about.');
   const subj = clean(subject, SUBJECT_MAX);
   const text = clean(description, BODY_MAX);
@@ -194,7 +198,7 @@ async function createRequest(sql, { guestId, category, subject, description, ord
     else throw userError('Enter the phone number we should call you on.');
   }
 
-  const recent = await countRecentAttempts(sql, { action: 'support_request_created', windowMinutes: 24 * 60, byActor: String(guestId) });
+  const recent = raisedBy ? 0 : await countRecentAttempts(sql, { action: 'support_request_created', windowMinutes: 24 * 60, byActor: String(guestId) });
   if (recent >= MAX_NEW_PER_DAY) throw userError('You have raised several requests today. Please add to an open one, or email hello@aerva.in.', 429);
 
   let ticket;
@@ -208,27 +212,27 @@ async function createRequest(sql, { guestId, category, subject, description, ord
     if (!ticket) throw new Error('could not draw a free reference number');
     // The timeline starts with the request being raised.
     await sql`INSERT INTO support_messages (ticket_id, sender, body, created_at) VALUES (${ticket.id}, 'system',
-                ${`Request raised: ${CATEGORIES[category].label}. Reference ${ticket.ref}.${callbackPhone ? ` Call back asked for on ${callbackPhone}.` : ''}`}, now() - interval '1 millisecond')`;
+                ${`Request raised${raisedBy ? ' by Aerva support (' + (raisedBy.name || raisedBy.email) + ') on the customer’s behalf' : ''}: ${CATEGORIES[category].label}. Reference ${ticket.ref}.${callbackPhone ? ` Call back asked for on ${callbackPhone}.` : ''}`}, now() - interval '1 millisecond')`;
     await sql`INSERT INTO support_messages (ticket_id, sender, body, attachments) VALUES (${ticket.id}, 'user', ${text}, ${JSON.stringify(files)}::jsonb)`;
   } catch (err) {
     if (notReady(err)) throw NOT_READY();
     throw err;
   }
-  await logAudit(sql, { action: 'support_request_created', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-    targetType: 'support_ticket', targetId: ticket.id, metadata: { ref: ticket.ref, category, role, orderId: oid, listingId: lid, files: files.length, ip: ip || null } });
+  await logAudit(sql, { action: 'support_request_created', success: true, actorType: raisedBy ? 'admin' : 'guest', actorIdentifier: raisedBy ? String(raisedBy.email) : String(guestId),
+    targetType: 'support_ticket', targetId: ticket.id, metadata: { ref: ticket.ref, category, role, orderId: oid, listingId: lid, files: files.length, ip: ip || null, onBehalfOf: raisedBy ? Number(guestId) : undefined } });
 
   // The acknowledgement, with the reference number (what the E-Commerce
   // Rules ask for), and a heads-up to the support inbox.
   await sendEmail(me.email, `We have received your request ${ticket.ref}`,
     `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">We have received your request</h2>
-     <p>Hi ${esc(String(me.name || '').split(' ')[0] || 'there')}, thank you for writing to Aerva. Your reference number is <strong>${esc(ticket.ref)}</strong>.</p>
+     <p>Hi ${esc(String(me.name || '').split(' ')[0] || 'there')}, ${raisedBy ? 'as discussed with our support team, we have raised this request for you' : 'thank you for writing to Aerva'}. Your reference number is <strong>${esc(ticket.ref)}</strong>.</p>
      <p><strong>${esc(subj)}</strong><br><span style="color:#6e675d;">${esc(CATEGORIES[category].label)}</span></p>
      <p>A member of our support team will ${callbackPhone ? `call you on <strong>${esc(callbackPhone)}</strong> and ` : ''}reply within ${FIRST_RESPONSE_HOURS} hours, usually much sooner. You can follow your request and add to it at any time:</p>
      ${button(requestLink(ticket.ref), 'View your request')}
      <p style="font-size:13px; color:#6e675d;">If anyone is in danger, call 112 first.</p>`);
   await sendEmail(SUPPORT_INBOX(), `New request ${ticket.ref}: ${CATEGORIES[category].label}`,
     `<p><strong>${esc(subj)}</strong> · ${esc(CATEGORIES[category].label)} · as ${esc(role)}</p>
-     <p>From ${esc(me.name || '')} (${esc(me.email || 'no email')}${callbackPhone ? ', asks for a call back on ' + esc(callbackPhone) : ''})${oid ? ' · booking #' + oid : ''}${lid ? ' · listing #' + lid : ''}</p>
+     <p>${raisedBy ? 'Raised by ' + esc(raisedBy.name || raisedBy.email) + ' for ' : 'From '}${esc(me.name || '')} (${esc(me.email || 'no email')}${callbackPhone ? ', asks for a call back on ' + esc(callbackPhone) : ''})${oid ? ' · booking #' + oid : ''}${lid ? ' · listing #' + lid : ''}</p>
      <blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(text)}</blockquote>
      ${files.length ? `<p>${files.length} file${files.length === 1 ? '' : 's'} attached.</p>` : ''}
      <p>Answer it in Admin → Support.</p>`, me.email || null);
@@ -602,7 +606,13 @@ async function eraseForAccount(sql, guestId) {
   } catch (err) { if (!notReady(err)) throw err; }
 }
 
+// The request types, for Admin → Lookup "Raise a request for this customer".
+function categoryList() {
+  return Object.keys(CATEGORIES).map(k => ({ key: k, label: CATEGORIES[k].label, audience: CATEGORIES[k].audience, booking: CATEGORIES[k].booking, bookingAs: CATEGORIES[k].bookingAs, listing: CATEGORIES[k].listing }));
+}
+
 module.exports = {
+  categoryList,
   CATEGORIES, STATUS_LABELS, STATUSES, FIRST_RESPONSE_HOURS, MAX_NEW_PER_DAY,
   CONDUCT, FEEDBACK_HOURS,
   requestOptions, createRequest, listRequests, getRequest, replyToRequest, closeRequest, submitFeedback, autoCloseResolved, bellNotifications,

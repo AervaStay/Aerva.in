@@ -93,7 +93,7 @@
   }
   // Matches create-order.js exactly — display-only here, purely so the
   // guest can see how the total breaks down. Never changes what's charged.
-  // Note: host commission rates (10%/5%) are deliberately NOT defined
+  // Note: host commission rates (5%) are deliberately NOT defined
   // here — the guest-facing side never computes, displays, or has any
   // knowledge of what's deducted from the host's payout. That stays
   // entirely server-side in create-order.js/verify-payment.js.
@@ -101,7 +101,7 @@
   // from the two commission rates above, which come out of the host's
   // side instead. Must match GUEST_SERVICE_FEE_RATE in create-order.js
   // exactly, since that's what actually determines the real charge.
-  const GUEST_SERVICE_FEE_RATE = 8;
+  const GUEST_SERVICE_FEE_RATE = 5;
 
   // Populated once approved listings are fetched (see initSite() near the
   // bottom of this script) — the Suites section is built from this real
@@ -8019,7 +8019,7 @@
       body.innerHTML = `
         <div class="hc-final">
           <p class="hc-cancel-head">Last step: compensate your guest</p>
-          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now refunds them in full and sends it.`
+          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now refunds them (except Aerva’s service fee) and sends it.`
             : `Your guest gets a ${inr(amount)} Aerva coupon, paid by you now. The booking is cancelled the moment your payment goes through.`}</p>
           <div class="hc-actions hc-col">
             ${d.couponPaid ? `<button type="button" class="hc-btn hc-danger" data-pay="held">Cancel the booking</button>`
@@ -8059,7 +8059,7 @@
     }
     function done(r){
       body.innerHTML = `<div class="hc-done"><p class="hc-cancel-head">Booking cancelled</p>
-        <p>Your guest has been refunded in full and gets the ${inr(r.couponAmount || amount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes.
+        <p>Your guest has been refunded (except Aerva’s service fee) and gets the ${inr(r.couponAmount || amount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes.
 </p></div>`;
       conv.booking_status = 'cancelled';
       try{ refreshInboxMessages(); loadInboxConversations(); }catch(e){}
@@ -14924,7 +14924,7 @@ function openCancelRequest(orderId, listingName){
   overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Request cancellation">
     <button type="button" class="payout-close" aria-label="Close">×</button>
     <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Request cancellation</h2>
-    <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}. If your host accepts, you are refunded in full.</p>
+    <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}. If your host accepts, you are refunded in full, except Aerva’s service fee.</p>
     <label class="payout-label" for="crReason">Reason</label>
     <select id="crReason" style="width:100%; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;">
       <option value="">Choose a reason</option>

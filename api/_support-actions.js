@@ -53,8 +53,8 @@ async function roleOf(sql, sessionPayload, hasValidSecret) {
 // What each role may call on get-pending-listings.js. Admin: everything.
 // Others: only these request keys (a GET's query keys, a POST's body keys).
 const MODIFIERS = new Set(['q', 'status', 'subject', 'limit', 'offset', 'before', 'ref', 'mine']);
-const AGENT_GET = new Set(['adminSummary', 'adminMe', 'supportTickets', 'supportTicket', 'supportTicketLive', 'lookup', 'lookupBooking', 'lookupGuest', 'lookupListing', 'supportActions', 'priceReviews']);
-const AGENT_POST = new Set(['supportReply', 'supportCase', 'supportSuggest', 'proposeAction', 'withdrawAction', 'adminSignOutEverywhere']);
+const AGENT_GET = new Set(['adminSummary', 'adminMe', 'supportCategories', 'supportTickets', 'supportTicket', 'supportTicketLive', 'lookup', 'lookupBooking', 'lookupGuest', 'lookupListing', 'supportActions', 'priceReviews']);
+const AGENT_POST = new Set(['supportReply', 'supportCase', 'supportSuggest', 'raiseForCustomer', 'proposeAction', 'withdrawAction', 'adminSignOutEverywhere']);
 const REVIEWER_POST = new Set([...AGENT_POST, 'reviewAction', 'decidePriceReview']);
 function allowed(role, req) {
   if (role === 'admin') return true;
@@ -128,8 +128,12 @@ async function checkAndPreview(sql, kind, p) {
     const pct = Number(p.refundPercent);
     if (!(pct >= 0 && pct <= 100)) throw userError('Refund must be 0 to 100%.');
     if (order.status !== 'paid') throw userError('Only a confirmed booking can be cancelled.');
+    // Refunding Aerva's service fee is an exception: a reason is required,
+    // and only an admin can approve it (review below).
+    const feeReason = String(p.feeReason || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+    if (p.refundFee && feeReason.length < 10) throw userError('Explain why Aerva’s service fee should be refunded (at least a sentence). Only an admin can approve it.');
     const pv = await executePolicyCancellation(sql, null, { orderId: order.id, pct, by: 'admin', note: '', refundFee: !!p.refundFee, preview: true });
-    return { order, params: { orderId: order.id, refundPercent: pct, refundFee: !!p.refundFee, countAgainstHost: !!p.countAgainstHost },
+    return { order, params: { orderId: order.id, refundPercent: pct, refundFee: !!p.refundFee, feeReason: p.refundFee ? feeReason : undefined, countAgainstHost: !!p.countAgainstHost },
              preview: { refundCash: pv.refundCash, couponBack: pv.couponBack, feeRefunded: pv.feeRefunded, alreadyRefunded: pv.alreadyRefunded, hostPayout: pv.hostPayout, items: pv.items } };
   }
   if (kind === 'partial_refund') {
@@ -186,7 +190,7 @@ async function propose(sql, { kind, params = {}, reason, ticketId = null, admin,
   return row;
 }
 function describe(kind, p, pv = {}) {
-  if (kind === 'cancel_refund') return `${p.refundPercent}% of the booking price${p.refundFee ? ' plus the service fee' : ''} — guest gets ${inr(pv.refundCash)}${pv.couponBack ? ' + ' + inr(pv.couponBack) + ' coupon' : ''}, host ${inr(pv.hostPayout)}.`;
+  if (kind === 'cancel_refund') return `${p.refundPercent}% of the booking price${p.refundFee ? ' plus Aerva’s service fee (exception — admin approval only; why: ' + (p.feeReason || '') + ')' : ''} — guest gets ${inr(pv.refundCash)}${pv.couponBack ? ' + ' + inr(pv.couponBack) + ' coupon' : ''}, host ${inr(pv.hostPayout)}.`;
   if (kind === 'partial_refund') return `${inr(p.amount)} back to the guest, paid by ${p.hostPays ? 'the host' : 'Aerva'}; the booking stays.`;
   if (kind === 'deposit_refund') return `${inr(pv.toGuest)} of the ${inr(pv.deposit)} deposit back to the guest${pv.toHost ? `, ${inr(pv.toHost)} to the host` : ''}.`;
   if (kind === 'block_guest_listing') return `${pv.person || 'The guest'} would no longer see or book ${pv.listing || 'the listing'}.`;
@@ -300,6 +304,10 @@ async function review(sql, razorpay, { id, approve, note, admin, audit }) {
     await logAudit(sql, { action: 'support_action_rejected', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id, metadata: { kind: a.kind, note: why } });
     return { status: 'rejected' };
   }
+  // Refunding Aerva's service fee: an admin only, case by case.
+  if (a.kind === 'cancel_refund' && a.params && a.params.refundFee && (admin.role || 'admin') !== 'admin') {
+    throw userError('This refunds Aerva’s service fee — only an admin can approve it.', 403);
+  }
   // Only one approval runs: pending → approving in one statement.
   const claim = await sql`UPDATE support_actions SET status = 'approving', reviewed_by = ${admin.id}, reviewed_by_email = ${admin.email}, reviewed_at = now(), review_note = ${why || null}
                           WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
@@ -309,7 +317,7 @@ async function review(sql, razorpay, { id, approve, note, admin, audit }) {
   let result;
   try {
     if (a.kind === 'cancel_refund') {
-      result = await executePolicyCancellation(sql, razorpay, { orderId: p.orderId, pct: p.refundPercent, by: 'admin', note: a.reason.slice(0, 300), refundFee: !!p.refundFee, countAgainstHost: !!p.countAgainstHost, adminLabel: label });
+      result = await executePolicyCancellation(sql, razorpay, { orderId: p.orderId, pct: p.refundPercent, by: 'admin', note: a.reason.slice(0, 300), refundFee: !!p.refundFee, feeReason: p.feeReason || a.reason, countAgainstHost: !!p.countAgainstHost, adminLabel: label });
     } else if (a.kind === 'partial_refund') {
       result = await lookup.partialRefund(sql, razorpay, { orderId: p.orderId, amount: p.amount, reason: a.reason.slice(0, 400), hostPays: !!p.hostPays, adminLabel: label });
     } else if (a.kind === 'deposit_refund') {

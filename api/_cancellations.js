@@ -14,7 +14,7 @@
 //   • booking price and its GST → refunded at the percentage. A part paid
 //     by coupon comes back as a coupon at the same percentage;
 //   • security deposit → always refunded in full (kept separate);
-//   • Aerva's guest service fee → never refunded.
+//   • Aerva's guest service fee → not refunded (an admin-only exception, see refundFee).
 // The part of the booking price not refunded goes to the host, less Aerva's
 // commission in the same proportion, on the normal payout day
 // (orders.payout_on_cancel; see _payouts.js). Co-host shares shrink with it.
@@ -257,7 +257,14 @@ async function clearUnsentPayouts(sql, ids) {
 // countAgainstHost records it as one of the host's cancellations (their
 // 3-a-year limit), e.g. an Aerva cancellation done for a host in an emergency.
 // preview: true works everything out and changes nothing.
-async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note = '', refundFee = false, countAgainstHost = false, adminLabel = null, preview = false }) {
+// refundFee (Aerva cancels only) is the exception to "the service fee is
+// never refunded": it needs feeReason, and a proposal with it can only be
+// approved by an admin (_support-actions.js).
+async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note = '', refundFee = false, feeReason = '', countAgainstHost = false, adminLabel = null, preview = false }) {
+  const feeWhy = String(feeReason || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (by === 'admin' && refundFee && !preview && feeWhy.length < 10) {
+    throw Object.assign(new Error('Explain why Aerva’s service fee is being refunded (at least a sentence). It is an exception and is recorded.'), { isUserFacing: true, status: 400 });
+  }
   const { main, rows } = await loadRows(sql, orderId);
   if (!main) throw Object.assign(new Error('Booking not found.'), { isUserFacing: true, status: 404 });
   if (main.status !== 'paid') throw Object.assign(new Error('This booking has already been cancelled.'), { isUserFacing: true, status: 409 });
@@ -301,6 +308,8 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   const splits = new Map(rows.map(r => {
     const s = splitRow(r, (paid[r.id] || {}).couponAbsorbed, percent);
     // Aerva's own fee, returned only when an admin chooses to.
+    // Aerva's service fee is not refunded — except when an admin decides so,
+    // case by case, with a recorded reason (refundFee + feeReason).
     if (by === 'admin' && refundFee && s.feeKept > 0) { s.refundCash += s.feeKept; s.feeRefunded = s.feeKept; s.feeKept = 0; }
     const already = goodwill[r.id] || 0;
     if (already > 0) {
@@ -390,7 +399,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     catch (err) { /* no co-host shares table */ }
     if (by === 'admin') {
       await logAudit(sql, { action: 'booking_cancelled_by_admin', success: true, actorType: 'admin', actorIdentifier: adminLabel || 'admin',
-        targetType: 'order', targetId: r.id, metadata: { percent, reason: note, refundCash: s.refundCash, couponBack: s.couponBack, feeRefunded: s.feeRefunded || 0, hostPayout: s.hostPayout, countAgainstHost: !!countAgainstHost } });
+        targetType: 'order', targetId: r.id, metadata: { percent, reason: note, refundCash: s.refundCash, couponBack: s.couponBack, feeRefunded: s.feeRefunded || 0, feeReason: s.feeRefunded ? feeWhy : undefined, hostPayout: s.hostPayout, countAgainstHost: !!countAgainstHost } });
       // Counts toward the host's yearly limit (hostCancellationsLastYear) —
       // once per purchase, like a host's own cancellation.
       if (countAgainstHost && Number(r.id) === Number(main.id)) {

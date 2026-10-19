@@ -2375,7 +2375,7 @@
     section.innerHTML = `
       <h2>Calendar sync</h2>
       <h3>1. Send your Aerva calendar to other sites</h3>
-      <p class="cs-step">Copy the link. Paste it into the other site’s “Import calendar” (Airbnb: Availability → Connect calendars. Agoda: Calendar → Calendar connections).</p>
+      <p class="cs-step">Copy the link. Paste it into the other site’s “Import calendar” (Airbnb: Availability → Connect calendars. Booking.com: Rates &amp; Availability → Sync calendars. Agoda: Calendar → Calendar connections. Vrbo: Calendar → Import/Export). Dates booked or blocked on Aerva are then closed there.</p>
       ${(state.exportLinks || []).map(l => `
         <div class="cs-row">
           ${state.exportLinks.length > 1 ? `<span style="min-width:120px;">${esc(l.label)}</span>` : ''}

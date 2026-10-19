@@ -11,9 +11,9 @@ const { earliestArrival } = require('./_booking-rules');
 
 const EXTRA_GUEST_RATE = 1500;
 const BASE_OCCUPANCY = 2;
-const BASE_COMMISSION_RATE = 10; // on room + extra-guest charges, after any discount
+const BASE_COMMISSION_RATE = 5; // on room + extra-guest charges, after any discount (was 10% until Oct 2026)
 const AMENITY_COMMISSION_RATE = 5; // on paid amenities
-const GUEST_SERVICE_FEE_RATE = 8;
+const GUEST_SERVICE_FEE_RATE = 5; // Aerva's guest service fee — not refunded; only an admin can make an exception, with a reason (was 8% until Oct 2026)
 const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
 const MAX_EXPERIENCES = 5; // same reasoning, for the experiences array
 const MAX_AMENITIES_PER_STAY = 15;

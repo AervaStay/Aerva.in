@@ -101,7 +101,8 @@ async function search(sql, raw) {
 // DETAILS
 // ---------------------------------------------------------------------
 async function moneyState(sql, orderId) {
-  const o = (await sql`SELECT id, total, to_jsonb(orders)->>'coupon_discount' AS coupon, charge_currency, razorpay_payment_id, razorpay_order_id
+  const o = (await sql`SELECT id, total, to_jsonb(orders)->>'coupon_discount' AS coupon, charge_currency, razorpay_payment_id, razorpay_order_id,
+                              to_jsonb(orders)->>'guest_service_fee' AS fee
                        FROM orders WHERE id = ${orderId}`)[0];
   if (!o) return null;
   const changePaid = (await soft(sql`SELECT COALESCE(sum(difference), 0)::int AS n FROM booking_changes
@@ -110,7 +111,9 @@ async function moneyState(sql, orderId) {
                                    WHERE order_id = ${orderId} AND status <> 'failed'`, [{ p: 0 }]))[0].p;
   const charged = Math.max(0, Math.round(Number(o.total) || 0) - Math.round(Number(o.coupon) || 0)) + (Number(changePaid) || 0);
   const refundedInr = Math.round(Number(refunded) / 100);
-  return { charged, refunded: refundedInr, refundable: Math.max(0, charged - refundedInr), currency: o.charge_currency || 'INR' };
+  // Aerva's service fee is never refunded, so it is never refundable here either.
+  const fee = Math.max(0, Math.round(Number(o.fee) || 0));
+  return { charged, refunded: refundedInr, refundable: Math.max(0, charged - fee - refundedInr), feeKept: fee, currency: o.charge_currency || 'INR' };
 }
 
 async function bookingDetail(sql, id) {
