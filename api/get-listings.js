@@ -98,9 +98,15 @@ const sql = neon(process.env.DATABASE_URL);
 // returns it as a JS Date object or an already-formatted string — same
 // helper used in create-order.js for the same reason. Only needed here
 // for the ?availabilityFor= branch below.
+// A DATE column arrives as a Date at local midnight (pg-types): its own
+// local year/month/day are the stored date, whatever the server's time zone.
 function toDateStr(val) {
   if (!val) return null;
-  if (val instanceof Date) return val.toISOString().split('T')[0];
+  if (val instanceof Date) {
+    if (isNaN(val)) return null;
+    const p = (n) => String(n).padStart(2, '0');
+    return val.getFullYear() + '-' + p(val.getMonth() + 1) + '-' + p(val.getDate());
+  }
   return String(val).slice(0, 10);
 }
 
@@ -1386,35 +1392,54 @@ module.exports = async (req, res) => {
         if (!own.length) return res.status(404).json({ error: 'This room is not part of that listing.' });
       }
 
-      const orderRows = roomId
-        ? await sql`SELECT arrival, departure FROM orders WHERE room_id = ${roomId} AND listing_id = ${listingId} AND status = 'paid' ORDER BY arrival ASC`
-        : await sql`SELECT arrival, departure FROM orders WHERE listing_id = ${listingId} AND status = 'paid' ORDER BY arrival ASC`;
-      const bookedRanges = orderRows.map(r => ({
-        arrival: toDateStr(r.arrival),
-        departure: toDateStr(r.departure),
-      }));
+      // Every step is guarded on its own and logged with the listing, so
+      // one odd row or a missing column never blanks the whole calendar.
+      // Bookings are the one part that must load: without them the
+      // calendar would show booked nights as free, so that fails loudly.
+      const range = (a, b) => {
+        try {
+          const arrival = toDateStr(a), departure = toDateStr(b);
+          return /^\d{4}-\d{2}-\d{2}$/.test(arrival || '') && /^\d{4}-\d{2}-\d{2}$/.test(departure || '') && departure > arrival ? { arrival, departure } : null;
+        } catch (e) { return null; }   // an unreadable date: skipped, never fatal
+      };
+      let orderRows;
+      try {
+        orderRows = roomId
+          ? await sql`SELECT arrival, departure FROM orders WHERE room_id = ${roomId} AND listing_id = ${listingId} AND status = 'paid' ORDER BY arrival ASC`
+          : await sql`SELECT arrival, departure FROM orders WHERE listing_id = ${listingId} AND status = 'paid' ORDER BY arrival ASC`;
+      } catch (err) {
+        console.error('availabilityFor: bookings failed for listing', listingId, err.code, err.message);
+        return res.status(503).json({ error: 'Dates could not be loaded right now.' });
+      }
+      const bookedRanges = orderRows.map(r => range(r.arrival, r.departure)).filter(Boolean);
       // Dates being paid for right now by someone else show as booked.
       try {
         const holdRows = roomId
           ? await sql`SELECT arrival, departure FROM booking_holds WHERE room_id = ${roomId} AND released = false AND expires_at > now()`
           : await sql`SELECT arrival, departure FROM booking_holds WHERE listing_id = ${listingId} AND room_id IS NULL AND released = false AND expires_at > now()`;
-        holdRows.forEach(r => bookedRanges.push({ arrival: toDateStr(r.arrival), departure: toDateStr(r.departure) }));
+        holdRows.forEach(r => { const x = range(r.arrival, r.departure); if (x) bookedRanges.push(x); });
       } catch (err) { /* holds table not created yet */ }
 
-      // Host-blocked dates (maintenance, personal use, etc.) — shown on
-      // the same calendar as booked dates so a guest can't even try to
-      // select them, though create-order.js is what actually enforces it.
-      // A room's calendar includes blocks on the whole resort (room_id
-      // NULL), the same rule checkout applies. Dates only: the host's own
-      // note on a block is private.
-      const blockedRows = roomId
-        ? await sql`SELECT start_date, end_date FROM listing_blocked_dates WHERE listing_id = ${listingId} AND (room_id IS NULL OR room_id = ${roomId}) ORDER BY start_date ASC`
-        : await sql`SELECT start_date, end_date FROM listing_blocked_dates WHERE listing_id = ${listingId} AND room_id IS NULL ORDER BY start_date ASC`;
-      const blockedRanges = blockedRows.map(r => ({
-        arrival: toDateStr(r.start_date),
-        departure: toDateStr(r.end_date),
-      }));
+      // Host-blocked dates (maintenance, personal use, calendars imported
+      // from other sites) — shown on the same calendar as booked dates so a
+      // guest can't even try to select them, though create-order.js is what
+      // actually enforces it. A room's calendar includes blocks on the
+      // whole resort (room_id NULL), the same rule checkout applies. Dates
+      // only: the host's own note on a block is private.
+      let blockedRows = [];
+      try {
+        blockedRows = roomId
+          ? await sql`SELECT start_date, end_date FROM listing_blocked_dates WHERE listing_id = ${listingId} AND (room_id IS NULL OR room_id = ${roomId}) ORDER BY start_date ASC`
+          : await sql`SELECT start_date, end_date FROM listing_blocked_dates WHERE listing_id = ${listingId} AND room_id IS NULL ORDER BY start_date ASC`;
+      } catch (err) {
+        console.error('availabilityFor: blocked dates failed for listing', listingId, err.code, err.message);
+        // A database without per-room blocks: every block is the listing's.
+        try { blockedRows = await sql`SELECT start_date, end_date FROM listing_blocked_dates WHERE listing_id = ${listingId} ORDER BY start_date ASC`; }
+        catch (e2) { return res.status(503).json({ error: 'Dates could not be loaded right now.' }); }
+      }
+      const blockedRanges = blockedRows.map(r => range(r.start_date, r.end_date)).filter(Boolean);
 
+      res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({ bookedRanges, blockedRanges });
     }
 
