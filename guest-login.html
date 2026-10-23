@@ -954,6 +954,10 @@
   let googleTokenClient = null;
   function initGoogleSignIn(){
     if(googleInitialized) return true;
+    // Inside the Aerva app (aerva-app, Capacitor): Google does not allow its
+    // sign-in pop-up in an app's web view, so the tile stays hidden there
+    // until native Google sign-in is added. Email sign-in works as usual.
+    if(/AervaApp/.test(navigator.userAgent)) return true;
     if(!window.google || !google.accounts || !google.accounts.oauth2) return false; // library not loaded yet
     if(GOOGLE_CLIENT_ID.startsWith('YOUR_')) return true; // not configured
     googleTokenClient = google.accounts.oauth2.initTokenClient({

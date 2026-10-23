@@ -5747,11 +5747,23 @@
     document.documentElement.classList.add('avail-peek-open');
     const taken = new Set();
     try{
-      const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId));
-      if(!res.ok) throw new Error('load');
-      const d = await res.json();
-      [...(d.bookedRanges || []), ...(d.blockedRanges || [])].forEach(r => { if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => taken.add(n)); });
+      // Tried twice: a cold server or a dropped mobile connection gets a second chance.
+      let d = null;
+      for(let attempt = 0; attempt < 2 && !d; attempt++){
+        try{
+          const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(listingId), { cache: 'no-store' });
+          if(res.ok) d = await res.json();
+          else if(res.status === 404) break;          // not a live home any more
+        }catch(e){ /* network: try again */ }
+        if(!d && attempt === 0) await new Promise(r => setTimeout(r, 700));
+      }
+      if(!d) throw new Error('load');
+      [...(d.bookedRanges || []), ...(d.blockedRanges || [])].forEach(r => {
+        if(!r || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.arrival)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.departure))) return;
+        getNightsInRangeClient(r.arrival, r.departure).forEach(n => taken.add(n));
+      });
     }catch(err){
+      console.error('Availability could not be loaded for listing', listingId, err);
       body.innerHTML = title + '<p>Dates could not be loaded right now. <button type="button" class="link" id="availPeekOpen">Open the home</button></p>';
       document.getElementById('availPeekOpen').onclick = () => { closeAvailabilityPeek(); openListingDetail(listingId); };
       return;
@@ -9951,7 +9963,11 @@
     const nights = [];
     let d = new Date(arrival + 'T00:00:00Z');
     const end = new Date(departure + 'T00:00:00Z');
-    while(d < end){
+    if(isNaN(d) || isNaN(end)) return nights;
+    // Never more than about two years: a calendar imported from another
+    // site can carry a block with no real end.
+    const stop = Math.min(end.getTime(), d.getTime() + 800 * 864e5);
+    while(d.getTime() < stop){
       nights.push(d.toISOString().split('T')[0]);
       d.setUTCDate(d.getUTCDate() + 1);
     }
