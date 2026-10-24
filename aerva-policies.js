@@ -279,7 +279,9 @@ window.AERVA_POLICIES = {
         'Other local taxes may apply to your stay under the law where the property is.'
       ]},
       { title: 'Hosts and co-hosts', points: [
-        'Tax deducted at source (TDS) is deducted from host and co-host payouts: 0.1% when a PAN is provided, 5% when it is not.',
+        'Tax deducted at source (TDS) is deducted from every payment Aerva makes to a host or co-host, including security deposit compensation: 0.1% when a valid PAN is provided, 5% when it is not or the PAN is inoperative (not linked to Aadhaar).',
+        'TDS is worked out on the amount due to you: for a host, the booking amount after Aerva’s commission and any co-host share; for a co-host, their share. GST and Aerva’s guest service fee are never part of it. A cancellation coupon you owe is deducted after TDS and does not reduce it.',
+        'As Aerva’s policy, TDS is deducted on every payment from the first rupee, including for individuals and HUFs earning under ₹5,00,000 a year through Aerva. Any TDS deducted counts towards your income tax and can be claimed in your return.',
         'You are responsible for your own income tax, GST registration and any other taxes on your earnings.'
       ]}
     ]},
@@ -692,7 +694,8 @@ window.AERVA_POLICIES = {
             'If a payout is late or the amount looks wrong, raise a request and choose the booking.'
           ]},
           { title: 'TDS', points: [
-            'TDS is deducted under section 194-O: 0.1% with a valid PAN, 5% without one. Add your PAN in your account before your first payout.',
+            'TDS is deducted from every payout under section 194-O (section 393 of the Income-tax Act, 2025): 0.1% with a valid PAN, 5% without one or if your PAN is not linked to Aadhaar. Add your PAN in Payout details before your first payout.',
+            'It is worked out on what is due to you after Aerva’s commission. Example: a ₹10,000 booking, Aerva’s 5% commission of ₹500, so ₹9,500 is due to you; TDS at 0.1% is ₹9.50 and ₹9,490.50 is paid. The TDS is credited against your PAN and shows in your Form 26AS.',
             'In Payout details, enter the name of the person or business to be paid exactly as their bank account holds it, and add that account. A PAN is optional; if you add one, it must be in that same name. Aerva verifies the account before the first payout.',
             'After you change your bank details, payouts wait 48 hours, and you are emailed about the change.'
           ]}
@@ -886,7 +889,7 @@ window.AERVA_POLICIES = {
         { name: 'Exceptional', text: 'One of the top stays in its city.' },
         { name: 'Aerva Exceptional', text: 'The finest stays in its city.' }
       ]},
-      { group: 'Stay highlights', intro: 'Shown alongside a stay’s badge.', items: [
+      { group: 'Stay highlights', intro: 'A stay shows one badge only: a highlight is shown when the stay has none of the badges above.', items: [
         { name: 'Spotless', text: 'Rated near-perfect on hygiene by every guest who scored it.' },
         { name: 'Hidden Treasure', text: 'Rated excellent by its guests, and not yet widely discovered.' }
       ]},
@@ -944,7 +947,7 @@ window.AERVA_POLICIES = {
       'Consumer Protection (E-Commerce) Rules, 2020: display the Grievance Officer’s name, designation and contact; acknowledge complaints within 48 hours; resolve within one month; give a complaint reference number.',
       'Consumer Protection (E-Commerce) Rules, 2020: do not charge consumers cancellation fees unless Aerva bears similar charges when it cancels.',
       'Digital Personal Data Protection Act, 2023 and Rules, 2025: tell affected users without delay after a breach; send the Data Protection Board a detailed report within 72 hours; publish a contact for data requests; keep processing logs at least 1 year; give 48 hours’ notice before erasing inactive users’ data.',
-      'Income-tax Act, section 194-O: deduct TDS on host payouts and issue certificates; a missing PAN means a higher rate. Confirm rates with the CA.',
+      'Income-tax Act, section 194-O (s.393 of the 2025 Act): deduct TDS on every payment to hosts and co-hosts, deposit compensation included, on the amount due after commission (CA’s advice, Oct 2026); 5% without a PAN or with an inoperative one; issue certificates.',
       'CGST Act, section 9(5): Aerva collects and pays GST on accommodation booked through it.',
       'Immigration and Foreigners Act, 2025: hosts file Form III for foreign guests within 24 hours; ₹50,000 penalty per case.'
     ]},
@@ -975,7 +978,7 @@ window.AERVA_POLICIES = {
     'Have the lawyer review agreements 2026-09g: ID checked by the host at check-in (not by Aerva), the 3-minute payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
     'Erase the guest ID proofs uploaded before September 2026: Admin → ID Verifications → “Erase reviewed documents & encrypt stored numbers”.',
     'Confirm with the CA how GST is treated on the part of a booking price kept after a guest cancels.',
-    'Payouts deduct TDS under section 194-O at 0.1% with a PAN and 5% without. Confirm these rates with the CA before real payouts.',
+    'TDS rules follow the CA’s review of October 2026 (no ₹5 lakh exemption, base after commission, deposits included). Hosts or co-hosts outside India are not handled; flag any non-resident payee to the CA (s.195).',
     'Remind hosts to file Form III when a foreign guest books (not built).',
     'Aadhaar and PAN files waiting for review sit in public storage until reviewed. Review them promptly.',
     'Privacy policy is published (Aerva Privacy). Add a consent tick to sign-up that links to it (DPDP Rules).',

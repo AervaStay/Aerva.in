@@ -689,7 +689,7 @@
     <div id="refundsList"><p style="opacity:0.6;">Loading…</p></div>
     <p id="couponForfeitLine" style="margin-top:8px; font-size:14.5px;"></p>
     <h2 style="margin-top:40px;">TDS</h2>
-    <p style="opacity:0.7; font-size:14px;">What Aerva deducted from host and co-host payouts as the e-commerce operator: 0.1% with a PAN, 5% without one or with an inoperative PAN, and nothing for an individual or HUF while their year's earnings through Aerva stay within ₹5 lakh. Deposit each month's TDS by the date shown, file the quarter's return and issue certificates by the dates shown. Confirm figures with your CA.</p>
+    <p style="opacity:0.7; font-size:14px;">What Aerva deducted from host and co-host payouts (security deposit compensation included) as the e-commerce operator: 0.1% with a PAN, 5% without one or with an inoperative PAN, on the amount due after Aerva’s commission, from the first rupee (company policy, on the CA’s advice). Deposit each month's TDS by the date shown, file the quarter's return and issue certificates by the dates shown. Confirm figures with your CA.</p>
     <div class="tds-bar"><label>Financial year <select id="tdsYear"></select></label><button type="button" class="approve-btn" id="tdsCsvAll">Download year (CSV)</button></div>
     <div id="tdsReport"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Security deposit compensation</h2>
@@ -2011,7 +2011,7 @@
         <table class="tds-table"><thead><tr><th>Payee</th><th>PAN</th><th>Earnings</th><th>TDS</th><th>PAN status</th></tr></thead><tbody>
           ${d.payees.map(y => `<tr><td>${esc(y.name || '—')}<div class="tds-sub">${y.payeeType === 'host' ? 'Host' : 'Co-host'}</div></td>
             <td>${y.pan ? esc(y.pan) + (y.panKind ? `<div class="tds-sub">${esc(y.panKind)}</div>` : '') : '<span class="tds-late">None</span>'}</td>
-            <td>${inrT(y.amount)}${y.panKind === 'Individual' || y.panKind === 'HUF' ? `<div class="tds-sub">${y.amount > d.threshold ? 'over' : 'within'} ₹5 lakh</div>` : ''}</td>
+            <td>${inrT(y.amount)}${d.threshold > 0 && (y.panKind === 'Individual' || y.panKind === 'HUF') ? `<div class="tds-sub">${y.amount > d.threshold ? 'over' : 'within'} ₹5 lakh</div>` : ''}</td>
             <td>${inrT(y.tds)}</td>
             <td>${y.pan ? `<label class="tds-inop"><input type="checkbox" ${y.panInoperative ? 'checked' : ''} onchange="setPanInoperative(${y.payeeType === 'host' ? Number(y.hostId) : 'null'}, ${y.payeeType === 'cohost' ? Number(y.cohostGuestId) : 'null'}, this)"> Inoperative (not linked to Aadhaar)</label>` : '—'}</td></tr>`).join('')}
         </tbody></table>`;

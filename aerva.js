@@ -651,8 +651,18 @@
   // address_components[]) so every existing call site — applyLocationResult
   // and friends — keeps working completely unchanged regardless of which
   // provider actually answered.
+  // The site is English only: place names come back in English
+  // (accept-language=en; the English name when OpenStreetMap has one).
+  const NON_LATIN = /[^\u0000-\u024F\u2000-\u206F\s]/;
   function nominatimToGoogleShape(nomResult){
     const addr = nomResult.address || {};
+    const nd = nomResult.namedetails || {};
+    // A name that is still in another script: the English one if OpenStreetMap has it.
+    if(nd['name:en'] && NON_LATIN.test(String(nomResult.display_name || ''))){
+      const local = String(nomResult.name || nd.name || '');
+      if(local) nomResult.display_name = String(nomResult.display_name).split(local).join(nd['name:en']);
+      ['city', 'town', 'village', 'suburb'].forEach(k => { if(addr[k] === local) addr[k] = nd['name:en']; });
+    }
     const components = [];
     function addComp(value, types){
       if(value) components.push({ long_name: String(value), short_name: String(value), types });
@@ -675,7 +685,7 @@
 
   async function freeReverseGeocode(lat, lng){
     try{
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&addressdetails=1`);
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&addressdetails=1&namedetails=1&accept-language=en`);
       if(res.ok){
         const data = await res.json();
         if(data && data.display_name) return nominatimToGoogleShape(data);
@@ -700,7 +710,7 @@
   async function freeForwardGeocode(query){
     if(!query) return null;
     try{
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&addressdetails=1&countrycodes=in&limit=1`);
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&addressdetails=1&countrycodes=in&limit=1&accept-language=en`);
       if(res.ok){
         const data = await res.json();
         if(Array.isArray(data) && data.length) return { lat: Number(data[0].lat), lng: Number(data[0].lon) };
@@ -723,10 +733,11 @@
   async function freeSearchSuggestions(query){
     if(!query || query.trim().length < 3) return [];
     try{
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&addressdetails=1&countrycodes=in&limit=6`);
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}&addressdetails=1&namedetails=1&countrycodes=in&limit=8&accept-language=en`);
       if(res.ok){
         const data = await res.json();
-        if(Array.isArray(data)) return data.map(nominatimToGoogleShape);
+        // English only: anything still in another script is left out.
+        if(Array.isArray(data)) return data.map(nominatimToGoogleShape).filter(p => !NON_LATIN.test(p.formatted_address || ''));
       }
     } catch(err){ /* fall through to Google below */ }
     return null; // null (not []) signals "Nominatim itself failed" so callers know to try Google instead
@@ -3535,7 +3546,8 @@
   function getRecentSearches(){
     try {
       if(storageOwner === 'anon') return [];
-      return JSON.parse(safeStorage.get(accountKey(RECENT_SEARCHES_KEY)) || '[]');
+      // English only: searches saved earlier in another script are not offered again.
+      return JSON.parse(safeStorage.get(accountKey(RECENT_SEARCHES_KEY)) || '[]').filter(it => it && it.text && !/[^\u0000-\u024F\u2000-\u206F\s]/.test(it.text));
     } catch(err){
       return [];
     }
@@ -3944,7 +3956,7 @@
     return `<div class="suite-rating"><span class="suite-star">\u2605</span>${r.toFixed(1)}<span class="suite-rating-count">(${n})</span></div>`;
   }
 
-  // Property standing. At most two pills: the rung, plus one flag. The
+  // Property standing. One pill (see propertyBadgeHtml): the rung, or a flag when there is no rung. The
   // ladder describes how good the place is; the flag says something the
   // rung cannot (hygiene specifically, or that it is not yet well known).
   // Capped at two deliberately — this card already carries Stay, New, a
@@ -3961,8 +3973,11 @@
   function propertyBadgeHtml(listing){
     const out = [];
     const t = listing.property_tier, f = listing.property_flag;
+    // ONE badge only: the standing (Aerva Exceptional, Exceptional,
+    // Outstanding, Great Stay — by their thresholds) when the home has
+    // one; otherwise its flag (Hidden Treasure or Spotless).
     if(t && t.label) out.push(`<span class="suite-badge prop-badge prop-${escapeMessageHtml(t.key)}" title="Property standing: how this home ranks on its reviews.">${escapeMessageHtml(t.label)}</span>`);
-    if(f && f.label) out.push(`<span class="suite-badge prop-flag" title="${escapeMessageHtml(BADGE_TIPS[f.key] || 'Something this home is rated especially well on.')}">${escapeMessageHtml(f.label)}</span>`);
+    else if(f && f.label) out.push(`<span class="suite-badge prop-flag" title="${escapeMessageHtml(BADGE_TIPS[f.key] || 'Something this home is rated especially well on.')}">${escapeMessageHtml(f.label)}</span>`);
     return out.join('');
   }
 
@@ -4740,7 +4755,8 @@
     // experience modal silently rendering a strip with no badge in it.
     const tierSrc = listing.property_tier || listing.experience_tier;
     const tier = tierSrc && tierSrc.label ? tierSrc : null;
-    const flag = listing.property_flag && listing.property_flag.label ? listing.property_flag : null;
+    // One badge only: the flag (Spotless, Hidden Treasure) shows only when there is no standing.
+    const flag = !tier && listing.property_flag && listing.property_flag.label ? listing.property_flag : null;
     const host = listing.host_tier && listing.host_tier.label ? listing.host_tier : null;
     const hostName = String(listing.host_name || '').trim();
     // The name and address fill the middle of the strip, which otherwise
