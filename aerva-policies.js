@@ -254,7 +254,7 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',
-        'Aerva’s guest service fee is not refunded: not when a guest or a host cancels, when Aerva cancels, when a booking is changed to a lower price, or when a stay issue is upheld. Only in an exceptional case may Aerva, at its sole discretion, decide to refund it.',
+        'Aerva’s guest service fee is not refunded: not when a guest or a host cancels, when Aerva cancels, when a booking is changed to a lower price, or when a stay issue is upheld. It is refunded only when a booking fails because of a mistake on Aerva’s side, or in an exceptional case where Aerva, at its sole discretion, decides to refund it.',
         'Aerva may change its fees. The fees shown when you book apply to that booking.'
       ]}
     ]},

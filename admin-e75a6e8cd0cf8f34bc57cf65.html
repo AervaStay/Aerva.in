@@ -2060,9 +2060,9 @@
       el.innerHTML = `
         ${(S.statement && S.statement.settlementsSetupNeeded) ? '<p class="error">Apply the database update “razorpay-settlements” in Admin → Database updates to see what Razorpay has paid into the bank.</p>' : ''}
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; margin:12px 0 20px;">
-          ${((S.statement && S.statement.sections) || []).map(sec => `<div class="dispute-card"><h4>${escAdmin(sec.title)}</h4>
+          ${((S.statement && S.statement.sections) || []).map(sec => `<div class="dispute-card"${sec.balanceSheet ? ' style="grid-column:1 / -1;"' : ''}><h4>${escAdmin(sec.title)}</h4>
             ${sec.note ? `<p class="tds-sub" style="margin-top:0;">${escAdmin(sec.note)}</p>` : ''}
-            <table class="tds-table" style="display:table;">${sec.lines.map(l => `<tr title="${escAdmin(l.m || '')}"><td${l.strong ? ' style="font-weight:600;"' : ''}>${l.sign ? `<span style="opacity:0.55;">${l.sign}</span> ` : ''}${escAdmin(l.k)}<div class="tds-sub" style="margin:2px 0 0;">${escAdmin(l.g || '')}</div></td><td style="text-align:right; white-space:nowrap;${l.strong ? ' font-weight:600;' : ''}">${accInr(l.sign ? Math.abs(l.v) : l.v)}</td></tr>`).join('')}</table></div>`).join('')}
+            <table class="tds-table" style="display:table;">${sec.lines.map(l => l.head ? `<tr><td colspan="2" style="font-weight:600; font-size:12px; letter-spacing:0.08em; padding-top:14px; opacity:0.75;">${escAdmin(l.k)}</td></tr>` : `<tr title="${escAdmin(l.m || '')}"><td${l.strong ? ' style="font-weight:600;"' : ''}>${l.sign ? `<span style="opacity:0.55;">${l.sign}</span> ` : ''}${escAdmin(l.k)}<div class="tds-sub" style="margin:2px 0 0;">${escAdmin(l.g || '')}</div></td><td style="text-align:right; white-space:nowrap;${l.strong ? ' font-weight:600;' : ''}">${accInr(l.sign ? Math.abs(l.v) : l.v)}</td></tr>`).join('')}</table></div>`).join('')}
         </div>
         ${(S.razorpay || {}).notYetKnown ? `<p class="tds-sub">Razorpay’s charges are not known yet for ${S.razorpay.notYetKnown} transaction${S.razorpay.notYetKnown === 1 ? '' : 's'}.</p>` : ''}
         ${S.bookingsToCheck ? `<p class="error">${S.bookingsToCheck} booking${S.bookingsToCheck === 1 ? '' : 's'} do not add up exactly (see “Difference to check” in the Bookings CSV) — for your CA to look at, e.g. a coupon or a fee refunded as an exception.</p>` : '<p class="tds-sub">Every booking this month adds up: paid = refunds + income + payable to host + GST.</p>'}
@@ -2096,7 +2096,7 @@
   ], accData.cash); });
   document.getElementById('accCsvSummary').addEventListener('click', () => { if(!accData) return; const S = accData.summary, B = S.balances;
     const rows = [];
-    ((S.statement && S.statement.sections) || []).forEach(sec => sec.lines.forEach(l => rows.push({ s: sec.title, k: (l.sign ? l.sign + ' ' : '') + l.k, v: l.v, g: l.g || '', m: l.m || '' })));
+    ((S.statement && S.statement.sections) || []).forEach(sec => sec.lines.forEach(l => rows.push({ s: sec.title, k: (l.sign ? l.sign + ' ' : '') + l.k, v: l.head ? '' : l.v, g: l.g || '', m: l.m || '' })));
     accCsv('summary', [['Section', 's'], ['Line', 'k'], ['Amount (INR)', 'v'], ['Tally ledger', 'g'], ['What it means', 'm']], rows); });
 
   async function setPanInoperative(hostId, cohostGuestId, box){
@@ -3700,7 +3700,7 @@ function lkBookingHtml(d){
         <p class="lk-hint">The deposit (if still held) is always returned in full. The percentage applies to the booking price and its GST; a part paid by coupon comes back as a coupon. Whatever is not refunded goes to the host, less commission.${(d.linked || []).length ? ' <strong>The linked booking on the same payment is cancelled with it.</strong>' : ''}${sentPayout ? ' <strong style="color:#a3402f;">The host has already been paid for this booking, so it cannot be cancelled here — use “Refund without cancelling”.</strong>' : ''}</p>
         <div class="lk-form">
           <label>Refund of booking price (%)<input type="number" id="lkPct" min="0" max="100" step="1" value="100" oninput="lkHidePreview()"></label>
-          <label class="lk-check"><input type="checkbox" id="lkFee" onchange="lkHidePreview(); document.getElementById('lkFeeWhyWrap').style.display = this.checked ? '' : 'none';"> Also refund Aerva’s service fee${Number(b.guest_service_fee) ? ` (${lkInr(b.guest_service_fee)})` : ''} — exception only</label>
+          <label class="lk-check"><input type="checkbox" id="lkFee" onchange="lkHidePreview(); document.getElementById('lkFeeWhyWrap').style.display = this.checked ? '' : 'none';"> Also refund Aerva’s service fee${Number(b.guest_service_fee) ? ` (${lkInr(b.guest_service_fee)})` : ''} — only for Aerva’s mistake or an exceptional case</label>
           <label class="lk-wide" id="lkFeeWhyWrap" style="display:none;">Why the service fee is refunded (required, recorded)<textarea id="lkFeeWhy" maxlength="500" placeholder="e.g. Aerva's own error charged the guest twice"></textarea></label>
           <label class="lk-check" title="Use when Aerva cancels for the host (e.g. a host emergency within 48 hours)"><input type="checkbox" id="lkHostCount"> Count as the host’s cancellation</label>
           <label class="lk-wide">Reason (the guest and host see this)<textarea id="lkCancelReason" maxlength="400" placeholder="e.g. Host emergency — flooding in the area; full refund agreed"></textarea></label>
@@ -4112,7 +4112,7 @@ function mountPropose(el, ctx){
     <div class="lk-form">
       <label>What should be done<select id="${id}k">${kinds.map(k => `<option value="${k}">${lkEsc(KIND_LABEL[k])}</option>`).join('')}</select></label>
       <span class="pp-f" data-for="cancel_refund"><label>Refund of booking price (%)<input type="number" id="${id}pct" min="0" max="100" value="100"></label></span>
-      <label class="lk-check pp-f" data-for="cancel_refund"><input type="checkbox" id="${id}fee" onchange="document.getElementById('${id}fwWrap').style.display = this.checked ? '' : 'none';"> Also refund Aerva’s service fee${b.fee ? ' (' + lkInr(b.fee) + ')' : ''} — exception, an admin must approve</label>
+      <label class="lk-check pp-f" data-for="cancel_refund"><input type="checkbox" id="${id}fee" onchange="document.getElementById('${id}fwWrap').style.display = this.checked ? '' : 'none';"> Also refund Aerva’s service fee${b.fee ? ' (' + lkInr(b.fee) + ')' : ''} — only for Aerva’s mistake or an exceptional case; an admin must approve</label>
       <label class="lk-wide pp-f" data-for="cancel_refund" id="${id}fwWrap">Why the service fee should be refunded (required)<textarea id="${id}fw" maxlength="500"></textarea></label>
       <label class="lk-check pp-f" data-for="cancel_refund"><input type="checkbox" id="${id}host"> Count as the host's cancellation</label>
       <span class="pp-f" data-for="partial_refund"><label>Amount (₹)${b.refundable ? ' — up to ' + lkInr(b.refundable) : ''}<input type="number" id="${id}amt" min="1"></label></span>
