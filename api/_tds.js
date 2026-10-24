@@ -1,20 +1,22 @@
 // /api/_tds.js — TDS on what Aerva pays hosts and co-hosts. Not an endpoint.
 //
-// THE RULE (Income-tax Act 2025, s.393(1) Table 8(v) and s.393(4) Table 11,
-// formerly s.194-O; checked 1 Oct 2026 — confirm with Aerva's CA):
-//   • Aerva, as the e-commerce operator, deducts 0.1% of the GROSS amount of
-//     each resident participant's supply through the platform (the host's
-//     booking amount before Aerva's commission; GST is not part of it — see
-//     _gst.js — and neither is the guest service fee).
-//   • No PAN (or Aadhaar) furnished, or the PAN is inoperative (not linked to
-//     Aadhaar): 5% (s.397(2), formerly s.206AA).
-//   • An INDIVIDUAL or HUF (PAN 4th letter P or H) who has furnished PAN:
-//     no TDS while their gross through Aerva in the financial year (April to
-//     March) stays within ₹5,00,000. When the year's gross goes past it, TDS
-//     applies to the whole year's gross: the payout that crosses the line
-//     also carries 0.1% on the earlier payouts of that year that had none
-//     ("catch-up"), and every later payout that year has 0.1%.
-//   • Companies, firms, trusts, AOPs and others: 0.1% from the first rupee.
+// THE RULE (Income-tax Act 2025, s.393(1) Table 8(v), formerly s.194-O),
+// as advised by Aerva's CA (review of October 2026, "TDS_Tanish"):
+//   • Aerva, as the e-commerce operator, deducts TDS from EVERY payment it
+//     makes to a host or co-host, at 0.1% with a PAN.
+//   • The base is the amount due to the payee (the invoice value): for a
+//     host, the booking amount less Aerva's commission and less co-host
+//     shares (taxed on the co-hosts); for a co-host, their share. GST and
+//     Aerva's guest service fee are never part of it. A cancellation coupon
+//     the host owes is deducted after TDS and does not lower the base.
+//     CA's example (1% for round numbers): booking ₹1,000, Aerva keeps ₹100,
+//     host's ₹900 → TDS ₹9 → ₹891 paid.
+//   • No PAN furnished, or the PAN is inoperative (not linked to Aadhaar):
+//     5% (s.397(2), formerly s.206AA).
+//   • Company policy (CA's advice): no ₹5,00,000 exemption for individuals
+//     and HUFs — TDS on every payment from the first rupee. The exemption
+//     code below stays, off, if TDS_THRESHOLD_INDIVIDUAL is ever set.
+//   • Security deposit compensation paid to a host carries TDS too.
 // The date that decides the financial year is the date the payout is
 // credited: when its row is created on check-out day.
 //
@@ -23,7 +25,8 @@
 
 const RATE_WITH_PAN = () => Number(process.env.TDS_RATE_WITH_PAN || 0.1);
 const RATE_WITHOUT_PAN = () => Number(process.env.TDS_RATE_WITHOUT_PAN || 5);
-const THRESHOLD = () => Number(process.env.TDS_THRESHOLD_INDIVIDUAL || 500000);
+// 0 = no exemption (company policy, on the CA's advice). Set it in Vercel only if that changes.
+const THRESHOLD = () => Number(process.env.TDS_THRESHOLD_INDIVIDUAL || 0);
 const round2 = (n) => Math.round(n * 100) / 100;
 
 // PAN: five letters, four digits, a letter. The 4th letter is the holder's
@@ -77,7 +80,7 @@ async function tdsForPayout(sql, { payee, base, pan, creditAt = new Date(), excl
     return { tds: round2(b * rate / 100), rate, reason: standing.reason, catchupBase: 0, fy, base: b };
   }
   const rate = RATE_WITH_PAN();
-  if (standing.kind !== 'P' && standing.kind !== 'H') {
+  if (!(THRESHOLD() > 0) || (standing.kind !== 'P' && standing.kind !== 'H')) {
     return { tds: round2(b * rate / 100), rate, reason: 'pan', catchupBase: 0, fy, base: b };
   }
   // Individual / HUF: the year's gross so far (booking payouts only).
@@ -124,7 +127,7 @@ function tdsLabel(row) {
 function tdsNote(row) {
   if (row.tds_reason === 'below_threshold') return `No TDS: your earnings through Aerva this financial year (${fyLabel(Number(row.tds_fy) || financialYear(row.created_at))}) are within ₹5,00,000.`;
   if (row.tds_reason === 'threshold_crossed') return 'Your earnings through Aerva this financial year went past ₹5,00,000, so TDS now applies to the whole year, as the law requires.';
-  if (row.tds_reason === 'no_pan') return 'Add your PAN to have TDS cut to 0.1% (and nothing at all while you earn under ₹5 lakh a year as an individual).';
+  if (row.tds_reason === 'no_pan') return 'Add your PAN to have TDS cut from 5% to 0.1%.';
   if (row.tds_reason === 'inoperative_pan') return 'Your PAN is inoperative because it is not linked to your Aadhaar. Link them at incometax.gov.in, then tell hello@aerva.in, to have TDS cut to 0.1%.';
   return null;
 }

@@ -475,6 +475,7 @@
         <div class="nav-group-label">Hosts and money</div>
         <div class="tab-row"><button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications<span class="tab-count" data-count="verifications" hidden></span></button><button type="button" class="tab-info" data-info="verifications" aria-label="What ID Verifications is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabPayoutsBtn" onclick="switchTab('payouts')">Payouts<span class="tab-count" data-count="payouts" hidden></span></button><button type="button" class="tab-info" data-info="payouts" aria-label="What Payouts is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabAccountsBtn" onclick="switchTab('accounts')">Accounts</button><button type="button" class="tab-info" data-info="accounts" aria-label="What Accounts is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits<span class="tab-count" data-count="deposits" hidden></span></button><button type="button" class="tab-info" data-info="deposits" aria-label="What Security Deposits is for">i</button></div>
       </div>
       <div class="nav-group" role="group" aria-label="Guests and support">
@@ -679,6 +680,16 @@
 
   </div>
 
+  <div id="accountsView" style="display:none;">
+    <h2>Accounts</h2>
+    <p style="opacity:0.7; font-size:14px;">One month as your CA books it. Aerva collects guests’ money as the hosts’ payment-collection agent, so only Aerva’s commission and guest service fee are income; everything else is held for hosts, guests or the government (liabilities) until paid. Download the three CSVs for Tally or Zoho Books.</p>
+    <div class="tds-bar"><label>Month <input type="month" id="accMonth"></label>
+      <button type="button" class="approve-btn" id="accCsvBookings">Bookings (CSV)</button>
+      <button type="button" class="approve-btn" id="accCsvCash">Money in and out (CSV)</button>
+      <button type="button" class="approve-btn" id="accCsvSummary">Summary (CSV)</button></div>
+    <div id="accountsReport"><p style="opacity:0.6;">Loading…</p></div>
+  </div>
+
   <div id="payoutsView" style="display:none;">
     <h2>Co-host payout details to review</h2>
     <p style="opacity:0.7; font-size:14px;">PAN, GSTIN and bank account a co-host has entered. A co-host is only paid while these are approved.</p>
@@ -689,7 +700,7 @@
     <div id="refundsList"><p style="opacity:0.6;">Loading…</p></div>
     <p id="couponForfeitLine" style="margin-top:8px; font-size:14.5px;"></p>
     <h2 style="margin-top:40px;">TDS</h2>
-    <p style="opacity:0.7; font-size:14px;">What Aerva deducted from host and co-host payouts as the e-commerce operator: 0.1% with a PAN, 5% without one or with an inoperative PAN, and nothing for an individual or HUF while their year's earnings through Aerva stay within ₹5 lakh. Deposit each month's TDS by the date shown, file the quarter's return and issue certificates by the dates shown. Confirm figures with your CA.</p>
+    <p style="opacity:0.7; font-size:14px;">What Aerva deducted from host and co-host payouts (security deposit compensation included) as the e-commerce operator: 0.1% with a PAN, 5% without one or with an inoperative PAN, on the amount due after Aerva’s commission, from the first rupee (company policy, on the CA’s advice). Deposit each month's TDS by the date shown, file the quarter's return and issue certificates by the dates shown. Confirm figures with your CA.</p>
     <div class="tds-bar"><label>Financial year <select id="tdsYear"></select></label><button type="button" class="approve-btn" id="tdsCsvAll">Download year (CSV)</button></div>
     <div id="tdsReport"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Security deposit compensation</h2>
@@ -2011,7 +2022,7 @@
         <table class="tds-table"><thead><tr><th>Payee</th><th>PAN</th><th>Earnings</th><th>TDS</th><th>PAN status</th></tr></thead><tbody>
           ${d.payees.map(y => `<tr><td>${esc(y.name || '—')}<div class="tds-sub">${y.payeeType === 'host' ? 'Host' : 'Co-host'}</div></td>
             <td>${y.pan ? esc(y.pan) + (y.panKind ? `<div class="tds-sub">${esc(y.panKind)}</div>` : '') : '<span class="tds-late">None</span>'}</td>
-            <td>${inrT(y.amount)}${y.panKind === 'Individual' || y.panKind === 'HUF' ? `<div class="tds-sub">${y.amount > d.threshold ? 'over' : 'within'} ₹5 lakh</div>` : ''}</td>
+            <td>${inrT(y.amount)}${d.threshold > 0 && (y.panKind === 'Individual' || y.panKind === 'HUF') ? `<div class="tds-sub">${y.amount > d.threshold ? 'over' : 'within'} ₹5 lakh</div>` : ''}</td>
             <td>${inrT(y.tds)}</td>
             <td>${y.pan ? `<label class="tds-inop"><input type="checkbox" ${y.panInoperative ? 'checked' : ''} onchange="setPanInoperative(${y.payeeType === 'host' ? Number(y.hostId) : 'null'}, ${y.payeeType === 'cohost' ? Number(y.cohostGuestId) : 'null'}, this)"> Inoperative (not linked to Aadhaar)</label>` : '—'}</td></tr>`).join('')}
         </tbody></table>`;
@@ -2032,6 +2043,66 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
+  // ---- Accounts (server: _accounts-report.js) ----
+  let accData = null;
+  const accInr = (n) => '₹' + (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  async function loadAccounts(){
+    const el = document.getElementById('accountsReport'), m = document.getElementById('accMonth');
+    if(!m.value){ const d = new Date(Date.now() + 5.5 * 3600e3); m.value = d.toISOString().slice(0, 7); }
+    el.innerHTML = '<p style="opacity:0.6;">Loading…</p>';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings?accountsReport=1&month=' + encodeURIComponent(m.value), { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || 'Could not load.');
+      accData = d;
+      const S = d.summary, B = S.balances;
+      const kv = (k, v, strong) => `<tr><td>${escAdmin(k)}</td><td style="text-align:right;${strong ? ' font-weight:600;' : ''}">${accInr(v)}</td></tr>`;
+      el.innerHTML = `
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px; margin:12px 0 20px;">
+          <div class="dispute-card"><h4>Income (profit and loss)</h4><table class="tds-table" style="display:table;">
+            ${kv('Commission from hosts', S.income.commission)}${kv('Guest service fees', S.income.serviceFee)}${kv('Total income', S.income.total, true)}</table>
+            <p class="tds-sub">Less Razorpay’s charges (from Razorpay’s settlement report).</p></div>
+          <div class="dispute-card"><h4>Money in and out this month</h4><table class="tds-table" style="display:table;">
+            ${kv('Received from guests', S.received)}${kv('Refunded to guests', S.refunded)}${kv('Paid out to hosts and co-hosts', S.paidOut)}${kv('TDS deducted (deposit by 7th)', S.tdsDeducted)}${kv('GST on stays recognised', S.gstOnStaysPayable)}</table></div>
+          <div class="dispute-card"><h4>Held at month end (liabilities)</h4><table class="tds-table" style="display:table;">
+            ${kv('Advance from guests', B.advanceFromGuests)}${kv('Payable to hosts', B.payableToHosts)}${kv('Security deposits held (today)', B.depositsHeldToday)}${kv('GST payable (s.9(5))', B.gstPayable)}${kv('TDS payable (194-O)', B.tdsPayable)}</table></div>
+        </div>
+        ${S.bookingsToCheck ? `<p class="error">${S.bookingsToCheck} booking${S.bookingsToCheck === 1 ? '' : 's'} do not add up exactly (see “Difference to check” in the Bookings CSV) — for your CA to look at, e.g. a coupon or a fee refunded as an exception.</p>` : '<p class="tds-sub">Every booking this month adds up: paid = refunds + income + payable to host + GST.</p>'}
+        <h3 class="tds-h">Bookings recognised in ${escAdmin(d.month)} <small>${d.bookings.length}</small></h3>
+        ${d.bookings.length ? `<table class="tds-table"><thead><tr><th>Booking</th><th>Event</th><th>Date</th><th>Host</th><th>Booking price</th><th>GST</th><th>Service fee</th><th>Refunded</th><th>Commission</th><th>Host payable</th></tr></thead><tbody>
+          ${d.bookings.map(b => `<tr><td>${escAdmin(b.reference)}<div class="tds-sub">${escAdmin(b.listing)}</div></td><td>${escAdmin(b.event)}</td><td>${escAdmin(b.recognisedOn)}</td><td>${escAdmin(b.host)}</td>
+            <td>${accInr(b.bookingPrice)}</td><td>${accInr(b.gstPayable)}</td><td>${accInr(b.serviceFeeIncome)}</td><td>${accInr(b.refundedToGuest)}</td><td>${accInr(b.commissionIncome)}</td><td>${accInr(b.hostPayable)}</td></tr>`).join('')}
+        </tbody></table>` : '<p style="opacity:0.6;">No check-ins or cancellations this month.</p>'}
+        <ul style="font-size:13px; opacity:0.7; margin-top:16px; line-height:1.6;">${S.notes.map(n => `<li>${escAdmin(n)}</li>`).join('')}</ul>`;
+    }catch(e){ el.innerHTML = `<p class="error">${escAdmin(e.message)}</p>`; }
+  }
+  function accCsv(name, head, rows){
+    const cell = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const lines = [head.map(h => h[0]).join(',')].concat(rows.map(r => head.map(h => cell(typeof h[1] === 'function' ? h[1](r) : r[h[1]])).join(',')));
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `aerva-accounts-${accData.month}-${name}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  document.getElementById('accMonth').addEventListener('change', loadAccounts);
+  document.getElementById('accCsvBookings').addEventListener('click', () => { if(accData) accCsv('bookings', [
+    ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Event', 'event'], ['Recognised on', 'recognisedOn'], ['Type', 'type'], ['Guest', 'guest'], ['Listing', 'listing'], ['Host', 'host'],
+    ['Arrival', 'arrival'], ['Departure', 'departure'], ['Paid on', 'paidOn'], ['Booking price (INR)', 'bookingPrice'], ['Paid by coupon (INR)', 'paidByCoupon'], ['GST on stay charged (INR)', 'gstOnStay'],
+    ['Guest service fee (INR)', 'serviceFee'], ['Security deposit (INR)', 'deposit'], ['Charged to guest (INR)', 'charged'], ['Refunded to guest (INR)', 'refundedToGuest'],
+    ['Income: commission (INR)', 'commissionIncome'], ['Income: guest service fee (INR)', 'serviceFeeIncome'], ['Payable to host incl. co-hosts (INR)', 'hostPayable'], ['of which co-hosts (INR)', 'cohostShares'], ['GST payable s.9(5) (INR)', 'gstPayable'], ['Difference to check (INR)', 'difference']
+  ], accData.bookings); });
+  document.getElementById('accCsvCash').addEventListener('click', () => { if(accData) accCsv('money-in-out', [
+    ['Date', 'date'], ['Type', 'type'], ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Payee', 'payee'], ['In (INR)', 'amountIn'], ['Out (INR)', 'amountOut'],
+    ['TDS deducted (INR)', 'tds'], ['Coupon recovered from host (INR)', 'couponRecovered'], ['Ledger', 'ledger']
+  ], accData.cash); });
+  document.getElementById('accCsvSummary').addEventListener('click', () => { if(!accData) return; const S = accData.summary, B = S.balances;
+    accCsv('summary', [['Line', 'k'], ['Amount (INR)', 'v'], ['Ledger group', 'g']], [
+      { k: 'Commission from hosts', v: S.income.commission, g: 'Income' }, { k: 'Guest service fees', v: S.income.serviceFee, g: 'Income' }, { k: 'Total income', v: S.income.total, g: 'Income' },
+      { k: 'Received from guests', v: S.received, g: 'Bank' }, { k: 'Refunded to guests', v: S.refunded, g: 'Bank' }, { k: 'Paid out to hosts and co-hosts', v: S.paidOut, g: 'Bank' },
+      { k: 'Advance from guests (month end)', v: B.advanceFromGuests, g: 'Current liabilities' }, { k: 'Payable to hosts (month end)', v: B.payableToHosts, g: 'Current liabilities (Sundry creditors)' },
+      { k: 'Security deposits held (today)', v: B.depositsHeldToday, g: 'Current liabilities' }, { k: 'GST payable s.9(5)', v: B.gstPayable, g: 'Duties & taxes' }, { k: 'TDS payable 194-O', v: B.tdsPayable, g: 'Duties & taxes' }
+    ]); });
+
   async function setPanInoperative(hostId, cohostGuestId, box){
     const flag = box.checked;
     if(!confirm(flag ? 'Mark this PAN inoperative? Payouts not yet sent will have 5% TDS.' : 'Mark this PAN as working again? Payouts not yet sent go back to the normal rate.')){ box.checked = !flag; return; }
@@ -2324,6 +2395,7 @@
     live: ['Live Listings', 'Every approved listing. Block pauses one (reversible); Remove takes it down. Also here: photos removed for showing contact details (with Restore), new photos taken far from the pin, and a photo test.'],
     compliance: ['Compliance', 'Check every approved listing against one requirement. Listings that fail get a flag and 14 days to fix it; the daily job blocks them after the deadline. Open flags clear when the host fixes and saves.'],
     verifications: ['ID Verifications', 'Host Aadhaar, PAN and bank details waiting for a human check. Approve or reject each one; the document is erased once reviewed. A host is paid only once their PAN and bank account are verified.'],
+    accounts: ['Accounts', 'Each month in the shape your CA books it: Aerva’s income (commission and guest service fee only), money received, refunded and paid out, GST on stays and TDS payable, and what Aerva still holds for hosts and guests at month end. Three CSVs for Tally or Zoho Books. Razorpay’s charges come from Razorpay’s own settlement report.'],
     payouts: ['Payouts', 'What each host and co-host is owed per booking, and Mark paid for payouts sent by hand. Also: refunds that need a retry, deposit compensation, cancellation coupons owed by hosts, co-host payout details to review, and the TDS report.'],
     deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the 7-day damage window has ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
     support: ['Support', 'Requests from the Resolution Center. Reply within 48 hours; safety requests are listed first. Keep the case record (issue as understood, outcome, how each side behaved) — a request cannot be resolved without it, and every version is kept. Once resolved, the person confirms and rates it, or it reopens; with no answer it closes by itself after 48 hours.'],
@@ -2425,6 +2497,9 @@
     document.getElementById('tabBatchBtn').classList.toggle('active', tab === 'batch');
     document.getElementById('tabTrafficBtn').classList.toggle('active', tab === 'traffic');
     document.getElementById('tabPayoutsBtn').classList.toggle('active', tab === 'payouts');
+    document.getElementById('tabAccountsBtn').classList.toggle('active', tab === 'accounts');
+    document.getElementById('accountsView').style.display = tab === 'accounts' ? 'block' : 'none';
+    if(tab === 'accounts') loadAccounts();
     document.getElementById('tabAuditBtn').classList.toggle('active', tab === 'audit');
     document.getElementById('tabTrustBtn').classList.toggle('active', tab === 'trust');
     document.getElementById('tabSupportBtn').classList.toggle('active', tab === 'support');

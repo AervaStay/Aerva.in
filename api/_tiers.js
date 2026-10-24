@@ -751,9 +751,10 @@ const PROPERTY_TIERS = [
     blurb: 'In the top 20% of stays in its city.' }
 ];
 
-// Flags are independent of the ladder and of each other. A property can
-// hold one flag alongside its rung; where several apply, the first match
-// in this order wins, so the rarer claim is the one shown.
+// Flags are independent of the ladder and of each other. A stay shows ONE
+// badge: its rung when it has one, otherwise a flag (get-listings.js);
+// where several flags apply, the first match in this order wins, so the
+// rarer claim is the one shown.
 const PROPERTY_FLAGS = [
   { key: 'hidden_treasure', label: 'Hidden Treasure', minScore: 4.85, maxReviews: 10, minReviews: 3,
     blurb: 'Excellent, and not yet widely discovered.' },
@@ -1003,7 +1004,7 @@ function describeLadders() {
         `Bands are ranked positions, not scores. Listings compete directly \u2014 exactly one can be Aerva Exceptional at a time, and a listing loses it when another overtakes it.`,
         `The minimum score is a floor on top of the rank: being best of a poor field is not exceptional, and the band is left empty instead.`,
         `Only live listings compete. A deactivated or removed listing holds no rank and displaces nobody; on reactivation it is ranked afresh against the field as it stands then.`,
-        'A property may hold one flag alongside its rung. Where several flags apply, the rarer one wins.',
+        'A stay shows one badge only: its rung when it has one, otherwise a flag. Where several flags apply, the rarer one wins.',
         'Below the lowest rung no badge is shown at all \u2014 never a lesser label.'
       ],
       bands: PROPERTY_TIERS.map(t => ({

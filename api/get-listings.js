@@ -2190,7 +2190,8 @@ module.exports = async (req, res) => {
           const key = standing[l.id] || null;
           const pf = stats ? propertyFlag(stats) : null;
           l.property_tier = key && TIER_LABELS[key] ? { key, label: TIER_LABELS[key] } : null;
-          l.property_flag = pf ? { key: pf.key, label: pf.label } : null;
+          // One badge per stay: a flag only when there is no standing.
+          l.property_flag = pf && !l.property_tier ? { key: pf.key, label: pf.label } : null;
         });
       }
     } catch (err) {

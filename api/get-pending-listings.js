@@ -869,6 +869,21 @@ module.exports = async (req, res) => {
   // financial year (April–March), with the payee's full PAN (needed for the
   // quarterly return), month totals with deposit dates, quarter totals with
   // return and certificate dates, and each payee's year. Viewing is logged.
+  // ---- Accounts: one month as the CA books it (_accounts-report.js) ----
+  // GET ?accountsReport=1&month=YYYY-MM — admins only (not in the
+  // representatives' list). Viewing is logged.
+  if (req.method === 'GET' && req.query.accountsReport === '1') {
+    try {
+      const out = await require('./_accounts-report').accountsReport(sql, String(req.query.month || ''));
+      await logAudit(sql, { action: 'accounts_report_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'report', metadata: { month: out.month } });
+      return res.status(200).json(out);
+    } catch (err) {
+      if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
+      console.error('accountsReport failed:', err);
+      return res.status(500).json({ error: 'Could not build the accounts report right now.' });
+    }
+  }
+
   if (req.method === 'GET' && req.query.tdsReport === '1') {
     const T = require('./_tds');
     const { decryptField } = require('./_secure-fields');
@@ -886,7 +901,7 @@ module.exports = async (req, res) => {
         LEFT JOIN hosts h ON h.id = p.host_id
         LEFT JOIN guests g ON g.id = p.payee_guest_id
         LEFT JOIN cohost_payout_profiles cp ON cp.guest_id = p.payee_guest_id
-        WHERE p.tds_fy = ${fy} AND COALESCE(p.kind, 'booking') = 'booking'
+        WHERE p.tds_fy = ${fy}          -- booking payouts and deposit compensation (both carry TDS)
         ORDER BY p.created_at, p.id`;
       const months = new Map(), quarters = new Map(), payees = new Map();
       const out = rows.map(r => {
@@ -1825,8 +1840,8 @@ module.exports = async (req, res) => {
         // use Retry. (Payouts created while they were off can still be
         // recorded here.)
         if (razorpayxReady() && row.auto_eligible) return res.status(409).json({ error: 'Automatic payouts are on. Use Retry instead of paying by hand.' });
-        // TDS as the rules give it today (a PAN added since, the ₹5 lakh
-        // limit) — unless the admin typed the amount.
+        // TDS as the rules give it today (a PAN added since, or marked
+        // inoperative) — unless the admin typed the amount.
         if (!isDeposit && (b.tds === undefined || b.tds === null || b.tds === '')) row = await refreshTds(sql, row);
         let tds = Number(row.tds), deductions = Number(row.deductions), ids = row.deducted_penalty_ids || [];
         if (!isCohost) {
@@ -1843,7 +1858,7 @@ module.exports = async (req, res) => {
         const net = Math.round((Number(row.gross) - Number(row.commission) - Number(row.cohost_shares) - deductions - tds) * 100) / 100;
         if (net < 0) return res.status(400).json({ error: `Deductions (₹${(deductions + tds).toLocaleString('en-IN')}) are more than this payout. Leave the coupon deduction for a larger payout.` });
         // If an admin typed the TDS, the rate shown is the one that amount represents.
-        const tdsBase = Number(row.gross) - Number(row.cohost_shares);
+        const tdsBase = Number(row.gross) - Number(row.commission) - Number(row.cohost_shares);   // amount due (CA's advice)
         const tdsRate = tds === Number(row.tds) ? Number(row.tds_rate || 0) : (tdsBase > 0 ? Math.round(tds / tdsBase * 10000) / 100 : 0);
         await sql`UPDATE payouts SET tds = ${tds}, tds_rate = ${tdsRate}, deductions = ${deductions}, deducted_penalty_ids = ${ids}, net = ${net} WHERE id = ${row.id}`;
         const done = await markPayoutSent(sql, row.id, { reference, arrivingBy, by: ADMIN_ACTOR });

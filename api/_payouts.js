@@ -46,7 +46,7 @@ async function loadPayoutSummary(sql, payoutId) {
     // Same reference the guest's booking confirmation shows.
     booking: r.razorpay_order_id || ('#' + r.booking_id),
     lines: lines.filter(([, v]) => v !== 0 && !Object.is(v, -0)).map(([label, value]) => ({ label, value })),
-    note: r.kind === 'deposit' ? null : tdsNote(r),
+    note: tdsNote(r),
     link: `${SITE}/index.html?payout=${r.id}`
   };
 }
@@ -118,8 +118,8 @@ const razorpayxReady = () => !!(process.env.RAZORPAYX_ACCOUNT_NUMBER && process.
 const round2 = (n) => Math.round(n * 100) / 100;
 
 // What each payee of a booking gets. Host: booking earnings − Aerva's
-// commission − co-host shares − cancellation coupons owed (as many whole
-// ones as fit) − TDS. Co-host: their share, in full.
+// commission − co-host shares − TDS (on that amount due) − cancellation
+// coupons owed (as many whole ones as fit). Co-host: their share − TDS.
 // opts.creditAt: the date the payout is credited (its row's creation;
 // now for a new one). opts.excludeIds: { host: id, 'cohost:<guestId>': id }
 // — a payout's own row, left out when its TDS is worked out again.
@@ -161,7 +161,8 @@ async function planPayouts(sql, orderId, opts = {}) {
   }
   const coTotal = round2(shares.reduce((t, x) => t + Number(x.amount), 0));
   const hostT = await tdsForPayout(sql, {
-    payee: { payeeType: 'host', hostId: o.host_id }, base: Math.max(0, gross - coTotal), creditAt, excludePayoutId: excludeIds.host || null,
+    // TDS on the amount due to the host (after Aerva's commission and co-host shares), as the CA advised.
+    payee: { payeeType: 'host', hostId: o.host_id }, base: Math.max(0, round2(gross - commission - coTotal)), creditAt, excludePayoutId: excludeIds.host || null,
     pan: { pan: decryptField(o.host_pan), present: !!o.host_pan, status: o.host_pan_status, inoperative: o.host_pan_inoperative === true }
   });
   const hostPan = hostT.reason !== 'no_pan' && hostT.reason !== 'inoperative_pan';
@@ -254,46 +255,53 @@ async function createPayoutRows(sql, orderId) {
 // The part of a deposit Aerva decides goes to the host is paid as its OWN
 // payout row (payouts.kind = 'deposit', sql/migration_payout_kinds.sql),
 // next to the booking's payout: the booking's payout may already be sent,
-// and its figures (commission, TDS) stay exactly as they were. Paid in full:
-// no commission, no deductions, no TDS (it is compensation for damage, not
-// a sale; see OWNER DECISIONS). Sent like any payout: automatically with
+// and its figures (commission, TDS) stay exactly as they were. No
+// commission or other deductions; TDS IS deducted, at the host's rate (the
+// CA's advice: TDS on every payment Aerva makes, for safety). Sent like any payout: automatically with
 // RazorpayX (retried every 4 hours), or by hand (Mark paid, kind 'deposit').
 // One per booking (unique index). Returns the row, or null if not created.
 async function depositPayee(sql, hostId) {
   const { decryptField, maskAccount } = require('./_secure-fields');
   const h = (await sql`SELECT id, name, bank_account_holder_name, bank_account_number, bank_ifsc, bank_status, razorpayx_fund_account_id, pan_number, pan_status,
+                              (to_jsonb(hosts)->>'pan_inoperative')::boolean AS pan_inoperative,
                               to_jsonb(hosts)->>'bank_changed_at' AS bank_changed_at
                        FROM hosts WHERE id = ${hostId}`)[0];
   if (!h) return null;
   const email = ((await sql`SELECT email FROM guests WHERE host_id = ${hostId} ORDER BY id LIMIT 1`)[0] || {}).email || null;
   return {
     payeeType: 'host', hostId: h.id, payeeGuestId: null, email, name: h.name, panFurnished: !!h.pan_number && h.pan_status !== 'rejected',
+    pan: { pan: decryptField(h.pan_number), present: !!h.pan_number, status: h.pan_status, inoperative: h.pan_inoperative === true },
     bankLabel: [h.bank_account_holder_name, maskAccount(h.bank_account_number)].filter(Boolean).join(' · '),
     bank: { ready: h.bank_status === 'verified' && !!h.bank_account_number && !!h.bank_ifsc && !inChangeHold(h.bank_changed_at) && h.pan_status !== 'pending_review',
             changedRecently: inChangeHold(h.bank_changed_at) || h.pan_status === 'pending_review', holder: h.bank_account_holder_name, account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, fundAccountId: h.razorpayx_fund_account_id, table: 'hosts', key: h.id }
   };
 }
 async function createDepositCompensationPayout(sql, { orderId, amount }) {
-  const net = round2(Number(amount) || 0);
-  if (!(net > 0)) return null;
+  const gross = round2(Number(amount) || 0);
+  if (!(gross > 0)) return null;
   const o = (await sql`SELECT o.id, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
   if (!o) return null;
   const payee = await depositPayee(sql, o.host_id);
   if (!payee) return null;
+  // TDS on the compensation, at the host's rate (0.1% with a PAN, 5% without).
+  const t = await tdsForPayout(sql, { payee: { payeeType: 'host', hostId: o.host_id }, base: gross, pan: payee.pan });
+  const tds = Math.min(gross, t.tds);
+  const net = round2(gross - tds);
+  const panOk = t.reason !== 'no_pan' && t.reason !== 'inoperative_pan';
   let r;
   try {
     r = await sql`
       INSERT INTO payouts (order_id, payee_type, host_id, payee_guest_id, status, gross, commission, cohost_shares, deductions, deducted_penalty_ids, tds, tds_rate, pan_furnished, net, bank_label, auto_eligible, kind,
                            tds_base, tds_reason, tds_catchup_base, tds_fy)
-      VALUES (${orderId}, 'host', ${o.host_id}, NULL, 'due', ${net}, 0, 0, 0, ${[]}, 0, 0, ${payee.panFurnished}, ${net}, ${payee.bankLabel || null}, ${razorpayxReady()}, 'deposit',
-              0, 'not_applicable', 0, ${require('./_tds').financialYear(new Date())})
+      VALUES (${orderId}, 'host', ${o.host_id}, NULL, 'due', ${gross}, 0, 0, 0, ${[]}, ${tds}, ${t.rate}, ${panOk}, ${net}, ${payee.bankLabel || null}, ${razorpayxReady()}, 'deposit',
+              ${t.base}, ${t.reason}, 0, ${t.fy})
       ON CONFLICT DO NOTHING RETURNING *
     `;
   } catch (err) {
     if (!err || err.code !== '42703') throw err;
     r = await sql`
       INSERT INTO payouts (order_id, payee_type, host_id, payee_guest_id, status, gross, commission, cohost_shares, deductions, deducted_penalty_ids, tds, tds_rate, pan_furnished, net, bank_label, auto_eligible, kind)
-      VALUES (${orderId}, 'host', ${o.host_id}, NULL, 'due', ${net}, 0, 0, 0, ${[]}, 0, 0, ${payee.panFurnished}, ${net}, ${payee.bankLabel || null}, ${razorpayxReady()}, 'deposit')
+      VALUES (${orderId}, 'host', ${o.host_id}, NULL, 'due', ${gross}, 0, 0, 0, ${[]}, ${tds}, ${t.rate}, ${panOk}, ${net}, ${payee.bankLabel || null}, ${razorpayxReady()}, 'deposit')
       ON CONFLICT DO NOTHING RETURNING *
     `;
   }
