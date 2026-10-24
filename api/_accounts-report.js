@@ -484,23 +484,24 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
   const liab = r2(close.advance + close.host + close.cohost + close.deposits + cumGst + c.tds);
   const bsDiff = r2(assets - liab - earnings);
   sections.unshift({ title: 'Balance sheet at ' + endLabel(end), note: 'Booking money only, since Aerva’s first booking. GST and TDS are shown in full: subtract what has already been deposited with the government from both “GST/TDS payable” and “Bank”. Aerva’s capital, other income and other expenses are not on the site — your CA adds them.', balanceSheet: true, lines: [
+    L('EQUITY AND LIABILITIES', null, '', '', { head: true }),
+    L('Owner’s funds', null, '', '', { head: true, sub: true }),
+    L('Reserves and surplus (Aerva’s earnings so far)', earnings, 'Capital account / Reserves and surplus: Profit and loss', 'Belongs to Aerva’s owners: commission and service fees since the first booking, less Razorpay’s charges (before GST). Not owed to anyone.'),
+    L('Current liabilities', null, '', '', { head: true, sub: true }),
+    L('Advance from guests', close.advance, 'Current liabilities: Advance from guests', 'Paid for stays that have not started'),
+    L('Payable to hosts', close.host, 'Current liabilities: Sundry creditors — Hosts', 'Hosts’ share of completed stays, not yet paid'),
+    L('Payable to co-hosts', close.cohost, 'Current liabilities: Sundry creditors — Co-hosts', 'Co-hosts’ share of completed stays, not yet paid'),
+    L('Security deposits held', close.deposits, 'Current liabilities: Security deposits', 'To be returned to guests or paid to hosts'),
+    L('GST payable on bookings (s.9(5))', cumGst, 'Current liabilities: Duties & taxes — Output GST', 'Since the first booking — less what has been deposited'),
+    L('TDS payable (194-O)', c.tds, 'Current liabilities: Duties & taxes — TDS payable', 'Since the first payout — less what has been deposited'),
+    L('Total equity and liabilities', r2(liab + earnings), '', '', { strong: true }),
     L('ASSETS', null, '', '', { head: true }),
+    L('Current assets', null, '', '', { head: true, sub: true }),
     L('Receivable from Razorpay', close.receivable, 'Current assets: Sundry debtors — Razorpay', 'Collected from guests, not yet paid into the bank'),
     L('Bank (booking money)', bank, 'Current assets: Bank', 'Settled by Razorpay into the bank, less payouts sent to hosts and co-hosts and RazorpayX’s charges'),
-    L('Input GST on Razorpay charges', c.feesGst, 'Current assets: Input GST', 'Claimable against GST payable'),
-    L('Total assets', assets, '', '', { strong: true }),
-    L('LIABILITIES', null, '', '', { head: true }),
-    L('Advance from guests', close.advance, 'Current liabilities', 'Paid for stays that have not started'),
-    L('Payable to hosts', close.host, 'Current liabilities: Sundry creditors', 'Hosts’ share of completed stays, not yet paid'),
-    L('Payable to co-hosts', close.cohost, 'Current liabilities: Sundry creditors', 'Co-hosts’ share of completed stays, not yet paid'),
-    L('Security deposits held', close.deposits, 'Current liabilities', 'To be returned to guests or paid to hosts'),
-    L('GST payable on bookings (s.9(5))', cumGst, 'Duties & taxes: Output GST', 'Since the first booking — less what has been deposited'),
-    L('TDS payable (194-O)', c.tds, 'Duties & taxes: TDS payable', 'Since the first payout — less what has been deposited'),
-    L('Total liabilities', liab, '', '', { strong: true }),
-    L('AERVA’S FUNDS', null, '', '', { head: true }),
-    L('Aerva’s earnings so far', earnings, 'Capital account: Profit and loss', 'Commission and service fees since the first booking, less Razorpay’s charges (before GST)'),
-    L('Total liabilities and Aerva’s funds', r2(liab + earnings), '', 'Equals total assets', { strong: true }),
-    ...(Math.abs(bsDiff) >= 1 ? [L('Not matched (for the CA to look at)', bsDiff, '', 'Assets differ from liabilities plus Aerva’s funds by this amount — see “Difference to check” in the Bookings CSV and any “Not matched” lines below.')] : [])
+    L('Input GST (ITC) on Razorpay charges', c.feesGst, 'Current assets: Duties & taxes — Input GST', 'Claimable against GST payable, if Aerva is GST-registered and Razorpay’s invoice shows Aerva’s GSTIN'),
+    L('Total assets', assets, '', 'Equals total equity and liabilities', { strong: true }),
+    ...(Math.abs(bsDiff) >= 1 ? [L('Not matched (for the CA to look at)', bsDiff, '', 'Assets differ from equity and liabilities by this amount — see “Difference to check” in the Bookings CSV and any “Not matched” lines below.')] : [])
   ] });
   return { month: label, sections, balanced: Math.abs(bsDiff) < 1, settlementsKnown: sync.ok, settlementsSetupNeeded: !!sync.setupNeeded };
 }
