@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js"></script>
+<script src="aerva-policies.js?v=2026-10-25c"></script>
 </head>
 <body>
 
@@ -2062,7 +2062,7 @@
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; margin:12px 0 20px;">
           ${((S.statement && S.statement.sections) || []).map(sec => `<div class="dispute-card"${sec.balanceSheet ? ' style="grid-column:1 / -1;"' : ''}><h4>${escAdmin(sec.title)}</h4>
             ${sec.note ? `<p class="tds-sub" style="margin-top:0;">${escAdmin(sec.note)}</p>` : ''}
-            <table class="tds-table" style="display:table;">${sec.lines.map(l => l.head ? `<tr><td colspan="2" style="font-weight:600; font-size:12px; letter-spacing:0.08em; padding-top:14px; opacity:0.75;">${escAdmin(l.k)}</td></tr>` : `<tr title="${escAdmin(l.m || '')}"><td${l.strong ? ' style="font-weight:600;"' : ''}>${l.sign ? `<span style="opacity:0.55;">${l.sign}</span> ` : ''}${escAdmin(l.k)}<div class="tds-sub" style="margin:2px 0 0;">${escAdmin(l.g || '')}</div></td><td style="text-align:right; white-space:nowrap;${l.strong ? ' font-weight:600;' : ''}">${accInr(l.sign ? Math.abs(l.v) : l.v)}</td></tr>`).join('')}</table></div>`).join('')}
+            <table class="tds-table" style="display:table;">${sec.lines.map(l => l.head ? (l.sub ? `<tr><td colspan="2" style="font-style:italic; font-size:13px; padding-top:10px; opacity:0.7;">${escAdmin(l.k)}</td></tr>` : `<tr><td colspan="2" style="font-weight:600; font-size:12px; letter-spacing:0.08em; padding-top:16px; opacity:0.8;">${escAdmin(l.k)}</td></tr>`) : `<tr title="${escAdmin(l.m || '')}"><td${l.strong ? ' style="font-weight:600;"' : ''}>${l.sign ? `<span style="opacity:0.55;">${l.sign}</span> ` : ''}${escAdmin(l.k)}<div class="tds-sub" style="margin:2px 0 0;">${escAdmin(l.g || '')}</div></td><td style="text-align:right; white-space:nowrap;${l.strong ? ' font-weight:600;' : ''}">${accInr(l.sign ? Math.abs(l.v) : l.v)}</td></tr>`).join('')}</table></div>`).join('')}
         </div>
         ${(S.razorpay || {}).notYetKnown ? `<p class="tds-sub">Razorpay’s charges are not known yet for ${S.razorpay.notYetKnown} transaction${S.razorpay.notYetKnown === 1 ? '' : 's'}.</p>` : ''}
         ${S.bookingsToCheck ? `<p class="error">${S.bookingsToCheck} booking${S.bookingsToCheck === 1 ? '' : 's'} do not add up exactly (see “Difference to check” in the Bookings CSV) — for your CA to look at, e.g. a coupon or a fee refunded as an exception.</p>` : '<p class="tds-sub">Every booking this month adds up: paid = refunds + income + payable to host + GST.</p>'}

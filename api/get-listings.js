@@ -606,6 +606,12 @@ const JOBS = [
   { name: 'offers_email', label: 'Quarterly offers email to guests who have not booked lately', everyMinutes: 60, heavy: true, lockMinutes: 10,
     run: (c) => { const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours(); return h >= 10 && h < 19
       ? require('./_offers-email').sendQuarterlyOffers(c.sql, { deadlineMs: Math.min(6000, c.remainingMs) }) : { waiting: 'sends between 10 am and 7 pm' }; } },
+  // Host Agreement revisions: a formal email to every host who has not
+  // accepted the current version; 30 days later, the agreement ends for those
+  // who still have not (their listings are deactivated) — _host-agreement.js.
+  { name: 'host_agreement_notices', label: 'Host Agreement revisions: notices, and ending agreements not accepted in time', everyMinutes: 60, lockMinutes: 10,
+    run: (c) => { const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours(); return h >= 10 && h < 19
+      ? require('./_host-agreement').runAgreementNotices(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) : { waiting: 'runs between 10 am and 7 pm' }; } },
   { name: 'chat_number_cleanup', label: 'Remove phone numbers from chats of finished or cancelled bookings', everyMinutes: 15,
     run: (c) => require('./_message-guard').scrubEndedConversations(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'photo_scan', label: 'Check photos for contact details (and remove any that show them)', everyMinutes: 5, lockMinutes: 3,

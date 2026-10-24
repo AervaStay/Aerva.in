@@ -17,6 +17,12 @@
     "api/guest-profile.js": {
       "maxDuration": 30,
       "includeFiles": "aerva-policies.js"
+    },
+    "api/host-listings.js": {
+      "includeFiles": "aerva-policies.js"
+    },
+    "api/submit-listing.js": {
+      "includeFiles": "aerva-policies.js"
     }
   },
   "crons": [

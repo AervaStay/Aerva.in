@@ -33,7 +33,7 @@ const photoGuard = require('./_photo-guard');
 const { recordPhotoLocations, tagListing } = require('./_photo-location');
 const { timezoneForAddress } = require('./_timezones');
 const { sanitizeBody } = require('./_plain-text');
-const { AGREEMENT_VERSION } = require('./_agreements');
+const { HOST_AGREEMENT_VERSION } = require('./_agreements');
 const { requestContext } = require('./_audit-log');
 
 const sql = neon(process.env.DATABASE_URL);
@@ -259,25 +259,24 @@ module.exports = async (req, res) => {
     }
     const authenticatedHostEmail = guest.email;
 
-    // Host agreement: required to submit a listing for review (not to save a
-    // draft), in its current wording. Accepted once per version; recorded on
-    // the host with time and IP.
+    // Host agreement: accepted for EVERY listing submitted for review (not
+    // to save a draft), in its current wording. Recorded once the listing is
+    // saved — on the listing and the host, with a copy emailed to the host
+    // (_host-agreement.js).
+    let acceptAgreement = false;
     if (!isDraft) {
       let already = false;
-      try {
-        const agr = await sql`SELECT host_agreement_version FROM hosts WHERE id = ${hostId}`;
-        already = !!(agr[0] && agr[0].host_agreement_version === AGREEMENT_VERSION);
-      } catch (err) { console.error('host agreement status unavailable:', err.message); }
-      if (!already) {
-        if (req.body.hostAgreementVersion !== AGREEMENT_VERSION) {
-          return res.status(400).json({ error: 'Please read and accept the host agreement to submit your listing.', agreementVersion: AGREEMENT_VERSION });
-        }
-        const ctx = requestContext(req);
+      if (listingId) {
         try {
-          await sql`UPDATE hosts SET host_agreement_version = ${AGREEMENT_VERSION}, host_agreement_accepted_at = now(), host_agreement_ip = ${ctx.ip} WHERE id = ${hostId}`;
-        } catch (err) { console.error('host agreement could not be stored (run migration_agreements.sql):', err.message); }
-        await logAudit(sql, { action: 'host_agreement_accepted', success: true, actorType: 'host', actorIdentifier: String(hostId),
-          targetType: 'host', targetId: hostId, metadata: { version: AGREEMENT_VERSION, ip: ctx.ip, via: 'listing_submission' } });
+          const l = await sql`SELECT host_agreement_version FROM listings WHERE id = ${listingId} AND host_id = ${hostId}`;
+          already = !!(l[0] && l[0].host_agreement_version === HOST_AGREEMENT_VERSION);
+        } catch (err) { /* database update not applied yet */ }
+      }
+      if (!already) {
+        if (req.body.hostAgreementVersion !== HOST_AGREEMENT_VERSION) {
+          return res.status(400).json({ error: 'Please read and accept the Aerva Host Agreement to submit your listing.', agreementVersion: HOST_AGREEMENT_VERSION });
+        }
+        acceptAgreement = true;
       }
     }
 
@@ -989,6 +988,15 @@ module.exports = async (req, res) => {
       }
     }
 
+    if (acceptAgreement) {
+      try {
+        const ctx = requestContext(req);
+        const r = await require('./_host-agreement').recordAcceptance(sql, { hostId, guestId: guest.id, email: guest.email, name: guest.name || '',
+          listings: [{ id: listing.id, name: listing.property_name || propertyName || '' }], ip: ctx.ip, via: 'listing_submission' });
+        await logAudit(sql, { action: 'host_agreement_accepted', success: true, actorType: 'host', actorIdentifier: String(hostId),
+          targetType: 'listing', targetId: listing.id, metadata: { version: HOST_AGREEMENT_VERSION, ip: ctx.ip, via: 'listing_submission', emailed: r.emailed } });
+      } catch (err) { console.error('host agreement acceptance not recorded:', err.message); }
+    }
     return res.status(200).json({ success: true, id: listing.id, isDraft: !!isDraft, status: listing.status,
       warning: priceNotes.length ? priceNotes.join(' ') : undefined, priceHeld: priceNotes.length ? priceNotes : undefined });
   } catch (err) {
