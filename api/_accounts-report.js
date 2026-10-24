@@ -165,16 +165,23 @@ async function accountsReport(sql, month) {
       AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp AND o.arrival >= ${end}::date
       AND (o.status = 'paid' OR (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') >= ${end}::timestamp)`)[0].v;
   // Payable to hosts: shares recognised by month end, less what was paid out by then.
-  const recognisedPayable = (await sql`
-    SELECT COALESCE(sum(o.payout_amount), 0) AS v FROM orders o
+  // payout_amount is the hosts' side in full; co-hosts' part of it is in
+  // order_cohost_shares, so the two are split here.
+  const recognised = (await sql`
+    SELECT COALESCE(sum(o.payout_amount), 0) AS v,
+           COALESCE(sum((SELECT COALESCE(sum(s.amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id)), 0) AS co
+    FROM orders o
     WHERE (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$') AND (
       (o.status = 'paid' AND o.arrival < ${end}::date)
-      OR (o.status = 'cancelled' AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp))`)[0].v;
-  const paidOut = (await sql`
-    SELECT COALESCE(sum(CASE WHEN p.payee_type = 'host' THEN p.gross - p.commission - p.cohost_shares ELSE p.gross END), 0) AS v
+      OR (o.status = 'cancelled' AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp))`)[0];
+  const recognisedCo = Number(recognised.co) || 0, recognisedHost = (Number(recognised.v) || 0) - recognisedCo;
+  const paid = (await sql`
+    SELECT COALESCE(sum(p.gross - p.commission - p.cohost_shares) FILTER (WHERE p.payee_type = 'host'), 0) AS host,
+           COALESCE(sum(p.gross) FILTER (WHERE p.payee_type <> 'host'), 0) AS co
     FROM payouts p WHERE p.status = 'sent' AND COALESCE(p.kind, 'booking') = 'booking'
       AND EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'))
-      AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`)[0].v;
+      AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`)[0];
+  const payableHost = r2(Math.max(0, recognisedHost - Number(paid.host))), payableCo = r2(Math.max(0, recognisedCo - Number(paid.co)));
   let depositsHeld = 0;
   try { depositsHeld = (await sql`SELECT COALESCE(sum(deposit_amount), 0) AS v FROM orders o WHERE deposit_status IN ('held', 'disputed') AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')`)[0].v; } catch (e) { depositsHeld = 0; }
 
@@ -206,9 +213,15 @@ async function accountsReport(sql, month) {
     received: r2(cash.reduce((t, c) => t + c.amountIn, 0)),
     refunded: r2(cash.filter(c => /^Refund/.test(c.type)).reduce((t, c) => t + c.amountOut, 0)),
     paidOut: r2(cash.filter(c => /^Payout/.test(c.type)).reduce((t, c) => t + c.amountOut, 0)),
+    paidOutHosts: r2(cash.filter(c => /^Payout/.test(c.type) && c.type !== 'Payout to co-host').reduce((t, c) => t + c.amountOut, 0)),
+    paidOutCohosts: r2(cash.filter(c => c.type === 'Payout to co-host').reduce((t, c) => t + c.amountOut, 0)),
+    tdsHosts: r2(payouts.filter(p => p.payee_type === 'host').reduce((t, p) => t + Number(p.tds || 0), 0)),
+    tdsCohosts: r2(payouts.filter(p => p.payee_type !== 'host').reduce((t, p) => t + Number(p.tds || 0), 0)),
     balances: {
       advanceFromGuests: r2(adv),
-      payableToHosts: r2(Math.max(0, Number(recognisedPayable) - Number(paidOut))),
+      payableToHosts: r2(payableHost + payableCo),     // hosts and co-hosts together
+      payableHostsOnly: payableHost,
+      payableCohosts: payableCo,
       depositsHeldToday: r2(depositsHeld),
       gstPayable: sum(bookings, 'gstPayable'),
       tdsPayable: tdsDeducted
@@ -226,7 +239,208 @@ async function accountsReport(sql, month) {
   summary.income.total = r2(summary.income.commission + summary.income.serviceFee);
   summary.income.afterRazorpay = r2(summary.income.total - summary.razorpay.charges);
   if (feeOf.unknown) summary.notes.unshift(`Razorpay’s charges are not known yet for ${feeOf.unknown} transaction${feeOf.unknown === 1 ? '' : 's'}${feeOf.setupNeeded ? ' — apply the database update “razorpay-fees” in Admin → Database updates' : ' — open this month again in a little while'}.`);
+  summary.statement = await buildStatement(sql, { start, end, label, bookings, cash, payouts, receipts0: receipts, summary });
   return { month: label, summary, bookings, cash };
+}
+
+// ---------------------------------------------------------------------------
+// The statement: the month as the CA posts it in Tally, ledger by ledger.
+// Each liability or receivable is shown as opening + in − out = closing, so
+// the closing figures carry straight into next month's opening.
+// ---------------------------------------------------------------------------
+// Balances at the START of a day (India time): everything before it.
+async function balancesAt(sql, day) {
+  const one = async (q) => { try { return (await q)[0] || {}; } catch (e) { return { failed: true }; } };
+  const ord = await one(sql`
+    SELECT COALESCE(sum(o.total - COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0)), 0) AS received,
+           COALESCE(sum(COALESCE(o.deposit_amount, 0)), 0) AS deposits
+    FROM orders o
+    WHERE o.status IN ('paid', 'cancelled') AND o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'
+      AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp`);
+  const chg = await one(sql`
+    SELECT COALESCE(sum(c.difference), 0) AS received FROM booking_changes c
+    WHERE c.status = 'applied' AND c.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND c.difference > 0
+      AND (c.applied_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp`);
+  const ref = await one(sql`
+    SELECT COALESCE(sum(r.amount) FILTER (WHERE r.kind LIKE 'deposit%'), 0) / 100.0 AS deposit,
+           COALESCE(sum(r.amount) FILTER (WHERE r.kind NOT LIKE 'deposit%'), 0) / 100.0 AS other
+    FROM refunds r
+    WHERE r.status = 'processed' AND r.razorpay_refund_id ~ '^rfnd_[A-Za-z0-9]{14}$'
+      AND (r.created_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp`);
+  const fees = await one(sql`
+    SELECT COALESCE(sum(f.fee_paise), 0) / 100.0 AS fee FROM razorpay_fees f
+    WHERE f.kind = 'payment' AND (
+      EXISTS (SELECT 1 FROM orders o WHERE o.razorpay_payment_id = f.ref_id AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp)
+      OR EXISTS (SELECT 1 FROM booking_changes c WHERE c.razorpay_payment_id = f.ref_id AND (c.applied_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp))`);
+  const setl = await one(sql`
+    SELECT COALESCE(sum(amount_paise), 0) / 100.0 AS settled FROM razorpay_settlements
+    WHERE (settled_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp`);
+  const rec = await one(sql`
+    SELECT COALESCE(sum(o.payout_amount), 0) AS hostside,
+           COALESCE(sum((SELECT COALESCE(sum(s.amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id)), 0) AS co
+    FROM orders o
+    WHERE o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$' AND (
+      (o.status = 'paid' AND o.arrival < ${day}::date)
+      OR (o.status = 'cancelled' AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp))`);
+  const paid = await one(sql`
+    SELECT COALESCE(sum(p.gross - p.commission - p.cohost_shares) FILTER (WHERE p.payee_type = 'host' AND COALESCE(p.kind, 'booking') = 'booking'), 0) AS host,
+           COALESCE(sum(p.gross) FILTER (WHERE p.payee_type <> 'host' AND COALESCE(p.kind, 'booking') = 'booking'), 0) AS co,
+           COALESCE(sum(p.gross) FILTER (WHERE p.kind = 'deposit'), 0) AS deposit
+    FROM payouts p
+    WHERE p.status = 'sent' AND EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')
+      AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp`);
+  const adv = await one(sql`
+    SELECT COALESCE(sum(o.total - COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0) - COALESCE(o.deposit_amount, 0)), 0) AS v
+    FROM orders o
+    WHERE o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$' AND o.status IN ('paid', 'cancelled')
+      AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp AND o.arrival >= ${day}::date
+      AND (o.status = 'paid' OR (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') >= ${day}::timestamp)`);
+  const co = Number(rec.co) || 0;
+  return {
+    receivable: r2((Number(ord.received) || 0) + (Number(chg.received) || 0) - (Number(ref.deposit) || 0) - (Number(ref.other) || 0) - (Number(fees.fee) || 0) - (Number(setl.settled) || 0)),
+    settlementsKnown: !setl.failed,
+    advance: r2(adv.v),
+    host: r2((Number(rec.hostside) || 0) - co - (Number(paid.host) || 0)),
+    cohost: r2(co - (Number(paid.co) || 0)),
+    deposits: r2((Number(ord.deposits) || 0) - (Number(ref.deposit) || 0) - (Number(paid.deposit) || 0))
+  };
+}
+
+// Razorpay settlements (money Razorpay moved to Aerva's bank), kept in
+// razorpay_settlements. New ones are fetched from Razorpay each time.
+async function syncSettlements(sql) {
+  const keyId = process.env.RAZORPAY_KEY_ID, secret = process.env.RAZORPAY_KEY_SECRET;
+  let last;
+  try { last = (await sql`SELECT max(settled_at) AS t FROM razorpay_settlements`)[0].t; } catch (e) { return { ok: false, setupNeeded: true }; }
+  if (!keyId || !secret) return { ok: false };
+  const auth = 'Basic ' + Buffer.from(`${keyId}:${secret}`).toString('base64');
+  const from = last ? Math.floor(new Date(last).getTime() / 1000) - 86400 : Math.floor(Date.UTC(2026, 0, 1) / 1000);
+  const started = Date.now();
+  try {
+    for (let skip = 0; skip < 1000 && Date.now() - started < 5000; skip += 100) {
+      const res = await fetch(`https://api.razorpay.com/v1/settlements?from=${from}&count=100&skip=${skip}`, { headers: { Authorization: auth } });
+      if (!res.ok) return { ok: false };
+      const d = await res.json();
+      const items = (d && d.items) || [];
+      for (const st of items) {
+        if (st.status !== 'processed') continue;
+        await sql`INSERT INTO razorpay_settlements (id, amount_paise, fees_paise, tax_paise, utr, settled_at)
+                  VALUES (${st.id}, ${Math.round(Number(st.amount) || 0)}, ${Math.round(Number(st.fees) || 0)}, ${Math.round(Number(st.tax) || 0)}, ${st.utr || null}, to_timestamp(${Number(st.created_at) || 0}))
+                  ON CONFLICT (id) DO NOTHING`;
+      }
+      if (items.length < 100) break;
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false }; }
+}
+
+async function buildStatement(sql, { start, end, label, bookings, cash, payouts, receipts0, summary }) {
+  const sum = (list, f) => r2(list.reduce((t, x) => t + (Number(f(x)) || 0), 0));
+  // Razorpay's fee on earlier payments too (for the opening receivable).
+  try {
+    const older = await sql`
+      SELECT o.id, o.razorpay_payment_id AS ref FROM orders o
+      WHERE o.status IN ('paid', 'cancelled') AND o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'
+        AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${start}::timestamp
+        AND NOT EXISTS (SELECT 1 FROM razorpay_fees f WHERE f.ref_id = o.razorpay_payment_id)
+      ORDER BY o.created_at DESC LIMIT 40`;
+    if (older.length) await razorpayFees(sql, older.map(o => ({ ref: o.ref, kind: 'payment', orderId: o.id })));
+  } catch (e) { /* table not created yet */ }
+  const sync = await syncSettlements(sql);
+  const [open, close] = [await balancesAt(sql, start), await balancesAt(sql, end)];
+  let settledIn = 0;
+  try { settledIn = r2(Number((await sql`SELECT COALESCE(sum(amount_paise), 0) / 100.0 AS v FROM razorpay_settlements
+      WHERE (settled_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (settled_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`)[0].v)); } catch (e) { settledIn = 0; }
+
+  const receipts = cash.filter(c => /^Receipt/.test(c.type));
+  const receivedAll = sum(receipts, c => c.amountIn);
+  const isDepRefund = (c) => /^Refund/.test(c.type) && /deposit/i.test(c.type);
+  const refundsDeposit = sum(cash.filter(isDepRefund), c => c.amountOut);
+  const refundsBooking = sum(cash.filter(c => /^Refund/.test(c.type) && !isDepRefund(c)), c => c.amountOut);
+  const payFees = sum(receipts, c => c.razorpayFee), payFeesGst = sum(receipts, c => c.razorpayFeeGst);
+  const pouts = cash.filter(c => /^Payout/.test(c.type));
+  const poutFees = sum(pouts, c => c.razorpayFee), poutFeesGst = sum(pouts, c => c.razorpayFeeGst);
+
+  const depReceived = sum(receipts0, o => o.deposit_amount);
+  const depPaidHost = sum(payouts.filter(p => p.kind === 'deposit'), p => p.gross);
+
+  const hostP = payouts.filter(p => p.payee_type === 'host' && p.kind !== 'deposit');
+  const coP = payouts.filter(p => p.payee_type !== 'host' && p.kind !== 'deposit');
+  const earnedHost = sum(bookings, b => b.hostPayable - b.cohostShares), earnedCo = sum(bookings, b => b.cohostShares);
+
+  const income = summary.income;
+  const gstOut = summary.gstOnStaysPayable;
+  const tdsHost = sum(payouts.filter(p => p.payee_type === 'host'), p => p.tds), tdsCo = sum(payouts.filter(p => p.payee_type !== 'host'), p => p.tds);
+  const transferred = sum(bookings, b => b.serviceFee + b.commissionIncome + b.hostPayable + b.gstPayable);
+  const advIn = r2(receivedAll - depReceived);
+
+  const L = (k, v, g, m, o = {}) => Object.assign({ k, v: r2(v), g, m }, o);
+  const check = (label, opening, moves, closing) => {
+    const diff = r2(opening + moves.reduce((t, x) => t + x, 0) - closing);
+    return Math.abs(diff) >= 1 ? [L('Timing difference (for the CA to look at)', -diff, '', 'Opening plus this month’s movements does not equal the closing balance by this amount — usually a refund or payout dated in a different month from its booking.')] : [];
+  };
+
+  const sections = [
+    { title: 'Receivable from Razorpay', note: 'Guests pay through Razorpay; Razorpay pays Aerva’s bank a day or two later. Until then the money is a receivable (Razorpay is a debtor in Tally).', lines: [
+      L('Opening receivable', open.receivable, 'Sundry debtors: Razorpay', 'Collected by Razorpay but not yet in the bank at the start of the month'),
+      L('Received from guests (incl. deposits)', receivedAll, 'Sundry debtors: Razorpay', 'Every payment guests made this month through Razorpay', { sign: '+' }),
+      L('Refunded to guests', -(refundsBooking + refundsDeposit), 'Sundry debtors: Razorpay', 'Refunds Razorpay processed this month (booking refunds and deposit refunds)', { sign: '−' }),
+      L('Razorpay charges on payments (incl. GST)', -payFees, 'Sundry debtors: Razorpay', 'Razorpay keeps its fee out of the settlement', { sign: '−' }),
+      L('Settled to Aerva’s bank', -settledIn, 'Bank', sync.ok ? 'Money Razorpay paid into the bank this month' : 'Razorpay’s settlements could not be read just now — take them from the bank statement', { sign: '−' }),
+      ...check('rzp', open.receivable, [receivedAll, -(refundsBooking + refundsDeposit), -payFees, -settledIn], close.receivable),
+      L('Closing receivable', close.receivable, 'Sundry debtors: Razorpay', 'Still with Razorpay at month end — should match Razorpay’s dashboard balance', { strong: true })
+    ] },
+    { title: 'Advance from guests (liability)', note: 'Booking money is not Aerva’s income: it is held for the stay until check-in (or cancellation).', lines: [
+      L('Opening advance', open.advance, 'Current liabilities: Advance from guests', 'Paid for stays that had not started by the start of the month'),
+      L('Received for bookings', advIn, 'Current liabilities: Advance from guests', 'Payments this month, less security deposits', { sign: '+' }),
+      L('Refunded to guests', -refundsBooking, 'Current liabilities: Advance from guests', 'Booking refunds processed this month (cancellations, changes)', { sign: '−' }),
+      L('Transferred at check-in or cancellation', -transferred, 'Current liabilities: Advance from guests', 'Split into Aerva’s income, GST and the host’s and co-hosts’ share (below)', { sign: '−' }),
+      ...check('adv', open.advance, [advIn, -refundsBooking, -transferred], close.advance),
+      L('Closing advance', close.advance, 'Current liabilities: Advance from guests', 'Paid for stays that start after this month', { strong: true })
+    ] },
+    { title: 'Aerva’s income and expenses (profit and loss)', lines: [
+      L('Commission from hosts', income.commission, 'Income: Commission', 'Aerva’s commission on stays checked in or cancelled this month'),
+      L('Guest service fees', income.serviceFee, 'Income: Service fees', 'Aerva’s fee from guests on the same stays'),
+      L('Total income', income.total, 'Income', 'Aerva’s revenue for the month', { strong: true }),
+      L('Razorpay charges (before GST)', -r2(payFees - payFeesGst + poutFees - poutFeesGst), 'Indirect expenses: Bank charges', 'Razorpay’s fees on payments and payouts — an expense', { sign: '−' }),
+      L('Income after Razorpay charges', r2(income.total - (payFees - payFeesGst + poutFees - poutFeesGst)), 'Profit and loss', 'Before Aerva’s other expenses', { strong: true })
+    ] },
+    { title: 'GST', note: 'GST on Aerva’s own commission and service fee is not shown here — confirm with your CA.', lines: [
+      L('GST on bookings (s.9(5))', gstOut, 'Duties & taxes: Output GST', 'GST on stays checked in or cancelled this month — Aerva pays it to the government'),
+      L('GST on Razorpay charges', -r2(payFeesGst + poutFeesGst), 'Duties & taxes: Input GST', 'Can be claimed as input tax credit', { sign: '−' }),
+      L('Net GST payable', r2(gstOut - payFeesGst - poutFeesGst), 'Duties & taxes', 'Before GST on Aerva’s own fees', { strong: true })
+    ] },
+    { title: 'TDS (194-O)', note: 'Deposit with the government by the 7th of next month.', lines: [
+      L('TDS on hosts', tdsHost, 'Duties & taxes: TDS payable', 'Cut from payouts to hosts this month'),
+      L('TDS on co-hosts', tdsCo, 'Duties & taxes: TDS payable', 'Cut from payouts to co-hosts this month'),
+      L('Total TDS payable', r2(tdsHost + tdsCo), 'Duties & taxes: TDS payable', '', { strong: true })
+    ] },
+    { title: 'Payable to hosts (liability)', lines: [
+      L('Opening payable', open.host, 'Sundry creditors: Hosts', 'Owed to hosts at the start of the month'),
+      L('Hosts’ share of stays this month', earnedHost, 'Sundry creditors: Hosts', 'From stays checked in or cancelled this month (after Aerva’s commission and co-hosts’ share)', { sign: '+' }),
+      L('Money sent to hosts', -sum(hostP, p => p.net), 'Bank', 'Payouts sent this month', { sign: '−' }),
+      L('TDS on hosts', -sum(hostP, p => p.tds), 'Duties & taxes: TDS payable', 'Part of the host’s money, paid to the government instead', { sign: '−' }),
+      L('Coupons recovered from hosts', -sum(hostP, p => p.deductions), 'Sundry creditors: Hosts', 'Host-funded coupons taken from their payout', { sign: '−' }),
+      ...check('host', open.host, [earnedHost, -sum(hostP, p => p.net), -sum(hostP, p => p.tds), -sum(hostP, p => p.deductions)], close.host),
+      L('Closing payable', close.host, 'Sundry creditors: Hosts', 'Owed to hosts at month end', { strong: true })
+    ] },
+    { title: 'Payable to co-hosts (liability)', note: 'Co-hosts are paid from the host’s share, not from Aerva’s income.', lines: [
+      L('Opening payable', open.cohost, 'Sundry creditors: Co-hosts', 'Owed to co-hosts at the start of the month'),
+      L('Co-hosts’ share of stays this month', earnedCo, 'Sundry creditors: Co-hosts', 'From stays checked in or cancelled this month', { sign: '+' }),
+      L('Money sent to co-hosts', -sum(coP, p => p.net), 'Bank', 'Payouts sent this month', { sign: '−' }),
+      L('TDS on co-hosts', -sum(coP, p => p.tds), 'Duties & taxes: TDS payable', '', { sign: '−' }),
+      ...check('co', open.cohost, [earnedCo, -sum(coP, p => p.net), -sum(coP, p => p.tds)], close.cohost),
+      L('Closing payable', close.cohost, 'Sundry creditors: Co-hosts', 'Owed to co-hosts at month end', { strong: true })
+    ] },
+    { title: 'Security deposits (liability)', note: 'Refundable deposits are the guest’s money until returned, or paid to the host for damage.', lines: [
+      L('Opening deposits held', open.deposits, 'Current liabilities: Security deposits', 'Held at the start of the month'),
+      L('Deposits received', depReceived, 'Current liabilities: Security deposits', 'Collected with bookings this month', { sign: '+' }),
+      L('Deposits refunded to guests', -refundsDeposit, 'Current liabilities: Security deposits', 'Returned after check-out', { sign: '−' }),
+      L('Deposits paid to hosts (damage)', -depPaidHost, 'Current liabilities: Security deposits', 'Paid to hosts for damage claims, before TDS', { sign: '−' }),
+      L('Closing deposits held', close.deposits, 'Current liabilities: Security deposits', 'Held at month end', { strong: true })
+    ] }
+  ];
+  return { month: label, sections, settlementsKnown: sync.ok, settlementsSetupNeeded: !!sync.setupNeeded };
 }
 
 // Razorpay's fee and the GST on it, per payment (pay_…) or payout (pout_…).
