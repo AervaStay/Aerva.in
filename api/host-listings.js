@@ -92,7 +92,7 @@ const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
 const { sanitizeBody } = require('./_plain-text');
-const { AGREEMENT_VERSION } = require('./_agreements');
+const { AGREEMENT_VERSION, HOST_AGREEMENT_VERSION } = require('./_agreements');
 const { requestContext } = require('./_audit-log');
 const { encryptField, decryptField, maskPan, maskAccount, maskGstin, encryptionReady } = require('./_secure-fields');
 const { COHOST_PERMISSIONS, FULL_ONLY, ALWAYS_LABEL, cleanPermissions, cleanEmail, resolveActingHost, cohostCan,
@@ -1187,37 +1187,118 @@ module.exports = async (req, res) => {
     return res.status(200).json(info);
   }
 
-  // ---- Host agreement: one-time acceptance for hosts who listed before
-  // it existed (new hosts accept it when submitting a listing) ----
-  // GET ?hostAgreement=1 → { isHost, accepted, version }
+  // ---- Aerva Host Agreement (see _host-agreement.js) ----
+  // Every listing accepts the current version when submitted; a revision is
+  // accepted (or declined) here, for all the host's listings at once.
+  // GET ?hostAgreement=1 → { isHost, accepted, version, noticeAt, respondBy, declined }
   if (req.method === 'GET' && (req.query || {}).hostAgreement === '1' && (req.query || {}).actingHost === undefined) {
     try {
       const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-      if (!g[0] || !g[0].host_id) return res.status(200).json({ isHost: false, accepted: false, version: AGREEMENT_VERSION });
-      let v = null;
-      try { v = (await sql`SELECT host_agreement_version FROM hosts WHERE id = ${g[0].host_id}`)[0]?.host_agreement_version || null; }
-      catch (err) { console.error('host agreement status unavailable:', err.message); }
-      return res.status(200).json({ isHost: true, accepted: v === AGREEMENT_VERSION, version: AGREEMENT_VERSION });
+      if (!g[0] || !g[0].host_id) return res.status(200).json({ isHost: false, accepted: false, version: HOST_AGREEMENT_VERSION });
+      let h = {};
+      try { h = (await sql`SELECT host_agreement_version, host_agreement_notice_version, host_agreement_notice_at, host_agreement_declined_at FROM hosts WHERE id = ${g[0].host_id}`)[0] || {}; }
+      catch (err) {
+        try { h = (await sql`SELECT host_agreement_version FROM hosts WHERE id = ${g[0].host_id}`)[0] || {}; } catch (e2) { h = {}; }
+      }
+      const { NOTICE_DAYS } = require('./_host-agreement');
+      const noticed = h.host_agreement_notice_version === HOST_AGREEMENT_VERSION && h.host_agreement_notice_at;
+      const listed = (await sql`SELECT count(*)::int AS n FROM listings WHERE host_id = ${g[0].host_id} AND status IN ('approved', 'pending', 'deactivated')`)[0].n > 0;
+      return res.status(200).json({ isHost: true, hasListings: listed, accepted: h.host_agreement_version === HOST_AGREEMENT_VERSION, version: HOST_AGREEMENT_VERSION,
+        noticeAt: noticed ? h.host_agreement_notice_at : null,
+        respondBy: noticed ? new Date(new Date(h.host_agreement_notice_at).getTime() + NOTICE_DAYS * 86400e3).toISOString() : null,
+        declinedAt: h.host_agreement_declined_at || null });
     } catch (err) {
       return res.status(500).json({ error: 'Could not check the host agreement right now.' });
     }
   }
-  // POST { acceptHostAgreement: { version } }
-  if (req.method === 'POST' && req.body && req.body.acceptHostAgreement && (req.query || {}).actingHost === undefined) {
+  // GET ?hostAgreements=1 → every agreement this host has accepted (and any
+  // notice, decline or termination), newest first.
+  if (req.method === 'GET' && (req.query || {}).hostAgreements === '1' && (req.query || {}).actingHost === undefined) {
     try {
       const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-      if (!g[0] || !g[0].host_id) return res.status(403).json({ error: 'Only hosts accept the host agreement.' });
-      if ((req.body.acceptHostAgreement || {}).version !== AGREEMENT_VERSION) {
-        return res.status(400).json({ error: 'Please accept the current host agreement.', agreementVersion: AGREEMENT_VERSION });
+      if (!g[0] || !g[0].host_id) return res.status(200).json({ items: [] });
+      let items = [];
+      try {
+        items = await sql`SELECT a.version, a.action, a.created_at, a.emailed, a.via, l.property_name AS listing
+                          FROM host_agreement_acceptances a LEFT JOIN listings l ON l.id = a.listing_id
+                          WHERE a.host_id = ${g[0].host_id} ORDER BY a.created_at DESC, a.id DESC LIMIT 200`;
+      } catch (err) { items = []; }
+      return res.status(200).json({ current: HOST_AGREEMENT_VERSION, items: items.map(r => ({ version: r.version, action: r.action, at: r.created_at, emailed: r.emailed, listing: r.listing || null })) });
+    } catch (err) {
+      return res.status(500).json({ error: 'Could not load your agreements right now.' });
+    }
+  }
+  // GET ?hostAgreementText=<version> → the exact text of that version.
+  if (req.method === 'GET' && typeof (req.query || {}).hostAgreementText === 'string') {
+    try {
+      const v = String(req.query.hostAgreementText).slice(0, 40);
+      let row = null;
+      try { row = (await sql`SELECT version, title, content, published_at FROM host_agreement_versions WHERE version = ${v}`)[0] || null; } catch (err) { row = null; }
+      if (!row) {
+        const a = require('./_host-agreement').loadAgreement();
+        if (a && a.version === v) return res.status(200).json({ version: a.version, title: a.title, intro: a.intro, clauses: a.clauses });
+        return res.status(404).json({ error: 'That version could not be found.' });
       }
+      const c = row.content || {};
+      return res.status(200).json({ version: row.version, title: row.title, intro: c.intro || '', clauses: c.clauses || [], publishedAt: row.published_at });
+    } catch (err) {
+      return res.status(500).json({ error: 'Could not load the agreement right now.' });
+    }
+  }
+  // POST { acceptHostAgreement: { version } } — accepts the current version
+  // for every listing of this host, emails a copy, and restores listings that
+  // were deactivated only because a revision was not accepted.
+  if (req.method === 'POST' && req.body && req.body.acceptHostAgreement && (req.query || {}).actingHost === undefined) {
+    try {
+      const g = await sql`SELECT g.host_id, g.email, g.name FROM guests g WHERE g.id = ${guestId}`;
+      if (!g[0] || !g[0].host_id) return res.status(403).json({ error: 'Only hosts accept the host agreement.' });
+      if ((req.body.acceptHostAgreement || {}).version !== HOST_AGREEMENT_VERSION) {
+        return res.status(400).json({ error: 'Please accept the current host agreement.', agreementVersion: HOST_AGREEMENT_VERSION });
+      }
+      const hostId = g[0].host_id;
       const ctx = requestContext(req);
-      await sql`UPDATE hosts SET host_agreement_version = ${AGREEMENT_VERSION}, host_agreement_accepted_at = now(), host_agreement_ip = ${ctx.ip} WHERE id = ${g[0].host_id}`;
-      await logAudit(sql, { action: 'host_agreement_accepted', success: true, actorType: 'host', actorIdentifier: String(g[0].host_id),
-        targetType: 'host', targetId: g[0].host_id, metadata: { version: AGREEMENT_VERSION, ip: ctx.ip, via: 'dashboard' } });
-      return res.status(200).json({ success: true, version: AGREEMENT_VERSION });
+      const mine = await sql`SELECT id, property_name, status FROM listings WHERE host_id = ${hostId} AND status IN ('approved', 'pending', 'deactivated', 'draft', 'rejected')`;
+      const r = await require('./_host-agreement').recordAcceptance(sql, { hostId, guestId, email: g[0].email, name: g[0].name || '',
+        listings: mine.map(l => ({ id: l.id, name: l.property_name })), ip: ctx.ip, via: 'dashboard' });
+      // Listings switched off only because the agreement ended come back,
+      // unless their name was taken meanwhile (one name per pincode).
+      const restored = [], keptOff = [];
+      let off = [];
+      try { off = await sql`SELECT id, property_name, pincode, property_type, listing_type FROM listings WHERE host_id = ${hostId} AND status = 'deactivated' AND deactivated_by = 'agreement'`; } catch (e) { off = []; }
+      const hs = (await sql`SELECT hosting_status FROM hosts WHERE id = ${hostId}`)[0] || {};
+      if (hs.hosting_status !== 'deactivated') {
+        for (const l of off) {
+          if ((l.listing_type || 'stay') === 'stay') {
+            const clash = await findNameClashInPincode(sql, { propertyName: l.property_name, pincode: l.pincode, propertyType: l.property_type, excludeListingId: l.id });
+            if (clash) { keptOff.push(l.property_name); continue; }
+          }
+          await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL WHERE id = ${l.id} AND status = 'deactivated' AND deactivated_by = 'agreement'`;
+          restored.push(l.id);
+        }
+      }
+      await logAudit(sql, { action: 'host_agreement_accepted', success: true, actorType: 'host', actorIdentifier: String(hostId),
+        targetType: 'host', targetId: hostId, metadata: { version: HOST_AGREEMENT_VERSION, ip: ctx.ip, via: 'dashboard', listings: mine.map(l => l.id), restored, emailed: r.emailed } });
+      return res.status(200).json({ success: true, version: HOST_AGREEMENT_VERSION, emailed: r.emailed, restored: restored.length,
+        keptOff: keptOff.length ? keptOff : undefined });
     } catch (err) {
       console.error('acceptHostAgreement failed:', err);
       return res.status(500).json({ error: 'Could not save your acceptance right now. Please try again.' });
+    }
+  }
+  // POST { declineHostAgreement: { version } } — the agreement ends: live
+  // listings are deactivated; confirmed bookings go ahead, payouts are paid.
+  if (req.method === 'POST' && req.body && req.body.declineHostAgreement && (req.query || {}).actingHost === undefined) {
+    try {
+      const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      if (!g[0] || !g[0].host_id) return res.status(403).json({ error: 'Only hosts can do this.' });
+      const ctx = requestContext(req);
+      const ids = await require('./_host-agreement').endAgreement(sql, g[0].host_id, { action: 'declined', guestId, ip: ctx.ip, via: 'dashboard' });
+      await logAudit(sql, { action: 'host_agreement_declined', success: true, actorType: 'host', actorIdentifier: String(g[0].host_id),
+        targetType: 'host', targetId: g[0].host_id, metadata: { version: HOST_AGREEMENT_VERSION, ip: ctx.ip, listingsDeactivated: ids } });
+      return res.status(200).json({ success: true, listingsDeactivated: ids.length });
+    } catch (err) {
+      console.error('declineHostAgreement failed:', err);
+      return res.status(500).json({ error: 'Could not save your answer right now. Please try again.' });
     }
   }
 
@@ -3828,8 +3909,8 @@ module.exports = async (req, res) => {
         pan_name: h.j && h.j.pan_name, bank_changed_at: h.j && h.j.bank_changed_at, bank_checked_at: h.j && h.j.bank_checked_at }, { who: 'host' }),
       bankPayoutsFrom: h.j && h.j.bank_changed_at && bankCheck.inChangeHold(h.j.bank_changed_at)
         ? new Date(new Date(h.j.bank_changed_at).getTime() + bankCheck.HOLD_HOURS_AFTER_CHANGE * 3600e3).toISOString() : null,
-      hostAgreementAccepted: hostAgreementVersion === AGREEMENT_VERSION,
-      hostAgreementVersion: AGREEMENT_VERSION
+      hostAgreementAccepted: hostAgreementVersion === HOST_AGREEMENT_VERSION,
+      hostAgreementVersion: HOST_AGREEMENT_VERSION
     } : null;
 
     // ---- Today ----

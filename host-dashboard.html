@@ -723,7 +723,7 @@
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-10-13a"></script>
-<script src="aerva-policies.js"></script>
+<script src="aerva-policies.js?v=2026-10-25c"></script>
 </head>
 <body>
 
@@ -4554,42 +4554,111 @@
 })();
 </script>
 <script>
-// ---- Host agreement: one-time acceptance for hosts who listed before it
-// existed. Shown at the top of My Collection until accepted. Not shown in
-// co-host mode. Text from aerva-policies.js; saved by host-listings.js.
+// ---- Aerva Host Agreement ----
+// 1. A banner at the top of My Collection when the current version has not
+//    been accepted (a revision): Accept, or Decline (which ends the
+//    agreement and deactivates live listings). Not shown in co-host mode.
+// 2. Account → Host Agreement: every agreement accepted, with the text of
+//    each version. Text from aerva-policies.js; saved by host-listings.js.
 (function(){
   if(window.AervaCohost && window.AervaCohost.get()) return;
-  const A = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements;
+  const P = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements;
   let token = null;
   try{ token = localStorage.getItem('aerva_guest_session'); }catch(e){}
-  if(!A || !token) return;
-  const API = (window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/host-listings';
+  if(!P || !P.host || !token) return;
+  const A = P.host, VERSION = P.hostVersion || P.version;
+  const API = (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/host-listings';
+  const H = { 'Authorization': 'Bearer ' + token };
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
-  fetch(API + '?hostAgreement=1', { headers: { 'Authorization': 'Bearer ' + token } })
-    .then(r => r.json()).then(d => {
-      if(!d || !d.isHost || d.accepted) return;
-      const wrap = document.querySelector('.wrap');
-      if(!wrap || document.getElementById('hostAgreementBanner')) return;
-      const box = document.createElement('div');
-      box.id = 'hostAgreementBanner';
-      box.className = 'notice-card';
-      box.style.cssText = 'margin:0 0 28px; padding:18px 20px;';
-      box.innerHTML = '<strong style="font-size:16px;">' + esc(A.host.title) + '</strong>'
-        + '<ul style="margin:10px 0 12px; padding-left:18px;">' + A.host.points.map(p => '<li style="font-size:14px; line-height:1.6; margin:4px 0;">' + esc(p) + '</li>').join('') + '</ul>'
-        + '<label style="display:flex; gap:10px; align-items:flex-start; font-size:14.5px; cursor:pointer;"><input type="checkbox" id="hostAgreeCheck" style="margin-top:3px; width:18px; height:18px;"> <span>' + esc(A.host.accept) + '</span></label>'
-        + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" id="hostAgreeBtn">Accept</button>'
-        + '<a href="index.html?view=policies&tab=host" target="_blank" rel="noopener" style="font-size:13.5px;">Read Aerva’s Policies</a>'
-        + '<span id="hostAgreeMsg" style="font-size:13.5px;"></span></div>';
-      wrap.insertBefore(box, wrap.firstChild);
-      document.getElementById('hostAgreeBtn').addEventListener('click', async () => {
-        const msg = document.getElementById('hostAgreeMsg');
-        if(!document.getElementById('hostAgreeCheck').checked){ msg.textContent = 'Tick the box to accept.'; return; }
-        const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-          body: JSON.stringify({ acceptHostAgreement: { version: A.version } }) });
-        const j = await r.json().catch(() => ({}));
-        if(r.ok) box.remove(); else msg.textContent = j.error || 'Could not save. Try again.';
+  const day = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' }); };
+  const textHtml = (a) => '<p style="font-size:13.5px; line-height:1.6; margin:0 0 6px;">' + esc(a.intro || '') + '</p>'
+    + (a.clauses || []).map(c => '<div style="margin:10px 0 0;"><strong style="font-size:13.5px;">' + esc(c.title) + '</strong><ul style="margin:4px 0 0; padding-left:18px;">'
+      + c.points.map(p => '<li style="font-size:13.5px; line-height:1.6; margin:3px 0;">' + esc(p) + '</li>').join('') + '</ul></div>').join('');
+  const scrollBox = (inner) => '<div style="max-height:340px; overflow:auto; border:1px solid #e6dccb; border-radius:8px; padding:10px 14px; margin:10px 0 12px; background:#fff;">' + inner + '</div>';
+
+  fetch(API + '?hostAgreement=1', { headers: H }).then(r => r.json()).then(d => {
+    if(!d || !d.isHost || d.accepted || !d.hasListings) return;
+    const wrap = document.querySelector('.wrap');
+    if(!wrap || document.getElementById('hostAgreementBanner')) return;
+    const box = document.createElement('div');
+    box.id = 'hostAgreementBanner';
+    box.className = 'notice-card';
+    box.style.cssText = 'margin:0 0 28px; padding:18px 20px;';
+    box.innerHTML = '<strong style="font-size:16px;">' + esc(A.title) + ' — version ' + esc(VERSION) + '</strong>'
+      + '<p style="font-size:14px; line-height:1.6; margin:8px 0;">Aerva has revised the Host Agreement. Please read it and accept it to keep hosting'
+      + (d.respondBy ? ', <strong>by ' + esc(day(d.respondBy)) + '</strong>' : '') + '. If you decline, or do not accept it in time, your agreement with Aerva ends and your listings are deactivated; confirmed bookings go ahead and amounts due to you are paid.</p>'
+      + scrollBox(textHtml(A))
+      + '<label style="display:flex; gap:10px; align-items:flex-start; font-size:14.5px; cursor:pointer;"><input type="checkbox" id="hostAgreeCheck" style="margin-top:3px; width:18px; height:18px;"> <span>' + esc(A.accept.replace(' for this listing', ' for all my listings')) + '</span></label>'
+      + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" id="hostAgreeBtn">Accept</button>'
+      + '<button type="button" class="ch-btn" id="hostDeclineBtn">Decline</button>'
+      + '<a href="index.html?view=policies&doc=host-agreement" target="_blank" rel="noopener" style="font-size:13.5px;">Open in a new tab</a>'
+      + '<span id="hostAgreeMsg" style="font-size:13.5px;"></span></div>';
+    wrap.insertBefore(box, wrap.firstChild);
+    const msg = document.getElementById('hostAgreeMsg');
+    document.getElementById('hostAgreeBtn').addEventListener('click', async () => {
+      if(!document.getElementById('hostAgreeCheck').checked){ msg.textContent = 'Tick the box to accept.'; return; }
+      const r = await fetch(API, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, H), body: JSON.stringify({ acceptHostAgreement: { version: VERSION } }) });
+      const j = await r.json().catch(() => ({}));
+      if(!r.ok){ msg.textContent = j.error || 'Could not save. Try again.'; return; }
+      box.innerHTML = '<strong>Thank you — you have accepted the ' + esc(A.title) + ' (version ' + esc(VERSION) + ').</strong>'
+        + '<p style="font-size:14px; margin:6px 0 0;">' + (j.emailed ? 'A copy has been emailed to you. ' : '') + 'You can see it any time under Account → Host Agreement.'
+        + (j.restored ? ' ' + j.restored + ' listing' + (j.restored === 1 ? ' is' : 's are') + ' live again.' : '')
+        + (j.keptOff && j.keptOff.length ? ' ' + esc(j.keptOff.join(', ')) + ' stayed paused because another property now uses that name nearby — write to hello@aerva.in and we will help.' : '') + '</p>';
+      loadHistory();
+    });
+    document.getElementById('hostDeclineBtn').addEventListener('click', async () => {
+      if(!confirm('Decline the revised Host Agreement? Your agreement with Aerva ends and all your live listings are deactivated. Confirmed bookings go ahead and amounts due to you are paid. You can accept the agreement later to bring them back.')) return;
+      const r = await fetch(API, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, H), body: JSON.stringify({ declineHostAgreement: { version: VERSION } }) });
+      const j = await r.json().catch(() => ({}));
+      if(!r.ok){ msg.textContent = j.error || 'Could not save. Try again.'; return; }
+      msg.textContent = 'Your agreement has ended. ' + (j.listingsDeactivated || 0) + ' listing' + (j.listingsDeactivated === 1 ? ' was' : 's were') + ' deactivated. You can accept the agreement here at any time to bring them back.';
+      loadHistory();
+    });
+  }).catch(() => {});
+
+  // Account → Host Agreement
+  const LABEL = { accepted: 'Accepted', notified: 'Revision notice sent', declined: 'Declined', terminated: 'Ended — not accepted in time' };
+  function loadHistory(){
+    const holder = document.getElementById('accountControls');
+    if(!holder) return;
+    let sec = document.getElementById('hostAgreementHistory');
+    if(!sec){
+      sec = document.createElement('div');
+      sec.id = 'hostAgreementHistory';
+      sec.style.cssText = 'margin:0 0 18px;';
+      const first = holder.querySelector('#hostingControl');
+      holder.insertBefore(sec, first);
+    }
+    fetch(API + '?hostAgreements=1', { headers: H }).then(r => r.json()).then(d => {
+      const items = (d && d.items) || [];
+      // One line per acceptance moment (listings accepted together are grouped).
+      const groups = [];
+      items.forEach(it => {
+        const key = it.version + '|' + it.action + '|' + String(it.at).slice(0, 16);
+        const g = groups.find(x => x.key === key);
+        if(g){ if(it.listing) g.listings.push(it.listing); } else groups.push({ key, version: it.version, action: it.action, at: it.at, emailed: it.emailed, listings: it.listing ? [it.listing] : [] });
       });
+      sec.innerHTML = '<div style="font-weight:600; font-size:14.5px; margin-bottom:6px;">Host Agreement</div>'
+        + '<div style="font-size:13.5px; opacity:0.75; margin-bottom:8px;">Current version: ' + esc(VERSION) + '. <a href="#" data-ver="' + esc(VERSION) + '" class="ha-view">Read it</a></div>'
+        + (groups.length ? '<ul style="margin:0; padding-left:18px;">' + groups.slice(0, 30).map(g => '<li style="font-size:13.5px; line-height:1.7;">'
+            + esc(LABEL[g.action] || g.action) + ' — version ' + esc(g.version) + ', ' + esc(day(g.at))
+            + (g.listings.length ? ' · ' + esc(g.listings.join(', ')) : '')
+            + (g.action === 'accepted' && g.emailed ? ' · copy emailed' : '')
+            + ' · <a href="#" class="ha-view" data-ver="' + esc(g.version) + '">View</a></li>').join('') + '</ul>'
+          : '<div style="font-size:13.5px; opacity:0.6;">Agreements you accept appear here.</div>')
+        + '<div id="haText" style="display:none;"></div>';
+      sec.querySelectorAll('.ha-view').forEach(a => a.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const out = document.getElementById('haText');
+        const r = await fetch(API + '?hostAgreementText=' + encodeURIComponent(a.dataset.ver), { headers: H });
+        const t = await r.json().catch(() => ({}));
+        out.style.display = 'block';
+        out.innerHTML = r.ok ? '<div style="font-weight:600; font-size:14px; margin-top:12px;">' + esc(t.title) + ' — version ' + esc(t.version) + '</div>' + scrollBox(textHtml(t))
+          : '<p style="font-size:13.5px;">' + esc(t.error || 'Could not load it.') + '</p>';
+      }));
     }).catch(() => {});
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadHistory); else loadHistory();
 })();
 </script>
 <script>

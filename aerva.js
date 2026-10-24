@@ -11954,11 +11954,14 @@
     if(!A || !A[kind]) return '';
     const a = A[kind];
     const esc = escapeMessageHtml;
+    const body = a.clauses
+      ? `<div class="agreement-scroll">${a.intro ? `<p class="agreement-intro">${esc(a.intro)}</p>` : ''}${a.clauses.map(c => `<div class="agreement-clause"><div class="agreement-clause-title">${esc(c.title)}</div><ul>${c.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>`).join('')}</div>`
+      : `<ul>${a.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>`;
     return `<div class="agreement-box" data-agreement="${kind}">
-      <div class="agreement-title">${esc(a.title)}</div>
-      <ul>${a.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+      <div class="agreement-title">${esc(a.title)}${kind === 'host' && A.hostVersion ? ` <span class="agreement-version">version ${esc(A.hostVersion)}</span>` : ''}</div>
+      ${body}
       <label class="agreement-accept"><input type="checkbox" class="agreement-check"> <span>${esc(a.accept)}</span></label>
-      <a class="agreement-link" href="index.html?view=policies${kind === 'host' ? '&tab=host' : ''}" target="_blank" rel="noopener">Read Aerva’s Policies</a>
+      <a class="agreement-link" href="index.html?view=policies${kind === 'host' ? '&doc=host-agreement' : ''}" target="_blank" rel="noopener">${kind === 'host' ? 'Open the Host Agreement in a new tab' : 'Read Aerva’s Policies'}</a>
     </div>`;
   }
   function mountAgreements(root){
@@ -12016,7 +12019,7 @@
             body.agreementVersion = version;
           } else if(!body.isDraft){
             if(!agreementTicked(lastAgreementButton)) return refuse('Please tick the host agreement to submit.');
-            body.hostAgreementVersion = version;
+            body.hostAgreementVersion = (window.AERVA_POLICIES.agreements.hostVersion || version);
           }
           init = Object.assign({}, init, { body: JSON.stringify(body) });
         }
@@ -12036,7 +12039,8 @@
       { id: 'terms', title: 'Terms of Service', summary: 'The terms that apply to everyone who uses Aerva.', href: 'index.html?view=terms' },
       { id: 'privacy', title: 'Privacy Policy', summary: 'What information Aerva collects and how it is used.', href: 'index.html?view=privacy' },
       A.guest ? { id: 'booking-agreement', title: A.guest.title, summary: 'The agreement every guest accepts before paying.', sections: [{ title: A.guest.title + ' (version ' + A.version + ')', points: A.guest.points }] } : null,
-      A.host ? { id: 'host-agreement', title: A.host.title, summary: 'The agreement every host accepts before listing.', sections: [{ title: A.host.title + ' (version ' + A.version + ')', points: A.host.points }] } : null
+      A.host ? { id: 'host-agreement', title: A.host.title, summary: 'The agreement every host accepts for each listing.',
+        sections: A.host.clauses ? [{ title: A.host.title + ' (version ' + (A.hostVersion || A.version) + ')', points: [A.host.intro] }].concat(A.host.clauses) : [{ title: A.host.title + ' (version ' + A.version + ')', points: A.host.points }] } : null
     ].filter(Boolean).concat(P.documents || []);
   }
   function renderPolicies(docId){
