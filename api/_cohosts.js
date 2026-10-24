@@ -38,7 +38,7 @@ const PERMISSION_KEYS = COHOST_PERMISSIONS.map(p => p.key);
 // details or account settings.
 const FULL_ONLY = 'full';
 
-const INVITE_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
+const INVITE_LIFETIME_MS = 24 * 60 * 60 * 1000; // 1 day, unless the host removes it sooner
 
 function cleanPermissions(list) {
   const set = new Set((Array.isArray(list) ? list : []).filter(k => PERMISSION_KEYS.includes(k)));
@@ -178,7 +178,7 @@ async function emailCohostInvite({ to, hostName, access, permissions, listingNam
         <p>You would have ${esc(what)}.</p>
         <p>Listings: ${esc(listingNames.join(', ') || '—')}</p>
         <p><a href="${link}" style="display:inline-block; background:#1c1a17; color:#fff; padding:12px 22px; border-radius:999px; text-decoration:none;">Accept invitation</a></p>
-        <p style="font-size:13px; opacity:0.7;">Sign in, or create an account, with this email address (${esc(to)}) — the invitation only works for it. It expires in 14 days.</p>
+        <p style="font-size:13px; opacity:0.7;">Sign in, or create an account, with this email address (${esc(to)}) — the invitation only works for it. It expires in 24 hours unless your host withdraws it sooner.</p>
       </div>`;
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',

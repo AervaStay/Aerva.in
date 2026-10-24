@@ -2060,14 +2060,16 @@
       el.innerHTML = `
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px; margin:12px 0 20px;">
           <div class="dispute-card"><h4>Income (profit and loss)</h4><table class="tds-table" style="display:table;">
-            ${kv('Commission from hosts', S.income.commission)}${kv('Guest service fees', S.income.serviceFee)}${kv('Total income', S.income.total, true)}</table>
-            <p class="tds-sub">Less Razorpay’s charges (from Razorpay’s settlement report).</p></div>
+            ${kv('Commission from hosts', S.income.commission)}${kv('Guest service fees', S.income.serviceFee)}${kv('Total income', S.income.total, true)}
+            ${kv('Less Razorpay’s charges (before GST)', -((S.razorpay || {}).charges || 0))}${kv('Income after Razorpay’s charges', S.income.afterRazorpay != null ? S.income.afterRazorpay : S.income.total, true)}</table>
+            <p class="tds-sub">GST on Razorpay’s charges: ${accInr((S.razorpay || {}).gst || 0)} (input tax credit).${(S.razorpay || {}).notYetKnown ? ` Charges not known yet for ${S.razorpay.notYetKnown} transaction${S.razorpay.notYetKnown === 1 ? '' : 's'}.` : ''}</p></div>
           <div class="dispute-card"><h4>Money in and out this month</h4><table class="tds-table" style="display:table;">
             ${kv('Received from guests', S.received)}${kv('Refunded to guests', S.refunded)}${kv('Paid out to hosts and co-hosts', S.paidOut)}${kv('TDS deducted (deposit by 7th)', S.tdsDeducted)}${kv('GST on stays recognised', S.gstOnStaysPayable)}</table></div>
           <div class="dispute-card"><h4>Held at month end (liabilities)</h4><table class="tds-table" style="display:table;">
             ${kv('Advance from guests', B.advanceFromGuests)}${kv('Payable to hosts', B.payableToHosts)}${kv('Security deposits held (today)', B.depositsHeldToday)}${kv('GST payable (s.9(5))', B.gstPayable)}${kv('TDS payable (194-O)', B.tdsPayable)}</table></div>
         </div>
         ${S.bookingsToCheck ? `<p class="error">${S.bookingsToCheck} booking${S.bookingsToCheck === 1 ? '' : 's'} do not add up exactly (see “Difference to check” in the Bookings CSV) — for your CA to look at, e.g. a coupon or a fee refunded as an exception.</p>` : '<p class="tds-sub">Every booking this month adds up: paid = refunds + income + payable to host + GST.</p>'}
+        ${S.leftOut ? `<p class="tds-sub">${S.leftOut} test or dummy booking${S.leftOut === 1 ? '' : 's'} left out — only real Razorpay payments are counted.</p>` : ''}
         <h3 class="tds-h">Bookings recognised in ${escAdmin(d.month)} <small>${d.bookings.length}</small></h3>
         ${d.bookings.length ? `<table class="tds-table"><thead><tr><th>Booking</th><th>Event</th><th>Date</th><th>Host</th><th>Booking price</th><th>GST</th><th>Service fee</th><th>Refunded</th><th>Commission</th><th>Host payable</th></tr></thead><tbody>
           ${d.bookings.map(b => `<tr><td>${escAdmin(b.reference)}<div class="tds-sub">${escAdmin(b.listing)}</div></td><td>${escAdmin(b.event)}</td><td>${escAdmin(b.recognisedOn)}</td><td>${escAdmin(b.host)}</td>
@@ -2093,14 +2095,25 @@
   ], accData.bookings); });
   document.getElementById('accCsvCash').addEventListener('click', () => { if(accData) accCsv('money-in-out', [
     ['Date', 'date'], ['Type', 'type'], ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Payee', 'payee'], ['In (INR)', 'amountIn'], ['Out (INR)', 'amountOut'],
-    ['TDS deducted (INR)', 'tds'], ['Coupon recovered from host (INR)', 'couponRecovered'], ['Ledger', 'ledger']
+    ['TDS deducted (INR)', 'tds'], ['Coupon recovered from host (INR)', 'couponRecovered'], ['Razorpay charge incl. GST (INR)', 'razorpayFee'], ['of which GST (INR)', 'razorpayFeeGst'], ['Ledger', 'ledger']
   ], accData.cash); });
   document.getElementById('accCsvSummary').addEventListener('click', () => { if(!accData) return; const S = accData.summary, B = S.balances;
-    accCsv('summary', [['Line', 'k'], ['Amount (INR)', 'v'], ['Ledger group', 'g']], [
-      { k: 'Commission from hosts', v: S.income.commission, g: 'Income' }, { k: 'Guest service fees', v: S.income.serviceFee, g: 'Income' }, { k: 'Total income', v: S.income.total, g: 'Income' },
-      { k: 'Received from guests', v: S.received, g: 'Bank' }, { k: 'Refunded to guests', v: S.refunded, g: 'Bank' }, { k: 'Paid out to hosts and co-hosts', v: S.paidOut, g: 'Bank' },
-      { k: 'Advance from guests (month end)', v: B.advanceFromGuests, g: 'Current liabilities' }, { k: 'Payable to hosts (month end)', v: B.payableToHosts, g: 'Current liabilities (Sundry creditors)' },
-      { k: 'Security deposits held (today)', v: B.depositsHeldToday, g: 'Current liabilities' }, { k: 'GST payable s.9(5)', v: B.gstPayable, g: 'Duties & taxes' }, { k: 'TDS payable 194-O', v: B.tdsPayable, g: 'Duties & taxes' }
+    accCsv('summary', [['Line', 'k'], ['Amount (INR)', 'v'], ['Ledger group', 'g'], ['What it means', 'm']], [
+      { k: 'Commission from hosts', v: S.income.commission, g: 'Income', m: 'Aerva’s commission on stays that checked in (or were cancelled) this month' },
+      { k: 'Guest service fees', v: S.income.serviceFee, g: 'Income', m: 'Aerva’s fee from guests on those same stays' },
+      { k: 'Total income', v: S.income.total, g: 'Income', m: 'Aerva’s revenue for the month — the only figure that goes to profit and loss' },
+      { k: 'Razorpay charges (before GST)', v: (S.razorpay || {}).charges || 0, g: 'Indirect expenses (Bank charges)', m: 'What Razorpay charged Aerva on this month’s payments and payouts — an expense' },
+      { k: 'GST on Razorpay charges', v: (S.razorpay || {}).gst || 0, g: 'Duties & taxes (Input GST)', m: 'GST Razorpay charged on its fee — claim as input tax credit' },
+      { k: 'Income after Razorpay charges', v: S.income.afterRazorpay != null ? S.income.afterRazorpay : S.income.total, g: 'Income', m: 'Total income less Razorpay’s charges' },
+      { k: 'Received from guests', v: S.received, g: 'Bank', m: 'Money that came in this month, for bookings paid this month (whenever the stay is)' },
+      { k: 'Refunded to guests', v: S.refunded, g: 'Bank', m: 'Refunds Razorpay processed this month' },
+      { k: 'Paid out to hosts and co-hosts', v: S.paidOut, g: 'Bank', m: 'Payouts actually sent this month (after TDS)' },
+      { k: 'Advance from guests (month end)', v: B.advanceFromGuests, g: 'Current liabilities', m: 'Paid by guests for stays not started yet — owed to guests or hosts, not income yet' },
+      { k: 'Payable to hosts (month end)', v: B.payableToHosts, g: 'Current liabilities (Sundry creditors)', m: 'Hosts’ share of stays already done but not yet paid out' },
+      { k: 'Security deposits held (today)', v: B.depositsHeldToday, g: 'Current liabilities', m: 'Deposits held now, to be returned to guests or paid to hosts' },
+      { k: 'GST payable s.9(5)', v: B.gstPayable, g: 'Duties & taxes', m: 'GST on this month’s stays that Aerva must deposit with the government' },
+      { k: 'TDS payable 194-O', v: B.tdsPayable, g: 'Duties & taxes', m: 'TDS cut from this month’s payouts — deposit by the 7th of next month' },
+      { k: 'Test bookings left out', v: S.leftOut || 0, g: '', m: 'Number of test or dummy bookings not counted (no real Razorpay payment)' }
     ]); });
 
   async function setPanInoperative(hostId, cohostGuestId, box){

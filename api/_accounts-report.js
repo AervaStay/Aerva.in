@@ -25,6 +25,11 @@
 //   cash     — money in and out of Aerva's accounts in the month
 //   balances — the liabilities at the end of the month (deposits held is
 //              today's figure: their history is not kept)
+//
+// Only money that really moved counts: a booking paid through Razorpay
+// (real Razorpay order and payment ids: "order_"/"pay_" + 14 characters),
+// a refund Razorpay has processed, and a payout sent on a real booking.
+// Seed, test and dummy rows are left out everywhere (summary.leftOut).
 
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const userError = (message, status = 400) => Object.assign(new Error(message), { isUserFacing: true, status });
@@ -52,13 +57,13 @@ async function accountsReport(sql, month) {
            o.commission_amount, o.payout_amount, to_jsonb(o)->>'refund_percent' AS refund_percent,
            COALESCE(NULLIF(btrim(concat_ws(' ', to_jsonb(o)->>'guest_first_name', to_jsonb(o)->>'guest_last_name')), ''), g.name, o.guest_email) AS guest_name,
            h.id AS host_id, h.name AS host_name,
-           (SELECT COALESCE(sum(amount), 0) FROM refunds r WHERE r.order_id = o.id AND r.status <> 'failed' AND r.kind NOT LIKE 'deposit%') AS refunded_paise,
+           (SELECT COALESCE(sum(amount), 0) FROM refunds r WHERE r.order_id = o.id AND r.status = 'processed' AND r.kind NOT LIKE 'deposit%') AS refunded_paise,
            (SELECT COALESCE(sum(amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id) AS cohost_shares
     FROM orders o
     LEFT JOIN guests g ON g.id = o.guest_id
     LEFT JOIN listings l ON l.id = o.listing_id
     LEFT JOIN hosts h ON h.id = l.host_id
-    WHERE o.status IN ('paid', 'cancelled') AND o.razorpay_payment_id IS NOT NULL
+    WHERE o.status IN ('paid', 'cancelled') AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')
       AND (
         (o.status = 'paid' AND o.arrival >= ${start}::date AND o.arrival < ${end}::date)
         OR (o.status = 'cancelled' AND o.cancelled_at IS NOT NULL
@@ -99,44 +104,52 @@ async function accountsReport(sql, month) {
 
   // ---- Cash in and out in the month ----
   const receipts = await sql`
-    SELECT o.id, to_jsonb(o)->>'confirmation_code' AS code, o.razorpay_order_id, o.created_at, o.total,
+    SELECT o.id, to_jsonb(o)->>'confirmation_code' AS code, o.razorpay_order_id, o.razorpay_payment_id, o.created_at, o.total,
            COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0) AS coupon_discount, o.deposit_amount, o.gst, o.guest_service_fee
     FROM orders o
-    WHERE o.status IN ('paid', 'cancelled') AND o.razorpay_payment_id IS NOT NULL
+    WHERE o.status IN ('paid', 'cancelled') AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')
       AND (o.created_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp
     ORDER BY o.created_at`;
   let changeReceipts = [];
   try {
     changeReceipts = await sql`
-      SELECT c.order_id AS id, c.applied_at AS created_at, c.difference AS amount FROM booking_changes c
-      WHERE c.status = 'applied' AND c.razorpay_payment_id IS NOT NULL AND c.difference > 0
+      SELECT c.order_id AS id, c.applied_at AS created_at, c.difference AS amount, c.razorpay_payment_id FROM booking_changes c
+      WHERE c.status = 'applied' AND c.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND c.difference > 0
         AND (c.applied_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (c.applied_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`;
   } catch (e) { changeReceipts = []; }
   const refunds = await sql`
     SELECT r.order_id, r.kind, r.amount, r.status, r.created_at, r.razorpay_refund_id
     FROM refunds r
-    WHERE r.status <> 'failed' AND r.status <> 'new'
+    WHERE r.status = 'processed' AND r.razorpay_refund_id ~ '^rfnd_[A-Za-z0-9]{14}$'
       AND (r.created_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (r.created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp
     ORDER BY r.created_at`;
   const payouts = await sql`
-    SELECT p.id, p.order_id, p.payee_type, COALESCE(p.kind, 'booking') AS kind, p.gross, p.commission, p.cohost_shares, p.deductions, p.tds, p.net, p.sent_at, p.reference,
+    SELECT p.id, p.order_id, p.payee_type, COALESCE(p.kind, 'booking') AS kind, p.gross, p.commission, p.cohost_shares, p.deductions, p.tds, p.net, p.sent_at, p.reference, to_jsonb(p)->>'razorpayx_payout_id' AS pout_id,
            CASE WHEN p.payee_type = 'host' THEN h.name ELSE g.name END AS payee
     FROM payouts p LEFT JOIN hosts h ON h.id = p.host_id LEFT JOIN guests g ON g.id = p.payee_guest_id
-    WHERE p.status = 'sent' AND p.sent_at IS NOT NULL
+    WHERE p.status = 'sent' AND p.sent_at IS NOT NULL AND p.net > 0
+      AND EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'))
       AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp
     ORDER BY p.sent_at`;
+  // Razorpay's charges on each payment and payout (fee incl. GST, and the GST).
+  const feeOf = await razorpayFees(sql, [
+    ...receipts.map(o => ({ ref: o.razorpay_payment_id, kind: 'payment', orderId: o.id })),
+    ...changeReceipts.map(c => ({ ref: c.razorpay_payment_id, kind: 'payment', orderId: c.id })),
+    ...payouts.filter(p => /^pout_/.test(p.pout_id || '')).map(p => ({ ref: p.pout_id, kind: 'payout', orderId: p.order_id }))
+  ]);
+  const feeCols = (ref) => { const f = feeOf.map[ref]; return f ? { razorpayFee: r2(f.fee / 100), razorpayFeeGst: r2(f.tax / 100) } : { razorpayFee: '', razorpayFeeGst: '' }; };
   const cash = [];
-  receipts.forEach(o => cash.push({ date: isoDay(o.created_at, true), type: 'Receipt from guest', bookingId: o.id, reference: o.code || o.razorpay_order_id,
+  receipts.forEach(o => cash.push({ ...feeCols(o.razorpay_payment_id), date: isoDay(o.created_at, true), type: 'Receipt from guest', bookingId: o.id, reference: o.code || o.razorpay_order_id,
     amountIn: r2(Number(o.total) - Number(o.coupon_discount || 0)), amountOut: 0,
     ledger: 'Advance from guests' + (Number(o.deposit_amount) > 0 ? ' / Security deposits held' : '') }));
-  changeReceipts.forEach(c => cash.push({ date: isoDay(c.created_at, true), type: 'Receipt: booking change', bookingId: c.id, reference: '', amountIn: r2(c.amount), amountOut: 0, ledger: 'Advance from guests' }));
+  changeReceipts.forEach(c => cash.push({ ...feeCols(c.razorpay_payment_id), date: isoDay(c.created_at, true), type: 'Receipt: booking change', bookingId: c.id, reference: '', amountIn: r2(c.amount), amountOut: 0, ledger: 'Advance from guests' }));
   refunds.forEach(r => {
     const k = String(r.kind || '');
     const ledger = k.startsWith('deposit') ? 'Security deposits held' : 'Advance from guests / Payable to hosts';
     cash.push({ date: isoDay(r.created_at, true), type: 'Refund to guest (' + k.split(':')[0] + ')', bookingId: r.order_id, reference: r.razorpay_refund_id || '', amountIn: 0, amountOut: r2(Number(r.amount) / 100), ledger });
   });
   payouts.forEach(p => {
-    cash.push({ date: isoDay(p.sent_at, true), type: p.kind === 'deposit' ? 'Payout: deposit compensation' : (p.payee_type === 'cohost' ? 'Payout to co-host' : 'Payout to host'),
+    cash.push({ ...feeCols(p.pout_id), date: isoDay(p.sent_at, true), type: p.kind === 'deposit' ? 'Payout: deposit compensation' : (p.payee_type === 'cohost' ? 'Payout to co-host' : 'Payout to host'),
       bookingId: p.order_id, reference: p.reference || '', payee: p.payee || '', amountIn: 0, amountOut: r2(p.net),
       tds: r2(p.tds), couponRecovered: r2(p.deductions),
       ledger: p.kind === 'deposit' ? 'Security deposits held (TDS → TDS payable)' : 'Payable to hosts (TDS → TDS payable)' });
@@ -148,28 +161,47 @@ async function accountsReport(sql, month) {
   const adv = (await sql`
     SELECT COALESCE(sum(o.total - COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0) - COALESCE(o.deposit_amount, 0)), 0) AS v
     FROM orders o
-    WHERE o.razorpay_payment_id IS NOT NULL AND o.status IN ('paid', 'cancelled')
+    WHERE (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$') AND o.status IN ('paid', 'cancelled')
       AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp AND o.arrival >= ${end}::date
       AND (o.status = 'paid' OR (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') >= ${end}::timestamp)`)[0].v;
   // Payable to hosts: shares recognised by month end, less what was paid out by then.
   const recognisedPayable = (await sql`
     SELECT COALESCE(sum(o.payout_amount), 0) AS v FROM orders o
-    WHERE o.razorpay_payment_id IS NOT NULL AND (
+    WHERE (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$') AND (
       (o.status = 'paid' AND o.arrival < ${end}::date)
       OR (o.status = 'cancelled' AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp))`)[0].v;
   const paidOut = (await sql`
     SELECT COALESCE(sum(CASE WHEN p.payee_type = 'host' THEN p.gross - p.commission - p.cohost_shares ELSE p.gross END), 0) AS v
     FROM payouts p WHERE p.status = 'sent' AND COALESCE(p.kind, 'booking') = 'booking'
+      AND EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'))
       AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`)[0].v;
   let depositsHeld = 0;
-  try { depositsHeld = (await sql`SELECT COALESCE(sum(deposit_amount), 0) AS v FROM orders WHERE deposit_status IN ('held', 'disputed')`)[0].v; } catch (e) { depositsHeld = 0; }
+  try { depositsHeld = (await sql`SELECT COALESCE(sum(deposit_amount), 0) AS v FROM orders o WHERE deposit_status IN ('held', 'disputed') AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')`)[0].v; } catch (e) { depositsHeld = 0; }
 
+  // Test or dummy bookings left out (no real Razorpay payment behind them)
+  // that would otherwise have shown in this month.
+  let leftOut = 0;
+  try {
+    leftOut = Number((await sql`
+      SELECT count(*) AS n FROM orders o
+      WHERE o.status IN ('paid', 'cancelled') AND NOT COALESCE((o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'), false)
+        AND ((o.status = 'paid' AND o.arrival >= ${start}::date AND o.arrival < ${end}::date)
+          OR (o.status = 'cancelled' AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp)
+          OR ((o.created_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp))`)[0].n) || 0;
+  } catch (e) { leftOut = 0; }
   const tdsDeducted = r2(payouts.reduce((t, p) => t + Number(p.tds || 0), 0));
   const summary = {
     month: label,
     income: { commission: sum(bookings, 'commissionIncome'), serviceFee: sum(bookings, 'serviceFeeIncome') },
     gstOnStaysPayable: sum(bookings, 'gstPayable'),
     tdsDeducted,
+    leftOut,
+    razorpay: {
+      charges: r2(cash.reduce((t, c) => t + (Number(c.razorpayFee) || 0) - (Number(c.razorpayFeeGst) || 0), 0)),   // expense, before GST
+      gst: r2(cash.reduce((t, c) => t + (Number(c.razorpayFeeGst) || 0), 0)),                                       // input tax credit
+      total: r2(cash.reduce((t, c) => t + (Number(c.razorpayFee) || 0), 0)),
+      notYetKnown: feeOf.unknown
+    },
     bookingsToCheck: bookings.filter(b => Math.abs(b.difference) >= 1).length,
     received: r2(cash.reduce((t, c) => t + c.amountIn, 0)),
     refunded: r2(cash.filter(c => /^Refund/.test(c.type)).reduce((t, c) => t + c.amountOut, 0)),
@@ -182,16 +214,57 @@ async function accountsReport(sql, month) {
       tdsPayable: tdsDeducted
     },
     notes: [
+      'Only real money is counted: payments made through Razorpay, refunds Razorpay has processed and payouts actually sent. Test or dummy bookings are left out.',
       'Income is Aerva’s commission and guest service fee only. Booking amounts are held for hosts (Aerva is their payment-collection agent).',
       'Recognised at check-in, or on the cancellation date for cancelled bookings. Dates are India time.',
       'GST payable is the GST on stays recognised this month (s.9(5)). GST on Aerva’s own fees is not included here — confirm with your CA.',
       'TDS payable is the TDS deducted from payouts sent this month: deposit by the 7th of next month.',
-      'Razorpay’s charges are not known to the site: add them from Razorpay’s settlement report as an expense.',
+      'Razorpay’s charges are taken from Razorpay for each payment and payout (Aerva pays them). The charge before GST is an expense; the GST on it can be claimed as input tax credit. Razorpay deducts them from its settlements, so the bank receives the payments less these charges.',
       'Security deposits held is today’s figure.'
     ]
   };
   summary.income.total = r2(summary.income.commission + summary.income.serviceFee);
+  summary.income.afterRazorpay = r2(summary.income.total - summary.razorpay.charges);
+  if (feeOf.unknown) summary.notes.unshift(`Razorpay’s charges are not known yet for ${feeOf.unknown} transaction${feeOf.unknown === 1 ? '' : 's'}${feeOf.setupNeeded ? ' — apply the database update “razorpay-fees” in Admin → Database updates' : ' — open this month again in a little while'}.`);
   return { month: label, summary, bookings, cash };
+}
+
+// Razorpay's fee and the GST on it, per payment (pay_…) or payout (pout_…).
+// Kept in razorpay_fees once known, so Razorpay is asked only once per
+// transaction; at most a few dozen are fetched each time the report opens.
+async function razorpayFees(sql, items) {
+  const out = { map: {}, unknown: 0, setupNeeded: false };
+  const list = items.filter(i => i.ref && /^(pay|pout)_[A-Za-z0-9]{14}$/.test(i.ref));
+  if (!list.length) return out;
+  const refs = [...new Set(list.map(i => i.ref))];
+  try {
+    (await sql`SELECT ref_id, fee_paise, tax_paise FROM razorpay_fees WHERE ref_id = ANY(${refs})`)
+      .forEach(r => { out.map[r.ref_id] = { fee: Number(r.fee_paise), tax: Number(r.tax_paise) }; });
+  } catch (e) { out.unknown = refs.length; out.setupNeeded = true; return out; }
+  const missing = list.filter((i, n) => !out.map[i.ref] && list.findIndex(x => x.ref === i.ref) === n);
+  const keyId = process.env.RAZORPAY_KEY_ID, secret = process.env.RAZORPAY_KEY_SECRET;
+  if (missing.length && keyId && secret) {
+    const auth = 'Basic ' + Buffer.from(`${keyId}:${secret}`).toString('base64');
+    const started = Date.now();
+    const todo = missing.slice(0, 40);
+    for (let i = 0; i < todo.length && Date.now() - started < 6000; i += 8) {
+      await Promise.all(todo.slice(i, i + 8).map(async (it) => {
+        try {
+          const res = await fetch(`https://api.razorpay.com/v1/${it.kind === 'payout' ? 'payouts' : 'payments'}/${it.ref}`, { headers: { Authorization: auth } });
+          if (!res.ok) return;
+          const d = await res.json();
+          const fee = it.kind === 'payout' ? d.fees : d.fee;
+          if (fee == null) return;              // not settled yet: try again next time
+          const row = { fee: Math.round(Number(fee) || 0), tax: Math.round(Number(d.tax) || 0) };
+          await sql`INSERT INTO razorpay_fees (ref_id, kind, order_id, fee_paise, tax_paise) VALUES (${it.ref}, ${it.kind}, ${it.orderId || null}, ${row.fee}, ${row.tax})
+                    ON CONFLICT (ref_id) DO NOTHING`;
+          out.map[it.ref] = row;
+        } catch (e) { /* try again next time */ }
+      }));
+    }
+  }
+  out.unknown = refs.filter(r => !out.map[r]).length;
+  return out;
 }
 
 function isoDay(v, ist = false) {
