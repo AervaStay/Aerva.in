@@ -4649,7 +4649,7 @@
       body.querySelectorAll('[data-team-resend]').forEach(b => b.addEventListener('click', async () => {
         b.disabled = true;
         const r = await call('POST', { resendCohostInvite: { id: Number(b.getAttribute('data-team-resend')) } });
-        render(r.ok ? (r.data.emailed ? 'Invitation sent again. It is valid for 14 days.' : 'The email could not be sent. Share this link with them: ' + r.data.inviteLink) : (r.data.error || 'Could not resend the invitation.'));
+        render(r.ok ? (r.data.emailed ? 'Invitation sent again. It is valid for 24 hours.' : 'The email could not be sent. Share this link with them: ' + r.data.inviteLink) : (r.data.error || 'Could not resend the invitation.'));
       }));
       body.querySelectorAll('[data-cohost-stop]').forEach(b => b.addEventListener('click', () => {
         const name = (list.find(h => Number(h.hostId) === Number(b.getAttribute('data-cohost-stop'))) || {}).hostName || 'this host';

@@ -4410,7 +4410,7 @@
     return 'Limited' + (extras.length ? ' + ' + extras.join(', ') : '');
   }
 
-  // A listing has ONE co-host: active, or invited within the last 14 days
+  // A listing has ONE co-host: active, or invited within the last 24 hours
   // (the same rule host-listings.js applies). A listing already taken
   // cannot be offered again, and if every listing is taken there is
   // nobody left to invite.
@@ -4503,7 +4503,7 @@
       b.disabled = true;
       const r = await call('POST', { resendCohostInvite: { id: Number(b.getAttribute('data-ch-resend')) } });
       if(!r.ok){ b.disabled = false; alert(r.data.error || 'Could not resend the invitation.'); return; }
-      await load(section, (r.data.emailed ? 'Invitation sent again. It is valid for 14 days.' : 'The email could not be sent.')
+      await load(section, (r.data.emailed ? 'Invitation sent again. It is valid for 24 hours.' : 'The email could not be sent.')
         + ' You can also share this link (it only works for the invited email): '
         + '<input class="ch-link" readonly value="' + esc(r.data.inviteLink) + '" onclick="this.select()">');
     }));

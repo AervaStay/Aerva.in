@@ -629,7 +629,7 @@ async function handleCohostModes(req, res, accountId) {
 
     // ---- The co-host's side ----
     if (req.method === 'GET' && q.myCohosting === '1') {
-      // Invitations waiting for me (sent to my email, within 14 days): shown
+      // Invitations waiting for me (sent to my email, within 24 hours): shown
       // on my Co-hosting page even if the email never arrived.
       let invitations = [];
       if (me.email) {
@@ -637,7 +637,7 @@ async function handleCohostModes(req, res, accountId) {
           SELECT c.id, c.access, c.permissions, c.listing_ids, c.invited_at, h.name AS host_name, h.id AS host_id
           FROM cohosts c JOIN hosts h ON h.id = c.host_id
           WHERE lower(c.invited_email) = ${String(me.email).trim().toLowerCase()} AND c.status = 'invited'
-            AND c.invited_at > now() - interval '14 days' AND (${me.host_id || 0}::int = 0 OR c.host_id <> ${me.host_id || 0})
+            AND c.invited_at > now() - interval '1 day' AND (${me.host_id || 0}::int = 0 OR c.host_id <> ${me.host_id || 0})
           ORDER BY c.invited_at DESC
         `;
         for (const r of inv) {
@@ -902,7 +902,7 @@ async function handleCohostModes(req, res, accountId) {
         res.status(200).json(Object.assign({ success: true, alreadyAccepted: true }, accessInfo(inv))); return true;
       }
       if (!inv || inv.status !== 'invited') { res.status(410).json({ error: 'This invitation is no longer open.' }); return true; }
-      if (inv.invited_at && Date.now() - new Date(inv.invited_at).getTime() > 14 * 24 * 3600 * 1000) {
+      if (inv.invited_at && Date.now() - new Date(inv.invited_at).getTime() > 24 * 3600 * 1000) {
         res.status(410).json({ error: 'This invitation has expired. Ask the host to send it again.' }); return true;
       }
       if (!me.email || String(me.email).trim().toLowerCase() !== String(inv.invited_email).toLowerCase()) {
@@ -986,7 +986,7 @@ async function handleCohostModes(req, res, accountId) {
           id: r.id, email: r.invited_email, name: r.cohost_name || null, access: r.access,
           permissions: cleanPermissions(r.permissions), listingIds: (r.listing_ids || []).map(Number),
           status: r.status, invitedAt: r.invited_at, acceptedAt: r.accepted_at,
-          expired: r.status === 'invited' && !!r.invited_at && Date.now() - new Date(r.invited_at).getTime() > 14 * 24 * 3600 * 1000,
+          expired: r.status === 'invited' && !!r.invited_at && Date.now() - new Date(r.invited_at).getTime() > 24 * 3600 * 1000,
           commissionPercent: r.commission_percent == null ? null : Number(r.commission_percent),
           proposedPercent: r.proposed_percent == null ? null : Number(r.proposed_percent),
           proposalStatus: r.proposal_status || null,
@@ -1042,13 +1042,13 @@ async function handleCohostModes(req, res, accountId) {
     }
 
     // One co-host per listing: a listing held by another co-host (active,
-    // or invited within 14 days) cannot be given to someone else until that
+    // or invited within 24 hours) cannot be given to someone else until that
     // co-host is removed from it. Returns a message, or null if all free.
     const takenMessage = async (listingIds, exceptId) => {
       const others = await sql`
         SELECT c.id, c.invited_email, c.listing_ids, g.name FROM cohosts c LEFT JOIN guests g ON g.id = c.cohost_guest_id
         WHERE c.host_id = ${me.host_id} AND c.id <> ${exceptId || 0}
-          AND (c.status = 'active' OR (c.status = 'invited' AND c.invited_at > now() - interval '14 days'))
+          AND (c.status = 'active' OR (c.status = 'invited' AND c.invited_at > now() - interval '1 day'))
       `;
       for (const id of listingIds) {
         const o = others.find(r => (r.listing_ids || []).map(Number).includes(Number(id)));
@@ -1077,10 +1077,10 @@ async function handleCohostModes(req, res, accountId) {
       if (a.access === 'limited' && !a.permissions.length) { res.status(400).json({ error: 'Choose at least one thing this co-host can do.' }); return true; }
       let existing = await sql`SELECT id, status, invited_at FROM cohosts WHERE host_id = ${me.host_id} AND lower(invited_email) = ${email} AND status IN ('invited', 'active')`;
       // An expired invitation is replaced by this new one.
-      for (const x of existing.filter(x => x.status === 'invited' && x.invited_at && Date.now() - new Date(x.invited_at).getTime() > 14 * 24 * 3600 * 1000)) {
+      for (const x of existing.filter(x => x.status === 'invited' && x.invited_at && Date.now() - new Date(x.invited_at).getTime() > 24 * 3600 * 1000)) {
         await sql`UPDATE cohosts SET status = 'removed', removed_at = now() WHERE id = ${x.id} AND status = 'invited'`;
       }
-      existing = existing.filter(x => !(x.status === 'invited' && x.invited_at && Date.now() - new Date(x.invited_at).getTime() > 14 * 24 * 3600 * 1000));
+      existing = existing.filter(x => !(x.status === 'invited' && x.invited_at && Date.now() - new Date(x.invited_at).getTime() > 24 * 3600 * 1000));
       if (existing.length) { res.status(409).json({ error: existing[0].status === 'active' ? 'This person is already your co-host.' : 'You have already invited this email.' }); return true; }
       const ins = await sql`
         INSERT INTO cohosts (host_id, invited_email, access, permissions, listing_ids)

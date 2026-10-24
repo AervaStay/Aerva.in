@@ -348,7 +348,7 @@ module.exports = async (req, res) => {
     try {
       const id = readInviteToken(String(req.query.inviteInfo));
       const inv = id ? (await sql`SELECT c.status, c.invited_email, c.invited_at, h.name AS host_name FROM cohosts c JOIN hosts h ON h.id = c.host_id WHERE c.id = ${id}`)[0] : null;
-      const expired = inv && inv.invited_at && Date.now() - new Date(inv.invited_at).getTime() > 14 * 24 * 3600 * 1000;
+      const expired = inv && inv.invited_at && Date.now() - new Date(inv.invited_at).getTime() > 24 * 3600 * 1000;
       if (!inv || (inv.status !== 'invited' && inv.status !== 'active') || (inv.status === 'invited' && expired)) {
         return res.status(410).json({ valid: false, error: 'This invitation has expired or is no longer open. Ask the host to send it again.' });
       }
@@ -537,12 +537,12 @@ module.exports = async (req, res) => {
             });
           });
         }
-        // Co-host invitations waiting for this email (within 14 days).
+        // Co-host invitations waiting for this email (within 24 hours).
         try {
           const invites = await sql`
             SELECT c.id, h.name AS host_name FROM cohosts c JOIN hosts h ON h.id = c.host_id
             WHERE lower(c.invited_email) = ${String(guest.email || '').trim().toLowerCase()} AND c.status = 'invited'
-              AND c.invited_at > now() - interval '14 days' AND c.host_id <> ${guest.host_id || 0}
+              AND c.invited_at > now() - interval '1 day' AND c.host_id <> ${guest.host_id || 0}
             ORDER BY c.invited_at DESC LIMIT 5
           `;
           invites.forEach(i => notifications.push({
