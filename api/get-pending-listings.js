@@ -869,6 +869,21 @@ module.exports = async (req, res) => {
   // financial year (April–March), with the payee's full PAN (needed for the
   // quarterly return), month totals with deposit dates, quarter totals with
   // return and certificate dates, and each payee's year. Viewing is logged.
+  // ---- Accounts: one month as the CA books it (_accounts-report.js) ----
+  // GET ?accountsReport=1&month=YYYY-MM — admins only (not in the
+  // representatives' list). Viewing is logged.
+  if (req.method === 'GET' && req.query.accountsReport === '1') {
+    try {
+      const out = await require('./_accounts-report').accountsReport(sql, String(req.query.month || ''));
+      await logAudit(sql, { action: 'accounts_report_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'report', metadata: { month: out.month } });
+      return res.status(200).json(out);
+    } catch (err) {
+      if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
+      console.error('accountsReport failed:', err);
+      return res.status(500).json({ error: 'Could not build the accounts report right now.' });
+    }
+  }
+
   if (req.method === 'GET' && req.query.tdsReport === '1') {
     const T = require('./_tds');
     const { decryptField } = require('./_secure-fields');
