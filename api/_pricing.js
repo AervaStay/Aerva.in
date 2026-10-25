@@ -11,9 +11,14 @@ const { earliestArrival } = require('./_booking-rules');
 
 const EXTRA_GUEST_RATE = 1500;
 const BASE_OCCUPANCY = 2;
-const BASE_COMMISSION_RATE = 5; // on room + extra-guest charges, after any discount (was 10% until Oct 2026)
-const AMENITY_COMMISSION_RATE = 5; // on paid amenities
-const GUEST_SERVICE_FEE_RATE = 5; // Aerva's guest service fee — not refunded; only an admin can make an exception, with a reason (was 8% until Oct 2026)
+// Starting rates only. The rates actually charged come from Admin →
+// Commission settings, per property type and moment of booking
+// (_rates.js): the host commission applies to the room, extra guests,
+// paid amenities and pet fees; the guest service fee to the stay subtotal.
+const BASE_COMMISSION_RATE = 5;
+const AMENITY_COMMISSION_RATE = 5;
+const GUEST_SERVICE_FEE_RATE = 5; // Aerva's guest service fee — not refunded; only an admin can make an exception, with a reason
+const { ratesFor } = require('./_rates');
 const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
 const MAX_EXPERIENCES = 5; // same reasoning, for the experiences array
 const MAX_AMENITIES_PER_STAY = 15;
@@ -187,7 +192,7 @@ function calculateDiscount(listing, nights, arrival, subtotalBeforeDiscount, pro
 // includedWithExperienceId }. i: its position (for messages).
 // excludeOrderId: when pricing a CHANGE to a booking, that booking's own
 // nights do not count as taken. Returns { detail } or { error }.
-async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
+async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
   if (!s.listingId || !s.arrival || !s.departure || !s.guests) {
     return { error: `Stay ${i + 1}: missing home selection, dates, or guest count` };
   }
@@ -200,7 +205,7 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
         SELECT id, property_name, nightly_rate, discount_type, discount_value,
                discount_min_nights, commission_rate, security_deposit,
                pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types,
-               max_guests, property_type, timezone
+               max_guests, property_type, listing_type, timezone
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
@@ -423,17 +428,20 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
 
       const roomPortion = beforeDiscount - discountAmount; // room + extra guests, after discount, never includes amenities
       const staySubtotal = roomPortion + amenityTotal + animalFees;
-      const baseCommission = Math.round(roomPortion * (BASE_COMMISSION_RATE / 100));
+      // Rates for this listing's property type, at the moment of booking
+      // (or, for a change to a booking, the moment it was first made).
+      const rates = await ratesFor(sql, listing, at || new Date());
+      const baseCommission = Math.round(roomPortion * (rates.host / 100));
       // Pet fee is commissioned at the same rate as paid amenities — both
       // are optional, host-set extras layered on top of the room rate,
       // not the base booking itself. Folded into amenityCommission
       // (rather than a new field) so verify-payment.js's existing
       // commissionAmount = baseCommission + amenityCommission logic picks
       // it up automatically, with no changes needed there.
-      const amenityCommission = Math.round((amenityTotal + animalFees) * (AMENITY_COMMISSION_RATE / 100));
+      const amenityCommission = Math.round((amenityTotal + animalFees) * (rates.host / 100));
       // Flat rate on the whole stay subtotal — added on top of what the
       // guest pays, never subtracted from what the host receives.
-      const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
+      const guestServiceFee = Math.round(staySubtotal * (rates.guest / 100));
 
       // Refundable security deposit — the host's own per-listing amount,
       // charged in full on top of everything else. Never discounted,
@@ -466,6 +474,8 @@ async function priceStay(sql, s, i, { excludeOrderId = null } = {}) {
         baseCommission,
         amenityCommission,
         guestServiceFee,
+        commissionRatePct: rates.host,
+        guestFeeRatePct: rates.guest,
         depositAmount,
         gst: stayTax.gst,
         gstRate: stayTax.rate,
@@ -505,7 +515,7 @@ const MAX_EXPERIENCE_GUESTS = 50;
 // (the database returns DATE columns as Date objects, which a text
 // comparison never matched — so the season was never enforced).
 // Returns { detail } or { error }.
-async function priceExperience(sql, ex, i) {
+async function priceExperience(sql, ex, i, { at = null } = {}) {
   if (!ex.listingId || !ex.date) return { error: `Experience ${i + 1}: missing selection or date` };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ex.date))) return { error: `Experience ${i + 1}: invalid date` };
   const rows = await sql`
@@ -544,9 +554,10 @@ async function priceExperience(sql, ex, i) {
   const promos = await activePromotions(sql, ex.listingId, null, { onlyCurrent: true });
   const discountAmount = calculateDiscount(experience, durationDays, ex.date, subtotalBeforeDiscount, promos);
   const subtotal = subtotalBeforeDiscount - discountAmount;
-  const commissionRate = BASE_COMMISSION_RATE;
+  const rates = await ratesFor(sql, { listing_type: 'experience' }, at || new Date());
+  const commissionRate = rates.host;
   const commissionAmount = Math.round(subtotal * (commissionRate / 100));
-  const guestServiceFee = Math.round(subtotal * (GUEST_SERVICE_FEE_RATE / 100));
+  const guestServiceFee = Math.round(subtotal * (rates.guest / 100));
   const expTax = experienceGst(subtotal);
   return { detail: {
     listingId: experience.id, suite: experience.property_name, date: ex.date, endDate: endDateExclusive, durationDays, guests,

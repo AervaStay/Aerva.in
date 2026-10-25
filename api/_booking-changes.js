@@ -159,14 +159,14 @@ async function quoteChange(sql, orderId, guestId, input) {
   if (o.kind !== 'stay') {
     // Experience (and, for a pair, the nights that come with it): the date
     // and the number of guests can change.
-    const xp = await priceExperience(sql, { listingId: o.listing_id, date: arrival, guests: guests || 1, keepDate: keep }, 0);
+    const xp = await priceExperience(sql, { listingId: o.listing_id, date: arrival, guests: guests || 1, keepDate: keep }, 0, { at: o.created_at || null });
     if (xp.error) throw userError(xp.error.replace(/^Experience 1: /, ''));
     const x = xp.detail;
     let st = null;
     if (o.kind === 'pair') {
       const sp = await priceStay(sql, { listingId: o.hosting_listing_id, roomId: null, arrival, departure: x.endDate, guests: x.guests, adults: Math.max(1, adults),
         pets: 0, petTypes: [], serviceAnimals: [], youngLitterCount: 0, selectedAmenities: [], includedWithExperienceId: o.listing_id, keepArrival: keep },
-        0, { excludeOrderId: o.stayRow.id });
+        0, { excludeOrderId: o.stayRow.id, at: o.created_at || null });
       if (sp.error) throw userError(sp.error.replace(/^Stay 1: /, ''));
       st = sp.detail;
     }
@@ -196,7 +196,7 @@ async function quoteChange(sql, orderId, guestId, input) {
     serviceAnimals: Array.isArray(o.service_animal_types) ? o.service_animal_types : [], youngLitterCount: 0,
     selectedAmenities: amenityIds.map(id => ({ amenityId: id, dates: nights }))
   };
-  const priced = await priceStay(sql, s, 0, { excludeOrderId: o.id });
+  const priced = await priceStay(sql, s, 0, { excludeOrderId: o.id, at: o.created_at || null });
   if (priced.error) throw userError(priced.error.replace(/^Stay 1: /, ''));
   const q = priced.detail;
   // Aerva's service fee is never refunded: a cheaper change keeps the fee already paid.

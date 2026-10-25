@@ -884,6 +884,61 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- Commission settings (admins only; _rates.js) ----
+  // GET ?feeRates=1 → current rates by property type, every rate set with its
+  // state, the earliest date a host rate may take effect.
+  if (req.method === 'GET' && req.query.feeRates === '1') {
+    try {
+      const R = require('./_rates');
+      return res.status(200).json({ types: R.PROPERTY_TYPES, current: await R.currentRates(sql), history: await R.rateHistory(sql),
+        earliestHostDate: R.earliestHostDate(), minHostDays: R.MIN_HOST_DAYS });
+    } catch (err) {
+      console.error('feeRates failed:', err);
+      return res.status(500).json({ error: 'Could not load commission settings right now.' });
+    }
+  }
+  // POST { setFeeRate: { audience, propertyType, rate, effectiveDate, note } }
+  if (req.method === 'POST' && req.body && req.body.setFeeRate) {
+    try {
+      const R = require('./_rates');
+      const b = req.body.setFeeRate;
+      const out = await R.scheduleRate(sql, { audience: b.audience, propertyType: b.propertyType, rate: b.rate, effectiveDate: b.effectiveDate, note: b.note, by: ADMIN_ACTOR });
+      await logAudit(sql, { action: 'fee_rate_set', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'fee_rate', targetId: out.row.id,
+        metadata: { audience: out.row.audience, propertyType: out.row.property_type, rate: Number(out.row.rate), previousRate: out.previousRate, effectiveFrom: out.row.effective_from } });
+      // Host changes: the notices start going out now (the job finishes them).
+      let notices = null;
+      if (out.row.audience === 'host') { try { notices = await R.runRateNotices(sql, { deadlineMs: 6000 }); } catch (e) { notices = null; } }
+      return res.status(200).json({ success: true, rate: out.row, previousRate: out.previousRate, notices });
+    } catch (err) {
+      if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
+      if (err.code === '23514') return res.status(400).json({ error: 'A host rate can take effect only 33 days or more after it is set.' });
+      if (err.code === '42P01') return res.status(400).json({ error: 'Apply the database update “fee-rates” in Database updates first.' });
+      console.error('setFeeRate failed:', err);
+      return res.status(500).json({ error: 'Could not save the rate right now.' });
+    }
+  }
+  // POST { cancelFeeRate: { id } } — withdraw a change before it takes effect.
+  if (req.method === 'POST' && req.body && req.body.cancelFeeRate) {
+    try {
+      const r = await require('./_rates').cancelRate(sql, req.body.cancelFeeRate.id, ADMIN_ACTOR);
+      await logAudit(sql, { action: 'fee_rate_withdrawn', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'fee_rate', targetId: r.id, metadata: { audience: r.audience, propertyType: r.property_type, rate: Number(r.rate) } });
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
+      console.error('cancelFeeRate failed:', err);
+      return res.status(500).json({ error: 'Could not withdraw the rate right now.' });
+    }
+  }
+  // GET ?insights=1 — Business insights (admins only; _insights.js).
+  if (req.method === 'GET' && req.query.insights === '1') {
+    try {
+      return res.status(200).json(await require('./_insights').insights(sql, { audience: req.query.audience === 'guest' ? 'guest' : 'host', propertyType: String(req.query.type || '*') }));
+    } catch (err) {
+      console.error('insights failed:', err);
+      return res.status(500).json({ error: 'Could not build the insights right now.' });
+    }
+  }
+
   if (req.method === 'GET' && req.query.tdsReport === '1') {
     const T = require('./_tds');
     const { decryptField } = require('./_secure-fields');

@@ -606,6 +606,16 @@ const JOBS = [
   { name: 'offers_email', label: 'Quarterly offers email to guests who have not booked lately', everyMinutes: 60, heavy: true, lockMinutes: 10,
     run: (c) => { const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours(); return h >= 10 && h < 19
       ? require('./_offers-email').sendQuarterlyOffers(c.sql, { deadlineMs: Math.min(6000, c.remainingMs) }) : { waiting: 'sends between 10 am and 7 pm' }; } },
+  // Host Agreement revisions: a formal email to every host who has not
+  // accepted the current version; 30 days later, the agreement ends for those
+  // who still have not (their listings are deactivated) — _host-agreement.js.
+  { name: 'host_agreement_notices', label: 'Host Agreement revisions: notices, and ending agreements not accepted in time', everyMinutes: 60, lockMinutes: 10,
+    run: (c) => { const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours(); return h >= 10 && h < 19
+      ? require('./_host-agreement').runAgreementNotices(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) : { waiting: 'runs between 10 am and 7 pm' }; } },
+  // Commission revisions for hosts: formal notices for changes to come;
+  // agreements end for notices not acknowledged by the date (_rates.js).
+  { name: 'commission_notices', label: 'Commission revisions: notices to hosts, and answers due', everyMinutes: 30, lockMinutes: 10,
+    run: (c) => require('./_rates').runRateNotices(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) },
   { name: 'chat_number_cleanup', label: 'Remove phone numbers from chats of finished or cancelled bookings', everyMinutes: 15,
     run: (c) => require('./_message-guard').scrubEndedConversations(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'photo_scan', label: 'Check photos for contact details (and remove any that show them)', everyMinutes: 5, lockMinutes: 3,
@@ -1734,6 +1744,7 @@ module.exports = async (req, res) => {
 
       await attachLikeCounts(filteredExperiences);
       filteredExperiences.forEach(publicLocation);
+      try { const R = require('./_rates'); const now = await R.currentRates(sql); filteredExperiences.forEach(e => { e.guest_fee_rate = now.guest.Experience; }); } catch (err) { /* estimate falls back */ }
       return res.status(200).json({ experiences: filteredExperiences });
     }
 
@@ -1769,6 +1780,7 @@ module.exports = async (req, res) => {
       `;
       await attachLikeCounts(experiencesFor);
       experiencesFor.forEach(publicLocation);
+      try { const R = require('./_rates'); const now = await R.currentRates(sql); experiencesFor.forEach(e => { e.guest_fee_rate = now.guest.Experience; }); } catch (err) { /* estimate falls back */ }
       return res.status(200).json({ experiences: experiencesFor });
     }
 
@@ -2231,6 +2243,13 @@ module.exports = async (req, res) => {
 
     await attachLikeCounts(filtered);
     filtered.forEach(publicLocation);
+    // The guest service fee rate in force now for each listing's type, for
+    // the price estimate shown before the server's quote (_rates.js).
+    try {
+      const R = require('./_rates');
+      const now = await R.currentRates(sql);
+      filtered.forEach(l => { l.guest_fee_rate = now.guest[R.rateType(l)]; });
+    } catch (err) { /* the estimate falls back to the starting rate */ }
     return res.status(200).json({ listings: filtered });
   } catch (err) {
     console.error('get-listings error:', err);

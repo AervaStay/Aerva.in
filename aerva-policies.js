@@ -18,7 +18,8 @@ window.AERVA_POLICIES = {
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-09g',
+    version: '2026-09g',          // booking agreement (guests)
+    hostVersion: '2026-10-25b',    // host agreement — accepted for every listing
     guest: {
       title: 'Booking agreement',
       points: [
@@ -39,24 +40,159 @@ window.AERVA_POLICIES = {
       accept: 'I agree to this booking agreement and Aerva’s Policies.'
     },
     host: {
-      title: 'Host agreement',
-      points: [
-        'Each booking is an agreement between you and the guest. Aerva is the platform that connects you and takes payment.',
-        'You: list accurately, keep your property safe, clean and legal, hold every registration your area requires, check a government photo ID for every adult guest at check-in, report foreign guests on Form III within 24 hours, and honour every confirmed booking.',
-        'Keep a phone number on your account and listing. Listing photos must not show phone numbers or any other contact details; a listing with such a photo is blocked immediately.',
-        'Answer guests’ cancellation and change requests in Aerva Messages. When a guest reports a problem during a stay, give your side; your payout for that booking is held until Aerva decides.',
-        'The guest: follows your house rules and the law, and pays for damage they cause.',
-        'Aerva: takes payment, pays you your share after Aerva’s fees and taxes, and handles refunds and complaints under Aerva’s Policies.',
-        'You are responsible for your own taxes, insurance and legal compliance.',
-        'No violence, threats, verbal abuse, harassment or discrimination of any kind, including on gender.',
-        'Damage claims go through Aerva, up to the security deposit. Damage above the deposit is between you and the guest, and is to be settled directly with the guest.',
-        'Aerva provides no support beyond the security deposit and the booking details.',
-        'You are responsible for your guests’ safety at your property as the law requires, and for any physical, mental or emotional harm that is beyond Aerva’s control.',
-        'Aerva does not own, run or inspect your property, and does not control what guests do. To the extent the law allows, Aerva is not responsible for the acts or omissions of any guest, host or third party, including criminal acts, death, injury, self-harm or any life-threatening situation, and pays no claim for them.',
-        'Aerva’s decision on any matter under its policies is full and final.',
-        'Aerva’s Policies apply to every booking.'
+      // The host agreement has its own version (hostVersion): it is accepted
+      // for EVERY listing submitted for review, and saved on that listing
+      // and on the host. Must match HOST_AGREEMENT_VERSION in api/_agreements.js.
+      title: 'Aerva Host Agreement',
+      intro: 'This agreement is between you (the host) and Aerva. It applies to this listing and to every booking made for it. Please read it carefully: by ticking the box below and submitting the listing, you accept it in full, together with Aerva’s Terms of Service and Aerva’s Policies, which form part of it.',
+      clauses: [
+        { title: '1. Aerva’s role', points: [
+          'Aerva is an online platform that connects hosts with guests and collects payment for bookings on the host’s behalf.',
+          'Aerva does not own, operate, manage, inspect or control any property or experience, and is not a party to the stay. Each booking is an agreement between you and the guest.',
+          'Aerva is not your employer, agent, partner or insurer, and you are not Aerva’s representative.'
+        ] },
+        { title: '2. Your eligibility and authority to list', points: [
+          'You are 18 or older and legally able to enter into this agreement.',
+          'You own the property, or hold the written permission of its owner, landlord, housing society or any other party whose permission the law or your lease requires, to host guests there.',
+          'You hold every registration, licence and permission your area requires for hosting, and keep them current.',
+          'Aerva may ask for proof of ownership or authorisation, registrations and licences at any time. A listing may be declined, paused or removed until satisfactory proof is provided.'
+        ] },
+        { title: '3. Identity verification', points: [
+          'You complete Aerva’s identity and address verification with a valid government ID (such as Aadhaar, passport, driving licence or voter ID) and keep your details current.',
+          'Your ID is verified when you submit it and is not stored by Aerva.',
+          'The information you give must be true, complete and your own. Aerva may decline, pause or remove a listing, withhold payouts or suspend an account where verification is incomplete, inaccurate or cannot be confirmed.'
+        ] },
+        { title: '4. PAN and bank details', points: [
+          'Payouts are made only to a bank account verified by Aerva and held by the person or business named in your payout details, alone or jointly.',
+          'Any PAN you provide must be correct, valid, linked to Aadhaar where the law requires, and in the same name as the payee. A PAN may be used on one Aerva account only.',
+          'A company, LLP or partnership firm is paid only to its own bank account, against its own PAN.',
+          'When bank details change, payouts are paused for a short security period and you are notified. Aerva is not responsible for delays or losses caused by incorrect, incomplete or outdated details you provide.'
+        ] },
+        { title: '5. Commission and fees', points: [
+          'Aerva charges you a commission on each booking, at the rate for your property type shown in your dashboard. It is deducted from your payout. Aerva also charges guests a service fee, which is Aerva’s own and does not form part of your earnings.',
+          'Aerva may revise its commission. A revised commission takes effect no sooner than 33 days after Aerva’s formal notice to you by email (31 days’ notice, plus 2 days to allow for time zones), and applies to bookings made on or after the date given in the notice. Aerva may revise the guest service fee at any time. The rates in force when a booking is made apply to that booking.',
+          'You acknowledge each commission revision in your dashboard before the date it takes effect. If you decline it, or have not acknowledged it by that date, this agreement ends, as set out in the Termination clause below.'
+        ] },
+        { title: '6. Payouts and taxes', points: [
+          'Your payout is sent after check-out to your verified bank account, after Aerva’s commission, any co-host share, applicable deductions and tax deducted at source.',
+          'Aerva may hold, adjust or withhold a payout while a guest’s report, a refund, a damage claim or a dispute is open, where fraud is suspected, or where the law requires.',
+          'You are solely responsible for your income tax, GST registration where applicable, and every other tax on your earnings.'
+        ] },
+        { title: '7. Tax deducted at source (TDS)', points: [
+          'Aerva deducts TDS under section 194-O of the Income-tax Act (section 393 of the Income-tax Act, 2025) from every payment it makes to you, including security deposit compensation, from the first rupee.',
+          'TDS is deducted at 0.1% where a valid and operative PAN is provided, and at 5% where it is not, or where the PAN is inoperative.',
+          'TDS deducted is deposited with the government against your PAN, appears in your Form 26AS, and may be claimed in your income tax return.'
+        ] },
+        { title: '8. Your listing', points: [
+          'Your listing, photos, prices, amenities, house rules, capacity and availability are accurate, complete and kept up to date.',
+          'Photos must be of the actual property and must not show phone numbers, email addresses, websites, social media handles or QR codes. Any such photo is removed.',
+          'Every charge to a guest is included in the price shown on Aerva. You may not charge any fee outside Aerva.',
+          'Every listing is reviewed before it goes live. Aerva may decline, edit, pause or remove any listing at its discretion.'
+        ] },
+        { title: '9. Bookings and the relationship with guests', points: [
+          'You honour every confirmed booking and provide the property as described, safe, clean and ready at check-in.',
+          'You check a valid government photo ID for every adult guest at check-in, and report foreign guests on Form III within 24 hours of arrival and of departure, as the law requires.',
+          'All communication about a booking stays on Aerva Messages. Once a booking is confirmed, a phone number may be shared there for that stay only. Taking bookings or payments outside Aerva, or using a guest’s details to do so, is not allowed.',
+          'You use guests’ personal information only for their booking and your legal duties, and keep it secure. No camera or recording device may be placed in a bedroom, bathroom or any private space; every device elsewhere must be disclosed in the listing.'
+        ] },
+        { title: '10. Check-in and check-out', points: [
+          'Your listing states its check-in and check-out times, and you have the property ready at check-in.',
+          'At check-in, you check a valid government photo ID for every adult guest; guests from outside India show their passport. Only the guests named in the booking, up to the number booked, may stay.',
+          'For a booking made late at night for the night that has already begun, the guest may check in straight away, as set out in Aerva’s Booking Requirements.',
+          'Check-in instructions and access details are given to the guest through Aerva only.'
+        ] },
+        { title: '11. Pets and service animals', points: [
+          'Your listing states whether pets are allowed, how many and which types, and any pet fee. Pet fees are charged only through Aerva, as part of the booking.',
+          'Guests declare every pet and service or support animal when they book. You may not ask for proof that a service or support animal is needed, or refuse one because of a disability.',
+          'Damage caused by a pet is handled like any other damage, under the Security Deposit and Damage clause.'
+        ] },
+        { title: '12. Contact details and communication', points: [
+          'No listing, photo, description, review, message or email sent through Aerva may contain a phone number, email address, website, social media handle, UPI ID, QR code or any other contact detail of you or any other person — except a phone number shared in Aerva Messages for a confirmed booking, for that stay only.',
+          'Aerva may remove any such content at once, without notice. You are liable for any loss or claim arising from contact details you share in breach of this clause, and repeated breaches may lead to penalties, removal of the listing and suspension of your account.'
+        ] },
+        { title: '13. Cancellations', points: [
+          'Each listing carries the cancellation policy you choose (Flexible or Firm). A booking keeps the policy it was paid under.',
+          'You answer guests’ cancellation and change requests in Aerva Messages within 24 hours. An unanswered request is settled under Aerva’s Cancellation Policy.',
+          'You may cancel a booking only 48 hours or more before check-in, with a reason, and no more than 3 times in any 12 months. Further cancellations are handled only by Aerva.'
+        ] },
+        { title: '14. Refunds', points: [
+          'Refunds to guests are made by Aerva under Aerva’s Cancellation Policy, Changing a Booking policy and Stay Issues and Refund Policy, and the amount you receive is adjusted accordingly.',
+          'When a guest reports a problem during a stay, you are told and may give your side through Aerva. Your payout for that booking is held until Aerva decides.'
+        ] },
+        { title: '15. Penalties', points: [
+          'If you cancel a confirmed booking, the guest receives an Aerva coupon worth 10% of the booking, paid for by you before the booking is cancelled, or deducted from your next payout.',
+          'Cancellations count towards your yearly limit and may affect your standing on Aerva.',
+          'For any breach of this agreement or Aerva’s Policies, Aerva may withhold or adjust payouts, pause or remove listings, cancel bookings, and suspend or close your account.'
+        ] },
+        { title: '16. Security deposits and damage', points: [
+          'If your listing holds a refundable security deposit, Aerva holds it and refunds it to the guest after check-out unless you report damage through Aerva within 7 days of check-out.',
+          'Aerva reviews each damage claim and decides how much of the deposit, if any, is paid to you. Aerva’s decision on the deposit is full and final.',
+          'Aerva handles damage claims only up to the security deposit. Damage above the deposit, or where no deposit is held, is between you and the guest, to be settled directly. Aerva is not a party to that settlement and pays no part of it.'
+        ] },
+        { title: '17. Proof and evidence', points: [
+          'Every claim, report or dispute must be supported by clear evidence: dated photos or videos, repair estimates or invoices, and messages on Aerva.',
+          'Aerva decides only on the evidence provided through Aerva. A claim without sufficient evidence, or made after the time allowed, may be declined.',
+          'Aerva may ask you for further documents at any time, including proof of identity, ownership or authorisation, registrations and invoices.'
+        ] },
+        { title: '18. Additional guests and misuse of the property', points: [
+          'You state the maximum number of guests your property allows. Guests beyond the booking, parties and events are not permitted unless your listing allows them.',
+          'Any charge for additional guests, pets, add-ons or any other service is paid only through Aerva, as a change to the booking. A charge taken outside Aerva, in cash or by any other means, is a breach of this agreement, and the booking is treated as a violation under the Penalties clause.',
+          'Aerva is not responsible for additional or unregistered guests, or for any illegal, unauthorised or improper use of your property by a guest or any other person. Raise such a matter with Aerva and, where needed, the local authorities.'
+        ] },
+        { title: '19. Local laws, safety and environmental hazards', points: [
+          'You comply with every law that applies to your property and your hosting, including building, fire, health, safety, zoning, tourism, housing society and tax rules.',
+          'You keep the property safe and free of hazards, disclose any known risks (including environmental hazards such as flooding, landslides, wildlife or water bodies) in your listing, and maintain working safety equipment where required.',
+          'You are responsible for your guests’ safety at your property as the law requires. In an emergency, contact the local emergency number (112 in India) and the relevant authorities first.'
+        ] },
+        { title: '20. Nondiscrimination and conduct', points: [
+          'You may not decline, cancel, charge differently or treat anyone differently because of race, colour, caste, religion, national origin, ethnicity, disability, sex, gender identity, sexual orientation, marital status or age.',
+          'House rules must apply equally to every guest. Accessibility must be described accurately.',
+          'Violence, threats, verbal abuse, harassment and discrimination of any kind are not tolerated and lead to removal from Aerva.'
+        ] },
+        { title: '21. Co-hosts', points: [
+          'If you invite co-hosts, you remain responsible for your listing and for everything your co-hosts do on it. Aerva pays each co-host their own share; any other arrangement between you and a co-host is for you to settle.'
+        ] },
+        { title: '22. Contacting Aerva', points: [
+          'For any matter about a booking, a guest, a payout or your listing, raise a request in the Resolution Center or write to hello@aerva.in. Every request receives a reference number.',
+          'Formal complaints may be addressed to Aerva’s Grievance Officer at hello@aerva.in.'
+        ] },
+        { title: '23. Aerva’s discretion on disputes', points: [
+          'Aerva reviews every dispute between you and a guest on the information and evidence available to it, and decides at its sole discretion.',
+          'Aerva’s decision on any matter under this agreement and Aerva’s Policies is full and final.'
+        ] },
+        { title: '24. Reputation and fair comment', points: [
+          'You will not make, publish or share any false, misleading, defamatory or disparaging statement about Aerva, its team or its services, on any platform or in any medium.',
+          'Concerns about Aerva are to be raised with Aerva through the Resolution Center or the Grievance Officer. A breach of this clause may lead to suspension or closure of your account, without prejudice to Aerva’s legal rights.'
+        ] },
+        { title: '25. Liability and indemnity', points: [
+          'To the extent the law allows, Aerva is not liable for the acts or omissions of any guest, host or third party, including criminal acts, death, injury, self-harm, loss of or damage to property, or any life-threatening situation, and pays no claim for them.',
+          'To the extent the law allows, Aerva’s total liability for any claim is limited to the fees Aerva received for the booking concerned.',
+          'You will compensate Aerva for any claim, loss, penalty or cost arising from your listing, your property, your hosting or your breach of this agreement, Aerva’s Policies or the law.',
+          'You are responsible for your own property, contents and liability insurance.'
+        ] },
+        { title: '26. Acceptance, records and copies', points: [
+          'This agreement is accepted for each listing you submit, and again whenever Aerva revises it. Each acceptance is recorded with the version, the listing, the date and time.',
+          'A copy of the agreement you accepted is emailed to you each time, and every agreement you have accepted can be viewed in your dashboard under Account → Host Agreement.',
+          'The version published by Aerva is the binding version. Aerva’s interpretation of this agreement and its Policies is final.'
+        ] },
+        { title: '27. Revisions', points: [
+          'Aerva may revise this agreement and its Policies at any time. A revision takes effect when it is published. Commission revisions follow the notice period in the Commission and fees clause.',
+          'Aerva emails you a formal notice of every revision. You accept the revised agreement in your dashboard, or decline it.',
+          'Bookings already confirmed keep the commission and fees in force when they were made.'
+        ] },
+        { title: '28. Termination', points: [
+          'If you decline a revised agreement, or do not accept it within 30 days of Aerva’s notice, or you decline a commission revision, or have not acknowledged it by the date it takes effect, this agreement ends. Your listings are deactivated and removed from Aerva, and they take no new bookings.',
+          'Confirmed bookings go ahead unless Aerva decides otherwise. Amounts due to you for completed stays are paid to your verified bank account, less any amounts you owe Aerva, such as cancellation coupons, refunds or penalties.',
+          'You may end this agreement at any time by deactivating your listings or your hosting. Aerva may end it, or suspend or remove any listing or account, if this agreement, Aerva’s Policies or the law are broken.',
+          'Your account and data are then handled under Aerva’s Deactivating, Removing and Deleting policy. You may delete your account once nothing is open; booking and payment records are kept as the law requires.',
+          'Accepting the current agreement in your dashboard before your account is deleted restores listings that were deactivated only because a revision was not accepted.'
+        ] },
+        { title: '29. General', points: [
+          'This agreement, Aerva’s Terms of Service and Aerva’s Policies are the entire agreement between you and Aerva about hosting. If any part is found unenforceable, the rest remains in force.',
+          'This agreement is governed by the laws of India. Disputes are subject to the courts of competent jurisdiction in India.'
+        ] }
       ],
-      accept: 'I agree to the host agreement and Aerva’s Policies.'
+      accept: 'I have read and accept the Aerva Host Agreement, Aerva’s Terms of Service and Aerva’s Policies for this listing.'
     }
   },
 
@@ -247,15 +383,16 @@ window.AERVA_POLICIES = {
     ]},
     { id: 'service-fees', title: 'Service Fees Policy', summary: 'How Aerva’s service fees are charged to hosts and guests.', sections: [
       { title: 'Guests', points: [
-        'A guest service fee of 5% of the booking price is added to your total and shown before you pay.'
+        'A guest service fee, a percentage of the booking price, is added to your total and shown before you pay.'
       ]},
       { title: 'Hosts', points: [
-        'Aerva’s commission is 5% of the stay price, paid amenities and pet fees. It is deducted from your payout.'
+        'Aerva’s commission is a percentage of the stay price, paid amenities and pet fees, at the rate for your property type shown in your dashboard. It is deducted from your payout.',
+        'A revised commission is announced by email at least 33 days before it takes effect (31 days’ notice, plus 2 days for time zones), and applies to bookings made from the date given. Hosts acknowledge it in their dashboard.'
       ]},
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',
         'Aerva’s guest service fee is not refunded: not when a guest or a host cancels, when Aerva cancels, when a booking is changed to a lower price, or when a stay issue is upheld. It is refunded only when a booking fails because of a mistake on Aerva’s side, or in an exceptional case where Aerva, at its sole discretion, decides to refund it.',
-        'Aerva may change its fees. The fees shown when you book apply to that booking.'
+        'Aerva may change the guest service fee at any time, and its commission on the notice above. The fees shown when you book apply to that booking.'
       ]}
     ]},
     { id: 'offline-fees', title: 'Offline Fee Policy', summary: 'When a host may charge anything outside Aerva.', sections: [
@@ -458,7 +595,7 @@ window.AERVA_POLICIES = {
       { title: 'Not allowed', points: [
         'Content that is illegal, false or misleading, sexual, violent, hateful or harassing.',
         'Other people’s personal information, contact details or links for booking outside Aerva.',
-        'Phone numbers, email addresses, websites, social media handles or QR codes in listing photos. A listing with such a photo is blocked immediately.',
+        'Phone numbers, email addresses, websites, social media handles or QR codes in listing photos. Any such photo is removed.',
         'Photos that are not of the actual listing, or that you do not have the right to use.',
         'Spam or advertising.'
       ]},
@@ -695,7 +832,7 @@ window.AERVA_POLICIES = {
           ]},
           { title: 'TDS', points: [
             'TDS is deducted from every payout under section 194-O (section 393 of the Income-tax Act, 2025): 0.1% with a valid PAN, 5% without one or if your PAN is not linked to Aadhaar. Add your PAN in Payout details before your first payout.',
-            'It is worked out on what is due to you after Aerva’s commission. Example: a ₹10,000 booking, Aerva’s 5% commission of ₹500, so ₹9,500 is due to you; TDS at 0.1% is ₹9.50 and ₹9,490.50 is paid. The TDS is credited against your PAN and shows in your Form 26AS.',
+            'It is worked out on what is due to you after Aerva’s commission. Example: a ₹10,000 booking with a 5% commission of ₹500, so ₹9,500 is due to you; TDS at 0.1% is ₹9.50 and ₹9,490.50 is paid. The TDS is credited against your PAN and shows in your Form 26AS.',
             'In Payout details, enter the name of the person or business to be paid exactly as their bank account holds it, and add that account. A PAN is optional; if you add one, it must be in that same name. Aerva verifies the account before the first payout.',
             'After you change your bank details, payouts wait 48 hours, and you are emailed about the change.'
           ]}
@@ -708,8 +845,8 @@ window.AERVA_POLICIES = {
             'Every listing is reviewed before it goes live. You are emailed when it is approved, or told what to change.'
           ]},
           { title: 'Photos', points: [
-            'Photos must be of the actual property and must not show phone numbers, email addresses, websites, social media handles or QR codes. A listing with such a photo is blocked at once.',
-            'Remove or replace the photo. If you believe a photo was blocked by mistake, raise a request and choose the listing.'
+            'Photos must be of the actual property and must not show phone numbers, email addresses, websites, social media handles or QR codes. Any such photo is removed.',
+            'Add a replacement photo if needed. If you believe a photo was removed by mistake, raise a request and choose the listing.'
           ]}
         ], docs: ['content', 'experience-standards', 'experience-host-terms'] },
 
@@ -972,6 +1109,7 @@ window.AERVA_POLICIES = {
 
   // Gaps between these policies and the product, for the admin to close.
   openItems: [
+    'Have the lawyer review the Aerva Host Agreement 2026-10-25b (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
     'Add the Grievance Officer’s name to support.grievanceOfficer in this file (required by the E-Commerce Rules); it then shows in the Resolution Center.',
     'Resolution Center: fill in support.contacts.tollFree, whatsapp and hours in this file when the numbers are live. Until then those buttons stay hidden.',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',

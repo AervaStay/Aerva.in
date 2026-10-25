@@ -3,5 +3,9 @@
 // text guests and hosts actually see). When the wording changes, change
 // both — a booking or listing that sends an older version is refused and
 // the person is shown the new text.
-const AGREEMENT_VERSION = '2026-09g';
-module.exports = { AGREEMENT_VERSION };
+const AGREEMENT_VERSION = '2026-09g';          // booking agreement (guests)
+// The host agreement has its own version: it is accepted for EVERY listing
+// submitted for review (saved on the listing and on the host). Must match
+// AERVA_POLICIES.agreements.hostVersion in aerva-policies.js.
+const HOST_AGREEMENT_VERSION = '2026-10-25b';
+module.exports = { AGREEMENT_VERSION, HOST_AGREEMENT_VERSION };
