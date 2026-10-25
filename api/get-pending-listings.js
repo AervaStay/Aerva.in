@@ -929,6 +929,22 @@ module.exports = async (req, res) => {
       return res.status(500).json({ error: 'Could not withdraw the rate right now.' });
     }
   }
+  // ---- Contact Checks (admins only; _contact-checks.js) ----
+  if (req.method === 'GET' && req.query.contactChecks === '1') {
+    try { return res.status(200).json(await require('./_contact-checks').checks(sql)); }
+    catch (err) { console.error('contactChecks failed:', err); return res.status(500).json({ error: 'Could not run the contact check right now.' }); }
+  }
+  if (req.method === 'POST' && req.body && req.body.contactChecksFix) {
+    try {
+      const r = await require('./_contact-checks').fixNow(sql);
+      await logAudit(sql, { action: 'contact_check_fixed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'messages', metadata: r });
+      return res.status(200).json(Object.assign({ success: true }, r));
+    } catch (err) { console.error('contactChecksFix failed:', err); return res.status(500).json({ error: 'Could not fix them right now.' }); }
+  }
+  if (req.method === 'POST' && req.body && req.body.contactCheckTry) {
+    try { return res.status(200).json(await require('./_contact-checks').tryMessage(req.body.contactCheckTry.text, req.body.contactCheckTry.context)); }
+    catch (err) { return res.status(500).json({ error: 'Could not check that message right now.' }); }
+  }
   // GET ?insights=1 — Business insights (admins only; _insights.js).
   if (req.method === 'GET' && req.query.insights === '1') {
     try {

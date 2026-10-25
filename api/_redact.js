@@ -324,9 +324,24 @@ const COMMON_WORDS = new Set(('home house night noon morning evening time times 
 const restoreLinks = (text, urls) => text.replace(/([-])/g, (_m, c) => urls[c.charCodeAt(0) - 0xE100]);
 
 // The main check. { displayText, wasRedacted }.
-// keepNumbers: phone numbers stay (a live booking's chat — see
-// _message-guard.js); emails, links and handles still go.
-function redactContactInfo(input, { keepNumbers = false } = {}) {
+// keepNumbers: phone numbers stay; keepEmails: email addresses stay (both
+// for a live booking's chat — see _message-guard.js). Links, social
+// handles and UPI IDs still go.
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const UPI_HANDLES = /@(?:ok[a-z]+|ybl|ibl|axl|apl|upi|paytm|ptyes|ptaxis|pthdfc|ptsbi|yapl|ikwik|jupiteraxis|fbl|waicici|wahdfcbank|wasbi|waaxis|kotak|icici|hdfcbank|sbi|axisbank|pingpay|freecharge)$/i;
+function redactContactInfo(input, { keepNumbers = false, keepEmails = false } = {}) {
+  if (!keepEmails) return redactCore(input, { keepNumbers });
+  // Emails are set aside (private-use placeholders), the rest is checked,
+  // then they are put back.
+  const kept = [];
+  const masked = String(input == null ? '' : input).replace(EMAIL_RE, (m) => {
+    if (UPI_HANDLES.test(m)) return m;                    // a UPI ID is not an email
+    kept.push(m); return String.fromCharCode(0xE400 + kept.length - 1);
+  });
+  const r = redactCore(masked, { keepNumbers });
+  return { displayText: r.displayText.replace(/[\uE400-\uE4FF]/g, (c) => kept[c.charCodeAt(0) - 0xE400] || ''), wasRedacted: r.wasRedacted };
+}
+function redactCore(input, { keepNumbers = false } = {}) {
   const first = removeLinksAndHandles(input);
   let text = first.text;
   let redacted = first.redacted;

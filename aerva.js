@@ -7037,7 +7037,7 @@
       }
       chatCurrentConversationId = data.conversationId;
       document.getElementById('chatModalTitle').textContent = data.listingName || listingName || 'Chat';
-      renderChatMessages(data.messages || [], data.viewerRole);
+      renderChatMessages(data.messages || [], data.viewerRole, !!data.photosAllowed);
       showReviewPrompt('chatReviewPrompt', data.reviewPrompt);
       // Booking details and the cancel / change / dispute cards sit ABOVE
       // the messages (inserted before the message list), so the reply box
@@ -7138,8 +7138,17 @@
     }));
   }
 
-  function renderChatMessages(messages, viewerRole){
+  let chatPicker = null;
+  function chatPickerReady(){
+    if(!chatPicker){
+      const box = document.getElementById('chatInput');
+      chatPicker = box ? makeChatPhotoPicker(box, box.parentNode) : null;
+    }
+    return chatPicker;
+  }
+  function renderChatMessages(messages, viewerRole, photosAllowed){
     const container = document.getElementById('chatMessagesContainer');
+    if(photosAllowed !== undefined && chatPickerReady()) chatPicker.setAllowed(photosAllowed);
     if(!messages.length){
       container.innerHTML = '<p style="font-size:13px; opacity:0.6; text-align:center;">Say hello — your host will see this once you send it.</p>';
       return;
@@ -7159,7 +7168,8 @@
       // one was fixed — the two must stay on the same path.
       return `
         <div style="align-self:${isMine ? 'flex-end' : 'flex-start'}; max-width:78%;">
-          <div style="background:${isMine ? 'var(--ink)' : 'var(--cream-deep)'}; color:${isMine ? 'var(--cream)' : 'var(--ink)'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${renderMessageBody(m.display_text)}</div>
+          ${m.display_text ? `<div style="background:${isMine ? 'var(--ink)' : 'var(--cream-deep)'}; color:${isMine ? 'var(--cream)' : 'var(--ink)'}; padding:10px 14px; border-radius:14px; font-size:13.5px; line-height:1.5; white-space:pre-wrap;">${renderMessageBody(m.display_text)}</div>` : ''}
+          ${chatPhotosHtml(m.photos)}
           ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
           ${reactionRowHtml(m, isMine, viewerRole)}
           ${canUnsendMessage(m, isMine) ? `<div class="msg-actions">${unsendButtonHtml(m)}</div>` : ''}
@@ -7170,7 +7180,7 @@
       const keep = container.scrollTop;
       const r = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${chatCurrentOrderId}`, { headers: { 'Authorization': 'Bearer ' + guestAuthToken() } });
       const d = await r.json().catch(() => ({}));
-      if(r.ok){ renderChatMessages(d.messages || [], d.viewerRole); container.scrollTop = keep; }
+      if(r.ok){ renderChatMessages(d.messages || [], d.viewerRole, !!d.photosAllowed); container.scrollTop = keep; }
     };
     wireUnsendButtons(container, () => chatCurrentConversationId, viewerRole, redrawChat);
     wireReactions(container, () => chatCurrentConversationId, viewerRole, redrawChat);
@@ -7215,7 +7225,8 @@
   }
 
   document.getElementById('chatInput').addEventListener('input', function(){
-    document.getElementById('chatWarning').style.display = looksLikeContactInfo(this.value) ? 'block' : 'none';
+    const live = chatPicker && chatPicker.allowed;
+    document.getElementById('chatWarning').style.display = (live ? /\b(instagram|insta|facebook|whatsapp|telegram)\b/i.test(this.value) : looksLikeContactInfo(this.value)) ? 'block' : 'none';
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 100) + 'px';
   });
@@ -7223,18 +7234,21 @@
   async function sendChatMessage(){
     const input = document.getElementById('chatInput');
     const text = input.value.trim();
-    if(!text || !chatCurrentConversationId) return;
+    const photos = chatPicker && chatPicker.allowed ? chatPicker.urls() : [];
+    if(chatPicker && chatPicker.busy()) return;
+    if((!text && !photos.length) || !chatCurrentConversationId) return;
     const token = guestAuthToken();
     input.disabled = true;
     try{
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ mode: 'send', conversationId: chatCurrentConversationId, text, role: 'guest' })
+        body: JSON.stringify({ mode: 'send', conversationId: chatCurrentConversationId, text, role: 'guest', photos })
       });
       const data = await res.json();
       if(res.ok){
         input.value = '';
+        if(chatPicker) chatPicker.clear();
         document.getElementById('chatWarning').style.display = 'none';
         // Re-fetch rather than locally append — keeps this in sync with
         // whatever the server actually stored (the redacted version),
@@ -7243,7 +7257,7 @@
           headers: { 'Authorization': 'Bearer ' + token }
         });
         const convData = await convRes.json();
-        if(convRes.ok) renderChatMessages(convData.messages || [], convData.viewerRole);
+        if(convRes.ok) renderChatMessages(convData.messages || [], convData.viewerRole, !!convData.photosAllowed);
       }
     } catch(err){
       // Silently retryable — the message just doesn't appear; the guest can try again.
@@ -7784,6 +7798,7 @@
     });
   }
 
+  let inboxPicker = null;
   async function refreshInboxMessages(){
     const token = guestAuthToken();
     const container = document.getElementById('inboxMessages');
@@ -7803,6 +7818,8 @@
       showCancellationCard('inboxReviewPrompt', data.cancellation, () => refreshInboxMessages());
       showChangeCard('inboxReviewPrompt', data.change, () => refreshInboxMessages());
       showDisputeCard('inboxReviewPrompt', data.dispute, () => refreshInboxMessages());
+      if(!inboxPicker){ const box = document.getElementById('inboxChatInput'); inboxPicker = box ? makeChatPhotoPicker(box, box.parentNode) : null; }
+      if(inboxPicker) inboxPicker.setAllowed(!!data.photosAllowed);
       await renderInboxMessages(data.messages || []);
       loadInboxChatTemplates(inboxCurrentConversationId);
       // Read messages update their own unread_count server-side, but the
@@ -7851,7 +7868,8 @@
           <div class="inbox-message-avatar"></div>
           <div>
             <div class="inbox-message-meta">${label} · ${time}</div>
-            <div class="inbox-message-bubble" data-msg-id="${m.id}">${renderMessageBody(shownText)}</div>
+            ${shownText ? `<div class="inbox-message-bubble" data-msg-id="${m.id}">${renderMessageBody(shownText)}</div>` : ''}
+            ${chatPhotosHtml(m.photos)}
             ${m.was_redacted ? '<p style="font-size:10px; opacity:0.5; margin-top:2px;">Some content was removed — contact info can\'t be shared here.</p>' : ''}
             ${showOriginalLink}
             ${reactionRowHtml(m, isMine, inboxCurrentRole)}
@@ -8395,7 +8413,9 @@
   async function sendInboxMessage(){
     const input = document.getElementById('inboxChatInput');
     const rawText = input.value.trim();
-    if(!rawText || !inboxCurrentConversationId) return;
+    const photos = inboxPicker && inboxPicker.allowed ? inboxPicker.urls() : [];
+    if(inboxPicker && inboxPicker.busy()) return;
+    if((!rawText && !photos.length) || !inboxCurrentConversationId) return;
     const token = guestAuthToken();
     // Ad hoc keyword resolution — a host typing "@checkin" directly into
     // the message box (whether picked from the suggestion dropdown or
@@ -8414,10 +8434,11 @@
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ mode: 'send', conversationId: inboxCurrentConversationId, text, role: inboxCurrentRole })
+        body: JSON.stringify({ mode: 'send', conversationId: inboxCurrentConversationId, text, role: inboxCurrentRole, photos })
       });
       if(res.ok){
         input.value = '';
+        if(inboxPicker) inboxPicker.clear();
         document.getElementById('inboxChatWarning').style.display = 'none';
         await refreshInboxMessages();
         loadInboxConversations(); // refreshes last-message preview in the list
@@ -8428,7 +8449,8 @@
   }
   document.getElementById('inboxChatSendBtn').addEventListener('click', sendInboxMessage);
   document.getElementById('inboxChatInput').addEventListener('input', function(){
-    document.getElementById('inboxChatWarning').style.display = looksLikeContactInfo(this.value) ? 'block' : 'none';
+    const live = inboxPicker && inboxPicker.allowed;
+    document.getElementById('inboxChatWarning').style.display = (live ? /\b(instagram|insta|facebook|whatsapp|telegram)\b/i.test(this.value) : looksLikeContactInfo(this.value)) ? 'block' : 'none';
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 100) + 'px';
   });
@@ -12582,6 +12604,7 @@
 
     let conversationId = null;
     let tbReload = null;
+    let tbPicker = null;
     const thread = document.getElementById('tbThread');
     try{
       const res = await fetch(SUITES_API_BASE + `/api/guest-profile?mode=conversation&orderId=${Number(orderId)}`, {
@@ -12590,13 +12613,16 @@
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Could not open this conversation.');
       conversationId = data.conversationId;
+      const tbBox = document.getElementById('tbText');
+      tbPicker = tbBox ? makeChatPhotoPicker(tbBox, tbBox.parentNode) : null;
+      if(tbPicker) tbPicker.setAllowed(!!data.photosAllowed);
       const drawTb = (msgs) => {
         thread.innerHTML = msgs.length
           ? msgs.map(m => `
               <div class="tb-msg ${m.sender_type === 'host' ? 'tb-msg-mine' : ''}">
                 <span class="tb-msg-who">${esc(m.sender_type === 'host' ? 'You' : (m.sender_type === 'system' ? 'Aerva' : r.guestName))}</span>
                 ${m.unsent ? `<span class="tb-msg-text msg-unsent-text">${unsentBubbleText(m.sender_type === 'host')}</span>`
-                  : `<span class="tb-msg-text">${esc(m.display_text || '')}</span>${canUnsendMessage(m, m.sender_type === 'host') ? unsendButtonHtml(m) : ''}${reactionRowHtml(m, m.sender_type === 'host', 'host')}`}
+                  : `${m.display_text ? `<span class="tb-msg-text">${esc(m.display_text)}</span>` : ''}${chatPhotosHtml(m.photos)}${canUnsendMessage(m, m.sender_type === 'host') ? unsendButtonHtml(m) : ''}${reactionRowHtml(m, m.sender_type === 'host', 'host')}`}
               </div>`).join('')
           : '<p class="tb-muted">No messages yet. Anything you send here reaches them in their Aerva messages.</p>';
         wireUnsendButtons(thread, () => conversationId, 'host', reloadTb);
@@ -12618,18 +12644,21 @@
       const btn = document.getElementById('tbSend');
       const text = document.getElementById('tbText').value.trim();
       const note = document.getElementById('tbMsg');
-      if(!text) return;
+      const photos = tbPicker && tbPicker.allowed ? tbPicker.urls() : [];
+      if(tbPicker && tbPicker.busy()){ note.textContent = 'Photos are still uploading…'; return; }
+      if(!text && !photos.length) return;
       if(!conversationId){ note.textContent = 'This conversation could not be opened.'; return; }
       btn.disabled = true; btn.textContent = 'Sending…';
       try{
         const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-          body: JSON.stringify({ mode: 'send', conversationId, text, role: 'host' })
+          body: JSON.stringify({ mode: 'send', conversationId, text, role: 'host', photos })
         });
         const data = await res.json();
         if(!res.ok) throw new Error(data.error || 'Could not send that.');
         document.getElementById('tbText').value = '';
+        if(tbPicker) tbPicker.clear();
         // What was stored (contact details taken out), not what was typed.
         const shown = data.message && typeof data.message.display_text === 'string' ? data.message.display_text : text;
         if(tbReload) await tbReload();
@@ -14554,6 +14583,59 @@ function cancellationPolicyText(policy){
   return policy === 'firm'
     ? 'Firm — full refund 30+ days before check-in; 50% from 5 to 29 days; within 4 days the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.'
     : 'Flexible — full refund 30+ days before check-in; 80% from 10 to 29 days; 50% from 5 to 9 days; 30% from 2 to 4 days; in the last day the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.';
+}
+
+// ---- Photos in a booking's chat ----
+// During a confirmed booking (until check-out) the guest and host can send
+// each other photos, up to 6 a message (guest-profile.js 'send').
+const CHAT_PHOTO_MAX = 6;
+function chatPhotosHtml(photos){
+  if(!Array.isArray(photos) || !photos.length) return '';
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  return `<div class="chat-photos chat-photos-${Math.min(photos.length, 3)}">${photos.map(u => /^https:\/\//.test(u)
+    ? `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Photo" loading="lazy"></a>` : '').join('')}</div>`;
+}
+// A "Photos" button before `beforeEl` (the message box), with previews
+// above `rowEl`. Photos upload as soon as they are picked.
+function makeChatPhotoPicker(beforeEl, rowEl){
+  if(!beforeEl || !rowEl) return null;
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'chat-photo-btn'; btn.title = 'Add photos'; btn.setAttribute('aria-label', 'Add photos');
+  btn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/></svg>';
+  btn.style.display = 'none';
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp'; input.multiple = true; input.style.display = 'none';
+  const strip = document.createElement('div'); strip.className = 'chat-photo-strip'; strip.style.display = 'none';
+  beforeEl.parentNode.insertBefore(btn, beforeEl);
+  beforeEl.parentNode.insertBefore(input, beforeEl);
+  rowEl.parentNode.insertBefore(strip, rowEl);
+  let items = [];                  // { id, url, status: 'up' | 'ok' | 'err', preview }
+  let allowed = false;
+  const draw = () => {
+    strip.style.display = items.length ? '' : 'none';
+    strip.innerHTML = items.map(it => `<div class="chat-photo-thumb${it.status === 'err' ? ' err' : ''}"><img src="${it.preview}" alt="">${it.status === 'up' ? '<span class="chat-photo-busy">…</span>' : ''}${it.status === 'err' ? '<span class="chat-photo-busy">!</span>' : ''}<button type="button" data-rm="${it.id}" aria-label="Remove">×</button></div>`).join('')
+      + (items.length ? `<span class="chat-photo-note">${items.length}/${CHAT_PHOTO_MAX}</span>` : '');
+    strip.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => { items = items.filter(x => String(x.id) !== b.dataset.rm); draw(); }));
+  };
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', async () => {
+    const files = [...input.files].slice(0, Math.max(0, CHAT_PHOTO_MAX - items.length));
+    input.value = '';
+    for(const f of files){
+      const it = { id: Date.now() + Math.random(), status: 'up', preview: URL.createObjectURL(f) };
+      items.push(it); draw();
+      try{ it.url = (await aervaUploadFiles([f], 'chat-photo'))[0]; it.status = 'ok'; }
+      catch(e){ it.status = 'err'; }
+      draw();
+    }
+  });
+  return {
+    setAllowed(on){ allowed = !!on; btn.style.display = allowed ? '' : 'none'; if(!allowed){ items = []; draw(); } },
+    get allowed(){ return allowed; },
+    busy(){ return items.some(i => i.status === 'up'); },
+    urls(){ return items.filter(i => i.status === 'ok' && i.url).map(i => i.url); },
+    clear(){ items = []; draw(); }
+  };
 }
 
 // ---- Uploading files (evidence for a reported problem) ----

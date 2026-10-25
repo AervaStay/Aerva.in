@@ -18,11 +18,16 @@
 // The original text is always kept in messages.original_text for the admin.
 //
 // A LIVE BOOKING (paid, check-out not yet passed): the guest and the host
-// may share a phone number with each other — only that. Emails, links,
-// social handles and UPI IDs are still removed. Once check-out has passed
-// or the booking is cancelled, every phone number in that conversation is
-// removed (scrubEndedConversations, run by the scheduler), silently: no one
-// is told. Chats outside a booking (enquiries) never allow numbers.
+// may share a phone number and an email address with each other, and send
+// photos (guest-profile.js 'send'). Links, social handles and UPI IDs are
+// still removed. Once check-out has passed or the booking is cancelled,
+// every phone number and email address in that conversation is removed,
+// and every photo in it (sent in the chat, or linked in a message, such as
+// check-in photos) is checked and removed if it shows a contact detail —
+// or removed outright when it cannot be checked (scrubEndedConversations,
+// run by the scheduler), silently: no one is told. The originals are kept
+// for Aerva's records. Chats outside a booking (enquiries) never allow
+// any of it.
 
 const { redactContactInfo, digitCount, rawDigitCount, removeAllDigits } = require('./_redact');
 
@@ -42,7 +47,7 @@ ${lines}
 
 Do these messages, read together, share or build up any of these: ${phonesOk ? '' : 'a phone or WhatsApp number (even split into pieces, mixed with letters or junk, written as words, or spread over several messages), '}an email address (even without its @domain, like "gmail me at ravi.k"), a social media or messaging handle or page, a UPI ID, a website, or an invitation to talk or pay off the platform?
 
-Ordinary booking talk is fine: guest counts, dates, times, prices, flight numbers, room or floor numbers, directions${phonesOk ? '. A phone number on its own is ALLOWED here (the booking is confirmed): do not count it' : ''}.
+Ordinary booking talk is fine: guest counts, dates, times, prices, flight numbers, room or floor numbers, directions${phonesOk ? '. A phone number or an email address on its own is ALLOWED here (the booking is confirmed): do not count either' : ''}.
 
 Reply with JSON only:
 {"contact": true or false, "messages": [numbers of the messages that carry the detail], "what": "a few words"}`;
@@ -163,9 +168,26 @@ async function phonesAllowed(sql, conversationId) {
     return !!r && r.status === 'paid' && Date.now() < stayEndsAt(r);
   } catch (e) { return false; }
 }
+// Photos: from confirmation until the booking's review window closes
+// (REVIEW_WINDOW_DAYS after check-out, on the property's calendar), so a
+// stay's photos — damage, a lost item — can still be sent after check-out.
+// Photos sent after check-out are checked like the rest (scrubEndedConversations).
+async function photosAllowed(sql, conversationId) {
+  try {
+    const r = (await sql`SELECT o.status, o.departure, l.check_out_time, l.timezone
+                         FROM conversations c JOIN orders o ON o.id = c.order_id JOIN listings l ON l.id = o.listing_id
+                         WHERE c.id = ${conversationId}`)[0];
+    if (!r || r.status !== 'paid') return false;
+    if (Date.now() < stayEndsAt(r)) return true;
+    const { reviewWindowState } = require('./_review-policy');
+    const tz = (r.timezone && String(r.timezone).trim()) || 'Asia/Kolkata';
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    return reviewWindowState(isoDay(r.departure), today) === 'open';
+  } catch (e) { return false; }
+}
 // Numbers stay; anything else that is a way to get in touch outside Aerva goes.
 async function guardLiveBooking(sql, { conversationId, senderType, text }) {
-  const own = redactContactInfo(text, { keepNumbers: true });
+  const own = redactContactInfo(text, { keepNumbers: true, keepEmails: true });
   const result = { displayText: own.displayText, wasRedacted: own.wasRedacted, rewrite: [], by: null, what: null, phonesAllowed: true };
   const ACCOUNT = new RegExp('@|' + require('./_redact').ACCOUNT_WORDS.source, 'i');
   let recent = [];
@@ -173,9 +195,11 @@ async function guardLiveBooking(sql, { conversationId, senderType, text }) {
     recent = (await sql`SELECT id, display_text FROM messages WHERE conversation_id = ${conversationId} AND sender_type = ${senderType}
                         AND created_at > now() - make_interval(mins => ${WINDOW_MINUTES}) ORDER BY created_at DESC LIMIT ${WINDOW_MESSAGES}`).reverse();
   } catch (e) { /* judge this message alone */ }
-  const recentAccount = recent.some(m => ACCOUNT.test(m.display_text));
+  // A plain email address is allowed here: it alone is no reason to look closer.
+  const noEmail = (t) => String(t || '').replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, ' ');
+  const recentAccount = recent.some(m => ACCOUNT.test(noEmail(m.display_text)));
   const fragment = recentAccount && result.displayText.trim().split(/\s+/).length <= 4 && !/[?!]/.test(result.displayText);
-  if (!ACCOUNT.test(result.displayText) && !fragment) return result;
+  if (!ACCOUNT.test(noEmail(result.displayText)) && !fragment) return result;
   const texts = [...recent.map(m => m.display_text), result.displayText];
   const verdict = await askClaude(texts, true);
   if (!verdict || !verdict.contact) return result;
@@ -191,31 +215,84 @@ async function guardLiveBooking(sql, { conversationId, senderType, text }) {
 // conversations.contacts_scrubbed_at marks the ones done.
 async function scrubEndedConversations(sql, { deadlineMs = 4000, limit = 200 } = {}) {
   const started = Date.now();
-  const out = { conversations: 0, messages: 0 };
+  const out = { conversations: 0, messages: 0, photosRemoved: 0, waiting: 0 };
   let rows;
   try {
     rows = await sql`
-      SELECT c.id, o.status, o.departure, l.check_out_time, l.timezone
+      SELECT c.id, c.contacts_scrubbed_at AS since, o.status, o.departure, l.check_out_time, l.timezone
       FROM conversations c JOIN orders o ON o.id = c.order_id JOIN listings l ON l.id = o.listing_id
-      WHERE c.contacts_scrubbed_at IS NULL
+      WHERE (c.contacts_scrubbed_at IS NULL
+             -- photos sent after the clean-up (allowed until reviews close) are checked too
+             OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.created_at > c.contacts_scrubbed_at
+                          AND jsonb_typeof(to_jsonb(m)->'photo_urls') = 'array' AND jsonb_array_length(to_jsonb(m)->'photo_urls') > 0))
         AND (o.status <> 'paid' OR o.departure <= CURRENT_DATE + 1)
       ORDER BY o.departure LIMIT ${limit}`;
   } catch (err) { return Object.assign(out, { skipped: true }); }   // before the database update
   for (const c of rows) {
     if (Date.now() - started > deadlineMs) break;
     if (c.status === 'paid' && Date.now() < stayEndsAt(c)) continue;   // still live
-    const msgs = await sql`SELECT id, display_text FROM messages WHERE conversation_id = ${c.id} AND display_text IS NOT NULL`;
+    // Already cleaned once: only what was sent since.
+    const msgs = c.since
+      ? await sql`SELECT id, display_text, to_jsonb(messages)->'photo_urls' AS photos FROM messages WHERE conversation_id = ${c.id} AND created_at > ${c.since}`
+      : await sql`SELECT id, display_text, to_jsonb(messages)->'photo_urls' AS photos FROM messages WHERE conversation_id = ${c.id}`;
+    let retry = false;
     for (const m of msgs) {
-      const shown = redactContactInfo(m.display_text).displayText;
-      if (shown !== m.display_text) {
-        await sql`UPDATE messages SET display_text = ${shown}, was_redacted = true WHERE id = ${m.id}`;
+      let shown = m.display_text == null ? null : redactContactInfo(m.display_text).displayText;
+      // Photo links in the text (check-in photos and the like).
+      if (shown) {
+        const r = await checkLinkedPhotos(shown);
+        shown = r.text; retry = retry || r.retry; out.photosRemoved += r.removed;
+      }
+      // Photos sent in the chat.
+      let photos = Array.isArray(m.photos) ? m.photos : null;
+      if (photos && photos.length) {
+        const keep = [];
+        for (const url of photos) {
+          const v = await photoVerdict(url);
+          if (v === 'retry') { retry = true; keep.push(url); }
+          else if (v === 'keep') keep.push(url);
+          else out.photosRemoved++;
+        }
+        if (keep.length !== photos.length) {
+          // Silent: was_redacted is left as it was, so no 'content removed' note appears.
+          await sql`UPDATE messages SET photo_urls = ${JSON.stringify(keep)}::jsonb WHERE id = ${m.id}`;
+          out.messages++;
+        }
+      }
+      if (shown != null && shown !== m.display_text) {
+        await sql`UPDATE messages SET display_text = ${shown} WHERE id = ${m.id}`;      // silent, as above
         out.messages++;
       }
     }
+    // A photo that could not be checked just now: the chat is looked at
+    // again on the next run (its text is already clean).
+    if (retry) { out.waiting++; continue; }
     await sql`UPDATE conversations SET contacts_scrubbed_at = now() WHERE id = ${c.id}`;
     out.conversations++;
   }
   return out;
 }
 
-module.exports = { guardMessage, askClaude, phonesAllowed, scrubEndedConversations, stayEndsAt, WINDOW_MINUTES, HARD_LIMIT_DIGITS, ASK_FROM_DIGITS };
+// After a stay: may this photo stay? 'keep' (checked, no contact detail),
+// 'remove' (shows one, or cannot be checked at all), 'retry' (try later).
+async function photoVerdict(url) {
+  const { isAervaBlobUrl } = require('./_listing-rules');
+  if (!isAervaBlobUrl(String(url || ''))) return 'remove';
+  const r = await require('./_photo-guard').checkPhoto(url);
+  if (r.status === 'clean') return 'keep';
+  if (r.status === 'flagged' || r.noKey || r.status === 'unscannable') return 'remove';
+  return 'retry';                                    // Claude busy, network, key problem
+}
+async function checkLinkedPhotos(text) {
+  const { isAervaBlobUrl } = require('./_listing-rules');
+  const urls = [...new Set((String(text).match(/https?:\/\/[^\s<>"']+/g) || []).filter(u => isAervaBlobUrl(u)))];
+  let out = String(text), removed = 0, retry = false;
+  for (const u of urls) {
+    const v = await photoVerdict(u);
+    if (v === 'retry') { retry = true; continue; }
+    if (v === 'remove') { out = out.split(u).join('[photo removed]'); removed++; }
+  }
+  return { text: out, removed, retry };
+}
+
+module.exports = { guardMessage, askClaude, phonesAllowed, photosAllowed, scrubEndedConversations, photoVerdict, stayEndsAt, WINDOW_MINUTES, HARD_LIMIT_DIGITS, ASK_FROM_DIGITS };

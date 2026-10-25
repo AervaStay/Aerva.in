@@ -19,7 +19,7 @@ window.AERVA_POLICIES = {
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
     version: '2026-09g',          // booking agreement (guests)
-    hostVersion: '2026-10-25b',    // host agreement — accepted for every listing
+    hostVersion: '2026-10-25c',    // host agreement — accepted for every listing
     guest: {
       title: 'Booking agreement',
       points: [
@@ -92,7 +92,7 @@ window.AERVA_POLICIES = {
         { title: '9. Bookings and the relationship with guests', points: [
           'You honour every confirmed booking and provide the property as described, safe, clean and ready at check-in.',
           'You check a valid government photo ID for every adult guest at check-in, and report foreign guests on Form III within 24 hours of arrival and of departure, as the law requires.',
-          'All communication about a booking stays on Aerva Messages. Once a booking is confirmed, a phone number may be shared there for that stay only. Taking bookings or payments outside Aerva, or using a guest’s details to do so, is not allowed.',
+          'All communication about a booking stays on Aerva Messages. Once a booking is confirmed, phone numbers and email addresses may be shared there until check-out, and photos until the review period closes (15 days after check-out). Taking bookings or payments outside Aerva, or using a guest’s details to do so, is not allowed.',
           'You use guests’ personal information only for their booking and your legal duties, and keep it secure. No camera or recording device may be placed in a bedroom, bathroom or any private space; every device elsewhere must be disclosed in the listing.'
         ] },
         { title: '10. Check-in and check-out', points: [
@@ -107,7 +107,8 @@ window.AERVA_POLICIES = {
           'Damage caused by a pet is handled like any other damage, under the Security Deposit and Damage clause.'
         ] },
         { title: '12. Contact details and communication', points: [
-          'No listing, photo, description, review, message or email sent through Aerva may contain a phone number, email address, website, social media handle, UPI ID, QR code or any other contact detail of you or any other person — except a phone number shared in Aerva Messages for a confirmed booking, for that stay only.',
+          'No listing, photo, description, review, message or email sent through Aerva may contain a phone number, email address, website, social media handle, UPI ID, QR code or any other contact detail of you or any other person.',
+          'Once a booking is confirmed, you and the guest may share phone numbers and email addresses in Aerva Messages until check-out, and photos until the review period closes (15 days after check-out). Other contact details (links, social media or messaging accounts, UPI IDs) are removed from messages automatically. Once the stay has ended or been cancelled, phone numbers, email addresses and any photo showing contact details are removed from the conversation.',
           'Aerva may remove any such content at once, without notice. You are liable for any loss or claim arising from contact details you share in breach of this clause, and repeated breaches may lead to penalties, removal of the listing and suspension of your account.'
         ] },
         { title: '13. Cancellations', points: [
@@ -406,7 +407,8 @@ window.AERVA_POLICIES = {
         'Do not ask for, offer or accept payment outside Aerva for a stay or experience found on Aerva.',
         'Do not use contact details from Aerva to book or pay outside it.',
         'Keep messages about a booking on Aerva.',
-        'Once a booking is confirmed, the guest and host may share a phone number in its Aerva Messages, for the stay only. Other contact details (email addresses, links, social media or messaging accounts, UPI IDs) are not allowed in messages.',
+        'Once a booking is confirmed, the guest and host may share phone numbers and email addresses in its Aerva Messages until check-out, and photos until the review period closes (15 days after check-out). Other contact details (links, social media or messaging accounts, UPI IDs) are not allowed in messages.',
+        'Once the stay has ended or the booking is cancelled, phone numbers, email addresses and any photo showing contact details are removed from the conversation.',
         'Aerva may cancel bookings and suspend accounts that break this policy.'
       ]}
     ]},
@@ -1109,7 +1111,7 @@ window.AERVA_POLICIES = {
 
   // Gaps between these policies and the product, for the admin to close.
   openItems: [
-    'Have the lawyer review the Aerva Host Agreement 2026-10-25b (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
+    'Have the lawyer review the Aerva Host Agreement 2026-10-25c (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
     'Add the Grievance Officer’s name to support.grievanceOfficer in this file (required by the E-Commerce Rules); it then shows in the Resolution Center.',
     'Resolution Center: fill in support.contacts.tollFree, whatsapp and hours in this file when the numbers are live. Until then those buttons stay hidden.',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',

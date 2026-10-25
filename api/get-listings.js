@@ -616,6 +616,10 @@ const JOBS = [
   // agreements end for notices not acknowledged by the date (_rates.js).
   { name: 'commission_notices', label: 'Commission revisions: notices to hosts, and answers due', everyMinutes: 30, lockMinutes: 10,
     run: (c) => require('./_rates').runRateNotices(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) },
+  // Daily: any message still showing a contact detail its chat does not
+  // allow is removed, and the admin emailed (_contact-checks.js).
+  { name: 'contact_check_audit', label: 'Contact check: remove anything the message rules missed', dailyAtHour: 4, lockMinutes: 10,
+    run: (c) => require('./_contact-checks').dailyAudit(c.sql) },
   { name: 'chat_number_cleanup', label: 'Remove phone numbers from chats of finished or cancelled bookings', everyMinutes: 15,
     run: (c) => require('./_message-guard').scrubEndedConversations(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'photo_scan', label: 'Check photos for contact details (and remove any that show them)', everyMinutes: 5, lockMinutes: 3,
