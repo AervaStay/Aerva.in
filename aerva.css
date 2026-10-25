@@ -3599,3 +3599,20 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .nav-account-menu a.menu-sub-link{ padding-left:34px; font-size:11.5px; opacity:0.8; }
 .mobile-nav-panel a.menu-sub-link{ padding-left:16px; font-size:0.9em; opacity:0.8; }
 .id-ok{ color:#2f6b37; opacity:1; font-weight:500; white-space:nowrap; }
+
+/* Photos in a booking's chat */
+.chat-photos{ display:grid; gap:4px; margin-top:6px; max-width:280px; }
+.chat-photos-1{ grid-template-columns:1fr; } .chat-photos-2{ grid-template-columns:1fr 1fr; } .chat-photos-3{ grid-template-columns:1fr 1fr 1fr; }
+.chat-photos a{ display:block; aspect-ratio:1/1; overflow:hidden; border-radius:10px; background:var(--cream-deep); }
+.chat-photos-1 a{ aspect-ratio:4/3; }
+.chat-photos img{ width:100%; height:100%; object-fit:cover; display:block; }
+.inbox-message-row.mine .chat-photos, .tb-msg-mine .chat-photos{ margin-left:auto; }
+.chat-photo-btn{ flex:0 0 auto; width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:transparent; border:1px solid var(--line-dark); border-radius:50%; color:var(--ink); cursor:pointer; }
+.chat-photo-btn:hover{ background:var(--cream-deep); }
+.chat-photo-strip{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:0 0 8px; }
+.chat-photo-thumb{ position:relative; width:56px; height:56px; border-radius:8px; overflow:hidden; background:var(--cream-deep); }
+.chat-photo-thumb img{ width:100%; height:100%; object-fit:cover; }
+.chat-photo-thumb.err{ outline:2px solid #a3402f; }
+.chat-photo-thumb button{ position:absolute; top:2px; right:2px; width:20px; height:20px; border-radius:50%; border:none; background:rgba(28,26,23,0.75); color:#fff; font-size:13px; line-height:20px; padding:0; cursor:pointer; }
+.chat-photo-busy{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.6); font-weight:600; }
+.chat-photo-note{ font-size:12px; opacity:0.6; }

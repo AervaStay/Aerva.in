@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-10-25d"></script>
+<script src="aerva-policies.js?v=2026-10-25g"></script>
 </head>
 <body>
 
@@ -488,6 +488,7 @@
         <div class="tab-row"><button class="tab-btn" id="tabSupportBtn" onclick="switchTab('support')">Support<span class="tab-count" data-count="support" hidden></span></button><button type="button" class="tab-info" data-info="support" aria-label="What Support is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabApprovalsBtn" onclick="switchTab('approvals')">Approvals<span class="tab-count" data-count="approvals" hidden></span></button><button type="button" class="tab-info" data-info="approvals" aria-label="What Approvals is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabTrustBtn" onclick="switchTab('trust')">Guest Safety<span class="tab-count" data-count="trust" hidden></span></button><button type="button" class="tab-info" data-info="trust" aria-label="What Guest Safety is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabContactBtn" onclick="switchTab('contact')">Contact Checks</button><button type="button" class="tab-info" data-info="contact" aria-label="What Contact Checks is for">i</button></div>
       </div>
       <div class="nav-group" role="group" aria-label="Reviews and badges">
         <div class="nav-group-label">Reviews and badges</div>
@@ -683,6 +684,12 @@
       <div class="process-results" id="simResults" style="margin-top:12px;"></div>
     </div>
 
+  </div>
+
+  <div id="contactView" style="display:none;">
+    <h2>Contact Checks</h2>
+    <p style="opacity:0.7; font-size:14px;">Checks that chats follow the rules: no contact details in enquiries; during a confirmed booking phone numbers and email addresses are allowed until check-out, and photos until the review period closes (no links, social handles or UPI IDs); after check-out or a cancellation, numbers, emails and photos showing contact details are removed, silently. Shows anything still visible that should not be, what was removed in the last 30 days, and lets you try a message.</p>
+    <div id="contactBody"><p style="opacity:0.6;">Loading…</p></div>
   </div>
 
   <div id="ratesView" style="display:none;">
@@ -2410,6 +2417,7 @@
     live: ['Live Listings', 'Every approved listing. Block pauses one (reversible); Remove takes it down. Also here: photos removed for showing contact details (with Restore), new photos taken far from the pin, and a photo test.'],
     compliance: ['Compliance', 'Check every approved listing against one requirement. Listings that fail get a flag and 14 days to fix it; the daily job blocks them after the deadline. Open flags clear when the host fixes and saves.'],
     verifications: ['ID Verifications', 'Host Aadhaar, PAN and bank details waiting for a human check. Approve or reject each one; the document is erased once reviewed. A host is paid only once their PAN and bank account are verified.'],
+    contact: ['Contact Checks', 'Proof that contact details stay out of chats: whether the checks are on, when finished chats were last cleaned, anything still showing that should not (with a Fix now button), every removal in the last 30 days with the original text, and a box to try any message. A daily check fixes anything missed and emails you.'],
     rates: ['Commission Settings', 'Set Aerva’s commission for hosts and service fee for guests, for all property types or one type. Host changes take effect at least 33 days later (31 days’ notice + 2 days for time zones), with a formal email that each host acknowledges; guest changes take effect at once. See every rate, the days to go for a scheduled one, and how long each has been in force. A scheduled change can be withdrawn before it starts.'],
     insights: ['Business Insights', 'What happened under each rate — bookings, booking value, Aerva’s fees, new guests and listings, cancellations, ratings and hosts who declined — per day and compared with the rate before; the last 12 months; ratings by part of the stay; support satisfaction; and the latest reviews and feedback. Real bookings only.'],
     accounts: ['Accounts', 'Each month in the shape your CA books it: Aerva’s income (commission and guest service fee only), money received, refunded and paid out, GST on stays and TDS payable, and what Aerva still holds for hosts and guests at month end. Three CSVs for Tally or Zoho Books. Razorpay’s charges come from Razorpay’s own settlement report.'],
@@ -2514,6 +2522,9 @@
     document.getElementById('tabBatchBtn').classList.toggle('active', tab === 'batch');
     document.getElementById('tabTrafficBtn').classList.toggle('active', tab === 'traffic');
     document.getElementById('tabPayoutsBtn').classList.toggle('active', tab === 'payouts');
+    document.getElementById('tabContactBtn').classList.toggle('active', tab === 'contact');
+    document.getElementById('contactView').style.display = tab === 'contact' ? 'block' : 'none';
+    if(tab === 'contact') window.loadContactChecks();
     document.getElementById('tabRatesBtn').classList.toggle('active', tab === 'rates');
     document.getElementById('ratesView').style.display = tab === 'rates' ? 'block' : 'none';
     if(tab === 'rates') window.loadFeeRates();
@@ -4392,6 +4403,68 @@ async function lkReport(id, status){
           <div class="dispute-card"><h4>Latest support feedback</h4>${d.feedback.support.length ? d.feedback.support.map(f => `<p style="font-size:13.5px; margin:8px 0;"><strong>${stars(f.rating)}</strong> · ${E(f.ref)} · ${E(String(f.category || '').replace(/_/g, ' '))} · <span class="tds-sub">${E(day(f.at))}</span>${f.comment ? '<br>' + E(f.comment) : ''}</p>`).join('') : '<p style="opacity:0.6;">No feedback yet.</p>'}</div>
         </div>
         <ul style="font-size:13px; opacity:0.7; margin-top:16px; line-height:1.6;">${d.notes.map(n => `<li>${E(n)}</li>`).join('')}</ul>`;
+    }catch(e){ el.innerHTML = `<p class="error">${E(e.message)}</p>`; }
+  };
+})();
+</script>
+<script>
+// ---- Contact Checks (admins only; get-pending-listings.js ?contactChecks / contactChecksFix / contactCheckTry) ----
+(function(){
+  const E = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  const when = (v) => { const d = new Date(v); return isNaN(d) ? '—' : d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); };
+  const API = () => API_BASE + '/api/get-pending-listings';
+  const post = (body) => fetch(API(), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify(body) }).then(async r => [r.ok, await r.json().catch(() => ({}))]);
+  const ok = (b) => b ? '<span style="color:#2f6b3a; font-weight:600;">✓</span>' : '<span style="color:#a3402f; font-weight:600;">✗</span>';
+  window.loadContactChecks = async function(){
+    const el = document.getElementById('contactBody');
+    el.innerHTML = '<p style="opacity:0.6;">Checking…</p>';
+    try{
+      const r = await fetch(API() + '?contactChecks=1', { headers: authHeaders() });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.error || 'Could not load.');
+      const job = d.job || {}, audit = d.audit || {};
+      const jobFresh = job.last_finished_at && Date.now() - new Date(job.last_finished_at).getTime() < 3 * 3600e3;
+      el.innerHTML = `
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px; margin:12px 0 20px;">
+          <div class="dispute-card"><h4>Health</h4><table class="tds-table" style="display:table;">
+            <tr><td>${ok(d.aiOn)} Second check for split or spelled-out details<div class="tds-sub">${d.aiOn ? 'On' : 'Off — ANTHROPIC_API_KEY not set in Vercel'}</div></td></tr>
+            <tr><td>${ok(jobFresh && job.last_ok !== false)} Clean-up of finished chats (every 15 minutes)<div class="tds-sub">${job.last_finished_at ? 'Last ran ' + E(when(job.last_finished_at)) : 'Not run yet'}</div></td></tr>
+            <tr><td>${ok(audit.last_ok !== false)} Daily contact check (4 am)<div class="tds-sub">${audit.last_finished_at ? 'Last ran ' + E(when(audit.last_finished_at)) : 'Not run yet'}</div></td></tr>
+            <tr><td>${ok(!d.missed.length)} Contact details still showing where not allowed: <strong>${E(d.missed.length)}</strong></td></tr>
+            <tr><td>Finished chats waiting for clean-up: ${E(d.waiting)}<div class="tds-sub">Stay ended under 2 hours ago</div></td></tr>
+          </table><p class="tds-sub">${E(d.scanned)} messages from the last 120 days checked.</p>
+          ${d.missed.length ? '<button type="button" class="approve-btn" id="ccFix">Fix now</button> <span id="ccFixMsg" style="font-size:13.5px;"></span>' : ''}</div>
+          <div class="dispute-card"><h4>Removed in the last 30 days</h4><table class="tds-table" style="display:table;">
+            <tr><td>Enquiries</td><td style="text-align:right;">${E(d.removedCounts.enquiry)}</td></tr>
+            <tr><td>Confirmed bookings (links, handles, UPI IDs)</td><td style="text-align:right;">${E(d.removedCounts.booking)}</td></tr>
+            <tr><td>After the stay / cancelled</td><td style="text-align:right;">${E(d.removedCounts.ended)}</td></tr>
+            <tr><td><strong>Total</strong></td><td style="text-align:right;"><strong>${E(d.removedTotal)}</strong></td></tr></table>
+            <p class="tds-sub">Nobody is told when a detail is removed.</p></div>
+          <div class="dispute-card"><h4>Try a message</h4>
+            <label style="font-size:13.5px;">Chat <select id="ccCtx"><option value="enquiry">Enquiry</option><option value="booking">Confirmed booking</option><option value="ended">After the stay / cancelled</option></select></label>
+            <textarea id="ccText" rows="3" style="width:100%; box-sizing:border-box; margin:8px 0; font:inherit;" placeholder="e.g. call me on nine eight two two..."></textarea>
+            <button type="button" class="approve-btn" id="ccTry">Check</button><div id="ccOut" style="font-size:13.5px; margin-top:8px;"></div></div>
+        </div>
+        ${d.missed.length ? `<h3 class="tds-h">Still showing — should not be <small>${E(d.missed.length)}</small></h3>
+          <div style="overflow-x:auto;"><table class="tds-table" style="display:table; min-width:800px;"><thead><tr><th>Sent</th><th>Chat</th><th>Booking</th><th>Shown now</th><th>After fix</th></tr></thead><tbody>
+          ${d.missed.slice(0, 50).map(f => `<tr><td>${E(when(f.at))}<div class="tds-sub">${E(f.sender)}</div></td><td>${E(f.contextLabel)}</td><td>${E(f.booking || '—')}<div class="tds-sub">${E(f.listing)}</div></td><td>${E(f.shown)}</td><td>${E(f.shouldBe)}</td></tr>`).join('')}
+          </tbody></table></div>` : '<p style="font-size:14px;"><strong>All clear:</strong> no contact detail is showing anywhere the rules do not allow.</p>'}
+        <h3 class="tds-h">Latest removals</h3>
+        ${d.removed.length ? `<div style="overflow-x:auto;"><table class="tds-table" style="display:table; min-width:800px;"><thead><tr><th>Sent</th><th>Chat</th><th>Booking</th><th>What was written</th><th>What is shown</th></tr></thead><tbody>
+          ${d.removed.map(m => `<tr><td>${E(when(m.at))}<div class="tds-sub">${E(m.sender)}</div></td><td>${E(m.context)}</td><td>${E(m.booking || '—')}<div class="tds-sub">${E(m.listing)}</div></td><td>${E(m.original)}</td><td>${E(m.shown)}</td></tr>`).join('')}
+          </tbody></table></div>` : '<p style="opacity:0.6;">Nothing removed in the last 30 days.</p>'}`;
+      const fix = document.getElementById('ccFix');
+      if(fix) fix.addEventListener('click', async () => {
+        fix.disabled = true;
+        const [good, j] = await post({ contactChecksFix: true });
+        document.getElementById('ccFixMsg').textContent = good ? `Fixed ${j.total} message${j.total === 1 ? '' : 's'}.` : (j.error || 'Could not fix.');
+        if(good) setTimeout(window.loadContactChecks, 1200);
+      });
+      document.getElementById('ccTry').addEventListener('click', async () => {
+        const out = document.getElementById('ccOut'); out.textContent = 'Checking…';
+        const [good, j] = await post({ contactCheckTry: { text: document.getElementById('ccText').value, context: document.getElementById('ccCtx').value } });
+        out.innerHTML = good ? `${j.removed ? '<strong style="color:#a3402f;">Removed</strong> (' + E(j.by) + ')' : '<strong style="color:#2f6b3a;">Allowed</strong>'} — shown as: “${E(j.shown)}”` : E(j.error || 'Could not check.');
+      });
     }catch(e){ el.innerHTML = `<p class="error">${E(e.message)}</p>`; }
   };
 })();

@@ -198,6 +198,7 @@ const UNSEND_MINUTES = 60;
 // Smileys a person can put on the other side's message.
 const REACTIONS = ['👍', '❤️', '😊', '🙏', '😂', '👌'];
 function unsentView(m) {
+  if (!Array.isArray(m.photos) || !m.photos.length) delete m.photos;
   if (!m.guest_reaction) delete m.guest_reaction;
   if (!m.host_reaction) delete m.host_reaction;
   if (!m.unsent_at) { delete m.unsent_at; return m; }
@@ -519,7 +520,8 @@ module.exports = async (req, res) => {
 
         const messages = (await sql`
           SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at,
-                 to_jsonb(messages)->>'guest_reaction' AS guest_reaction, to_jsonb(messages)->>'host_reaction' AS host_reaction
+                 to_jsonb(messages)->>'guest_reaction' AS guest_reaction, to_jsonb(messages)->>'host_reaction' AS host_reaction,
+                 to_jsonb(messages)->'photo_urls' AS photos
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `).map(unsentView);
         // This endpoint is only ever called from the guest-facing chat
@@ -533,7 +535,7 @@ module.exports = async (req, res) => {
         // and the host's replies, all rendered identically as "mine,"
         // making it look like nothing was ever received.
         const viewerRole = isGuest ? 'guest' : 'host';
-        return res.status(200).json({ conversationId, listingName: order.property_name, viewerRole, messages,
+        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, messages,
           booking: { orderId: order.id, confirmationCode: order.confirmation_code || null,
                      arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights,
                      total: order.total, status: order.status },
@@ -692,7 +694,8 @@ module.exports = async (req, res) => {
 
         const messages = (await sql`
           SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at,
-                 to_jsonb(messages)->>'guest_reaction' AS guest_reaction, to_jsonb(messages)->>'host_reaction' AS host_reaction
+                 to_jsonb(messages)->>'guest_reaction' AS guest_reaction, to_jsonb(messages)->>'host_reaction' AS host_reaction,
+                 to_jsonb(messages)->'photo_urls' AS photos
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `).map(unsentView);
         // Opening a conversation marks the OTHER party's messages read.
@@ -717,7 +720,7 @@ module.exports = async (req, res) => {
           `;
         }
         const myRole = isHost ? 'host' : 'guest';
-        return res.status(200).json({ messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole),
+        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole),
                                       cancellation: await cancellationCard(sql, conversationId, myRole),
                                       change: await changeCard(sql, conversationId, myRole),
                                       dispute: await disputeCard(sql, conversationId, myRole) });
@@ -1405,7 +1408,14 @@ module.exports = async (req, res) => {
       if (mode === 'send') {
         const { conversationId, text, role } = req.body || {};
         const rawText = typeof text === 'string' ? text.trim().slice(0, 2000) : '';
-        if (!conversationId || !rawText) return res.status(400).json({ error: 'Message can\'t be empty.' });
+        // Photos: Aerva-stored images only, up to 6 a message, and only in a
+        // confirmed booking's chat until check-out (checked below).
+        const { isAervaBlobUrl } = require('./_listing-rules');
+        const photosIn = Array.isArray((req.body || {}).photos) ? req.body.photos : [];
+        const photos = [...new Set(photosIn.filter(u => typeof u === 'string').map(u => u.trim()).filter(isAervaBlobUrl))].slice(0, 6);
+        if (photosIn.length > 6) return res.status(400).json({ error: 'You can send up to 6 photos in one message.' });
+        if (photosIn.length && photos.length !== photosIn.length) return res.status(400).json({ error: 'Those photos could not be sent. Please add them again.' });
+        if (!conversationId || (!rawText && !photos.length)) return res.status(400).json({ error: 'Message can\'t be empty.' });
 
         const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${conversationId}`;
         const conv = convRows[0];
@@ -1435,9 +1445,12 @@ module.exports = async (req, res) => {
           senderType = isHost ? 'host' : 'guest';
         }
 
+        if (photos.length && !(await require('./_message-guard').photosAllowed(sql, conversationId))) {
+          return res.status(400).json({ error: 'Photos can be shared once the booking is confirmed, until the review period closes.' });
+        }
         // Contact details in this message, or built up over the sender's
         // recent messages (_message-guard.js). Earlier pieces lose them too.
-        const guard = await guardMessage(sql, { conversationId, senderType, text: rawText });
+        const guard = rawText ? await guardMessage(sql, { conversationId, senderType, text: rawText }) : { displayText: '', wasRedacted: false, rewrite: [], by: null };
         const displayText = guard.displayText, wasRedacted = guard.wasRedacted;
         for (const m of guard.rewrite) {
           await sql`UPDATE messages SET display_text = ${m.display_text}, was_redacted = true WHERE id = ${m.id} AND conversation_id = ${conversationId}`;
@@ -1446,11 +1459,16 @@ module.exports = async (req, res) => {
           await logAudit(sql, { action: 'message_contact_pieces_removed', success: true, actorType: 'guest', actorIdentifier: String(guestId),
             targetType: 'conversation', targetId: conversationId, metadata: { senderType, by: guard.by, what: guard.what, earlierMessages: guard.rewrite.map(m => m.id) } });
         }
-        const inserted = await sql`
-          INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
-          VALUES (${conversationId}, ${senderType}, ${rawText}, ${displayText}, ${wasRedacted})
-          RETURNING id, sender_type, display_text, was_redacted, created_at
-        `;
+        const inserted = photos.length
+          ? await sql`
+            INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted, photo_urls, original_photo_urls)
+            VALUES (${conversationId}, ${senderType}, ${rawText}, ${displayText}, ${wasRedacted}, ${JSON.stringify(photos)}::jsonb, ${JSON.stringify(photos)}::jsonb)
+            RETURNING id, sender_type, display_text, was_redacted, created_at, photo_urls AS photos`
+          : await sql`
+            INSERT INTO messages (conversation_id, sender_type, original_text, display_text, was_redacted)
+            VALUES (${conversationId}, ${senderType}, ${rawText}, ${displayText}, ${wasRedacted})
+            RETURNING id, sender_type, display_text, was_redacted, created_at
+          `;
         return res.status(200).json({ message: inserted[0] });
       }
 
