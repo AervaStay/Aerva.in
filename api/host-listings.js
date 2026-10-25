@@ -1285,6 +1285,50 @@ module.exports = async (req, res) => {
       return res.status(500).json({ error: 'Could not save your acceptance right now. Please try again.' });
     }
   }
+  // ---- Commission revisions (Admin → Commission settings, _rates.js) ----
+  // GET ?rateNotices=1 → revisions waiting for this host's answer, and the
+  // commission in force now for each of the host's property types.
+  if (req.method === 'GET' && (req.query || {}).rateNotices === '1' && (req.query || {}).actingHost === undefined) {
+    try {
+      const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      if (!g[0] || !g[0].host_id) return res.status(200).json({ notices: [], current: [] });
+      const R = require('./_rates');
+      const types = (await sql`SELECT DISTINCT CASE WHEN listing_type = 'experience' THEN 'Experience' ELSE COALESCE(property_type, 'Other') END AS t
+                               FROM listings WHERE host_id = ${g[0].host_id} AND status IN ('approved', 'pending', 'deactivated')`).map(x => R.PROPERTY_TYPES.includes(x.t) ? x.t : 'Other');
+      const current = [];
+      for (const t of [...new Set(types)]) current.push({ type: t, rate: await R.rateAt(sql, 'host', t) });
+      return res.status(200).json({ notices: await R.pendingNotices(sql, g[0].host_id), current });
+    } catch (err) {
+      return res.status(500).json({ error: 'Could not load commission notices right now.' });
+    }
+  }
+  // POST { answerRateNotice: { id, accept: true|false } }
+  if (req.method === 'POST' && req.body && req.body.answerRateNotice && (req.query || {}).actingHost === undefined) {
+    try {
+      const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      if (!g[0] || !g[0].host_id) return res.status(403).json({ error: 'Only hosts can do this.' });
+      const { id, accept } = req.body.answerRateNotice;
+      const ctx = requestContext(req);
+      const n = (await sql`SELECT n.id, n.rate_id FROM fee_rate_notices n JOIN fee_rates r ON r.id = n.rate_id
+                           WHERE n.id = ${Number(id) || 0} AND n.host_id = ${g[0].host_id} AND r.status = 'set' AND r.effective_from > now()
+                             AND n.acknowledged_at IS NULL AND n.declined_at IS NULL`)[0];
+      if (!n) return res.status(404).json({ error: 'This notice has already been answered or is no longer open.' });
+      if (accept === true) {
+        await sql`UPDATE fee_rate_notices SET acknowledged_at = now() WHERE id = ${n.id}`;
+        await logAudit(sql, { action: 'commission_revision_acknowledged', success: true, actorType: 'host', actorIdentifier: String(g[0].host_id),
+          targetType: 'host', targetId: g[0].host_id, metadata: { notice: n.id, rate: n.rate_id, ip: ctx.ip } });
+        return res.status(200).json({ success: true });
+      }
+      await sql`UPDATE fee_rate_notices SET declined_at = now() WHERE id = ${n.id}`;
+      const ids = await require('./_host-agreement').endAgreement(sql, g[0].host_id, { action: 'declined', guestId, ip: ctx.ip, via: 'commission_revision' });
+      await logAudit(sql, { action: 'commission_revision_declined', success: true, actorType: 'host', actorIdentifier: String(g[0].host_id),
+        targetType: 'host', targetId: g[0].host_id, metadata: { notice: n.id, rate: n.rate_id, ip: ctx.ip, listingsDeactivated: ids } });
+      return res.status(200).json({ success: true, listingsDeactivated: ids.length });
+    } catch (err) {
+      console.error('answerRateNotice failed:', err);
+      return res.status(500).json({ error: 'Could not save your answer right now. Please try again.' });
+    }
+  }
   // POST { declineHostAgreement: { version } } — the agreement ends: live
   // listings are deactivated; confirmed bookings go ahead, payouts are paid.
   if (req.method === 'POST' && req.body && req.body.declineHostAgreement && (req.query || {}).actingHost === undefined) {

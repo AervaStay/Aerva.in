@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-10-25c"></script>
+<script src="aerva-policies.js?v=2026-10-25d"></script>
 </head>
 <body>
 
@@ -477,6 +477,11 @@
         <div class="tab-row"><button class="tab-btn" id="tabPayoutsBtn" onclick="switchTab('payouts')">Payouts<span class="tab-count" data-count="payouts" hidden></span></button><button type="button" class="tab-info" data-info="payouts" aria-label="What Payouts is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabAccountsBtn" onclick="switchTab('accounts')">Accounts</button><button type="button" class="tab-info" data-info="accounts" aria-label="What Accounts is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits<span class="tab-count" data-count="deposits" hidden></span></button><button type="button" class="tab-info" data-info="deposits" aria-label="What Security Deposits is for">i</button></div>
+      </div>
+      <div class="nav-group" role="group" aria-label="Business">
+        <div class="nav-group-label">Business</div>
+        <div class="tab-row"><button class="tab-btn" id="tabRatesBtn" onclick="switchTab('rates')">Commission Settings</button><button type="button" class="tab-info" data-info="rates" aria-label="What Commission Settings is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabInsightsBtn" onclick="switchTab('insights')">Business Insights</button><button type="button" class="tab-info" data-info="insights" aria-label="What Business Insights is for">i</button></div>
       </div>
       <div class="nav-group" role="group" aria-label="Guests and support">
         <div class="nav-group-label">Guests and support</div>
@@ -678,6 +683,20 @@
       <div class="process-results" id="simResults" style="margin-top:12px;"></div>
     </div>
 
+  </div>
+
+  <div id="ratesView" style="display:none;">
+    <h2>Commission Settings</h2>
+    <p style="opacity:0.7; font-size:14px;">Aerva’s commission (charged to hosts) and service fee (charged to guests), by property type. A new host commission takes effect at least 33 days after you set it — 31 days’ notice plus 2 days for time zones — and every affected host is emailed a formal notice to acknowledge. A new guest fee takes effect at once. Each booking keeps the rates of the moment it was made.</p>
+    <div id="ratesBody"><p style="opacity:0.6;">Loading…</p></div>
+  </div>
+
+  <div id="insightsView" style="display:none;">
+    <h2>Business Insights</h2>
+    <p style="opacity:0.7; font-size:14px;">How each commission or fee rate has gone while in force, the last 12 months, guests’ and hosts’ ratings, support and the latest feedback.</p>
+    <div class="tds-bar"><label>Rate <select id="insAudience"><option value="host">Host commission</option><option value="guest">Guest service fee</option></select></label>
+      <label>Property type <select id="insType"><option value="*">All property types</option></select></label></div>
+    <div id="insightsBody"><p style="opacity:0.6;">Loading…</p></div>
   </div>
 
   <div id="accountsView" style="display:none;">
@@ -2391,6 +2410,8 @@
     live: ['Live Listings', 'Every approved listing. Block pauses one (reversible); Remove takes it down. Also here: photos removed for showing contact details (with Restore), new photos taken far from the pin, and a photo test.'],
     compliance: ['Compliance', 'Check every approved listing against one requirement. Listings that fail get a flag and 14 days to fix it; the daily job blocks them after the deadline. Open flags clear when the host fixes and saves.'],
     verifications: ['ID Verifications', 'Host Aadhaar, PAN and bank details waiting for a human check. Approve or reject each one; the document is erased once reviewed. A host is paid only once their PAN and bank account are verified.'],
+    rates: ['Commission Settings', 'Set Aerva’s commission for hosts and service fee for guests, for all property types or one type. Host changes take effect at least 33 days later (31 days’ notice + 2 days for time zones), with a formal email that each host acknowledges; guest changes take effect at once. See every rate, the days to go for a scheduled one, and how long each has been in force. A scheduled change can be withdrawn before it starts.'],
+    insights: ['Business Insights', 'What happened under each rate — bookings, booking value, Aerva’s fees, new guests and listings, cancellations, ratings and hosts who declined — per day and compared with the rate before; the last 12 months; ratings by part of the stay; support satisfaction; and the latest reviews and feedback. Real bookings only.'],
     accounts: ['Accounts', 'Each month in the shape your CA books it: Aerva’s income (commission and guest service fee only), money received, refunded and paid out, GST on stays and TDS payable, and what Aerva still holds for hosts and guests at month end. Three CSVs for Tally or Zoho Books. Razorpay’s charges come from Razorpay’s own settlement report.'],
     payouts: ['Payouts', 'What each host and co-host is owed per booking, and Mark paid for payouts sent by hand. Also: refunds that need a retry, deposit compensation, cancellation coupons owed by hosts, co-host payout details to review, and the TDS report.'],
     deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the 7-day damage window has ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
@@ -2493,6 +2514,12 @@
     document.getElementById('tabBatchBtn').classList.toggle('active', tab === 'batch');
     document.getElementById('tabTrafficBtn').classList.toggle('active', tab === 'traffic');
     document.getElementById('tabPayoutsBtn').classList.toggle('active', tab === 'payouts');
+    document.getElementById('tabRatesBtn').classList.toggle('active', tab === 'rates');
+    document.getElementById('ratesView').style.display = tab === 'rates' ? 'block' : 'none';
+    if(tab === 'rates') window.loadFeeRates();
+    document.getElementById('tabInsightsBtn').classList.toggle('active', tab === 'insights');
+    document.getElementById('insightsView').style.display = tab === 'insights' ? 'block' : 'none';
+    if(tab === 'insights') window.loadInsights();
     document.getElementById('tabAccountsBtn').classList.toggle('active', tab === 'accounts');
     document.getElementById('accountsView').style.display = tab === 'accounts' ? 'block' : 'none';
     if(tab === 'accounts') loadAccounts();
@@ -4188,6 +4215,186 @@ async function lkReport(id, status){
   const note = prompt(status === 'actioned' ? 'What was done?' : 'Why dismiss it?') || '';
   try{ await lkPost({ resolveReport: { id, status, note } }); lkLoadDetail(); }catch(err){ alert(err.message); }
 }
+</script>
+<script>
+// ---- Commission Settings and Business Insights (admins only) ----
+// Server: get-pending-listings.js ?feeRates / setFeeRate / cancelFeeRate /
+// ?insights, built on api/_rates.js and api/_insights.js.
+(function(){
+  const E = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  const day = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }); };
+  const inr = (n) => '₹' + (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  const API = () => API_BASE + '/api/get-pending-listings';
+  let rates = null, timer = null;
+
+  // Live countdown to a moment: "33 days 4 h".
+  function countdown(iso){
+    const ms = new Date(iso).getTime() - Date.now();
+    if(ms <= 0) return 'now';
+    const d = Math.floor(ms / 864e5), h = Math.floor((ms % 864e5) / 36e5), m = Math.floor((ms % 36e5) / 6e4);
+    return (d ? d + ' day' + (d === 1 ? '' : 's') + ' ' : '') + h + ' h ' + (d ? '' : m + ' min');
+  }
+  function inForce(iso, untilIso){
+    const end = untilIso && new Date(untilIso).getTime() < Date.now() ? new Date(untilIso).getTime() : Date.now();
+    const days = Math.max(0, Math.floor((end - new Date(iso).getTime()) / 864e5));
+    const months = Math.floor(days / 30.44), rest = Math.round(days - months * 30.44);
+    return days + ' day' + (days === 1 ? '' : 's') + (months ? ' (' + months + ' month' + (months === 1 ? '' : 's') + (rest ? ' ' + rest + ' d' : '') + ')' : '');
+  }
+
+  window.loadFeeRates = async function(){
+    const el = document.getElementById('ratesBody');
+    try{
+      const r = await fetch(API() + '?feeRates=1', { headers: authHeaders() });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.error || 'Could not load.');
+      rates = d;
+      render();
+      clearInterval(timer);
+      timer = setInterval(() => { if(document.getElementById('ratesView').style.display !== 'none') document.querySelectorAll('[data-countdown]').forEach(x => { x.textContent = countdown(x.dataset.countdown); }); }, 30000);
+    }catch(e){ el.innerHTML = `<p class="error">${E(e.message)}</p>`; }
+  };
+
+  function render(){
+    const d = rates, el = document.getElementById('ratesBody');
+    const next = (aud, t) => d.history.filter(h => h.audience === aud && h.state === 'scheduled' && (h.propertyType === t || h.propertyType === '*'))
+      .sort((a, b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom))[0];
+    const rows = d.types.map(t => {
+      const n = next('host', t);
+      return `<tr><td>${E(t)}</td><td style="text-align:right;">${E(d.current.host[t])}%</td><td style="text-align:right;">${E(d.current.guest[t])}%</td>
+        <td>${n ? `<strong>${E(n.rate)}%</strong> from ${E(day(n.effectiveFrom))} · <span data-countdown="${E(n.effectiveFrom)}">${E(countdown(n.effectiveFrom))}</span> to go` : '<span style="opacity:0.5;">—</span>'}</td></tr>`;
+    }).join('');
+    const state = (h) => h.state === 'scheduled' ? `<span style="display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#f4eadc; color:#8a6c39;">Scheduled</span> <span data-countdown="${E(h.effectiveFrom)}">${E(countdown(h.effectiveFrom))}</span> to go`
+      : h.state === 'in effect' ? `<span style="display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#e6f2e8; color:#2f6b3a;">In effect</span> ${E(inForce(h.effectiveFrom))} so far`
+      : h.state === 'ended' ? `Ended · was in force ${E(inForce(h.effectiveFrom, h.until))}`
+      : h.state === 'withdrawn' ? 'Withdrawn' + (h.cancelledAt ? ' on ' + E(day(h.cancelledAt)) : '') : 'Not valid (broke the 33-day rule)';
+    const notices = (h) => h.audience !== 'host' || h.note === 'starting rate' ? '' : !h.notices ? (h.state === 'scheduled' ? 'None told yet' : '') : `${h.notices.sent} told · ${h.notices.acknowledged} acknowledged${h.notices.declined ? ' · ' + h.notices.declined + ' declined' : ''}${h.notices.ended ? ' · ' + h.notices.ended + ' ended' : ''}`;
+    el.innerHTML = `
+      <div class="dispute-card" style="margin:12px 0 20px;"><h4>Rates now</h4>
+        <table class="tds-table" style="display:table;"><thead><tr><th>Property type</th><th style="text-align:right;">Host commission</th><th style="text-align:right;">Guest service fee</th><th>Next host change</th></tr></thead><tbody>${rows}</tbody></table></div>
+
+      <div class="dispute-card" style="margin:0 0 20px;"><h4>Set a new rate</h4>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+          <label>For<br><select id="frAud"><option value="host">Hosts — commission</option><option value="guest">Guests — service fee</option></select></label>
+          <label>Property type<br><select id="frType"><option value="*">All property types</option>${d.types.map(t => `<option>${E(t)}</option>`).join('')}</select></label>
+          <label>Rate (%)<br><input type="number" id="frRate" min="0" max="50" step="0.1" style="width:90px;"></label>
+          <label id="frDateWrap">Takes effect on (India time)<br><input type="date" id="frDate" min="${E(d.earliestHostDate)}" value="${E(d.earliestHostDate)}"></label>
+          <span id="frNow" style="display:none; font-size:13.5px; opacity:0.8;">Takes effect immediately — no notice to guests.</span>
+          <label style="flex:1; min-width:220px;">Note (internal)<br><input type="text" id="frNote" maxlength="300" style="width:100%;" placeholder="Why the change"></label>
+          <button type="button" class="approve-btn" id="frSave">Set rate</button>
+        </div>
+        <p class="tds-sub" id="frHelp">Host commission: earliest ${E(day(d.earliestHostDate))} — ${E(d.minHostDays)} days from now (31 days’ notice + 2 days for time zones). Hosts with listings of that type are emailed at once and asked to acknowledge; a host who declines, or has not acknowledged by that date, has their agreement ended.</p>
+        <p id="frMsg" style="font-size:14px;"></p></div>
+
+      <h3 class="tds-h">Every rate set</h3>
+      <div style="overflow-x:auto;"><table class="tds-table" style="display:table; min-width:900px;"><thead><tr><th>For</th><th>Applies to</th><th style="text-align:right;">Rate</th><th>From</th><th>Status</th><th>Hosts</th><th>Set</th><th></th></tr></thead><tbody>
+        ${d.history.map(h => `<tr><td>${h.audience === 'host' ? 'Hosts' : 'Guests'}</td><td>${E(h.appliesTo)}</td><td style="text-align:right;"><strong>${E(h.rate)}%</strong></td>
+          <td>${E(day(h.effectiveFrom))}${h.until ? '<div class="tds-sub">until ' + E(day(h.until)) + '</div>' : ''}</td><td>${state(h)}</td><td class="tds-sub">${E(notices(h))}</td>
+          <td class="tds-sub">${E(day(h.setAt))}${h.setBy ? '<br>' + E(h.setBy) : ''}${h.note ? '<br>' + E(h.note) : ''}</td>
+          <td>${h.state === 'scheduled' ? `<button type="button" class="reject-btn" data-withdraw="${E(h.id)}">Withdraw</button>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>`;
+    const aud = document.getElementById('frAud');
+    const sync = () => { const host = aud.value === 'host'; document.getElementById('frDateWrap').style.display = host ? '' : 'none'; document.getElementById('frNow').style.display = host ? 'none' : ''; document.getElementById('frHelp').style.display = host ? '' : 'none'; };
+    aud.addEventListener('change', sync); sync();
+    document.getElementById('frSave').addEventListener('click', save);
+    el.querySelectorAll('[data-withdraw]').forEach(b => b.addEventListener('click', async () => {
+      if(!confirm('Withdraw this scheduled change? Hosts already told are emailed that it is withdrawn.')) return;
+      const r = await fetch(API(), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify({ cancelFeeRate: { id: Number(b.dataset.withdraw) } }) });
+      const j = await r.json().catch(() => ({}));
+      if(!r.ok){ alertAdmin(j.error || 'Could not withdraw.'); return; }
+      window.loadFeeRates();
+    }));
+  }
+  function alertAdmin(m){ const x = document.getElementById('frMsg'); if(x){ x.className = 'error'; x.textContent = m; } }
+
+  async function save(){
+    const msg = document.getElementById('frMsg'); msg.className = ''; msg.textContent = '';
+    const b = { audience: document.getElementById('frAud').value, propertyType: document.getElementById('frType').value,
+      rate: document.getElementById('frRate').value, effectiveDate: document.getElementById('frDate').value, note: document.getElementById('frNote').value };
+    if(b.rate === ''){ alertAdmin('Enter the rate.'); return; }
+    const what = (b.audience === 'host' ? 'Host commission' : 'Guest service fee') + ' for ' + (b.propertyType === '*' ? 'all property types' : b.propertyType) + ': ' + b.rate + '%';
+    const when = b.audience === 'host' ? ' from ' + b.effectiveDate + '. Every affected host is emailed a formal notice now.' : ', starting immediately.';
+    if(!confirm(what + when + '\n\nSet this rate?')) return;
+    const r = await fetch(API(), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()), body: JSON.stringify({ setFeeRate: b }) });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ alertAdmin(j.error || 'Could not save.'); return; }
+    await window.loadFeeRates();
+    const m = document.getElementById('frMsg');
+    m.className = ''; m.textContent = 'Saved: ' + what + (b.audience === 'host' ? ' from ' + b.effectiveDate + (j.notices ? ` — ${j.notices.noticed} host notice${j.notices.noticed === 1 ? '' : 's'} sent so far (the rest follow automatically).` : '.') : ', in effect now.');
+  }
+
+  // ---- Business Insights ----
+  let insTypesFilled = false;
+  ['insAudience', 'insType'].forEach(id => document.addEventListener('change', (e) => { if(e.target && e.target.id === id) window.loadInsights(); }));
+  const chg = (v, unit = '%', goodUp = true) => {
+    if(v == null) return '';
+    const up = v > 0, good = goodUp ? up : !up;
+    return ` <span style="font-size:12px; color:${v === 0 ? '#6e675d' : (good ? '#2f6b3a' : '#a3402f')};">${v > 0 ? '+' : ''}${E(v)}${unit}</span>`;
+  };
+  const stars = (v) => v == null ? '—' : E(v) + ' ★';
+  window.loadInsights = async function(){
+    const el = document.getElementById('insightsBody');
+    el.innerHTML = '<p style="opacity:0.6;">Loading…</p>';
+    try{
+      const q = '?insights=1&audience=' + encodeURIComponent(document.getElementById('insAudience').value) + '&type=' + encodeURIComponent(document.getElementById('insType').value);
+      const r = await fetch(API() + q, { headers: authHeaders() });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.error || 'Could not load.');
+      if(!insTypesFilled){ document.getElementById('insType').insertAdjacentHTML('beforeend', d.types.map(t => `<option>${E(t)}</option>`).join('')); insTypesFilled = true; }
+      const maxB = Math.max(1, ...d.months.map(m => m.bookings)), maxF = Math.max(1, ...d.months.map(m => m.fees));
+      const bar = (v, max, color) => `<div style="height:6px; background:#f1ebe1; border-radius:3px; margin-top:3px;"><div style="height:6px; width:${Math.round((v / max) * 100)}%; background:${color}; border-radius:3px;"></div></div>`;
+      const P = d.periods;
+      el.innerHTML = `
+        <h3 class="tds-h">Each ${d.audience === 'host' ? 'commission' : 'guest fee'} rate while in force${d.propertyType !== '*' ? ' — ' + E(d.propertyType) : ''}</h3>
+        ${P.length ? `<div style="overflow-x:auto;"><table class="tds-table" style="display:table; min-width:1000px;"><thead><tr><th>Rate</th><th>Period</th><th style="text-align:right;">Bookings / day</th><th style="text-align:right;">Booking value / day</th><th style="text-align:right;">Aerva’s fees / day</th><th style="text-align:right;">New guests</th><th style="text-align:right;">New listings</th><th style="text-align:right;">Cancelled</th><th style="text-align:right;">Rating</th>${d.audience === 'host' ? '<th>Hosts</th>' : ''}</tr></thead><tbody>
+          ${P.map(p => p.state === 'scheduled'
+            ? `<tr><td><strong>${E(p.rate)}%</strong><div class="tds-sub">${E(p.appliesTo)}</div></td><td colspan="${d.audience === 'host' ? 9 : 8}">Scheduled from ${E(day(p.from))} — <span data-countdown="${E(p.from)}">${E(countdown(p.from))}</span> to go${p.notices ? ` · ${p.notices.sent} hosts told, ${p.notices.acknowledged} acknowledged${p.notices.declined ? ', ' + p.notices.declined + ' declined' : ''}` : ''}</td></tr>`
+            : `<tr><td><strong>${E(p.rate)}%</strong><div class="tds-sub">${E(p.appliesTo)}</div></td>
+              <td>${E(day(p.from))} – ${p.until && p.state === 'ended' ? E(day(p.until)) : 'now'}<div class="tds-sub">${E(p.days)} days (${E(p.months)} months)${p.state === 'in effect' ? ' · in effect' : ''}</div></td>
+              <td style="text-align:right;">${E(p.perDay.bookings)}${chg(p.change && p.change.bookings)}<div class="tds-sub">${E(p.metrics.bookings)} total</div></td>
+              <td style="text-align:right;">${inr(p.perDay.value)}${chg(p.change && p.change.value)}<div class="tds-sub">${inr(p.metrics.value)} total</div></td>
+              <td style="text-align:right;">${inr(p.perDay.fees)}${chg(p.change && p.change.fees)}<div class="tds-sub">${inr(p.metrics.fees)} total</div></td>
+              <td style="text-align:right;">${E(p.metrics.newGuests)}${chg(p.change && p.change.newGuests)}</td>
+              <td style="text-align:right;">${E(p.metrics.listingsCreated)}${chg(p.change && p.change.listingsCreated)}${p.metrics.listingsDeactivated ? `<div class="tds-sub">${E(p.metrics.listingsDeactivated)} deactivated</div>` : ''}</td>
+              <td style="text-align:right;">${p.cancellationRate == null ? '—' : E(p.cancellationRate) + '%'}${chg(p.change && p.change.cancellationRate, ' pts', false)}</td>
+              <td style="text-align:right;">${stars(p.metrics.rating)}${chg(p.change && p.change.rating, '', true)}<div class="tds-sub">${E(p.metrics.reviews)} reviews</div></td>
+              ${d.audience === 'host' ? `<td class="tds-sub">${p.notices ? `${p.notices.acknowledged}/${p.notices.sent} acknowledged${p.notices.declined ? ' · ' + p.notices.declined + ' declined' : ''}${p.notices.ended ? ' · ' + p.notices.ended + ' ended' : ''}` : '—'}</td>` : ''}</tr>`).join('')}
+        </tbody></table></div><p class="tds-sub">Changes are per day against the rate before it. Green is better, red is worse.</p>` : '<p style="opacity:0.6;">No rate history yet.</p>'}
+
+        <h3 class="tds-h">Last 12 months</h3>
+        <div style="overflow-x:auto;"><table class="tds-table" style="display:table; min-width:1000px;"><thead><tr><th>Month</th><th style="text-align:right;">Bookings</th><th style="text-align:right;">Booking value</th><th style="text-align:right;">Aerva’s fees</th><th style="text-align:right;">Cancelled</th><th style="text-align:right;">New guests</th><th style="text-align:right;">New hosts</th><th style="text-align:right;">New listings</th><th style="text-align:right;">Stay rating</th><th style="text-align:right;">Guest rating</th><th style="text-align:right;">Support</th></tr></thead><tbody>
+          ${d.months.map(m => `<tr><td>${E(m.month)}</td>
+            <td style="text-align:right;">${E(m.bookings)}${bar(m.bookings, maxB, '#8a6c39')}</td><td style="text-align:right;">${inr(m.value)}</td>
+            <td style="text-align:right;">${inr(m.fees)}${bar(m.fees, maxF, '#2f6b3a')}</td><td style="text-align:right;">${m.cancellationRate == null ? '—' : E(m.cancellationRate) + '%'}</td>
+            <td style="text-align:right;">${E(m.newGuests)}</td><td style="text-align:right;">${E(m.newHosts)}</td><td style="text-align:right;">${E(m.listingsCreated)}</td>
+            <td style="text-align:right;">${stars(m.rating)}<div class="tds-sub">${E(m.reviews)}</div></td><td style="text-align:right;">${stars(m.guestRating)}</td>
+            <td style="text-align:right;">${E(m.supportRequests)}${m.supportSatisfaction != null ? '<div class="tds-sub">' + E(m.supportSatisfaction) + ' ★</div>' : ''}</td></tr>`).join('')}
+        </tbody></table></div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px; margin:20px 0;">
+          <div class="dispute-card"><h4>Guests rate stays (90 days)</h4><table class="tds-table" style="display:table;">
+            ${[['Hygiene','hygiene'],['Communication','communication'],['Services','services'],['Value','value'],['Location','location'],['Organisation (experiences)','organisation'],['Guide (experiences)','guide'],['Safety (experiences)','safety']]
+              .filter(([, k]) => d.ratings.stays[k] != null).map(([l, k]) => `<tr><td>${l}</td><td style="text-align:right;">${stars(d.ratings.stays[k])}</td></tr>`).join('') || '<tr><td style="opacity:0.6;">No reviews yet.</td></tr>'}
+            </table><p class="tds-sub">${E(d.ratings.stays.n)} reviews</p></div>
+          <div class="dispute-card"><h4>Hosts rate guests (90 days)</h4><table class="tds-table" style="display:table;">
+            ${[['Overall','overall'],['Cleanliness','cleanliness'],['Communication','communication'],['Respect','respectful'],['House rules','rules']]
+              .filter(([, k]) => d.ratings.guests[k] != null).map(([l, k]) => `<tr><td>${l}</td><td style="text-align:right;">${stars(d.ratings.guests[k])}</td></tr>`).join('') || '<tr><td style="opacity:0.6;">No reviews yet.</td></tr>'}
+            </table><p class="tds-sub">${E(d.ratings.guests.n)} reviews</p></div>
+          <div class="dispute-card"><h4>Support (90 days)</h4><table class="tds-table" style="display:table;">
+            <tr><td>Requests</td><td style="text-align:right;">${E(d.support.requests)}</td></tr>
+            <tr><td>Resolved or closed</td><td style="text-align:right;">${E(d.support.resolved)}</td></tr>
+            <tr><td>First reply (average)</td><td style="text-align:right;">${d.support.firstReplyHours == null ? '—' : E(d.support.firstReplyHours) + ' h'}</td></tr>
+            <tr><td>Satisfaction</td><td style="text-align:right;">${stars(d.support.satisfaction)}<div class="tds-sub">${E(d.support.rated)} rated · ${E(d.support.saidResolved)} said resolved</div></td></tr></table>
+            ${d.support.byCategory.length ? '<p class="tds-sub">Most asked: ' + d.support.byCategory.slice(0, 5).map(c => E(String(c.category || 'other').replace(/_/g, ' ')) + ' (' + E(c.n) + ')').join(', ') + '</p>' : ''}</div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px;">
+          <div class="dispute-card"><h4>Latest reviews</h4>${d.feedback.reviews.length ? d.feedback.reviews.map(f => `<p style="font-size:13.5px; margin:8px 0;"><strong>${stars(f.rating)}</strong> · ${E(f.listing)} · <span class="tds-sub">${E(day(f.at))}</span><br>${E(f.comment)}</p>`).join('') : '<p style="opacity:0.6;">No written reviews yet.</p>'}</div>
+          <div class="dispute-card"><h4>Latest support feedback</h4>${d.feedback.support.length ? d.feedback.support.map(f => `<p style="font-size:13.5px; margin:8px 0;"><strong>${stars(f.rating)}</strong> · ${E(f.ref)} · ${E(String(f.category || '').replace(/_/g, ' '))} · <span class="tds-sub">${E(day(f.at))}</span>${f.comment ? '<br>' + E(f.comment) : ''}</p>`).join('') : '<p style="opacity:0.6;">No feedback yet.</p>'}</div>
+        </div>
+        <ul style="font-size:13px; opacity:0.7; margin-top:16px; line-height:1.6;">${d.notes.map(n => `<li>${E(n)}</li>`).join('')}</ul>`;
+    }catch(e){ el.innerHTML = `<p class="error">${E(e.message)}</p>`; }
+  };
+})();
 </script>
 </body>
 </html>

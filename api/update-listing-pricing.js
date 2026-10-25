@@ -285,7 +285,7 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     try {
       const rows = await sql`
-        SELECT id, property_name, property_type, bedrooms, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
+        SELECT id, property_name, property_type, listing_type, bedrooms, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address, pincode,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
@@ -362,6 +362,9 @@ module.exports = async (req, res) => {
 
       // The property's own today, for the page's calendars.
       const pendingPriceChanges = await priceReview.pendingFor(sql, listingId);
+      // Commission in force now for this listing's property type, for the
+      // "what you receive" preview (Admin → Commission settings, _rates.js).
+      try { listing.host_commission_rate = await require('./_rates').rateAt(sql, 'host', require('./_rates').rateType(listing)); } catch (e) { /* preview falls back */ }
       return res.status(200).json({ listing, paidAmenities, blockedDates, promotions, customFields, rooms, bookedRanges, pendingPriceChanges, today: localTodayIn(listing.timezone) });
     } catch (err) {
       console.error('update-listing-pricing (GET) error:', err);

@@ -102,6 +102,9 @@
   // side instead. Must match GUEST_SERVICE_FEE_RATE in create-order.js
   // exactly, since that's what actually determines the real charge.
   const GUEST_SERVICE_FEE_RATE = 5;
+  // The rate in force for a listing's property type, sent with each listing
+  // (get-listings.js, from Admin → Commission settings); 5% if missing.
+  const guestFeeRateOf = (l) => (l && l.guest_fee_rate != null && isFinite(Number(l.guest_fee_rate))) ? Number(l.guest_fee_rate) : GUEST_SERVICE_FEE_RATE;
 
   // Populated once approved listings are fetched (see initSite() near the
   // bottom of this script) — the Suites section is built from this real
@@ -10491,7 +10494,7 @@
     });
 
     const staySubtotal = beforeDiscount - discountAmount + petFeeAmount + serviceAnimalFee + amenityTotal;
-    const guestServiceFee = Math.round(staySubtotal * (GUEST_SERVICE_FEE_RATE / 100));
+    const guestServiceFee = Math.round(staySubtotal * (guestFeeRateOf(listing) / 100));
     const stayTax = stayGstFor(beforeDiscount - discountAmount, nights, petFeeAmount + serviceAnimalFee + amenityTotal);
     const total = staySubtotal + guestServiceFee;
 
@@ -10526,7 +10529,7 @@
         // The add-on carries its own guest service fee at checkout
         // (create-order.js). It used to be left out of this summary, so
         // the total shown was lower than the amount charged.
-        experienceFee = Math.round(experienceTotal * (GUEST_SERVICE_FEE_RATE / 100));
+        experienceFee = Math.round(experienceTotal * (guestFeeRateOf(exp) / 100));
       }
     }
     const gstShown = stayTax.gst + experienceGst;

@@ -19,7 +19,7 @@ window.AERVA_POLICIES = {
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
     version: '2026-09g',          // booking agreement (guests)
-    hostVersion: '2026-10-25',    // host agreement — accepted for every listing
+    hostVersion: '2026-10-25b',    // host agreement — accepted for every listing
     guest: {
       title: 'Booking agreement',
       points: [
@@ -69,9 +69,9 @@ window.AERVA_POLICIES = {
           'When bank details change, payouts are paused for a short security period and you are notified. Aerva is not responsible for delays or losses caused by incorrect, incomplete or outdated details you provide.'
         ] },
         { title: '5. Commission and fees', points: [
-          'Aerva charges you a commission on each booking, at the rate set out in Aerva’s Service Fees Policy. It is deducted from your payout. Aerva also charges guests a service fee, which is Aerva’s own and does not form part of your earnings.',
-          'Aerva may revise its commission, fees and rates at any time, without prior notice to you. The rates in force when a booking is made apply to that booking.',
-          'On every revision, Aerva sends you a formal email and shows the revised Host Agreement in your dashboard. You must review and accept it to continue hosting, as set out in the Revisions and Termination clauses below.'
+          'Aerva charges you a commission on each booking, at the rate for your property type shown in your dashboard. It is deducted from your payout. Aerva also charges guests a service fee, which is Aerva’s own and does not form part of your earnings.',
+          'Aerva may revise its commission. A revised commission takes effect no sooner than 33 days after Aerva’s formal notice to you by email (31 days’ notice, plus 2 days to allow for time zones), and applies to bookings made on or after the date given in the notice. Aerva may revise the guest service fee at any time. The rates in force when a booking is made apply to that booking.',
+          'You acknowledge each commission revision in your dashboard before the date it takes effect. If you decline it, or have not acknowledged it by that date, this agreement ends, as set out in the Termination clause below.'
         ] },
         { title: '6. Payouts and taxes', points: [
           'Your payout is sent after check-out to your verified bank account, after Aerva’s commission, any co-host share, applicable deductions and tax deducted at source.',
@@ -176,12 +176,12 @@ window.AERVA_POLICIES = {
           'The version published by Aerva is the binding version. Aerva’s interpretation of this agreement and its Policies is final.'
         ] },
         { title: '27. Revisions', points: [
-          'Aerva may revise this agreement, its Policies, its commission and its fees at any time. A revision takes effect when it is published.',
+          'Aerva may revise this agreement and its Policies at any time. A revision takes effect when it is published. Commission revisions follow the notice period in the Commission and fees clause.',
           'Aerva emails you a formal notice of every revision. You accept the revised agreement in your dashboard, or decline it.',
           'Bookings already confirmed keep the commission and fees in force when they were made.'
         ] },
         { title: '28. Termination', points: [
-          'If you decline a revised agreement, or do not accept it within 30 days of Aerva’s notice, this agreement ends. Your listings are deactivated and removed from Aerva, and they take no new bookings.',
+          'If you decline a revised agreement, or do not accept it within 30 days of Aerva’s notice, or you decline a commission revision, or have not acknowledged it by the date it takes effect, this agreement ends. Your listings are deactivated and removed from Aerva, and they take no new bookings.',
           'Confirmed bookings go ahead unless Aerva decides otherwise. Amounts due to you for completed stays are paid to your verified bank account, less any amounts you owe Aerva, such as cancellation coupons, refunds or penalties.',
           'You may end this agreement at any time by deactivating your listings or your hosting. Aerva may end it, or suspend or remove any listing or account, if this agreement, Aerva’s Policies or the law are broken.',
           'Your account and data are then handled under Aerva’s Deactivating, Removing and Deleting policy. You may delete your account once nothing is open; booking and payment records are kept as the law requires.',
@@ -383,15 +383,16 @@ window.AERVA_POLICIES = {
     ]},
     { id: 'service-fees', title: 'Service Fees Policy', summary: 'How Aerva’s service fees are charged to hosts and guests.', sections: [
       { title: 'Guests', points: [
-        'A guest service fee of 5% of the booking price is added to your total and shown before you pay.'
+        'A guest service fee, a percentage of the booking price, is added to your total and shown before you pay.'
       ]},
       { title: 'Hosts', points: [
-        'Aerva’s commission is 5% of the stay price, paid amenities and pet fees. It is deducted from your payout.'
+        'Aerva’s commission is a percentage of the stay price, paid amenities and pet fees, at the rate for your property type shown in your dashboard. It is deducted from your payout.',
+        'A revised commission is announced by email at least 33 days before it takes effect (31 days’ notice, plus 2 days for time zones), and applies to bookings made from the date given. Hosts acknowledge it in their dashboard.'
       ]},
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',
         'Aerva’s guest service fee is not refunded: not when a guest or a host cancels, when Aerva cancels, when a booking is changed to a lower price, or when a stay issue is upheld. It is refunded only when a booking fails because of a mistake on Aerva’s side, or in an exceptional case where Aerva, at its sole discretion, decides to refund it.',
-        'Aerva may change its fees and commission at any time. The fees shown when you book apply to that booking. Hosts are sent a formal email of any revision and accept the revised Host Agreement in their dashboard.'
+        'Aerva may change the guest service fee at any time, and its commission on the notice above. The fees shown when you book apply to that booking.'
       ]}
     ]},
     { id: 'offline-fees', title: 'Offline Fee Policy', summary: 'When a host may charge anything outside Aerva.', sections: [
@@ -831,7 +832,7 @@ window.AERVA_POLICIES = {
           ]},
           { title: 'TDS', points: [
             'TDS is deducted from every payout under section 194-O (section 393 of the Income-tax Act, 2025): 0.1% with a valid PAN, 5% without one or if your PAN is not linked to Aadhaar. Add your PAN in Payout details before your first payout.',
-            'It is worked out on what is due to you after Aerva’s commission. Example: a ₹10,000 booking, Aerva’s 5% commission of ₹500, so ₹9,500 is due to you; TDS at 0.1% is ₹9.50 and ₹9,490.50 is paid. The TDS is credited against your PAN and shows in your Form 26AS.',
+            'It is worked out on what is due to you after Aerva’s commission. Example: a ₹10,000 booking with a 5% commission of ₹500, so ₹9,500 is due to you; TDS at 0.1% is ₹9.50 and ₹9,490.50 is paid. The TDS is credited against your PAN and shows in your Form 26AS.',
             'In Payout details, enter the name of the person or business to be paid exactly as their bank account holds it, and add that account. A PAN is optional; if you add one, it must be in that same name. Aerva verifies the account before the first payout.',
             'After you change your bank details, payouts wait 48 hours, and you are emailed about the change.'
           ]}
@@ -1108,7 +1109,7 @@ window.AERVA_POLICIES = {
 
   // Gaps between these policies and the product, for the admin to close.
   openItems: [
-    'Have the lawyer review the Aerva Host Agreement 2026-10-25 (29 clauses): accepted per listing; commission revisions without prior notice, with a formal email and acceptance; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
+    'Have the lawyer review the Aerva Host Agreement 2026-10-25b (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
     'Add the Grievance Officer’s name to support.grievanceOfficer in this file (required by the E-Commerce Rules); it then shows in the Resolution Center.',
     'Resolution Center: fill in support.contacts.tollFree, whatsapp and hours in this file when the numbers are live. Until then those buttons stay hidden.',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',
