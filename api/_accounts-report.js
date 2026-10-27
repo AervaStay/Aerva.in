@@ -55,11 +55,14 @@ async function recognisedBookings(sql, from, end) {
            o.subtotal, o.gst, o.guest_service_fee, o.deposit_amount, o.total,
            COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0) AS coupon_discount,
            COALESCE((to_jsonb(o)->>'fee_credit_used')::numeric, 0) AS credit_used,
-           o.commission_amount, o.payout_amount, to_jsonb(o)->>'refund_percent' AS refund_percent,
+           -- Cancelled with nothing kept for the host (a host cancelled, or all
+           -- refunded): no commission and no host share, whatever the row still holds.
+           CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN o.commission_amount ELSE 0 END AS commission_amount,
+           CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN o.payout_amount ELSE 0 END AS payout_amount, to_jsonb(o)->>'refund_percent' AS refund_percent,
            COALESCE(NULLIF(btrim(concat_ws(' ', to_jsonb(o)->>'guest_first_name', to_jsonb(o)->>'guest_last_name')), ''), g.name, o.guest_email) AS guest_name,
            h.id AS host_id, h.name AS host_name,
            (SELECT COALESCE(sum(amount), 0) FROM refunds r WHERE r.order_id = o.id AND r.status = 'processed' AND r.kind NOT LIKE 'deposit%' AND r.kind NOT LIKE '%fee-credit-%' AND r.razorpay_refund_id ~ '^rfnd_[A-Za-z0-9]{14}$') AS refunded_paise,
-           (SELECT COALESCE(sum(amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id) AS cohost_shares
+           CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN (SELECT COALESCE(sum(amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id) ELSE 0 END AS cohost_shares
     FROM orders o
     LEFT JOIN guests g ON g.id = o.guest_id
     LEFT JOIN listings l ON l.id = o.listing_id
@@ -257,8 +260,8 @@ async function accountsReport(sql, month) {
   // payout_amount is the hosts' side in full; co-hosts' part of it is in
   // order_cohost_shares, so the two are split here.
   const recognised = (await sql`
-    SELECT COALESCE(sum(o.payout_amount), 0) AS v,
-           COALESCE(sum((SELECT COALESCE(sum(s.amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id)), 0) AS co
+    SELECT COALESCE(sum(CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN o.payout_amount ELSE 0 END), 0) AS v,
+           COALESCE(sum(CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN (SELECT COALESCE(sum(s.amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id) ELSE 0 END), 0) AS co
     FROM orders o
     WHERE (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$') AND (
       (o.status = 'paid' AND o.arrival < ${end}::date)
@@ -366,8 +369,8 @@ async function balancesAt(sql, day) {
     SELECT COALESCE(sum(amount_paise), 0) / 100.0 AS settled FROM razorpay_settlements
     WHERE (settled_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp`);
   const rec = await one(sql`
-    SELECT COALESCE(sum(o.payout_amount), 0) AS hostside,
-           COALESCE(sum((SELECT COALESCE(sum(s.amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id)), 0) AS co
+    SELECT COALESCE(sum(CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN o.payout_amount ELSE 0 END), 0) AS hostside,
+           COALESCE(sum(CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN (SELECT COALESCE(sum(s.amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id) ELSE 0 END), 0) AS co
     FROM orders o
     WHERE o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$' AND (
       (o.status = 'paid' AND o.arrival < ${day}::date)
