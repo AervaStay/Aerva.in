@@ -111,8 +111,8 @@ window.AERVA_POLICIES = {
           'Damage caused by a pet is handled like any other damage, under the Security Deposit and Damage clause.'
         ] },
         { title: '12. Contact details and communication', points: [
-          'Before a booking is confirmed, nothing sent through Aerva — a listing, photo, description, review, message or email — may contain a phone number, email address, website, social media handle, UPI ID, QR code or any other contact detail of you or any other person.',
-          'Once a booking is confirmed, you and the guest may share phone numbers, email addresses and photos in Aerva Messages until 15 days after check-out. Other contact details (links, social media or messaging accounts, UPI IDs) are never allowed. After those 15 days, or if the booking is cancelled, phone numbers, email addresses and any photo showing contact details are removed from the conversation.',
+          'Before a booking is confirmed, nothing sent through Aerva — a listing, photo, description, review, message or email — may contain a phone number, email address, website (other than a link to an aerva.in page), social media handle, UPI ID, QR code or any other contact detail of you or any other person.',
+          'Once a booking is confirmed, you and the guest may share phone numbers, email addresses and photos in Aerva Messages until 15 days after check-out. Other contact details (links to other websites, social media or messaging accounts, UPI IDs) are never allowed. After those 15 days, or if the booking is cancelled, phone numbers, email addresses and any photo showing contact details are removed from the conversation. Links to Aerva pages, such as a listing on aerva.in, can be shared at any time — before, during and after a booking.',
           'Aerva may remove any such content at once, without notice. You are liable for any loss or claim arising from contact details you share in breach of this clause, and repeated breaches may lead to penalties, removal of the listing and suspension of your account.'
         ] },
         { title: '13. Cancellations', points: [
@@ -382,7 +382,10 @@ window.AERVA_POLICIES = {
         'A coupon covers the booking price only. The guest service fee, GST and any security deposit are charged in full, on the full booking price.',
         'If the booking price is more than the coupon, you pay the difference plus the service fee, GST and any deposit.',
         'If the coupon is worth more than the booking price, the unused balance is forfeited. It is not refunded, carried over or exchanged for cash.',
-        'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown — at most 1 month after they are issued.'
+        'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown — at most 1 month after they are issued.',
+        'Only one coupon can be used on a booking, even if you hold more than one.',
+        'If your payment does not go through, nothing is booked and your coupon stays valid to use again.',
+        'If the host cancels a booking you paid for partly by coupon, that part comes back as a new coupon valid for 1 month. If the host cancelled within 48 hours of check-in, you also receive the usual 10% coupon, also valid for 1 month. If you cancel, the part paid by coupon is not returned.'
       ]},
       { title: 'Payouts to hosts and co-hosts', points: [
         'Payouts are made automatically to a verified bank account the day after check-in (for an experience, the day after its date), after Aerva’s fees and TDS.',
@@ -418,7 +421,7 @@ window.AERVA_POLICIES = {
         'Do not ask for, offer or accept payment outside Aerva for a stay or experience found on Aerva.',
         'Do not use contact details from Aerva to book or pay outside it.',
         'Keep messages about a booking on Aerva.',
-        'Once a booking is confirmed, the guest and host may share phone numbers, email addresses and photos in its Aerva Messages until 15 days after check-out. Other contact details (links, social media or messaging accounts, UPI IDs) are not allowed in messages.',
+        'Once a booking is confirmed, the guest and host may share phone numbers, email addresses and photos in its Aerva Messages until 15 days after check-out. Other contact details (links to other websites, social media or messaging accounts, UPI IDs) are not allowed in messages. Links to Aerva pages, such as a listing on aerva.in, can be shared at any time — before, during and after a booking.',
         'Once the stay has ended or the booking is cancelled, phone numbers, email addresses and any photo showing contact details are removed from the conversation.',
         'Aerva may cancel bookings and suspend accounts that break this policy.'
       ]}
@@ -464,7 +467,7 @@ window.AERVA_POLICIES = {
         'Refunds cover the booking price and its GST at the percentage above. Aerva’s guest service fee is not refunded. The security deposit is always refunded in full.',
         'Before check-in, for an environmental hazard, a life-threatening situation, a medical or family emergency, or a travel restriction, choose that reason. If the host accepts, the booking price, GST and deposit are refunded in full.',
         'Once the stay has started, a booking cannot be cancelled. To leave early, change the check-out date (see Changing a Booking).',
-        'A part paid by coupon is returned as a coupon, in the same proportion.'
+        'A part paid by coupon is not returned when you cancel. It comes back as a new coupon, valid for 1 month, only if the host cancels the booking (or Aerva cancels it for the host).'
       ]},
       { title: 'Hosts', points: [
         'Hosts may cancel before check-in time, and must give a reason. The guest is told the reason.',
@@ -492,7 +495,8 @@ window.AERVA_POLICIES = {
       { title: 'How', points: [
         'Choose the change in My Bookings. The new price and the difference are shown before you send it.',
         'The request goes to the host in Aerva Messages. The host accepts or rejects it. Until then, the booking stays as it is.',
-        'If the new total is lower, the full difference is refunded once the host accepts. During a stay it is held for you as Aerva credit instead, which you can have refunded at any time.',
+        'If the new total is lower, the difference is refunded once the host accepts. During a stay it is held for you as Aerva credit instead, which you can have refunded at any time.',
+        'Aerva’s service fee stays as charged on the original booking. If you paid part of the price with a coupon, the coupon’s share of the difference is not returned: a coupon comes back only when the host cancels.',
         'If the new total is higher, pay the difference within 24 hours of the host accepting, through the 3-minute payment window. The change applies only when that payment succeeds.',
         'If prices change before the host answers or before you pay, the request closes; send a new one.'
       ]}
@@ -781,7 +785,8 @@ window.AERVA_POLICIES = {
             'The host accepts or rejects the change in Aerva Messages. Until then, your booking stays as it is.',
             'If the new total is higher, pay the difference within 24 hours of the host accepting.',
             'During your stay, ask by 10 AM (the property’s local time) on the day after check-in. The check-in night is never refunded. If your host agrees, the nights you no longer stay come back as Aerva credit that does not expire — use it on another booking or have it refunded from My Bookings whenever you choose. After that time the booking cannot be changed.',
-            'If the host declines a change you asked for during your stay, or does not answer, you can raise it with Aerva within 24 hours: My Bookings → Report a problem.'
+            'If the host declines a change you asked for during your stay, or does not answer, you can raise it with Aerva within 24 hours: My Bookings → Report a problem.',
+            'A cheaper change refunds the difference, but Aerva’s service fee stays as charged, and any part paid by coupon is not returned.'
           ]},
           { title: 'When we can help', points: [
             'If the change will not send, the price looks wrong, or you paid the difference and the booking did not change, raise a request and choose the booking.'
@@ -826,7 +831,10 @@ window.AERVA_POLICIES = {
         sections: [
           { title: 'Using a coupon', points: [
             'A coupon covers the booking price only. The service fee, GST and any deposit are paid in full.',
-            'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown — at most 1 month after they are issued.'
+            'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown — at most 1 month after they are issued.',
+            'Only one coupon can be used on a booking, even if you hold more than one.',
+            'If your payment does not go through, nothing is booked and your coupon stays valid to use again.',
+            'If the host cancels a booking you paid for partly by coupon, that part comes back as a new coupon valid for 1 month, plus the usual 10% coupon if they cancelled within 48 hours of check-in. If you cancel, the part paid by coupon is not returned.'
           ]},
           { title: 'A coupon that did not arrive', points: [
             'A cancellation coupon arrives about 15 minutes after a host cancels. If it has not arrived after an hour, raise a request and choose the booking.'

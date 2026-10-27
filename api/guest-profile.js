@@ -82,7 +82,7 @@ function changeView(qc) {
     lines.push({ label: 'GST', amount: x.gst + (st ? st.gst : 0) });
     lines.push({ label: 'Guest service fee', amount: x.guestServiceFee + (st ? st.guestServiceFee : 0) });
     if (st && st.depositAmount) lines.push({ label: 'Refundable deposit', amount: st.depositAmount });
-    return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference };
+    return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference, couponNotReturned: qc.couponNotReturned || 0 };
   }
   const lines = [{ label: `${q.nights} night${q.nights === 1 ? '' : 's'}${q.discountAmount ? ' (after discount)' : ''}`, amount: q.roomPortion }];
   (q.amenities || []).forEach(a => lines.push({ label: a.name, amount: a.total }));
@@ -90,7 +90,7 @@ function changeView(qc) {
   if (q.gst) lines.push({ label: 'GST', amount: q.gst });
   lines.push({ label: 'Guest service fee', amount: q.guestServiceFee });
   if (q.depositAmount) lines.push({ label: 'Refundable deposit', amount: q.depositAmount });
-  return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference };
+  return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference, couponNotReturned: qc.couponNotReturned || 0 };
 }
 // The change card at the top of a booking's thread.
 async function changeCard(sql, conversationId, role) {

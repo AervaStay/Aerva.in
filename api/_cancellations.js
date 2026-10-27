@@ -79,6 +79,15 @@ function splitRow(row, couponAbsorbed, pct) {
   };
 }
 
+// The part of a booking paid by coupon comes back as a new coupon only when
+// the HOST cancels (themselves, or Aerva cancelling for them). Any other
+// cancellation or change: that part is not returned (couponLost). Changes s.
+function dropCouponBack(s) {
+  s.couponLost = (s.couponLost || 0) + (s.couponBack || 0);
+  s.couponBack = 0;
+  return s;
+}
+
 // Part of the booking paid with Aerva credit (_fee-credits.js): the refund
 // goes to the payment first, and what the payment cannot take (it only paid
 // `paid`, deposit aside) goes back onto the credit as s.creditBack. Changes s.
@@ -147,19 +156,20 @@ async function cancellationQuote(sql, orderId, guestId) {
   if (tier.started) return { ...base, allowed: false, started: true, error: 'This stay has already started, so it cannot be cancelled. To leave early, change your check-out date in My Bookings — possible until 10 AM on the day after check-in.' };
   const paid = await paidByOrderRow(sql, main.razorpay_order_id);
   const total = (pct) => rows.reduce((t, r) => {
-    const s = creditPart(splitRow(r, (paid[r.id] || {}).couponAbsorbed, pct), r, paid[r.id]);
+    const s = dropCouponBack(creditPart(splitRow(r, (paid[r.id] || {}).couponAbsorbed, pct), r, paid[r.id]));
+    t.couponLost += s.couponLost;
     t.refundCash += s.refundCash; t.couponBack += s.couponBack; t.deposit += s.deposit; t.feeKept += s.feeKept; t.creditBack += s.creditBack;
     t.refundBooking += s.refundBooking + s.refundGst;
     return t;
-  }, { refundCash: 0, couponBack: 0, deposit: 0, feeKept: 0, refundBooking: 0, creditBack: 0 });
+  }, { refundCash: 0, couponBack: 0, couponLost: 0, deposit: 0, feeKept: 0, refundBooking: 0, creditBack: 0 });
   if (tier.hostDecides) {
     return { ...base, allowed: true, hostDecides: true, pct: null, ifNoRefund: total(0), ifFullRefund: total(100) };
   }
   return { ...base, allowed: true, hostDecides: false, pct: tier.pct, ...total(tier.pct) };
 }
 
-// A returned coupon keeps the original coupon's expiry, but always has at
-// least 30 days left. Never throws.
+// A returned coupon (the host cancelled) is a new coupon valid for 1 month
+// from the day it is returned. Never throws.
 async function returnCouponValue(sql, { razorpayOrderId, amount, sourceOrderId, guestEmail, suiteName }) {
   try {
     const value = Math.round(Number(amount) || 0);
@@ -173,7 +183,7 @@ async function returnCouponValue(sql, { razorpayOrderId, amount, sourceOrderId, 
     const created = (await sql`
       INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, expires_at)
       VALUES (${code}, ${src.guest_id}, ${value}, ${src.issuing_host_id}, ${Number(sourceOrderId)}, 'active',
-              GREATEST(COALESCE(${src.expires_at}::timestamptz, now()), now() + interval '1 month'))
+              now() + interval '1 month')
       RETURNING id, expires_at
     `)[0];
     await logAudit(sql, { action: 'coupon_value_restored', success: true, actorType: 'system', targetType: 'coupon', targetId: created.id,
@@ -231,14 +241,15 @@ async function issueCouponForHost(sql, { orderId, hostId }) {
 
 // Value to give back to a guest that no card payment can take: first onto
 // the Aerva credit the booking used (_fee-credits.js), the rest as a coupon
-// (returnCouponValue). Returns { credit, coupon }.
-async function returnValue(sql, { razorpayOrderId, amount, sourceOrderId, guestEmail, suiteName }) {
+// (returnCouponValue) — only with coupon: true (the host's fault). Without
+// it the coupon part is not returned. Returns { credit, coupon, couponLost }.
+async function returnValue(sql, { razorpayOrderId, amount, sourceOrderId, guestEmail, suiteName, coupon = false }) {
   const want = Math.max(0, Math.round(Number(amount) || 0));
-  if (!want) return { credit: 0, coupon: 0 };
+  if (!want) return { credit: 0, coupon: 0, couponLost: 0 };
   const credit = await require('./_fee-credits').giveBack(sql, sourceOrderId, want);
   const rest = want - credit;
-  if (rest > 0) await returnCouponValue(sql, { razorpayOrderId, amount: rest, sourceOrderId, guestEmail, suiteName });
-  return { credit, coupon: rest };
+  if (rest > 0 && coupon) await returnCouponValue(sql, { razorpayOrderId, amount: rest, sourceOrderId, guestEmail, suiteName });
+  return { credit, coupon: coupon ? rest : 0, couponLost: coupon ? 0 : rest };
 }
 
 async function email(to, subject, html) {
@@ -380,12 +391,13 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
       if (hostPart > 0) s.hostPayout = Math.max(0, s.hostPayout - hostPart);
     }
     creditPart(s, r, paid[r.id], already);
+    if (!(by === 'admin' && countAgainstHost)) dropCouponBack(s);
     return [Number(r.id), s];
   }));
   const ids = rows.map(r => Number(r.id));
   if (preview) {
     const t = (k) => [...splits.values()].reduce((a, s) => a + (s[k] || 0), 0);
-    return { preview: true, percent, items: rows.map(r => r.suite_name), refundCash: t('refundCash'), couponBack: t('couponBack'), deposit: t('deposit'),
+    return { preview: true, percent, items: rows.map(r => r.suite_name), refundCash: t('refundCash'), couponBack: t('couponBack'), couponLost: t('couponLost'), deposit: t('deposit'),
              feeKept: t('feeKept'), feeRefunded: t('feeRefunded'), alreadyRefunded: t('alreadyRefunded'), creditBack: t('creditBack'), hostPayout: t('hostPayout'), policy: policyKey(main.policy), daysBefore: Number(main.days_before) };
   }
   const claim = await claimForCancellation(sql, ids);
@@ -462,7 +474,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     await require('./_payouts').settleAfterPayout(sql, r.id, { reason: 'Booking cancelled after its payout was sent' });
     if (by === 'admin') {
       await logAudit(sql, { action: 'booking_cancelled_by_admin', success: true, actorType: 'admin', actorIdentifier: adminLabel || 'admin',
-        targetType: 'order', targetId: r.id, metadata: { percent, reason: note, refundCash: s.refundCash, couponBack: s.couponBack, feeRefunded: s.feeRefunded || 0, feeReason: s.feeRefunded ? feeWhy : undefined, hostPayout: s.hostPayout, countAgainstHost: !!countAgainstHost } });
+        targetType: 'order', targetId: r.id, metadata: { percent, reason: note, refundCash: s.refundCash, couponBack: s.couponBack, couponLost: s.couponLost || 0, feeRefunded: s.feeRefunded || 0, feeReason: s.feeRefunded ? feeWhy : undefined, hostPayout: s.hostPayout, countAgainstHost: !!countAgainstHost } });
       // Counts toward the host's yearly limit (hostCancellationsLastYear) —
       // once per purchase, like a host's own cancellation.
       if (countAgainstHost && Number(r.id) === Number(main.id)) {
@@ -472,7 +484,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
       continue;
     }
     await logAudit(sql, { action: 'booking_cancelled_by_guest', success: true, actorType: 'system', actorIdentifier: String(main.guest_id || ''),
-      targetType: 'order', targetId: r.id, metadata: { percent, by, refundCash: s.refundCash, couponBack: s.couponBack, hostPayout: s.hostPayout, policy: policyKey(main.policy) } });
+      targetType: 'order', targetId: r.id, metadata: { percent, by, refundCash: s.refundCash, couponBack: s.couponBack, couponLost: s.couponLost || 0, hostPayout: s.hostPayout, policy: policyKey(main.policy) } });
   }
 
   const sum = (k) => done.reduce((t, r) => t + (splits.get(Number(r.id))[k] || 0), 0);
@@ -489,7 +501,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   await email(main.guest_email, `Your booking at ${main.suite_name} is cancelled`,
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your booking is cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)})</p><p>${escH(reason)}.</p>
-      <p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}${creditBack > 0 ? `, plus ${inr(creditBack)} back on your Aerva credit (the part paid with it; see My Bookings)` : ''}. Refunds usually arrive in 5–7 working days.${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}</p>
+      <p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}${creditBack > 0 ? `, plus ${inr(creditBack)} back on your Aerva credit (the part paid with it; see My Bookings)` : ''}. Refunds usually arrive in 5–7 working days.${sum('couponLost') > 0 ? ` The ${inr(sum('couponLost'))} paid by coupon is not returned: a coupon comes back only when the host cancels.` : ''}${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Contact hello@aerva.in.</p></div>`);
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${main.host_id} ORDER BY id LIMIT 1`)[0];
   await email(host && host.email, `Booking cancelled: ${main.suite_name}`,

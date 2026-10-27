@@ -2796,7 +2796,7 @@ module.exports = async (req, res) => {
   // a new coupon when the booking is cancelled (their cash is refunded
   // separately). Never throws: the cancellation and refund are done.
   async function restoreCouponValue(order, cancelledIds, paidMap){
-    // Keeps the original coupon's expiry, with at least 30 days left (_cancellations.js).
+    // A new coupon valid for 1 month (_cancellations.js).
     const value = cancelledIds.reduce((t, id) => t + ((paidMap[id] || {}).couponAbsorbed || 0), 0);
     if (value > 0) await returnCouponValue(sql, { razorpayOrderId: order.razorpay_order_id, amount: value, sourceOrderId: cancelledIds[0], guestEmail: order.guest_email, suiteName: order.suite_name });
   }
