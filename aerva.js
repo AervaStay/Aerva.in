@@ -6891,7 +6891,7 @@
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
           <div class="fee-credit-body">
             <strong>Aerva credit</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}${c.amount > c.remaining ? ` <span class="fee-credit-from">· ${fmtGuest(c.remaining)} left of ${fmtGuest(c.amount)}</span>` : ''}
-            <p>${c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : 'Your host cancelled, so Aerva’s service fee is held for you.'} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
+            <p>${c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : (c.reason === 'host_cancelled' ? 'Your host cancelled, so Aerva’s service fee is held for you.' : 'Your host cancelled, so what you paid is held for you.')} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
             <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund it now</button> <span class="fee-credit-msg"></span>
           </div>
         </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
@@ -8072,21 +8072,21 @@
     if(!pv.ok){ body.innerHTML = `<p class="hc-cancel-err">${esc(pv.data.error || 'Could not check this booking right now.')}</p>`; return; }
     const d = pv.data;
     if(!d.canCancel){ body.innerHTML = `<div class="hc-cancel-warn"><p>${esc(d.message || 'This booking cannot be cancelled here.')}</p></div>${hostCancelPolicyHtml(!!d.isExperience, true)}`; return; }
-    const used = Number(d.cancellationsUsed) || 0, limit = Number(d.cancellationsLimit) || 3, after = used + 1;
+    const used = Number(d.cancellationsUsed) || 0, limit = Number(d.cancellationsLimit) || 3, after = d.sameDayGrace ? used : used + 1;
     const amount = Number(d.couponAmount) || 0;
     body.innerHTML = `
       <div class="hc-cancel-warn" role="alert">
         <p class="hc-cancel-head">Before you cancel</p>
         <div class="hc-score">
           <div class="hc-score-bar" aria-hidden="true">${Array.from({ length: limit }, (_, i) => `<span class="${i < used ? 'is-used' : i < after ? 'is-next' : ''}"></span>`).join('')}</div>
-          <p><strong>Your cancellation score: ${used} of ${limit}</strong> used in the last 12 months. This one would make it <strong>${after} of ${limit}</strong>.${after >= limit ? ' After this you cannot cancel any booking yourself until one is more than 12 months old.' : ''}</p>
+          <p><strong>Your cancellation score: ${used} of ${limit}</strong> used in the last 12 months. ${d.sameDayGrace ? 'This one <strong>does not count</strong>: it is a same-day booking made less than an hour ago.' : `This one would make it <strong>${after} of ${limit}</strong>.${after >= limit ? ' After this you cannot cancel any booking yourself until one is more than 12 months old.' : ''}`}</p>
         </div>
         <ul>
           ${d.late ? '<li><strong>Check-in is less than 48 hours away.</strong></li>' : ''}
           ${d.asCredit
             ? '<li>Everything your guest paid — the booking, GST and Aerva’s service fee — is held for them as Aerva credit, which they can use on another stay or have refunded. Any deposit is refunded to them straight away.</li>'
             : '<li>Your guest is refunded straight away — the booking, GST and any deposit. Aerva’s service fee is held for them as Aerva credit.</li>'}
-          ${d.couponNeeded !== false ? `<li>You compensate them with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the ${d.isExperience ? 'booking' : 'stay'}). You pay it now, as the last step; it reaches them by email ${Number(d.couponReleaseMinutes) || 15} minutes later. The coupon is not refundable; they can use it together with their credit.</li>` : '<li>No coupon is needed: this cancels the experience together with its stay.</li>'}
+          ${d.couponNeeded !== false ? `<li>You compensate them with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the ${d.isExperience ? 'booking' : 'stay'}). You pay it now, as the last step; it reaches them by email ${Number(d.couponReleaseMinutes) || 15} minutes later. The coupon is not refundable; they can use it together with their credit.</li>` : (d.pairExperience ? '<li>No coupon is needed: this cancels the experience together with its stay.</li>' : d.sameDayGrace ? '<li>No coupon is needed: this same-day booking was made less than an hour ago.</li>' : '<li>No coupon is needed: check-in is more than 48 hours away.</li>')}
           <li>The guest is told the reason. This cannot be undone.</li>
         </ul>
       </div>
@@ -8095,7 +8095,7 @@
       <select id="hcReason" class="hc-input"><option value="">Choose a reason…</option>${(d.reasons || []).map(r => `<option value="${esc(r.code)}">${esc(r.label)}</option>`).join('')}</select>
       <label class="hc-label" for="hcDetails">Details for the guest <span class="hc-opt" id="hcDetailsOpt">(optional)</span></label>
       <textarea id="hcDetails" class="hc-input" rows="3" maxlength="800" placeholder="A short, kind explanation helps the guest."></textarea>
-      <label class="hc-check"><input type="checkbox" id="hcAgree"> I understand this counts towards my cancellation score${d.couponNeeded !== false ? ` and that I pay the guest’s ${inr(amount)} coupon` : ''}.</label>
+      <label class="hc-check"><input type="checkbox" id="hcAgree"> I understand ${d.sameDayGrace ? 'this cannot be undone' : 'this counts towards my cancellation score'}${d.couponNeeded !== false ? ` and that I pay the guest’s ${inr(amount)} coupon` : ''}.</label>
       <div class="hc-actions"><button type="button" class="hc-btn hc-danger" id="hcNext">Continue</button><button type="button" class="hc-btn" id="hcKeep">Keep the booking</button></div>
       <p class="hc-cancel-err" id="hcErr" hidden></p>`;
     const err = (m) => { const e = document.getElementById('hcErr'); e.textContent = m; e.hidden = !m; };

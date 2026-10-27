@@ -215,14 +215,28 @@ async function returnCouponValue(sql, { razorpayOrderId, amount, sourceOrderId, 
 // (host_penalties). For an experience that includes a stay: on the stay's
 // amount only, and none when it is the experience that is cancelled.
 // Returns { amount } (0 when no coupon). Never throws.
+// The coupon a host owes when Aerva cancels for them: 10% of the booking
+// (deposit aside), only within 48 hours of check-in (the same rule as a
+// host's own cancellation), none for the experience half of a pair. ₹.
+async function hostCouponAmount(sql, orderId) {
+  const o = (await sql`SELECT o.id, o.guest_id, o.total, COALESCE(o.deposit_amount, 0) AS deposit, COALESCE(o.order_type, 'stay') AS order_type, o.arrival,
+                              o.arrival::text AS arrival_day, o.created_at AS booked_at, l.timezone, l.check_in_time
+                       FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${Number(orderId) || 0}`)[0];
+  if (!o || !o.guest_id) return 0;
+  const { hoursUntilCheckInTime } = require('./_booking-rules');
+  if (!(hoursUntilCheckInTime(o.arrival, o.timezone, o.check_in_time) < 48)) return 0;
+  if (require('./_booking-rules').sameDayGrace(o.arrival_day, o.booked_at, o.timezone)) return 0;
+  const sibs = await linkedSiblings(sql, o.id);
+  if (sibs.length && o.order_type === 'experience') return 0;
+  return Math.max(1, Math.round(Math.max(0, Number(o.total) - Number(o.deposit)) * 0.10));
+}
+
 async function issueCouponForHost(sql, { orderId, hostId }) {
   try {
-    const o = (await sql`SELECT o.id, o.guest_id, o.total, COALESCE(o.deposit_amount, 0) AS deposit, COALESCE(o.order_type, 'stay') AS order_type, o.razorpay_order_id, o.arrival, o.listing_id
-                         FROM orders o WHERE o.id = ${Number(orderId) || 0}`)[0];
+    const o = (await sql`SELECT o.id, o.guest_id FROM orders o WHERE o.id = ${Number(orderId) || 0}`)[0];
     if (!o || !o.guest_id) return { amount: 0 };
-    const sibs = await linkedSiblings(sql, o.id);
-    if (sibs.length && o.order_type === 'experience') return { amount: 0 };
-    const amount = Math.max(1, Math.round(Math.max(0, Number(o.total) - Number(o.deposit)) * 0.10));
+    const amount = await hostCouponAmount(sql, o.id);
+    if (!amount) return { amount: 0 };
     const { COUPON_RELEASE_DELAY_MINUTES } = require('./_coupons');
     const code = 'AERVA-' + crypto.randomBytes(5).toString('hex').toUpperCase();
     const coupon = (await sql`INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, release_at)
@@ -330,7 +344,7 @@ async function clearUnsentPayouts(sql, ids) {
 // refundFee (Aerva cancels only) is the exception to "the service fee is
 // never refunded": it needs feeReason, and a proposal with it can only be
 // approved by an admin (_support-actions.js).
-async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note = '', refundFee = false, feeReason = '', countAgainstHost = false, adminLabel = null, preview = false }) {
+async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note = '', refundFee = false, feeReason = '', countAgainstHost = false, adminLabel = null, preview = false, asCredit = false }) {
   const feeWhy = String(feeReason || '').replace(/\s+/g, ' ').trim().slice(0, 500);
   if (by === 'admin' && refundFee && !preview && feeWhy.length < 10) {
     throw Object.assign(new Error('Explain why Aerva’s service fee is being refunded (at least a sentence). It is an exception and is recorded.'), { isUserFacing: true, status: 400 });
@@ -392,12 +406,19 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     }
     creditPart(s, r, paid[r.id], already);
     if (!(by === 'admin' && countAgainstHost)) dropCouponBack(s);
+    // asCredit (Aerva cancelling for a host): only the deposit goes back to
+    // the payment; everything else the guest paid is held for them as Aerva
+    // credit after the cancellation (_fee-credits.js creditForWholeBooking).
+    if (asCredit && (r.charge_currency || 'INR') === 'INR') {
+      s.heldAsCredit = Math.max(0, s.refundCash - s.deposit) + (s.creditBack || 0);
+      s.refundCash = s.deposit; s.creditBack = 0;
+    }
     return [Number(r.id), s];
   }));
   const ids = rows.map(r => Number(r.id));
   if (preview) {
     const t = (k) => [...splits.values()].reduce((a, s) => a + (s[k] || 0), 0);
-    return { preview: true, percent, items: rows.map(r => r.suite_name), refundCash: t('refundCash'), couponBack: t('couponBack'), couponLost: t('couponLost'), deposit: t('deposit'),
+    return { preview: true, percent, items: rows.map(r => r.suite_name), refundCash: t('refundCash'), couponBack: t('couponBack'), couponLost: t('couponLost'), heldAsCredit: t('heldAsCredit'), deposit: t('deposit'),
              feeKept: t('feeKept'), feeRefunded: t('feeRefunded'), alreadyRefunded: t('alreadyRefunded'), creditBack: t('creditBack'), hostPayout: t('hostPayout'), policy: policyKey(main.policy), daysBefore: Number(main.days_before) };
   }
   const claim = await claimForCancellation(sql, ids);
@@ -496,12 +517,17 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     const want = splits.get(Number(r.id)).creditBack || 0;
     if (want > 0) creditBack += await require('./_fee-credits').giveBack(sql, r.id, want);
   }
+  let heldAsCredit = 0;
+  if (asCredit) {
+    try { const h = await require('./_fee-credits').creditForWholeBooking(sql, done.map(r => Number(r.id)), 'host_cancelled_late'); heldAsCredit = (h.total || 0) + (h.back || 0); }
+    catch (err) { console.error('Aerva credit for a cancellation by Aerva for the host not made (needs follow-up):', main.id, err.message); }
+  }
 
   const when = `${dateStr(main.arrival)} → ${dateStr(main.departure)}`;
   await email(main.guest_email, `Your booking at ${main.suite_name} is cancelled`,
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your booking is cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)})</p><p>${escH(reason)}.</p>
-      <p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}${creditBack > 0 ? `, plus ${inr(creditBack)} back on your Aerva credit (the part paid with it; see My Bookings)` : ''}. Refunds usually arrive in 5–7 working days.${sum('couponLost') > 0 ? ` The ${inr(sum('couponLost'))} paid by coupon is not returned: a coupon comes back only when the host cancels.` : ''}${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}</p>
+      ${asCredit ? `<p>Everything you paid${heldAsCredit > 0 ? ` — <strong>${inr(heldAsCredit)}</strong>` : ''} is held for you as Aerva credit (details in a separate email): use it on another booking, or have it refunded to your original payment method at any time from My Bookings.${refundCash > 0 ? ` Your deposit of ${inr(refundCash)} is refunded to your original payment method.` : ''}</p>` : `<p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}${creditBack > 0 ? `, plus ${inr(creditBack)} back on your Aerva credit (the part paid with it; see My Bookings)` : ''}. Refunds usually arrive in 5–7 working days.${sum('couponLost') > 0 ? ` The ${inr(sum('couponLost'))} paid by coupon is not returned: a coupon comes back only when the host cancels.` : ''}${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}</p>`}
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Contact hello@aerva.in.</p></div>`);
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${main.host_id} ORDER BY id LIMIT 1`)[0];
   await email(host && host.email, `Booking cancelled: ${main.suite_name}`,
@@ -509,7 +535,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)}) — the dates are open again.</p>
       ${hostShare > 0 ? `<p>Your payout for this booking: <strong>${inr(hostShare)}</strong>, on the usual payout day.</p>` : ''}</div>`);
   await postThreadMessage(sql, main.id, by === 'admin' ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}${creditBack > 0 ? ` plus ${inr(creditBack)} back on their Aerva credit` : ''}.`);
-  return { ok: true, refundCash, couponBack, creditBack, percent };
+  return { ok: true, refundCash, couponBack, creditBack, heldAsCredit, percent };
 }
 
 // Host cancellations in the last 12 months (co-host cancellations count for
@@ -685,5 +711,5 @@ module.exports = {
   POLICIES, HOST_DECISION_TIMEOUT_HOURS, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, REQUEST_REASONS,
   policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
   claimForCancellation, releaseClaim, guestGetsBackFor, claimRequest, unclaimRequest, postThreadMessage, hostOption, createCancellationRequest, cancellationCard,
-  cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, issueCouponForHost, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
+  cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, issueCouponForHost, hostCouponAmount, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
 };

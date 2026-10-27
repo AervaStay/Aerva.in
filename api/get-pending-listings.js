@@ -707,6 +707,7 @@ module.exports = async (req, res) => {
       if (req.query.lookupBooking) {
         const out = await lookup.bookingDetail(sql, req.query.lookupBooking);
         out.records = await actions.recordsFor(sql, { orderId: out.booking.id });
+        out.hostCancel = await require('./_host-cancel-confirm').pendingFor(sql, out.booking.id);
         out.role = ADMIN_ROLE;
         await logAudit(sql, { action: 'admin_lookup_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'order', targetId: out.booking.id });
         return res.status(200).json(out);
@@ -741,17 +742,34 @@ module.exports = async (req, res) => {
       if (!(pct >= 0 && pct <= 100)) return res.status(400).json({ error: 'Refund must be 0 to 100%.' });
       const reason = String(b.reason || '').trim().slice(0, 400);
       if (!b.preview && reason.length < 5) return res.status(400).json({ error: 'Write the reason — the guest and host are told it.' });
+      // For the host: nothing is cancelled yet. The host confirms it in a
+      // support request raised for them (_host-cancel-confirm.js).
+      if (forHost && !b.preview) {
+        const me = await actions.me(sql, sessionPayload, ADMIN_ROLE);
+        const r = await require('./_host-cancel-confirm').requestConfirmation(sql, { orderId: Number(b.orderId) || 0, reason, adminLabel: ADMIN_ACTOR, adminName: me && me.name });
+        return res.status(200).json({ success: true, awaitingHost: true, ...r });
+      }
       const out = await executePolicyCancellation(sql, razorpay, { orderId: Number(b.orderId) || 0, pct, by: 'admin', note: reason,
         refundFee: forHost || (b.refundFee === true && ADMIN_ROLE === 'admin'), feeReason: forHost ? 'Cancelled by Aerva for the host: the guest gets back everything they paid' : b.feeReason,
-        countAgainstHost: forHost || b.countAgainstHost === true, adminLabel: ADMIN_ACTOR, preview: b.preview === true });
-      if (forHost && !b.preview && out && out.ok) {
-        const h = (await sql`SELECT l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${Number(b.orderId) || 0}`)[0];
-        if (h) out.couponForGuest = (await require('./_cancellations').issueCouponForHost(sql, { orderId: Number(b.orderId), hostId: h.host_id })).amount;
-      }
+        countAgainstHost: forHost || b.countAgainstHost === true, adminLabel: ADMIN_ACTOR, preview: b.preview === true, asCredit: forHost });
+      if (forHost && b.preview && out) out.couponForGuest = await require('./_cancellations').hostCouponAmount(sql, Number(b.orderId) || 0);
       return res.status(200).json({ success: true, ...out });
     } catch (err) {
       if (!err.isUserFacing) console.error('adminCancelBooking failed:', err);
       return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking. Nothing was refunded unless Admin → Refunds shows it.' });
+    }
+  }
+  // POST { issueHostCancelCoupon: { orderId } } — after a host confirmed Aerva
+  // cancelling for them within 48 hours of check-in: issue the guest's coupon.
+  // Aerva pays it; it is deducted from the host's next payout. Admins only.
+  if (req.method === 'POST' && req.body && req.body.issueHostCancelCoupon) {
+    try {
+      if (ADMIN_ROLE !== 'admin') return res.status(403).json({ error: 'Only an admin can issue this coupon.' });
+      const r = await require('./_host-cancel-confirm').issueCoupon(sql, { orderId: Number(req.body.issueHostCancelCoupon.orderId) || 0, adminLabel: ADMIN_ACTOR });
+      return res.status(200).json({ success: true, ...r });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('issueHostCancelCoupon failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not issue the coupon.' });
     }
   }
   if (req.method === 'POST' && req.body && req.body.adminPartialRefund) {

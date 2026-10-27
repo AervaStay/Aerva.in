@@ -316,8 +316,9 @@ async function getRequest(sql, guestId, ref) {
   const msgs = await sql`SELECT id, sender, body, attachments, created_at FROM support_messages
                          WHERE ticket_id = ${t.id} AND internal = false ORDER BY created_at, id`;
   await sql`UPDATE support_tickets SET user_last_seen_at = now() WHERE id = ${t.id}`;
+  const hostCancel = await require('./_host-cancel-confirm').forTicket(sql, t.id, guestId);
   return {
-    ...ticketView(t), unread: false,
+    ...ticketView(t), unread: false, hostCancel,
     canReply: t.status !== 'closed', canClose: !['closed'].includes(t.status),
     // Resolved: the person is asked whether it is, and for a rating, before it closes.
     askFeedback: t.status === 'resolved',

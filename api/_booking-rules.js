@@ -116,6 +116,17 @@ function localDateAt(at, zone) {
   return localClock(zone, Number.isFinite(ms) ? ms : Date.now()).date;
 }
 
+// A booking made for the same day (check-in on the day it was booked, on the
+// property's calendar) that the host cancels within 1 hour of it being made:
+// no coupon is owed for it (host-listings.js cancelTerms, _cancellations.js).
+const SAME_DAY_GRACE_MINUTES = 60;
+function sameDayGrace(arrival, bookedAt, zone, nowMs = Date.now()) {
+  const at = bookedAt instanceof Date ? bookedAt.getTime() : Date.parse(bookedAt);
+  if (!Number.isFinite(at) || nowMs - at > SAME_DAY_GRACE_MINUTES * 60e3) return false;
+  const day = arrival instanceof Date ? arrival.toISOString().slice(0, 10) : String(arrival || '').slice(0, 10);
+  return day === localDateAt(at, zone);
+}
+
 // ---- Same-day bookings ----
 // Each host chooses until what time (property's clock) a guest may book the
 // same night: 6 PM to 11 PM, or 12 AM (all day, the default) —
@@ -169,7 +180,7 @@ async function paidByOrderRow(sql, razorpayOrderId) {
 }
 
 module.exports = { dateStr, localMidnightMs, hoursUntilCheckIn, allocatePaid, paidByOrderRow, paymentRows,
-  checkInMinutes, checkInMomentMs, hoursUntilCheckInTime, daysBeforeCheckIn, LATE_NIGHT_UNTIL_HOUR, SAME_DAY_HOURS, localClock, earliestArrival,
+  checkInMinutes, checkInMomentMs, hoursUntilCheckInTime, daysBeforeCheckIn, sameDayGrace, SAME_DAY_GRACE_MINUTES, LATE_NIGHT_UNTIL_HOUR, SAME_DAY_HOURS, localClock, earliestArrival,
   STAY_WINDOW_HOUR, stayWindowEndMs, localDateAt };
 
 // ---------------------------------------------------------------------
