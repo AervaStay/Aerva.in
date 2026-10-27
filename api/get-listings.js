@@ -624,6 +624,10 @@ const JOBS = [
   // full to the original payment (_fee-credits.js).
   { name: 'fee_credit_refunds', label: 'Refund Aerva credits that have ended', everyMinutes: 60, lockMinutes: 10,
     run: (c) => require('./_fee-credits').runExpired(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  // Unused Aerva credit: a reminder every 15 days, in the daytime (_fee-credits.js).
+  { name: 'credit_reminders', label: 'Remind guests of unused Aerva credit (every 15 days)', everyMinutes: 60, lockMinutes: 10,
+    run: (c) => { const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours(); return h >= 10 && h < 19
+      ? require('./_fee-credits').remindUnused(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) : { waiting: 'runs between 10 am and 7 pm' }; } },
   { name: 'chat_number_cleanup', label: 'Remove phone numbers from chats of finished or cancelled bookings', everyMinutes: 15,
     run: (c) => require('./_message-guard').scrubEndedConversations(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'photo_scan', label: 'Check photos for contact details (and remove any that show them)', everyMinutes: 5, lockMinutes: 3,

@@ -2605,7 +2605,7 @@ module.exports = async (req, res) => {
       // The host decides how much of the deposit to keep — for damage or
       // extra cleaning — and never more than the deposit.
       const keep = Math.round(Number((req.body.raiseDispute || {}).amount) * 100) / 100;
-      if (!(keep > 0)) return res.status(400).json({ error: 'Enter how much of the deposit you are keeping.' });
+      if (!(keep > 0)) return res.status(400).json({ error: 'Enter how much of the deposit you ask to keep.' });
       if (keep > Number(order.deposit_amount || 0)) return res.status(400).json({ error: `You can keep at most the deposit (₹${Number(order.deposit_amount || 0)}). Anything above it is between you and the guest.` });
       const raised = await sql`
         UPDATE orders SET deposit_status = 'disputed', dispute_reason = ${String(reason).trim().slice(0, 1000)}, dispute_raised_at = now()

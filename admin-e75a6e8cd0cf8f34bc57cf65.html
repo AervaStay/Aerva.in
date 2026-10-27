@@ -3473,12 +3473,12 @@
           <h4>${escAdmin(d.suite_name)} — ${fmt(d.deposit_amount)} deposit</h4>
           <div class="dispute-meta">${escAdmin(dateRange)} · Host: ${escAdmin(d.host_name)} (${escAdmin(d.host_email)}) · Guest: ${escAdmin(d.guest_email)}</div>
           <div class="dispute-reason-box">"${escAdmin(d.dispute_reason)}"</div>
-          <div class="dispute-meta" style="margin:-4px 0 8px;">Host’s proof: ${Array.isArray(d.dispute_evidence) && d.dispute_evidence.length ? d.dispute_evidence.map((u, i) => `<a href="${escAdmin(u)}" target="_blank" rel="noopener" style="color:#8a6c39; margin-right:8px;">${/\.(mp4|mov|webm)(\?|$)/i.test(u) ? 'Video' : 'File'} ${i + 1}</a>`).join('') : '<span style="color:#a3402f;">none sent</span>'}${d.dispute_amount != null ? ` · Host keeps <strong>${fmt(d.dispute_amount)}</strong> (the host’s decision; check the proof is there)` : ''}</div>
+          <div class="dispute-meta" style="margin:-4px 0 8px;">Host’s proof: ${Array.isArray(d.dispute_evidence) && d.dispute_evidence.length ? d.dispute_evidence.map((u, i) => `<a href="${escAdmin(u)}" target="_blank" rel="noopener" style="color:#8a6c39; margin-right:8px;">${/\.(mp4|mov|webm)(\?|$)/i.test(u) ? 'Video' : 'File'} ${i + 1}</a>`).join('') : '<span style="color:#a3402f;">none sent</span>'}${d.dispute_amount != null ? ` · Host asks for <strong>${fmt(d.dispute_amount)}</strong> (${Number(d.deposit_amount) > 0 ? Math.round(Number(d.dispute_amount) / Number(d.deposit_amount) * 100) : 0}% of the deposit) — review the proof and the guest’s side, then approve` : ''}</div>
           <div class="dispute-meta" style="margin:-4px 0 10px;">Raised ${escAdmin(fmtDate(d.dispute_raised_at))} · ${(d.guestRequests || []).length
             ? 'Guest’s side: ' + d.guestRequests.map(r => `<a href="#" onclick="switchTab('support'); openSupport(${Number(r.id)}); return false;" style="color:#8a6c39;">${escAdmin(r.ref)}</a> (${escAdmin(r.subject)})`).join(', ')
             : 'The guest has been emailed and can send their side as a Support request; none yet.'}</div>
           <div class="resolve-row">
-            <label style="font-size:12.5px;">Compensate host ₹</label>
+            <label style="font-size:12.5px;">Approve for the host ₹</label>
             <input type="number" id="compensation-${Number(d.id)}" min="0" max="${Number(d.deposit_amount)}" placeholder="0" value="${d.dispute_amount != null ? Number(d.dispute_amount) : ''}">
             <button type="button" class="resolve-btn" onclick="resolveDispute(${Number(d.id)}, ${Number(d.deposit_amount)})">Resolve</button>
             <span id="resolveError-${Number(d.id)}" class="error"></span>
@@ -3497,7 +3497,7 @@
       errorEl.textContent = `Must be between 0 and ${fmt(depositAmount)}.`;
       return;
     }
-    if(!confirm(`Compensate the host ₹${compensationAmount} and refund the remaining ₹${depositAmount - compensationAmount} to the guest?`)) return;
+    if(!confirm(`Approve ₹${compensationAmount} (${Number(depositAmount) > 0 ? Math.round(compensationAmount / Number(depositAmount) * 100) : 0}% of the deposit) for the host and refund the remaining ₹${depositAmount - compensationAmount} to the guest? Both are told Aerva’s decision is final.`)) return;
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings', {
         method: 'POST',

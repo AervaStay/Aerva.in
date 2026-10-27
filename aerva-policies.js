@@ -27,7 +27,7 @@ window.AERVA_POLICIES = {
         'You: give true details of every guest and pet, keep a confirmed email and a phone number on your account, carry a government photo ID for every adult guest to show the host at check-in, follow the house rules and the law, and pay for any damage you or your guests cause.',
         'Your booking is confirmed only when payment completes within the 3-minute payment window. A payment that does not match the booking amount, or completes after the window, is not a booking and is refunded.',
         'Cancellations and changes are requests to the host through Aerva, under the refund policy shown before you pay. A booking can be cancelled only before check-in. Aerva’s service fee is not refunded when you cancel or change a booking; a cheaper change refunds the difference, but the fee stays as charged.',
-        'If the host cancels your booking, everything you paid — the booking price, its GST and Aerva’s service fee — is held for you as Aerva credit for 30 days: use it on another stay or experience, or have it refunded to your original payment method at any time from My Bookings; anything left after 30 days is refunded automatically. Any deposit is refunded at once. If the host cancels within 48 hours of check-in, you also receive an Aerva coupon worth 10% of the booking, valid for 1 month (not for a same-day booking the host cancels within 1 hour of it being made).',
+        'If the host cancels your booking, everything you paid — the booking price, its GST and Aerva’s service fee — is held for you as Aerva credit, which does not expire: use it on another stay or experience, or have it refunded to your original payment method at any time from My Bookings. Aerva reminds you every 15 days while it is unused. Any deposit is refunded at once. If the host cancels within 48 hours of check-in, you also receive an Aerva coupon worth 10% of the booking, valid for 1 month (not for a same-day booking the host cancels within 1 hour of it being made).',
         'Only one coupon can be used on a booking. The part of a booking paid by coupon comes back to you, as a new coupon valid for 1 month, only if the host cancels or a problem you report is upheld — not when you cancel or change the booking. If a payment does not go through, nothing is booked and your coupon stays valid.',
         'Once your stay has started: to leave early, ask your host to change your check-out date, or report a problem with evidence, in My Bookings by 10 AM (the property’s local time, the standard check-out time) on the day after check-in. The check-in night is never refunded. If the host agrees to the shorter stay, what you paid for the nights you no longer stay comes back to you as Aerva credit: use it on another booking, or have it refunded to your original payment method whenever you choose, from My Bookings. This credit does not expire. A request sent in time stands however long the host takes to answer. If the host declines it, or does not answer, you may raise it with Aerva within 24 hours, and Aerva decides.',
         'After 10 AM (the property’s local time) on the day after check-in, the booking can no longer be changed and nothing more is refunded.',
@@ -35,7 +35,7 @@ window.AERVA_POLICIES = {
         'The host: provides the home or experience as described, keeps it safe and clean, and follows local laws.',
         'Aerva: takes your payment, handles refunds and complaints under Aerva’s Policies, and keeps your booking records.',
         'No violence, threats, verbal abuse, harassment or discrimination of any kind, including on gender.',
-        'Any security deposit is refunded under Aerva’s Security Deposit and Damage Policy, within 7 days of check-out — or within 2 bank working days if the host confirms there is no damage. It covers damage and extra cleaning (by the host or someone the host calls in), up to the deposit amount; the host decides how much of it is refunded, and must share photos or videos of the damage with Aerva to keep any of it. Damage above the deposit is between you and the host, and is to be settled directly with the host; Aerva provides no refund or compensation for it.',
+        'Any security deposit is refunded under Aerva’s Security Deposit and Damage Policy, within 7 days of check-out — or within 2 bank working days if the host confirms there is no damage. It covers damage and extra cleaning (by the host or someone the host calls in), up to the deposit amount; the host asks for an amount and must share photos or videos of the damage with Aerva; Aerva reviews both sides and approves how much of the deposit, and what percentage, goes to the host, and its decision is final. Damage above the deposit is between you and the host, and is to be settled directly with the host; Aerva provides no refund or compensation for it.',
         'Before a booking is confirmed, nothing you send through Aerva may contain a phone number, email address, social media handle, UPI ID or link to another website. Once it is confirmed, you and the host may share phone numbers, email addresses and photos in Aerva Messages until 15 days after check-out. Links to Aerva pages can be shared at any time.',
         'Aerva provides no support beyond the security deposit and your booking details.',
         'You are responsible for your own safety and for any physical, mental or emotional harm you or your guests cause or suffer that is beyond Aerva’s control.',
@@ -138,8 +138,9 @@ window.AERVA_POLICIES = {
         ] },
         { title: '16. Security deposits and damage', points: [
           'If your listing holds a refundable security deposit, Aerva holds it and refunds it to the guest after check-out unless you report damage through Aerva within 7 days of check-out.',
-          'You alone decide how much of the deposit is refunded to the guest. To keep any of it, you must share photos or videos of the damage with Aerva when you report it, through Aerva; a report without proof is not accepted, and the deposit is then refunded in full.',
-          'The deposit also covers extra cleaning: cleaning you do yourself, or a cleaner or other help you call in, to return the home to how it was. What you keep for damage and cleaning together can never be more than the deposit.',
+          'To keep any of the deposit, report the damage through Aerva, say how much of the deposit you ask to keep, and share photos or videos of the damage with Aerva; a report without proof is not accepted, and the deposit is then refunded in full.',
+          'Nothing is kept from the deposit until Aerva approves it. Aerva reviews your proof and the guest’s side, and decides fairly how much of the deposit, and what percentage of it, is paid to you; the rest is refunded to the guest. You abide by Aerva’s decision, which is full and final.',
+          'The deposit also covers extra cleaning: cleaning you do yourself, or a cleaner or other help you call in, to return the home to how it was. What you are paid for damage and cleaning together can never be more than the deposit.',
           'If you find no damage, you can confirm it when you review the guest: the deposit is then refunded within 2 bank working days, without waiting for the 7 days.',
           'Aerva handles damage and cleaning claims only up to the security deposit. If the damage or cleaning costs more than the deposit, or no deposit is held, Aerva provides no refund, compensation or support of any kind for the rest; it is between you and the guest, to be settled directly. Aerva is not a party to that settlement and pays no part of it.'
         ] },
@@ -382,7 +383,7 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Refunds', points: [
         'Refunds, where due, go to the original payment method. Timing depends on your bank or card issuer.',
-        'If the host cancels, everything you paid is held for you as Aerva credit first (refundable at any time from My Bookings; anything left after 30 days is refunded automatically). Credit for nights you no longer stay, after a shorter stay the host agreed to, does not expire.'
+        'If the host cancels, everything you paid is held for you as Aerva credit first. Aerva credit does not expire: use it on any booking, or have it refunded at any time from My Bookings.'
       ]},
       { title: 'Coupons', points: [
         'A coupon covers the booking price only. The guest service fee, GST and any security deposit are charged in full, on the full booking price.',
@@ -419,7 +420,7 @@ window.AERVA_POLICIES = {
     { id: 'offline-fees', title: 'Offline Fee Policy', summary: 'When a host may charge anything outside Aerva.', sections: [
       { title: 'Rule', points: [
         'Hosts may not charge guests any fee outside Aerva. Every charge must be part of the price shown on Aerva before booking.',
-        'Security deposit claims — damage and extra cleaning — go through Aerva, up to the deposit; the host decides the amount and must share photos or videos. Anything beyond the deposit is settled directly between the host and the guest.'
+        'Security deposit claims — damage and extra cleaning — go through Aerva, up to the deposit; the host asks for an amount with photos or videos, and Aerva approves what is paid. Anything beyond the deposit is settled directly between the host and the guest.'
       ]}
     ]},
     { id: 'off-platform', title: 'Off-Platform Policy', summary: 'What must not happen outside Aerva.', sections: [
@@ -478,7 +479,7 @@ window.AERVA_POLICIES = {
       { title: 'Hosts', points: [
         'Hosts may cancel before check-in time, and must give a reason. The guest is told the reason.',
         'A host may cancel at most 3 bookings in any 12 months. Further cancellations are handled only by Aerva, on the host’s request and once the host confirms it in a support request: everything the guest paid is held for them as Aerva credit (refundable at any time; any deposit is refunded), and, if check-in is within 48 hours, gets a coupon worth 10% of the booking that Aerva pays for on the host’s behalf and deducts from the host’s next payout.',
-        'Whenever the host cancels, everything the guest paid — the booking price, its GST and Aerva’s service fee — is held for them as Aerva credit for 30 days. They can use it on another stay or experience, or have it refunded in full to the original payment method at any time from My Bookings; anything left at the end is refunded automatically. The security deposit is refunded at once.',
+        'Whenever the host cancels, everything the guest paid — the booking price, its GST and Aerva’s service fee — is held for them as Aerva credit, which does not expire. They can use it on another stay or experience, or have it refunded in full to the original payment method at any time from My Bookings, and are reminded every 15 days while it is unused. The security deposit is refunded at once.',
         'Within 48 hours of check-in, the guest also receives an Aerva coupon worth 10% of the booking, valid for 1 month, sent automatically 15 minutes after the cancellation. The host pays for it before the booking is cancelled. No coupon is given when the host cancels more than 48 hours before check-in, or cancels a same-day booking within 1 hour of it being made (which also does not count towards the host’s 3 cancellations a year). The coupon is not refundable; the guest can use it together with Aerva credit.',
         'What a guest is not refunded after cancelling is paid to the host, less Aerva’s commission, on the usual payout day.'
       ]},
@@ -521,7 +522,7 @@ window.AERVA_POLICIES = {
       { title: 'Rule', points: [
         'Each experience shows its own refund terms before booking. Those terms apply.',
         'An experience that includes a stay: if the experience’s host cancels it (with its stay), everything the guest paid, GST and Aerva’s service fee included, is held for them as Aerva credit to use on another stay or experience, or to have refunded; no coupon. If the stay’s host cancels, the stay’s rules apply and the coupon is worth 10% of the stay, paid for by the stay’s host.',
-        'If a host or co-host cancels, everything the guest paid — the price, its GST and Aerva’s service fee — is held for them as Aerva credit for 30 days: it is taken off what they pay for their next Aerva booking (anything left stays on the credit), or refunded in full to the original payment method — at any time from My Bookings, or automatically when the 30 days end. If the cancellation is within 48 hours of check-in, 15 minutes later the guest also receives an Aerva coupon worth 10% of the booking, paid for by whoever cancelled.'
+        'If a host or co-host cancels, everything the guest paid — the price, its GST and Aerva’s service fee — is held for them as Aerva credit, which does not expire: it is taken off what they pay for their next Aerva booking (anything left stays on the credit), or refunded in full to the original payment method at any time from My Bookings. If the cancellation is within 48 hours of check-in, 15 minutes later the guest also receives an Aerva coupon worth 10% of the booking, paid for by whoever cancelled.'
       ]}
     ]},
     { id: 'major-events', title: 'Major Disruptive Events Policy', summary: 'When events beyond anyone’s control stop a booking.', sections: [
@@ -557,7 +558,7 @@ window.AERVA_POLICIES = {
         'Some listings hold a refundable security deposit, shown before you pay.',
         'It is refunded to the original payment method after check-out, unless the host reports damage through Aerva within 7 days of check-out.',
         'The deposit covers damage and extra cleaning — by the host, or a cleaner or other help the host calls in — up to the deposit amount, never more.',
-        'The host alone decides how much of the deposit is refunded on their booking. To keep any of it, the host must report it through Aerva and share photos or videos of the damage with Aerva. The rest is refunded.',
+        'To keep any of the deposit, the host must report it through Aerva, say how much they ask to keep, and share photos or videos of the damage with Aerva. Aerva reviews both sides and approves how much of the deposit, and what percentage, is paid to the host; the rest is refunded. Aerva’s decision is fair, full and final, and both the host and the guest abide by it.',
         'If the host confirms there is no damage when reviewing the guest, the deposit is refunded within 2 bank working days, without waiting for the 7 days.'
       ]},
       { title: 'Damage above the deposit', points: [
@@ -769,10 +770,10 @@ window.AERVA_POLICIES = {
             'A booking can be cancelled only before check-in. Once your stay has started, change your check-out date instead (Changing a booking).'
           ]},
           { title: 'If the host cancels', points: [
-            'Whenever the host cancels, everything you paid — the booking price, GST and Aerva’s service fee — is held for you as Aerva credit for 30 days. Use it on another stay or experience, or have it refunded to your original payment method at any time from My Bookings. Any deposit is refunded at once.',
+            'Whenever the host cancels, everything you paid — the booking price, GST and Aerva’s service fee — is held for you as Aerva credit, which does not expire. Use it on another stay or experience, or have it refunded to your original payment method at any time from My Bookings. Any deposit is refunded at once.',
             'If the host cancelled within 48 hours of check-in, about 15 minutes later you also receive an Aerva coupon worth 10% of the booking, valid for 1 month. It is not refundable, and you can use it together with your Aerva credit.',
-            'Book another stay or experience in that time and the credit is taken off what you pay, automatically — checkout shows it as “Aerva credit”. If the new booking costs less than your credit, the rest stays on the credit; if it costs more, you pay the difference.',
-            'What is left on your credit shows in My Bookings. Have it refunded in full to your original payment method at any time. Anything left when the 30 days end is refunded automatically.',
+            'Book another stay or experience and the credit is taken off what you pay, automatically — checkout shows it as “Aerva credit”. If the new booking costs less than your credit, the rest stays on the credit; if it costs more, you pay the difference.',
+            'What is left on your credit shows in My Bookings. Have it refunded in full to your original payment method at any time. While it is unused, Aerva reminds you every 15 days.',
             'Your credit is not used for a security deposit: the deposit is paid with your chosen payment method and refunded to it after the stay.',
             'If a booking paid partly with credit is later cancelled or refunded, the refund goes to your original payment method first, and the part paid with credit goes back onto your credit.'
           ]},
@@ -826,7 +827,7 @@ window.AERVA_POLICIES = {
           ]},
           { title: 'If damage is reported', points: [
             'You are told, and can send your side and your own photos.',
-            'The host decides how much of the deposit to keep and must share photos or videos of the damage with Aerva. The rest is refunded.',
+            'The host asks for an amount and must share photos or videos of the damage with Aerva. Aerva reviews it with your side and approves what, if anything, is paid to the host. The rest is refunded.',
             'Damage above the deposit is between you and the host.'
           ]}
         ], docs: ['resolution'] },
@@ -837,6 +838,7 @@ window.AERVA_POLICIES = {
           { title: 'Using a coupon', points: [
             'A coupon covers the booking price only. The service fee, GST and any deposit are paid in full.',
             'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown — at most 1 month after they are issued.',
+            'Your coupons and your Aerva credit are shown at the top of My Bookings, with each coupon’s code, value and last day, and your credit balance. The bell shows them too.',
             'Only one coupon can be used on a booking, even if you hold more than one.',
             'If your payment does not go through, nothing is booked and your coupon stays valid to use again.',
             'If the host cancels a booking you paid for partly by coupon, that part comes back as a new coupon valid for 1 month, plus the usual 10% coupon if they cancelled within 48 hours of check-in. If you cancel, the part paid by coupon is not returned.'
@@ -927,8 +929,8 @@ window.AERVA_POLICIES = {
           { title: 'How to claim', points: [
             'Report damage through Aerva within 7 days of check-out, from the booking.',
             'Photos or videos of the damage are required, shared through Aerva; a report without them is not accepted. Add a repair or cleaning estimate or invoice if you have one.',
-            'Enter how much of the deposit you are keeping — for damage and extra cleaning, by you or someone you call in — up to the deposit amount.',
-            'The guest is told how much you are keeping and can give their side. The rest is refunded to the guest.',
+            'Enter how much of the deposit you ask to keep — for damage and extra cleaning, by you or someone you call in — up to the deposit amount.',
+            'The guest is told what you asked for and can give their side. Aerva reviews both and approves how much of the deposit, and what percentage, is paid to you; the rest is refunded to the guest. Aerva’s decision is final.',
             'No damage? Tick it when you review the guest, and the deposit is refunded within 2 bank working days.'
           ]},
           { title: 'Above the deposit', points: [
@@ -1148,7 +1150,7 @@ window.AERVA_POLICIES = {
       'Audit log: every admin, host, co-host and system action is recorded and never deleted.'
     ]},
     { title: 'How admins apply these policies', points: [
-      'Deposit disputes: the host decides the amount kept (up to the deposit); check the photos or videos are there, then settle it in the dispute tab at that amount. With no proof, refund the deposit in full.',
+      'Deposit disputes: the host asks for an amount (up to the deposit) with photos or videos; review the proof and the guest’s side, then approve the amount in the dispute tab (prefilled with the host’s request). With no proof, refund the deposit in full.',
       'Stay disputes (Guest Safety tab): give the host’s account more weight; refund only when the guest’s evidence stands and the host cannot justify.',
       'Listing photos with phone numbers or other contact details: use “Block: phone number in photo” on the listing.',
       'Hazard reports: rebook or refund the guest when the property is unsafe; review the listing.',
@@ -1160,7 +1162,7 @@ window.AERVA_POLICIES = {
 
   // Gaps between these policies and the product, for the admin to close.
   openItems: [
-    'Have the lawyer review the Aerva Host Agreement 2026-10-28a (every host cancellation: all as credit (refundable any time); coupon not refundable; coupon from the host only within 48 hours of check-in; Aerva cancels for the host with the coupon from the next payout; commission revisions announced in advance with no fixed number of days, confirm or decline; offered again after it ends; commission revisions acknowledged and confirmed; payout the day after check-in; first night only while a guest’s request is open; amounts recovered from the next payout) and its earlier terms (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
+    'Have the lawyer review the Aerva Host Agreement 2026-10-28a (every host cancellation: all as Aerva credit that never expires (refundable any time); coupon not refundable; coupon from the host only within 48 hours of check-in; Aerva cancels for the host with the coupon from the next payout; commission revisions announced in advance with no fixed number of days, confirm or decline; offered again after it ends; commission revisions acknowledged and confirmed; payout the day after check-in; first night only while a guest’s request is open; amounts recovered from the next payout) and its earlier terms (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
     'Add the Grievance Officer’s name to support.grievanceOfficer in this file (required by the E-Commerce Rules); it then shows in the Resolution Center.',
     'Resolution Center: fill in support.contacts.tollFree, whatsapp and hours in this file when the numbers are live. Until then those buttons stay hidden.',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',
