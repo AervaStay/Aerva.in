@@ -8130,12 +8130,12 @@
         <p class="hc-cancel-head">Before you cancel</p>
         <div class="hc-score">
           <div class="hc-score-bar" aria-hidden="true">${Array.from({ length: limit }, (_, i) => `<span class="${i < used ? 'is-used' : i < after ? 'is-next' : ''}"></span>`).join('')}</div>
-          <p><strong>Your cancellation score: ${used} of ${limit}</strong> used in the last 12 months. ${d.sameDayGrace ? 'This one <strong>does not count</strong>: it is a same-day booking made less than an hour ago.' : `This one would make it <strong>${after} of ${limit}</strong>.${after >= limit ? ' After this you cannot cancel any booking yourself until one is more than 12 months old.' : ''}`}</p>
+          <p><strong>Your cancellation score: ${used} of ${limit}</strong> used in the last 12 months. ${d.sameDayGrace ? 'This one <strong>does not count</strong> towards your score.' : `This one would make it <strong>${after} of ${limit}</strong>.${after >= limit ? ' After this you cannot cancel any booking yourself until one is more than 12 months old.' : ''}`}</p>
         </div>
         <ul>
           ${d.late ? '<li><strong>Check-in is less than 48 hours away.</strong></li>' : ''}
           <li>Aerva looks after your guest.</li>
-          ${d.couponNeeded !== false ? `<li>You compensate your guest with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the ${d.isExperience ? 'booking' : 'stay'}). You pay it now, as the last step. What you pay for it is not refunded to you.</li>` : (d.pairExperience ? '<li>No coupon is needed: this cancels the experience together with its stay.</li>' : d.sameDayGrace ? '<li>No coupon is needed: this same-day booking was made less than an hour ago.</li>' : '<li>No coupon is needed: check-in is more than 48 hours away.</li>')}
+          ${d.couponNeeded !== false ? `<li>You compensate your guest with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the ${d.isExperience ? 'booking' : 'stay'}). You pay it now, as the last step. What you pay for it is not refunded to you.</li>` : (d.pairExperience ? '<li>No coupon is needed: this cancels the experience together with its stay.</li>' : d.sameDayGrace ? '<li>No coupon is needed for this cancellation.</li>' : '<li>No coupon is needed: check-in is more than 48 hours away.</li>')}
           <li>The guest is told the reason. This cannot be undone.</li>
         </ul>
       </div>

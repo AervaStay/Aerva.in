@@ -2403,16 +2403,19 @@
   // ---- Policies tab ----
   // The same document guests and hosts read (aerva-policies.js), plus the
   // admin-only notes and the open items still to close.
-  function renderAdminPolicies(){
+  async function renderAdminPolicies(){
     const P = window.AERVA_POLICIES;
+    // The internal notes come from the server, never from the public file.
+    let N = { adminNotes: [], openItems: [] };
+    try{ const r = await fetch(API_BASE + '/api/get-pending-listings?adminNotes=1', { headers: authHeaders() }); if(r.ok) N = await r.json(); }catch(e){}
     const body = document.getElementById('policiesAdminBody');
     if(!P){ body.innerHTML = '<p class="error">aerva-policies.js did not load. Deploy it with this page.</p>'; return; }
     const list = (pts) => '<ul>' + pts.map(p => '<li>' + escAdmin(p) + '</li>').join('') + '</ul>';
     const block = (title, secs) => '<h2 class="pol-h">' + escAdmin(title) + '</h2>'
       + secs.map(sec => '<div class="pol-sec"><h3>' + escAdmin(sec.title) + '</h3>' + list(sec.points) + '</div>').join('');
     body.innerHTML = '<p style="opacity:0.7;">Version ' + escAdmin(P.version) + ' · updated ' + escAdmin(P.updated) + ' · public at <a href="index.html?view=policies" target="_blank" rel="noopener">index.html?view=policies</a></p>'
-      + '<div class="pol-sec pol-open"><h3>Open items</h3>' + list(P.openItems) + '</div>'
-      + block('Admin notes', P.adminNotes)
+      + '<div class="pol-sec pol-open"><h3>Open items</h3>' + list(N.openItems || []) + '</div>'
+      + block('Admin notes (internal — never shown to guests or hosts)', N.adminNotes || [])
       + (P.agreements ? block('Agreements (version ' + P.agreements.version + ')', [P.agreements.guest, P.agreements.host]) : '')
       + (P.terms ? block('Terms of Service — all versions', P.terms.common.concat(...P.terms.regions.map(r => (P.terms.specific[r.id] || []).map(x => ({ title: r.label + ': ' + x.title, points: x.points }))))) : '')
       + (P.privacy ? block('Privacy — ' + P.privacy.title, P.privacy.sections) : '')

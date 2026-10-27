@@ -895,6 +895,9 @@ module.exports = async (req, res) => {
   // GET ?supportCategories=1 · POST { raiseForCustomer: { guestId, category, subject, description, orderId?, listingId?, callback? } }
   // The customer gets the reference number by email; it then goes through
   // Support (and Approvals, for anything a representative proposes) like any request.
+  // GET ?adminNotes=1 — internal rules and open items (admins, reviewers and
+  // customer representatives only; never in the public policies file).
+  if (req.method === 'GET' && req.query.adminNotes === '1') return res.status(200).json(require('./_admin-notes'));
   if (req.method === 'GET' && req.query.supportCategories === '1') return res.status(200).json({ categories: support.categoryList() });
   if (req.method === 'POST' && req.body && req.body.raiseForCustomer) {
     try {
