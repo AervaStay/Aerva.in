@@ -76,6 +76,22 @@ function feeAfterChange(newFee, row) {
   return Math.max(0, Math.round(Number(newFee) || 0), paid);
 }
 
+// A change the guest asked for never returns the part of the price paid by
+// coupon (only a host's cancellation does). The price cut is split like the
+// price was paid: the coupon's share of it is not refunded; the rest (and
+// any GST difference) is. Aerva's service fee stays as charged. Returns ₹.
+async function couponShareOfCut(sql, o, q, refundOwed, ids) {
+  if (!(refundOwed > 0)) return 0;
+  try {
+    const paidRows = await require('./_booking-rules').paidByOrderRow(sql, o.razorpay_order_id);
+    const absorbed = ids.reduce((t, id) => t + Math.round(Number((paidRows[id] || {}).couponAbsorbed) || 0), 0);
+    const oldSub = Number(o.subtotal || 0) + (o.stayRow ? Number(o.stayRow.subtotal || 0) : 0);
+    const newSub = q.kind === 'stay' ? Number(q.subtotal || 0) : Number((q.experience || {}).subtotal || 0) + Number((q.stay || {}).subtotal || 0);
+    if (absorbed > 0 && oldSub > 0 && newSub < oldSub) return Math.min(refundOwed, Math.round((oldSub - newSub) * Math.min(1, absorbed / oldSub)));
+  } catch (err) { console.error('coupon share of a change not worked out:', o.id, err.message); }
+  return 0;
+}
+
 async function loadBooking(sql, orderId) {
   const load = async (id) => (await sql`
     SELECT o.*, l.property_name, l.property_type, l.host_id, l.timezone, l.max_guests, l.pet_friendly, l.max_pets_allowed,
@@ -215,7 +231,8 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
     return { booking: o, kind: o.kind,
              input: { arrival, departure: x.endDate, adults, children, infants: Math.max(0, Math.floor(Number(input.infants) || 0)), pets: 0, petTypes: [], amenityIds: [] },
              quote: { kind: o.kind, experience: x, stay: st, stayOrderId: o.stayRow ? o.stayRow.id : null },
-             oldTotal: o.totalNow, newTotal, difference: newTotal - o.totalNow, summary: parts.join('; ') };
+             oldTotal: o.totalNow, newTotal, difference: newTotal - o.totalNow, summary: parts.join('; '),
+             couponNotReturned: await couponShareOfCut(sql, o, { kind: o.kind, experience: x, stay: st }, Math.max(0, o.totalNow - newTotal), [o.id].concat(o.stayRow ? [o.stayRow.id] : [])) };
   }
 
   const departure = String(input.departure || '').slice(0, 10);
@@ -249,7 +266,8 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
   if (added.length) parts.push(`Added: ${added.join(', ')}`);
   if (removed) parts.push(`Removed ${removed} add-on${removed === 1 ? '' : 's'}`);
   return { booking: o, kind: 'stay', input: { arrival, departure, adults, children, infants: Math.max(0, Math.floor(Number(input.infants) || 0)), pets: s.pets, petTypes: s.petTypes, amenityIds },
-           quote: Object.assign({ kind: 'stay' }, q), oldTotal: o.totalNow, newTotal, difference: newTotal - o.totalNow, summary: parts.join('; ') };
+           quote: Object.assign({ kind: 'stay' }, q), oldTotal: o.totalNow, newTotal, difference: newTotal - o.totalNow, summary: parts.join('; '),
+           couponNotReturned: await couponShareOfCut(sql, o, Object.assign({ kind: 'stay' }, q), Math.max(0, o.totalNow - newTotal), [o.id]) };
 }
 
 // ---------------------------------------------------------------------
@@ -300,7 +318,13 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
   const input = change.requested;
   const ids = [o.id].concat(o.stayRow ? [o.stayRow.id] : []);
   const claim = await claimForCancellation(sql, ids);
-  const refundOwed = Number(change.difference) < 0 ? Math.round(-Number(change.difference)) : 0;
+  const refundOwedFull = Number(change.difference) < 0 ? Math.round(-Number(change.difference)) : 0;
+  // A change the guest asked for never returns the part of the price paid by
+  // coupon (only a host's cancellation does). The price cut is split like the
+  // price was paid: the coupon's share of it is not refunded; the rest (and
+  // any GST difference) is. Aerva's service fee stays as charged.
+  const couponLostPart = await couponShareOfCut(sql, o, q, refundOwedFull, ids);
+  const refundOwed = refundOwedFull - couponLostPart;
   const kindBase = `change-${change.id}`;
   // The values one stay row takes from a priced stay detail.
   const stayValues = (d) => {
@@ -416,7 +440,8 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
   }
 
   // Lower total: the full difference back — in cash as far as the booking's
-  // payments allow, the rest (a part that was paid by coupon) as a coupon.
+  // payments allow; a part paid with Aerva credit goes back to the credit, and a
+  // part paid by coupon is not returned (the guest chose the change).
   // A refund that fails now stays on record as failed in Admin → Refunds.
   let refundedInr = 0, couponBack = 0, refundFailed = false, back = { credit: 0, coupon: 0 }, heldAsCredit = 0;
   if (asCredit) {
@@ -442,13 +467,17 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
       await logAudit(sql, { action: 'booking_change_refund_failed', success: false, actorType: 'system', targetType: 'order', targetId: o.id,
         metadata: { changeId: change.id, refundOwed, error: String(err.message || err).slice(0, 300) } });
     }
-    if (couponBack > 0) back = await returnValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: couponBack, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
+    if (couponBack > 0) back = await returnValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: couponBack, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name, coupon: false });
+    // A change the guest asked for: the part paid by coupon is not returned
+    // (only a host's cancellation returns it). Aerva credit goes back to the credit.
   }
   await logAudit(sql, { action: 'booking_change_applied', success: true, actorType: 'system', targetType: 'order', targetId: o.id,
-    metadata: { changeId: change.id, difference: change.difference, refundedInr, couponBack, refundFailed, paymentId, summary: change.summary } });
+    metadata: { changeId: change.id, difference: change.difference, refundedInr, couponBack, couponNotReturned: couponLostPart, refundFailed, paymentId, summary: change.summary } });
+  const creditHeld = refundFailed ? refundOwed : heldAsCredit + (back.credit || 0);
+  const couponLost = couponLostPart + (asCredit ? (refundFailed ? 0 : Math.max(0, refundOwed - creditHeld)) : Math.max(0, couponBack - (back.credit || 0)));
   const money = change.difference > 0 ? `Paid: ${inr(change.difference)}.`
-    : change.difference < 0 && asCredit ? `${inr(refundOwed)} is held for the guest as Aerva credit (use it on another booking, or have it refunded from My Bookings).${refundFailed ? ' Aerva is finishing this and will follow up.' : ''}`
-    : change.difference < 0 ? `Refund: ${inr(refundedInr)}${back.credit ? ` plus ${inr(back.credit)} back on your Aerva credit` : ''}${couponBack - back.credit > 0 ? ` plus ${inr(couponBack - back.credit)} as a coupon` : ''}.${refundFailed ? ' The refund is delayed; Aerva is sending it and will follow up.' : ''}` : '';
+    : change.difference < 0 && asCredit ? `${inr(creditHeld)} is held for the guest as Aerva credit${couponLost > 0 ? ` (the ${inr(couponLost)} paid by coupon is not returned)` : ''} (use it on another booking, or have it refunded from My Bookings).${refundFailed ? ' Aerva is finishing this and will follow up.' : ''}`
+    : change.difference < 0 ? `Refund: ${inr(refundedInr)}${back.credit ? ` plus ${inr(back.credit)} back on your Aerva credit` : ''}${couponLost > 0 ? ` (the ${inr(couponLost)} paid by coupon is not returned)` : ''}.${refundFailed ? ' The refund is delayed; Aerva is sending it and will follow up.' : ''}` : '';
   await postThreadMessage(sql, o.id, 'host', `Booking changed. ${change.summary}. ${money}`.trim());
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
   const body = `<p><strong>${esc(o.property_name)}</strong></p><p>${esc(change.summary)}</p><p>New ${o.kind === 'stay' ? 'dates' : 'date'}: ${esc(niceDate(input.arrival))}${o.kind === 'stay' ? ' – ' + esc(niceDate(input.departure)) : ''}</p>`;

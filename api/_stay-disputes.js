@@ -178,7 +178,7 @@ async function decideDispute(sql, razorpay, { disputeId, refund, note = '', admi
     const r = await refundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: cash, kindBase: `dispute-${disputeId}` });
     r.shortfallInr = (r.shortfallInr || 0) + couponBack + creditBack;
     let back = { credit: 0, coupon: 0 };
-    if (r.shortfallInr > 0) back = await returnValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: r.shortfallInr, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
+    if (r.shortfallInr > 0) back = await returnValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: r.shortfallInr, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name, coupon: true });
     await sql`UPDATE orders SET commission_amount = ${commissionKept}, payout_amount = ${hostPayout} WHERE id = ${o.id}`;
     try { await sql`UPDATE order_cohost_shares SET amount = round(${hostPayout}::numeric * percent / 100) WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
     // Paid out already (payouts go the day after check-in): what the host

@@ -20,7 +20,7 @@
 // A LIVE BOOKING (paid, until the review period closes — REVIEW_WINDOW_DAYS
 // after check-out): the guest and the host may share a phone number and an
 // email address with each other, and send photos (guest-profile.js 'send').
-// Links, social handles and UPI IDs are still removed. Once that period has
+// Links (other than aerva.in pages, which anyone may share at any time), social handles and UPI IDs are still removed. Once that period has
 // passed, or the booking is cancelled,
 // every phone number and email address in that conversation is removed,
 // and every photo in it (sent in the chat, or linked in a message, such as
@@ -46,7 +46,7 @@ const PROMPT = (lines, phonesOk) => `These are one sender's recent chat messages
 
 ${lines}
 
-Do these messages, read together, share or build up any of these: ${phonesOk ? '' : 'a phone or WhatsApp number (even split into pieces, mixed with letters or junk, written as words, or spread over several messages), '}an email address (even without its @domain, like "gmail me at ravi.k"), a social media or messaging handle or page, a UPI ID, a website, or an invitation to talk or pay off the platform?
+Do these messages, read together, share or build up any of these: ${phonesOk ? '' : 'a phone or WhatsApp number (even split into pieces, mixed with letters or junk, written as words, or spread over several messages), '}an email address (even without its @domain, like "gmail me at ravi.k"), a social media or messaging handle or page, a UPI ID, a website (a link to an aerva.in page is fine, never count it), or an invitation to talk or pay off the platform?
 
 Ordinary booking talk is fine: guest counts, dates, times, prices, flight numbers, room or floor numbers, directions${phonesOk ? '. A phone number or an email address on its own is ALLOWED here (the booking is confirmed): do not count either' : ''}.
 

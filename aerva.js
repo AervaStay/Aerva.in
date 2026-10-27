@@ -14976,7 +14976,8 @@ async function openChangeBooking(orderId, listingName){
     const { ok, d } = await post({ mode: 'changeQuote', orderId, change });
     if(!ok){ msg.textContent = d.error || 'Could not price this change.'; return; }
     const line = (l, v) => `<div class="payout-line"><span>${esc(l)}</span><span>${v}</span></div>`;
-    const diffText = d.difference > 0 ? `You pay ${inr(d.difference)} more` : d.difference < 0 ? `You get back ${inr(-d.difference)}` : 'The total stays the same';
+    const kept = Math.max(0, Number(d.couponNotReturned) || 0);
+    const diffText = d.difference > 0 ? `You pay ${inr(d.difference)} more` : d.difference < 0 ? (-d.difference - kept > 0 ? `You get back ${inr(-d.difference - kept)}` : 'Nothing is refunded') : 'The total stays the same';
     out.innerHTML = `${bookStep(o.limits.amenities.length ? 4 : 3, 'Check the new total')}
       <p class="step-help">${d.summary ? d.summary.split('; ').map(esc).join('<br>') : 'Nothing has changed yet.'}</p>
       ${d.lines.map(l => line(l.label, inr(l.amount))).join('')}
@@ -14984,7 +14985,7 @@ async function openChangeBooking(orderId, listingName){
       ${line('Current total', inr(d.oldTotal))}
       ${line('New total', '<strong>' + inr(d.newTotal) + '</strong>')}
       <div class="sum-row" style="font-weight:600; font-size:18px; padding-top:10px;"><span>${diffText}</span><span></span></div>
-      <p class="pay-note" style="text-align:left;">Your host is asked first. ${d.difference > 0 ? 'Once they accept, you pay the difference to confirm.' : d.difference < 0 ? 'Once they accept, the difference is refunded in full.' : ''} Until then your booking stays as it is.</p>
+      <p class="pay-note" style="text-align:left;">Your host is asked first. ${d.difference > 0 ? 'Once they accept, you pay the difference to confirm.' : d.difference < 0 ? (kept > 0 ? `Once they accept, the difference is refunded, except ${inr(kept)} that was paid by coupon — a coupon is returned only when the host cancels. Aerva\u2019s service fee stays as charged.` : 'Once they accept, the difference is refunded. Aerva\u2019s service fee stays as charged.') : ''} Until then your booking stays as it is.</p>
       ${d.summary ? '<button type="button" class="btn solid" id="chSend" style="width:100%; margin-top:10px;">Send change request to host</button>' : ''}`;
     const send = out.querySelector('#chSend');
     if(send) send.addEventListener('click', async () => {
@@ -15065,10 +15066,10 @@ async function openPolicyCancel(orderId, listingName){
   const line = (label, value) => `<div class="payout-line"><span>${esc(label)}</span><span>${value}</span></div>`;
   const planText = () => {
     const reason = overlay.querySelector('#pcReason').value;
-    if(reason !== 'change_of_plans') return '<p class="payout-muted" style="margin:8px 0;">If your host accepts, the booking price and deposit are refunded in full. Aerva\u2019s service fee is non-refundable.</p>';
+    if(reason !== 'change_of_plans') return '<p class="payout-muted" style="margin:8px 0;">If your host accepts, the booking price and deposit are refunded in full. Aerva\u2019s service fee is non-refundable.' + (q.couponLost || (q.ifFullRefund && q.ifFullRefund.couponLost) ? ' Any part paid by coupon is not returned \u2014 a coupon comes back only when the host cancels.' : '') + '</p>';
     if(!q.allowed) return `<p class="payout-muted" style="margin:8px 0;">${esc(q.error || '')}</p>`;
     if(q.hostDecides) return `<p class="payout-muted" style="margin:8px 0;">Your host decides the refund.</p>${line('Deposit refunded', inr(q.ifNoRefund.deposit))}${line('Aerva service fee (non-refundable)', inr(q.ifNoRefund.feeKept))}`;
-    return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
+    return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
   };
   body.innerHTML = `<label class="payout-label" for="pcReason">Reason</label>
     <select id="pcReason" style="width:100%; padding:11px; margin:6px 0 10px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;">

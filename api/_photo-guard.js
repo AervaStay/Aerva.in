@@ -89,7 +89,7 @@ const USER_PROMPT = `Does this photo show any way to contact someone, pay them, 
 Count:
 - phone or mobile numbers in any form (spaced, split, partly hidden, written in words or in any language)
 - email addresses
-- websites or web addresses
+- websites or web addresses (not aerva.in, which is Aerva itself)
 - social media handles or page names (Instagram, Facebook, YouTube, X and so on)
 - WhatsApp, Telegram or similar mentions with a number or name
 - UPI IDs and any QR code

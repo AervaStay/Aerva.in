@@ -221,6 +221,14 @@ const MAP_LATLNG_URL = /^https:\/\/www\.google\.com\/maps\/search\/\?api=1&query
 function isProtectedUrl(url) {
   return blobHostPattern().test(url) || MAP_LATLNG_URL.test(url);
 }
+// Aerva's own pages (a listing, a search): the only links anyone may share,
+// before a booking, during it and after it.
+const AERVA_URL = /^(?:https?:\/\/)?(?:www\.|uat\.)?aerva\.in(?:[\/?#][^\s<>"']*)?$/i;
+function isAervaLink(url) { return AERVA_URL.test(String(url || '')); }
+// A web address written without http(s)://: www.x.com, x.com/abc, bit.ly/abc.
+const BARE_LINK = /(?<![@\w.\-\uE000-\uF8FF])(?:www\.)?(?:[a-z0-9-]+\.)+(?:com|in|net|org|co|io|me|ly|app|link|page|site|xyz|info|biz|us|uk|ai|gl|gg|to|tv|online|store|shop|club|live)\b(?:\/[^\s<>"']*)?/gi;
+// Trailing punctuation after a link belongs to the sentence.
+const splitTail = (u) => { const t = u.match(/[.,!?;:)]+$/); return t ? [u.slice(0, -t[0].length), t[0]] : [u, '']; };
 
 // ---------------------------------------------------------------- removing
 
@@ -243,11 +251,15 @@ function removeLinksAndHandles(input) {
   let text = String(input == null ? '' : input);
   let redacted = false;
   const urls = [];
+  const park = (u) => { urls.push(u); return '\uE000' + String.fromCharCode(0xE100 + urls.length - 1) + '\uE001'; };
   text = text.replace(/https?:\/\/[^\s<>"']+/gi, (match) => {
     if (SOCIAL_URL_PATTERN.test(match)) { redacted = true; return '[contact info removed]'; }
-    if (!isProtectedUrl(match)) return match;             // left in place: the checks below see it
-    urls.push(match);
-    return '' + String.fromCharCode(0xE100 + urls.length - 1) + '';
+    // Aerva's own links stay; a photo or map link the app made stays; any
+    // other website is removed.
+    const [u, tail] = splitTail(match);
+    if (isAervaLink(u)) return park(u) + tail;
+    if (isProtectedUrl(match)) return park(match);
+    redacted = true; return '[contact info removed]' + tail;
   });
   text = text.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, () => { redacted = true; return '[email removed]'; });
   // Spelled out: ravi (at) gmail (dot) com, ravi at gmail dot com
@@ -261,6 +273,11 @@ function removeLinksAndHandles(input) {
     redacted = true; return '[contact info removed]';
   });
   text = text.replace(/\b(instagram\.com|facebook\.com|fb\.com|wa\.me|t\.me)\/[a-zA-Z0-9._]+/gi, () => { redacted = true; return '[contact info removed]'; });
+  text = text.replace(BARE_LINK, (m) => {
+    const [u, tail] = splitTail(m);
+    if (isAervaLink(u)) return park(u) + tail;
+    redacted = true; return '[contact info removed]' + tail;
+  });
   // An email or messaging account named without its "@domain": "send gmail
   // to me at tanishoswal", "my mail id is ravi.k", "tanishoswal on gmail",
   // "telegram: ravi_k". Once the message names a provider or account kind,
