@@ -8134,10 +8134,8 @@
         </div>
         <ul>
           ${d.late ? '<li><strong>Check-in is less than 48 hours away.</strong></li>' : ''}
-          ${d.asCredit
-            ? '<li>Everything your guest paid — the booking, GST and Aerva’s service fee — is held for them as Aerva credit, which they can use on another stay or have refunded. Any deposit is refunded to them straight away.</li>'
-            : '<li>Your guest is refunded straight away — the booking, GST and any deposit. Aerva’s service fee is held for them as Aerva credit.</li>'}
-          ${d.couponNeeded !== false ? `<li>You compensate them with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the ${d.isExperience ? 'booking' : 'stay'}). You pay it now, as the last step; it reaches them by email ${Number(d.couponReleaseMinutes) || 15} minutes later. The coupon is not refundable; they can use it together with their credit.</li>` : (d.pairExperience ? '<li>No coupon is needed: this cancels the experience together with its stay.</li>' : d.sameDayGrace ? '<li>No coupon is needed: this same-day booking was made less than an hour ago.</li>' : '<li>No coupon is needed: check-in is more than 48 hours away.</li>')}
+          <li>Aerva looks after your guest.</li>
+          ${d.couponNeeded !== false ? `<li>You compensate your guest with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the ${d.isExperience ? 'booking' : 'stay'}). You pay it now, as the last step. What you pay for it is not refunded to you.</li>` : (d.pairExperience ? '<li>No coupon is needed: this cancels the experience together with its stay.</li>' : d.sameDayGrace ? '<li>No coupon is needed: this same-day booking was made less than an hour ago.</li>' : '<li>No coupon is needed: check-in is more than 48 hours away.</li>')}
           <li>The guest is told the reason. This cannot be undone.</li>
         </ul>
       </div>
@@ -8178,7 +8176,7 @@
       body.innerHTML = `
         <div class="hc-final">
           <p class="hc-cancel-head">Last step: compensate your guest</p>
-          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now ${d.asCredit ? 'holds everything they paid for them as Aerva credit' : 'refunds them (Aerva’s service fee is held for them as a credit)'} and sends it.`
+          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now sends it to them.`
             : `Your guest gets a ${inr(amount)} Aerva coupon, paid by you now. The booking is cancelled the moment your payment goes through.`}</p>
           <div class="hc-actions hc-col">
             ${d.couponPaid ? `<button type="button" class="hc-btn hc-danger" data-pay="held">Cancel the booking</button>`
@@ -8218,7 +8216,7 @@
     }
     function done(r){
       body.innerHTML = `<div class="hc-done"><p class="hc-cancel-head">Booking cancelled</p>
-        <p>${r.asCredit ? 'Everything your guest paid is held for them as Aerva credit (any deposit is refunded)' : 'Your guest has been refunded (Aerva’s service fee is held for them as a credit)'}${r.couponAmount ? ` and gets the ${inr(r.couponAmount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes` : ''}.
+        <p>The booking is cancelled and your guest has been told${r.couponAmount ? `; they receive the ${inr(r.couponAmount)} coupon you paid for` : ''}.
 </p></div>`;
       conv.booking_status = 'cancelled';
       try{ refreshInboxMessages(); loadInboxConversations(); }catch(e){}
