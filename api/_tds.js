@@ -83,18 +83,18 @@ async function tdsForPayout(sql, { payee, base, pan, creditAt = new Date(), excl
   if (!(THRESHOLD() > 0) || (standing.kind !== 'P' && standing.kind !== 'H')) {
     return { tds: round2(b * rate / 100), rate, reason: 'pan', catchupBase: 0, fy, base: b };
   }
-  // Individual / HUF: the year's gross so far (booking payouts only).
+  // Individual / HUF: the year's gross so far (booking payouts, and amounts added after them).
   const who = payee.payeeType === 'cohost'
     ? sql`SELECT COALESCE(sum(tds_base), 0) AS gross,
                  COALESCE(sum(tds_base) FILTER (WHERE tds_reason = 'below_threshold'), 0) AS untaxed,
                  COALESCE(sum(tds_catchup_base), 0) AS caught
           FROM payouts WHERE payee_type = 'cohost' AND payee_guest_id = ${payee.payeeGuestId}
-            AND COALESCE(kind, 'booking') = 'booking' AND tds_fy = ${fy} AND id IS DISTINCT FROM ${excludePayoutId}`
+            AND COALESCE(kind, 'booking') <> 'deposit' AND tds_fy = ${fy} AND id IS DISTINCT FROM ${excludePayoutId}`
     : sql`SELECT COALESCE(sum(tds_base), 0) AS gross,
                  COALESCE(sum(tds_base) FILTER (WHERE tds_reason = 'below_threshold'), 0) AS untaxed,
                  COALESCE(sum(tds_catchup_base), 0) AS caught
           FROM payouts WHERE payee_type = 'host' AND host_id = ${payee.hostId}
-            AND COALESCE(kind, 'booking') = 'booking' AND tds_fy = ${fy} AND id IS DISTINCT FROM ${excludePayoutId}`;
+            AND COALESCE(kind, 'booking') <> 'deposit' AND tds_fy = ${fy} AND id IS DISTINCT FROM ${excludePayoutId}`;
   let y;
   try { y = (await who)[0]; }
   catch (err) {

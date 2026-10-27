@@ -4,11 +4,18 @@
 // add-ons and pets. Stays only (homes and resort rooms); an experience, or
 // an experience that includes a stay, cannot be changed here.
 //
-// WHEN: any time before check-in, and during the stay, until 12:00 AM at the
-// start of check-out day on the property's clock. During a stay check-in
-// cannot move (the guest is already there) and check-out must stay at least
-// tomorrow. The limit is checked when asking, when the host answers, when
-// paying and when applying.
+// WHEN: any time before check-in. Once the stay has started, only until
+// 10 AM (property's clock) on the day after check-in — the stay window
+// (_booking-rules.js stayWindowEndMs). A request sent in time stays valid
+// however long the host takes to answer (until check-out day begins).
+// During a stay check-in cannot move and the check-in night is always
+// kept: the new check-out is the day after check-in or later. A shorter
+// stay agreed during the stay is not refunded to the payment: what it
+// gives back is Aerva credit (_fee-credits.js), to use on another booking
+// or have refunded from My Bookings. The limit is checked when asking,
+// when the host answers, when paying and when applying.
+// While a request made during the stay is open, only the first night of
+// the host's payout is sent; the rest waits for the outcome (_payouts.js).
 //
 // HOW:
 //   1. The guest sees the new price and the difference (priced by
@@ -30,12 +37,15 @@
 // purpose, checked with Razorpay).
 
 const { priceStay, priceExperience, parseMaxGuests } = require('./_pricing');
-const { localMidnightMs, dateStr, takeHolds, attachHolds, releaseHolds, holdValidForConfirmation, HOLD_SECONDS } = require('./_booking-rules');
-const { claimForCancellation, releaseClaim, postThreadMessage, returnCouponValue } = require('./_cancellations');
+const { localMidnightMs, dateStr, takeHolds, attachHolds, releaseHolds, holdValidForConfirmation, HOLD_SECONDS, stayWindowEndMs, localDateAt } = require('./_booking-rules');
+const { claimForCancellation, releaseClaim, postThreadMessage, returnCouponValue, returnValue } = require('./_cancellations');
 const { safeRefund, refundAcrossPayments, hasChangePayments, planRefundAcrossPayments, dropPlannedRefunds } = require('./_refunds');
 const { logAudit } = require('./_audit-log');
 
 const AWAITING_PAYMENT_HOURS = 24;
+// After the host declines (or does not answer) a change asked for during the
+// stay, the guest may take it to Aerva for this long (_stay-disputes.js).
+const DECLINED_GRACE_HOURS = 24;
 const userError = (message, status = 400) => Object.assign(new Error(message), { isUserFacing: true, status });
 const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
 const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -58,6 +68,14 @@ async function email(to, subject, html) {
 //                  that hosts it, bought as one: ALWAYS changed together. A
 //                  change asked for from either half is made on the pair.
 // For a pair the booking returned is the experience row, with .stayRow.
+// The service fee after a change: never below what was charged. (Part of
+// the booking may have been paid with Aerva credit, orders.fee_credit_used:
+// the row keeps its full price, so the difference is worked out as usual.)
+function feeAfterChange(newFee, row) {
+  const paid = Math.round(Number(row && row.guest_service_fee) || 0);
+  return Math.max(0, Math.round(Number(newFee) || 0), paid);
+}
+
 async function loadBooking(sql, orderId) {
   const load = async (id) => (await sql`
     SELECT o.*, l.property_name, l.property_type, l.host_id, l.timezone, l.max_guests, l.pet_friendly, l.max_pets_allowed,
@@ -100,17 +118,27 @@ function sameTotals(fresh, saved) {
     && Math.round(Number(fresh.oldTotal)) === Math.round(Number(saved.old_total));
 }
 
-// Midnight at the start of check-out day (for an experience, its last day),
-// on the property's clock.
-function beforeCutoff(o) {
-  return Date.now() < localMidnightMs(o.departureStr, o.timezone);
+// A change may still go ahead: before midnight at the start of check-out
+// day (for an experience, its last day), and asked for (requestedAt; now
+// for a new request) before the stay window closed — 10 AM on the day
+// after check-in, on the property's clock.
+function beforeCutoff(o, requestedAt = null) {
+  if (Date.now() >= localMidnightMs(o.departureStr, o.timezone)) return false;
+  const at = requestedAt ? new Date(requestedAt).getTime() : Date.now();
+  return at < stayWindowEndMs(o.arrivalStr, o.timezone);
 }
+// "10 AM on 28 October" — the end of the stay window, on the property's clock.
+function windowLabel(arrivalStr) {
+  const d = new Date(arrivalStr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1);
+  return '10 AM on ' + d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+}
+const CLOSED = 'This booking can no longer be changed. Once a stay has started, changes can be asked for until 10 AM on the day after check-in.';
 
-async function assertChangeable(sql, o, guestId) {
+async function assertChangeable(sql, o, guestId, requestedAt = null) {
   if (!o || (guestId != null && o.guest_id !== guestId)) throw userError('Booking not found.', 404);
   if (o.status !== 'paid' || (o.stayRow && o.stayRow.status !== 'paid')) throw userError('Only a confirmed booking can be changed.');
   if ((o.charge_currency || 'INR') !== 'INR') throw userError('This booking cannot be changed online. Please write to hello@aerva.in.');
-  if (!beforeCutoff(o)) throw userError('Changes are no longer possible — the last moment was midnight at the start of your check-out day.');
+  if (!beforeCutoff(o, requestedAt)) throw userError(CLOSED);
 }
 
 // What the change screen offers: the booking now and what can change.
@@ -124,6 +152,9 @@ async function changeOptions(sql, orderId, guestId) {
   }
   return {
     orderId: o.id, kind: o.kind, listing: o.property_name, started: o.started, today: o.todayStr,
+    // During the stay: changes can be asked for until then.
+    windowEndsAt: o.started ? new Date(stayWindowEndMs(o.arrivalStr, o.timezone)).toISOString() : null,
+    windowEndsLabel: o.started ? windowLabel(o.arrivalStr) : null,
     current: {
       arrival: o.arrivalStr, departure: o.departureStr, guests: o.guests,
       pets: Array.isArray(o.pet_types) ? o.pet_types.length : 0, petTypes: Array.isArray(o.pet_types) ? o.pet_types : [],
@@ -143,9 +174,13 @@ async function changeOptions(sql, orderId, guestId) {
 // Prices the requested booking. input: { arrival (the date, for an
 // experience), departure (stays only), adults, children, infants, pets,
 // petTypes, amenityIds }.
-async function quoteChange(sql, orderId, guestId, input) {
+// requestedAt: when the change was asked for (re-pricing a saved request);
+// its rules are those of that moment.
+async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
   const o = await loadBooking(sql, orderId);
-  await assertChangeable(sql, o, guestId);
+  await assertChangeable(sql, o, guestId, requestedAt);
+  // The day the guest asked, on the property's calendar.
+  const askedOn = requestedAt ? localDateAt(requestedAt, o.timezone) : o.todayStr;
   const arrival = o.started ? o.arrivalStr : String(input.arrival || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(arrival)) throw userError('Choose your new date.');
   if (o.started && input.arrival && String(input.arrival).slice(0, 10) !== o.arrivalStr) throw userError('You have already checked in, so check-in cannot move. You can still change check-out, guests and add-ons.');
@@ -171,8 +206,8 @@ async function quoteChange(sql, orderId, guestId, input) {
       st = sp.detail;
     }
     // Aerva's service fee is never refunded: a cheaper change keeps the fee already paid.
-    x.guestServiceFee = Math.max(Number(x.guestServiceFee) || 0, Math.round(Number(o.guest_service_fee) || 0));
-    if (st && o.stayRow) st.guestServiceFee = Math.max(Number(st.guestServiceFee) || 0, Math.round(Number(o.stayRow.guest_service_fee) || 0));
+    x.guestServiceFee = feeAfterChange(x.guestServiceFee, o);
+    if (st && o.stayRow) st.guestServiceFee = feeAfterChange(st.guestServiceFee, o.stayRow);
     // Whole rupees, as stored (a listing's deposit may have paise).
     const newTotal = Math.round(x.subtotal + x.gst + x.guestServiceFee + (st ? st.subtotal + st.gst + st.guestServiceFee + Number(st.depositAmount) : 0));
     if (arrival !== o.arrivalStr) parts.push(`Date: ${niceDate(o.arrivalStr)} → ${niceDate(arrival)}${o.kind === 'pair' ? ' (with the included stay)' : ''}`);
@@ -186,7 +221,9 @@ async function quoteChange(sql, orderId, guestId, input) {
   const departure = String(input.departure || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(departure)) throw userError('Choose your new dates.');
   if (departure <= arrival) throw userError('Check-out must be after check-in.');
-  if (departure <= o.todayStr) throw userError('Check-out must be tomorrow or later.');
+  // Before check-in: tomorrow or later. During the stay: the day after
+  // check-in or later (the check-in night is kept), and not before the day asked.
+  if (o.started ? departure < askedOn : departure <= askedOn) throw userError(o.started ? 'During your stay, the new check-out cannot be before today.' : 'Check-out must be tomorrow or later.');
   const nights = [];
   for (let d = new Date(arrival + 'T00:00:00Z'); d < new Date(departure + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)) nights.push(d.toISOString().slice(0, 10));
   const amenityIds = [...new Set((Array.isArray(input.amenityIds) ? input.amenityIds : []).map(Number).filter(Boolean))];
@@ -200,7 +237,7 @@ async function quoteChange(sql, orderId, guestId, input) {
   if (priced.error) throw userError(priced.error.replace(/^Stay 1: /, ''));
   const q = priced.detail;
   // Aerva's service fee is never refunded: a cheaper change keeps the fee already paid.
-  q.guestServiceFee = Math.max(Number(q.guestServiceFee) || 0, Math.round(Number(o.guest_service_fee) || 0));
+  q.guestServiceFee = feeAfterChange(q.guestServiceFee, o);
   // Whole rupees, as stored (a listing's deposit may have paise).
   const newTotal = Math.round(q.subtotal + q.gst + q.guestServiceFee + Number(q.depositAmount));
   if (arrival !== o.arrivalStr || departure !== o.departureStr) parts.push(`Dates: ${niceDate(o.arrivalStr)} – ${niceDate(o.departureStr)} → ${niceDate(arrival)} – ${niceDate(departure)}`);
@@ -258,7 +295,7 @@ async function withdrawChange(sql, { changeId, guestId }) {
 async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
   const o = await loadBooking(sql, change.order_id);
   if (!o || o.status !== 'paid') throw userError('This booking is no longer active.', 409);
-  if (!beforeCutoff(o)) throw userError('Changes are no longer possible — the last moment was midnight at the start of check-out day.');
+  if (!beforeCutoff(o, change.created_at)) throw userError(CLOSED);
   const q = change.quote;
   const input = change.requested;
   const ids = [o.id].concat(o.stayRow ? [o.stayRow.id] : []);
@@ -284,12 +321,14 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
     } catch (err) { console.error('order_amenities not updated:', err.message); }
     try { await sql`UPDATE order_cohost_shares SET amount = round(${d.subtotal - commission}::numeric * percent / 100) WHERE order_id = ${orderId}`; } catch (e) { /* none */ }
   };
+  // A shorter stay agreed during the stay: held as Aerva credit, not refunded.
+  const asCredit = refundOwed > 0 && o.started && (o.charge_currency || 'INR') === 'INR';
   let plan = null;
   try {
     // Lower total: the refund owed is written down BEFORE the booking
     // changes (refunds rows, _refunds.js). If anything stops after the
     // change is made, the refund is still on record for Admin → Refunds.
-    if (refundOwed > 0) {
+    if (refundOwed > 0 && !asCredit) {
       plan = await planRefundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: refundOwed, kindBase });
       await logAudit(sql, { action: 'booking_change_refund_planned', success: true, actorType: 'system', targetType: 'order', targetId: o.id,
         metadata: { changeId: change.id, refundOwed, cashPlanned: plan.plannedInr, couponPart: plan.shortfallInr } });
@@ -367,11 +406,30 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
   }
   await releaseClaim(sql, ids, claim);
 
+  // Paid out already (payouts go the day after check-in): a change during
+  // the stay is settled against it — less owed comes off the next payout,
+  // more owed is paid on its own (_payouts.js settleAfterPayout).
+  const settled = { hostRecovered: 0, hostAdded: 0 };
+  for (const id of ids) {
+    const r = await require('./_payouts').settleAfterPayout(sql, id, { reason: 'Booking changed after its payout was sent' });
+    settled.hostRecovered += r.hostRecovered || 0; settled.hostAdded += r.hostAdded || 0;
+  }
+
   // Lower total: the full difference back — in cash as far as the booking's
   // payments allow, the rest (a part that was paid by coupon) as a coupon.
   // A refund that fails now stays on record as failed in Admin → Refunds.
-  let refundedInr = 0, couponBack = 0, refundFailed = false;
-  if (refundOwed > 0) {
+  let refundedInr = 0, couponBack = 0, refundFailed = false, back = { credit: 0, coupon: 0 }, heldAsCredit = 0;
+  if (asCredit) {
+    try {
+      const r = await require('./_fee-credits').creditForShorterStay(sql, o.id, refundOwed);
+      heldAsCredit = r.credit; back.credit = r.back; couponBack = r.back;
+    } catch (err) {
+      refundFailed = true;
+      console.error('credit for a shorter stay not made (needs follow-up):', change.id, err.message);
+      await logAudit(sql, { action: 'booking_change_credit_failed', success: false, actorType: 'system', targetType: 'order', targetId: o.id,
+        metadata: { changeId: change.id, refundOwed, error: String(err.message || err).slice(0, 300) } });
+    }
+  } else if (refundOwed > 0) {
     try {
       const r = await refundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: refundOwed, kindBase });
       refundedInr = r.refundedInr;
@@ -384,18 +442,23 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
       await logAudit(sql, { action: 'booking_change_refund_failed', success: false, actorType: 'system', targetType: 'order', targetId: o.id,
         metadata: { changeId: change.id, refundOwed, error: String(err.message || err).slice(0, 300) } });
     }
-    if (couponBack > 0) await returnCouponValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: couponBack, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
+    if (couponBack > 0) back = await returnValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: couponBack, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
   }
   await logAudit(sql, { action: 'booking_change_applied', success: true, actorType: 'system', targetType: 'order', targetId: o.id,
     metadata: { changeId: change.id, difference: change.difference, refundedInr, couponBack, refundFailed, paymentId, summary: change.summary } });
   const money = change.difference > 0 ? `Paid: ${inr(change.difference)}.`
-    : change.difference < 0 ? `Refund: ${inr(refundedInr)}${couponBack ? ` plus ${inr(couponBack)} as a coupon` : ''}.${refundFailed ? ' The refund is delayed; Aerva is sending it and will follow up.' : ''}` : '';
+    : change.difference < 0 && asCredit ? `${inr(refundOwed)} is held for the guest as Aerva credit (use it on another booking, or have it refunded from My Bookings).${refundFailed ? ' Aerva is finishing this and will follow up.' : ''}`
+    : change.difference < 0 ? `Refund: ${inr(refundedInr)}${back.credit ? ` plus ${inr(back.credit)} back on your Aerva credit` : ''}${couponBack - back.credit > 0 ? ` plus ${inr(couponBack - back.credit)} as a coupon` : ''}.${refundFailed ? ' The refund is delayed; Aerva is sending it and will follow up.' : ''}` : '';
   await postThreadMessage(sql, o.id, 'host', `Booking changed. ${change.summary}. ${money}`.trim());
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
   const body = `<p><strong>${esc(o.property_name)}</strong></p><p>${esc(change.summary)}</p><p>New ${o.kind === 'stay' ? 'dates' : 'date'}: ${esc(niceDate(input.arrival))}${o.kind === 'stay' ? ' – ' + esc(niceDate(input.departure)) : ''}</p>`;
   await email(o.guest_email, `Your booking at ${o.property_name} has been changed`, `<h2 style="font-family:Georgia,serif;">Your booking has been changed</h2>${body}${money ? `<p>${esc(money)}</p>` : ''}`);
-  await email(host && host.email, `Booking changed: ${o.property_name}`, `<h2 style="font-family:Georgia,serif;">A booking has been changed</h2>${body}`);
-  if (refundFailed) await email(process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `Change refund failed: booking #${o.id}`, `<p>Change #${change.id} was applied, but the refund of ${inr(refundOwed - couponBack)} failed. Retry it in Admin → Refunds.</p>`);
+  const payNote = settled.hostRecovered > 0 ? `<p>Your payout for this booking had already been sent, so the ${inr(settled.hostRecovered)} no longer owed will be deducted from your next payout.</p>`
+    : settled.hostAdded > 0 ? `<p>Your payout for this booking had already been sent, so the extra ${inr(settled.hostAdded)} (before TDS) is paid to you separately.</p>` : '';
+  await email(host && host.email, `Booking changed: ${o.property_name}`, `<h2 style="font-family:Georgia,serif;">A booking has been changed</h2>${body}${payNote}`);
+  if (refundFailed) await email(process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `Change refund failed: booking #${o.id}`, asCredit
+    ? `<p>Change #${change.id} (a shorter stay) was applied, but the ${inr(refundOwed)} could not be held as the guest’s Aerva credit. Add it by hand or refund it.</p>`
+    : `<p>Change #${change.id} was applied, but the refund of ${inr(refundOwed - couponBack)} failed. Retry it in Admin → Refunds.</p>`);
   return { ok: true, refundedInr, couponBack, refundFailed };
 }
 
@@ -414,12 +477,15 @@ async function respondChange(sql, razorpay, { changeId, accept, hostId, accountI
   if (accept !== true) {
     await sql`UPDATE booking_changes SET status = 'declined' WHERE id = ${changeId}`;
     await postThreadMessage(sql, change.order_id, 'host', `Change request declined. Your booking stays as it was.${note ? ' ' + note : ''}`);
-    await email(guestTo, `Your change request for ${o.property_name}`, `<h2 style="font-family:Georgia,serif;">Your change request was declined</h2><p>Your booking at <strong>${esc(o.property_name)}</strong> stays as it was.</p>${note ? `<p><strong>Host’s note:</strong> ${esc(note)}</p>` : ''}`);
+    // Asked during the stay: the guest may take it to Aerva (My Bookings →
+    // Report a problem) within a day (_stay-disputes.js).
+    const midStay = o && o.started;
+    await email(guestTo, `Your change request for ${o.property_name}`, `<h2 style="font-family:Georgia,serif;">Your change request was declined</h2><p>Your booking at <strong>${esc(o.property_name)}</strong> stays as it was.</p>${note ? `<p><strong>Host’s note:</strong> ${esc(note)}</p>` : ''}${midStay ? `<p>If you still need to leave early, you can raise it with Aerva within ${DECLINED_GRACE_HOURS} hours: My Bookings → Report a problem.</p>` : ''}`);
     return { accepted: false };
   }
   // Re-priced now: if anything moved since the guest asked, the guest asks again.
   let fresh;
-  try { fresh = await quoteChange(sql, change.order_id, null, change.requested); }
+  try { fresh = await quoteChange(sql, change.order_id, null, change.requested, change.created_at); }
   catch (err) {
     await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId}`;
     await postThreadMessage(sql, change.order_id, 'host', `This change can no longer be made (${err.message}). Please send a new request if you still need it.`);
@@ -453,7 +519,7 @@ async function startChangePayment(sql, razorpay, { changeId, guestId, ip }) {
     await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId} AND status = 'awaiting_payment'`;
     throw userError(`The ${AWAITING_PAYMENT_HOURS} hours to pay for this change have passed. Please send a new change request.`, 409);
   }
-  const fresh = await quoteChange(sql, c.order_id, guestId, c.requested);
+  const fresh = await quoteChange(sql, c.order_id, guestId, c.requested, c.created_at);
   if (!sameTotals(fresh, c)) {
     await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId} AND status = 'awaiting_payment'`;
     throw userError('Prices have been changed recently, so this change has closed. Please send a new change request to see the new price.', 409);
@@ -520,7 +586,7 @@ async function confirmChangePayment(sql, razorpay, { order, payment, razorpayOrd
     return scheduleChangeRefund(sql, { c, razorpayOrderId, razorpayPaymentId, amountInr: Math.round(Number(payment.amount) / 100), reason: 'The amount paid did not match the amount due for this change.', holdReason: 'error' });
   }
   let fresh;
-  try { fresh = await quoteChange(sql, c.order_id, null, c.requested); }
+  try { fresh = await quoteChange(sql, c.order_id, null, c.requested, c.created_at); }
   catch (err) { return refundNow(err.message); }
   if (!sameTotals(fresh, c)) {
     return scheduleChangeRefund(sql, { c, razorpayOrderId, razorpayPaymentId, amountInr: c.difference, reason: 'The price changed while the payment was being made, so the amount paid no longer matches.', holdReason: 'price_changed' });
@@ -581,6 +647,6 @@ async function expireChanges(sql) {
 }
 
 module.exports = {
-  loadBooking, AWAITING_PAYMENT_HOURS, changeOptions, quoteChange, requestChange, withdrawChange, respondChange,
+  loadBooking, AWAITING_PAYMENT_HOURS, DECLINED_GRACE_HOURS, changeOptions, quoteChange, requestChange, withdrawChange, respondChange,
   startChangePayment, confirmChangePayment, applyChange, refundAcrossPayments, hasChangePayments, openChangeFor, expireChanges, beforeCutoff
 };

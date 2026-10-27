@@ -54,10 +54,11 @@ async function recognisedBookings(sql, from, end) {
            COALESCE(o.order_type, 'stay') AS order_type,
            o.subtotal, o.gst, o.guest_service_fee, o.deposit_amount, o.total,
            COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0) AS coupon_discount,
+           COALESCE((to_jsonb(o)->>'fee_credit_used')::numeric, 0) AS credit_used,
            o.commission_amount, o.payout_amount, to_jsonb(o)->>'refund_percent' AS refund_percent,
            COALESCE(NULLIF(btrim(concat_ws(' ', to_jsonb(o)->>'guest_first_name', to_jsonb(o)->>'guest_last_name')), ''), g.name, o.guest_email) AS guest_name,
            h.id AS host_id, h.name AS host_name,
-           (SELECT COALESCE(sum(amount), 0) FROM refunds r WHERE r.order_id = o.id AND r.status = 'processed' AND r.kind NOT LIKE 'deposit%' AND r.razorpay_refund_id ~ '^rfnd_[A-Za-z0-9]{14}$') AS refunded_paise,
+           (SELECT COALESCE(sum(amount), 0) FROM refunds r WHERE r.order_id = o.id AND r.status = 'processed' AND r.kind NOT LIKE 'deposit%' AND r.kind NOT LIKE '%fee-credit-%' AND r.razorpay_refund_id ~ '^rfnd_[A-Za-z0-9]{14}$') AS refunded_paise,
            (SELECT COALESCE(sum(amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id) AS cohost_shares
     FROM orders o
     LEFT JOIN guests g ON g.id = o.guest_id
@@ -70,6 +71,38 @@ async function recognisedBookings(sql, from, end) {
             AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp)
       )
     ORDER BY 1`;
+  // Moved to Aerva credit (_fee-credits.js): a host cancelled (the service
+  // fee), or the stay was shortened (the nights not stayed). That money
+  // leaves the booking for the guest's credit — a liability of its own
+  // (Aerva credits, below), whatever later happens to the credit.
+  const held = {};
+  if (orders.length) {
+    try {
+      (await sql`SELECT source_order_id AS id, sum(amount) AS v FROM fee_credits
+                 WHERE source_order_id = ANY(${orders.map(o => o.id)}) GROUP BY source_order_id`)
+        .forEach(r => { held[r.id] = Number(r.v) || 0; });
+    } catch (e) { /* database update not applied yet */ }
+  }
+  // Where the credit a booking used came from: the bookings and Razorpay
+  // payments that first paid it.
+  const creditFrom = {};
+  if (orders.some(o => Number(o.credit_used) > 0)) {
+    try {
+      (await sql`SELECT u.order_id AS id, string_agg(DISTINCT COALESCE(to_jsonb(src)->>'confirmation_code', src.razorpay_order_id, '#' || src.id) || ' (' || COALESCE(f.razorpay_payment_id, '') || ')', '; ') AS v
+                 FROM fee_credit_uses u JOIN fee_credits f ON f.id = u.credit_id LEFT JOIN orders src ON src.id = f.source_order_id
+                 WHERE u.order_id = ANY(${orders.map(o => o.id)}) GROUP BY u.order_id`)
+        .forEach(r => { creditFrom[r.id] = r.v || ''; });
+    } catch (e) { /* database update not applied yet */ }
+  }
+  // Paid with Aerva credit and not given back on a refund (_fee-credits.js).
+  const back = {};
+  if (orders.some(o => Number(o.credit_used) > 0)) {
+    try {
+      (await sql`SELECT order_id AS id, sum(COALESCE(restored_amount, 0)) AS v FROM fee_credit_uses WHERE order_id = ANY(${orders.map(o => o.id)}) GROUP BY order_id`)
+        .forEach(r => { back[r.id] = Number(r.v) || 0; });
+    } catch (e) { /* database update not applied yet */ }
+  }
+  orders.forEach(o => { o.fee_credit_held = held[o.id] || 0; o.credit_from = creditFrom[o.id] || ''; o.paid_by_credit = Math.max(0, Number(o.credit_used) - (back[o.id] || 0)); });
   return orders.map(o => {
     const subtotal = r2(o.subtotal), gst = r2(o.gst), fee = r2(o.guest_service_fee), deposit = r2(o.deposit_amount);
     const commission = r2(o.commission_amount), hostPayable = r2(o.payout_amount);
@@ -81,13 +114,19 @@ async function recognisedBookings(sql, from, end) {
     const gstPayable = o.status === 'paid' ? gst
       : (pct != null ? r2(gst * (1 - pct / 100)) : (subtotal > 0 ? r2(gst * Math.min(1, kept / subtotal)) : 0));
     const refunded = r2(Number(o.refunded_paise) / 100);
-    const charged = r2(Number(o.total) - Number(o.coupon_discount || 0));
+    // Charged in money: the coupon and any Aerva credit are not money.
+    const charged = r2(Number(o.total) - Number(o.coupon_discount || 0) - Number(o.credit_used || 0));
+    // Paid with Aerva credit (and kept): money the guest had already paid
+    // Aerva on an earlier booking, held as credit until now.
+    const paidByCredit = r2(o.paid_by_credit);
     // What stayed with Aerva after refunds (deposit aside), split in order:
     // GST, the host's share, Aerva's commission, then Aerva's service fee.
     // On a cancellation the service fee is income only as far as it was
     // actually kept: a host's cancellation or an admin exception returns it.
-    const keptAll = r2(charged - deposit - refunded);
-    const feeIncome = o.status === 'paid' ? fee : r2(Math.max(0, Math.min(fee, keptAll - commission - hostPayable - gstPayable)));
+    const keptAll = r2(charged - deposit - refunded + paidByCredit);
+    // Moved to the guest's Aerva credit: not income of this booking.
+    const feeCreditHeld = r2(o.fee_credit_held);
+    const feeIncome = o.status === 'paid' ? fee : r2(Math.max(0, Math.min(fee, keptAll - commission - hostPayable - gstPayable - feeCreditHeld)));
     const recognisedOn = o.status === 'cancelled' && o.cancelled_at
       ? new Date(new Date(o.cancelled_at).getTime() + 5.5 * 3600e3).toISOString().slice(0, 10)
       : isoDay(o.arrival);
@@ -95,7 +134,7 @@ async function recognisedBookings(sql, from, end) {
       bookingId: o.id, reference: o.code || o.razorpay_order_id || ('#' + o.id), event: o.status === 'cancelled' ? 'Cancelled' : 'Check-in',
       recognisedOn, guest: o.guest_name || '', listing: o.suite_name || '', host: o.host_name || '', hostId: o.host_id,
       type: o.order_type, arrival: isoDay(o.arrival), departure: isoDay(o.departure), paidOn: isoDay(o.created_at, true),
-      bookingPrice: subtotal, paidByCoupon: r2(o.coupon_discount), gstOnStay: gst, serviceFee: fee, deposit,
+      bookingPrice: subtotal, paidByCoupon: r2(o.coupon_discount), paidByCredit, creditFrom: o.credit_from, gstOnStay: gst, serviceFee: fee, deposit,
       charged,
       refundedToGuest: refunded,
       commissionIncome: commission, serviceFeeIncome: feeIncome,
@@ -103,7 +142,8 @@ async function recognisedBookings(sql, from, end) {
       // Should be 0: what the guest paid (deposit aside), less refunds, less
       // every ledger it went to. Anything else is for the CA to look at
       // (e.g. Aerva refunding its own fee as an exception, or a coupon).
-      difference: r2(keptAll - feeIncome - commission - hostPayable - gstPayable)
+      feeCreditHeld,
+      difference: r2(keptAll - feeIncome - commission - hostPayable - gstPayable - feeCreditHeld)
     };
   });
 }
@@ -116,11 +156,45 @@ async function accountsReport(sql, month) {
   // ---- Cash in and out in the month ----
   const receipts = await sql`
     SELECT o.id, to_jsonb(o)->>'confirmation_code' AS code, o.razorpay_order_id, o.razorpay_payment_id, o.created_at, o.total,
-           COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0) AS coupon_discount, o.deposit_amount, o.gst, o.guest_service_fee
+           COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0) AS coupon_discount,
+           COALESCE((to_jsonb(o)->>'fee_credit_used')::numeric, 0) AS credit_used, o.deposit_amount, o.gst, o.guest_service_fee
     FROM orders o
     WHERE o.status IN ('paid', 'cancelled') AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')
       AND (o.created_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp
     ORDER BY o.created_at`;
+  // For receipts paid partly with Aerva credit: the bookings and Razorpay
+  // payments the credit first came from.
+  const receiptCreditFrom = {};
+  if (receipts.some(o => Number(o.credit_used) > 0)) {
+    try {
+      (await sql`SELECT u.order_id AS id, string_agg(DISTINCT COALESCE(to_jsonb(src)->>'confirmation_code', src.razorpay_order_id, '#' || src.id) || ' (' || COALESCE(f.razorpay_payment_id, '') || ')', '; ') AS v
+                 FROM fee_credit_uses u JOIN fee_credits f ON f.id = u.credit_id LEFT JOIN orders src ON src.id = f.source_order_id
+                 WHERE u.order_id = ANY(${receipts.map(o => o.id)}) GROUP BY u.order_id`).forEach(r => { receiptCreditFrom[r.id] = r.v || ''; });
+    } catch (e) { /* database update not applied yet */ }
+  }
+  // The Aerva credit ledger for the month (fee_credit_entries): every
+  // credit made, used, given back or refunded, with the booking and the
+  // Razorpay payment or refund behind it.
+  let credits = [];
+  try {
+    credits = (await sql`
+      SELECT e.id, e.created_at, e.kind, e.amount, e.reference, e.note, e.credit_id, f.guest_email, COALESCE(to_jsonb(f)->>'reason', 'host_cancelled') AS reason,
+             COALESCE(to_jsonb(o)->>'confirmation_code', o.razorpay_order_id, CASE WHEN o.id IS NULL THEN '' ELSE '#' || o.id END) AS booking,
+             COALESCE(to_jsonb(src)->>'confirmation_code', src.razorpay_order_id, '#' || src.id) AS source_booking, f.razorpay_payment_id AS source_payment
+      FROM fee_credit_entries e JOIN fee_credits f ON f.id = e.credit_id
+      LEFT JOIN orders o ON o.id = e.order_id LEFT JOIN orders src ON src.id = f.source_order_id
+      WHERE (e.created_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (e.created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp
+      ORDER BY e.created_at, e.id`).map(e => ({
+        date: isoDay(e.created_at, true), credit: 'C-' + e.credit_id, guest: e.guest_email || '',
+        movement: { issued: 'Credit made', used: 'Used on a booking', given_back: 'Given back to the credit', refunded: 'Refunded to the guest' }[e.kind] || e.kind,
+        why: e.kind === 'issued' ? (e.reason === 'stay_shortened' ? 'Stay shortened' : 'Host cancelled') : (e.note || ''),
+        booking: e.booking || '', reference: e.reference || '',
+        creditIn: e.kind === 'issued' || e.kind === 'given_back' ? Number(e.amount) : 0,
+        creditOut: e.kind === 'used' || e.kind === 'refunded' ? Number(e.amount) : 0,
+        originallyPaidBy: (e.source_booking || '') + (e.source_payment ? ' (' + e.source_payment + ')' : ''),
+        ledger: e.kind === 'issued' ? 'Advance from guests → Aerva credits' : e.kind === 'used' ? 'Aerva credits → Advance from guests' : e.kind === 'given_back' ? 'Advance from guests → Aerva credits' : 'Aerva credits → Razorpay (refund)'
+      }));
+  } catch (e) { credits = []; }
   let changeReceipts = [];
   try {
     changeReceipts = await sql`
@@ -151,13 +225,17 @@ async function accountsReport(sql, month) {
   const feeCols = (ref) => { const f = feeOf.map[ref]; return f ? { razorpayFee: r2(f.fee / 100), razorpayFeeGst: r2(f.tax / 100) } : { razorpayFee: '', razorpayFeeGst: '' }; };
   const cash = [];
   receipts.forEach(o => cash.push({ ...feeCols(o.razorpay_payment_id), date: isoDay(o.created_at, true), type: 'Receipt from guest', bookingId: o.id, reference: o.code || o.razorpay_order_id,
-    amountIn: r2(Number(o.total) - Number(o.coupon_discount || 0)), amountOut: 0,
-    ledger: 'Advance from guests' + (Number(o.deposit_amount) > 0 ? ' / Security deposits held' : '') }));
+    // Received through Razorpay: the coupon and any Aerva credit are not money.
+    amountIn: r2(Number(o.total) - Number(o.coupon_discount || 0) - Number(o.credit_used || 0)), amountOut: 0,
+    ...(Number(o.credit_used) > 0 ? { paidWithCredit: r2(o.credit_used), creditFrom: receiptCreditFrom[o.id] || '' } : {}),
+    payment: o.razorpay_payment_id || '',
+    ledger: 'Advance from guests' + (Number(o.deposit_amount) > 0 ? ' / Security deposits held' : '') + (Number(o.credit_used) > 0 ? ' (credit part: from Aerva credits)' : '') }));
   changeReceipts.forEach(c => cash.push({ ...feeCols(c.razorpay_payment_id), date: isoDay(c.created_at, true), type: 'Receipt: booking change', bookingId: c.id, reference: '', amountIn: r2(c.amount), amountOut: 0, ledger: 'Advance from guests' }));
   refunds.forEach(r => {
     const k = String(r.kind || '');
-    const ledger = k.startsWith('deposit') ? 'Security deposits held' : 'Advance from guests / Payable to hosts';
-    cash.push({ date: isoDay(r.created_at, true), type: 'Refund to guest (' + k.split(':')[0] + ')', bookingId: r.order_id, reference: r.razorpay_refund_id || '', amountIn: 0, amountOut: r2(Number(r.amount) / 100), ledger });
+    const isCredit = /fee-credit-/.test(k);
+    const ledger = k.startsWith('deposit') ? 'Security deposits held' : isCredit ? 'Aerva credits (guests)' : 'Advance from guests / Payable to hosts';
+    cash.push({ date: isoDay(r.created_at, true), type: isCredit ? 'Refund of Aerva credit' : 'Refund to guest (' + k.split(':')[0] + ')', bookingId: r.order_id, reference: r.razorpay_refund_id || '', amountIn: 0, amountOut: r2(Number(r.amount) / 100), ledger });
   });
   payouts.forEach(p => {
     cash.push({ ...feeCols(p.pout_id), date: isoDay(p.sent_at, true), type: p.kind === 'deposit' ? 'Payout: deposit compensation' : (p.payee_type === 'cohost' ? 'Payout to co-host' : 'Payout to host'),
@@ -189,7 +267,7 @@ async function accountsReport(sql, month) {
   const paid = (await sql`
     SELECT COALESCE(sum(p.gross - p.commission - p.cohost_shares) FILTER (WHERE p.payee_type = 'host'), 0) AS host,
            COALESCE(sum(p.gross) FILTER (WHERE p.payee_type <> 'host'), 0) AS co
-    FROM payouts p WHERE p.status = 'sent' AND COALESCE(p.kind, 'booking') = 'booking'
+    FROM payouts p WHERE p.status = 'sent' AND COALESCE(p.kind, 'booking') <> 'deposit'
       AND EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'))
       AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`)[0];
   const payableHost = r2(Math.max(0, recognisedHost - Number(paid.host))), payableCo = r2(Math.max(0, recognisedCo - Number(paid.co)));
@@ -238,6 +316,7 @@ async function accountsReport(sql, month) {
       tdsPayable: tdsDeducted
     },
     notes: [
+      'When a host cancels, Aerva’s service fee is held as the guest’s credit: it is not income while open; used on a new booking it becomes income, refunded it does not.',
       'Only real money is counted: payments made through Razorpay, refunds Razorpay has processed and payouts actually sent. Test or dummy bookings are left out.',
       'Income is Aerva’s commission and guest service fee only. Booking amounts are held for hosts (Aerva is their payment-collection agent).',
       'Recognised at check-in, or on the cancellation date for cancelled bookings. Dates are India time.',
@@ -250,8 +329,8 @@ async function accountsReport(sql, month) {
   summary.income.total = r2(summary.income.commission + summary.income.serviceFee);
   summary.income.afterRazorpay = r2(summary.income.total - summary.razorpay.charges);
   if (feeOf.unknown) summary.notes.unshift(`Razorpay’s charges are not known yet for ${feeOf.unknown} transaction${feeOf.unknown === 1 ? '' : 's'}${feeOf.setupNeeded ? ' — apply the database update “razorpay-fees” in Admin → Database updates' : ' — open this month again in a little while'}.`);
-  summary.statement = await buildStatement(sql, { start, end, label, bookings, cash, payouts, receipts0: receipts, summary });
-  return { month: label, summary, bookings, cash };
+  summary.statement = await buildStatement(sql, { start, end, label, bookings, cash, payouts, receipts0: receipts, summary, credits });
+  return { month: label, summary, bookings, cash, credits };
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +342,7 @@ async function accountsReport(sql, month) {
 async function balancesAt(sql, day) {
   const one = async (q) => { try { return (await q)[0] || {}; } catch (e) { return { failed: true }; } };
   const ord = await one(sql`
-    SELECT COALESCE(sum(o.total - COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0)), 0) AS received,
+    SELECT COALESCE(sum(o.total - COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0) - COALESCE((to_jsonb(o)->>'fee_credit_used')::numeric, 0)), 0) AS received,
            COALESCE(sum(COALESCE(o.deposit_amount, 0)), 0) AS deposits
     FROM orders o
     WHERE o.status IN ('paid', 'cancelled') AND o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'
@@ -294,8 +373,8 @@ async function balancesAt(sql, day) {
       (o.status = 'paid' AND o.arrival < ${day}::date)
       OR (o.status = 'cancelled' AND (o.cancelled_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp))`);
   const paid = await one(sql`
-    SELECT COALESCE(sum(p.gross - p.commission - p.cohost_shares) FILTER (WHERE p.payee_type = 'host' AND COALESCE(p.kind, 'booking') = 'booking'), 0) AS host,
-           COALESCE(sum(p.gross) FILTER (WHERE p.payee_type <> 'host' AND COALESCE(p.kind, 'booking') = 'booking'), 0) AS co,
+    SELECT COALESCE(sum(p.gross - p.commission - p.cohost_shares) FILTER (WHERE p.payee_type = 'host' AND COALESCE(p.kind, 'booking') <> 'deposit'), 0) AS host,
+           COALESCE(sum(p.gross) FILTER (WHERE p.payee_type <> 'host' AND COALESCE(p.kind, 'booking') <> 'deposit'), 0) AS co,
            COALESCE(sum(p.gross) FILTER (WHERE p.kind = 'deposit'), 0) AS deposit
     FROM payouts p
     WHERE p.status = 'sent' AND EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')
@@ -321,8 +400,18 @@ async function balancesAt(sql, day) {
   const poutFees = await one(sql`
     SELECT COALESCE(sum(f.fee_paise), 0) / 100.0 AS fee FROM razorpay_fees f
     WHERE f.kind = 'payout' AND EXISTS (SELECT 1 FROM payouts p WHERE to_jsonb(p)->>'razorpayx_payout_id' = f.ref_id AND p.status = 'sent' AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp)`);
+  // Aerva credits held: every credit movement before the day (the ledger,
+  // fee_credit_entries); without it, today's balance.
+  let credits = null;
+  try {
+    credits = Number((await sql`SELECT COALESCE(sum(CASE WHEN kind IN ('issued', 'given_back') THEN amount ELSE -amount END), 0) AS v FROM fee_credit_entries
+                               WHERE (created_at AT TIME ZONE 'Asia/Kolkata') < ${day}::timestamp`)[0].v) || 0;
+  } catch (e) {
+    try { credits = Number((await sql`SELECT COALESCE(sum(remaining), 0) AS v FROM fee_credits WHERE status IN ('active', 'refunding')`)[0].v) || 0; } catch (e2) { credits = 0; }
+  }
   const co = Number(rec.co) || 0;
   return {
+    credits: r2(credits),
     cum: {
       settled: r2(setl.settled), payoutsNet: r2(poutCum.net), tds: r2(poutCum.tds), payoutFees: r2(poutFees.fee),
       fees: r2(feesCum.fee), feesGst: r2(feesCum.tax)
@@ -364,7 +453,7 @@ async function syncSettlements(sql) {
   } catch (e) { return { ok: false }; }
 }
 
-async function buildStatement(sql, { start, end, label, bookings, cash, payouts, receipts0, summary }) {
+async function buildStatement(sql, { start, end, label, bookings, cash, payouts, receipts0, summary, credits = [] }) {
   const sum = (list, f) => r2(list.reduce((t, x) => t + (Number(f(x)) || 0), 0));
   // Razorpay's fee on earlier payments too (for the opening receivable).
   try {
@@ -386,7 +475,9 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
   const receivedAll = sum(receipts, c => c.amountIn);
   const isDepRefund = (c) => /^Refund/.test(c.type) && /deposit/i.test(c.type);
   const refundsDeposit = sum(cash.filter(isDepRefund), c => c.amountOut);
-  const refundsBooking = sum(cash.filter(c => /^Refund/.test(c.type) && !isDepRefund(c)), c => c.amountOut);
+  const isCreditRefund = (c) => c.type === 'Refund of Aerva credit';
+  const refundsCredit = sum(cash.filter(isCreditRefund), c => c.amountOut);
+  const refundsBooking = sum(cash.filter(c => /^Refund/.test(c.type) && !isDepRefund(c) && !isCreditRefund(c)), c => c.amountOut);
   const payFees = sum(receipts, c => c.razorpayFee), payFeesGst = sum(receipts, c => c.razorpayFeeGst);
   const pouts = cash.filter(c => /^Payout/.test(c.type));
   const poutFees = sum(pouts, c => c.razorpayFee), poutFeesGst = sum(pouts, c => c.razorpayFeeGst);
@@ -401,9 +492,15 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
   const income = summary.income;
   const gstOut = summary.gstOnStaysPayable;
   const tdsHost = sum(payouts.filter(p => p.payee_type === 'host'), p => p.tds), tdsCo = sum(payouts.filter(p => p.payee_type !== 'host'), p => p.tds);
-  const transferred = sum(bookings, b => b.serviceFeeIncome + b.commissionIncome + b.hostPayable + b.gstPayable);
+  const transferred = sum(bookings, b => b.serviceFeeIncome + b.commissionIncome + b.hostPayable + b.gstPayable + (b.feeCreditHeld || 0));
   const bookingDiff = sum(bookings, b => b.difference);
   const advIn = r2(receivedAll - depReceived);
+  // Bookings made this month and paid partly with Aerva credit: that part is an advance too.
+  // Aerva credits this month (the credit ledger; without it, the bookings).
+  const cr = (k) => sum(credits.filter(e => e.movement === k), e => e.creditIn + e.creditOut);
+  const creditIn = credits.length ? cr('Used on a booking') : sum(receipts0, o => o.credit_used);
+  const creditBack = cr('Given back to the credit');
+  const creditMade = cr('Credit made'), creditRefunded = cr('Refunded to the guest');
 
   const L = (k, v, g, m, o = {}) => Object.assign({ k, v: r2(v), g, m }, o);
   const check = (label, opening, moves, closing) => {
@@ -415,19 +512,21 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
     { title: 'Receivable from Razorpay', note: 'Guests pay through Razorpay; Razorpay pays Aerva’s bank a day or two later. Until then the money is a receivable (Razorpay is a debtor in Tally).', lines: [
       L('Opening receivable', open.receivable, 'Sundry debtors: Razorpay', 'Collected by Razorpay but not yet in the bank at the start of the month'),
       L('Received from guests (incl. deposits)', receivedAll, 'Sundry debtors: Razorpay', 'Every payment guests made this month through Razorpay', { sign: '+' }),
-      L('Refunded to guests', -(refundsBooking + refundsDeposit), 'Sundry debtors: Razorpay', 'Refunds Razorpay processed this month (booking refunds and deposit refunds)', { sign: '−' }),
+      L('Refunded to guests', -(refundsBooking + refundsDeposit + refundsCredit), 'Sundry debtors: Razorpay', 'Refunds Razorpay processed this month (booking refunds, deposit refunds and Aerva credits refunded)', { sign: '−' }),
       L('Razorpay charges on payments (incl. GST)', -payFees, 'Sundry debtors: Razorpay', 'Razorpay keeps its fee out of the settlement', { sign: '−' }),
       L('Settled to Aerva’s bank', -settledIn, 'Bank', sync.ok ? 'Money Razorpay paid into the bank this month' : 'Razorpay’s settlements could not be read just now — take them from the bank statement', { sign: '−' }),
-      ...check('rzp', open.receivable, [receivedAll, -(refundsBooking + refundsDeposit), -payFees, -settledIn], close.receivable),
+      ...check('rzp', open.receivable, [receivedAll, -(refundsBooking + refundsDeposit + refundsCredit), -payFees, -settledIn], close.receivable),
       L('Closing receivable', close.receivable, 'Sundry debtors: Razorpay', 'Still with Razorpay at month end — should match Razorpay’s dashboard balance', { strong: true })
     ] },
     { title: 'Advance from guests (liability)', note: 'When a guest pays, the money is not yet Aerva’s or the host’s — it is an advance held for the stay. On the day the guest checks in (or the booking is cancelled), it leaves this ledger: Aerva’s commission and fee become income, GST becomes payable to the government, and the rest becomes payable to the host and co-hosts.', lines: [
       L('Opening advance', open.advance, 'Current liabilities: Advance from guests', 'Held at the start of the month for stays not yet started'),
       L('Paid by guests this month', advIn, 'Current liabilities: Advance from guests', 'Booking payments received this month (security deposits are kept separately, below)', { sign: '+' }),
+      ...(creditIn ? [L('Paid with Aerva credit this month', creditIn, 'Current liabilities: Advance from guests', 'The part of this month’s bookings paid with a guest’s Aerva credit — money first received through Razorpay on the booking the credit came from (see the Aerva credits CSV)', { sign: '+' })] : []),
+      ...(creditBack ? [L('Returned to Aerva credit', -creditBack, 'Current liabilities: Advance from guests', 'The credit part of bookings refunded this month, back onto the guest’s credit', { sign: '−' })] : []),
       L('Refunded to guests this month', -refundsBooking, 'Current liabilities: Advance from guests', 'Booking money returned (cancellations, changes) — deposits not included', { sign: '−' }),
-      L('Moved out: stays checked in or cancelled', -transferred, 'Current liabilities: Advance from guests', 'Went to Aerva’s income, GST payable and the host’s and co-hosts’ share — see those sections', { sign: '−' }),
+      L('Moved out: stays checked in or cancelled', -transferred, 'Current liabilities: Advance from guests', 'Went to Aerva’s income, GST payable, the host’s and co-hosts’ share, and Aerva credits held for guests — see those sections', { sign: '−' }),
       ...(Math.abs(bookingDiff) >= 1 ? [L('Bookings that do not add up', -bookingDiff, 'Current liabilities: Advance from guests', 'See “Difference to check” in the Bookings CSV', { sign: '−' })] : []),
-      ...check('adv', open.advance, [advIn, -refundsBooking, -transferred, -bookingDiff], close.advance),
+      ...check('adv', open.advance, [advIn, creditIn, -creditBack, -refundsBooking, -transferred, -bookingDiff], close.advance),
       L('Closing advance', close.advance, 'Current liabilities: Advance from guests', 'Held at month end for stays that start later', { strong: true })
     ] },
     { title: 'Aerva’s income and expenses (profit and loss)', lines: [
@@ -452,7 +551,7 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
       L('Hosts’ share of stays this month', earnedHost, 'Sundry creditors: Hosts', 'From stays checked in or cancelled this month (after Aerva’s commission and co-hosts’ share)', { sign: '+' }),
       L('Money sent to hosts', -sum(hostP, p => p.net), 'Bank', 'Payouts sent this month', { sign: '−' }),
       L('TDS on hosts', -sum(hostP, p => p.tds), 'Duties & taxes: TDS payable', 'Part of the host’s money, paid to the government instead', { sign: '−' }),
-      L('Coupons recovered from hosts', -sum(hostP, p => p.deductions), 'Sundry creditors: Hosts', 'Host-funded coupons taken from their payout', { sign: '−' }),
+      L('Deducted from hosts’ payouts', -sum(hostP, p => p.deductions), 'Sundry creditors: Hosts', 'Host-funded cancellation coupons, and amounts paid before on bookings reduced after their payout was sent', { sign: '−' }),
       ...check('host', open.host, [earnedHost, -sum(hostP, p => p.net), -sum(hostP, p => p.tds), -sum(hostP, p => p.deductions)], close.host),
       L('Closing payable', close.host, 'Sundry creditors: Hosts', 'Owed to hosts at month end', { strong: true })
     ] },
@@ -461,8 +560,18 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
       L('Co-hosts’ share of stays this month', earnedCo, 'Sundry creditors: Co-hosts', 'From stays checked in or cancelled this month', { sign: '+' }),
       L('Money sent to co-hosts', -sum(coP, p => p.net), 'Bank', 'Payouts sent this month', { sign: '−' }),
       L('TDS on co-hosts', -sum(coP, p => p.tds), 'Duties & taxes: TDS payable', '', { sign: '−' }),
-      ...check('co', open.cohost, [earnedCo, -sum(coP, p => p.net), -sum(coP, p => p.tds)], close.cohost),
+      ...(sum(coP, p => p.deductions) ? [L('Deducted from co-hosts’ payouts', -sum(coP, p => p.deductions), 'Sundry creditors: Co-hosts', 'Amounts paid before on bookings reduced after their payout was sent', { sign: '−' })] : []),
+      ...check('co', open.cohost, [earnedCo, -sum(coP, p => p.net), -sum(coP, p => p.tds), -sum(coP, p => p.deductions)], close.cohost),
       L('Closing payable', close.cohost, 'Sundry creditors: Co-hosts', 'Owed to co-hosts at month end', { strong: true })
+    ] },
+    { title: 'Aerva credits (liability)', note: 'Credit held for guests: Aerva’s service fee when a host cancels, and the nights not stayed when a stay is shortened. No money moves when a credit is made or used — it was received through Razorpay on the booking it came from. Every movement, with that booking and Razorpay payment, is in the Aerva credits CSV.', lines: [
+      L('Opening credits held', open.credits, 'Current liabilities: Aerva credits (guests)', 'Held for guests at the start of the month'),
+      L('Credits made', creditMade, 'Current liabilities: Aerva credits (guests)', 'From bookings a host cancelled, or stays shortened during the stay (from Advance from guests)', { sign: '+' }),
+      ...(creditBack ? [L('Given back to credits', creditBack, 'Current liabilities: Aerva credits (guests)', 'The credit part of bookings refunded this month', { sign: '+' })] : []),
+      L('Used on new bookings', -creditIn, 'Current liabilities: Aerva credits (guests)', 'Taken off new bookings (to Advance from guests)', { sign: '−' }),
+      L('Refunded to guests', -creditRefunded, 'Current liabilities: Aerva credits (guests)', 'Refunded through Razorpay to the original payment, at the guest’s request or when the credit period ended', { sign: '−' }),
+      ...check('credits', open.credits, [creditMade, creditBack, -creditIn, -creditRefunded], close.credits),
+      L('Closing credits held', close.credits, 'Current liabilities: Aerva credits (guests)', 'Held for guests at month end', { strong: true })
     ] },
     { title: 'Security deposits (liability)', note: 'Refundable deposits are the guest’s money until returned, or paid to the host for damage.', lines: [
       L('Opening deposits held', open.deposits, 'Current liabilities: Security deposits', 'Held at the start of the month'),
@@ -481,7 +590,8 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
   const feesExGst = r2(c.fees - c.feesGst);
   const assets = r2(close.receivable + bank + c.feesGst);
   const earnings = r2(cumIncome - feesExGst);
-  const liab = r2(close.advance + close.host + close.cohost + close.deposits + cumGst + c.tds);
+  const creditsHeld = close.credits;
+  const liab = r2(close.advance + close.host + close.cohost + close.deposits + cumGst + c.tds + creditsHeld);
   const bsDiff = r2(assets - liab - earnings);
   sections.unshift({ title: 'Balance sheet at ' + endLabel(end), note: 'Booking money only, since Aerva’s first booking. GST and TDS are shown in full: subtract what has already been deposited with the government from both “GST/TDS payable” and “Bank”. Aerva’s capital, other income and other expenses are not on the site — your CA adds them.', balanceSheet: true, lines: [
     L('EQUITY AND LIABILITIES', null, '', '', { head: true }),
@@ -492,6 +602,7 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
     L('Payable to hosts', close.host, 'Current liabilities: Sundry creditors — Hosts', 'Hosts’ share of completed stays, not yet paid'),
     L('Payable to co-hosts', close.cohost, 'Current liabilities: Sundry creditors — Co-hosts', 'Co-hosts’ share of completed stays, not yet paid'),
     L('Security deposits held', close.deposits, 'Current liabilities: Security deposits', 'To be returned to guests or paid to hosts'),
+    L('Aerva credits held', creditsHeld, 'Current liabilities: Aerva credits (guests)', 'Guests’ Aerva credit not yet used or refunded: Aerva’s service fee on bookings a host cancelled, and the nights not stayed on stays shortened during the stay. Money first received through Razorpay; see the Aerva credits CSV.'),
     L('GST payable on bookings (s.9(5))', cumGst, 'Current liabilities: Duties & taxes — Output GST', 'Since the first booking — less what has been deposited'),
     L('TDS payable (194-O)', c.tds, 'Current liabilities: Duties & taxes — TDS payable', 'Since the first payout — less what has been deposited'),
     L('Total equity and liabilities', r2(liab + earnings), '', '', { strong: true }),

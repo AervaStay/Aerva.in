@@ -79,6 +79,20 @@ function splitRow(row, couponAbsorbed, pct) {
   };
 }
 
+// Part of the booking paid with Aerva credit (_fee-credits.js): the refund
+// goes to the payment first, and what the payment cannot take (it only paid
+// `paid`, deposit aside) goes back onto the credit as s.creditBack. Changes s.
+function creditPart(s, row, paidInfo, alreadyRefunded = 0) {
+  const credit = Math.max(0, Math.round(Number((paidInfo || {}).creditUsed) || 0));
+  s.creditBack = 0;
+  if (!credit) return s;
+  const card = Math.max(0, Math.round(Number((paidInfo || {}).paid) || 0) - Math.round(Number(row.deposit_amount) || 0) - Math.round(Number(alreadyRefunded) || 0));
+  const booking = Math.max(0, s.refundCash - s.deposit);
+  const back = Math.min(credit, Math.max(0, booking - card));
+  s.refundCash -= back; s.creditBack = back;
+  return s;
+}
+
 // The other half of an "Includes a Stay" purchase (see host-listings.js).
 async function linkedSiblings(sql, orderId) {
   return await sql`
@@ -130,14 +144,14 @@ async function cancellationQuote(sql, orderId, guestId) {
     policySummary: policySummary(main.policy), daysBefore: Number(main.days_before),
     items: rows.map(r => r.suite_name)
   };
-  if (tier.started) return { ...base, allowed: false, error: 'This stay has already started. For an emergency, use Request cancellation instead.' };
+  if (tier.started) return { ...base, allowed: false, started: true, error: 'This stay has already started, so it cannot be cancelled. To leave early, change your check-out date in My Bookings — possible until 10 AM on the day after check-in.' };
   const paid = await paidByOrderRow(sql, main.razorpay_order_id);
   const total = (pct) => rows.reduce((t, r) => {
-    const s = splitRow(r, (paid[r.id] || {}).couponAbsorbed, pct);
-    t.refundCash += s.refundCash; t.couponBack += s.couponBack; t.deposit += s.deposit; t.feeKept += s.feeKept;
+    const s = creditPart(splitRow(r, (paid[r.id] || {}).couponAbsorbed, pct), r, paid[r.id]);
+    t.refundCash += s.refundCash; t.couponBack += s.couponBack; t.deposit += s.deposit; t.feeKept += s.feeKept; t.creditBack += s.creditBack;
     t.refundBooking += s.refundBooking + s.refundGst;
     return t;
-  }, { refundCash: 0, couponBack: 0, deposit: 0, feeKept: 0, refundBooking: 0 });
+  }, { refundCash: 0, couponBack: 0, deposit: 0, feeKept: 0, refundBooking: 0, creditBack: 0 });
   if (tier.hostDecides) {
     return { ...base, allowed: true, hostDecides: true, pct: null, ifNoRefund: total(0), ifFullRefund: total(100) };
   }
@@ -183,6 +197,18 @@ async function returnCouponValue(sql, { razorpayOrderId, amount, sourceOrderId, 
       metadata: { error: String(err.message || err).slice(0, 300) } });
     return null;
   }
+}
+
+// Value to give back to a guest that no card payment can take: first onto
+// the Aerva credit the booking used (_fee-credits.js), the rest as a coupon
+// (returnCouponValue). Returns { credit, coupon }.
+async function returnValue(sql, { razorpayOrderId, amount, sourceOrderId, guestEmail, suiteName }) {
+  const want = Math.max(0, Math.round(Number(amount) || 0));
+  if (!want) return { credit: 0, coupon: 0 };
+  const credit = await require('./_fee-credits').giveBack(sql, sourceOrderId, want);
+  const rest = want - credit;
+  if (rest > 0) await returnCouponValue(sql, { razorpayOrderId, amount: rest, sourceOrderId, guestEmail, suiteName });
+  return { credit, coupon: rest };
 }
 
 async function email(to, subject, html) {
@@ -231,17 +257,20 @@ async function releaseClaim(sql, ids, token) {
 }
 
 // Payouts of these bookings not sent yet are removed (they are planned
-// again from the booking's new amounts by _payouts.js). A payout already
-// sent, or being sent, is refused: the host must never be paid twice for
-// money the guest gets back. Same rule as host cancellations
-// (host-listings.js assertNoPayoutSent). A deposit-compensation payout
+// again from the booking's new amounts by _payouts.js). Payouts go the day
+// after check-in, so a booking cancelled during the stay may already have
+// been paid out: then nothing is removed, and once the amounts change
+// _payouts.js settleAfterPayout deducts what the host and co-hosts are no
+// longer owed from their next payout. A payout being sent at this moment
+// is refused for a few minutes. A deposit-compensation payout
 // (payouts.kind = 'deposit') is not the booking's payout and is kept.
 async function clearUnsentPayouts(sql, ids) {
   let rows;
   try { rows = await sql`SELECT id, status FROM payouts WHERE order_id = ANY(${ids}) AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`; }
   catch (err) { return; } // before migration_payouts.sql
-  const sent = () => Object.assign(new Error('The host payout for this booking has already been sent, so it cannot be cancelled here. Please contact hello@aerva.in.'), { isUserFacing: true, status: 409 });
-  if (rows.some(r => !['due', 'failed'].includes(r.status))) throw sent();
+  const sent = () => Object.assign(new Error('The host payout for this booking is being sent right now. Please try again in a few minutes.'), { isUserFacing: true, status: 409 });
+  if (rows.some(r => r.status === 'processing')) throw sent();
+  if (rows.some(r => r.status === 'sent')) return;   // settled after the change (settleAfterPayout)
   if (!rows.length) return;
   await sql`DELETE FROM payouts WHERE order_id = ANY(${ids}) AND status IN ('due', 'failed') AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`;
   // One claimed for sending in the same moment is still there: refused.
@@ -320,13 +349,14 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
       const hostPart = Math.min(notCovered, hostPaid[r.id] || 0);
       if (hostPart > 0) s.hostPayout = Math.max(0, s.hostPayout - hostPart);
     }
+    creditPart(s, r, paid[r.id], already);
     return [Number(r.id), s];
   }));
   const ids = rows.map(r => Number(r.id));
   if (preview) {
     const t = (k) => [...splits.values()].reduce((a, s) => a + (s[k] || 0), 0);
     return { preview: true, percent, items: rows.map(r => r.suite_name), refundCash: t('refundCash'), couponBack: t('couponBack'), deposit: t('deposit'),
-             feeKept: t('feeKept'), feeRefunded: t('feeRefunded'), alreadyRefunded: t('alreadyRefunded'), hostPayout: t('hostPayout'), policy: policyKey(main.policy), daysBefore: Number(main.days_before) };
+             feeKept: t('feeKept'), feeRefunded: t('feeRefunded'), alreadyRefunded: t('alreadyRefunded'), creditBack: t('creditBack'), hostPayout: t('hostPayout'), policy: policyKey(main.policy), daysBefore: Number(main.days_before) };
   }
   const claim = await claimForCancellation(sql, ids);
   let done = [];
@@ -397,6 +427,9 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     const s = splits.get(Number(r.id));
     try { await sql`UPDATE order_cohost_shares SET amount = round(${s.hostPayout}::numeric * percent / 100) WHERE order_id = ${r.id}`; }
     catch (err) { /* no co-host shares table */ }
+    // Paid out already (the day after check-in): what is no longer owed
+    // comes off the next payout.
+    await require('./_payouts').settleAfterPayout(sql, r.id, { reason: 'Booking cancelled after its payout was sent' });
     if (by === 'admin') {
       await logAudit(sql, { action: 'booking_cancelled_by_admin', success: true, actorType: 'admin', actorIdentifier: adminLabel || 'admin',
         targetType: 'order', targetId: r.id, metadata: { percent, reason: note, refundCash: s.refundCash, couponBack: s.couponBack, feeRefunded: s.feeRefunded || 0, feeReason: s.feeRefunded ? feeWhy : undefined, hostPayout: s.hostPayout, countAgainstHost: !!countAgainstHost } });
@@ -415,20 +448,26 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   const sum = (k) => done.reduce((t, r) => t + (splits.get(Number(r.id))[k] || 0), 0);
   const refundCash = sum('refundCash'), couponBack = sum('couponBack'), hostShare = sum('hostPayout');
   if (couponBack > 0) await returnCouponValue(sql, { razorpayOrderId: main.razorpay_order_id, amount: couponBack, sourceOrderId: main.id, guestEmail: main.guest_email, suiteName: main.suite_name });
+  // The part paid with Aerva credit that the payment cannot take: back onto the credit.
+  let creditBack = 0;
+  for (const r of done) {
+    const want = splits.get(Number(r.id)).creditBack || 0;
+    if (want > 0) creditBack += await require('./_fee-credits').giveBack(sql, r.id, want);
+  }
 
   const when = `${dateStr(main.arrival)} → ${dateStr(main.departure)}`;
   await email(main.guest_email, `Your booking at ${main.suite_name} is cancelled`,
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your booking is cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)})</p><p>${escH(reason)}.</p>
-      <p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}. Refunds usually arrive in 5–7 working days.${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}</p>
+      <p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}${creditBack > 0 ? `, plus ${inr(creditBack)} back on your Aerva credit (the part paid with it; see My Bookings)` : ''}. Refunds usually arrive in 5–7 working days.${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Contact hello@aerva.in.</p></div>`);
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${main.host_id} ORDER BY id LIMIT 1`)[0];
   await email(host && host.email, `Booking cancelled: ${main.suite_name}`,
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">A booking was cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)}) — the dates are open again.</p>
       ${hostShare > 0 ? `<p>Your payout for this booking: <strong>${inr(hostShare)}</strong>, on the usual payout day.</p>` : ''}</div>`);
-  await postThreadMessage(sql, main.id, by === 'admin' ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}.`);
-  return { ok: true, refundCash, couponBack, percent };
+  await postThreadMessage(sql, main.id, by === 'admin' ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}${creditBack > 0 ? ` plus ${inr(creditBack)} back on their Aerva credit` : ''}.`);
+  return { ok: true, refundCash, couponBack, creditBack, percent };
 }
 
 // Host cancellations in the last 12 months (co-host cancellations count for
@@ -489,8 +528,9 @@ async function createCancellationRequest(sql, { orderId, guestId, reasonCode, de
   if (!REQUEST_REASONS[reasonCode]) return { error: 'Choose a reason.', status: 400 };
   const q = await cancellationQuote(sql, orderId, guestId);
   if (q.status) return { error: q.error, status: q.status };
-  if (!q.allowed && !EMERGENCY_REASONS[reasonCode]) return { error: q.error, status: 400 };
-  // Emergencies may be sent until check-out; everything else only before check-in.
+  // Only before check-in, emergencies included. Once the stay has started
+  // the guest changes the booking instead (shorter stay, _booking-changes.js).
+  if (!q.allowed && (!EMERGENCY_REASONS[reasonCode] || q.started)) return { error: q.error, status: 400 };
   const o = (await sql`SELECT o.suite_name, o.arrival, o.departure, l.host_id,
                               (o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS ended
                        FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
@@ -603,5 +643,5 @@ module.exports = {
   POLICIES, HOST_DECISION_TIMEOUT_HOURS, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, REQUEST_REASONS,
   policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
   claimForCancellation, releaseClaim, guestGetsBackFor, claimRequest, unclaimRequest, postThreadMessage, hostOption, createCancellationRequest, cancellationCard,
-  cancellationQuote, executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
+  cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
 };

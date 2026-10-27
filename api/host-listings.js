@@ -168,7 +168,7 @@ async function sendCancellationEmail(order, opts = {}){
       <h2 style="font-family:Georgia,serif;">Your booking has been cancelled</h2>
       <p>${lead}</p>
       ${opts.reasonLabel ? `<p><strong>Reason:</strong> ${esc(opts.reasonLabel)}${opts.details ? ' — ' + esc(opts.details) : ''}</p>` : ''}
-      <p>Your payment has been refunded to your original payment method, except Aerva’s service fee, which is non-refundable. It should appear within 5–7 business days, depending on your bank.</p>
+      <p>${opts.feeCredit ? `Your payment has been refunded to your original payment method, apart from Aerva’s service fee of ₹${Number(opts.feeCredit).toLocaleString('en-IN')}, which is held for you as Aerva credit: it is taken off your next Aerva booking, or refunded to you in full if you decide not to book again (see the separate email).` : opts.creditBack ? 'What you paid at checkout has been refunded to your original payment method.' : (String(order.charge_currency || 'INR') !== 'INR' ? 'Your payment has been refunded to your original payment method, including Aerva’s service fee.' : 'Your payment has been refunded to your original payment method, except Aerva’s service fee.')}${opts.creditBack ? ` The ₹${Number(opts.creditBack).toLocaleString('en-IN')} you paid with Aerva credit is back on your credit (My Bookings).` : ''} It should appear within 5–7 business days, depending on your bank.</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you have questions about this cancellation, please contact hello@aerva.in.</p>
     </div>
   `;
@@ -1384,7 +1384,8 @@ module.exports = async (req, res) => {
         listing: r.suite_name, arrival: r.arrival, departure: r.departure,
         // A deposit dispute paid to the host is its own payout (payouts.kind,
         // migration_payout_kinds.sql) — labelled like _payouts.js does.
-        kind: r.kind === 'deposit' ? 'deposit' : 'booking', label: r.kind === 'deposit' ? 'Security deposit compensation' : 'Booking payout' })) });
+        kind: r.kind === 'deposit' ? 'deposit' : /^adjustment/.test(r.kind) ? 'adjustment' : /^rest/.test(r.kind) ? 'rest' : 'booking',
+        label: r.kind === 'deposit' ? 'Security deposit compensation' : /^adjustment/.test(r.kind) ? 'Booking changed after payout' : /^rest/.test(r.kind) ? 'Rest of booking payout' : 'Booking payout' })) });
     } catch (err) {
       console.error('payouts view failed:', err);
       return res.status(500).json({ error: 'Could not load payouts right now.' });
@@ -2801,9 +2802,13 @@ module.exports = async (req, res) => {
     const depositOf = new Map([[Number(orderId), order]].concat(siblings.map(r => [Number(r.id), r])));
     const refundSubunit = async (id, currency) => {
       const row = depositOf.get(Number(id)) || {};
-      // Aerva's service fee is never refunded, even when the host cancels.
+      // Aerva's service fee is not part of this refund: paid in rupees, it
+      // is held as the guest's service-fee credit (_fee-credits.js — used on
+      // their next booking, or refunded in full). Paid in another currency,
+      // it is refunded now with the rest.
+      const feeHeld = currency === 'INR' ? Math.round(Number(row.guest_service_fee) || 0) : 0;
       const inr = Math.max(0, ((paidMap[id] || {}).paid || 0) - (depositStillHeld(row) ? 0 : Math.round(Number(row.deposit_amount) || 0))
-                              - Math.round(Number(row.guest_service_fee) || 0));
+                              - feeHeld);
       if (currency === 'INR') return Math.round(inr * 100);
       // The same share of what was actually captured, never re-converted at
       // today's rate (_currency.js). null = no record of the charge: refuse.
@@ -2882,7 +2887,11 @@ module.exports = async (req, res) => {
     catch (err) { /* payouts table not created yet */ }
 
     await restoreCouponValue(order, cancelledIds, paidMap);
-    await sendCancellationEmail(order, emailOpts);
+    // The service fee becomes the guest's credit (emailed separately).
+    let credits = [];
+    try { credits = await require('./_fee-credits').createForHostCancellation(sql, cancelledIds); }
+    catch (err) { console.error('fee credit not created (needs follow-up):', orderId, err.message); }
+    await sendCancellationEmail(order, Object.assign({}, emailOpts, { feeCredit: credits.reduce((t, c) => t + Number(c.amount || 0), 0), creditBack: credits.restored || 0 }));
     return true;
     }
   }
@@ -3008,7 +3017,7 @@ module.exports = async (req, res) => {
   // then cancels) is replaced: every host cancellation now refunds in full
   // AND gives the guest a 10% coupon, charged to the host's next payout.
   if (req.method === 'POST' && req.body && req.body.cancelWithCoupon) {
-    return res.status(410).json({ error: 'Use Cancel Booking. The guest is refunded (except Aerva’s service fee) and gets a 10% Aerva coupon.' });
+    return res.status(410).json({ error: 'Use Cancel Booking. The guest is refunded (Aerva’s service fee is held for them as a credit) and gets a 10% Aerva coupon.' });
   }
 
   // GET ?myPenalties=1 — cancellation coupons to be deducted from this
@@ -3020,17 +3029,17 @@ module.exports = async (req, res) => {
       let rows = [];
       try {
         rows = cohostActor
-          ? await sql`SELECT p.id, p.amount, p.created_at, o.suite_name FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
+          ? await sql`SELECT p.id, p.amount, p.created_at, o.suite_name, COALESCE(to_jsonb(p)->>'kind', 'coupon') AS kind FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
                       WHERE p.payer_guest_id = ${cohostActor.guestId} AND p.status = 'owed' ORDER BY p.created_at`
-          : await sql`SELECT p.id, p.amount, p.created_at, o.suite_name FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
+          : await sql`SELECT p.id, p.amount, p.created_at, o.suite_name, COALESCE(to_jsonb(p)->>'kind', 'coupon') AS kind FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
                       WHERE p.host_id = ${g.host_id} AND p.payer_guest_id IS NULL AND p.status = 'owed' ORDER BY p.created_at`;
       } catch (err) {
         try { // before migration_coupon_release.sql: everything is the host's
-          if (!cohostActor) rows = await sql`SELECT p.id, p.amount, p.created_at, o.suite_name FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
+          if (!cohostActor) rows = await sql`SELECT p.id, p.amount, p.created_at, o.suite_name, COALESCE(to_jsonb(p)->>'kind', 'coupon') AS kind FROM host_penalties p LEFT JOIN orders o ON o.id = p.order_id
                                              WHERE p.host_id = ${g.host_id} AND p.status = 'owed' ORDER BY p.created_at`;
         } catch (e2) { /* table not created yet */ }
       }
-      return res.status(200).json({ owed: rows.map(r => ({ id: r.id, amount: Number(r.amount), createdAt: r.created_at, booking: r.suite_name })),
+      return res.status(200).json({ owed: rows.map(r => ({ id: r.id, amount: Number(r.amount), createdAt: r.created_at, booking: r.suite_name, kind: r.kind || 'coupon' })),
                                     total: Math.round(rows.reduce((t, r) => t + Number(r.amount), 0)) });
     } catch (err) {
       return res.status(500).json({ error: 'Could not load this right now.' });

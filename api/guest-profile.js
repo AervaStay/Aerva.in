@@ -838,6 +838,7 @@ module.exports = async (req, res) => {
                to_jsonb(l)->>'experience_meeting_point_address' AS meeting_point_address,
                to_jsonb(l)->>'experience_meeting_point_details' AS meeting_point_details,
                EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id) AS reviewed,
+               COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}) AS listing_timezone,
                (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
         FROM orders o
         LEFT JOIN listings l ON l.id = o.listing_id
@@ -864,6 +865,35 @@ module.exports = async (req, res) => {
           bookings.forEach(b => { b.cancel_request_status = byOrder[b.id] || null; });
         }
       } catch (err) { /* migration_cancellation_requests.sql not run yet */ }
+
+      // What the guest may still do on each booking (the stay window,
+      // _booking-rules.js): before check-in, change or request a
+      // cancellation; once the stay has started, only change it (or report
+      // a problem) until 10 AM on the day after check-in — or take a change
+      // the host declined to Aerva within a day.
+      try {
+        const R = require('./_booking-rules');
+        let declined = new Set();
+        const ids = bookings.filter(b => b.status === 'paid').map(b => b.id);
+        if (ids.length) {
+          try {
+            declined = new Set((await sql`SELECT DISTINCT order_id FROM booking_changes WHERE order_id = ANY(${ids}) AND status IN ('declined', 'expired')
+                                            AND decided_at IS NOT NULL AND decided_at > now() - interval '24 hours'`).map(r => r.order_id));
+          } catch (e) { /* booking_changes not created yet */ }
+        }
+        bookings.forEach(b => {
+          const today = toDateStr(b.local_today), arr = toDateStr(b.arrival), dep = toDateStr(b.departure);
+          const paid = b.status === 'paid' && today && dep > today;
+          const started = !!today && arr <= today;
+          const windowEnd = R.stayWindowEndMs(arr, b.listing_timezone);
+          const inWindow = Date.now() < windowEnd;
+          b.can_change = !!paid && (!started || inWindow);
+          b.can_cancel_request = !!paid && !started;
+          b.can_report = !!paid && started && (b.listing_type || 'stay') === 'stay' && (inWindow || declined.has(b.id));
+          b.stay_window_closed = !!paid && started && !inWindow;
+          delete b.listing_timezone;
+        });
+      } catch (err) { console.error('booking actions not worked out:', err.message); }
 
       // Money refunded on each booking (cancellations, deposit returns),
       // for the summary page. Only refunds Razorpay has taken on.
@@ -922,6 +952,14 @@ module.exports = async (req, res) => {
       const avgRating = reviewCount
         ? reviews.reduce((sum, r) => sum + Number(r.rating || 0), 0) / reviewCount
         : 0;
+
+      // ---- Service-fee credits (a host cancelled; _fee-credits.js) ----
+      // GET ?mode=feeCredits → { credits: [...], days }
+      if (req.query.mode === 'feeCredits') {
+        if (actingCtx) return res.status(200).json({ credits: [] });
+        const FC = require('./_fee-credits');
+        return res.status(200).json({ credits: await FC.forGuest(sql, guestId), days: FC.FEE_CREDIT_DAYS });
+      }
 
       // ---- Their own profile ----
       // GET ?mode=profile — everything their profile page shows, plus the
@@ -1005,6 +1043,23 @@ module.exports = async (req, res) => {
   if (req.method === 'POST') {
     const { mode } = req.body || {};
     try {
+      // ---- Refund a service-fee credit now (the guest is not booking again) ----
+      // POST { mode: 'refundFeeCredit', id }
+      if (mode === 'refundFeeCredit') {
+        if (actingCtx) return res.status(403).json({ error: 'Only the guest can do this.' });
+        const id = Number((req.body || {}).id) || 0;
+        const own = await sql`SELECT id FROM fee_credits WHERE id = ${id} AND guest_id = ${guestId}`;
+        if (!own.length) return res.status(404).json({ error: 'Credit not found.' });
+        try {
+          const r = await require('./_fee-credits').refundCredit(sql, razorpayClient(), id, 'asked');
+          await logAudit(sql, { action: 'fee_credit_refunded', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'fee_credit', targetId: id, metadata: { amount: r.refunded, reason: 'asked' } });
+          return res.status(200).json({ success: true, refunded: r.refunded });
+        } catch (err) {
+          if (!err.isUserFacing) console.error('refundFeeCredit failed:', err);
+          return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not refund it right now. Please try again in a little while.' });
+        }
+      }
+
       // ---- Ask the host before booking (_inquiries.js) ----
       // POST { mode: 'inquiry', listingId, text, arrival?, departure?, guests? }
       if (mode === 'inquiry') {

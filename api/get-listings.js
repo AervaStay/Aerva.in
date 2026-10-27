@@ -582,7 +582,7 @@ const JOBS = [
     run: (c) => expireChanges(c.sql) },
   { name: 'coupon_release', label: 'Release cancellation coupons (15 minutes after a cancellation)', everyMinutes: 5,
     run: (c) => releaseDueCoupons(c.sql, { force: true }) },
-  { name: 'payouts', label: 'Payouts (5 PM on check-out day; retries every 4 hours; payout and refund status)', everyMinutes: 5,
+  { name: 'payouts', label: 'Payouts (5 PM on the day after check-in; retries every 4 hours; payout and refund status)', everyMinutes: 5,
     run: (c) => runAutoPayouts(c.sql, { deadlineMs: Math.min(4000, c.remainingMs), razorpay: razorpayClient() }) },
   { name: 'template_messages', label: 'Scheduled message templates', everyMinutes: 5,
     run: (c) => sendScheduledTemplates(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
@@ -620,6 +620,10 @@ const JOBS = [
   // allow is removed, and the admin emailed (_contact-checks.js).
   { name: 'contact_check_audit', label: 'Contact check: remove anything the message rules missed', dailyAtHour: 4, lockMinutes: 10,
     run: (c) => require('./_contact-checks').dailyAudit(c.sql) },
+  // Aerva credits whose period has ended: what is left is refunded in
+  // full to the original payment (_fee-credits.js).
+  { name: 'fee_credit_refunds', label: 'Refund Aerva credits that have ended', everyMinutes: 60, lockMinutes: 10,
+    run: (c) => require('./_fee-credits').runExpired(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'chat_number_cleanup', label: 'Remove phone numbers from chats of finished or cancelled bookings', everyMinutes: 15,
     run: (c) => require('./_message-guard').scrubEndedConversations(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'photo_scan', label: 'Check photos for contact details (and remove any that show them)', everyMinutes: 5, lockMinutes: 3,

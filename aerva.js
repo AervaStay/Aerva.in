@@ -6871,9 +6871,46 @@
     });
   })();
 
+  // Service-fee credits: when a host cancels, Aerva's service fee is held
+  // for the guest — used on their next booking, or refunded on request or
+  // when the credit period ends (_fee-credits.js).
+  async function loadFeeCredits(){
+    const box = document.getElementById('feeCreditsBox');
+    const token = guestAuthToken();
+    if(!box || !token) return;
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=feeCredits', { headers: { 'Authorization': 'Bearer ' + token } });
+      const d = await r.json();
+      const list = (r.ok && d.credits) || [];
+      if(!list.length){ box.innerHTML = ''; return; }
+      const fmtDate = (v) => new Date(v).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+      box.innerHTML = list.map(c => c.status === 'active' && c.remaining > 0 ? `
+        <div class="fee-credit-card">
+          <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
+          <div class="fee-credit-body">
+            <strong>Aerva credit</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}${c.amount > c.remaining ? ` <span class="fee-credit-from">· ${fmtGuest(c.remaining)} left of ${fmtGuest(c.amount)}</span>` : ''}
+            <p>${c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : 'Your host cancelled, so Aerva’s service fee is held for you.'} Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.</p>
+            <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund it now</button> <span class="fee-credit-msg"></span>
+          </div>
+        </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
+        : (c.refunded > 0 ? `<div class="fee-credit-card done"><div class="fee-credit-body">${fmtGuest(c.refunded)} of your Aerva credit was refunded on ${escapeMessageHtml(fmtDate(c.refundedAt))}. It usually reaches your account within 5–7 working days.</div></div>` : '')).join('');
+      box.querySelectorAll('[data-refund-credit]').forEach(btn => btn.addEventListener('click', async () => {
+        if(!confirm('Refund your Aerva credit now? It goes back to your original payment method and can no longer be used on a booking.')) return;
+        btn.disabled = true;
+        const msg = btn.parentNode.querySelector('.fee-credit-msg');
+        const rr = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ mode: 'refundFeeCredit', id: Number(btn.dataset.refundCredit) }) });
+        const j = await rr.json().catch(() => ({}));
+        if(!rr.ok){ msg.textContent = j.error || 'Could not refund it right now.'; btn.disabled = false; return; }
+        loadFeeCredits();
+      }));
+    }catch(e){ box.innerHTML = ''; }
+  }
+
   async function loadMyBookings(){
     const container = document.getElementById('myBookingsContainer');
     const token = guestAuthToken();
+    loadFeeCredits();
     if(!token){
       container.innerHTML = '<p class="suites-empty">Please <a href="guest-login.html" style="color:var(--gold-deep); text-decoration:underline;">log in</a> to see your bookings.</p>';
       return;
@@ -6903,21 +6940,25 @@
         // A paid stay whose check-out day has passed (in the listing's own
         // timezone — local_today comes from the server) is Completed.
         const completed = b.status === 'paid' && !!localToday && String(b.departure).slice(0, 10) < localToday;
-        // Stays can be changed before check-in and during the stay (the
-        // server applies the midnight-before-check-out limit exactly).
+        // Before check-in: change or request a cancellation. Once the stay
+        // has started: only change it (or report a problem), until 10 AM on
+        // the day after check-in (the server works this out: can_change,
+        // can_report, can_cancel_request).
         const ch = b.open_change;
         const changeHtml = !upcoming ? ''
           : ch && ch.status === 'pending' ? `<span class="booking-request-note">Change requested · waiting for your host <a href="#" data-withdraw-change="${ch.id}" style="color:var(--gold-text); margin-left:6px;">Withdraw</a></span>`
           : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="min-height:44px; padding:10px 18px;">Pay ₹${Number(ch.difference).toLocaleString('en-IN')} to confirm your change</button>`
+          : b.can_change === false ? (b.stay_window_closed ? '<span class="booking-request-note">Changes to this stay closed at 10 AM on the day after check-in</span>' : '')
           : `<button type="button" class="filter-clear" data-change-booking="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Change booking</button>`;
         const codeHtml = b.confirmation_code && b.status === 'paid'
           ? `<div class="confirm-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${escapeMessageHtml(b.confirmation_code)}">Copy</button></div>`
           : '';
         const inStay = !!localToday && (b.listing_type || 'stay') === 'stay' && String(b.arrival).slice(0, 10) <= localToday && localToday < String(b.departure).slice(0, 10);
-        const reportHtml = inStay ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Report a problem</button>` : '';
+        const reportHtml = inStay && b.can_report !== false ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Report a problem</button>` : '';
         const requestHtml = !upcoming ? ''
           : b.cancel_request_status === 'pending' ? '<span class="booking-request-note">Cancellation requested · waiting for the host</span>'
           : b.cancel_request_status === 'declined' ? '<span class="booking-request-note">Cancellation request declined by the host</span>'
+          : b.can_cancel_request === false ? ''
           : `<button type="button" class="filter-clear" data-policy-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Request cancellation</button>`;
         const chatBtnHtml = (b.status === 'paid' || b.status === 'cancelled')
           ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">${upcoming ? 'Message host' : 'View messages'}</button>`
@@ -8068,7 +8109,7 @@
       body.innerHTML = `
         <div class="hc-final">
           <p class="hc-cancel-head">Last step: compensate your guest</p>
-          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now refunds them (except Aerva’s service fee) and sends it.`
+          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now refunds them (Aerva’s service fee is held for them as a credit) and sends it.`
             : `Your guest gets a ${inr(amount)} Aerva coupon, paid by you now. The booking is cancelled the moment your payment goes through.`}</p>
           <div class="hc-actions hc-col">
             ${d.couponPaid ? `<button type="button" class="hc-btn hc-danger" data-pay="held">Cancel the booking</button>`
@@ -8108,7 +8149,7 @@
     }
     function done(r){
       body.innerHTML = `<div class="hc-done"><p class="hc-cancel-head">Booking cancelled</p>
-        <p>Your guest has been refunded (except Aerva’s service fee) and gets the ${inr(r.couponAmount || amount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes.
+        <p>Your guest has been refunded (Aerva’s service fee is held for them as a credit) and gets the ${inr(r.couponAmount || amount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes.
 </p></div>`;
       conv.booking_status = 'cancelled';
       try{ refreshInboxMessages(); loadInboxConversations(); }catch(e){}
@@ -14248,6 +14289,10 @@ const aervaQuoteSeq = {};
 function aervaQuote(slot, body){
   const n = (aervaQuoteSeq[slot] = (aervaQuoteSeq[slot] || 0) + 1);
   const headers = { 'Content-Type': 'application/json' };
+  // Signed in: the quote includes the guest's Aerva credit.
+  let token = null;
+  try { token = (typeof guestAuthToken === 'function') ? guestAuthToken() : localStorage.getItem('aerva_guest_session'); } catch(e){ token = null; }
+  if(token) headers.Authorization = 'Bearer ' + token;
   return fetch((window.AERVA_API || (window.AERVA_API || 'https://aerva-in.vercel.app')) + '/api/create-order', { method: 'POST', headers,
       body: JSON.stringify(Object.assign({}, body, { quoteOnly: true })) })
     .then(async r => {
@@ -14282,6 +14327,7 @@ function aervaQuoteBodyHtml(q){
   return `${aervaQuoteRowsHtml(q)}
     <div class="sum-row" style="font-weight:600; margin-top:8px; padding-top:8px; border-top:1px solid var(--line-dark);"><span>Total</span><span>${fmtGuest(Number(q.total) || 0)}</span></div>
     ${inrNote}
+    ${Number(q.creditBalance) > 0 ? `<p class="quote-credit" style="font-size:12.5px; margin-top:8px; padding:8px 10px; border-radius:8px; background:var(--cream-2, #f4eadc);">You have ${fmtGuest(Number(q.creditBalance))} Aerva credit${Number(q.feeCredit) > 0 ? `: ${fmtGuest(Number(q.feeCredit))} is taken off this booking${Number(q.creditBalance) > Number(q.feeCredit) ? ', and the rest stays on your credit' : ''}.` : '.'} See it in My Bookings.</p>` : ''}
     <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">This is the total you pay. Any coupon is taken off at payment.</p>`;
 }
 function aervaQuoteErrorHtml(err){
@@ -14809,7 +14855,7 @@ function openReportProblem(orderId, listingName){
     <button type="button" class="payout-close" aria-label="Close">×</button>
     <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Report a problem</h2>
     <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
-    <p class="step-help">Tell your host and Aerva what is wrong, with photos. Aerva decides after hearing your host. If the problem is upheld, the nights from today to check-out are refunded.</p>
+    <p class="step-help">Tell your host and Aerva what is wrong, with photos. Aerva decides after hearing your host. If the problem is upheld, the nights after the check-in night are refunded.</p>
     <label class="payout-label" for="rpReason">What is the problem?</label>
     <select id="rpReason" style="${field}">
       <option value="not_as_described">Not as described in the listing</option>
@@ -14881,11 +14927,11 @@ async function openChangeBooking(orderId, listingName){
   body.innerHTML = `
     ${bookStep(1, isStay ? 'New dates' : 'New date')}
     ${o.kind === 'pair' ? '<p class="step-help">This experience includes a stay. Both move together.</p>' : ''}
-    ${o.started ? `<p class="step-help">${isStay ? `You have checked in, so check-in stays ${esc(o.current.arrival)}. You can change check-out.` : 'This has already started, so the date cannot move. You can change the number of guests.'}</p>` : ''}
+    ${o.started ? `<p class="step-help">${isStay ? `You have checked in, so check-in stays ${esc(o.current.arrival)}. You can bring check-out forward: the check-in night stays part of your stay. If your host agrees, the nights you no longer stay come back to you as Aerva credit, which you can use on another booking or have refunded.` : 'This has already started, so the date cannot move. You can change the number of guests.'}${o.windowEndsLabel ? ` Changes during a stay can be asked for until ${esc(o.windowEndsLabel)} (the property’s local time).` : ''}</p>` : ''}
     <label class="payout-label" for="chIn">${isStay ? 'Check-in' : 'Date'}</label>
     <input id="chIn" type="date" value="${esc(o.current.arrival)}" min="${esc(o.today)}" ${o.started ? 'disabled' : ''} style="${field}">
     ${isStay ? `<label class="payout-label" for="chOut">Check-out</label>
-    <input id="chOut" type="date" value="${esc(o.current.departure)}" style="${field}">` : ''}
+    <input id="chOut" type="date" value="${esc(o.current.departure)}"${o.started ? ` min="${esc([o.today, new Date(new Date(o.current.arrival + 'T00:00:00Z').getTime() + 864e5).toISOString().slice(0, 10)].sort().pop())}"` : ''} style="${field}">` : ''}
     ${bookStep(2, 'Who is coming')}
     ${num('chAdults', 'Adults (18 or over)', Math.max(1, o.current.guests), 1, maxG)}
     ${num('chChildren', 'Children (2–17)', 0, 0, maxG)}

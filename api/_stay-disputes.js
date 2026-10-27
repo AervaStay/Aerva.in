@@ -1,24 +1,32 @@
 // /api/_stay-disputes.js — a guest is unhappy during a stay. Not an endpoint.
 //
-//   1. During the stay (from check-in day until the day before check-out)
-//      the guest reports the problem with evidence — at least one photo or
-//      document — in My Bookings. It appears in the booking's thread.
+//   1. During the stay window — from check-in until 10 AM (property's clock)
+//      on the day after check-in (_booking-rules.js stayWindowEndMs) — the
+//      guest reports the problem with evidence — at least one photo or
+//      document — in My Bookings. It appears in the booking's thread. A
+//      change the guest asked for in that window and the host declined (or
+//      did not answer) can be taken to Aerva this way within
+//      DECLINED_GRACE_HOURS of that, counted from the day it was asked.
 //   2. The host answers with their justification and any evidence.
 //   3. Aerva decides. The host's account is given more weight: the guest is
 //      refunded only when their evidence stands and the host cannot justify.
-//   4. Refund decided → the nights from the day the dispute was raised to
-//      check-out are refunded (their booking price and GST; Aerva's service fee is never refunded).
+//   4. Refund decided → every night after the check-in night is refunded
+//      (booking price and GST; Aerva's service fee is never refunded). The
+//      check-in night is always kept.
 //      The host is paid for the nights already used, less Aerva's commission
 //      on those nights. The security deposit is not part of this.
 //   While a dispute is open, the host's payout for the booking is held
 //   (_payouts.js), so nothing is paid out that may have to be refunded.
+//   Payouts go the day after check-in, so a problem reported later in the
+//   stay may come after the payout: then what the host (and co-hosts) are
+//   no longer owed is deducted from their next payout (settleAfterPayout).
 //   One open dispute per booking; every step moves the status forward with a
 //   guarded update, so nothing is decided or refunded twice.
 
 const { refundAcrossPayments } = require('./_refunds');
-const { returnCouponValue, postThreadMessage } = require('./_cancellations');
+const { returnValue, postThreadMessage } = require('./_cancellations');
 const { logAudit } = require('./_audit-log');
-const { dateStr, paidByOrderRow } = require('./_booking-rules');
+const { dateStr, paidByOrderRow, stayWindowEndMs, localDateAt } = require('./_booking-rules');
 
 const REASONS = {
   not_as_described: 'Not as described in the listing',
@@ -62,7 +70,23 @@ async function raiseDispute(sql, { orderId, guestId, reason, details, evidence }
   if (o.status !== 'paid' || (o.order_type || 'stay') !== 'stay') throw userError('Only a confirmed stay can be reported.');
   const today = dateStr(o.local_today), arrival = dateStr(o.arrival), departure = dateStr(o.departure);
   if (today < arrival) throw userError('You can report a problem once your stay has started. Before check-in, message your host or request a cancellation.');
-  if (today >= departure) throw userError('Problems can be reported during the stay, up to the day before check-out.');
+  if (today >= departure) throw userError('This stay has ended.');
+  // In the stay window: counted from today. After it: only a change asked
+  // for in time that the host declined or did not answer, counted from the
+  // day it was asked.
+  let raisedOn = today;
+  if (Date.now() >= stayWindowEndMs(arrival, o.timezone)) {
+    const { DECLINED_GRACE_HOURS } = require('./_booking-changes');
+    let ch = null;
+    try {
+      ch = (await sql`SELECT created_at FROM booking_changes WHERE order_id = ${orderId} AND status IN ('declined', 'expired') AND decided_at IS NOT NULL
+                        AND decided_at > now() - make_interval(hours => ${DECLINED_GRACE_HOURS}) ORDER BY id DESC LIMIT 1`)[0] || null;
+    } catch (e) { ch = null; }
+    if (!ch || new Date(ch.created_at).getTime() >= stayWindowEndMs(arrival, o.timezone)) {
+      throw userError('Problems with a stay can be reported until 10 AM on the day after check-in.');
+    }
+    raisedOn = localDateAt(ch.created_at, o.timezone);
+  }
   if (!REASONS[reason]) throw userError('Choose what the problem is.');
   const files = cleanFiles(evidence);
   if (!files.length) throw userError('Please add at least one photo or document as evidence.');
@@ -71,7 +95,7 @@ async function raiseDispute(sql, { orderId, guestId, reason, details, evidence }
   let row;
   try {
     row = (await sql`INSERT INTO stay_disputes (order_id, guest_id, raised_date, reason, details, evidence)
-                     VALUES (${orderId}, ${guestId}, ${today}, ${reason}, ${text}, ${JSON.stringify(files)}) RETURNING *`)[0];
+                     VALUES (${orderId}, ${guestId}, ${raisedOn}, ${reason}, ${text}, ${JSON.stringify(files)}) RETURNING *`)[0];
   } catch (err) {
     if (/idx_stay_disputes_open|duplicate key/.test(err.message)) throw userError('You have already reported a problem on this stay. Aerva is looking into it.', 409);
     throw err;
@@ -81,7 +105,7 @@ async function raiseDispute(sql, { orderId, guestId, reason, details, evidence }
   await postThreadMessage(sql, orderId, 'guest', `I have reported a problem with this stay to Aerva: ${REASONS[reason]}. ${text}`);
   await email(await hostEmail(sql, o.host_id), `A guest reported a problem at ${o.property_name}`,
     `<h2 style="font-family:Georgia,serif;">A guest reported a problem</h2><p><strong>${esc(o.property_name)}</strong></p><p>${esc(REASONS[reason])}: ${esc(text)}</p>
-     <p>Please reply in Messages with your side and any photos. Aerva decides; your payout for this booking is held until then.</p>
+     <p>Please reply in Messages with your side and any photos. Aerva decides; part of your payout for this booking is held until then.</p>
      <p><a href="https://aerva.in/index.html?view=messages" style="color:#8a6c39;">Open Messages</a></p>`);
   await email(process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `Stay dispute #${row.id}: ${o.property_name}`, `<p>${esc(REASONS[reason])}: ${esc(text)}</p><p>Review it in Admin → Stay disputes.</p>`);
   return row;
@@ -117,13 +141,15 @@ async function decideDispute(sql, razorpay, { disputeId, refund, note = '', admi
   }
   try {
     const nights = Math.max(1, Number(o.nights) || 1);
-    const departure = new Date(dateStr(o.departure) + 'T00:00:00Z'), raised = new Date(dateStr(d.raised_date) + 'T00:00:00Z');
+    // Counted from check-in: the check-in night is kept, every night after it is refunded.
+    const departure = new Date(dateStr(o.departure) + 'T00:00:00Z'), raised = new Date(dateStr(o.arrival) + 'T00:00:00Z');
     // Nights an earlier upheld report on this stay already refunded (always
     // the last nights of the stay) are never refunded again.
     let before = 0;
     try { before = Number((await sql`SELECT COALESCE(SUM(nights_refunded), 0)::int AS n FROM stay_disputes WHERE order_id = ${o.id} AND status = 'refunded' AND id <> ${disputeId}`)[0].n) || 0; } catch (e) { before = 0; }
     before = Math.min(nights, before);
-    const refundNights = Math.max(0, Math.min(nights, Math.max(0, Math.round((departure - raised) / 86400000))) - before);
+    // The check-in night is kept: refunded from the next night on.
+    const refundNights = Math.max(0, Math.min(nights, Math.max(0, Math.round((departure - raised) / 86400000) - 1)) - before);
     if (!refundNights) throw userError('There are no nights left to refund after the day this was raised.');
     const share = refundNights / nights;
     // What the guest actually paid for this row (allocatePaid): the part of
@@ -138,7 +164,9 @@ async function decideDispute(sql, razorpay, { disputeId, refund, note = '', admi
     const feeBack = 0;   // Aerva's service fee is never refunded
     const cashCap = Math.max(0, Math.round(Number(paid.paid) || 0) - Math.round(Number(o.deposit_amount) || 0));
     const cash = Math.min(bookingCash + gstBack + feeBack, cashCap);
-    const total = cash + couponBack;
+    // Paid partly with Aerva credit: what the card cannot take goes back onto the credit.
+    const creditBack = Math.min(Math.max(0, Math.round(Number(paid.creditUsed) || 0)), Math.max(0, bookingCash + gstBack + feeBack - cash));
+    const total = cash + couponBack + creditBack;
     // The host keeps the nights used. The booking's commission and payout
     // now cover the nights not yet refunded (an earlier upheld report may
     // have reduced them): they shrink to the nights still kept.
@@ -148,19 +176,23 @@ async function decideDispute(sql, razorpay, { disputeId, refund, note = '', admi
     // Cash as far as the booking's payments allow; the coupon part (and any
     // cash no payment has left) comes back as a coupon.
     const r = await refundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: cash, kindBase: `dispute-${disputeId}` });
-    r.shortfallInr = (r.shortfallInr || 0) + couponBack;
-    if (r.shortfallInr > 0) await returnCouponValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: r.shortfallInr, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
+    r.shortfallInr = (r.shortfallInr || 0) + couponBack + creditBack;
+    let back = { credit: 0, coupon: 0 };
+    if (r.shortfallInr > 0) back = await returnValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: r.shortfallInr, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
     await sql`UPDATE orders SET commission_amount = ${commissionKept}, payout_amount = ${hostPayout} WHERE id = ${o.id}`;
     try { await sql`UPDATE order_cohost_shares SET amount = round(${hostPayout}::numeric * percent / 100) WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
+    // Paid out already (payouts go the day after check-in): what the host
+    // and co-hosts are no longer owed comes off their next payout.
+    const settled = await require('./_payouts').settleAfterPayout(sql, o.id, { reason: 'A problem the guest reported was upheld after the payout was sent' });
     await sql`UPDATE stay_disputes SET status = 'refunded', nights_refunded = ${refundNights}, refund_amount = ${total} WHERE id = ${disputeId}`;
     await logAudit(sql, { action: 'stay_dispute_decided', success: true, actorType: 'admin', actorIdentifier: adminLabel, targetType: 'order', targetId: o.id,
       metadata: { disputeId, refund: true, refundNights, total, hostPayout } });
     const nightsUsed = nights - before - refundNights;
     await postThreadMessage(sql, o.id, 'host', `Aerva has decided the reported problem in the guest’s favour: ${refundNights} night${refundNights === 1 ? '' : 's'} refunded (${inr(total)}). The host is paid for the ${nightsUsed} night${nightsUsed === 1 ? '' : 's'} used.`);
     await email(o.guest_email, `Refund for your stay at ${o.property_name}`,
-      `<h2 style="font-family:Georgia,serif;">Your report was upheld</h2><p>${refundNights} night${refundNights === 1 ? '' : 's'}, from the day you reported the problem to check-out, are refunded: <strong>${inr(total)}</strong>${r.shortfallInr ? ` (${inr(r.shortfallInr)} of it as a coupon)` : ''}.</p>${note ? `<p>${esc(note)}</p>` : ''}`);
+      `<h2 style="font-family:Georgia,serif;">Your report was upheld</h2><p>${refundNights} night${refundNights === 1 ? '' : 's'}, after the day you reported the problem, to check-out, are refunded: <strong>${inr(total)}</strong>${back.credit ? ` (${inr(back.credit)} of it back on your Aerva credit)` : ''}${back.coupon ? ` (${inr(back.coupon)} of it as a coupon)` : ''}.</p>${note ? `<p>${esc(note)}</p>` : ''}`);
     await email(await hostEmail(sql, o.host_id), `Decision on the reported problem at ${o.property_name}`,
-      `<h2 style="font-family:Georgia,serif;">Aerva’s decision</h2><p>The guest’s report was upheld. ${refundNights} night${refundNights === 1 ? '' : 's'} were refunded to the guest. You are paid for the ${nightsUsed} night${nightsUsed === 1 ? '' : 's'} used: ${inr(hostPayout)} after Aerva’s commission, on the usual payout day.</p>${note ? `<p>${esc(note)}</p>` : ''}`);
+      `<h2 style="font-family:Georgia,serif;">Aerva’s decision</h2><p>The guest’s report was upheld. ${refundNights} night${refundNights === 1 ? '' : 's'} were refunded to the guest. You are paid for the ${nightsUsed} night${nightsUsed === 1 ? '' : 's'} used: ${inr(hostPayout)} after Aerva’s commission${settled.hostRecovered > 0 ? `. Your payout for this booking had already been sent, so the ${inr(settled.hostRecovered)} no longer owed will be deducted from your next payout` : ', on the usual payout day'}.</p>${note ? `<p>${esc(note)}</p>` : ''}`);
     return { refunded: true, refundNights, total, hostPayout };
   } catch (err) {
     await unclaim();

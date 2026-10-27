@@ -1412,7 +1412,11 @@ async function loadPayoutDeductions(){
       const top = document.querySelector('.wrap .top-row');
       if(top) top.after(box); else (document.querySelector('.wrap') || document.body).prepend(box);
     }
-    box.textContent = 'To be deducted from your next payout: ₹' + Number(data.total).toLocaleString('en-IN') + ' (guest cancellation coupons).';
+    const kinds = new Set((data.owed || []).map(o => o.kind || 'coupon'));
+    const why = kinds.has('overpaid') && kinds.has('coupon') ? 'guest cancellation coupons, and amounts paid before on bookings reduced after their payout was sent'
+      : kinds.has('overpaid') ? 'amounts paid before on bookings reduced after their payout was sent (a cancellation, a shorter stay or a guest’s upheld report during the stay)'
+      : 'guest cancellation coupons';
+    box.textContent = 'To be deducted from your next payout: ₹' + Number(data.total).toLocaleString('en-IN') + ' (' + why + ').';
   }catch(err){ /* leave the page as it is */ }
 }
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadPayoutDeductions); else loadPayoutDeductions();

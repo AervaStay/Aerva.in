@@ -27,7 +27,7 @@ const { sendBookingConfirmedTemplates } = require('./_template-scheduling');
 const { recordCohostShares } = require('./_cohosts');
 const { safeRefund } = require('./_refunds');
 const { convertInrToForeignSubunit } = require('./_currency');
-const { allocatePaid, releaseHolds, holdValidForConfirmation } = require('./_booking-rules');
+const { allocatePaid, paymentRows, releaseHolds, holdValidForConfirmation } = require('./_booking-rules');
 const { confirmChangePayment } = require('./_booking-changes');
 const { markIdDeadlineIfMissing } = require('./_guest-id');
 
@@ -167,12 +167,15 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
     const row = (label, amount) => doc.fontSize(10.5).font('Helvetica').text(`${label}: ${amount}`, { align: 'right' });
     const coupon = Math.max(0, Math.round(Number(couponDiscount) || 0));
     const beforeCoupon = sumSubtotal + sumGst + sumFee + sumDeposit;
-    const paid = Math.max(0, beforeCoupon - coupon);
+    // Paid with Aerva credit (a host cancelled an earlier booking, _fee-credits.js).
+    const credit = [...stays, ...experiences].reduce((t, x) => t + Math.max(0, Math.round(Number(x.feeCreditUsed) || 0)), 0);
+    const paid = Math.max(0, beforeCoupon - coupon - credit);
     row('Bookings', fmt(sumSubtotal));
     if (sumGst > 0) row('GST', fmt(sumGst));
     if (sumFee > 0) row('Guest service fee', fmt(sumFee));
     if (sumDeposit > 0) row('Refundable deposit', fmt(sumDeposit));
     if (coupon > 0) row('Coupon', '- ' + fmt(coupon));
+    if (credit > 0) row('Aerva credit', '- ' + fmt(credit));
     doc.moveDown(0.3);
     doc.fontSize(13).font('Helvetica-Bold').text(`Total paid: ${fmt(paid)}${chargeCurrency && chargeCurrency !== 'INR' ? ' (charged in ' + chargeCurrency + ')' : ''}`, { align: 'right' });
     // Aerva's GST registration, once set in Vercel. Until then it is left
@@ -403,7 +406,7 @@ function planRows(ctx) {
       subtotal, discountAmount: stay.discountAmount || 0, gst, guestServiceFee,
       total: subtotal + gst + guestServiceFee + depositAmount,
       effectiveRate, commissionAmount, payoutAmount: subtotal - commissionAmount,
-      depositAmount, depositReleaseAt, ...takeCoupon()
+      depositAmount, depositReleaseAt, feeCreditUsed: Math.round(Number(stay.feeCreditUsed) || 0), ...takeCoupon()
     });
   }
   for (const ex of experiences) {
@@ -417,7 +420,7 @@ function planRows(ctx) {
       total: ex.subtotal + gst + guestServiceFee,
       effectiveRate: ex.commissionRate != null ? Number(ex.commissionRate) : FALLBACK_COMMISSION_RATE,
       commissionAmount, payoutAmount: ex.subtotal - commissionAmount,
-      depositAmount: 0, depositReleaseAt: null, ...takeCoupon()
+      depositAmount: 0, depositReleaseAt: null, feeCreditUsed: Math.round(Number(ex.feeCreditUsed) || 0), ...takeCoupon()
     });
   }
   return rows;
@@ -546,7 +549,7 @@ async function sendConflictEmail(ctx, reasonText, refundedInr, refundFailed) {
 // (an amount mismatch, another currency) the whole amount is refunded once,
 // against the first row.
 async function refundWholePayment(sql, razorpay, ctx, orderIds) {
-  const paid = allocatePaid(await sql`SELECT id, subtotal, total, coupon_discount FROM orders WHERE id = ANY(${orderIds})`);
+  const paid = allocatePaid(await paymentRows(sql, { ids: orderIds }));
   const ids = [...orderIds].sort((a, b) => Number(a) - Number(b));
   let left = null;
   try {
@@ -596,7 +599,7 @@ async function cancelAndScheduleRefund(sql, razorpay, ctx, rows, reason) {
   // What the guest is told and what is scheduled: the amount Razorpay
   // actually captured (less anything already refunded), in rupees — not the
   // booking rows, which by definition did not match the payment here.
-  const paid = allocatePaid(await sql`SELECT id, subtotal, total, coupon_discount FROM orders WHERE id = ANY(${ids})`);
+  const paid = allocatePaid(await paymentRows(sql, { ids }));
   const amountInr = ctx.chargeCurrency === 'INR' && ctx.capturedSubunit != null
     ? Math.round(ctx.capturedSubunit / 100)
     : ids.reduce((t, id) => t + ((paid[id] || {}).paid || 0), 0);
@@ -731,6 +734,8 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       couponId: src.couponId ? Number(src.couponId) : null,
       couponDiscount: src.couponDiscount ? Number(src.couponDiscount) : 0,
       couponForfeited: src.couponForfeited ? Number(src.couponForfeited) : 0,
+      // Aerva credit taken off this payment (_fee-credits.js): [{ creditId, amount }].
+      feeCredits: Array.isArray(src.feeCredits) ? src.feeCredits.map(a => ({ creditId: Number(a.creditId), amount: Math.round(Number(a.amount) || 0) })).filter(a => a.creditId && a.amount > 0) : [],
       agreement,
       orderAmount: Number(order.amount),
       orderCreatedAt: order.created_at ? Number(order.created_at) : null,
@@ -760,7 +765,8 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
   try {
     const expected = ctx.stays.reduce((t, x) => t + Number(x.subtotal) + Number(x.gst || 0) + Number(x.guestServiceFee || 0) + Number(x.depositAmount || 0), 0)
                    + ctx.experiences.reduce((t, x) => t + Number(x.subtotal) + Number(x.gst || 0) + Number(x.guestServiceFee || 0), 0)
-                   - Number(ctx.couponDiscount || 0);
+                   - Number(ctx.couponDiscount || 0)
+                   - [...ctx.stays, ...ctx.experiences].reduce((t, x) => t + Math.max(0, Math.round(Number(x.feeCreditUsed) || 0)), 0);
     let mismatch = null;
     if (Number(check.payment.amount) !== ctx.orderAmount) mismatch = 'The amount paid did not match the amount of the order.';
     else if (ctx.chargeCurrency === 'INR' && ctx.orderAmount !== Math.round(expected * 100)) mismatch = 'The amount paid did not match the booking amount.';
@@ -810,6 +816,19 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     if (got.length) couponClaimed = true;
     else conflictReason = 'The coupon on this booking had already been used on another booking.';
   }
+  // 4b. Aerva credit still there? Claimed the same way, all or none.
+  let creditClaimed = false;
+  if (!conflictReason && ctx.feeCredits.length) {
+    try {
+      creditClaimed = await require('./_fee-credits').claim(sql, ctx.feeCredits);
+      if (!creditClaimed) conflictReason = 'The Aerva credit on this booking had already been used or refunded.';
+    } catch (err) { conflictReason = 'The Aerva credit on this booking could not be applied.'; }
+  }
+  const unclaimCredit = async () => {
+    if (!creditClaimed) return;
+    await require('./_fee-credits').unclaim(sql, ctx.feeCredits);
+    creditClaimed = false;
+  };
   const unclaimCoupon = async () => {
     if (!couponClaimed) return;
     try { await sql`UPDATE coupons SET status = 'active', redeemed_at = NULL WHERE id = ${ctx.couponId} AND status = 'redeemed' AND redeemed_order_id IS NULL`; }
@@ -837,6 +856,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       console.error('confirmBooking: could not write the booking:', razorpayOrderId, err);
       if (!written.length) {
         await unclaimCoupon();
+        await unclaimCredit();
         await release();
         return { status: 'error', message: 'Could not save the booking right now.' };
       }
@@ -851,6 +871,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
   // 6a. Conflict: record, refund in full, tell the guest.
   if (conflictReason) {
     await unclaimCoupon();
+    await unclaimCredit();
     const already = new Set(written.map(w => w.row));
     for (const row of rows) {
       if (already.has(row)) continue;
@@ -884,6 +905,12 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     await sql`UPDATE orders o SET cancellation_policy = l.cancellation_policy FROM listings l
               WHERE o.id = ANY(${written.map(w => w.id)}) AND l.id = o.listing_id`;
   } catch (err) { /* before migration_cancellation_policy.sql: treated as Flexible */ }
+  if (creditClaimed) {
+    try {
+      for (const { row, id } of written) if (row.feeCreditUsed > 0) await sql`UPDATE orders SET fee_credit_used = ${row.feeCreditUsed} WHERE id = ${id}`;
+      await require('./_fee-credits').recordUses(sql, ctx.feeCredits, written.map(w => ({ id: w.id, feeCreditUsed: w.row.feeCreditUsed })));
+    } catch (err) { console.error('fee credit use not recorded:', err.message); }
+  }
   for (const { row, id } of written) {
     try { await afterPaidRow(sql, ctx, row, id); }
     catch (err) { console.error('post-booking step failed (booking kept):', id, err.message); }
