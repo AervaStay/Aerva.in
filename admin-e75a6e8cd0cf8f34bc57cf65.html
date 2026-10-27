@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-10-27c"></script>
+<script src="aerva-policies.js?v=2026-10-28b"></script>
 </head>
 <body>
 
@@ -696,7 +696,7 @@
 
   <div id="contactView" style="display:none;">
     <h2>Contact Checks</h2>
-    <p style="opacity:0.7; font-size:14px;">Checks that chats follow the rules: no contact details in enquiries; during a confirmed booking phone numbers and email addresses are allowed until check-out, and photos until the review period closes (no links, social handles or UPI IDs); after check-out or a cancellation, numbers, emails and photos showing contact details are removed, silently. Shows anything still visible that should not be, what was removed in the last 30 days, and lets you try a message.</p>
+    <p style="opacity:0.7; font-size:14px;">Checks that chats follow the rules: no contact details in enquiries; during a confirmed booking phone numbers, email addresses and photos are allowed until 15 days after check-out (no links, social handles or UPI IDs); after that or a cancellation, numbers, emails and photos showing contact details are removed, silently. Shows anything still visible that should not be, what was removed in the last 30 days, and lets you try a message.</p>
     <div id="contactBody"><p style="opacity:0.6;">Loading…</p></div>
   </div>
 
@@ -3473,12 +3473,13 @@
           <h4>${escAdmin(d.suite_name)} — ${fmt(d.deposit_amount)} deposit</h4>
           <div class="dispute-meta">${escAdmin(dateRange)} · Host: ${escAdmin(d.host_name)} (${escAdmin(d.host_email)}) · Guest: ${escAdmin(d.guest_email)}</div>
           <div class="dispute-reason-box">"${escAdmin(d.dispute_reason)}"</div>
+          <div class="dispute-meta" style="margin:-4px 0 8px;">Host’s proof: ${Array.isArray(d.dispute_evidence) && d.dispute_evidence.length ? d.dispute_evidence.map((u, i) => `<a href="${escAdmin(u)}" target="_blank" rel="noopener" style="color:#8a6c39; margin-right:8px;">${/\.(mp4|mov|webm)(\?|$)/i.test(u) ? 'Video' : 'File'} ${i + 1}</a>`).join('') : '<span style="color:#a3402f;">none sent</span>'}${d.dispute_amount != null ? ` · Host keeps <strong>${fmt(d.dispute_amount)}</strong> (the host’s decision; check the proof is there)` : ''}</div>
           <div class="dispute-meta" style="margin:-4px 0 10px;">Raised ${escAdmin(fmtDate(d.dispute_raised_at))} · ${(d.guestRequests || []).length
             ? 'Guest’s side: ' + d.guestRequests.map(r => `<a href="#" onclick="switchTab('support'); openSupport(${Number(r.id)}); return false;" style="color:#8a6c39;">${escAdmin(r.ref)}</a> (${escAdmin(r.subject)})`).join(', ')
             : 'The guest has been emailed and can send their side as a Support request; none yet.'}</div>
           <div class="resolve-row">
             <label style="font-size:12.5px;">Compensate host ₹</label>
-            <input type="number" id="compensation-${Number(d.id)}" min="0" max="${Number(d.deposit_amount)}" placeholder="0">
+            <input type="number" id="compensation-${Number(d.id)}" min="0" max="${Number(d.deposit_amount)}" placeholder="0" value="${d.dispute_amount != null ? Number(d.dispute_amount) : ''}">
             <button type="button" class="resolve-btn" onclick="resolveDispute(${Number(d.id)}, ${Number(d.deposit_amount)})">Resolve</button>
             <span id="resolveError-${Number(d.id)}" class="error"></span>
           </div>
@@ -3755,6 +3756,7 @@ function lkBookingHtml(d){
           <label class="lk-check"><input type="checkbox" id="lkFee" onchange="lkHidePreview(); document.getElementById('lkFeeWhyWrap').style.display = this.checked ? '' : 'none';"> Also refund Aerva’s service fee${Number(b.guest_service_fee) ? ` (${lkInr(b.guest_service_fee)})` : ''} — only for Aerva’s mistake or an exceptional case</label>
           <label class="lk-wide" id="lkFeeWhyWrap" style="display:none;">Why the service fee is refunded (required, recorded)<textarea id="lkFeeWhy" maxlength="500" placeholder="e.g. Aerva's own error charged the guest twice"></textarea></label>
           <label class="lk-check" title="Use when Aerva cancels for the host (e.g. a host emergency within 48 hours)"><input type="checkbox" id="lkHostCount"> Count as the host’s cancellation</label>
+          <label class="lk-check lk-wide" title="A host who has used their 3 cancellations a year asks Aerva to cancel"><input type="checkbox" id="lkForHost" onchange="lkHidePreview(); ['lkPct','lkFee','lkHostCount'].forEach(i => { const e = document.getElementById(i); if(e) e.disabled = this.checked; });"> Cancel for the host (over their limit): refund everything the guest paid — price, GST, Aerva’s fee and deposit — and give the guest a 10% coupon, deducted from the host’s next payout</label>
           <label class="lk-wide">Reason (the guest and host see this)<textarea id="lkCancelReason" maxlength="400" placeholder="e.g. Host emergency — flooding in the area; full refund agreed"></textarea></label>
           <button type="button" class="lk-btn is-ghost" onclick="lkCancelPreview(${Number(b.id)})">Preview the refund</button>
           <button type="button" class="lk-btn is-danger" id="lkCancelBtn" onclick="lkCancel(${Number(b.id)})">Cancel booking</button>
@@ -3782,12 +3784,13 @@ function lkHidePreview(){ const p = document.getElementById('lkPreview'); if(p) 
 function lkCancelBody(id, preview){
   return { adminCancelBooking: { orderId: id, refundPercent: Number(document.getElementById('lkPct').value), refundFee: document.getElementById('lkFee').checked,
            feeReason: (document.getElementById('lkFeeWhy') || {}).value || '',
-           countAgainstHost: document.getElementById('lkHostCount').checked, reason: document.getElementById('lkCancelReason').value.trim(), preview } };
+           countAgainstHost: document.getElementById('lkHostCount').checked, forHost: !!(document.getElementById('lkForHost') || {}).checked,
+           reason: document.getElementById('lkCancelReason').value.trim(), preview } };
 }
 async function lkCancelPreview(id){
   const box = document.getElementById('lkPreview'), msg = document.getElementById('lkCancelMsg');
   msg.textContent = ''; msg.className = 'lk-msg';
-  const pct = Number(document.getElementById('lkPct').value);
+  const pct = (document.getElementById('lkForHost') || {}).checked ? 100 : Number(document.getElementById('lkPct').value);
   if(!(pct >= 0 && pct <= 100)){ msg.textContent = 'Enter 0 to 100%.'; msg.className = 'lk-msg is-err'; return null; }
   try{
     const d = await lkPost(lkCancelBody(id, true));
@@ -3809,7 +3812,7 @@ async function lkCancel(id){
   const btn = document.getElementById('lkCancelBtn'); btn.disabled = true; btn.textContent = 'Cancelling…';
   try{
     const d = await lkPost(lkCancelBody(id, false));
-    msg.textContent = `Cancelled. ${lkInr(d.refundCash)} refunded${d.couponBack ? ` + ${lkInr(d.couponBack)} coupon` : ''}. Guest and host emailed.`; msg.className = 'lk-msg is-ok';
+    msg.textContent = `Cancelled. ${lkInr(d.refundCash)} refunded${d.couponBack ? ` + ${lkInr(d.couponBack)} coupon` : ''}${d.couponForGuest ? `; a ${lkInr(d.couponForGuest)} coupon goes to the guest in 15 minutes, deducted from the host’s next payout` : ''}. Guest and host emailed.`; msg.className = 'lk-msg is-ok';
     setTimeout(lkLoadDetail, 1400);
   }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; btn.disabled = false; btn.textContent = 'Cancel booking'; }
 }

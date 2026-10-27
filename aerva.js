@@ -5787,7 +5787,7 @@
       document.getElementById('availPeekOpen').onclick = () => { closeAvailabilityPeek(); openListingDetail(listingId); };
       return;
     }
-    const minIso = (() => { try{ return aervaEarliestArrival(listing.timezone || 'Asia/Kolkata'); }catch(e){ return toLocalDateStr(new Date()); } })();
+    const minIso = (() => { try{ return aervaEarliestArrival(listing.timezone || 'Asia/Kolkata', listing.same_day_until); }catch(e){ return toLocalDateStr(new Date()); } })();
     const fmt = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
     const nightsBetween = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 864e5);
     const rangeFree = (a, b) => getNightsInRangeClient(a, b).every(n => !taken.has(n));
@@ -6753,6 +6753,7 @@
       <div class="rv-set">${GUEST_REVIEW_FACTORS.map(starRowHtml).join('')}</div>
       <label class="rv-comment-label" for="guestReviewComment">A few words for other hosts</label>
       <textarea id="guestReviewComment" rows="4" maxlength="1000" placeholder="How was it having them stay?"></textarea>
+      ${p.depositHeld ? `<label style="display:flex; gap:10px; align-items:flex-start; margin-top:12px; font-size:14px; cursor:pointer;"><input type="checkbox" id="guestReviewDeposit" style="margin-top:3px; width:18px; height:18px;"> <span>No damage — refund the guest’s ₹${Number(p.depositHeld).toLocaleString('en-IN')} security deposit now. It reaches them in 2 bank working days instead of after 7 days, and you can no longer raise a concern about it.</span></label>` : ''}
       <button type="button" class="btn solid" id="guestReviewSend" style="width:100%; margin-top:14px; cursor:pointer;">Send review</button>
       <p class="payout-muted" id="guestReviewMsg" style="margin-top:10px;"></p></div>`;
     const close = () => { ov.remove(); };
@@ -6771,7 +6772,8 @@
       try{
         const res = await fetch(SUITES_API_BASE + '/api/host-listings', { method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-          body: JSON.stringify({ reviewGuest: Object.assign({ orderId: p.orderId, comment: ov.querySelector('#guestReviewComment').value.trim() }, scores) }) });
+          body: JSON.stringify({ reviewGuest: Object.assign({ orderId: p.orderId, comment: ov.querySelector('#guestReviewComment').value.trim(),
+            releaseDeposit: !!(ov.querySelector('#guestReviewDeposit') || {}).checked }, scores) }) });
         const d = await res.json().catch(() => ({}));
         if(!res.ok){ btn.disabled = false; msg.textContent = d.error || 'Could not submit this review.'; return; }
         close();
@@ -6889,7 +6891,7 @@
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
           <div class="fee-credit-body">
             <strong>Aerva credit</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}${c.amount > c.remaining ? ` <span class="fee-credit-from">· ${fmtGuest(c.remaining)} left of ${fmtGuest(c.amount)}</span>` : ''}
-            <p>${c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : 'Your host cancelled, so Aerva’s service fee is held for you.'} Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.</p>
+            <p>${c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : 'Your host cancelled, so Aerva’s service fee is held for you.'} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
             <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund it now</button> <span class="fee-credit-msg"></span>
           </div>
         </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
@@ -8080,8 +8082,11 @@
           <p><strong>Your cancellation score: ${used} of ${limit}</strong> used in the last 12 months. This one would make it <strong>${after} of ${limit}</strong>.${after >= limit ? ' After this you cannot cancel any booking yourself until one is more than 12 months old.' : ''}</p>
         </div>
         <ul>
-          <li>Your guest is refunded in full straight away — booking and deposit.</li>
-          <li>You compensate them with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the booking). You pay it now, as the last step; it reaches them by email ${Number(d.couponReleaseMinutes) || 15} minutes later.</li>
+          ${d.late ? '<li><strong>Check-in is less than 48 hours away.</strong></li>' : ''}
+          ${d.asCredit
+            ? '<li>Everything your guest paid — the booking, GST and Aerva’s service fee — is held for them as Aerva credit, which they can use on another stay or have refunded. Any deposit is refunded to them straight away.</li>'
+            : '<li>Your guest is refunded straight away — the booking, GST and any deposit. Aerva’s service fee is held for them as Aerva credit.</li>'}
+          ${d.couponNeeded !== false ? `<li>You compensate them with an Aerva coupon of <strong>${inr(amount)}</strong> (10% of the ${d.isExperience ? 'booking' : 'stay'}). You pay it now, as the last step; it reaches them by email ${Number(d.couponReleaseMinutes) || 15} minutes later. The coupon is not refundable; they can use it together with their credit.</li>` : '<li>No coupon is needed: this cancels the experience together with its stay.</li>'}
           <li>The guest is told the reason. This cannot be undone.</li>
         </ul>
       </div>
@@ -8090,7 +8095,7 @@
       <select id="hcReason" class="hc-input"><option value="">Choose a reason…</option>${(d.reasons || []).map(r => `<option value="${esc(r.code)}">${esc(r.label)}</option>`).join('')}</select>
       <label class="hc-label" for="hcDetails">Details for the guest <span class="hc-opt" id="hcDetailsOpt">(optional)</span></label>
       <textarea id="hcDetails" class="hc-input" rows="3" maxlength="800" placeholder="A short, kind explanation helps the guest."></textarea>
-      <label class="hc-check"><input type="checkbox" id="hcAgree"> I understand this counts towards my cancellation score and that I pay the guest’s ${inr(amount)} coupon.</label>
+      <label class="hc-check"><input type="checkbox" id="hcAgree"> I understand this counts towards my cancellation score${d.couponNeeded !== false ? ` and that I pay the guest’s ${inr(amount)} coupon` : ''}.</label>
       <div class="hc-actions"><button type="button" class="hc-btn hc-danger" id="hcNext">Continue</button><button type="button" class="hc-btn" id="hcKeep">Keep the booking</button></div>
       <p class="hc-cancel-err" id="hcErr" hidden></p>`;
     const err = (m) => { const e = document.getElementById('hcErr'); e.textContent = m; e.hidden = !m; };
@@ -8106,10 +8111,23 @@
     });
 
     function finalStep(reasonCode, details){
+      if(d.couponNeeded === false){
+        body.innerHTML = `<div class="hc-final"><p class="hc-cancel-head">Last step</p><p>Cancel this booking? Everything the guest paid is held for them as Aerva credit.</p>
+          <div class="hc-actions hc-col"><button type="button" class="hc-btn hc-danger" data-pay="held">Cancel the booking</button><button type="button" class="hc-btn" id="hcBack">Back</button></div>
+          <p class="hc-cancel-err" id="hcErr" hidden></p></div>`;
+        document.getElementById('hcBack').addEventListener('click', () => startHostCancel(conv));
+        body.querySelector('[data-pay]').addEventListener('click', async (e) => {
+          e.target.disabled = true;
+          const r = await api('', { method: 'POST', body: JSON.stringify({ cancelBooking: { orderId: Number(conv.order_id), reasonCode, details } }) });
+          if(r.ok){ done(r.data); return; }
+          err(r.data.error || 'Could not cancel this booking. Please try again.'); e.target.disabled = false;
+        });
+        return;
+      }
       body.innerHTML = `
         <div class="hc-final">
           <p class="hc-cancel-head">Last step: compensate your guest</p>
-          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now refunds them (Aerva’s service fee is held for them as a credit) and sends it.`
+          <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now ${d.asCredit ? 'holds everything they paid for them as Aerva credit' : 'refunds them (Aerva’s service fee is held for them as a credit)'} and sends it.`
             : `Your guest gets a ${inr(amount)} Aerva coupon, paid by you now. The booking is cancelled the moment your payment goes through.`}</p>
           <div class="hc-actions hc-col">
             ${d.couponPaid ? `<button type="button" class="hc-btn hc-danger" data-pay="held">Cancel the booking</button>`
@@ -8149,7 +8167,7 @@
     }
     function done(r){
       body.innerHTML = `<div class="hc-done"><p class="hc-cancel-head">Booking cancelled</p>
-        <p>Your guest has been refunded (Aerva’s service fee is held for them as a credit) and gets the ${inr(r.couponAmount || amount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes.
+        <p>${r.asCredit ? 'Everything your guest paid is held for them as Aerva credit (any deposit is refunded)' : 'Your guest has been refunded (Aerva’s service fee is held for them as a credit)'}${r.couponAmount ? ` and gets the ${inr(r.couponAmount)} coupon by email in ${Number(r.couponReleaseMinutes) || 15} minutes` : ''}.
 </p></div>`;
       conv.booking_status = 'cancelled';
       try{ refreshInboxMessages(); loadInboxConversations(); }catch(e){}
@@ -10122,10 +10140,9 @@
       }
     }
 
-    // The earliest night a guest can book, on the PROPERTY's clock. Between
-    // 12:00 AM and 6:00 AM that is still last night (a late-night booking —
-    // same rule as api/_booking-rules.js).
-    const todayIso = aervaEarliestArrival((typeof listing !== 'undefined' && listing && listing.timezone) || 'Asia/Kolkata');
+    // The earliest night a guest can book, on the PROPERTY's clock: tonight
+    // until the host's same-day cut-off, then tomorrow (api/_booking-rules.js).
+    const todayIso = aervaEarliestArrival((typeof listing !== 'undefined' && listing && listing.timezone) || 'Asia/Kolkata', (typeof listing !== 'undefined' && listing) ? listing.same_day_until : 24);
     let viewYear = new Date().getFullYear();
     let viewMonth = new Date().getMonth();
     if(initialArrival){
@@ -10602,7 +10619,7 @@
     }
     rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee + experienceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
-      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (held 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
+      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (covers damage and extra cleaning; held up to 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
     }
 
     const grandTotalInr = total + stayTax.gst + (listing.security_deposit ? Number(listing.security_deposit) : 0) + experienceTotal + experienceGst + experienceFee;
@@ -10898,7 +10915,7 @@
     // The earliest night a guest can book, on the PROPERTY's clock — today,
     // or last night between 12:00 AM and 6:00 AM (same rule as stays and
     // api/_booking-rules.js).
-    const minIso = aervaEarliestArrival((listing && listing.timezone) || 'Asia/Kolkata');
+    const minIso = aervaEarliestArrival((listing && listing.timezone) || 'Asia/Kolkata', listing && listing.same_day_until);
     const minDateObj = new Date(minIso + 'T00:00:00');
     let viewYear = minDateObj.getFullYear();
     let viewMonth = minDateObj.getMonth();
@@ -14253,16 +14270,18 @@
 })();
 
 
-// ---- Late-night bookings: between 12:00 AM and 6:00 AM on the property's
-// clock, last night can still be booked (server: api/_booking-rules.js) ----
-function aervaEarliestArrival(zone){
+// ---- Same-day bookings: the earliest check-in date right now. Tonight can
+// be booked until the host's cut-off (listing.same_day_until: 18 = 6 PM …
+// 24 = 12 AM, all day); from then, tomorrow (server: api/_booking-rules.js) ----
+function aervaEarliestArrival(zone, untilHour){
   try{
     const parts = {};
     new Intl.DateTimeFormat('en-US', { timeZone: zone || 'Asia/Kolkata', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' })
       .formatToParts(new Date()).forEach(p => { parts[p.type] = p.value; });
     const date = `${parts.year}-${parts.month}-${parts.day}`;
-    if(Number(parts.hour) >= 6) return date;
-    const d = new Date(date + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
+    const until = [18, 19, 20, 21, 22, 23, 24].includes(Number(untilHour)) ? Number(untilHour) : 24;
+    if(Number(parts.hour) < until) return date;
+    const d = new Date(date + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1);
     return d.toISOString().slice(0, 10);
   }catch(e){ return toLocalDateStr(new Date()); }
 }

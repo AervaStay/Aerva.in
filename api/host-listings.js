@@ -168,7 +168,7 @@ async function sendCancellationEmail(order, opts = {}){
       <h2 style="font-family:Georgia,serif;">Your booking has been cancelled</h2>
       <p>${lead}</p>
       ${opts.reasonLabel ? `<p><strong>Reason:</strong> ${esc(opts.reasonLabel)}${opts.details ? ' — ' + esc(opts.details) : ''}</p>` : ''}
-      <p>${opts.feeCredit ? `Your payment has been refunded to your original payment method, apart from Aerva’s service fee of ₹${Number(opts.feeCredit).toLocaleString('en-IN')}, which is held for you as Aerva credit: it is taken off your next Aerva booking, or refunded to you in full if you decide not to book again (see the separate email).` : opts.creditBack ? 'What you paid at checkout has been refunded to your original payment method.' : (String(order.charge_currency || 'INR') !== 'INR' ? 'Your payment has been refunded to your original payment method, including Aerva’s service fee.' : 'Your payment has been refunded to your original payment method, except Aerva’s service fee.')}${opts.creditBack ? ` The ₹${Number(opts.creditBack).toLocaleString('en-IN')} you paid with Aerva credit is back on your credit (My Bookings).` : ''} It should appear within 5–7 business days, depending on your bank.</p>
+      <p>${opts.allCredit ? `Everything you paid for this booking — ₹${Number(opts.allCredit).toLocaleString('en-IN')}, including GST and Aerva’s service fee — is held for you as Aerva credit: use it on another stay or experience, or have it refunded to your original payment method at any time from My Bookings (see the separate email). Any security deposit has been refunded to your original payment method.` : opts.feeCredit ? `Your payment has been refunded to your original payment method, apart from Aerva’s service fee of ₹${Number(opts.feeCredit).toLocaleString('en-IN')}, which is held for you as Aerva credit: it is taken off your next Aerva booking, or refunded to you in full if you decide not to book again (see the separate email).` : opts.creditBack ? 'What you paid at checkout has been refunded to your original payment method.' : (String(order.charge_currency || 'INR') !== 'INR' ? 'Your payment has been refunded to your original payment method, including Aerva’s service fee.' : 'Your payment has been refunded to your original payment method, except Aerva’s service fee.')}${opts.creditBack ? ` The ₹${Number(opts.creditBack).toLocaleString('en-IN')} you paid with Aerva credit is back on your credit (My Bookings).` : ''} It should appear within 5–7 business days, depending on your bank.</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you have questions about this cancellation, please contact hello@aerva.in.</p>
     </div>
   `;
@@ -1648,12 +1648,19 @@ module.exports = async (req, res) => {
            ${vals.cleanliness}, ${vals.communication}, ${vals.respectful}, ${vals.rules})
         RETURNING id
       `;
+      // No damage: the host releases the deposit with the review — refunded
+      // two bank working days later instead of after 7 days (_deposits.js).
+      let deposit = null;
+      if (b.releaseDeposit === true) {
+        deposit = await require('./_deposits').releaseEarly(sql, order.id, { hostId: me.host_id });
+        if (deposit.refundOn) await logAudit(sql, { action: 'deposit_released_by_host', success: true, actorType: 'host', actorIdentifier: String(guestId), targetType: 'order', targetId: order.id, metadata: { refundOn: deposit.refundOn } });
+      }
       await logAudit(sql, {
         action: 'guest_review_submitted', success: true, actorType: 'host', actorIdentifier: String(guestId),
         targetType: 'guest_review', targetId: inserted[0].id,
         metadata: { orderId: order.id, guestId: order.guest_id }
       });
-      return res.status(200).json({ success: true, held: true });
+      return res.status(200).json({ success: true, held: true, depositRefundOn: deposit && deposit.refundOn || null });
     } catch (err) {
       console.error('reviewGuest error:', err);
       return res.status(500).json({ error: 'Could not save your review right now.' });
@@ -2560,7 +2567,7 @@ module.exports = async (req, res) => {
       // never trust orderId alone, since it's just a number a guest's
       // browser could also send.
       const rows = await sql`
-        SELECT o.id, o.deposit_status, o.deposit_release_at,
+        SELECT o.id, o.deposit_status, o.deposit_release_at, o.deposit_amount,
                (o.deposit_release_at IS NOT NULL
                 AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date > o.deposit_release_at) AS window_closed
         FROM orders o
@@ -2574,6 +2581,11 @@ module.exports = async (req, res) => {
       if (order.deposit_status !== 'held') {
         return res.status(400).json({ error: 'This deposit is no longer open to a concern — it has already been refunded, disputed, or resolved.' });
       }
+      // Released by the host with their review (no damage): no concern after that.
+      try {
+        const rel = (await sql`SELECT to_jsonb(orders)->>'deposit_released_by_host_at' AS t FROM orders WHERE id = ${orderId}`)[0];
+        if (rel && rel.t) return res.status(400).json({ error: 'You confirmed there was no damage when you reviewed this guest, so the deposit is being refunded.' });
+      } catch (e) { /* column not added yet */ }
       // "Within 7 days of check-out" (aerva-policies.js): deposit_release_at
       // is check-out + 7 days, and that whole day still counts — on the
       // listing's own calendar, not the server's UTC clock.
@@ -2585,11 +2597,25 @@ module.exports = async (req, res) => {
       // an admin's deposit run may have claimed this order in between,
       // and flipping a deposit that is mid-refund to 'disputed' would let
       // it be refunded a second time when the dispute is resolved.
+      // Proof is required: photos or videos of the damage, shared with Aerva.
+      const { isAervaBlobUrl } = require('./_listing-rules');
+      const evidence = (Array.isArray((req.body.raiseDispute || {}).evidence) ? req.body.raiseDispute.evidence : [])
+        .map(String).filter(u => isAervaBlobUrl(u) && u.length <= 600).slice(0, 10);
+      if (!evidence.length) return res.status(400).json({ error: 'Add at least one photo or video of the damage. Aerva can only hold the deposit with proof.' });
+      // The host decides how much of the deposit to keep — for damage or
+      // extra cleaning — and never more than the deposit.
+      const keep = Math.round(Number((req.body.raiseDispute || {}).amount) * 100) / 100;
+      if (!(keep > 0)) return res.status(400).json({ error: 'Enter how much of the deposit you are keeping.' });
+      if (keep > Number(order.deposit_amount || 0)) return res.status(400).json({ error: `You can keep at most the deposit (₹${Number(order.deposit_amount || 0)}). Anything above it is between you and the guest.` });
       const raised = await sql`
         UPDATE orders SET deposit_status = 'disputed', dispute_reason = ${String(reason).trim().slice(0, 1000)}, dispute_raised_at = now()
         WHERE id = ${orderId} AND deposit_status = 'held'
         RETURNING id
       `;
+      if (raised.length) {
+        try { await sql`UPDATE orders SET dispute_evidence = ${JSON.stringify(evidence)}::jsonb, dispute_amount = ${keep} WHERE id = ${orderId}`; }
+        catch (e) { console.error('deposit evidence not saved (apply 2026-10-28-02-deposit-early-release.sql):', e.message); }
+      }
       if (!raised.length) {
         return res.status(400).json({ error: 'This deposit is no longer open to a concern — it has already been refunded, disputed, or resolved.' });
       }
@@ -2618,15 +2644,39 @@ module.exports = async (req, res) => {
   // what the guest paid for the booking and any linked rooms paid together
   // (excluding security deposits). The amount is set here, never by the
   // host. The coupon is held ('reserved') until the booking is cancelled,
-  // then released to the guest ('active', 3 months) and emailed to them.
+  // then released to the guest ('active', 1 month) and emailed to them.
   async function cancellationCouponAmount(order, orderId){
     // This booking and its linked pair only (an experience that includes a
     // stay). Other homes in the same cart belong to other bookings — often
     // other hosts — and are not part of this cancellation.
-    const ids = [Number(orderId)].concat((await linkedSiblings(orderId)).map(r => r.id));
-    const rows = await sql`SELECT total, deposit_amount FROM orders WHERE id = ANY(${ids})`;
+    // For an experience that includes a stay: cancelled by the stay's host,
+    // the coupon is on the stay's amount only (and paid by the stay's host);
+    // cancelled by the experience's host, there is no coupon (cancelTerms).
+    const t = await cancelTerms(order, orderId);
+    if (!t.couponNeeded) return 0;
+    const rows = await sql`SELECT total, deposit_amount FROM orders WHERE id = ${Number(orderId)}`;
     const base = rows.reduce((sum, r) => sum + Math.max(0, (Number(r.total) || 0) - (Number(r.deposit_amount) || 0)), 0);
     return Math.max(1, Math.round(base * 0.10));
+  }
+  // The terms of a host cancellation:
+  //   • more than 48 hours before check-in: the guest is refunded (price,
+  //     GST, deposit), Aerva's service fee is held as Aerva credit, and the
+  //     host pays a 10% coupon first;
+  //   • within 48 hours: the host still pays the 10% coupon first, and
+  //     EVERYTHING the guest paid (price, GST and the fee) is held as Aerva
+  //     credit — refundable by the guest at any time, refunded automatically
+  //     at the end of the credit period; the deposit is refunded;
+  //   • an experience that includes a stay, cancelled by the experience's
+  //     host: everything as credit, no coupon; cancelled by the stay's host:
+  //     the coupon is on the stay's amount only.
+  // The coupon (bought by the host) is never refunded; the guest can use it
+  // together with the credit.
+  async function cancelTerms(order, orderId){
+    const sibs = await linkedSiblings(orderId);
+    const pairExperience = sibs.length > 0 && (order.order_type || 'stay') === 'experience';
+    const late = Number.isFinite(order.hoursToCheckIn) ? order.hoursToCheckIn < CANCELLATION_CUTOFF_HOURS : false;
+    const inr = String(order.charge_currency || 'INR') === 'INR';
+    return { late, pairExperience, couponNeeded: !pairExperience, asCredit: inr && (late || pairExperience) };
   }
   // The other half of an "Includes a Stay" purchase: the experience and
   // the nights at the home that hosts it, bought as one thing (same
@@ -2705,7 +2755,7 @@ module.exports = async (req, res) => {
       return { error: 'You do not have permission to do this.', status: 403 };
     }
     const rows = await sql`
-      SELECT o.id, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_id, o.status,
+      SELECT o.id, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_id, o.status, COALESCE(o.order_type, 'stay') AS order_type,
              o.total, o.deposit_status, o.deposit_amount, o.charge_currency, o.razorpay_payment_id, o.razorpay_order_id, o.guest_service_fee,
              l.timezone, l.check_in_time,
              (o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS stay_ended
@@ -2728,16 +2778,13 @@ module.exports = async (req, res) => {
     if (order.stay_ended) {
       return { error: 'This stay has already ended, so it can no longer be cancelled.', status: 400 };
     }
-    if (enforceCutoff) {
-      // Counted to the check-in MOMENT on the property's clock (e.g. 1:00 PM),
-      // not midnight — the same clock as the guest's cancellation brackets.
-      const hoursUntilArrival = hoursUntilCheckInTime(order.arrival, order.timezone, order.check_in_time);
-      if (!(hoursUntilArrival >= CANCELLATION_CUTOFF_HOURS)) {
-        return {
-          error: `This stay checks in within ${CANCELLATION_CUTOFF_HOURS} hours — bookings this close to check-in can no longer be cancelled by the host. Please contact hello@aerva.in if this is urgent.`,
-          status: 400
-        };
-      }
+    // Counted to the check-in MOMENT on the property's clock (e.g. 1:00 PM),
+    // not midnight — the same clock as the guest's cancellation brackets.
+    // Within 48 hours a host may still cancel, on stricter terms (see
+    // cancelTerms); once check-in time has come, only Aerva can.
+    order.hoursToCheckIn = hoursUntilCheckInTime(order.arrival, order.timezone, order.check_in_time);
+    if (enforceCutoff && !(order.hoursToCheckIn > 0)) {
+      return { error: 'Check-in time has passed, so this booking can no longer be cancelled by the host. Please contact hello@aerva.in if this is urgent.', status: 400 };
     }
     // Emails and messages show plain dates, not a Date object's long form.
     order.arrival = dateStr(order.arrival) || order.arrival;
@@ -2786,7 +2833,7 @@ module.exports = async (req, res) => {
   // host cancellation and a coupon-gated "prioritize a bigger booking"
   // cancellation. Identical money-handling either way; only the gate
   // checks before calling this differ.
-  async function executeCancellationRefund(order, orderId, reason, hostId, auditAction, emailOpts = {}){
+  async function executeCancellationRefund(order, orderId, reason, hostId, auditAction, emailOpts = {}, terms = {}){
     // What is cancelled: this booking, plus its linked half if it is an
     // "Includes a Stay" purchase. Never the other homes in the same cart.
     const siblings = await linkedSiblings(orderId);
@@ -2824,6 +2871,13 @@ module.exports = async (req, res) => {
       // their next booking, or refunded in full). Paid in another currency,
       // it is refunded now with the rest.
       const feeHeld = currency === 'INR' ? Math.round(Number(row.guest_service_fee) || 0) : 0;
+      // Everything held as Aerva credit (within 48 hours, or an experience
+      // that includes a stay cancelled by its host): only the deposit is
+      // refunded now.
+      if (terms.asCredit && currency === 'INR') {
+        const dep = depositStillHeld(row) ? Math.round(Number(row.deposit_amount) || 0) : 0;
+        return Math.round(Math.min(dep, (paidMap[id] || {}).paid || 0) * 100);
+      }
       const inr = Math.max(0, ((paidMap[id] || {}).paid || 0) - (depositStillHeld(row) ? 0 : Math.round(Number(row.deposit_amount) || 0))
                               - feeHeld);
       if (currency === 'INR') return Math.round(inr * 100);
@@ -2904,7 +2958,16 @@ module.exports = async (req, res) => {
     catch (err) { /* payouts table not created yet */ }
 
     await restoreCouponValue(order, cancelledIds, paidMap);
-    // The service fee becomes the guest's credit (emailed separately).
+    // The service fee becomes the guest's credit — or, within 48 hours (or
+    // an experience with its stay cancelled by its host), everything the
+    // guest paid does (emailed separately).
+    if (terms.asCredit) {
+      let all = { total: 0, back: 0 };
+      try { all = await require('./_fee-credits').creditForWholeBooking(sql, cancelledIds, terms.pairExperience ? 'experience_cancelled' : 'host_cancelled_late'); }
+      catch (err) { console.error('credit not created (needs follow-up):', orderId, err.message); }
+      await sendCancellationEmail(order, Object.assign({}, emailOpts, { allCredit: all.total, creditBack: all.back }));
+      return true;
+    }
     let credits = [];
     try { credits = await require('./_fee-credits').createForHostCancellation(sql, cancelledIds); }
     catch (err) { console.error('fee credit not created (needs follow-up):', orderId, err.message); }
@@ -2940,7 +3003,9 @@ module.exports = async (req, res) => {
       const used = await hostCancellationsLastYear(sql, loaded.guest.host_id);
       const held = (await sql`SELECT amount FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
       const couponAmount = held ? Number(held.amount) : await cancellationCouponAmount(loaded.order, orderId);
+      const terms = await cancelTerms(loaded.order, orderId);
       return res.status(200).json({
+        late: terms.late, asCredit: terms.asCredit, couponNeeded: terms.couponNeeded, pairExperience: terms.pairExperience,
         canCancel: used < HOST_CANCELLATIONS_PER_YEAR,
         message: used >= HOST_CANCELLATIONS_PER_YEAR ? HOST_LIMIT_MESSAGE : null,
         cancellationsUsed: used, cancellationsLimit: HOST_CANCELLATIONS_PER_YEAR,
@@ -2985,11 +3050,17 @@ module.exports = async (req, res) => {
       //  2. { payLater: true }: Aerva issues the coupon now and the amount is
       //     deducted from the host's next payout (host_penalties).
       // Either way the booking and deposit are refunded in full at once.
+      const terms = await cancelTerms(loaded.order, orderId);
       const held = (await sql`SELECT id, amount FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
       // The host always pays the guest's coupon up front, before cancelling
       // (Razorpay: buyCouponOrder → verifyCouponPayment). Paying it from the
       // next payout is no longer offered.
       const payLater = false;
+      if (!terms.couponNeeded) {
+        const didCancel = await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host', { reasonLabel, details }, terms);
+        if (!didCancel) return [409, { error: 'This booking has already been cancelled.' }];
+        return [200, { success: true, couponAmount: 0, asCredit: terms.asCredit }];
+      }
       if (req.body.cancelBooking.payLater === true && !held) return [400, { error: 'Pay for the guest’s coupon first — the booking is cancelled as soon as it is paid.', needsCoupon: true, amount: await cancellationCouponAmount(loaded.order, orderId) }];
       // Co-host shares are paid in full, without deductions, so a co-host
       // pays for the coupon before cancelling.
@@ -3000,7 +3071,7 @@ module.exports = async (req, res) => {
       }
       const amountLater = held ? 0 : await cancellationCouponAmount(loaded.order, orderId);
 
-      const didCancel = await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host', { reasonLabel, details });
+      const didCancel = await executeCancellationRefund(loaded.order, orderId, reason, loaded.guest.host_id, 'booking_cancelled_by_host', { reasonLabel, details }, terms);
       // Another request (a double click) already cancelled it: never issue
       // a second coupon or penalty.
       if (!didCancel) return [409, { error: 'This booking has already been cancelled.' }];
@@ -3008,7 +3079,7 @@ module.exports = async (req, res) => {
       // its code (it is only emailed to the guest).
       if (held) {
         await scheduleCancellationCoupon(held.id, orderId);
-        return [200, { success: true, couponAmount: Number(held.amount), paid: 'now', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES }];
+        return [200, { success: true, couponAmount: Number(held.amount), paid: 'now', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES, asCredit: terms.asCredit }];
       }
       const issued = await issueCouponChargedToNextPayout(loaded.order, orderId, loaded.guest.host_id, amountLater);
       return [200, { success: true, couponAmount: issued.amount, paid: 'next_payout', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES }];
@@ -3338,6 +3409,7 @@ module.exports = async (req, res) => {
       const already = (await sql`SELECT id FROM coupons WHERE source_order_id = ${bookingId} AND status = 'reserved' LIMIT 1`)[0];
       if (already) return res.status(200).json({ alreadyPaid: true });
       const amount = await cancellationCouponAmount(loaded.order, bookingId);
+      if (!amount) return res.status(400).json({ error: 'No coupon is needed to cancel this booking.' });
       // One coupon payment per booking. A second tab (or a second click)
       // gets the SAME Razorpay order back, and Razorpay accepts only one
       // payment per order — so the coupon can never be paid for twice.

@@ -730,12 +730,24 @@ module.exports = async (req, res) => {
   if (req.method === 'POST' && req.body && req.body.adminCancelBooking) {
     try {
       const b = req.body.adminCancelBooking;
-      const pct = Number(b.refundPercent);
+      // forHost: Aerva cancels for the host (a host over their 3 cancellations
+      // a year, or who cannot cancel themselves): everything the guest paid
+      // is refunded (price, GST, Aerva's fee, deposit), it counts as the
+      // host's cancellation, and the guest gets the 10% coupon, deducted
+      // from the host's next payout. Admins only.
+      const forHost = b.forHost === true;
+      if (forHost && ADMIN_ROLE !== 'admin') return res.status(403).json({ error: 'Only an admin can cancel for the host.' });
+      const pct = forHost ? 100 : Number(b.refundPercent);
       if (!(pct >= 0 && pct <= 100)) return res.status(400).json({ error: 'Refund must be 0 to 100%.' });
       const reason = String(b.reason || '').trim().slice(0, 400);
       if (!b.preview && reason.length < 5) return res.status(400).json({ error: 'Write the reason — the guest and host are told it.' });
       const out = await executePolicyCancellation(sql, razorpay, { orderId: Number(b.orderId) || 0, pct, by: 'admin', note: reason,
-        refundFee: b.refundFee === true && ADMIN_ROLE === 'admin', feeReason: b.feeReason, countAgainstHost: b.countAgainstHost === true, adminLabel: ADMIN_ACTOR, preview: b.preview === true });
+        refundFee: forHost || (b.refundFee === true && ADMIN_ROLE === 'admin'), feeReason: forHost ? 'Cancelled by Aerva for the host: the guest gets back everything they paid' : b.feeReason,
+        countAgainstHost: forHost || b.countAgainstHost === true, adminLabel: ADMIN_ACTOR, preview: b.preview === true });
+      if (forHost && !b.preview && out && out.ok) {
+        const h = (await sql`SELECT l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${Number(b.orderId) || 0}`)[0];
+        if (h) out.couponForGuest = (await require('./_cancellations').issueCouponForHost(sql, { orderId: Number(b.orderId), hostId: h.host_id })).amount;
+      }
       return res.status(200).json({ success: true, ...out });
     } catch (err) {
       if (!err.isUserFacing) console.error('adminCancelBooking failed:', err);
@@ -2463,7 +2475,7 @@ module.exports = async (req, res) => {
     try {
       const disputes = await sql`
         SELECT o.id, o.suite_name, o.arrival, o.departure, o.deposit_amount,
-               o.dispute_reason, o.dispute_raised_at, o.guest_email,
+               o.dispute_reason, o.dispute_raised_at, o.guest_email, to_jsonb(o)->'dispute_evidence' AS dispute_evidence, to_jsonb(o)->>'dispute_amount' AS dispute_amount,
                l.host_name, l.host_email
         FROM orders o
         JOIN listings l ON o.listing_id = l.id

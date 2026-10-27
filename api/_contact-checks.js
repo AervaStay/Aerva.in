@@ -4,9 +4,10 @@
 //
 // The rules being checked (see _message-guard.js):
 //   • Enquiries (no confirmed booking): no contact detail of any kind.
-//   • A confirmed booking, until check-out: phone numbers, email addresses
-//     and photos may be shared; links, handles and UPI IDs may not.
-//   • After check-out, or once cancelled: no contact detail at all — the
+//   • A confirmed booking, until 15 days after check-out (the review
+//     period): phone numbers, email addresses and photos may be shared;
+//     links, handles and UPI IDs may not.
+//   • After that, or once cancelled: no contact detail at all — the
 //     'chat_number_cleanup' job removes phone numbers and emails, and
 //     photos that show a contact detail, silently.
 //
@@ -17,17 +18,17 @@
 // whatever is left; the original text is always kept for the admin.
 
 const { redactContactInfo } = require('./_redact');
-const { stayEndsAt, scrubEndedConversations } = require('./_message-guard');
+const { stayEndsAt, contactsEndAt, scrubEndedConversations } = require('./_message-guard');
 const GRACE_MS = 2 * 3600e3;
 
 // The rule for a conversation now: 'enquiry' | 'booking' (phones allowed) | 'ended'.
 function contextOf(c, now = Date.now()) {
   if (!c.order_id) return 'enquiry';
-  if (c.status === 'paid' && now < stayEndsAt(c)) return 'booking';
+  if (c.status === 'paid' && now < contactsEndAt(c)) return 'booking';
   if (c.status === 'paid' || c.status === 'cancelled') return 'ended';
   return 'enquiry';                       // an unpaid booking request
 }
-const LABEL = { enquiry: 'Enquiry', booking: 'Confirmed booking', ended: 'After the stay / cancelled' };
+const LABEL = { enquiry: 'Enquiry', booking: 'Confirmed booking', ended: '15 days after the stay / cancelled' };
 
 // What the rule says this text should look like.
 function cleaned(text, context) {
@@ -49,7 +50,7 @@ async function scan(sql, { days = 120, limit = 4000 } = {}) {
     const ctx = contextOf(m, now);
     const shouldBe = cleaned(m.display_text, ctx);
     if (shouldBe === m.display_text) continue;
-    const ended = ctx === 'ended' ? (m.status === 'cancelled' ? null : stayEndsAt(m)) : null;
+    const ended = ctx === 'ended' ? (m.status === 'cancelled' ? null : contactsEndAt(m)) : null;
     const waiting = ctx === 'ended' && !m.contacts_scrubbed_at && ended && now - ended < GRACE_MS;
     found.push({ messageId: m.id, conversationId: m.conversation_id, context: ctx, contextLabel: LABEL[ctx], waiting: !!waiting,
       sender: m.sender_type, at: m.created_at, booking: m.code || m.razorpay_order_id || (m.order_id ? '#' + m.order_id : ''), listing: m.property_name || '',

@@ -18,8 +18,8 @@ window.AERVA_POLICIES = {
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-10-27a',       // booking agreement (guests)
-    hostVersion: '2026-10-27b',    // host agreement — accepted for every listing
+    version: '2026-10-28a',       // booking agreement (guests)
+    hostVersion: '2026-10-28a',    // host agreement — accepted for every listing
     guest: {
       title: 'Booking agreement',
       points: [
@@ -27,12 +27,13 @@ window.AERVA_POLICIES = {
         'You: give true details of every guest and pet, keep a confirmed email and a phone number on your account, carry a government photo ID for every adult guest to show the host at check-in, follow the house rules and the law, and pay for any damage you or your guests cause.',
         'Your booking is confirmed only when payment completes within the 3-minute payment window. A payment that does not match the booking amount, or completes after the window, is not a booking and is refunded.',
         'Cancellations and changes are requests to the host through Aerva, under the refund policy shown before you pay. A booking can be cancelled only before check-in.',
-        'Once your stay has started: to leave early, ask your host to change your check-out date, or report a problem with evidence, in My Bookings by 10 AM (the property’s local time, the standard check-out time) on the day after check-in. The check-in night is never refunded. If the host agrees to the shorter stay, what you paid for the nights you no longer stay comes back to you as Aerva credit: use it on another booking, or have it refunded to your original payment method at any time from My Bookings (anything left after 30 days is refunded automatically). A request sent in time stands however long the host takes to answer. If the host declines it, or does not answer, you may raise it with Aerva within 24 hours, and Aerva decides.',
+        'Once your stay has started: to leave early, ask your host to change your check-out date, or report a problem with evidence, in My Bookings by 10 AM (the property’s local time, the standard check-out time) on the day after check-in. The check-in night is never refunded. If the host agrees to the shorter stay, what you paid for the nights you no longer stay comes back to you as Aerva credit: use it on another booking, or have it refunded to your original payment method whenever you choose, from My Bookings. This credit does not expire. A request sent in time stands however long the host takes to answer. If the host declines it, or does not answer, you may raise it with Aerva within 24 hours, and Aerva decides.',
         'After 10 AM (the property’s local time) on the day after check-in, the booking can no longer be changed and nothing more is refunded.',
+        'Any Aerva credit or coupon you are given stays exactly as issued: its value does not change, and no interest is paid on it. You can have your Aerva credit refunded to your original payment method whenever it suits you, from My Bookings. A coupon is not refundable and can be used, alone or with your credit, until the date shown on it — at most 1 month after it is issued.',
         'The host: provides the home or experience as described, keeps it safe and clean, and follows local laws.',
         'Aerva: takes your payment, handles refunds and complaints under Aerva’s Policies, and keeps your booking records.',
         'No violence, threats, verbal abuse, harassment or discrimination of any kind, including on gender.',
-        'Any security deposit is refunded under Aerva’s Security Deposit and Damage Policy. Damage above the deposit is between you and the host, and is to be settled directly with the host.',
+        'Any security deposit is refunded under Aerva’s Security Deposit and Damage Policy. It covers damage and extra cleaning (by the host or someone the host calls in), up to the deposit amount; the host decides how much of it is refunded. Damage above the deposit is between you and the host, and is to be settled directly with the host.',
         'Aerva provides no support beyond the security deposit and your booking details.',
         'You are responsible for your own safety and for any physical, mental or emotional harm you or your guests cause or suffer that is beyond Aerva’s control.',
         'Aerva does not own, run or inspect properties or experiences, and does not control what hosts or guests do. To the extent the law allows, Aerva is not responsible for the acts or omissions of any host, guest or third party, including criminal acts, death, injury, self-harm or any life-threatening situation, and pays no claim for them.',
@@ -72,12 +73,12 @@ window.AERVA_POLICIES = {
         ] },
         { title: '5. Commission and fees', points: [
           'Aerva charges you a commission on each booking, at the commission rate shown in your dashboard. It is deducted from your payout. Aerva also charges guests a service fee, which is Aerva’s own and does not form part of your earnings.',
-          'Aerva may revise its commission. A revised commission takes effect no sooner than 33 days after Aerva’s formal notice to you by email (31 days’ notice, plus 2 days to allow for time zones), and applies to bookings made on or after the date given in the notice. Aerva may revise the guest service fee at any time. The rates in force when a booking is made apply to that booking.',
-          'You acknowledge and confirm each commission revision in your dashboard before the date it takes effect. If it is not confirmed by that date, this agreement ends, as set out in the Termination clause below.'
+          'Aerva may revise its commission. You are told in advance, by email and in your dashboard, with the date from which the revised commission applies; it applies to bookings made on or after that date. Aerva may revise the guest service fee at any time. The rates in force when a booking is made apply to that booking.',
+          'You acknowledge and confirm, or decline, each commission revision in your dashboard before the date it applies. If you decline it, or it is not confirmed by that date, this agreement ends, as set out in the Termination clause below.'
         ] },
         { title: '6. Payouts and taxes', points: [
           'Your payout for a booking is sent the day after check-in (for an experience, the day after its date) to your verified bank account, after Aerva’s commission, any co-host share, applicable deductions and tax deducted at source.',
-          'If a booking changes after its payout has been sent — it is cancelled, shortened or extended, or a guest’s report during the stay is upheld — any amount you are no longer owed is deducted from your next payout, and any amount added is paid to you separately.',
+          'Once your payout for a booking has been sent, the amount is settled. If Aerva later has to refund the guest for that booking, the part you are no longer owed is deducted from your next payout; if the booking’s amount goes up, the difference is paid to you separately.',
           'Aerva may hold, adjust or withhold a payout while a guest’s report, a refund, a damage claim or a dispute is open, where fraud is suspected, or where the law requires.',
           'You are solely responsible for your income tax, GST registration where applicable, and every other tax on your earnings.'
         ] },
@@ -95,13 +96,13 @@ window.AERVA_POLICIES = {
         { title: '9. Bookings and the relationship with guests', points: [
           'You honour every confirmed booking and provide the property as described, safe, clean and ready at check-in.',
           'You check a valid government photo ID for every adult guest at check-in, and report foreign guests on Form III within 24 hours of arrival and of departure, as the law requires.',
-          'All communication about a booking stays on Aerva Messages. Once a booking is confirmed, phone numbers and email addresses may be shared there until check-out, and photos until the review period closes (15 days after check-out). Taking bookings or payments outside Aerva, or using a guest’s details to do so, is not allowed.',
+          'All communication about a booking stays on Aerva Messages. Once a booking is confirmed, phone numbers, email addresses and photos may be shared there until 15 days after check-out. Taking bookings or payments outside Aerva, or using a guest’s details to do so, is not allowed.',
           'You use guests’ personal information only for their booking and your legal duties, and keep it secure. No camera or recording device may be placed in a bedroom, bathroom or any private space; every device elsewhere must be disclosed in the listing.'
         ] },
         { title: '10. Check-in and check-out', points: [
           'Your listing states its check-in and check-out times, and you have the property ready at check-in.',
           'At check-in, you check a valid government photo ID for every adult guest; guests from outside India show their passport. Only the guests named in the booking, up to the number booked, may stay.',
-          'For a booking made late at night for the night that has already begun, the guest may check in straight away, as set out in Aerva’s Booking Requirements.',
+          'You choose until what time a guest may book your home for the same night — from 6 PM to 12 AM, where the property is (12 AM unless you change it). A booking made before that time is for that night, and the guest may check in straight away.',
           'Check-in instructions and access details are given to the guest through Aerva only.'
         ] },
         { title: '11. Pets and service animals', points: [
@@ -110,28 +111,32 @@ window.AERVA_POLICIES = {
           'Damage caused by a pet is handled like any other damage, under the Security Deposit and Damage clause.'
         ] },
         { title: '12. Contact details and communication', points: [
-          'No listing, photo, description, review, message or email sent through Aerva may contain a phone number, email address, website, social media handle, UPI ID, QR code or any other contact detail of you or any other person.',
-          'Once a booking is confirmed, you and the guest may share phone numbers and email addresses in Aerva Messages until check-out, and photos until the review period closes (15 days after check-out). Other contact details (links, social media or messaging accounts, UPI IDs) are removed from messages automatically. Once the stay has ended or been cancelled, phone numbers, email addresses and any photo showing contact details are removed from the conversation.',
+          'Before a booking is confirmed, nothing sent through Aerva — a listing, photo, description, review, message or email — may contain a phone number, email address, website, social media handle, UPI ID, QR code or any other contact detail of you or any other person.',
+          'Once a booking is confirmed, you and the guest may share phone numbers, email addresses and photos in Aerva Messages until 15 days after check-out. Other contact details (links, social media or messaging accounts, UPI IDs) are never allowed. After those 15 days, or if the booking is cancelled, phone numbers, email addresses and any photo showing contact details are removed from the conversation.',
           'Aerva may remove any such content at once, without notice. You are liable for any loss or claim arising from contact details you share in breach of this clause, and repeated breaches may lead to penalties, removal of the listing and suspension of your account.'
         ] },
         { title: '13. Cancellations', points: [
           'Each listing carries the cancellation policy you choose (Flexible or Firm). A booking keeps the policy it was paid under.',
           'You answer guests’ cancellation and change requests in Aerva Messages within 24 hours. An unanswered request is settled under Aerva’s Cancellation Policy.',
-          'You may cancel a booking only 48 hours or more before check-in, with a reason, and no more than 3 times in any 12 months. Further cancellations are handled only by Aerva.'
+          'You may cancel a booking before check-in, with a reason, no more than 3 times in any 12 months. Further cancellations are handled only by Aerva, on your request.'
         ] },
         { title: '14. Refunds', points: [
           'Refunds to guests are made by Aerva under Aerva’s Cancellation Policy, Changing a Booking policy and Stay Issues and Refund Policy, and the amount you receive is adjusted accordingly.',
           'When a guest asks to change a stay that has started, or reports a problem, you are told and may give your side through Aerva. Until it is settled, only the first night of your payout for that booking is sent; the rest follows once it is settled, after any refund decided.'
         ] },
         { title: '15. Penalties', points: [
-          'If you cancel a confirmed booking, the guest receives an Aerva coupon worth 10% of the booking, paid for by you before the booking is cancelled, or deducted from your next payout.',
+          'If you cancel a confirmed booking, you first pay for an Aerva coupon for the guest worth 10% of the booking (for an experience that includes a stay: of the stay, paid by the stay’s host; none when the experience’s host cancels it). The coupon is valid for 1 month at most and is not refundable; the guest can use it together with Aerva credit.',
+          'If you cancel within 48 hours of check-in, everything the guest paid — the booking, GST and Aerva’s service fee — is held for them as Aerva credit, which they may use on another booking or have refunded.',
+          'When Aerva cancels for you (after your 3 cancellations, or when you cannot cancel yourself), the guest is refunded everything they paid, and a coupon worth 10% of the booking, valid for 1 month at most, is given to the guest and deducted from your next payout.',
           'Cancellations count towards your yearly limit and may affect your standing on Aerva.',
           'For any breach of this agreement or Aerva’s Policies, Aerva may withhold or adjust payouts, pause or remove listings, cancel bookings, and suspend or close your account.'
         ] },
         { title: '16. Security deposits and damage', points: [
           'If your listing holds a refundable security deposit, Aerva holds it and refunds it to the guest after check-out unless you report damage through Aerva within 7 days of check-out.',
-          'Aerva reviews each damage claim and decides how much of the deposit, if any, is paid to you. Aerva’s decision on the deposit is full and final.',
-          'Aerva handles damage claims only up to the security deposit. Damage above the deposit, or where no deposit is held, is between you and the guest, to be settled directly. Aerva is not a party to that settlement and pays no part of it.'
+          'You alone decide how much of the deposit is refunded to the guest. To keep any of it, you must share photos or videos of the damage with Aerva when you report it, through Aerva; a report without proof is not accepted, and the deposit is then refunded in full.',
+          'The deposit also covers extra cleaning: cleaning you do yourself, or a cleaner or other help you call in, to return the home to how it was. What you keep for damage and cleaning together can never be more than the deposit.',
+          'If you find no damage, you can confirm it when you review the guest: the deposit is then refunded within 2 bank working days, without waiting for the 7 days.',
+          'Aerva handles damage and cleaning claims only up to the security deposit. If the damage or cleaning costs more than the deposit, or no deposit is held, Aerva provides no refund, compensation or support of any kind for the rest; it is between you and the guest, to be settled directly. Aerva is not a party to that settlement and pays no part of it.'
         ] },
         { title: '17. Proof and evidence', points: [
           'Every claim, report or dispute must be supported by clear evidence: dated photos or videos, repair estimates or invoices, and messages on Aerva.',
@@ -154,19 +159,21 @@ window.AERVA_POLICIES = {
           'Violence, threats, verbal abuse, harassment and discrimination of any kind are not tolerated and lead to removal from Aerva.'
         ] },
         { title: '21. Co-hosts', points: [
-          'If you invite co-hosts, you remain responsible for your listing and for everything your co-hosts do on it. Aerva pays each co-host their own share; any other arrangement between you and a co-host is for you to settle.'
+          'If you invite co-hosts, you remain responsible for your listing and for everything your co-hosts do on it. Aerva pays each co-host their own share, based on the percentage share you set and they agreed to; any other arrangement between you and a co-host is for you to settle.'
         ] },
         { title: '22. Contacting Aerva', points: [
           'For any matter about a booking, a guest, a payout or your listing, raise a request in the Resolution Center or write to hello@aerva.in. Every request receives a reference number.',
           'Formal complaints may be addressed to Aerva’s Grievance Officer at hello@aerva.in.'
         ] },
         { title: '23. Aerva’s discretion on disputes', points: [
-          'Aerva reviews every dispute between you and a guest on the information and evidence available to it, and decides at its sole discretion.',
+          'Aerva reviews every dispute between you and a guest, and decides it fairly on the facts and evidence both sides provide.',
           'Aerva’s decision on any matter under this agreement and Aerva’s Policies is full and final.'
         ] },
         { title: '24. Reputation and fair comment', points: [
+          'Aerva supports hosts and guests alike. It decides every matter fairly, on the facts and evidence both sides provide, and does not discriminate against a host or a guest in any form; nothing other than those facts affects its decision.',
           'You will not make, publish or share any false, misleading, defamatory or disparaging statement about Aerva, its team or its services, on any platform or in any medium.',
-          'Concerns about Aerva are to be raised with Aerva through the Resolution Center or the Grievance Officer. A breach of this clause may lead to suspension or closure of your account, without prejudice to Aerva’s legal rights.'
+          'Concerns about Aerva are to be raised with Aerva through the Resolution Center or the Grievance Officer. A breach of this clause may lead to suspension or closure of your account, without prejudice to Aerva’s legal rights.',
+          'A host who, instead of raising a concern with Aerva, defames Aerva or any member of its team will be dealt with in accordance with the law.'
         ] },
         { title: '25. Liability and indemnity', points: [
           'To the extent the law allows, Aerva is not liable for the acts or omissions of any guest, host or third party, including criminal acts, death, injury, self-harm, loss of or damage to property, or any life-threatening situation, and pays no claim for them.',
@@ -375,7 +382,7 @@ window.AERVA_POLICIES = {
         'A coupon covers the booking price only. The guest service fee, GST and any security deposit are charged in full, on the full booking price.',
         'If the booking price is more than the coupon, you pay the difference plus the service fee, GST and any deposit.',
         'If the coupon is worth more than the booking price, the unused balance is forfeited. It is not refunded, carried over or exchanged for cash.',
-        'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown.'
+        'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown — at most 1 month after they are issued.'
       ]},
       { title: 'Payouts to hosts and co-hosts', points: [
         'Payouts are made automatically to a verified bank account the day after check-in (for an experience, the day after its date), after Aerva’s fees and TDS.',
@@ -383,7 +390,7 @@ window.AERVA_POLICIES = {
         'Payouts go only to a verified bank account held by the person or business named in the payout details (the host or someone else), alone or jointly. When a PAN is given, it must be in that same name, and TDS is deducted against it. A company, LLP or partnership firm is paid only to its own account, against its own PAN.',
         'When bank details change, payouts wait 48 hours, and the account owner is emailed about the change.',
         'Aerva may hold, adjust or withhold a payout for disputes, refunds, damage claims, suspected fraud or legal reasons.',
-        'Aerva pays hosts and co-hosts their own shares only. Co-host shares are paid in full, without deductions. Any other money between a host and a co-host is for them to settle between themselves.'
+        'Aerva pays hosts and co-hosts their own shares only. Each co-host’s share is the percentage the host set and the co-host agreed to, worked out on the final booking amount: while a guest’s request is open, a co-host’s share is held just like the host’s payout, so both match the booking once it is settled. Any other money between a host and a co-host is for them to settle between themselves.'
       ]}
     ]},
     { id: 'service-fees', title: 'Service Fees Policy', summary: 'How Aerva’s service fees are charged to hosts and guests.', sections: [
@@ -392,7 +399,7 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Hosts', points: [
         'Aerva’s commission is a percentage of the stay price, paid amenities and pet fees, at the commission rate shown in your dashboard. It is deducted from your payout.',
-        'A revised commission is announced by email at least 33 days before it takes effect (31 days’ notice, plus 2 days for time zones), and applies to bookings made from the date given. Hosts acknowledge it in their dashboard.'
+        'A revised commission is announced to hosts in advance, by email and in their dashboard, and applies to bookings made from the date given. Hosts acknowledge and confirm, or decline, it in their dashboard.'
       ]},
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',
@@ -403,7 +410,7 @@ window.AERVA_POLICIES = {
     { id: 'offline-fees', title: 'Offline Fee Policy', summary: 'When a host may charge anything outside Aerva.', sections: [
       { title: 'Rule', points: [
         'Hosts may not charge guests any fee outside Aerva. Every charge must be part of the price shown on Aerva before booking.',
-        'Security deposit claims go through Aerva, up to the deposit. Anything beyond the deposit is settled directly between the host and the guest.'
+        'Security deposit claims — damage and extra cleaning — go through Aerva, up to the deposit; the host decides the amount and must share photos or videos. Anything beyond the deposit is settled directly between the host and the guest.'
       ]}
     ]},
     { id: 'off-platform', title: 'Off-Platform Policy', summary: 'What must not happen outside Aerva.', sections: [
@@ -411,7 +418,7 @@ window.AERVA_POLICIES = {
         'Do not ask for, offer or accept payment outside Aerva for a stay or experience found on Aerva.',
         'Do not use contact details from Aerva to book or pay outside it.',
         'Keep messages about a booking on Aerva.',
-        'Once a booking is confirmed, the guest and host may share phone numbers and email addresses in its Aerva Messages until check-out, and photos until the review period closes (15 days after check-out). Other contact details (links, social media or messaging accounts, UPI IDs) are not allowed in messages.',
+        'Once a booking is confirmed, the guest and host may share phone numbers, email addresses and photos in its Aerva Messages until 15 days after check-out. Other contact details (links, social media or messaging accounts, UPI IDs) are not allowed in messages.',
         'Once the stay has ended or the booking is cancelled, phone numbers, email addresses and any photo showing contact details are removed from the conversation.',
         'Aerva may cancel bookings and suspend accounts that break this policy.'
       ]}
@@ -460,10 +467,11 @@ window.AERVA_POLICIES = {
         'A part paid by coupon is returned as a coupon, in the same proportion.'
       ]},
       { title: 'Hosts', points: [
-        'Hosts may cancel only 48 hours or more before check-in time, and must give a reason. The guest is told the reason.',
-        'A host may cancel at most 3 bookings in any 12 months. Further cancellations are handled only by Aerva.',
-        'When a host cancels, the guest is refunded at once: the booking price, its GST and the security deposit. Aerva’s service fee is held for the guest as Aerva credit for 30 days: it is taken off what they pay for their next Aerva booking (anything left stays on the credit), or, if they decide not to book again, it is refunded in full to the original payment method — at any time from My Bookings, or automatically when the 30 days end.',
-        'The guest also receives an Aerva coupon worth 10% of the booking, valid for 3 months, sent automatically 15 minutes after the cancellation. The host pays for it before the booking is cancelled.',
+        'Hosts may cancel before check-in time, and must give a reason. The guest is told the reason.',
+        'A host may cancel at most 3 bookings in any 12 months. Further cancellations are handled only by Aerva, on the host’s request: the guest is refunded everything they paid, and gets a coupon worth 10% of the booking, deducted from the host’s next payout.',
+        'Within 48 hours of check-in: everything the guest paid — the booking price, its GST and Aerva’s service fee — is held for them as Aerva credit for 30 days. They can use it on another stay or experience, or have it refunded in full to the original payment method at any time from My Bookings; anything left at the end is refunded automatically. The security deposit is refunded at once.',
+        'More than 48 hours before check-in, the guest is refunded at once: the booking price, its GST and the security deposit. Aerva’s service fee is held for the guest as Aerva credit for 30 days: it is taken off what they pay for their next Aerva booking (anything left stays on the credit), or, if they decide not to book again, it is refunded in full to the original payment method — at any time from My Bookings, or automatically when the 30 days end.',
+        'Either way, the guest also receives an Aerva coupon worth 10% of the booking, valid for 1 month, sent automatically 15 minutes after the cancellation. The host pays for it before the booking is cancelled. The coupon is not refundable; the guest can use it together with Aerva credit.',
         'What a guest is not refunded after cancelling is paid to the host, less Aerva’s commission, on the usual payout day.'
       ]},
       { title: 'Co-hosts', points: [
@@ -478,7 +486,7 @@ window.AERVA_POLICIES = {
         'An experience that includes a stay changes together with its stay: a new date moves both, and the number of guests applies to both.',
         'Any time before check-in. Once the stay has started, only until 10 AM (the property’s local time, the standard check-out time) on the day after check-in. After that the booking cannot be changed and nothing more is refunded.',
         'During a stay, check-in cannot move; check-out, guests and add-ons can. The new check-out can be the day after check-in at the earliest: the check-in night is never refunded.',
-        'If the host agrees to a shorter stay, what you paid for the nights you no longer stay is held for you as Aerva credit, not refunded to your payment. It is taken off your next Aerva booking automatically, or refunded to your original payment method whenever you ask from My Bookings; anything left after 30 days is refunded automatically.',
+        'If the host agrees to a shorter stay, what you paid for the nights you no longer stay is held for you as Aerva credit, not refunded to your payment. It is taken off your next Aerva booking automatically, or refunded to your original payment method whenever you ask from My Bookings. It does not expire.',
         'A request sent in time stands however long the host takes to answer. If the host declines it, or does not answer, you may raise it with Aerva within 24 hours from My Bookings (Report a problem); Aerva decides.'
       ]},
       { title: 'How', points: [
@@ -496,13 +504,14 @@ window.AERVA_POLICIES = {
         'Carry a government photo ID for every adult guest. The host checks it at check-in. Guests from outside India carry their passport.',
         'You can also verify your ID on Aerva (Account Settings → ID verification) with Aadhaar, a passport, driving licence or voter ID. It takes under a minute, your ID is not stored, and hosts see that you are verified.'
       ]},
-      { title: 'Late-night bookings', points: [
-        'Between 12:00 AM and 6:00 AM, where the property is, you may still book the night that has already begun. It counts as the previous day’s night, with check-out that day or later. Once booked, you may check in straight away.'
+      { title: 'Same-day bookings', points: [
+        'Each host chooses until what time their home can be booked for the same night, between 6 PM and 12 AM where the property is. Before that time you can book tonight and check in straight away; after it, the earliest check-in is the next day. For example, with 12 AM, a booking made at 11:59 PM on 25 November is for the night of 25–26 November.'
       ]}
     ]},
     { id: 'cancellation-experiences', title: 'Cancellation Policy for Experiences', summary: 'How cancellations work for experiences.', sections: [
       { title: 'Rule', points: [
         'Each experience shows its own refund terms before booking. Those terms apply.',
+        'An experience that includes a stay: if the experience’s host cancels it (with its stay), everything the guest paid, GST and Aerva’s service fee included, is held for them as Aerva credit to use on another stay or experience, or to have refunded; no coupon. If the stay’s host cancels, the stay’s rules apply and the coupon is worth 10% of the stay, paid for by the stay’s host.',
         'If a host or co-host cancels, the guest is refunded the price and its GST at once and, 15 minutes later, receives an Aerva coupon worth 10% of the booking, paid for by whoever cancelled. Aerva’s service fee is held for the guest as Aerva credit for 30 days: it is taken off what they pay for their next Aerva booking (anything left stays on the credit), or, if they decide not to book again, it is refunded in full to the original payment method — at any time from My Bookings, or automatically when the 30 days end.'
       ]}
     ]},
@@ -537,12 +546,14 @@ window.AERVA_POLICIES = {
       { title: 'Security deposit', points: [
         'Some listings hold a refundable security deposit, shown before you pay.',
         'It is refunded to the original payment method after check-out, unless the host reports damage through Aerva within 7 days of check-out.',
-        'If damage is reported, Aerva reviews it and decides how much of the deposit, if any, goes to the host. The rest is refunded. Aerva’s decision on the deposit is full and final.'
+        'The deposit covers damage and extra cleaning — by the host, or a cleaner or other help the host calls in — up to the deposit amount, never more.',
+        'The host alone decides how much of the deposit is refunded on their booking. To keep any of it, the host must report it through Aerva and share photos or videos of the damage with Aerva. The rest is refunded.',
+        'If the host confirms there is no damage when reviewing the guest, the deposit is refunded within 2 bank working days, without waiting for the 7 days.'
       ]},
       { title: 'Damage above the deposit', points: [
-        'Aerva handles damage claims only up to the security deposit.',
+        'Aerva handles damage and cleaning claims only up to the security deposit.',
         'Damage above the deposit, or where no deposit is held, is between the host and the guest, and is to be settled directly between them.',
-        'Aerva provides no support beyond the security deposit and the booking details. It is not a party to any settlement and pays no part of it.'
+        'Aerva provides no refund, compensation or support beyond the security deposit and the booking details — to the guest or to the host. It is not a party to any settlement and pays no part of it.'
       ]}
     ]},
     { id: 'reviews', title: 'Reviews Policy', summary: 'The rules for reviews left on Aerva.', sections: [
@@ -748,8 +759,9 @@ window.AERVA_POLICIES = {
             'A booking can be cancelled only before check-in. Once your stay has started, change your check-out date instead (Changing a booking).'
           ]},
           { title: 'If the host cancels', points: [
-            'You are refunded at once: the booking price, its GST and any security deposit.',
-            'About 15 minutes later you receive an Aerva coupon worth 10% of the booking, valid for 3 months.',
+            'More than 48 hours before check-in: you are refunded at once — the booking price, its GST and any security deposit.',
+            'Within 48 hours of check-in: everything you paid — the booking price, GST and Aerva’s service fee — is held for you as Aerva credit for 30 days. Use it on another stay or experience, or have it refunded to your original payment method at any time from My Bookings. Any deposit is refunded at once.',
+            'About 15 minutes later you receive an Aerva coupon worth 10% of the booking, valid for 1 month. It is not refundable, and you can use it together with your Aerva credit.',
             'Aerva’s service fee is held for you as Aerva credit for 30 days. Book another stay or experience in that time and the credit is taken off what you pay, automatically — checkout shows it as “Aerva credit”. If the new booking costs less than your credit, the rest stays on the credit; if it costs more, you pay the difference.',
             'What is left on your credit shows in My Bookings. Have it refunded in full to your original payment method at any time. Anything left when the 30 days end is refunded automatically.',
             'Your credit is not used for a security deposit: the deposit is paid with your chosen payment method and refunded to it after the stay.',
@@ -768,7 +780,7 @@ window.AERVA_POLICIES = {
             'Choose the change in My Bookings. The new price and the difference are shown before you send it.',
             'The host accepts or rejects the change in Aerva Messages. Until then, your booking stays as it is.',
             'If the new total is higher, pay the difference within 24 hours of the host accepting.',
-            'During your stay, ask by 10 AM (the property’s local time) on the day after check-in. The check-in night is never refunded. If your host agrees, the nights you no longer stay come back as Aerva credit — use it on another booking or have it refunded from My Bookings. After that time the booking cannot be changed.',
+            'During your stay, ask by 10 AM (the property’s local time) on the day after check-in. The check-in night is never refunded. If your host agrees, the nights you no longer stay come back as Aerva credit that does not expire — use it on another booking or have it refunded from My Bookings whenever you choose. After that time the booking cannot be changed.',
             'If the host declines a change you asked for during your stay, or does not answer, you can raise it with Aerva within 24 hours: My Bookings → Report a problem.'
           ]},
           { title: 'When we can help', points: [
@@ -798,11 +810,13 @@ window.AERVA_POLICIES = {
         summary: 'When a deposit is refunded, and what happens if a host reports damage.',
         sections: [
           { title: 'Refund', points: [
-            'A security deposit is refunded to the original payment method after check-out, unless the host reports damage through Aerva within 7 days of check-out.'
+            'A security deposit is refunded to the original payment method after check-out, unless the host reports damage through Aerva within 7 days of check-out.',
+            'If the host confirms there is no damage when reviewing you, it is refunded within 2 bank working days.',
+            'The deposit covers damage and extra cleaning (by the host or someone they call in), up to the deposit amount.'
           ]},
           { title: 'If damage is reported', points: [
             'You are told, and can send your side and your own photos.',
-            'Aerva reviews the claim and decides how much of the deposit, if any, goes to the host. The rest is refunded.',
+            'The host decides how much of the deposit to keep and must share photos or videos of the damage with Aerva. The rest is refunded.',
             'Damage above the deposit is between you and the host.'
           ]}
         ], docs: ['resolution'] },
@@ -812,7 +826,7 @@ window.AERVA_POLICIES = {
         sections: [
           { title: 'Using a coupon', points: [
             'A coupon covers the booking price only. The service fee, GST and any deposit are paid in full.',
-            'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown.'
+            'One coupon per booking. Coupons belong to the account they were issued to and expire on the date shown — at most 1 month after they are issued.'
           ]},
           { title: 'A coupon that did not arrive', points: [
             'A cancellation coupon arrives about 15 minutes after a host cancels. If it has not arrived after an hour, raise a request and choose the booking.'
@@ -883,9 +897,10 @@ window.AERVA_POLICIES = {
         summary: 'When a host may cancel, and what it means for the guest and for you.',
         sections: [
           { title: 'Rules', points: [
-            'Cancel only 48 hours or more before check-in, and give a reason. The guest is told the reason.',
-            'At most 3 cancellations in any 12 months. Beyond that, write to us.',
-            'The guest is refunded the booking price, GST and any deposit, and receives a coupon worth 10% of the booking, paid for by you. Aerva’s service fee is held for the guest as a credit for their next booking, or refunded to them in full.'
+            'Cancel before check-in, and give a reason. The guest is told the reason.',
+            'At most 3 cancellations in any 12 months. Beyond that, write to us: if Aerva cancels for you, the guest is refunded everything they paid and the 10% coupon is deducted from your next payout.',
+            'You pay for the guest’s coupon (10% of the booking) before the booking is cancelled. It is not refundable.',
+            'More than 48 hours before check-in, the guest is refunded the booking price, GST and any deposit, and Aerva’s service fee is held for them as credit. Within 48 hours, everything they paid is held for them as Aerva credit.'
           ]},
           { title: 'Instead of cancelling', points: [
             'If something at the property has gone wrong, raise a request before cancelling. We may be able to help the guest another way.'
@@ -897,11 +912,13 @@ window.AERVA_POLICIES = {
         sections: [
           { title: 'How to claim', points: [
             'Report damage through Aerva within 7 days of check-out, from the booking.',
-            'Send dated photos of the damage, and a repair estimate or invoice.',
-            'The guest is told and can give their side. Aerva decides how much of the deposit, if any, is paid to you.'
+            'Photos or videos of the damage are required, shared through Aerva; a report without them is not accepted. Add a repair or cleaning estimate or invoice if you have one.',
+            'Enter how much of the deposit you are keeping — for damage and extra cleaning, by you or someone you call in — up to the deposit amount.',
+            'The guest is told how much you are keeping and can give their side. The rest is refunded to the guest.',
+            'No damage? Tick it when you review the guest, and the deposit is refunded within 2 bank working days.'
           ]},
           { title: 'Above the deposit', points: [
-            'Aerva handles claims only up to the security deposit. Anything above it, or where no deposit was held, is between you and the guest.'
+            'Aerva handles claims only up to the security deposit. Anything above it, or where no deposit was held, is between you and the guest: Aerva provides no refund or compensation for it.'
           ]}
         ], docs: ['resolution'] },
 
@@ -922,7 +939,7 @@ window.AERVA_POLICIES = {
         sections: [
           { title: 'Basics', points: [
             'Invite a co-host from Co-hosting. They accept with their own Aerva account.',
-            'Aerva pays each co-host their own share, in full. Anything else between a host and a co-host is for them to settle.',
+            'Aerva pays each co-host their own share, based on the percentage share the host sets and the co-host agrees to. Anything else between a host and a co-host is for them to settle.',
             'Every co-host sees what the listings they co-host earn: each booking\u2019s total and the host\u2019s payout, next to their own share. They never see other listings, or the host\u2019s bank details, PAN or tax.',
             'A host can remove a co-host, and a co-host can leave, at any time. Shares already earned are still paid.'
           ]}
@@ -1117,7 +1134,7 @@ window.AERVA_POLICIES = {
       'Audit log: every admin, host, co-host and system action is recorded and never deleted.'
     ]},
     { title: 'How admins apply these policies', points: [
-      'Deposit disputes: decide within the dispute tab; record the reason.',
+      'Deposit disputes: the host decides the amount kept (up to the deposit); check the photos or videos are there, then settle it in the dispute tab at that amount. With no proof, refund the deposit in full.',
       'Stay disputes (Guest Safety tab): give the host’s account more weight; refund only when the guest’s evidence stands and the host cannot justify.',
       'Listing photos with phone numbers or other contact details: use “Block: phone number in photo” on the listing.',
       'Hazard reports: rebook or refund the guest when the property is unsafe; review the listing.',
@@ -1129,11 +1146,11 @@ window.AERVA_POLICIES = {
 
   // Gaps between these policies and the product, for the admin to close.
   openItems: [
-    'Have the lawyer review the Aerva Host Agreement 2026-10-27b (offered again after it ends; commission revisions acknowledged and confirmed; payout the day after check-in; first night only while a guest’s request is open; amounts recovered from the next payout) and its earlier terms (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
+    'Have the lawyer review the Aerva Host Agreement 2026-10-28a (host cancellations within 48 hours: all as credit; coupon not refundable; Aerva cancels for the host with the coupon from the next payout; commission revisions announced in advance with no fixed number of days, confirm or decline; offered again after it ends; commission revisions acknowledged and confirmed; payout the day after check-in; first night only while a guest’s request is open; amounts recovered from the next payout) and its earlier terms (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
     'Add the Grievance Officer’s name to support.grievanceOfficer in this file (required by the E-Commerce Rules); it then shows in the Resolution Center.',
     'Resolution Center: fill in support.contacts.tollFree, whatsapp and hours in this file when the numbers are live. Until then those buttons stay hidden.',
     'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',
-    'Have the lawyer review booking agreement 2026-10-27a — no cancellation once a stay has started; changes and problem reports only until 10 AM on the day after check-in; the check-in night never refunded; a shorter stay agreed by the host returned as Aerva credit (refundable on request, refunded automatically after 30 days); nothing refunded after that time — and its earlier terms: ID checked by the host at check-in (not by Aerva), the 3-minute payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
+    'Have the lawyer review booking agreement 2026-10-28a — no cancellation once a stay has started; changes and problem reports only until 10 AM on the day after check-in; the check-in night never refunded; a shorter stay agreed by the host returned as Aerva credit (never expires, refundable whenever the guest asks); nothing refunded after that time — and its earlier terms: ID checked by the host at check-in (not by Aerva), the 3-minute payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
     'Erase the guest ID proofs uploaded before September 2026: Admin → ID Verifications → “Erase reviewed documents & encrypt stored numbers”.',
     'Confirm with the CA how GST is treated on the part of a booking price kept after a guest cancels.',
     'TDS rules follow the CA’s review of October 2026 (no ₹5 lakh exemption, base after commission, deposits included). Hosts or co-hosts outside India are not handled; flag any non-resident payee to the CA (s.195).',

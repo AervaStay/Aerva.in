@@ -601,6 +601,10 @@
               <button type="button" class="dispute-btn" data-order-id="${b.id}" onclick="toggleDisputeForm(${b.id})">Raise a Concern</button>
               <div class="dispute-form" id="disputeForm-${b.id}">
                 <textarea id="disputeReason-${b.id}" rows="3" placeholder="What happened? (damage, missing items, extra cleaning needed, etc.)"></textarea>
+                <label style="display:block; font-size:13px; margin:8px 0 4px;">Amount you are keeping from the deposit (₹, up to ${fmt(b.deposit_amount)}) — repairs and extra cleaning, by you or someone you call in</label>
+                <input type="number" id="disputeAmount-${b.id}" min="1" max="${Number(b.deposit_amount)}" step="1" style="font-size:14px; margin-bottom:8px; width:160px;">
+                <label style="display:block; font-size:13px; margin:8px 0 4px;">Photos or videos of the damage (required — Aerva holds the deposit only with proof)</label>
+                <input type="file" id="disputeFiles-${b.id}" multiple accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,application/pdf" style="font-size:14px; margin-bottom:8px;">
                 <button type="button" class="btn-small" onclick="submitDispute(${b.id})">Submit</button>
                 <p class="verify-error" id="disputeError-${b.id}"></p>
               </div>
@@ -881,11 +885,34 @@
       errorEl.style.display = 'block';
       return;
     }
+    const amount = Number((document.getElementById('disputeAmount-' + orderId) || {}).value);
+    const maxKeep = Number((document.getElementById('disputeAmount-' + orderId) || {}).max);
+    if(!(amount > 0) || amount > maxKeep){
+      errorEl.textContent = `Enter how much of the deposit you are keeping — between ₹1 and ₹${maxKeep}. Anything above the deposit is between you and the guest.`;
+      errorEl.style.display = 'block';
+      return;
+    }
+    const files = [...((document.getElementById('disputeFiles-' + orderId) || {}).files || [])].slice(0, 10);
+    if(!files.length){
+      errorEl.textContent = 'Add at least one photo or video of the damage. Aerva can only hold the deposit with proof.';
+      errorEl.style.display = 'block';
+      return;
+    }
     try{
+      errorEl.textContent = 'Uploading…'; errorEl.style.display = 'block';
+      const { upload } = await import('https://esm.sh/@vercel/blob/client');
+      const evidence = [];
+      for(const f of files){
+        const isVideo = /^video\//.test(f.type);
+        if(f.size > (isVideo ? 60 : 8) * 1024 * 1024) throw new Error(`"${f.name}" is too large (${isVideo ? '60' : '8'} MB at most).`);
+        const r = await upload(f.name, f, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload', clientPayload: JSON.stringify({ purpose: 'deposit-evidence', token: sessionToken || '' }) });
+        evidence.push(r.url);
+      }
+      errorEl.style.display = 'none';
       const res = await fetch(API_BASE + '/api/host-listings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-        body: JSON.stringify({ raiseDispute: { orderId, reason } })
+        body: JSON.stringify({ raiseDispute: { orderId, reason, evidence, amount } })
       });
       const data = await res.json();
       if(res.ok){
@@ -895,7 +922,7 @@
         errorEl.style.display = 'block';
       }
     } catch(err){
-      errorEl.textContent = 'Could not submit your concern. Please try again.';
+      errorEl.textContent = (err && err.message && /too large|upload|sign in/i.test(err.message)) ? err.message : 'Could not submit your concern. Please try again.';
       errorEl.style.display = 'block';
     }
   }
@@ -946,7 +973,7 @@
         errorEl.parentNode.insertBefore(box, errorEl);
       }
       box.innerHTML = '<p style="font-size:14.5px; margin:0 0 6px;"><strong>Guest’s cancellation coupon: ' + inr(amount) + ' (10% of the booking).</strong></p>'
-        + '<p style="font-size:13.5px; margin:0 0 12px; opacity:0.8;">The guest is refunded in full (booking and deposit) straight away, and gets this coupon by email 15 minutes later. This cannot be undone.</p>'
+        + '<p style="font-size:13.5px; margin:0 0 12px; opacity:0.8;">Your guest is refunded (or, within 48 hours of check-in, everything they paid is held for them as Aerva credit) and gets this coupon by email 15 minutes later. The coupon is not refundable. This cannot be undone.</p>'
         + '<div style="display:flex; gap:8px; flex-wrap:wrap;">'
         + '<button type="button" class="btn-small" data-choice="now">Pay ' + inr(amount) + ' now and cancel</button>'
         + '</div>';

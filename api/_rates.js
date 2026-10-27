@@ -211,9 +211,9 @@ async function runRateNotices(sql, { deadlineMs = 5000 } = {}) {
         <p style="font-size:12px; letter-spacing:0.14em; color:#8a6c39;">AERVA</p>
         <p>Dear ${esc(h.name || 'Host')},</p>
         <p>This is formal notice of a revision of Aerva’s commission on your listings: <strong>from ${esc(one.from)} to ${esc(one.to)}</strong>.</p>
-        <p><strong>The revised commission applies to bookings made on or after ${esc(dateLabel(r.effective_from))} (12:00 AM, India time).</strong> This notice is given 31 days in advance, with 2 more days to allow for time zones. Bookings made before that date keep the commission in force when they were made.</p>
-        <p>Please acknowledge and confirm the revision in your dashboard before ${esc(dateLabel(r.effective_from))}. If it is not confirmed by then, your agreement with Aerva ends under the Aerva Host Agreement: your listings are deactivated, confirmed bookings go ahead, and amounts due to you are paid.</p>
-        <p><a href="${SITE}/host-dashboard.html" style="background:#1c1a17; color:#f4eadc; padding:11px 20px; text-decoration:none; display:inline-block;">Acknowledge and confirm</a></p>
+        <p><strong>The revised commission applies to bookings made on or after ${esc(dateLabel(r.effective_from))} (12:00 AM, India time).</strong> This notice is given in advance. Bookings made before that date keep the commission in force when they were made.</p>
+        <p>Please acknowledge and confirm, or decline, the revision in your dashboard before ${esc(dateLabel(r.effective_from))}. If you decline it, or it is not confirmed by then, your agreement with Aerva ends under the Aerva Host Agreement: your listings are deactivated, confirmed bookings go ahead, and amounts due to you are paid.</p>
+        <p><a href="${SITE}/host-dashboard.html" style="background:#1c1a17; color:#f4eadc; padding:11px 20px; text-decoration:none; display:inline-block;">Review the revision</a></p>
         <p style="font-size:13px; color:#6e675d;">Questions: raise a request in the Resolution Center or write to hello@aerva.in.</p></div>`;
       const ok = await sendEmail(h.email, `Notice: revision of Aerva’s commission from ${dateLabel(r.effective_from)}`, html);
       await sql`UPDATE fee_rate_notices SET emailed = ${ok} WHERE id = ${claimed[0].id}`;

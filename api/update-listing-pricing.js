@@ -293,6 +293,7 @@ module.exports = async (req, res) => {
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
                auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason, timezone,
                COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
+               COALESCE((to_jsonb(listings)->>'same_day_until')::int, 24) AS same_day_until,
                COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough,
                to_jsonb(listings)->>'checkin_send_trigger' AS checkin_send_trigger,
                (to_jsonb(listings)->>'checkin_send_offset_minutes')::int AS checkin_send_offset_minutes,
@@ -464,7 +465,7 @@ module.exports = async (req, res) => {
               latitude, longitude, formattedAddress, city, area, pincode, maxGuests,
               petFriendly, maxPetsAllowed, allowedPetTypes, petFee, securityDeposit, experiencePriceUnit,
               checkInTime, checkOutTime, wifiName, wifiPassword, accessCode,
-              customFields, autoSendCheckinInstructions, checkinSendTrigger, checkinSendOffsetMinutes, checkinSendAlsoOnConfirm, checkinSendAtTime, checkinPhotos, rooms, bedrooms, cancellationPolicy, promotionsLoadedIds } = req.body || {};
+              customFields, autoSendCheckinInstructions, checkinSendTrigger, checkinSendOffsetMinutes, checkinSendAlsoOnConfirm, checkinSendAtTime, checkinPhotos, rooms, bedrooms, cancellationPolicy, sameDayUntil, promotionsLoadedIds } = req.body || {};
       // "Sent" means the key is in the request at all. A page that saves
       // only part of the form (the dashboard's calendar sidebar, the
       // experience calendar) must never wipe what it didn't send.
@@ -755,6 +756,11 @@ module.exports = async (req, res) => {
       // paid booking keeps the policy it was bought under (_cancellations.js).
       // Separate from the save above so the save still works before
       // migration_cancellation_policy.sql has run.
+      // Until what time tonight can be booked (6 PM … 12 AM; _booking-rules.js).
+      if ([18, 19, 20, 21, 22, 23, 24].includes(Number(sameDayUntil))) {
+        try { await sql`UPDATE listings SET same_day_until = ${Number(sameDayUntil)} WHERE id = ${listingId}`; }
+        catch (err) { console.error('same_day_until not saved (apply 2026-10-28-01-same-day-cutoff.sql):', err.message); }
+      }
       if (cancellationPolicy === 'flexible' || cancellationPolicy === 'firm') {
         try { await sql`UPDATE listings SET cancellation_policy = ${cancellationPolicy} WHERE id = ${listingId}`; }
         catch (err) { console.error('cancellation_policy not saved (run migration_cancellation_policy.sql):', err.message); }
