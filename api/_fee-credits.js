@@ -12,9 +12,10 @@
 //     confirmation claims it — _confirm-booking.js). The rest is paid by
 //     card; whatever is left stays on the credit.
 //   • Not booking again, the guest can ask for it back at any time (My
-//     Bookings → "Refund it now"); and whatever is left when the credit
-//     period ends is refunded automatically ('fee_credit_refunds' job).
-//     Either way, in full, to the original payment method.
+//     Bookings → "Refund it now"), in full, to the original payment method.
+//     Credit does not expire ('infinity'); while unused, the guest is
+//     reminded every 15 days (remindUnused). Only a credit given an end
+//     date before 2026-10-28 is refunded when it ends ('fee_credit_refunds').
 //   • A booking paid partly with credit and later refunded (cancelled,
 //     changed, a stay problem upheld) is refunded to the payment first; the
 //     part the payment cannot take goes back onto the credit (giveBack), with
@@ -111,7 +112,7 @@ async function createForHostCancellation(sql, orderIds) {
     if (fee <= 0) continue;
     try {
       const c = (await sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at)
-                           VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${fee}, ${fee}, now() + make_interval(days => ${FEE_CREDIT_DAYS}))
+                           VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${fee}, ${fee}, 'infinity'::timestamptz)
                            ON CONFLICT (source_order_id) DO NOTHING RETURNING *`)[0];
       if (c) {
         made.push(Object.assign(c, { suite: r.suite_name }));
@@ -126,8 +127,8 @@ async function createForHostCancellation(sql, orderIds) {
     const total = list.reduce((t, c) => t + c.amount, 0);
     await email(to, `${inr(total)} is held for you as Aerva credit`, `
       <div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
-        <p>Because your host cancelled, Aerva’s service fee of <strong>${inr(total)}</strong> is not kept. It is held for you as Aerva credit until <strong>${esc(day(list[0].expires_at))}</strong>.</p>
-        <p>Book another stay or experience on Aerva by then and the credit is taken off what you pay, automatically. Anything left stays on your credit. If you decide not to book again, you can have it refunded at any time from My Bookings — and anything left on that date is refunded to your original payment method automatically.</p>
+        <p>Because your host cancelled, Aerva’s service fee of <strong>${inr(total)}</strong> is not kept. It is held for you as Aerva credit, and it does not expire.</p>
+        <p>Book another stay or experience on Aerva and the credit is taken off what you pay, automatically. Anything left stays on your credit. If you decide not to book again, you can have it refunded to your original payment method whenever you choose, from My Bookings.</p>
         <p style="font-size:12px; opacity:0.6;">Questions: hello@aerva.in</p></div>`);
   }
   made.restored = restored;
@@ -218,10 +219,10 @@ async function creditForWholeBooking(sql, orderIds, reason) {
     let c;
     const ins = (withReason) => withReason
       ? sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at, reason)
-            VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, now() + make_interval(days => ${FEE_CREDIT_DAYS}), ${reason})
+            VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, 'infinity'::timestamptz, ${reason})
             ON CONFLICT (source_order_id) DO NOTHING RETURNING *`
       : sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at)
-            VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, now() + make_interval(days => ${FEE_CREDIT_DAYS}))
+            VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, 'infinity'::timestamptz)
             ON CONFLICT (source_order_id) DO NOTHING RETURNING *`;
     try { c = (await ins(true))[0]; }
     catch (err) { if (err && err.code === '42703') c = (await ins(false))[0]; else { console.error('credit not made (needs follow-up):', r.id, err.message); continue; } }
@@ -233,8 +234,8 @@ async function creditForWholeBooking(sql, orderIds, reason) {
   if (out.total > 0 && guestEmail) {
     await email(guestEmail, `${inr(out.total)} is held for you as Aerva credit`, `
       <div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
-        <p>Your booking at <strong>${esc(suite || 'Aerva')}</strong> was cancelled by the host. Everything you paid for it — <strong>${inr(out.total)}</strong>, including GST and Aerva’s service fee — is held for you as Aerva credit until <strong>${esc(day(out.expiresAt))}</strong>.</p>
-        <p>Book another stay or experience and it is taken off what you pay, automatically. Or have it refunded to your original payment method at any time from My Bookings — anything left on that date is refunded automatically.</p>
+        <p>Your booking at <strong>${esc(suite || 'Aerva')}</strong> was cancelled by the host. Everything you paid for it — <strong>${inr(out.total)}</strong>, including GST and Aerva’s service fee — is held for you as Aerva credit, and it does not expire.</p>
+        <p>Book another stay or experience and it is taken off what you pay, automatically. Or have it refunded to your original payment method whenever you choose, from My Bookings.</p>
         <p style="font-size:12px; opacity:0.6;">Questions: hello@aerva.in</p></div>`);
   }
   return out;
@@ -346,6 +347,73 @@ async function runExpired(sql, razorpay, { deadlineMs = 4000 } = {}) {
   return out;
 }
 
+// ---- Reminders: every 15 days while a credit is unused ----
+// One email per guest (their whole balance), with a line that makes them
+// want to open it, and the way to have it refunded instead. Never throws.
+const REMINDER_DAYS = 15;
+const TAGLINES = [
+  { subject: (a) => `Your next getaway is already ${a} closer`, line: (a) => `You have <strong>${a}</strong> of Aerva credit waiting. Pick a stay — it comes off the price automatically.` },
+  { subject: (a) => `${a} is waiting in your Aerva wallet`, line: (a) => `Somewhere beautiful is waiting, and <strong>${a}</strong> of it is already paid for.` },
+  { subject: (a) => `A weekend away, partly on us: ${a} of credit`, line: (a) => `Your <strong>${a}</strong> Aerva credit is ready to use on any stay or experience in India.` },
+  { subject: (a) => `Don’t let ${a} sit idle — plan your escape`, line: (a) => `Hills, beaches or a quiet villa: use your <strong>${a}</strong> credit on your next booking.` },
+  { subject: (a) => `${a} towards your next stay — still yours`, line: (a) => `Your <strong>${a}</strong> Aerva credit never expires. Now could be the moment to use it.` }
+];
+async function remindUnused(sql, { deadlineMs = 4000 } = {}) {
+  const started = Date.now();
+  const out = { reminded: 0 };
+  let due;
+  try {
+    due = await sql`SELECT guest_id, min(guest_email) AS guest_email, sum(remaining)::int AS balance, max(COALESCE(reminders_sent, 0))::int AS sent, array_agg(id) AS ids
+                    FROM fee_credits
+                    WHERE status = 'active' AND remaining > 0 AND guest_id IS NOT NULL
+                      AND created_at <= now() - make_interval(days => ${REMINDER_DAYS})
+                      AND (last_reminder_at IS NULL OR last_reminder_at <= now() - make_interval(days => ${REMINDER_DAYS}))
+                    GROUP BY guest_id LIMIT 50`;
+  } catch (e) { return Object.assign(out, { skipped: 'database update not applied' }); }
+  for (const g of due) {
+    if (Date.now() - started > deadlineMs) break;
+    // Claimed first, so two runs never send twice.
+    const claimed = await sql`UPDATE fee_credits SET last_reminder_at = now(), reminders_sent = COALESCE(reminders_sent, 0) + 1
+                              WHERE id = ANY(${g.ids}) AND (last_reminder_at IS NULL OR last_reminder_at <= now() - make_interval(days => ${REMINDER_DAYS})) RETURNING id`;
+    if (!claimed.length) continue;
+    const who = (await sql`SELECT name, deleted_at FROM guests WHERE id = ${g.guest_id}`)[0];
+    if (!who || who.deleted_at || !g.guest_email) continue;
+    const t = TAGLINES[(Number(g.sent) || 0) % TAGLINES.length];
+    const amount = inr(g.balance);
+    await email(g.guest_email, t.subject(amount), `
+      <div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
+        <p style="font-size:13px; letter-spacing:0.12em; text-transform:uppercase; color:#8a6c39; margin:0 0 6px;">Your Aerva credit</p>
+        <h2 style="font-family:Georgia,serif; font-weight:normal; margin:0 0 12px;">${amount} is ready when you are</h2>
+        <p>Hi ${esc(String(who.name || '').split(' ')[0] || 'there')}, ${t.line(amount)}</p>
+        <p style="margin:22px 0;"><a href="https://aerva.in/index.html" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">Find a stay</a></p>
+        <p style="font-size:13px; color:#6e675d;">It is taken off your next booking automatically and does not expire. Prefer the money back? Have it refunded to your original payment method at any time from <a href="https://aerva.in/index.html?view=my-bookings" style="color:#8a6c39;">My Bookings</a>.</p>
+      </div>`);
+    out.reminded++;
+  }
+  return out;
+}
+
+// For the bell: the guest's unused credit, as a nudge to use it.
+async function bellNotice(sql, guestId) {
+  try {
+    const out = [];
+    const r = (await sql`SELECT COALESCE(sum(remaining), 0)::int AS balance, max(created_at) AS at FROM fee_credits
+                         WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0`)[0];
+    if (r && r.balance > 0) {
+      const a = inr(r.balance);
+      out.push({ id: 'aerva-credit:' + r.balance, kind: 'action', title: `${a} of Aerva credit is waiting for you`,
+                 body: 'Your next getaway is partly paid for. It comes off your next booking automatically — or have it refunded any time.',
+                 href: 'index.html?view=my-bookings' });
+    }
+    try {
+      const cps = await sql`SELECT code, amount, expires_at FROM coupons WHERE guest_id = ${guestId} AND status = 'active' AND expires_at > now() ORDER BY expires_at LIMIT 3`;
+      cps.forEach(c => out.push({ id: 'aerva-coupon:' + c.code, kind: 'action', title: `Your ${inr(c.amount)} Aerva coupon: ${c.code}`,
+        body: `Use it at checkout by ${day(c.expires_at)}. It covers the booking price and works with your Aerva credit.`, href: 'index.html?view=my-bookings' }));
+    } catch (e) { /* coupons table not there */ }
+    return out;
+  } catch (e) { return []; }
+}
+
 // For the guest: open credits, and ones refunded in the last 60 days.
 async function forGuest(sql, guestId) {
   try {
@@ -358,4 +426,4 @@ async function forGuest(sql, guestId) {
   } catch (e) { return []; }
 }
 
-module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest };
+module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindUnused, bellNotice };

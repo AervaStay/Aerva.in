@@ -142,31 +142,33 @@ async function notifyDepositDispute(sql, orderId, event, { compensation = 0, ref
     if (!o) return;
     const name = esc(o.property_name || o.suite_name);
     const ref = o.confirmation_code ? ` (${esc(o.confirmation_code)})` : '';
+    const pct = (n) => (Number(o.deposit_amount) > 0 ? Math.round(Number(n) / Number(o.deposit_amount) * 100) : 0) + '%';
     const btn = (href, label) => `<p style="margin:20px 0;"><a href="${href}" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">${esc(label)}</a></p>`;
     if (event === 'raised') {
       const reply = `https://aerva.in/index.html?view=help&new=1&category=deposit_damage&order=${Number(o.id)}`;
       await sendMail(o.guest_email, `The host reported damage after your stay at ${o.property_name || o.suite_name}`,
         `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your security deposit is on hold</h2>
-         <p>Hi ${esc(String(o.guest_name || '').split(' ')[0] || 'there')}, the host of <strong>${name}</strong>${ref} has reported damage or extra cleaning after your stay${o.dispute_amount != null ? `, and is keeping <strong>${inr(o.dispute_amount)}</strong> of your ${inr(o.deposit_amount)} security deposit` : `. Your ${inr(o.deposit_amount)} security deposit is held`}. The host has shared photos or videos with Aerva.</p>
+         <p>Hi ${esc(String(o.guest_name || '').split(' ')[0] || 'there')}, the host of <strong>${name}</strong>${ref} has reported damage or extra cleaning after your stay${o.dispute_amount != null ? `, and has asked to keep <strong>${inr(o.dispute_amount)}</strong> of your ${inr(o.deposit_amount)} security deposit` : ''}. The host has shared photos or videos with Aerva. Your deposit is held while Aerva reviews it.</p>
          <p style="padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f;">“${esc(o.dispute_reason)}”</p>
-         <p>If you would like to give your side, send it with any photos you have.</p>
+         <p>If you would like to give your side, send it with any photos you have. Aerva considers both sides before deciding.</p>
          ${btn(reply, 'Send your side')}
-         <p style="font-size:13px; color:#6e675d;">The deposit covers damage and extra cleaning, up to the deposit amount. The host decides how much of it to keep; the rest is refunded to your original payment method. Damage above the deposit is between you and the host, under Aerva’s Security Deposit and Damage Policy.</p>`);
+         <p style="font-size:13px; color:#6e675d;">The deposit covers damage and extra cleaning, up to the deposit amount. Aerva approves how much, if any, goes to the host; the rest is refunded to your original payment method. Damage above the deposit is between you and the host, under Aerva’s Security Deposit and Damage Policy.</p>`);
       await sendMail(process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `Deposit dispute: ${o.property_name || o.suite_name} · booking #${o.id}`,
-        `<p>The host reported damage on booking #${Number(o.id)}${ref} (${inr(o.deposit_amount)} deposit)${o.dispute_amount != null ? ` and keeps ${inr(o.dispute_amount)}` : ''}:</p><p>“${esc(o.dispute_reason)}”</p><p>Proof: ${(Array.isArray(o.dispute_evidence) ? o.dispute_evidence : []).map((u, i) => `<a href="${esc(u)}">file ${i + 1}</a>`).join(' · ') || 'none'}</p><p>The guest has been told and invited to send their side. Settle it in Admin → Security Deposits.</p>`);
+        `<p>The host reported damage on booking #${Number(o.id)}${ref} (${inr(o.deposit_amount)} deposit)${o.dispute_amount != null ? ` and asks to keep ${inr(o.dispute_amount)}` : ''}:</p><p>“${esc(o.dispute_reason)}”</p><p>Proof: ${(Array.isArray(o.dispute_evidence) ? o.dispute_evidence : []).map((u, i) => `<a href="${esc(u)}">file ${i + 1}</a>`).join(' · ') || 'none'}</p><p>The guest has been told and invited to send their side. Review it and approve the amount in Admin → Security Deposits.</p>`);
       return;
     }
     if (event === 'resolved') {
       await sendMail(o.guest_email, `Your security deposit for ${o.property_name || o.suite_name}`,
-        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your security deposit has been settled</h2>
+        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Aerva has decided on your security deposit</h2>
          <p>Booking at <strong>${name}</strong>${ref}. Security deposit: ${inr(o.deposit_amount)}.</p>
-         <p>${refunded > 0 ? `<strong>${inr(refunded)}</strong> is being refunded to your original payment method. Your bank may take a few working days to show it.` : 'No part of the deposit is refunded.'}${compensation > 0 ? ` ${inr(compensation)} goes to the host for the damage.` : ''}</p>
+         <p>${refunded > 0 ? `<strong>${inr(refunded)}</strong> is being refunded to your original payment method. Your bank may take a few working days to show it.` : 'No part of the deposit is refunded.'}${compensation > 0 ? ` ${inr(compensation)} (${pct(compensation)} of the deposit) goes to the host for the damage.` : ''}</p>
+         <p style="font-size:13px; color:#6e675d;">Aerva reviewed the host’s proof and your side. Its decision is final.</p>
          <p style="font-size:13px; color:#6e675d;">Questions? Raise a request in the Resolution Center: https://aerva.in/index.html?view=help</p>`);
-      await sendMail(o.host_account_email || o.host_email, `Your damage report is settled: ${o.property_name || o.suite_name}`,
-        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your damage report is settled</h2>
+      await sendMail(o.host_account_email || o.host_email, `Aerva’s decision on your damage report: ${o.property_name || o.suite_name}`,
+        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Aerva has decided on your damage report</h2>
          <p>Booking #${Number(o.id)}${ref} at <strong>${name}</strong>. Security deposit: ${inr(o.deposit_amount)}.</p>
-         <p>${compensation > 0 ? `You receive <strong>${inr(compensation)}</strong>. It is paid to your bank account as a separate payout; you will get an email when it is sent.` : 'No part of the deposit is paid to you.'}${refunded > 0 ? ` ${inr(refunded)} is refunded to the guest.` : ''}</p>
-         <p style="font-size:13px; color:#6e675d;">Damage or cleaning above the deposit is between you and the guest; Aerva pays no refund or compensation for it, under Aerva’s Security Deposit and Damage Policy.</p>`);
+         <p>${o.dispute_amount != null ? `You asked for ${inr(o.dispute_amount)}. ` : ''}${compensation > 0 ? `Aerva approved <strong>${inr(compensation)}</strong> (${pct(compensation)} of the deposit). It is paid to your bank account as a separate payout; you will get an email when it is sent.` : 'No part of the deposit is paid to you.'}${refunded > 0 ? ` ${inr(refunded)} is refunded to the guest.` : ''}</p>
+         <p style="font-size:13px; color:#6e675d;">Aerva’s decision is final. Damage or cleaning above the deposit is between you and the guest; Aerva pays no refund or compensation for it, under Aerva’s Security Deposit and Damage Policy.</p>`);
     }
   } catch (err) { console.error('notifyDepositDispute failed:', err.message); }
 }

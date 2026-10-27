@@ -552,6 +552,8 @@ module.exports = async (req, res) => {
             href: 'index.html?view=cohost'
           }));
         } catch (err) { /* co-host tables not there */ }
+        // Unused Aerva credit: a nudge to use it (_fee-credits.js).
+        (await require('./_fee-credits').bellNotice(sql, guest.id)).forEach(n => notifications.push(n));
         // Resolution Center: requests with a reply not opened yet (_support.js).
         (await require('./_support').bellNotifications(sql, guest.id)).forEach(n => notifications.push(n));
         // Payout details: what the host or co-host must do, or is waiting for (_bank-check.js).

@@ -601,7 +601,7 @@
               <button type="button" class="dispute-btn" data-order-id="${b.id}" onclick="toggleDisputeForm(${b.id})">Raise a Concern</button>
               <div class="dispute-form" id="disputeForm-${b.id}">
                 <textarea id="disputeReason-${b.id}" rows="3" placeholder="What happened? (damage, missing items, extra cleaning needed, etc.)"></textarea>
-                <label style="display:block; font-size:13px; margin:8px 0 4px;">Amount you are keeping from the deposit (₹, up to ${fmt(b.deposit_amount)}) — repairs and extra cleaning, by you or someone you call in</label>
+                <label style="display:block; font-size:13px; margin:8px 0 4px;">Amount you ask to keep from the deposit (₹, up to ${fmt(b.deposit_amount)}) — repairs and extra cleaning, by you or someone you call in. Aerva reviews it with the guest’s side and approves what is paid; its decision is final.</label>
                 <input type="number" id="disputeAmount-${b.id}" min="1" max="${Number(b.deposit_amount)}" step="1" style="font-size:14px; margin-bottom:8px; width:160px;">
                 <label style="display:block; font-size:13px; margin:8px 0 4px;">Photos or videos of the damage (required — Aerva holds the deposit only with proof)</label>
                 <input type="file" id="disputeFiles-${b.id}" multiple accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,application/pdf" style="font-size:14px; margin-bottom:8px;">
@@ -888,7 +888,7 @@
     const amount = Number((document.getElementById('disputeAmount-' + orderId) || {}).value);
     const maxKeep = Number((document.getElementById('disputeAmount-' + orderId) || {}).max);
     if(!(amount > 0) || amount > maxKeep){
-      errorEl.textContent = `Enter how much of the deposit you are keeping — between ₹1 and ₹${maxKeep}. Anything above the deposit is between you and the guest.`;
+      errorEl.textContent = `Enter how much of the deposit you ask to keep — between ₹1 and ₹${maxKeep}. Anything above the deposit is between you and the guest.`;
       errorEl.style.display = 'block';
       return;
     }

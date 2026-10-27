@@ -960,7 +960,16 @@ module.exports = async (req, res) => {
       if (req.query.mode === 'feeCredits') {
         if (actingCtx) return res.status(200).json({ credits: [] });
         const FC = require('./_fee-credits');
-        return res.status(200).json({ credits: await FC.forGuest(sql, guestId), days: FC.FEE_CREDIT_DAYS });
+        // The guest's coupons too: ready to use, or on their way (15 minutes
+        // after a host's cancellation).
+        let coupons = [];
+        try {
+          coupons = (await sql`SELECT c.code, c.amount, c.status, c.expires_at, c.release_at, o.suite_name FROM coupons c LEFT JOIN orders o ON o.id = c.source_order_id
+                               WHERE c.guest_id = ${guestId} AND (c.status = 'scheduled' OR (c.status = 'active' AND (c.expires_at IS NULL OR c.expires_at > now())))
+                               ORDER BY c.expires_at NULLS LAST, c.id LIMIT 20`)
+            .map(c => ({ code: c.status === 'active' ? c.code : null, amount: Number(c.amount), status: c.status, expiresAt: c.expires_at, releaseAt: c.release_at, from: c.suite_name || '' }));
+        } catch (e) { coupons = []; }
+        return res.status(200).json({ credits: await FC.forGuest(sql, guestId), coupons, days: FC.FEE_CREDIT_DAYS });
       }
 
       // ---- Their own profile ----

@@ -6884,9 +6884,22 @@
       const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=feeCredits', { headers: { 'Authorization': 'Bearer ' + token } });
       const d = await r.json();
       const list = (r.ok && d.credits) || [];
-      if(!list.length){ box.innerHTML = ''; return; }
+      const coupons = (r.ok && d.coupons) || [];
+      if(!list.length && !coupons.length){ box.innerHTML = ''; return; }
       const fmtDate = (v) => new Date(v).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
-      box.innerHTML = list.map(c => c.status === 'active' && c.remaining > 0 ? `
+      // Coupons: the code to enter at checkout, its value and its last day.
+      const couponHtml = coupons.map(c => `
+        <div class="fee-credit-card">
+          <div class="fee-credit-amount">${fmtGuest(c.amount)}</div>
+          <div class="fee-credit-body">
+            <strong>Aerva coupon</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}
+            ${c.status === 'active'
+              ? `<p>Enter <code style="font-size:15px; letter-spacing:0.04em; background:#f4eadc; padding:2px 8px; border-radius:6px;">${escapeMessageHtml(c.code)}</code> at checkout. It covers the booking price and can be used with your Aerva credit. Use it by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong>; it is not refundable.</p>
+                 <button type="button" class="filter-clear" data-copy-coupon="${escapeMessageHtml(c.code)}">Copy code</button> <span class="fee-credit-msg"></span>`
+              : '<p>On its way — it arrives by email about 15 minutes after the cancellation, and shows here with its code.</p>'}
+          </div>
+        </div>`).join('');
+      box.innerHTML = couponHtml + list.map(c => c.status === 'active' && c.remaining > 0 ? `
         <div class="fee-credit-card">
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
           <div class="fee-credit-body">
@@ -6896,6 +6909,10 @@
           </div>
         </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
         : (c.refunded > 0 ? `<div class="fee-credit-card done"><div class="fee-credit-body">${fmtGuest(c.refunded)} of your Aerva credit was refunded on ${escapeMessageHtml(fmtDate(c.refundedAt))}. It usually reaches your account within 5–7 working days.</div></div>` : '')).join('');
+      box.querySelectorAll('[data-copy-coupon]').forEach(btn => btn.addEventListener('click', async () => {
+        const msg = btn.parentNode.querySelector('.fee-credit-msg');
+        try{ await navigator.clipboard.writeText(btn.dataset.copyCoupon); msg.textContent = 'Copied.'; }catch(e){ msg.textContent = btn.dataset.copyCoupon; }
+      }));
       box.querySelectorAll('[data-refund-credit]').forEach(btn => btn.addEventListener('click', async () => {
         if(!confirm('Refund your Aerva credit now? It goes back to your original payment method and can no longer be used on a booking.')) return;
         btn.disabled = true;
