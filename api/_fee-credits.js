@@ -393,6 +393,22 @@ async function remindUnused(sql, { deadlineMs = 4000 } = {}) {
   return out;
 }
 
+// For the sign-in reminder: the credit balance and coupons ready to use,
+// with the days left on each coupon (by its own expiry date).
+async function wallet(sql, guestId) {
+  const out = { credit: 0, coupons: [] };
+  try {
+    const r = (await sql`SELECT COALESCE(sum(remaining), 0)::int AS balance FROM fee_credits WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0`)[0];
+    out.credit = r ? r.balance : 0;
+  } catch (e) { /* not there yet */ }
+  try {
+    const cps = await sql`SELECT code, amount, expires_at FROM coupons WHERE guest_id = ${guestId} AND status = 'active' AND expires_at > now() ORDER BY expires_at LIMIT 5`;
+    out.coupons = cps.map(c => ({ code: c.code, amount: Number(c.amount), expiresAt: c.expires_at,
+      daysLeft: Math.max(0, Math.ceil((new Date(c.expires_at).getTime() - Date.now()) / 86400e3)) }));
+  } catch (e) { /* not there yet */ }
+  return out;
+}
+
 // For the bell: the guest's unused credit, as a nudge to use it.
 async function bellNotice(sql, guestId) {
   try {
@@ -426,4 +442,4 @@ async function forGuest(sql, guestId) {
   } catch (e) { return []; }
 }
 
-module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindUnused, bellNotice };
+module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindUnused, bellNotice, wallet };
