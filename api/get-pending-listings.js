@@ -149,7 +149,7 @@ const SITE_BASE = 'https://aerva.in';
 // randomly-generated name rather than the guessable "admin.html".
 const ADMIN_PAGE_PATH = 'admin-e75a6e8cd0cf8f34bc57cf65.html';
 
-async function sendAdminPasswordResetEmail(admin, resetTok) {
+async function sendAdminPasswordResetEmail(admin, resetTok, invite = null) {
   if (!process.env.RESEND_API_KEY) {
     console.error('RESEND_API_KEY not set — admin cannot receive their password reset link.');
     return; // same "fail quietly, log loudly" approach as guest-auth.js's version — never reveals send failures to the caller
@@ -157,10 +157,13 @@ async function sendAdminPasswordResetEmail(admin, resetTok) {
   const link = `${SITE_BASE}/${ADMIN_PAGE_PATH}?resetToken=${resetTok}`;
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
-      <h2 style="font-family:Georgia,serif;">Reset your admin password</h2>
+      ${invite ? `<h2 style="font-family:Georgia,serif;">You have been added to Aerva Admin</h2>
+      <p>${invite.by ? invite.by + ' added you' : 'You have been added'} to the Aerva team as <strong>${invite.role}</strong>. Click below to choose your password and sign in. This link expires in 3 days.</p>
+      <p><a href="${link}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Choose my password</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If the link has expired, use “Forgot password” on the admin login page.</p>` : `<h2 style="font-family:Georgia,serif;">Reset your admin password</h2>
       <p>Click below to choose a new password for your Aerva admin account. This link expires in 1 hour.</p>
       <p><a href="${link}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Reset Password</a></p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you didn't request this, you can safely ignore this email — your password won't change unless you click the link above and set a new one.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you didn't request this, you can safely ignore this email — your password won't change unless you click the link above and set a new one.</p>`}
     </div>
   `;
   const res = await fetch('https://api.resend.com/emails', {
@@ -172,7 +175,7 @@ async function sendAdminPasswordResetEmail(admin, resetTok) {
     body: JSON.stringify({
       from: 'Aerva <hello@aerva.in>',
       to: admin.email,
-      subject: 'Reset your Aerva admin password',
+      subject: invite ? 'You have been added to Aerva Admin' : 'Reset your Aerva admin password',
       html
     })
   });
@@ -370,7 +373,7 @@ module.exports = async (req, res) => {
     const secret = await checkAdminSecret(sql, req, 'get-pending-listings');
     if (secret.limited) return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
     if (!secret.ok) {
-      return res.status(401).json({ error: 'Unauthorized' });
+      return res.status(401).json({ error: 'The master password does not match. It is the ADMIN_SECRET value in this site’s Vercel environment variables (UAT and Production can each have their own). Or ask an admin to add you from Admin → Team.' });
     }
     try {
       const { email, password, name } = req.body.adminSignup;
@@ -528,6 +531,31 @@ module.exports = async (req, res) => {
   if (req.method === 'GET' && req.query.adminMe === '1') return res.status(200).json(await actions.me(sql, sessionPayload, ADMIN_ROLE));
   // GET ?adminTeam=1 · POST { setAdminRole: { adminId, role } } — admins only (see allowed())
   if (req.method === 'GET' && req.query.adminTeam === '1') return res.status(200).json(await actions.team(sql));
+  // POST { addTeamMember: { name, email, role } } — admins only (see allowed()).
+  // A signed-in admin adds someone without the master secret: the account
+  // is made with no usable password, and they are emailed a link to choose
+  // one (valid 3 days; after that, Forgot password).
+  if (req.method === 'POST' && req.body && req.body.addTeamMember) {
+    try {
+      const x = req.body.addTeamMember;
+      const cleanEmail = typeof x.email === 'string' ? x.email.trim().toLowerCase() : '';
+      if (!cleanEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cleanEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
+      const role = ['admin', 'reviewer', 'agent'].includes(x.role) ? x.role : 'agent';
+      if ((await sql`SELECT id FROM admins WHERE email = ${cleanEmail}`)[0]) return res.status(409).json({ error: 'This email already has an admin account.' });
+      const unusable = await bcrypt.hash(require('crypto').randomBytes(24).toString('hex'), BCRYPT_ROUNDS);
+      const name = String(x.name || '').trim().slice(0, 80) || null;
+      const row = (await sql`INSERT INTO admins (email, password_hash, name) VALUES (${cleanEmail}, ${unusable}, ${name}) RETURNING id, email, name`)[0];
+      try { await sql`UPDATE admins SET role = ${role} WHERE id = ${row.id}`; } catch (e) { /* before the roles update: everyone is an admin */ }
+      const tok = createToken(row.id, 'admin-password-reset', 72 * 3600 * 1000);
+      let emailed = true;
+      try { await sendAdminPasswordResetEmail(row, tok, { role: actions.ROLES[role] || role, by: ADMIN_ACTOR }); } catch (e) { emailed = false; }
+      await logAudit(sql, { action: 'admin_account_created', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'admin', targetId: row.id, metadata: { role, email: cleanEmail, invited: true } });
+      return res.status(200).json({ success: true, admin: Object.assign(row, { role }), emailed: emailed && !!process.env.RESEND_API_KEY });
+    } catch (err) {
+      console.error('addTeamMember failed:', err);
+      return res.status(500).json({ error: 'Could not add this person right now.' });
+    }
+  }
   // Proposed actions and approvals
   // GET ?supportActions=1[&status=pending|done|all]
   // POST { proposeAction: { kind, params, reason, ticketId? } } · { withdrawAction: { id } }

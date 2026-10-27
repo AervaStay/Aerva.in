@@ -202,15 +202,15 @@ async function runRateNotices(sql, { deadlineMs = 5000 } = {}) {
       if (Date.now() - started > deadlineMs) return out;
       const claimed = await sql`INSERT INTO fee_rate_notices (rate_id, host_id) VALUES (${r.id}, ${h.id}) ON CONFLICT DO NOTHING RETURNING id`;
       if (!claimed.length) continue;
-      const lines = (h.types || []).filter(t => types.includes(t)).map(t => {
+      // One commission for the host — not a line per property type.
+      const one = oneChange((h.types || []).filter(t => types.includes(t)).map(t => {
         const prev = rowAt(rows, 'host', t, new Date(new Date(r.effective_from).getTime() - 1), { exceptId: r.id });
-        return `<li>${esc(t)}: from ${esc(prev ? Number(prev.rate) : DEFAULTS.host)}% to <strong>${esc(Number(r.rate))}%</strong></li>`;
-      }).join('');
+        return { from: prev ? Number(prev.rate) : DEFAULTS.host, to: Number(r.rate) };
+      }), r.rate);
       const html = `<div style="font-family:sans-serif; max-width:620px; color:#1c1a17; line-height:1.6;">
         <p style="font-size:12px; letter-spacing:0.14em; color:#8a6c39;">AERVA</p>
         <p>Dear ${esc(h.name || 'Host')},</p>
-        <p>This is formal notice of a revision of Aerva’s commission on your listings:</p>
-        <ul>${lines}</ul>
+        <p>This is formal notice of a revision of Aerva’s commission on your listings: <strong>from ${esc(one.from)} to ${esc(one.to)}</strong>.</p>
         <p><strong>The revised commission applies to bookings made on or after ${esc(dateLabel(r.effective_from))} (12:00 AM, India time).</strong> This notice is given 31 days in advance, with 2 more days to allow for time zones. Bookings made before that date keep the commission in force when they were made.</p>
         <p>Please review and acknowledge the revision in your dashboard before ${esc(dateLabel(r.effective_from))}. If you decline it, or do not acknowledge it by then, your agreement with Aerva ends under the Aerva Host Agreement: your listings are deactivated, confirmed bookings go ahead, and amounts due to you are paid.</p>
         <p><a href="${SITE}/host-dashboard.html" style="background:#1c1a17; color:#f4eadc; padding:11px 20px; text-decoration:none; display:inline-block;">Review and acknowledge</a></p>
@@ -237,6 +237,19 @@ async function runRateNotices(sql, { deadlineMs = 5000 } = {}) {
   return out;
 }
 
+// What a host is shown: ONE commission, never a rate per property type.
+// rates: numbers → "6%", or "5–6%" if the host's listings differ.
+function pct(list) {
+  const v = [...new Set((list || []).map(Number).filter(n => Number.isFinite(n)))].sort((a, b) => a - b);
+  if (!v.length) return '';
+  return v.length === 1 ? `${v[0]}%` : `${v[0]}–${v[v.length - 1]}%`;
+}
+// changes: [{ from, to }] → { from: '5%', to: '6%' }.
+function oneChange(changes, fallbackTo) {
+  const c = changes || [];
+  return { from: pct(c.map(x => x.from)), to: pct(c.length ? c.map(x => x.to) : [fallbackTo]) };
+}
+
 // For the host dashboard: notices waiting for this host's answer, with
 // the old and new rate for each of the host's own property types.
 async function pendingNotices(sql, hostId) {
@@ -251,9 +264,10 @@ async function pendingNotices(sql, hostId) {
     const all = await loadRates(sql);
     return rows.map(n => {
       const types = (n.property_type === '*' ? mine : [n.property_type]).filter(t => mine.includes(t));
-      return { id: n.id, appliesTo: typeLabel(n.property_type), rate: Number(n.rate), effectiveFrom: n.effective_from, sentAt: n.sent_at,
-        changes: types.map(t => { const p = rowAt(all, 'host', t, new Date(new Date(n.effective_from).getTime() - 1), { exceptId: n.rate_id });
-          return { type: t, from: p ? Number(p.rate) : DEFAULTS.host, to: Number(n.rate) }; }) };
+      const changes = types.map(t => { const p = rowAt(all, 'host', t, new Date(new Date(n.effective_from).getTime() - 1), { exceptId: n.rate_id });
+        return { from: p ? Number(p.rate) : DEFAULTS.host, to: Number(n.rate) }; });
+      // One commission for the host — not a line per property type.
+      return { id: n.id, rate: Number(n.rate), effectiveFrom: n.effective_from, sentAt: n.sent_at, commission: oneChange(changes, n.rate) };
     });
   } catch (e) { return []; }
 }
