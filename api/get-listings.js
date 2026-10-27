@@ -1870,7 +1870,8 @@ module.exports = async (req, res) => {
         -- read through to_jsonb so this query still works before the
         -- migration adds the column (every listing is then Flexible)
         COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
-        to_jsonb(listings)->>'price_changed_at' AS price_changed_at
+        to_jsonb(listings)->>'price_changed_at' AS price_changed_at,
+        COALESCE((to_jsonb(listings)->>'same_day_until')::int, 24) AS same_day_until
       FROM listings
       WHERE status = 'approved' AND listing_type = 'stay'
         AND (${effectiveCityFilter}::text IS NULL OR city ILIKE ${effectiveCityFilter} OR area ILIKE ${effectiveCityFilter})

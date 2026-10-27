@@ -157,7 +157,7 @@ async function threadReviewPrompt(sql, conversationId, role) {
   try {
     const o = (await sql`
       SELECT o.id, o.suite_name, COALESCE(o.order_type, 'stay') AS order_type, o.departure,
-             COALESCE(g.name, o.guest_email) AS guest_name,
+             COALESCE(g.name, o.guest_email) AS guest_name, o.deposit_status, o.deposit_amount,
              (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
       FROM conversations c JOIN orders o ON o.id = c.order_id
       JOIN listings l ON l.id = o.listing_id LEFT JOIN guests g ON g.id = o.guest_id
@@ -170,7 +170,9 @@ async function threadReviewPrompt(sql, conversationId, role) {
       : (await sql`SELECT 1 FROM listing_reviews WHERE order_id = ${o.id} LIMIT 1`).length > 0;
     if (done) return null;
     return { orderId: o.id, role, listingName: o.suite_name || '', listingType: o.order_type === 'experience' ? 'experience' : 'stay',
-             guestName: o.guest_name || 'your guest', daysLeft: Math.max(0, REVIEW_WINDOW_DAYS - daysSinceCheckout(o.departure, o.local_today)) };
+             guestName: o.guest_name || 'your guest', daysLeft: Math.max(0, REVIEW_WINDOW_DAYS - daysSinceCheckout(o.departure, o.local_today)),
+             // The host may release a deposit still held, with their review.
+             depositHeld: role === 'host' && o.deposit_status === 'held' && Number(o.deposit_amount) > 0 ? Math.round(Number(o.deposit_amount)) : 0 };
   } catch (err) {
     console.error('threadReviewPrompt skipped:', err.message);
     return null;   // never block a conversation over the prompt

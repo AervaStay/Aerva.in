@@ -32,7 +32,9 @@ const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const photoGuard = require('./_photo-guard');
 
 const UPLOADS_PER_DAY = 200;
-const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'support-evidence'];
+const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'support-evidence', 'deposit-evidence'];
+// A host's proof of damage to a property (a deposit concern): videos too.
+const VIDEO_PURPOSES = ['deposit-evidence'];
 const SESSION_ACTIONS = ['guest-session', 'manage-pricing', 'manage-cohost', 'admin-session'];
 
 let sqlClient = null;
@@ -118,10 +120,10 @@ module.exports = async (req, res) => {
         await logAudit(sql, { action: 'blob_upload_token', success: true, actorType: who.actorType,
           actorIdentifier: who.account, metadata: { purpose: who.purpose || 'photo', pathname: String(pathname || '').slice(0, 200), ip: getClientIp(req) } });
         return {
-          allowedContentTypes: allowsPdf
+          allowedContentTypes: (allowsPdf
             ? ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
-            : ['image/jpeg', 'image/png', 'image/webp'],
-          maximumSizeInBytes: 8 * 1024 * 1024, // 8MB per file
+            : ['image/jpeg', 'image/png', 'image/webp']).concat(VIDEO_PURPOSES.includes(who.purpose) ? ['video/mp4', 'video/quicktime', 'video/webm'] : []),
+          maximumSizeInBytes: (VIDEO_PURPOSES.includes(who.purpose) ? 60 : 8) * 1024 * 1024, // 8MB per photo; 60MB per video
           addRandomSuffix: true, // avoids filename collisions between hosts
           // Comes back in onUploadCompleted: who uploaded it, and why.
           tokenPayload: JSON.stringify({ account: who.account, purpose: who.purpose || '' }),

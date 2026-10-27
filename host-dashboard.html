@@ -723,7 +723,7 @@
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-10-13a"></script>
-<script src="aerva-policies.js?v=2026-10-27c"></script>
+<script src="aerva-policies.js?v=2026-10-28b"></script>
 </head>
 <body>
 
@@ -4638,9 +4638,9 @@
       const c = n.commission || { from: '', to: n.rate + '%' };
       box.innerHTML = '<strong style="font-size:16px;">Notice: revision of Aerva’s commission</strong>'
         + '<p style="font-size:15px; line-height:1.6; margin:8px 0;">Aerva’s commission: ' + (c.from ? 'from ' + esc(c.from) + ' ' : '') + 'to <strong>' + esc(c.to) + '</strong></p>'
-        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">The revised commission applies to bookings made on or after <strong>' + esc(day(n.effectiveFrom)) + '</strong> (12:00 AM, India time). Bookings made before then keep the commission in force when they were made. This notice was given 31 days in advance, with 2 more days to allow for time zones.</p>'
-        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Please acknowledge and confirm it before that date. If it is not confirmed by then, your agreement with Aerva ends: your listings are deactivated, confirmed bookings go ahead and amounts due to you are paid. You can accept the agreement again at any time to bring them back.</p>'
-        + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" data-a="1">Acknowledge and confirm</button><span class="rn-msg" style="font-size:13.5px;"></span></div>';
+        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">The revised commission applies to bookings made on or after <strong>' + esc(day(n.effectiveFrom)) + '</strong> (12:00 AM, India time). Bookings made before then keep the commission in force when they were made. This notice was given in advance.</p>'
+        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Please acknowledge and confirm, or decline, before that date. If you decline it, or it is not confirmed by then, your agreement with Aerva ends: your listings are deactivated, confirmed bookings go ahead and amounts due to you are paid. You can accept the agreement again at any time to bring them back.</p>'
+        + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" data-a="1">Acknowledge and confirm</button><button type="button" class="ch-btn" data-a="0">Decline</button><span class="rn-msg" style="font-size:13.5px;"></span></div>';
       wrap.insertBefore(box, wrap.firstChild);
       box.querySelectorAll('button[data-a]').forEach(btn => btn.addEventListener('click', async () => {
         const accept = btn.dataset.a === '1';

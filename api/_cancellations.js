@@ -173,7 +173,7 @@ async function returnCouponValue(sql, { razorpayOrderId, amount, sourceOrderId, 
     const created = (await sql`
       INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, expires_at)
       VALUES (${code}, ${src.guest_id}, ${value}, ${src.issuing_host_id}, ${Number(sourceOrderId)}, 'active',
-              GREATEST(COALESCE(${src.expires_at}::timestamptz, now()), now() + interval '30 days'))
+              GREATEST(COALESCE(${src.expires_at}::timestamptz, now()), now() + interval '1 month'))
       RETURNING id, expires_at
     `)[0];
     await logAudit(sql, { action: 'coupon_value_restored', success: true, actorType: 'system', targetType: 'coupon', targetId: created.id,
@@ -196,6 +196,36 @@ async function returnCouponValue(sql, { razorpayOrderId, amount, sourceOrderId, 
     await logAudit(sql, { action: 'coupon_value_restore_failed', success: false, actorType: 'system', targetType: 'order', targetId: Number(sourceOrderId) || null,
       metadata: { error: String(err.message || err).slice(0, 300) } });
     return null;
+  }
+}
+
+// Aerva cancels for a host who has used their 3 cancellations (or cannot
+// cancel themselves): the guest is refunded everything they paid, and gets
+// the 10% Aerva coupon, which is deducted from the host's next payout
+// (host_penalties). For an experience that includes a stay: on the stay's
+// amount only, and none when it is the experience that is cancelled.
+// Returns { amount } (0 when no coupon). Never throws.
+async function issueCouponForHost(sql, { orderId, hostId }) {
+  try {
+    const o = (await sql`SELECT o.id, o.guest_id, o.total, COALESCE(o.deposit_amount, 0) AS deposit, COALESCE(o.order_type, 'stay') AS order_type, o.razorpay_order_id, o.arrival, o.listing_id
+                         FROM orders o WHERE o.id = ${Number(orderId) || 0}`)[0];
+    if (!o || !o.guest_id) return { amount: 0 };
+    const sibs = await linkedSiblings(sql, o.id);
+    if (sibs.length && o.order_type === 'experience') return { amount: 0 };
+    const amount = Math.max(1, Math.round(Math.max(0, Number(o.total) - Number(o.deposit)) * 0.10));
+    const { COUPON_RELEASE_DELAY_MINUTES } = require('./_coupons');
+    const code = 'AERVA-' + crypto.randomBytes(5).toString('hex').toUpperCase();
+    const coupon = (await sql`INSERT INTO coupons (code, guest_id, amount, issuing_host_id, source_order_id, status, release_at)
+                              VALUES (${code}, ${o.guest_id}, ${amount}, ${hostId}, ${o.id}, 'scheduled', now() + make_interval(mins => ${COUPON_RELEASE_DELAY_MINUTES}))
+                              RETURNING id`)[0];
+    try {
+      await sql`INSERT INTO host_penalties (host_id, order_id, coupon_id, amount) VALUES (${hostId}, ${o.id}, ${coupon.id}, ${amount})`;
+    } catch (e) { console.error('coupon deduction not recorded (needs follow-up):', o.id, e.message); }
+    await logAudit(sql, { action: 'cancellation_coupon_charged_to_payout', success: true, actorType: 'admin', targetType: 'order', targetId: o.id, metadata: { couponId: coupon.id, amount, hostId, byAerva: true } });
+    return { amount };
+  } catch (err) {
+    console.error('coupon for the host not issued (needs follow-up):', orderId, err.message);
+    return { amount: 0 };
   }
 }
 
@@ -643,5 +673,5 @@ module.exports = {
   POLICIES, HOST_DECISION_TIMEOUT_HOURS, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, REQUEST_REASONS,
   policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
   claimForCancellation, releaseClaim, guestGetsBackFor, claimRequest, unclaimRequest, postThreadMessage, hostOption, createCancellationRequest, cancellationCard,
-  cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
+  cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, issueCouponForHost, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
 };

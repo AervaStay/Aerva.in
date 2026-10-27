@@ -116,23 +116,27 @@ function localDateAt(at, zone) {
   return localClock(zone, Number.isFinite(ms) ? ms : Date.now()).date;
 }
 
-// ---- Late-night bookings ----
-// Between 12:00 AM and 6:00 AM on the property's clock, a guest may still
-// book "tonight": the night is counted as the previous day's, so arrival is
-// yesterday's date and check-out today or later (someone arriving at 2 AM
-// to sleep). Once booked, they may check in straight away.
-const LATE_NIGHT_UNTIL_HOUR = 6;
+// ---- Same-day bookings ----
+// Each host chooses until what time (property's clock) a guest may book the
+// same night: 6 PM to 11 PM, or 12 AM (all day, the default) —
+// listings.same_day_until, 18…24. A booking at 11:59 PM on 25 November
+// with 12 AM is for 25–26 November; from the chosen hour, the earliest
+// check-in is the next day.
+const SAME_DAY_HOURS = [18, 19, 20, 21, 22, 23, 24];
+const LATE_NIGHT_UNTIL_HOUR = 0;            // no longer used: after midnight it is the next day
 function localClock(zone, nowMs = Date.now()) {
   const parts = {};
   new Intl.DateTimeFormat('en-US', { timeZone: safeZone(zone), hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' })
     .formatToParts(new Date(nowMs)).forEach(p => { parts[p.type] = p.value; });
   return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
 }
-// The earliest arrival date a guest may book right now.
-function earliestArrival(zone, nowMs = Date.now()) {
+// The earliest arrival date a guest may book right now. untilHour: the
+// listing's same_day_until (default 24 — all day).
+function earliestArrival(zone, nowMs = Date.now(), untilHour = 24) {
   const { date, hour } = localClock(zone, nowMs);
-  if (hour >= LATE_NIGHT_UNTIL_HOUR) return date;
-  const d = new Date(date + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
+  const until = SAME_DAY_HOURS.includes(Number(untilHour)) ? Number(untilHour) : 24;
+  if (hour < until) return date;
+  const d = new Date(date + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
 }
 
@@ -165,7 +169,7 @@ async function paidByOrderRow(sql, razorpayOrderId) {
 }
 
 module.exports = { dateStr, localMidnightMs, hoursUntilCheckIn, allocatePaid, paidByOrderRow, paymentRows,
-  checkInMinutes, checkInMomentMs, hoursUntilCheckInTime, daysBeforeCheckIn, LATE_NIGHT_UNTIL_HOUR, localClock, earliestArrival,
+  checkInMinutes, checkInMomentMs, hoursUntilCheckInTime, daysBeforeCheckIn, LATE_NIGHT_UNTIL_HOUR, SAME_DAY_HOURS, localClock, earliestArrival,
   STAY_WINDOW_HOUR, stayWindowEndMs, localDateAt };
 
 // ---------------------------------------------------------------------

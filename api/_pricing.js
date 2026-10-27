@@ -8,6 +8,7 @@
 
 const { stayGst, experienceGst } = require('./_gst');
 const { earliestArrival } = require('./_booking-rules');
+const sameDayLabel = (h) => { const n = Number(h) || 24; return n >= 24 ? '12 AM' : `${n - 12} PM`; };
 
 const EXTRA_GUEST_RATE = 1500;
 const BASE_OCCUPANCY = 2;
@@ -205,7 +206,7 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
         SELECT id, property_name, nightly_rate, discount_type, discount_value,
                discount_min_nights, commission_rate, security_deposit,
                pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types,
-               max_guests, property_type, listing_type, timezone
+               max_guests, property_type, listing_type, timezone, to_jsonb(listings)->>'same_day_until' AS same_day_until
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
@@ -253,15 +254,17 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
         return { error: `Stay ${i + 1}: please choose the number of guests.` };
       }
       // Dates must be real calendar dates, and not in the past on the
-      // property's clock — except a late-night booking: between 12:00 AM and
-      // 6:00 AM the night is still counted as the previous day's, so
-      // yesterday's date may be booked as arrival (_booking-rules.js).
+      // property's clock; tonight only until the host's same-day cut-off
+      // (listings.same_day_until, _booking-rules.js).
       // A change to a booking already under way keeps its original arrival.
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.arrival)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(s.departure))) {
         return { error: `Stay ${i + 1}: invalid dates` };
       }
-      if (!s.keepArrival && String(s.arrival) < earliestArrival(listing.timezone)) {
-        return { error: `Stay ${i + 1}: check-in cannot be in the past. Please choose today or a later date.` };
+      const earliest = earliestArrival(listing.timezone, Date.now(), Number(listing.same_day_until) || 24);
+      if (!s.keepArrival && String(s.arrival) < earliest) {
+        return { error: String(s.arrival) >= earliestArrival(listing.timezone)
+          ? `Stay ${i + 1}: this home takes bookings for tonight only until ${sameDayLabel(listing.same_day_until)}. Please choose tomorrow or a later date.`
+          : `Stay ${i + 1}: check-in cannot be in the past. Please choose today or a later date.` };
       }
 
       // A stay must include at least one adult (18 or over) — children and

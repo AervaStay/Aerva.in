@@ -10,6 +10,59 @@
 const { safeRefund } = require('./_refunds');
 const { refundSubunitForInr } = require('./_currency');
 
+// Two bank working days (Monday to Friday) after `day` (YYYY-MM-DD).
+function addWorkingDays(day, n) {
+  const d = new Date(String(day).slice(0, 10) + 'T00:00:00Z');
+  let left = n;
+  while (left > 0) { d.setUTCDate(d.getUTCDate() + 1); const w = d.getUTCDay(); if (w !== 0 && w !== 6) left--; }
+  return d.toISOString().slice(0, 10);
+}
+// The host confirms, with their review of the guest, that there is no
+// damage: the deposit is refunded two bank working days later instead of
+// at the end of the 7-day window (never later than it would have been).
+// The host can no longer raise a concern about it. Returns { refundOn } or
+// { error }. Never throws.
+async function releaseEarly(sql, orderId, { hostId } = {}) {
+  try {
+    const o = (await sql`SELECT o.id, o.guest_email, o.suite_name, o.deposit_amount, o.deposit_status, o.deposit_release_at, l.host_id,
+                                (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date::text AS today, o.departure::text AS departure
+                         FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${Number(orderId) || 0}`)[0];
+    if (!o || (hostId && Number(o.host_id) !== Number(hostId))) return { error: 'Booking not found.' };
+    if (o.deposit_status !== 'held' || !(Number(o.deposit_amount) > 0)) return { error: 'There is no deposit held for this booking.' };
+    const iso = (v) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v || '').slice(0, 10);
+    const today = iso(o.today);
+    if (iso(o.departure) > today) return { error: 'The deposit can be released once the guest has checked out.' };
+    const refundOn = addWorkingDays(today, 2);
+    // The job refunds once the release date has passed: the day before refundOn.
+    const d = new Date(refundOn + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
+    const releaseAt = d.toISOString().slice(0, 10);
+    let upd;
+    try {
+      upd = await sql`UPDATE orders SET deposit_release_at = LEAST(deposit_release_at, ${releaseAt}::date), deposit_released_by_host_at = now()
+                      WHERE id = ${o.id} AND deposit_status = 'held' RETURNING deposit_release_at::text AS deposit_release_at`;
+    } catch (e) {
+      upd = await sql`UPDATE orders SET deposit_release_at = LEAST(deposit_release_at, ${releaseAt}::date) WHERE id = ${o.id} AND deposit_status = 'held' RETURNING deposit_release_at::text AS deposit_release_at`;
+    }
+    if (!upd.length) return { error: 'The deposit is no longer held.' };
+    const on = new Date(new Date(iso(upd[0].deposit_release_at) + 'T00:00:00Z').getTime() + 86400e3).toISOString().slice(0, 10);
+    if (process.env.RESEND_API_KEY && o.guest_email) {
+      const nice = new Date(on + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+      const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      try {
+        await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: o.guest_email, subject: `Your security deposit for ${o.suite_name} is being released`,
+            html: `<div style="font-family:sans-serif; max-width:480px; line-height:1.6;"><p>Your host has confirmed there is no damage from your stay at <strong>${esc(o.suite_name)}</strong>.</p>
+              <p>Your security deposit of <strong>₹${Math.round(Number(o.deposit_amount)).toLocaleString('en-IN')}</strong> will be refunded to your original payment method on <strong>${esc(nice)}</strong>, instead of at the end of the 7-day period. Your bank may take a few working days to show it.</p>
+              <p style="font-size:12px; opacity:0.6;">Questions: hello@aerva.in</p></div>` }) });
+      } catch (e) { /* the refund goes ahead either way */ }
+    }
+    return { refundOn: on };
+  } catch (err) {
+    console.error('deposit not released early:', orderId, err.message);
+    return { error: 'Could not release the deposit right now.' };
+  }
+}
+
 async function releaseDueDeposits(sql, razorpay, { deadlineMs = 6000 } = {}) {
   const started = Date.now();
   const results = [];
@@ -81,6 +134,7 @@ async function notifyDepositDispute(sql, orderId, event, { compensation = 0, ref
   try {
     const o = (await sql`
       SELECT o.id, o.guest_email, o.suite_name, o.deposit_amount, o.dispute_reason, o.confirmation_code, o.departure,
+             to_jsonb(o)->>'dispute_amount' AS dispute_amount, to_jsonb(o)->'dispute_evidence' AS dispute_evidence,
              l.property_name, l.host_email, g.name AS guest_name,
              (SELECT x.email FROM guests x WHERE x.host_id = l.host_id ORDER BY x.id LIMIT 1) AS host_account_email
       FROM orders o JOIN listings l ON l.id = o.listing_id LEFT JOIN guests g ON g.id = o.guest_id
@@ -93,28 +147,28 @@ async function notifyDepositDispute(sql, orderId, event, { compensation = 0, ref
       const reply = `https://aerva.in/index.html?view=help&new=1&category=deposit_damage&order=${Number(o.id)}`;
       await sendMail(o.guest_email, `The host reported damage after your stay at ${o.property_name || o.suite_name}`,
         `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your security deposit is on hold</h2>
-         <p>Hi ${esc(String(o.guest_name || '').split(' ')[0] || 'there')}, the host of <strong>${name}</strong>${ref} has reported damage after your stay. Your ${inr(o.deposit_amount)} security deposit is held while Aerva reviews it.</p>
+         <p>Hi ${esc(String(o.guest_name || '').split(' ')[0] || 'there')}, the host of <strong>${name}</strong>${ref} has reported damage or extra cleaning after your stay${o.dispute_amount != null ? `, and is keeping <strong>${inr(o.dispute_amount)}</strong> of your ${inr(o.deposit_amount)} security deposit` : `. Your ${inr(o.deposit_amount)} security deposit is held`}. The host has shared photos or videos with Aerva.</p>
          <p style="padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f;">“${esc(o.dispute_reason)}”</p>
-         <p>If you would like to give your side, send it with any photos you have. Aerva will consider it before deciding.</p>
+         <p>If you would like to give your side, send it with any photos you have.</p>
          ${btn(reply, 'Send your side')}
-         <p style="font-size:13px; color:#6e675d;">Aerva decides how much of the deposit, if any, goes to the host, under the Security Deposit and Damage Policy. The rest is refunded to your original payment method.</p>`);
+         <p style="font-size:13px; color:#6e675d;">The deposit covers damage and extra cleaning, up to the deposit amount. The host decides how much of it to keep; the rest is refunded to your original payment method. Damage above the deposit is between you and the host, under Aerva’s Security Deposit and Damage Policy.</p>`);
       await sendMail(process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `Deposit dispute: ${o.property_name || o.suite_name} · booking #${o.id}`,
-        `<p>The host reported damage on booking #${Number(o.id)}${ref} (${inr(o.deposit_amount)} deposit):</p><p>“${esc(o.dispute_reason)}”</p><p>The guest has been told and invited to send their side. Decide it in Admin → Security Deposits.</p>`);
+        `<p>The host reported damage on booking #${Number(o.id)}${ref} (${inr(o.deposit_amount)} deposit)${o.dispute_amount != null ? ` and keeps ${inr(o.dispute_amount)}` : ''}:</p><p>“${esc(o.dispute_reason)}”</p><p>Proof: ${(Array.isArray(o.dispute_evidence) ? o.dispute_evidence : []).map((u, i) => `<a href="${esc(u)}">file ${i + 1}</a>`).join(' · ') || 'none'}</p><p>The guest has been told and invited to send their side. Settle it in Admin → Security Deposits.</p>`);
       return;
     }
     if (event === 'resolved') {
       await sendMail(o.guest_email, `Your security deposit for ${o.property_name || o.suite_name}`,
-        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Aerva has reviewed the damage report</h2>
+        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your security deposit has been settled</h2>
          <p>Booking at <strong>${name}</strong>${ref}. Security deposit: ${inr(o.deposit_amount)}.</p>
          <p>${refunded > 0 ? `<strong>${inr(refunded)}</strong> is being refunded to your original payment method. Your bank may take a few working days to show it.` : 'No part of the deposit is refunded.'}${compensation > 0 ? ` ${inr(compensation)} goes to the host for the damage.` : ''}</p>
          <p style="font-size:13px; color:#6e675d;">Questions? Raise a request in the Resolution Center: https://aerva.in/index.html?view=help</p>`);
-      await sendMail(o.host_account_email || o.host_email, `Decision on your damage report: ${o.property_name || o.suite_name}`,
-        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Aerva has decided your damage report</h2>
+      await sendMail(o.host_account_email || o.host_email, `Your damage report is settled: ${o.property_name || o.suite_name}`,
+        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your damage report is settled</h2>
          <p>Booking #${Number(o.id)}${ref} at <strong>${name}</strong>. Security deposit: ${inr(o.deposit_amount)}.</p>
          <p>${compensation > 0 ? `You receive <strong>${inr(compensation)}</strong>. It is paid to your bank account as a separate payout; you will get an email when it is sent.` : 'No part of the deposit is paid to you.'}${refunded > 0 ? ` ${inr(refunded)} is refunded to the guest.` : ''}</p>
-         <p style="font-size:13px; color:#6e675d;">Damage above the deposit is between you and the guest, under Aerva’s Security Deposit and Damage Policy.</p>`);
+         <p style="font-size:13px; color:#6e675d;">Damage or cleaning above the deposit is between you and the guest; Aerva pays no refund or compensation for it, under Aerva’s Security Deposit and Damage Policy.</p>`);
     }
   } catch (err) { console.error('notifyDepositDispute failed:', err.message); }
 }
 
-module.exports = { releaseDueDeposits, notifyDepositDispute };
+module.exports = { releaseDueDeposits, notifyDepositDispute, releaseEarly, addWorkingDays };

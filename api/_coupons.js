@@ -29,7 +29,7 @@ async function sendCouponEmail(coupon, code, expiresAt){
       <h2 style="font-family:Georgia,serif;">You've received an Aerva coupon</h2>
       <p>Your host for <strong>${coupon.suite_name}</strong> has issued you a coupon worth <strong>${fmt(coupon.amount)}</strong>.</p>
       <p style="background:#f4eadc; padding:16px; text-align:center; font-size:20px; letter-spacing:0.05em; font-weight:600;">${code}</p>
-      <p>Apply this code at checkout on any Aerva stay or experience. Valid until <strong>${expiresLabel}</strong> (3 months from today).</p>
+      <p>Apply this code at checkout on any Aerva stay or experience. Valid until <strong>${expiresLabel}</strong> (1 month from today).</p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this coupon? Contact hello@aerva.in.</p>
     </div>
   `;
@@ -63,7 +63,7 @@ async function releaseDueCoupons(sql, { force = false } = {}) {
   lastRun = now;
   try {
     const due = await sql`
-      UPDATE coupons SET status = 'active', expires_at = now() + interval '3 months'
+      UPDATE coupons SET status = 'active', expires_at = now() + interval '1 month'
       WHERE status = 'scheduled' AND release_at <= now()
       RETURNING id, code, amount, expires_at, source_order_id
     `;

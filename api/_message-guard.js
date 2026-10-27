@@ -17,10 +17,11 @@
 //      those messages.
 // The original text is always kept in messages.original_text for the admin.
 //
-// A LIVE BOOKING (paid, check-out not yet passed): the guest and the host
-// may share a phone number and an email address with each other, and send
-// photos (guest-profile.js 'send'). Links, social handles and UPI IDs are
-// still removed. Once check-out has passed or the booking is cancelled,
+// A LIVE BOOKING (paid, until the review period closes — REVIEW_WINDOW_DAYS
+// after check-out): the guest and the host may share a phone number and an
+// email address with each other, and send photos (guest-profile.js 'send').
+// Links, social handles and UPI IDs are still removed. Once that period has
+// passed, or the booking is cancelled,
 // every phone number and email address in that conversation is removed,
 // and every photo in it (sent in the chat, or linked in a message, such as
 // check-in photos) is checked and removed if it shows a contact detail —
@@ -160,12 +161,20 @@ function stayEndsAt(row) {
   const c = parseClock(row.check_out_time) || CHECKOUT_DEFAULT;
   return zonedToUtc(day, c[0], c[1], (row.timezone && String(row.timezone).trim()) || 'Asia/Kolkata');
 }
+// Until when phone numbers and email addresses may be shared: the review
+// period after the stay (REVIEW_WINDOW_DAYS after check-out time).
+function contactsEndAt(row) {
+  const end = stayEndsAt(row);
+  if (!end) return 0;
+  const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
+  return end + (Number(REVIEW_WINDOW_DAYS) || 15) * 86400e3;
+}
 async function phonesAllowed(sql, conversationId) {
   try {
     const r = (await sql`SELECT o.status, o.departure, l.check_out_time, l.timezone
                          FROM conversations c JOIN orders o ON o.id = c.order_id JOIN listings l ON l.id = o.listing_id
                          WHERE c.id = ${conversationId}`)[0];
-    return !!r && r.status === 'paid' && Date.now() < stayEndsAt(r);
+    return !!r && r.status === 'paid' && Date.now() < contactsEndAt(r);
   } catch (e) { return false; }
 }
 // Photos: from confirmation until the booking's review window closes
@@ -210,8 +219,9 @@ async function guardLiveBooking(sql, { conversationId, senderType, text }) {
   return result;
 }
 
-// After check-out, or once cancelled: every phone number (and any other
-// contact detail) in the booking's conversation is removed, silently.
+// After the review period (REVIEW_WINDOW_DAYS after check-out), or once
+// cancelled: every phone number (and any other contact detail) in the
+// booking's conversation is removed, silently.
 // conversations.contacts_scrubbed_at marks the ones done.
 async function scrubEndedConversations(sql, { deadlineMs = 4000, limit = 200 } = {}) {
   const started = Date.now();
@@ -225,12 +235,12 @@ async function scrubEndedConversations(sql, { deadlineMs = 4000, limit = 200 } =
              -- photos sent after the clean-up (allowed until reviews close) are checked too
              OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.created_at > c.contacts_scrubbed_at
                           AND jsonb_typeof(to_jsonb(m)->'photo_urls') = 'array' AND jsonb_array_length(to_jsonb(m)->'photo_urls') > 0))
-        AND (o.status <> 'paid' OR o.departure <= CURRENT_DATE + 1)
+        AND (o.status <> 'paid' OR o.departure <= CURRENT_DATE + 1 - 15)
       ORDER BY o.departure LIMIT ${limit}`;
   } catch (err) { return Object.assign(out, { skipped: true }); }   // before the database update
   for (const c of rows) {
     if (Date.now() - started > deadlineMs) break;
-    if (c.status === 'paid' && Date.now() < stayEndsAt(c)) continue;   // still live
+    if (c.status === 'paid' && Date.now() < contactsEndAt(c)) continue;   // still allowed
     // Already cleaned once: only what was sent since.
     const msgs = c.since
       ? await sql`SELECT id, display_text, to_jsonb(messages)->'photo_urls' AS photos FROM messages WHERE conversation_id = ${c.id} AND created_at > ${c.since}`
@@ -295,4 +305,4 @@ async function checkLinkedPhotos(text) {
   return { text: out, removed, retry };
 }
 
-module.exports = { guardMessage, askClaude, phonesAllowed, photosAllowed, scrubEndedConversations, photoVerdict, stayEndsAt, WINDOW_MINUTES, HARD_LIMIT_DIGITS, ASK_FROM_DIGITS };
+module.exports = { guardMessage, askClaude, phonesAllowed, photosAllowed, scrubEndedConversations, photoVerdict, stayEndsAt, contactsEndAt, WINDOW_MINUTES, HARD_LIMIT_DIGITS, ASK_FROM_DIGITS };
