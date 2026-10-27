@@ -1,7 +1,8 @@
 // /api/_payouts.js — payout summaries. Not an endpoint.
 //
-// Payouts are created automatically at 5 PM on check-out day (property's
-// local time) by runAutoPayouts (get-listings.js ?runSchedules=1, the daily
+// Payouts are created automatically at 5 PM on the day after check-in
+// (property's local time; for an experience, the day after its date) by
+// runAutoPayouts (get-listings.js ?runSchedules=1, the daily
 // cron and site traffic). With RazorpayX set up (RAZORPAYX_ACCOUNT_NUMBER)
 // and approved bank details, they are sent there and then; otherwise they
 // wait as 'due' for an admin to send by hand and record ("Mark paid").
@@ -9,7 +10,11 @@
 //   • the host or co-host is emailed this summary (sendPayoutEmail), and
 //   • it shows as a website notification (guest-auth.js) that opens the
 //     same summary (host-listings.js ?payoutDetail=<id>).
-// Co-host shares are paid in full: no TDS and no deductions.
+// Co-host shares: TDS only, and any amount they were overpaid before.
+// A booking that changes after its payout was sent is settled by
+// settleAfterPayout: an amount no longer owed is deducted from the payee's
+// next payout (host_penalties, kind 'overpaid'); an amount added is paid as
+// a payout of its own (payouts.kind 'adjustment-<n>').
 // The summary is built from the saved payout row and its booking, so the
 // email, the notification and the page always show the same figures.
 
@@ -34,10 +39,21 @@ async function loadPayoutSummary(sql, payoutId) {
   if (!r) return null;
   const lines = r.kind === 'deposit'
     ? [['Security deposit compensation', Number(r.gross)]]
+    : /^adjustment/.test(r.kind || '')
+    ? [['Booking changed after your payout', Number(r.gross)]]
+    : /^rest/.test(r.kind || '')
+    ? [['Rest of your payout for this booking', Number(r.gross)]]
     : r.payee_type === 'host'
     ? [['Booking earnings', Number(r.gross)], ['Aerva commission', -Number(r.commission)], ['Co-host share', -Number(r.cohost_shares)]]
     : [['Co-host share', Number(r.gross)]]; // co-hosts: TDS only, no other deductions
-  if (Number(r.deductions) > 0) lines.push(['Cancellation coupons deducted', -Number(r.deductions)]);
+  if (Number(r.deductions) > 0) {
+    // What was deducted: cancellation coupons, and/or an amount paid before
+    // on a booking that was reduced after its payout was sent.
+    let kinds = ['coupon'];
+    try { kinds = (await sql`SELECT DISTINCT COALESCE(to_jsonb(hp)->>'kind', 'coupon') AS k FROM host_penalties hp WHERE hp.id = ANY(${r.deducted_penalty_ids || []})`).map(x => x.k); } catch (e) { /* coupons */ }
+    const label = kinds.length === 1 && kinds[0] === 'overpaid' ? 'Overpaid earlier, deducted' : kinds.includes('overpaid') ? 'Coupons and earlier overpayment deducted' : 'Cancellation coupons deducted';
+    lines.push([label, -Number(r.deductions)]);
+  }
   if (Number(r.tds) > 0) lines.push([tdsLabel(r), -Number(r.tds)]);
   return {
     id: r.id, orderId: r.order_id, status: r.status, payeeType: r.payee_type, payeeName: r.payee_name || '', hostId: r.host_id, payeeGuestId: r.payee_guest_id,
@@ -132,6 +148,7 @@ async function planPayouts(sql, orderId, opts = {}) {
   const { decryptField, maskAccount } = require('./_secure-fields');
   const o = (await sql`
     SELECT o.id, o.status, (to_jsonb(o)->>'payout_on_cancel')::boolean AS payout_on_cancel, o.commission_amount, o.payout_amount, h.id AS host_id, h.name AS host_name,
+           o.nights, to_jsonb(o)->>'payout_rest_held_at' AS rest_held_at,
            h.bank_account_holder_name, h.bank_account_number, h.bank_ifsc, h.bank_status, h.razorpayx_fund_account_id,
            h.pan_number AS host_pan, h.pan_status AS host_pan_status, (to_jsonb(h)->>'pan_inoperative')::boolean AS host_pan_inoperative,
            to_jsonb(h)->>'bank_changed_at' AS host_bank_changed_at
@@ -148,8 +165,14 @@ async function planPayouts(sql, orderId, opts = {}) {
                        FROM order_cohost_shares s JOIN guests g ON g.id = s.cohost_guest_id LEFT JOIN cohost_payout_profiles p ON p.guest_id = s.cohost_guest_id
                        WHERE s.order_id = ${orderId}`;
   } catch (e) { shares = []; }
-  const commission = Number(o.commission_amount) || 0;
-  const gross = (Number(o.payout_amount) || 0) + commission;
+  // While a guest's request made during the stay is open, only the first
+  // night is paid (orders.payout_rest_held_at; runAutoPayouts). opts.full:
+  // the whole booking, whatever is held.
+  const nights = Math.max(1, Number(o.nights) || 1);
+  const part = o.rest_held_at && !opts.full && nights > 1 ? 1 / nights : 1;
+  if (part < 1) shares.forEach(x => { x.amount = round2(Number(x.amount) * part); });
+  const commission = round2((Number(o.commission_amount) || 0) * part);
+  const gross = round2(((Number(o.payout_amount) || 0) + (Number(o.commission_amount) || 0)) * part);
   // Co-host shares can never add up to more than the host's part after
   // commission: if they would (shares of 100% or more), they are scaled
   // down to fit, so no one is paid money the booking did not earn.
@@ -175,13 +198,26 @@ async function planPayouts(sql, orderId, opts = {}) {
   // A coupon owed is deducted from ONE payout: those already listed on
   // another booking's payout that has not been sent yet are left out.
   try {
-    owed = await sql`SELECT id, amount FROM host_penalties hp WHERE hp.host_id = ${o.host_id} AND hp.payer_guest_id IS NULL AND hp.status = 'owed'
+    owed = await sql`SELECT id, amount, COALESCE(to_jsonb(hp)->>'kind', 'coupon') AS kind, order_id FROM host_penalties hp WHERE hp.host_id = ${o.host_id} AND hp.payer_guest_id IS NULL AND hp.status = 'owed'
                        AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.status IN ('due', 'processing', 'failed') AND p.order_id <> ${orderId} AND hp.id = ANY(p.deducted_penalty_ids))
                      ORDER BY hp.created_at`;
   } catch (e) { owed = []; }
   const deducted = [];
   let deductions = 0;
-  for (const pn of owed) { if (deductions + Number(pn.amount) <= available) { deductions += Number(pn.amount); deducted.push(pn.id); } }
+  for (const pn of owed) {
+    if (deductions + Number(pn.amount) <= available) { deductions += Number(pn.amount); deducted.push(pn.id); continue; }
+    // An amount overpaid earlier that does not fit whole: as much as fits
+    // now, the rest stays owed for the payout after (only when a payout is
+    // actually being created — opts.splitOverpaid).
+    const room = round2(available - deductions);
+    if (pn.kind === 'overpaid' && opts.splitOverpaid && room >= 1) {
+      const cut = await sql`UPDATE host_penalties SET amount = ${room} WHERE id = ${pn.id} AND status = 'owed' AND amount = ${pn.amount} RETURNING id`;
+      if (cut.length) {
+        await sql`INSERT INTO host_penalties (host_id, order_id, amount, payer_guest_id, kind, note) VALUES (${o.host_id}, ${pn.order_id}, ${round2(Number(pn.amount) - room)}, NULL, 'overpaid', ${'Rest of #' + pn.id + ', for a later payout'})`;
+        deductions += room; deducted.push(pn.id);
+      }
+    }
+  }
   const hostEmail = ((await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0] || {}).email || null;
   const plans = [{
     payeeType: 'host', hostId: o.host_id, payeeGuestId: null, gross, commission, cohostShares: coTotal, deductions, deductedIds: deducted, tds, tdsRate: hostRate, panFurnished: hostPan,
@@ -203,11 +239,22 @@ async function planPayouts(sql, orderId, opts = {}) {
     const coPan = coT.reason !== 'no_pan' && coT.reason !== 'inoperative_pan';
     const coRate = coT.rate;
     const coTds = Math.min(Number(x.amount), coT.tds);
+    // An amount this co-host was overpaid on another booking (reduced after
+    // its payout was sent): deducted here, as far as it fits.
+    let coOwed = [];
+    try {
+      coOwed = await sql`SELECT id, amount FROM host_penalties hp WHERE hp.payer_guest_id = ${x.cohost_guest_id} AND hp.status = 'owed' AND COALESCE(to_jsonb(hp)->>'kind', 'coupon') = 'overpaid'
+                           AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.status IN ('due', 'processing', 'failed') AND p.order_id <> ${orderId} AND hp.id = ANY(p.deducted_penalty_ids))
+                         ORDER BY hp.created_at`;
+    } catch (e) { coOwed = []; }
+    const coDed = [];
+    let coDeductions = 0;
+    for (const pn of coOwed) { if (coDeductions + Number(pn.amount) <= Number(x.amount) - coTds) { coDeductions += Number(pn.amount); coDed.push(pn.id); } }
     plans.push({
-      payeeType: 'cohost', hostId: o.host_id, payeeGuestId: x.cohost_guest_id, gross: Number(x.amount), commission: 0, cohostShares: 0, deductions: 0, deductedIds: [],
+      payeeType: 'cohost', hostId: o.host_id, payeeGuestId: x.cohost_guest_id, gross: Number(x.amount), commission: 0, cohostShares: 0, deductions: round2(coDeductions), deductedIds: coDed,
       tds: coTds, tdsRate: coRate, panFurnished: coPan,
       tdsBase: coT.base, tdsReason: coT.reason, tdsCatchupBase: coT.catchupBase, tdsFy: coT.fy,
-      net: round2(Number(x.amount) - coTds), email: x.email, name: x.name,
+      net: round2(Number(x.amount) - coTds - coDeductions), email: x.email, name: x.name,
       bankLabel: [x.account_holder_name, maskAccount(x.bank_account_number)].filter(Boolean).join(' · '),
       bank: { ready: x.profile_status === 'approved' && !!x.bank_account_number && !!x.bank_ifsc && !inChangeHold(x.bank_changed_at), changedRecently: inChangeHold(x.bank_changed_at), holder: x.account_holder_name, account: decryptField(x.bank_account_number), ifsc: x.bank_ifsc, fundAccountId: x.razorpayx_fund_account_id, table: 'cohost_payout_profiles', key: x.cohost_guest_id }
     });
@@ -226,7 +273,7 @@ async function createPayoutRows(sql, orderId) {
                              AND (to_jsonb(o)->>'cancel_claimed_at')::timestamptz > now() - interval '10 minutes'`;
     if (busy.length) return created;
   } catch (e) { /* before migration_cancellation_policy.sql */ }
-  for (const plan of await planPayouts(sql, orderId)) {
+  for (const plan of await planPayouts(sql, orderId, { splitOverpaid: true })) {
     let r;
     try {
       r = await sql`
@@ -308,6 +355,133 @@ async function createDepositCompensationPayout(sql, { orderId, amount }) {
   return r[0] || (await sql`SELECT * FROM payouts WHERE order_id = ${orderId} AND payee_type = 'host' AND kind = 'deposit'`)[0] || null;
 }
 
+// A co-host as a payee of a payout of its own (bank details, PAN).
+async function cohostPayee(sql, guestId) {
+  const { decryptField, maskAccount } = require('./_secure-fields');
+  const x = (await sql`SELECT g.id, g.name, g.email, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status AS profile_status, p.razorpayx_fund_account_id,
+                              p.pan_number, (to_jsonb(p)->>'pan_inoperative')::boolean AS pan_inoperative, to_jsonb(p)->>'bank_changed_at' AS bank_changed_at
+                       FROM guests g LEFT JOIN cohost_payout_profiles p ON p.guest_id = g.id WHERE g.id = ${Number(guestId) || 0}`)[0];
+  if (!x) return null;
+  return {
+    payeeType: 'cohost', hostId: null, payeeGuestId: x.id, email: x.email, name: x.name, panFurnished: !!x.pan_number && x.profile_status !== 'rejected',
+    pan: { pan: decryptField(x.pan_number), present: !!x.pan_number, status: x.profile_status === 'rejected' ? 'rejected' : (x.profile_status || 'pending_review'), inoperative: x.pan_inoperative === true },
+    bankLabel: [x.account_holder_name, maskAccount(x.bank_account_number)].filter(Boolean).join(' · '),
+    bank: { ready: x.profile_status === 'approved' && !!x.bank_account_number && !!x.bank_ifsc && !inChangeHold(x.bank_changed_at), changedRecently: inChangeHold(x.bank_changed_at),
+            holder: x.account_holder_name, account: decryptField(x.bank_account_number), ifsc: x.bank_ifsc, fundAccountId: x.razorpayx_fund_account_id, table: 'cohost_payout_profiles', key: x.id }
+  };
+}
+
+// ---------------------------------------------------------------------
+// A booking changed after its payout was sent (payouts go the day after
+// check-in, so a stay can still change: a problem upheld, a shorter or
+// longer stay, an emergency cancellation). Called after any change to a
+// booking's amounts. For each payee (host, co-hosts):
+//   • a payout not sent yet ('due'/'failed') is planned again from the new
+//     amounts;
+//   • against what was already sent: an amount no longer owed is recorded
+//     to be deducted from their next payout (host_penalties, kind
+//     'overpaid'); an amount added is paid as a payout of its own
+//     (kind 'adjustment-<n>'), sent like any other.
+// Compared on the amount due before TDS (TDS deducted earlier stays
+// deducted). Never throws.
+const payeeKey = (type, guestId) => `${type}:${Number(guestId) || 0}`;
+// opts.release: the rest of a payout held while a guest's request was open
+// (runAutoPayouts) is paid now — as kind 'rest-<n>'. Without it, nothing
+// more is paid while the rest is held (only amounts no longer owed are
+// recorded).
+async function settleAfterPayout(sql, orderId, { reason = 'The booking changed after its payout was sent', release = false } = {}) {
+  const out = { recovered: 0, added: 0 };
+  try {
+    const rows = await sql`SELECT * FROM payouts WHERE order_id = ${Number(orderId) || 0} AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') <> 'deposit'`;
+    if (!rows.length) return out;
+    const o = (await sql`SELECT o.id, l.host_id, to_jsonb(o)->>'payout_rest_held_at' AS rest_held_at FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
+    if (!o) return out;
+    const held = !!o.rest_held_at;
+    const plans = await planPayouts(sql, orderId);                       // as paid now (first night only while held)
+    const full = held ? await planPayouts(sql, orderId, { full: true }) : plans;
+    const due = {};                                         // what each payee is owed in all (before TDS)
+    full.forEach(p => { due[payeeKey(p.payeeType, p.payeeGuestId)] = p.payeeType === 'host' ? round2(p.gross - p.commission - p.cohostShares) : round2(p.gross); });
+    // A booking payout not sent yet: planned again from the new amounts.
+    for (const r of rows.filter(r => (r.kind || 'booking') === 'booking' && ['due', 'failed'].includes(r.status))) {
+      const p = plans.find(x => x.payeeType === r.payee_type && (x.payeeGuestId || 0) === (r.payee_guest_id || 0));
+      const upd = p
+        ? await sql`UPDATE payouts SET gross = ${p.gross}, commission = ${p.commission}, cohost_shares = ${p.cohostShares}, deductions = ${p.deductions}, deducted_penalty_ids = ${p.deductedIds},
+                      tds = ${p.tds}, tds_rate = ${p.tdsRate}, net = ${p.net} WHERE id = ${r.id} AND status IN ('due', 'failed') RETURNING *`
+        : await sql`UPDATE payouts SET gross = 0, commission = 0, cohost_shares = 0, deductions = 0, deducted_penalty_ids = ${[]}, tds = 0, net = 0, status = 'cancelled'
+                    WHERE id = ${r.id} AND status IN ('due', 'failed') RETURNING *`;
+      if (upd[0]) Object.assign(r, upd[0]);
+    }
+    if (!rows.some(r => r.status === 'sent' || r.status === 'processing')) return out;
+    const baseOf = (r) => r.payee_type === 'host' && (r.kind || 'booking') === 'booking' ? Number(r.gross) - Number(r.commission) - Number(r.cohost_shares) : Number(r.gross);
+    const paid = {};
+    rows.filter(r => r.status !== 'cancelled').forEach(r => { const k = payeeKey(r.payee_type, r.payee_guest_id); paid[k] = round2((paid[k] || 0) + baseOf(r)); });
+    // Amounts already recorded as overpaid on this booking (not withdrawn).
+    let recs = [];
+    try {
+      recs = await sql`SELECT id, amount, status, payer_guest_id FROM host_penalties WHERE order_id = ${orderId} AND COALESCE(to_jsonb(host_penalties)->>'kind', 'coupon') = 'overpaid' AND status <> 'cancelled' ORDER BY id DESC`;
+    } catch (e) { recs = null; }                             // database update not applied
+    const keys = new Set([...Object.keys(due), ...Object.keys(paid)]);
+    for (const k of keys) {
+      const [type, gid] = k.split(':');
+      const mine = (recs || []).filter(x => (Number(x.payer_guest_id) || 0) === Number(gid) && (type === 'host' ? !x.payer_guest_id : true));
+      const settled = round2((paid[k] || 0) - mine.reduce((t, x) => t + Number(x.amount), 0));
+      let diff = round2((due[k] || 0) - settled);
+      if (Math.abs(diff) < 1) continue;
+      if (diff < 0) {
+        if (recs === null) { console.error('overpaid amount not recorded (apply the database update):', orderId, k, -diff); continue; }
+        await sql`INSERT INTO host_penalties (host_id, order_id, amount, payer_guest_id, kind, note)
+                  VALUES (${o.host_id}, ${orderId}, ${-diff}, ${type === 'cohost' ? Number(gid) : null}, 'overpaid', ${reason.slice(0, 300)})`;
+        out.recovered = round2(out.recovered - diff);
+        if (type === 'host') out.hostRecovered = round2((out.hostRecovered || 0) - diff);
+        continue;
+      }
+      // Owed more: first withdraw what is still waiting to be deducted.
+      for (const x of mine.filter(x => x.status === 'owed')) {
+        if (diff <= 0) break;
+        const amt = Number(x.amount);
+        if (amt <= diff) {
+          const w = await sql`UPDATE host_penalties SET status = 'cancelled', settled_at = now(), settled_by = 'automatic', note = 'Withdrawn: the booking changed again'
+                              WHERE id = ${x.id} AND status = 'owed' AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.status IN ('due', 'processing', 'failed', 'sent') AND ${x.id} = ANY(p.deducted_penalty_ids)) RETURNING id`;
+          if (w.length) diff = round2(diff - amt);
+        } else {
+          const w = await sql`UPDATE host_penalties SET amount = ${round2(amt - diff)} WHERE id = ${x.id} AND status = 'owed'
+                                AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.status IN ('due', 'processing', 'failed', 'sent') AND ${x.id} = ANY(p.deducted_penalty_ids)) RETURNING id`;
+          if (w.length) diff = 0;
+        }
+      }
+      if (diff < 1) continue;
+      // More is owed: nothing more is paid while the rest is held.
+      if (held && !release) continue;
+      // The rest: a payout of its own.
+      const payee = type === 'host' ? await depositPayee(sql, o.host_id) : await cohostPayee(sql, gid);
+      if (!payee) continue;
+      const t = await tdsForPayout(sql, { payee: type === 'host' ? { payeeType: 'host', hostId: o.host_id } : { payeeType: 'cohost', payeeGuestId: Number(gid) }, base: diff, pan: payee.pan });
+      const tds = Math.min(diff, t.tds);
+      const prefix = release ? 'rest' : 'adjustment';
+      const n = rows.filter(r => (r.kind || '').startsWith(prefix + '-')).length + 1;
+      let made = null;
+      for (let i = 0; i < 5 && !made; i++) {
+        made = (await sql`
+          INSERT INTO payouts (order_id, payee_type, host_id, payee_guest_id, status, gross, commission, cohost_shares, deductions, deducted_penalty_ids, tds, tds_rate, pan_furnished, net, bank_label, auto_eligible, kind,
+                               tds_base, tds_reason, tds_catchup_base, tds_fy)
+          VALUES (${orderId}, ${type}, ${o.host_id}, ${type === 'cohost' ? Number(gid) : null}, 'due', ${diff}, 0, 0, 0, ${[]}, ${tds}, ${t.rate}, ${t.reason !== 'no_pan' && t.reason !== 'inoperative_pan'}, ${round2(diff - tds)},
+                  ${payee.bankLabel || null}, ${razorpayxReady()}, ${prefix + '-' + (n + i)}, ${t.base}, ${t.reason}, 0, ${t.fy})
+          ON CONFLICT DO NOTHING RETURNING *`)[0] || null;
+      }
+      if (made) {
+        rows.push(made);
+        out.added = round2(out.added + diff);
+        if (type === 'host') out.hostAdded = round2((out.hostAdded || 0) + diff);
+        if (razorpayxReady()) { try { await attemptPayout(sql, made.id); } catch (e) { /* retried every 4 hours */ } }
+      }
+    }
+  } catch (err) {
+    console.error('payout not settled after a change (needs follow-up):', orderId, err.message);
+    out.error = err.message;
+  }
+  return out;
+}
+
 async function razorpayx(method, path, body, idempotencyKey) {
   const auth = Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
   const headers = { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' };
@@ -343,7 +517,7 @@ async function refreshTds(sql, row) {
     if (same) return row;
     const net = row.payee_type === 'host'
       ? round2(Number(row.gross) - Number(row.commission) - Number(row.cohost_shares) - Number(row.deductions) - plan.tds)
-      : round2(Number(row.gross) - plan.tds);
+      : round2(Number(row.gross) - Number(row.deductions || 0) - plan.tds);
     if (net < 0) return row;
     let upd;
     try {
@@ -383,8 +557,8 @@ async function attemptPayout(sql, payoutId, { by = 'automatic' } = {}) {
       if (live.status === 'processed') await markPayoutSent(sql, row.id, { reference: live.utr || live.id, by: 'RazorpayX' });
       return 'adopted';
     }
-    const plan = row.kind === 'deposit'
-      ? await depositPayee(sql, row.host_id)
+    const plan = (row.kind && row.kind !== 'booking')
+      ? (row.payee_type === 'host' ? await depositPayee(sql, row.host_id) : await cohostPayee(sql, row.payee_guest_id))
       : (await planPayouts(sql, row.order_id)).find(p => p.payeeType === row.payee_type && (p.payeeGuestId || 0) === (row.payee_guest_id || 0));
     if (!plan || !plan.bank.ready) return back('due', plan && plan.bank.changedRecently ? 'Payout details changed recently (PAN or bank being checked, or within 48 hours): waiting' : 'Waiting for approved bank details');
     let fa = plan.bank.fundAccountId;
@@ -449,11 +623,21 @@ async function pollRazorpayX(sql) {
   return { checked: rows.length };
 }
 
+// Bookings (of ids) with a guest's request open: a change waiting for the
+// host or for payment, or a reported problem waiting for Aerva.
+async function openGuestRequests(sql, ids) {
+  const set = new Set();
+  if (!ids || !ids.length) return set;
+  try { (await sql`SELECT order_id FROM stay_disputes WHERE order_id = ANY(${ids}) AND status IN ('open', 'host_responded')`).forEach(r => set.add(r.order_id)); } catch (e) { /* not created yet */ }
+  try { (await sql`SELECT order_id FROM booking_changes WHERE order_id = ANY(${ids}) AND status IN ('pending', 'awaiting_payment')`).forEach(r => set.add(r.order_id)); } catch (e) { /* not created yet */ }
+  return set;
+}
+
 // The scheduler (every run of get-listings ?runSchedules=1, the daily cron
 // and site traffic). Throws when something failed, so the run is recorded
 // as failed (Admin → Scheduled jobs) — after doing everything it could.
-//   • bookings whose check-out day has reached 5 PM locally get their
-//     payouts, sent at once;
+//   • bookings whose day after check-in has reached 5 PM locally get
+//     their payouts, sent at once;
 //   • payouts left behind ('due') are retried every 4 hours;
 //   • payouts and refunds in progress are checked with Razorpay.
 const RETRY_HOURS = 4;
@@ -467,24 +651,26 @@ async function runAutoPayouts(sql, { deadlineMs = 7000, razorpay = null } = {}) 
     SELECT o.id FROM orders o JOIN listings l ON l.id = o.listing_id
     CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata')) AS local_now) lt
     WHERE (o.status = 'paid' OR (o.status = 'cancelled' AND (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE AND o.payout_amount > 0))
-      AND o.departure IS NOT NULL
-      AND o.departure >= lt.local_now::date - 30
-      AND (o.departure < lt.local_now::date OR (o.departure = lt.local_now::date AND extract(hour from lt.local_now) >= ${PAYOUT_HOUR}))
+      AND o.arrival IS NOT NULL
+      AND o.arrival >= lt.local_now::date - 60
+      AND (o.arrival + 1 < lt.local_now::date OR (o.arrival + 1 = lt.local_now::date AND extract(hour from lt.local_now) >= ${PAYOUT_HOUR}))
       AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.order_id = o.id AND p.payee_type = 'host' AND COALESCE(to_jsonb(p)->>'kind', 'booking') = 'booking')
-    ORDER BY o.departure LIMIT 100
+    ORDER BY o.arrival LIMIT 100
   `;
-  // A booking with an open stay dispute is held until Aerva decides
-  // (_stay-disputes.js): its payout may shrink to the nights used.
-  let held = new Set();
-  try {
-    const ids = orders.map(o => o.id);
-    if (ids.length) held = new Set((await sql`SELECT order_id FROM stay_disputes WHERE order_id = ANY(${ids}) AND status IN ('open', 'host_responded')`).map(r => r.order_id));
-  } catch (err) { /* stay_disputes not created yet */ }
+  // A guest's request made in the stay window still open — a change asked
+  // for (_booking-changes.js) or a problem reported (_stay-disputes.js):
+  // only the first night is paid now; the rest once it is settled (below).
+  const held = await openGuestRequests(sql, orders.map(o => o.id));
+  let canHoldRest = true;
+  try { await sql`SELECT payout_rest_held_at FROM orders LIMIT 0`; } catch (e) { canHoldRest = false; }
   // Each booking on its own: one that fails never holds back the others,
   // and is reported (Admin → Scheduled jobs) instead of passing as done.
   for (const o of orders) {
     if (Date.now() - started > deadlineMs) break;
-    if (held.has(o.id)) continue;
+    if (held.has(o.id)) {
+      if (!canHoldRest) continue;                         // database update not applied: all of it waits, as before
+      await sql`UPDATE orders SET payout_rest_held_at = COALESCE(payout_rest_held_at, now()) WHERE id = ${o.id}`;
+    }
     try {
       for (const { row } of await createPayoutRows(sql, o.id)) {
         out.created++;
@@ -496,6 +682,29 @@ async function runAutoPayouts(sql, { deadlineMs = 7000, razorpay = null } = {}) 
       out.failed++;
       errors.push(`booking #${o.id}: ${String(err.message || err).slice(0, 120)}`);
       console.error('payout not created for booking', o.id, err);
+    }
+  }
+  // The rest of a payout held for a guest's request, once nothing is open
+  // and a declined request can no longer be taken to Aerva.
+  if (canHoldRest) {
+    const { DECLINED_GRACE_HOURS } = require('./_booking-changes');
+    const waiting = await sql`SELECT o.id FROM orders o WHERE o.payout_rest_held_at IS NOT NULL ORDER BY o.payout_rest_held_at LIMIT 50`;
+    const still = await openGuestRequests(sql, waiting.map(r => r.id));
+    for (const w of waiting) {
+      if (Date.now() - started > deadlineMs) break;
+      if (still.has(w.id)) continue;
+      let recent = [];
+      try {
+        recent = await sql`SELECT 1 FROM booking_changes WHERE order_id = ${w.id} AND status IN ('declined', 'expired') AND decided_at > now() - make_interval(hours => ${DECLINED_GRACE_HOURS}) LIMIT 1`;
+      } catch (e) { recent = []; }
+      if (recent.length) continue;
+      try {
+        const cleared = await sql`UPDATE orders SET payout_rest_held_at = NULL WHERE id = ${w.id} AND payout_rest_held_at IS NOT NULL RETURNING id`;
+        if (!cleared.length) continue;
+        const r = await settleAfterPayout(sql, w.id, { release: true, reason: 'Rest of the payout, held while a guest’s request was open' });
+        if (r.error) { await sql`UPDATE orders SET payout_rest_held_at = now() WHERE id = ${w.id}`; throw new Error(r.error); }
+        out.released = (out.released || 0) + 1;
+      } catch (err) { out.failed++; errors.push(`booking #${w.id} (rest): ${String(err.message || err).slice(0, 120)}`); }
     }
   }
   // Left behind: retried every 4 hours (only payouts created while
@@ -513,5 +722,5 @@ async function runAutoPayouts(sql, { deadlineMs = 7000, razorpay = null } = {}) 
 }
 
 module.exports = { loadPayoutSummary, payoutEmailHtml, sendPayoutEmail, recentPayoutNotifications, inr,
-  planPayouts, createPayoutRows, refreshTds, markPayoutSent, runAutoPayouts, attemptPayout, pollRazorpayX, razorpayxReady, PAYOUT_HOUR, RETRY_HOURS,
+  planPayouts, createPayoutRows, refreshTds, markPayoutSent, runAutoPayouts, attemptPayout, settleAfterPayout, pollRazorpayX, razorpayxReady, PAYOUT_HOUR, RETRY_HOURS,
   createDepositCompensationPayout };

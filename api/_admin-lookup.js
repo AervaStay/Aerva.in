@@ -102,18 +102,27 @@ async function search(sql, raw) {
 // ---------------------------------------------------------------------
 async function moneyState(sql, orderId) {
   const o = (await sql`SELECT id, total, to_jsonb(orders)->>'coupon_discount' AS coupon, charge_currency, razorpay_payment_id, razorpay_order_id,
-                              to_jsonb(orders)->>'guest_service_fee' AS fee
+                              to_jsonb(orders)->>'guest_service_fee' AS fee, to_jsonb(orders)->>'fee_credit_used' AS credit
                        FROM orders WHERE id = ${orderId}`)[0];
   if (!o) return null;
   const changePaid = (await soft(sql`SELECT COALESCE(sum(difference), 0)::int AS n FROM booking_changes
                                      WHERE order_id = ${orderId} AND status = 'applied' AND razorpay_payment_id IS NOT NULL AND difference > 0`, [{ n: 0 }]))[0].n;
   const refunded = (await soft(sql`SELECT COALESCE(sum(amount), 0)::bigint AS p FROM refunds
                                    WHERE order_id = ${orderId} AND status <> 'failed'`, [{ p: 0 }]))[0].p;
-  const charged = Math.max(0, Math.round(Number(o.total) || 0) - Math.round(Number(o.coupon) || 0)) + (Number(changePaid) || 0);
+  // Paid with Aerva credit (not money through Razorpay), and where that credit came from.
+  const credit = Math.max(0, Math.round(Number(o.credit) || 0));
+  let creditFrom = '';
+  if (credit) {
+    creditFrom = ((await soft(sql`SELECT string_agg(DISTINCT COALESCE(to_jsonb(src)->>'confirmation_code', src.razorpay_order_id, '#' || src.id) || ' (' || COALESCE(f.razorpay_payment_id, '') || ')', '; ') AS v
+                                   FROM fee_credit_uses u JOIN fee_credits f ON f.id = u.credit_id LEFT JOIN orders src ON src.id = f.source_order_id WHERE u.order_id = ${orderId}`, [{ v: '' }]))[0] || {}).v || '';
+  }
+  const charged = Math.max(0, Math.round(Number(o.total) || 0) - Math.round(Number(o.coupon) || 0) - credit) + (Number(changePaid) || 0);
   const refundedInr = Math.round(Number(refunded) / 100);
-  // Aerva's service fee is never refunded, so it is never refundable here either.
+  // Aerva's service fee is never refunded, so it is never refundable here
+  // either (a part paid with credit was not paid through Razorpay).
   const fee = Math.max(0, Math.round(Number(o.fee) || 0));
-  return { charged, refunded: refundedInr, refundable: Math.max(0, charged - fee - refundedInr), feeKept: fee, currency: o.charge_currency || 'INR' };
+  return { charged, refunded: refundedInr, refundable: Math.max(0, charged - Math.max(0, fee - credit) - refundedInr), feeKept: fee, currency: o.charge_currency || 'INR',
+           paidWithCredit: credit, creditFrom };
 }
 
 async function bookingDetail(sql, id) {
@@ -211,11 +220,13 @@ async function partialRefund(sql, razorpay, { orderId, amount, reason, hostPays,
   // host is still paid in full for it.
   let payoutBefore = null;
   if (hostPays) {
+    // Already paid out (payouts go the day after check-in): the host's part
+    // is deducted from their next payout instead (settleAfterPayout, below).
     const pays = await soft(sql`SELECT status FROM payouts WHERE order_id = ${o.id} AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`);
-    if (pays.some(p => !['due', 'failed'].includes(p.status))) throw userError('The host has already been paid for this booking, so it cannot come out of their payout. Choose "Aerva pays" instead.', 409);
+    if (pays.some(p => p.status === 'processing')) throw userError('The host payout for this booking is being sent right now. Try again in a few minutes.', 409);
     payoutBefore = Math.round(Number(o.payout_amount) || 0);
     if (amt > payoutBefore) throw userError(`The host's payout for this booking is ${inr(payoutBefore)} — less than the refund.`);
-    await soft(sql`DELETE FROM payouts WHERE order_id = ${o.id} AND status IN ('due', 'failed') AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`);
+    if (!pays.some(p => p.status === 'sent')) await soft(sql`DELETE FROM payouts WHERE order_id = ${o.id} AND status IN ('due', 'failed') AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`);
     await sql`UPDATE orders SET payout_amount = ${payoutBefore - amt} WHERE id = ${o.id}`;
     await soft(sql`UPDATE order_cohost_shares SET amount = round(${payoutBefore - amt}::numeric * percent / 100) WHERE order_id = ${o.id}`);
   }
@@ -242,6 +253,8 @@ async function partialRefund(sql, razorpay, { orderId, amount, reason, hostPays,
     throw err.isUserFacing ? err : userError('Razorpay could not make this refund: ' + String(err.error && err.error.description || err.message || 'unknown error'), 502);
   }
 
+  // The host's payout was already sent: their part comes off the next payout.
+  if (hostPays) await require('./_payouts').settleAfterPayout(sql, o.id, { reason: 'Refund to the guest taken from the host’s share after the payout was sent' });
   await logAudit(sql, { action: 'admin_partial_refund', success: true, actorType: 'admin', actorIdentifier: adminLabel || 'admin',
     targetType: 'order', targetId: o.id, metadata: { amount: amt, reason, hostPays: !!hostPays, refundId, kind: kindBase } });
   await postThreadMessage(sql, o.id, 'system', `Aerva refunded ${inr(amt)} to the guest. Reason: ${String(reason).trim()}`);

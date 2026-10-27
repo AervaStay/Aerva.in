@@ -162,7 +162,7 @@ function plainError(message, itemCount) {
 
 // The breakdown a guest sees: the price quote, and the "prices have been
 // changed recently" answer. Amounts in rupees; the page formats them.
-function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon = 0 }) {
+function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon = 0, feeCredit = 0 }) {
   const lines = [];
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   stayDetails.forEach(x => {
@@ -189,6 +189,7 @@ function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon 
   lines.push({ kind: 'fee', label: 'Guest service fee', amount: fee });
   if (deposit) lines.push({ kind: 'deposit', label: 'Refundable deposit (held 7 days)', amount: deposit });
   if (coupon) lines.push({ kind: 'coupon', label: 'Coupon', amount: -coupon });
+  if (feeCredit) lines.push({ kind: 'fee_credit', label: 'Aerva credit', amount: -feeCredit });
   return lines;
 }
 
@@ -562,11 +563,45 @@ module.exports = async (req, res) => {
     const gst = grandGst;
     let totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit;
 
+    // ---- Aerva credit (a host cancelled an earlier booking) ----
+    // Pays toward this booking — price, GST and service fee, after any
+    // coupon — as far as it goes (_fee-credits.js); the rest is paid with
+    // the guest's chosen payment method. What is left on the credit stays
+    // there. The security deposit is always paid with that payment method
+    // (it is refunded to it), and so is at least ₹1 (a payment cannot be
+    // for nothing). Rupee payments only. Each item
+    // keeps its full price; the part the credit paid is item.feeCreditUsed
+    // (orders.fee_credit_used). Claimed at payment.
+    let feeCreditAllocations = [], feeCreditUsed = 0, creditBalance = 0;
+    const applyCredit = async (couponDiscount) => {
+      if (!guestId) return;
+      // Shown whenever the guest has any (the quote tells them it is there).
+      try { creditBalance = (await require('./_fee-credits').available(sql, guestId)).reduce((t, c) => t + Number(c.remaining || 0), 0); } catch (e) { creditBalance = 0; }
+      if (preferredCurrency && preferredCurrency !== 'INR') return;
+      try {
+        const FC = require('./_fee-credits');
+        const items = [...stayDetails, ...experienceDetails];
+        let c = Math.max(0, Math.round(Number(couponDiscount) || 0));
+        const payable = items.map(x => {
+          const sub = Math.max(0, Math.round(Number(x.subtotal) || 0));
+          const a = Math.min(c, sub); c -= a;
+          return sub - a + Math.max(0, Math.round(Number(x.gst) || 0)) + Math.max(0, Math.round(Number(x.guestServiceFee) || 0));
+        });
+        const cap = Math.max(0, payable.reduce((t, v) => t + v, 0) - (grandDeposit > 0 ? 0 : 1));
+        feeCreditAllocations = FC.allocate(await FC.available(sql, guestId), cap);
+        feeCreditUsed = feeCreditAllocations.reduce((t, a) => t + a.amount, 0);
+        const parts = FC.spread(payable, feeCreditUsed);
+        items.forEach((x, k) => { x.feeCreditUsed = parts[k]; });
+        totalRupees = Math.max(0, totalRupees - feeCreditUsed);
+      } catch (err) { feeCreditAllocations = []; feeCreditUsed = 0; console.error('Aerva credit not applied:', err.message); }
+    };
+
     if (quoteOnly) {
+      await applyCredit(0);
       return res.status(200).json({
         quote: true,
-        lines: priceLines(stayDetails, experienceDetails, { gst, fee: grandGuestServiceFee, deposit: grandDeposit }),
-        total: totalRupees, subtotal: grandSubtotal, gst, guestServiceFee: grandGuestServiceFee, deposit: grandDeposit,
+        lines: priceLines(stayDetails, experienceDetails, { gst, fee: grandGuestServiceFee, deposit: grandDeposit, feeCredit: feeCreditUsed }),
+        total: totalRupees, subtotal: grandSubtotal, gst, guestServiceFee: grandGuestServiceFee, deposit: grandDeposit, feeCredit: feeCreditUsed, creditBalance,
         stays: stayDetails.map(x => ({ listingId: x.listingId, roomId: x.roomId, suite: x.suite, arrival: x.arrival, departure: x.departure, nights: x.nights,
                                        guests: x.guests, subtotal: x.subtotal, gst: x.gst, gstRate: x.gstRate, guestServiceFee: x.guestServiceFee, depositAmount: x.depositAmount,
                                        withExperienceId: x.withExperienceId })),
@@ -620,6 +655,7 @@ module.exports = async (req, res) => {
       appliedCouponId = coupon.id;
       totalRupees = Math.max(0, totalRupees - appliedCouponDiscount);
     }
+    await applyCredit(appliedCouponDiscount);
 
     // Default path, and the ONLY path until International Payments is
     // actually approved and an admin explicitly enables specific
@@ -668,7 +704,7 @@ module.exports = async (req, res) => {
         return res.status(409).json({
           priceChanged: true,
           error: 'Prices have been changed recently. The new price is below.',
-          lines: priceLines(stayDetails, experienceDetails, { gst, fee: grandGuestServiceFee, deposit: grandDeposit, coupon: appliedCouponDiscount }),
+          lines: priceLines(stayDetails, experienceDetails, { gst, fee: grandGuestServiceFee, deposit: grandDeposit, coupon: appliedCouponDiscount, feeCredit: feeCreditUsed }),
           total: totalRupees, pricesSeen: current
         });
       }
@@ -715,6 +751,7 @@ module.exports = async (req, res) => {
       stays: stayDetails, experiences: experienceDetails,
       chargeCurrency, chargeAmount,
       couponId: appliedCouponId, couponDiscount: appliedCouponDiscount, couponForfeited,
+      feeCredits: feeCreditAllocations,
       agreement: agreementNote,
       // true when a payment window was opened: the payment then only counts
       // if it completes inside it (_confirm-booking.js).
@@ -774,6 +811,7 @@ module.exports = async (req, res) => {
       gst,
       couponDiscount: appliedCouponDiscount || 0,
       couponForfeited: couponForfeited || 0,
+      feeCredit: feeCreditUsed || 0,
       // The page shows a countdown and closes the payment window when it ends.
       holdSeconds: holdIds.length ? HOLD_SECONDS : null,
       pricesSeen: current || undefined,

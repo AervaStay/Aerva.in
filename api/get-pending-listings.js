@@ -1858,37 +1858,43 @@ module.exports = async (req, res) => {
     // POST { markPayoutPaid: { orderId, payee: 'host' | 'cohost', cohostGuestId?,
     //        reference, arrivingBy (YYYY-MM-DD), tds?, deductCoupons?, kind? } }
     // Finishes the booking's payout row (created automatically at 5 PM on
-    // check-out day, or here if not yet): amounts come from the booking.
+    // the day after check-in, or here if not yet): amounts come from the booking.
+    // payoutId: a payout of its own (deposit compensation, or a change made
+    // after the booking's payout was sent) instead.
     // kind 'deposit': the host's security deposit compensation instead.
     // Co-host shares are paid in full. Refused if already sent, or being
     // sent by RazorpayX, or if deductions would take it below zero; and
-    // before the booking's check-out day, or while a stay dispute is open
+    // before the day after check-in, or while a stay dispute is open
     // (the payout may still shrink), exactly as automatic payouts are.
     if (req.body && req.body.markPayoutPaid) {
       try {
         const b = req.body.markPayoutPaid;
-        const orderId = Number(b.orderId) || 0;
-        const isCohost = b.payee === 'cohost';
-        const isDeposit = b.kind === 'deposit' && !isCohost;
+        // A payout of its own (deposit compensation, or an amount added by a
+        // change after the booking's payout was sent), by its id.
+        const extra = Number(b.payoutId) ? (await sql`SELECT * FROM payouts WHERE id = ${Number(b.payoutId)} AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') <> 'booking'`)[0] : null;
+        if (Number(b.payoutId) && !extra) return res.status(404).json({ error: 'Payout not found.' });
+        const orderId = extra ? Number(extra.order_id) : (Number(b.orderId) || 0);
+        const isCohost = extra ? extra.payee_type === 'cohost' : b.payee === 'cohost';
+        const isDeposit = !!extra || (b.kind === 'deposit' && !isCohost);
         const reference = String(b.reference || '').trim().slice(0, 100);
         if (!reference) return res.status(400).json({ error: 'Enter the bank reference (UTR) for this payout.' });
         const arrivingBy = /^\d{4}-\d{2}-\d{2}$/.test(String(b.arrivingBy || '')) ? b.arrivingBy : null;
         const o = (await sql`SELECT o.id, o.status, (to_jsonb(o)->>'payout_on_cancel')::boolean AS payout_on_cancel, o.payout_amount,
-                                    (o.departure > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS before_checkout
+                                    (o.arrival + 1 > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS before_payout_day
                              FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
         // A guest-cancelled booking still pays the host the part not refunded.
         const payable = o && (o.status === 'paid' || (o.status === 'cancelled' && o.payout_on_cancel === true && Number(o.payout_amount) > 0));
         if (!o || (!payable && !isDeposit)) return res.status(404).json({ error: 'This booking has no payout to make.' });
         if (!isDeposit) {
-          if (o.before_checkout) return res.status(409).json({ error: 'A payout can be made from the booking’s check-out day.' });
+          if (o.before_payout_day) return res.status(409).json({ error: 'A payout can be made from the day after check-in.' });
           let disputed = [];
           try { disputed = await sql`SELECT 1 FROM stay_disputes WHERE order_id = ${orderId} AND status IN ('open', 'host_responded') LIMIT 1`; } catch (e) { /* table not created yet */ }
           if (disputed.length) return res.status(409).json({ error: 'A problem reported on this stay is open. Decide it in Stay disputes first — the payout may change.' });
           await createPayoutRows(sql, orderId);
         }
-        const payeeGuestId = isCohost ? (Number(b.cohostGuestId) || 0) : null;
-        let row;
-        try {
+        const payeeGuestId = isCohost ? (extra ? Number(extra.payee_guest_id) : (Number(b.cohostGuestId) || 0)) : null;
+        let row = extra;
+        if (!extra) try {
           row = (await sql`SELECT * FROM payouts WHERE order_id = ${orderId} AND payee_type = ${isCohost ? 'cohost' : 'host'} AND COALESCE(payee_guest_id, 0) = ${payeeGuestId || 0}
                              AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = ${isDeposit ? 'deposit' : 'booking'}`)[0];
         } catch (e) { row = null; }
@@ -2230,7 +2236,7 @@ module.exports = async (req, res) => {
       } catch (err) { console.error('payout profiles unavailable:', err.message); }
       const orders = await sql`
         SELECT o.id, o.suite_name, o.arrival, o.departure, o.status, o.total, o.commission_amount, o.payout_amount,
-               (o.departure > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS before_checkout,
+               (o.arrival + 1 > (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS before_checkout,
                h.id AS host_id, h.name AS host_name, h.bank_account_holder_name AS host_holder,
                h.bank_account_number AS host_account, h.bank_ifsc AS host_ifsc, h.bank_status AS host_bank_status,
                to_jsonb(h)->>'bank_changed_at' AS host_bank_changed_at, to_jsonb(h)->>'bank_name_match' AS host_bank_match
@@ -2260,7 +2266,7 @@ module.exports = async (req, res) => {
         try {
           penalties = await sql`
             SELECT p.id, p.host_id, p.amount, p.created_at, h.name AS host_name, o.suite_name, o.id AS order_id,
-                   p.payer_guest_id, pg.name AS payer_name, pg.email AS payer_email,
+                   p.payer_guest_id, pg.name AS payer_name, pg.email AS payer_email, COALESCE(to_jsonb(p)->>'kind', 'coupon') AS kind,
                    (p.created_at < now() - interval '6 months') AS over_six_months
             FROM host_penalties p JOIN hosts h ON h.id = p.host_id LEFT JOIN orders o ON o.id = p.order_id
             LEFT JOIN guests pg ON pg.id = p.payer_guest_id
@@ -2287,13 +2293,14 @@ module.exports = async (req, res) => {
       // Security deposit compensation payouts are listed on their own.
       let depositPayouts = [];
       try {
-        depositPayouts = await sql`SELECT p.id, p.order_id, p.status, p.net, p.reference, p.sent_at, p.failure_reason, p.attempts, p.auto_eligible, o.suite_name, h.name AS host_name
-                                   FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id
-                                   WHERE p.kind = 'deposit' ORDER BY p.created_at DESC LIMIT 100`;
+        depositPayouts = await sql`SELECT p.id, p.order_id, p.status, p.net, p.reference, p.sent_at, p.failure_reason, p.attempts, p.auto_eligible, o.suite_name, h.name AS host_name,
+                                          p.kind, p.payee_type, pg.name AS payee_name
+                                   FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id LEFT JOIN guests pg ON pg.id = p.payee_guest_id
+                                   WHERE COALESCE(p.kind, 'booking') <> 'booking' ORDER BY p.created_at DESC LIMIT 100`;
       } catch (err) { /* migration_payout_kinds.sql not run yet */ }
       const paidKey = (orderId, type, guest) => `${orderId}:${type}:${guest || 0}`;
       const paidMap = {};
-      paidRows.filter(p => p.kind !== 'deposit').forEach(p => { paidMap[paidKey(p.order_id, p.payee_type, p.payee_guest_id)] = { id: p.id, status: p.status, net: Number(p.net), reference: p.reference, sentAt: p.sent_at, failure: p.failure_reason,
+      paidRows.filter(p => p.kind === 'booking').forEach(p => { paidMap[paidKey(p.order_id, p.payee_type, p.payee_guest_id)] = { id: p.id, status: p.status, net: Number(p.net), reference: p.reference, sentAt: p.sent_at, failure: p.failure_reason,
         attempts: p.attempts, lastAttemptAt: p.last_attempt_at, autoEligible: p.auto_eligible, tds: Number(p.tds), tdsRate: Number(p.tds_rate), panFurnished: p.pan_furnished }; });
       // Refunds not yet confirmed (in progress, or failed: admin retries).
       let openRefunds = [];
@@ -2325,11 +2332,12 @@ module.exports = async (req, res) => {
         couponForfeitTotal,
         automaticPayouts: razorpayxReady(),
         depositPayouts: depositPayouts.map(p => ({ id: p.id, orderId: p.order_id, status: p.status, net: Number(p.net), reference: p.reference, sentAt: p.sent_at,
-          failure: p.failure_reason, attempts: p.attempts, autoEligible: p.auto_eligible, listing: p.suite_name, hostName: p.host_name })),
+          failure: p.failure_reason, attempts: p.attempts, autoEligible: p.auto_eligible, listing: p.suite_name, hostName: p.host_name,
+          kind: p.kind === 'deposit' ? 'deposit' : /^rest/.test(p.kind || '') ? 'rest' : 'adjustment', payeeType: p.payee_type, payeeName: p.payee_type === 'cohost' ? p.payee_name : p.host_name })),
         refunds: openRefunds.map(r => ({ id: r.id, orderId: r.order_id, kind: r.kind, amount: Number(r.amount) / 100, currency: r.charge_currency || 'INR', status: r.status,
           failure: r.failure_reason, attempts: r.attempts, listing: r.suite_name, guestEmail: r.guest_email, createdAt: r.created_at })),
         penalties: penalties.map(p => ({ id: p.id, hostId: p.host_id, hostName: p.host_name, amount: Number(p.amount),
-          payer: p.payer_guest_id ? 'cohost' : 'host', payerName: p.payer_guest_id ? (p.payer_name || p.payer_email || 'Co-host') : p.host_name,
+          kind: p.kind || 'coupon', payer: p.payer_guest_id ? 'cohost' : 'host', payerName: p.payer_guest_id ? (p.payer_name || p.payer_email || 'Co-host') : p.host_name,
           booking: p.suite_name, orderId: p.order_id, createdAt: p.created_at, overSixMonths: !!p.over_six_months })),
         pendingProfiles: pendingProfiles.map(p => ({
           guestId: p.guest_id, name: p.name, email: p.email, pan: readableForAdmin(p.pan_number), gstin: readableForAdmin(p.gstin),
@@ -2352,7 +2360,7 @@ module.exports = async (req, res) => {
             penaltyToDeduct: Math.round(owedByHost[o.host_id] || 0),
             hostPaid: paidMap[paidKey(o.id, 'host', null)] || null,
             orderId: o.id, listing: o.suite_name, arrival: o.arrival, departure: o.departure,
-            // Not payable yet: before the check-out day, or a stay dispute is open.
+            // Not payable yet: before the day after check-in, or a stay dispute is open.
             notDue: o.before_checkout === true || o.before_checkout === 't', onHold: heldByDispute.has(o.id),
             total: Number(o.total) || 0, commission: Number(o.commission_amount) || 0,
             hostPayout: Number(o.payout_amount) || 0, hostNet: (Number(o.payout_amount) || 0) - coTotal,

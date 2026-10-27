@@ -3616,3 +3616,11 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .chat-photo-thumb button{ position:absolute; top:2px; right:2px; width:20px; height:20px; border-radius:50%; border:none; background:rgba(28,26,23,0.75); color:#fff; font-size:13px; line-height:20px; padding:0; cursor:pointer; }
 .chat-photo-busy{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.6); font-weight:600; }
 .chat-photo-note{ font-size:12px; opacity:0.6; }
+
+/* Service-fee credit (a host cancelled) — My Bookings */
+.fee-credit-card{ display:flex; gap:16px; align-items:flex-start; border:1px solid var(--line-dark); border-radius:12px; padding:16px 18px; margin:0 0 16px; background:#fdfbf7; }
+.fee-credit-card.done{ background:transparent; font-size:14px; opacity:0.8; }
+.fee-credit-amount{ font-family:'Bodoni Moda', Georgia, serif; font-size:26px; color:var(--gold-deep); flex:0 0 auto; }
+.fee-credit-body p{ font-size:14px; line-height:1.6; margin:6px 0 10px; }
+.fee-credit-from{ font-size:13px; opacity:0.7; }
+.fee-credit-msg{ font-size:13px; color:#a3402f; }

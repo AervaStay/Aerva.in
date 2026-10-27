@@ -95,6 +95,27 @@ function daysBeforeCheckIn(arrival, zone, checkInTime, nowMs = Date.now()) {
   return h < 0 ? -1 : Math.floor(h / 24);
 }
 
+// ---- The stay window ----
+// Once a stay has started, a guest may ask to shorten or change it, or
+// report a problem, only until 10 AM (property's clock, the standard
+// check-out time) on the day after check-in — before the host's payout for
+// the booking goes at 5 PM (_payouts.js PAYOUT_HOUR). After that the
+// booking cannot be changed and nothing is refunded. A request sent in
+// time stays valid however long the host takes to answer. The check-in
+// night is never refunded.
+const STAY_WINDOW_HOUR = 10;
+function stayWindowEndMs(arrival, zone) {
+  const d = dateStr(arrival);
+  if (!d) return NaN;
+  const next = new Date(d + 'T00:00:00Z'); next.setUTCDate(next.getUTCDate() + 1);
+  return localMidnightMs(next.toISOString().slice(0, 10), zone) + STAY_WINDOW_HOUR * 3600e3;
+}
+// The property's calendar date at a moment (ms or Date/ISO).
+function localDateAt(at, zone) {
+  const ms = at instanceof Date ? at.getTime() : (typeof at === 'number' ? at : Date.parse(at));
+  return localClock(zone, Number.isFinite(ms) ? ms : Date.now()).date;
+}
+
 // ---- Late-night bookings ----
 // Between 12:00 AM and 6:00 AM on the property's clock, a guest may still
 // book "tonight": the night is counted as the previous day's, so arrival is
@@ -115,8 +136,11 @@ function earliestArrival(zone, nowMs = Date.now()) {
   return d.toISOString().slice(0, 10);
 }
 
-// rows: [{ id, subtotal, total, coupon_discount }] — every row of ONE
-// payment, whatever its status. Returns { [id]: { paid, couponAbsorbed } }.
+// rows: [{ id, subtotal, total, coupon_discount, fee_credit_used }] — every
+// row of ONE payment, whatever its status. Returns { [id]: { paid,
+// couponAbsorbed, creditUsed } }: paid is what the row was paid in MONEY
+// (the coupon and any Aerva credit are not money, and are never refunded
+// to the card — _fee-credits.js).
 function allocatePaid(rows) {
   const sorted = [...(rows || [])].sort((a, b) => Number(a.id) - Number(b.id));
   let coupon = sorted.reduce((s, r) => s + Math.max(0, Math.round(Number(r.coupon_discount) || 0)), 0);
@@ -124,18 +148,25 @@ function allocatePaid(rows) {
   for (const r of sorted) {
     const absorbed = Math.min(coupon, Math.max(0, Math.round(Number(r.subtotal) || 0)));
     coupon -= absorbed;
-    out[r.id] = { paid: Math.max(0, Math.round(Number(r.total) || 0) - absorbed), couponAbsorbed: absorbed };
+    const credit = Math.max(0, Math.round(Number(r.fee_credit_used) || 0));
+    out[r.id] = { paid: Math.max(0, Math.round(Number(r.total) || 0) - absorbed - credit), couponAbsorbed: absorbed, creditUsed: credit };
   }
   return out;
 }
-
-async function paidByOrderRow(sql, razorpayOrderId) {
-  const rows = await sql`SELECT id, subtotal, total, coupon_discount FROM orders WHERE razorpay_order_id = ${razorpayOrderId}`;
-  return allocatePaid(rows);
+// The rows of one payment, as allocatePaid needs them.
+async function paymentRows(sql, { razorpayOrderId = null, ids = null } = {}) {
+  return ids
+    ? await sql`SELECT id, subtotal, total, coupon_discount, COALESCE((to_jsonb(orders)->>'fee_credit_used')::int, 0) AS fee_credit_used FROM orders WHERE id = ANY(${ids})`
+    : await sql`SELECT id, subtotal, total, coupon_discount, COALESCE((to_jsonb(orders)->>'fee_credit_used')::int, 0) AS fee_credit_used FROM orders WHERE razorpay_order_id = ${razorpayOrderId}`;
 }
 
-module.exports = { dateStr, localMidnightMs, hoursUntilCheckIn, allocatePaid, paidByOrderRow,
-  checkInMinutes, checkInMomentMs, hoursUntilCheckInTime, daysBeforeCheckIn, LATE_NIGHT_UNTIL_HOUR, localClock, earliestArrival };
+async function paidByOrderRow(sql, razorpayOrderId) {
+  return allocatePaid(await paymentRows(sql, { razorpayOrderId }));
+}
+
+module.exports = { dateStr, localMidnightMs, hoursUntilCheckIn, allocatePaid, paidByOrderRow, paymentRows,
+  checkInMinutes, checkInMomentMs, hoursUntilCheckInTime, daysBeforeCheckIn, LATE_NIGHT_UNTIL_HOUR, localClock, earliestArrival,
+  STAY_WINDOW_HOUR, stayWindowEndMs, localDateAt };
 
 // ---------------------------------------------------------------------
 // 3. THE PAYMENT WINDOW (booking_holds) — strict, no exceptions

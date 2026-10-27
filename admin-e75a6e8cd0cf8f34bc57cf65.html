@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-10-25g"></script>
+<script src="aerva-policies.js?v=2026-10-27b"></script>
 </head>
 <body>
 
@@ -708,10 +708,11 @@
 
   <div id="accountsView" style="display:none;">
     <h2>Accounts</h2>
-    <p style="opacity:0.7; font-size:14px;">One month as your CA books it. Aerva collects guests’ money as the hosts’ payment-collection agent, so only Aerva’s commission and guest service fee are income; everything else is held for hosts, guests or the government (liabilities) until paid. Download the three CSVs for Tally or Zoho Books.</p>
+    <p style="opacity:0.7; font-size:14px;">One month as your CA books it. Aerva collects guests’ money as the hosts’ payment-collection agent, so only Aerva’s commission and guest service fee are income; everything else is held for hosts, guests or the government (liabilities) until paid. Download the CSVs for Tally or Zoho Books.</p>
     <div class="tds-bar"><label>Month <input type="month" id="accMonth"></label>
       <button type="button" class="approve-btn" id="accCsvBookings">Bookings (CSV)</button>
       <button type="button" class="approve-btn" id="accCsvCash">Money in and out (CSV)</button>
+      <button type="button" class="approve-btn" id="accCsvCredits">Aerva credits (CSV)</button>
       <button type="button" class="approve-btn" id="accCsvSummary">Summary (CSV)</button></div>
     <div id="accountsReport"><p style="opacity:0.6;">Loading…</p></div>
   </div>
@@ -729,10 +730,10 @@
     <p style="opacity:0.7; font-size:14px;">What Aerva deducted from host and co-host payouts (security deposit compensation included) as the e-commerce operator: 0.1% with a PAN, 5% without one or with an inoperative PAN, on the amount due after Aerva’s commission, from the first rupee (company policy, on the CA’s advice). Deposit each month's TDS by the date shown, file the quarter's return and issue certificates by the dates shown. Confirm figures with your CA.</p>
     <div class="tds-bar"><label>Financial year <select id="tdsYear"></select></label><button type="button" class="approve-btn" id="tdsCsvAll">Download year (CSV)</button></div>
     <div id="tdsReport"><p style="opacity:0.6;">Loading…</p></div>
-    <h2 style="margin-top:40px;">Security deposit compensation</h2>
-    <p style="opacity:0.7; font-size:14px;">What a host is paid from a guest’s deposit after a dispute is decided. Paid on its own, separate from the booking payout.</p>
+    <h2 style="margin-top:40px;">Other payouts</h2>
+    <p style="opacity:0.7; font-size:14px;">Paid on their own, separate from the booking payout: what a host is paid from a guest’s deposit after a dispute is decided, what a host or co-host is owed when a booking grew after its payout was sent, and the rest of a booking’s payout that was held while a guest’s request made during the stay was open (only the first night is paid until it is settled). When a booking shrinks after its payout was sent, the difference is deducted from the payee’s next payout instead (listed below with the coupons).</p>
     <div id="depositPayoutsList"><p style="opacity:0.6;">Loading…</p></div>
-    <h2 style="margin-top:40px;">Cancellation coupons to deduct from hosts</h2>
+    <h2 style="margin-top:40px;">Amounts to deduct from hosts and co-hosts</h2>
     <p style="opacity:0.7; font-size:14px;">When a host or co-host cancels without paying for the guest’s 10% coupon, the coupon still goes to the guest and whoever cancelled owes the amount: from the host’s next payout, or from the co-host’s own share. Deduct it, then mark it recovered. Over 6 months unrecovered: decide whether to chase it or write it off.</p>
     <div id="penaltiesList"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Booking payouts</h2>
@@ -2112,14 +2113,19 @@
   document.getElementById('accMonth').addEventListener('change', loadAccounts);
   document.getElementById('accCsvBookings').addEventListener('click', () => { if(accData) accCsv('bookings', [
     ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Event', 'event'], ['Recognised on', 'recognisedOn'], ['Type', 'type'], ['Guest', 'guest'], ['Listing', 'listing'], ['Host', 'host'],
-    ['Arrival', 'arrival'], ['Departure', 'departure'], ['Paid on', 'paidOn'], ['Booking price (INR)', 'bookingPrice'], ['Paid by coupon (INR)', 'paidByCoupon'], ['GST on stay charged (INR)', 'gstOnStay'],
+    ['Arrival', 'arrival'], ['Departure', 'departure'], ['Paid on', 'paidOn'], ['Booking price (INR)', 'bookingPrice'], ['Paid by coupon (INR)', 'paidByCoupon'], ['Paid with Aerva credit (INR)', 'paidByCredit'], ['Credit came from (booking, Razorpay payment)', 'creditFrom'], ['GST on stay charged (INR)', 'gstOnStay'],
     ['Guest service fee (INR)', 'serviceFee'], ['Security deposit (INR)', 'deposit'], ['Charged to guest (INR)', 'charged'], ['Refunded to guest (INR)', 'refundedToGuest'],
     ['Income: commission (INR)', 'commissionIncome'], ['Income: guest service fee (INR)', 'serviceFeeIncome'], ['Payable to host incl. co-hosts (INR)', 'hostPayable'], ['of which co-hosts (INR)', 'cohostShares'], ['GST payable s.9(5) (INR)', 'gstPayable'], ['Difference to check (INR)', 'difference']
   ], accData.bookings); });
   document.getElementById('accCsvCash').addEventListener('click', () => { if(accData) accCsv('money-in-out', [
-    ['Date', 'date'], ['Type', 'type'], ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Payee', 'payee'], ['In (INR)', 'amountIn'], ['Out (INR)', 'amountOut'],
+    ['Date', 'date'], ['Type', 'type'], ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Razorpay payment', 'payment'], ['Payee', 'payee'], ['In through Razorpay (INR)', 'amountIn'], ['Out (INR)', 'amountOut'],
+    ['Paid with Aerva credit (INR)', 'paidWithCredit'], ['Credit came from (booking, Razorpay payment)', 'creditFrom'],
     ['TDS deducted (INR)', 'tds'], ['Coupon recovered from host (INR)', 'couponRecovered'], ['Razorpay charge incl. GST (INR)', 'razorpayFee'], ['of which GST (INR)', 'razorpayFeeGst'], ['Ledger', 'ledger']
   ], accData.cash); });
+  document.getElementById('accCsvCredits').addEventListener('click', () => { if(accData) accCsv('aerva-credits', [
+    ['Date', 'date'], ['Credit', 'credit'], ['Guest', 'guest'], ['Movement', 'movement'], ['Why', 'why'], ['Booking', 'booking'], ['Razorpay payment or refund', 'reference'],
+    ['Into credit (INR)', 'creditIn'], ['Out of credit (INR)', 'creditOut'], ['Credit first paid by (booking, Razorpay payment)', 'originallyPaidBy'], ['Ledger', 'ledger']
+  ], accData.credits || []); });
   document.getElementById('accCsvSummary').addEventListener('click', () => { if(!accData) return; const S = accData.summary, B = S.balances;
     const rows = [];
     ((S.statement && S.statement.sections) || []).forEach(sec => sec.lines.forEach(l => rows.push({ s: sec.title, k: (l.sign ? l.sign + ' ' : '') + l.k, v: l.head ? '' : l.v, g: l.g || '', m: l.m || '' })));
@@ -2163,8 +2169,8 @@
         </div>`).join('') : '<p style="opacity:0.6;">Nothing waiting.</p>';
       document.getElementById('couponForfeitLine').textContent = 'Unused coupon balances kept by Aerva (coupons worth more than the booking price): ' + payInr(data.couponForfeitTotal || 0);
       document.getElementById('autoPayoutLine').textContent = data.automaticPayouts
-        ? 'Automatic payouts: ON. Sent through RazorpayX at 5 PM on check-out day (property’s local time); any left behind are retried every 4 hours. You only act on payouts that failed at the bank (Retry).'
-        : 'Automatic payouts: OFF (RazorpayX not set up). At 5 PM on check-out day each payout appears here as Not sent: send it by hand, then Mark paid.';
+        ? 'Automatic payouts: ON. Sent through RazorpayX at 5 PM on the day after check-in (property’s local time); any left behind are retried every 4 hours. You only act on payouts that failed at the bank (Retry).'
+        : 'Automatic payouts: OFF (RazorpayX not set up). At 5 PM on the day after check-in each payout appears here as Not sent: send it by hand, then Mark paid.';
       window.__autoPayouts = !!data.automaticPayouts;
       const rfs = data.refunds || [];
       // A refund written down but not started within 10 minutes was
@@ -2182,14 +2188,14 @@
       const dps = data.depositPayouts || [];
       document.getElementById('depositPayoutsList').innerHTML = dps.length ? dps.map(p => `
         <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;${p.status === 'failed' || p.status === 'due' ? ' border-left:3px solid #a3402f;' : ''}">
-          <strong>${escAdmin(p.listing || '')}</strong> · booking #${Number(p.orderId)} · host <strong>${escAdmin(p.hostName || '')}</strong> · <strong>${payInr(p.net)}</strong>
+          <strong>${escAdmin(p.listing || '')}</strong> · booking #${Number(p.orderId)} · ${p.kind === 'deposit' ? 'deposit compensation' : p.kind === 'rest' ? 'rest of the booking payout (held while a guest’s request was open)' : 'booking changed after payout'} · ${p.payeeType === 'cohost' ? 'co-host' : 'host'} <strong>${escAdmin(p.payeeName || p.hostName || '')}</strong> · <strong>${payInr(p.net)}</strong>
           ${depositPayoutControl(p)}
-        </div>`).join('') : '<p style="opacity:0.6;">No deposit compensation payouts.</p>';
+        </div>`).join('') : '<p style="opacity:0.6;">No other payouts.</p>';
       const pens = data.penalties || [];
       document.getElementById('penaltiesList').innerHTML = pens.length ? pens.map(p => `
         <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;${p.overSixMonths ? ' border-left:3px solid #a3402f;' : ''}">
           ${p.payer === 'cohost' ? `Co-host <strong>${escAdmin(p.payerName)}</strong> (for host ${escAdmin(p.hostName || '')})` : `<strong>${escAdmin(p.hostName || 'Host #' + p.hostId)}</strong>`} owes <strong>${payInr(p.amount)}</strong>
-          · cancelled ${escAdmin(p.booking || '')} (booking #${Number(p.orderId) || '—'}) on ${payDate(p.createdAt)}
+          · ${p.kind === 'overpaid' ? 'overpaid: ' + escAdmin(p.booking || '') + ' (booking #' + (Number(p.orderId) || '—') + ') was reduced after its payout was sent, on ' + payDate(p.createdAt) + ' — deducted from their next payout automatically' : 'cancelled ' + escAdmin(p.booking || '') + ' (booking #' + (Number(p.orderId) || '—') + ') on ' + payDate(p.createdAt)}
           ${p.overSixMonths ? '<span style="color:#a3402f;"> · over 6 months — decide</span>' : ''}
           <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <button class="approve-btn" onclick="settlePenalty(${Number(p.id)}, 'recovered')">Recovered from payout</button>
@@ -2215,7 +2221,7 @@
   function payoutGate(o, paid){
     if(paid && (paid.status === 'sent' || paid.status === 'processing')) return '';
     if(o.onHold) return `<div style="color:#8a6c39; font-size:13.5px; margin:4px 0 10px;">On hold: a problem reported on this stay is open. Decide it in Guest Safety first.</div>`;
-    if(o.notDue) return `<div style="opacity:0.65; font-size:13.5px; margin:4px 0 10px;">Not due yet: payable from check-out day (${payDate(o.departure)}).</div>`;
+    if(o.notDue) return `<div style="opacity:0.65; font-size:13.5px; margin:4px 0 10px;">Not due yet: payable from the day after check-in (${payDate(new Date(new Date(String(o.arrival).slice(0,10) + 'T00:00:00Z').getTime() + 864e5).toISOString())}).</div>`;
     return '';
   }
   // Mark paid: record a payout sent by hand; the host / co-host is emailed
@@ -2266,13 +2272,13 @@
       <div id="pay-${key}" style="display:none; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
         <input id="payRef-${key}" placeholder="Bank reference (UTR)" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:200px; max-width:100%;">
         <label style="font-size:13px;">Arriving by <input id="payBy-${key}" type="date" value="${soon}" style="padding:7px; border:1px solid #ccc; border-radius:6px;"></label>
-        <button class="approve-btn" onclick="markDepositPayoutPaid(${Number(p.orderId)}, '${key}')">Confirm, notify host</button>
+        <button class="approve-btn" onclick="markDepositPayoutPaid(${Number(p.id)}, '${key}')">Confirm, notify ${p.payeeType === 'cohost' ? 'co-host' : 'host'}</button>
       </div></div>`;
   }
-  async function markDepositPayoutPaid(orderId, key){
+  async function markDepositPayoutPaid(payoutId, key){
     const reference = document.getElementById('payRef-' + key).value.trim();
     if(!reference){ alert('Enter the bank reference (UTR).'); return; }
-    const body = { markPayoutPaid: { orderId, payee: 'host', kind: 'deposit', reference, arrivingBy: document.getElementById('payBy-' + key).value } };
+    const body = { markPayoutPaid: { payoutId, reference, arrivingBy: document.getElementById('payBy-' + key).value } };
     const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
     if(!res.ok){ alert(data.error || 'Could not record this payout.'); return; }
@@ -3726,7 +3732,7 @@ function lkBookingHtml(d){
         ${lkKv('Booking price', lkInr(b.subtotal))}${Number(b.gst) ? lkKv('GST', lkInr(b.gst)) : ''}${Number(b.guest_service_fee) ? lkKv('Service fee', lkInr(b.guest_service_fee)) : ''}
         ${Number(b.deposit_amount) ? lkKv('Deposit', `${lkInr(b.deposit_amount)} <span class="lk-sub" style="display:inline;">${lkEsc(b.deposit_status || '')}</span>`) : ''}
         ${Number(b.coupon_discount) ? lkKv('Coupon', '−' + lkInr(b.coupon_discount)) : ''}
-        ${lkKv('Charged', lkInr(m.charged), 'is-total')}${lkKv('Refunded so far', lkInr(m.refunded))}${lkKv('Still refundable', `<strong>${lkInr(m.refundable)}</strong>`)}
+        ${lkKv('Charged through Razorpay', lkInr(m.charged), 'is-total')}${m.paidWithCredit ? lkKv('Paid with Aerva credit', `${lkInr(m.paidWithCredit)}${m.creditFrom ? ` · from ${lkEsc(m.creditFrom)}` : ''}`) : ''}${lkKv('Refunded so far', lkInr(m.refunded))}${lkKv('Still refundable', `<strong>${lkInr(m.refundable)}</strong>`)}
         ${lkKv('Host payout', lkInr(b.payout_amount))}${b.refund_percent != null ? lkKv('Refund %', lkEsc(b.refund_percent) + '%') : ''}</div>
       <div class="lk-card"><h4>Payment</h4>
         ${lkKv('Razorpay order', `<code>${lkEsc(b.razorpay_order_id || '—')}</code>`)}${lkKv('Payment ID', `<code>${lkEsc(b.razorpay_payment_id || '—')}</code>`)}
