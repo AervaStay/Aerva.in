@@ -1287,17 +1287,20 @@ module.exports = async (req, res) => {
   }
   // ---- Commission revisions (Admin → Commission settings, _rates.js) ----
   // GET ?rateNotices=1 → revisions waiting for this host's answer, and the
-  // commission in force now for each of the host's property types.
+  // host's commission now (one figure, not per property type).
   if (req.method === 'GET' && (req.query || {}).rateNotices === '1' && (req.query || {}).actingHost === undefined) {
     try {
       const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-      if (!g[0] || !g[0].host_id) return res.status(200).json({ notices: [], current: [] });
+      if (!g[0] || !g[0].host_id) return res.status(200).json({ notices: [], commission: '' });
       const R = require('./_rates');
       const types = (await sql`SELECT DISTINCT CASE WHEN listing_type = 'experience' THEN 'Experience' ELSE COALESCE(property_type, 'Other') END AS t
                                FROM listings WHERE host_id = ${g[0].host_id} AND status IN ('approved', 'pending', 'deactivated')`).map(x => R.PROPERTY_TYPES.includes(x.t) ? x.t : 'Other');
-      const current = [];
-      for (const t of [...new Set(types)]) current.push({ type: t, rate: await R.rateAt(sql, 'host', t) });
-      return res.status(200).json({ notices: await R.pendingNotices(sql, g[0].host_id), current });
+      const rates = [];
+      for (const t of [...new Set(types)]) rates.push(await R.rateAt(sql, 'host', t));
+      // One commission for the host, never a rate per property type.
+      const v = [...new Set(rates.map(Number))].sort((x, y) => x - y);
+      const commission = !v.length ? '' : v.length === 1 ? `${v[0]}%` : `${v[0]}–${v[v.length - 1]}%`;
+      return res.status(200).json({ notices: await R.pendingNotices(sql, g[0].host_id), commission });
     } catch (err) {
       return res.status(500).json({ error: 'Could not load commission notices right now.' });
     }

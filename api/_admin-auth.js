@@ -79,7 +79,8 @@ async function checkAdminSecret(sql, req, source) {
     countRecentAttempts(sql, { action: 'admin_secret_failed', windowMinutes: SECRET_WINDOW_MINUTES, onlyFailures: true })
   ]);
   if (fromIp >= SECRET_MAX_PER_IP || fromAll >= SECRET_MAX_TOTAL) return { ok: false, limited: true };
-  const ok = secretMatches(given, process.env.ADMIN_SECRET);
+  // Spaces or a line break copied around the value (in Vercel or when typed) do not count.
+  const ok = secretMatches(String(given).trim(), String(process.env.ADMIN_SECRET || '').trim());
   if (!ok) {
     await logAudit(sql, { action: 'admin_secret_failed', success: false, actorType: 'system', actorIdentifier: source,
       metadata: { ip, userAgent: requestContext(req).userAgent } });

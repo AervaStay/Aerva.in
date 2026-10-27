@@ -71,7 +71,7 @@ window.AERVA_POLICIES = {
           'When bank details change, payouts are paused for a short security period and you are notified. Aerva is not responsible for delays or losses caused by incorrect, incomplete or outdated details you provide.'
         ] },
         { title: '5. Commission and fees', points: [
-          'Aerva charges you a commission on each booking, at the rate for your property type shown in your dashboard. It is deducted from your payout. Aerva also charges guests a service fee, which is Aerva’s own and does not form part of your earnings.',
+          'Aerva charges you a commission on each booking, at the commission rate shown in your dashboard. It is deducted from your payout. Aerva also charges guests a service fee, which is Aerva’s own and does not form part of your earnings.',
           'Aerva may revise its commission. A revised commission takes effect no sooner than 33 days after Aerva’s formal notice to you by email (31 days’ notice, plus 2 days to allow for time zones), and applies to bookings made on or after the date given in the notice. Aerva may revise the guest service fee at any time. The rates in force when a booking is made apply to that booking.',
           'You acknowledge each commission revision in your dashboard before the date it takes effect. If you decline it, or have not acknowledged it by that date, this agreement ends, as set out in the Termination clause below.'
         ] },
@@ -391,7 +391,7 @@ window.AERVA_POLICIES = {
         'A guest service fee, a percentage of the booking price, is added to your total and shown before you pay.'
       ]},
       { title: 'Hosts', points: [
-        'Aerva’s commission is a percentage of the stay price, paid amenities and pet fees, at the rate for your property type shown in your dashboard. It is deducted from your payout.',
+        'Aerva’s commission is a percentage of the stay price, paid amenities and pet fees, at the commission rate shown in your dashboard. It is deducted from your payout.',
         'A revised commission is announced by email at least 33 days before it takes effect (31 days’ notice, plus 2 days for time zones), and applies to bookings made from the date given. Hosts acknowledge it in their dashboard.'
       ]},
       { title: 'General', points: [
