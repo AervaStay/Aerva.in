@@ -7,5 +7,5 @@ const AGREEMENT_VERSION = '2026-10-27a';          // booking agreement (guests)
 // The host agreement has its own version: it is accepted for EVERY listing
 // submitted for review (saved on the listing and on the host). Must match
 // AERVA_POLICIES.agreements.hostVersion in aerva-policies.js.
-const HOST_AGREEMENT_VERSION = '2026-10-27a';
+const HOST_AGREEMENT_VERSION = '2026-10-27b';
 module.exports = { AGREEMENT_VERSION, HOST_AGREEMENT_VERSION };
