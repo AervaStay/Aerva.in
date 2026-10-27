@@ -1196,14 +1196,21 @@ module.exports = async (req, res) => {
       const g = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
       if (!g[0] || !g[0].host_id) return res.status(200).json({ isHost: false, accepted: false, version: HOST_AGREEMENT_VERSION });
       let h = {};
-      try { h = (await sql`SELECT host_agreement_version, host_agreement_notice_version, host_agreement_notice_at, host_agreement_declined_at FROM hosts WHERE id = ${g[0].host_id}`)[0] || {}; }
+      try { h = (await sql`SELECT host_agreement_version, host_agreement_accepted_at, host_agreement_notice_version, host_agreement_notice_at, host_agreement_declined_at FROM hosts WHERE id = ${g[0].host_id}`)[0] || {}; }
       catch (err) {
         try { h = (await sql`SELECT host_agreement_version FROM hosts WHERE id = ${g[0].host_id}`)[0] || {}; } catch (e2) { h = {}; }
       }
       const { NOTICE_DAYS } = require('./_host-agreement');
       const noticed = h.host_agreement_notice_version === HOST_AGREEMENT_VERSION && h.host_agreement_notice_at;
       const listed = (await sql`SELECT count(*)::int AS n FROM listings WHERE host_id = ${g[0].host_id} AND status IN ('approved', 'pending', 'deactivated')`)[0].n > 0;
-      return res.status(200).json({ isHost: true, hasListings: listed, accepted: h.host_agreement_version === HOST_AGREEMENT_VERSION, version: HOST_AGREEMENT_VERSION,
+      // The agreement has ended (declined, a commission revision declined
+      // or not acknowledged, or a revision not accepted in time): listings
+      // are off until the host accepts the current agreement again.
+      let offForAgreement = 0;
+      try { offForAgreement = (await sql`SELECT count(*)::int AS n FROM listings WHERE host_id = ${g[0].host_id} AND status = 'deactivated' AND deactivated_by = 'agreement'`)[0].n; } catch (e) { offForAgreement = 0; }
+      const declinedLast = h.host_agreement_declined_at && (!h.host_agreement_accepted_at || new Date(h.host_agreement_declined_at) > new Date(h.host_agreement_accepted_at));
+      const ended = !!(offForAgreement > 0 || declinedLast);
+      return res.status(200).json({ isHost: true, hasListings: listed, accepted: h.host_agreement_version === HOST_AGREEMENT_VERSION && !ended, ended, listingsOff: offForAgreement, version: HOST_AGREEMENT_VERSION,
         noticeAt: noticed ? h.host_agreement_notice_at : null,
         respondBy: noticed ? new Date(new Date(h.host_agreement_notice_at).getTime() + NOTICE_DAYS * 86400e3).toISOString() : null,
         declinedAt: h.host_agreement_declined_at || null });
@@ -1276,6 +1283,13 @@ module.exports = async (req, res) => {
           restored.push(l.id);
         }
       }
+      // Accepting again after the agreement ended also accepts the commission
+      // in force or announced: a revision declined (or left unanswered) is
+      // acknowledged now, so it does not end the agreement again.
+      try {
+        await sql`UPDATE fee_rate_notices n SET acknowledged_at = now() FROM fee_rates r
+                  WHERE n.host_id = ${hostId} AND r.id = n.rate_id AND r.status = 'set' AND n.acknowledged_at IS NULL`;
+      } catch (e) { /* database update not applied yet */ }
       await logAudit(sql, { action: 'host_agreement_accepted', success: true, actorType: 'host', actorIdentifier: String(hostId),
         targetType: 'host', targetId: hostId, metadata: { version: HOST_AGREEMENT_VERSION, ip: ctx.ip, via: 'dashboard', listings: mine.map(l => l.id), restored, emailed: r.emailed } });
       return res.status(200).json({ success: true, version: HOST_AGREEMENT_VERSION, emailed: r.emailed, restored: restored.length,
@@ -3109,6 +3123,9 @@ module.exports = async (req, res) => {
           await sql`UPDATE listings SET status = 'deactivated', deactivated_by = 'host', deactivated_at = now() WHERE id = ${l.id}`;
         } else {
           if (l.status !== 'deactivated') return res.status(400).json({ error: 'This listing is not deactivated.' });
+          // Switched off because the agreement ended: it comes back only by
+          // accepting the current Host Agreement (which brings back all of them).
+          if (l.deactivated_by === 'agreement') return res.status(409).json({ error: 'Your agreement with Aerva has ended. Accept the current Host Agreement on your dashboard to make your listings live again.', needsAgreement: true });
           const h = (await sql`SELECT hosting_status FROM hosts WHERE id = ${g.host_id}`)[0] || {};
           if (h.hosting_status === 'deactivated') return res.status(400).json({ error: 'Reactivate your hosting first.' });
           // One name per pincode: another property may have taken this

@@ -723,7 +723,7 @@
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-10-13a"></script>
-<script src="aerva-policies.js?v=2026-10-27b"></script>
+<script src="aerva-policies.js?v=2026-10-27c"></script>
 </head>
 <body>
 
@@ -4586,13 +4586,19 @@
     box.id = 'hostAgreementBanner';
     box.className = 'notice-card';
     box.style.cssText = 'margin:0 0 28px; padding:18px 20px;';
-    box.innerHTML = '<strong style="font-size:16px;">' + esc(A.title) + ' — version ' + esc(VERSION) + '</strong>'
-      + '<p style="font-size:14px; line-height:1.6; margin:8px 0;">Aerva has revised the Host Agreement. Please read it and accept it to keep hosting'
-      + (d.respondBy ? ', <strong>by ' + esc(day(d.respondBy)) + '</strong>' : '') + '. If you decline, or do not accept it in time, your agreement with Aerva ends and your listings are deactivated; confirmed bookings go ahead and amounts due to you are paid.</p>'
+    // The agreement has ended (declined, or a revision not accepted): offered
+    // again on every visit until accepted; nothing else changes meanwhile.
+    const ended = !!d.ended;
+    box.innerHTML = '<strong style="font-size:16px;">' + (ended ? 'Your agreement with Aerva has ended' : esc(A.title) + ' — version ' + esc(VERSION)) + '</strong>'
+      + (ended
+        ? '<p style="font-size:14px; line-height:1.6; margin:8px 0;">' + (d.listingsOff ? d.listingsOff + ' listing' + (d.listingsOff === 1 ? ' is' : 's are') + ' switched off and cannot take bookings. ' : 'Your listings cannot take bookings. ')
+          + 'To host on Aerva again, read the current ' + esc(A.title) + ' (version ' + esc(VERSION) + ')' + (commissionNow ? ', with Aerva’s commission of <strong>' + esc(commissionNow) + '</strong>,' : '') + ' and accept it: your listings go live again straight away. Confirmed bookings go ahead and amounts due to you are paid either way.</p>'
+        : '<p style="font-size:14px; line-height:1.6; margin:8px 0;">Aerva has revised the Host Agreement. Please read it and accept it to keep hosting'
+          + (d.respondBy ? ', <strong>by ' + esc(day(d.respondBy)) + '</strong>' : '') + '. If you decline, or do not accept it in time, your agreement with Aerva ends and your listings are deactivated; confirmed bookings go ahead and amounts due to you are paid.</p>')
       + scrollBox(textHtml(A))
       + '<label style="display:flex; gap:10px; align-items:flex-start; font-size:14.5px; cursor:pointer;"><input type="checkbox" id="hostAgreeCheck" style="margin-top:3px; width:18px; height:18px;"> <span>' + esc(A.accept.replace(' for this listing', ' for all my listings')) + '</span></label>'
-      + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" id="hostAgreeBtn">Accept</button>'
-      + '<button type="button" class="ch-btn" id="hostDeclineBtn">Decline</button>'
+      + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" id="hostAgreeBtn">' + (ended ? 'Accept and go live again' : 'Accept') + '</button>'
+      + (ended ? '' : '<button type="button" class="ch-btn" id="hostDeclineBtn">Decline</button>')
       + '<a href="index.html?view=policies&doc=host-agreement" target="_blank" rel="noopener" style="font-size:13.5px;">Open in a new tab</a>'
       + '<span id="hostAgreeMsg" style="font-size:13.5px;"></span></div>';
     wrap.insertBefore(box, wrap.firstChild);
@@ -4608,7 +4614,7 @@
         + (j.keptOff && j.keptOff.length ? ' ' + esc(j.keptOff.join(', ')) + ' stayed paused because another property now uses that name nearby — write to hello@aerva.in and we will help.' : '') + '</p>';
       loadHistory();
     });
-    document.getElementById('hostDeclineBtn').addEventListener('click', async () => {
+    if(document.getElementById('hostDeclineBtn')) document.getElementById('hostDeclineBtn').addEventListener('click', async () => {
       if(!confirm('Decline the revised Host Agreement? Your agreement with Aerva ends and all your live listings are deactivated. Confirmed bookings go ahead and amounts due to you are paid. You can accept the agreement later to bring them back.')) return;
       const r = await fetch(API, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, H), body: JSON.stringify({ declineHostAgreement: { version: VERSION } }) });
       const j = await r.json().catch(() => ({}));
@@ -4633,8 +4639,8 @@
       box.innerHTML = '<strong style="font-size:16px;">Notice: revision of Aerva’s commission</strong>'
         + '<p style="font-size:15px; line-height:1.6; margin:8px 0;">Aerva’s commission: ' + (c.from ? 'from ' + esc(c.from) + ' ' : '') + 'to <strong>' + esc(c.to) + '</strong></p>'
         + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">The revised commission applies to bookings made on or after <strong>' + esc(day(n.effectiveFrom)) + '</strong> (12:00 AM, India time). Bookings made before then keep the commission in force when they were made. This notice was given 31 days in advance, with 2 more days to allow for time zones.</p>'
-        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Please acknowledge it before that date. If you decline it, or do not acknowledge it by then, your agreement with Aerva ends: your listings are deactivated, confirmed bookings go ahead and amounts due to you are paid.</p>'
-        + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" data-a="1">Acknowledge</button><button type="button" class="ch-btn" data-a="0">Decline</button><span class="rn-msg" style="font-size:13.5px;"></span></div>';
+        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Please acknowledge and confirm it before that date. If it is not confirmed by then, your agreement with Aerva ends: your listings are deactivated, confirmed bookings go ahead and amounts due to you are paid. You can accept the agreement again at any time to bring them back.</p>'
+        + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" data-a="1">Acknowledge and confirm</button><span class="rn-msg" style="font-size:13.5px;"></span></div>';
       wrap.insertBefore(box, wrap.firstChild);
       box.querySelectorAll('button[data-a]').forEach(btn => btn.addEventListener('click', async () => {
         const accept = btn.dataset.a === '1';
