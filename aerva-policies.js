@@ -7,8 +7,10 @@
 //
 // Wording rule: instructions only. Short, direct, no explanations.
 // Every rule here matches how the site actually works (checked against the
-// code, Sept 2026). "adminNotes" and "openItems" are shown ONLY in the
-// admin tool.
+// code, Sept 2026). Everything here is public (every visitor's browser
+// downloads this file): nothing that could be used to game Aerva goes here.
+// Internal rules and the to-do list live in api/_admin-notes.js, shown
+// only in the admin tool.
 window.AERVA_POLICIES = {
   version: '1.0',
   updated: '26 September 2026',
@@ -121,7 +123,7 @@ window.AERVA_POLICIES = {
         { title: '13. Cancellations', points: [
           'Each listing carries the cancellation policy you choose (Flexible or Firm). A booking keeps the policy it was paid under.',
           'You answer guests’ cancellation and change requests in Aerva Messages within 24 hours. An unanswered request is settled under Aerva’s Cancellation Policy.',
-          'You may cancel a booking before check-in, with a reason, no more than 3 times in any 12 months (a same-day booking you cancel within 1 hour of it being made does not count). Further cancellations are handled only by Aerva, on your request, once you confirm them in the support request Aerva raises for you. What the guest receives, and any coupon you owe, are set out in the Penalties clause.'
+          'You may cancel a booking before check-in, with a reason, no more than 3 times in any 12 months. Further cancellations are handled only by Aerva, on your request, once you confirm them in the support request Aerva raises for you. What the guest receives, and any coupon you owe, are set out in the Penalties clause.'
         ] },
         { title: '14. Refunds', points: [
           'Refunds to guests are made by Aerva under Aerva’s Cancellation Policy, Changing a Booking policy and Stay Issues and Refund Policy, and the amount you receive is adjusted accordingly.',
@@ -130,10 +132,9 @@ window.AERVA_POLICIES = {
         { title: '15. Penalties', points: [
           'If you cancel a confirmed booking more than 48 hours before check-in, no coupon is owed and the penalty is limited to the cancellation counting towards your yearly limit. Aerva may decide further penalties for repeated cancellations.',
           'If you cancel within 48 hours of check-in, you first pay for an Aerva coupon for the guest worth 10% of the booking (for an experience that includes a stay: of the stay, paid by the stay’s host; none when the experience’s host cancels it). What you pay for the coupon is not refunded to you.',
-          'No coupon is owed if you cancel a same-day booking (check-in on the day it was booked) within 1 hour of it being made, and it does not count towards your yearly limit of 3 cancellations.',
           'To avoid cancelling, keep your calendar up to date: block any dates when your home is not available — for maintenance, repairs, your own use or any other reason — before guests can book them.',
           'When Aerva cancels for you (after your 3 cancellations, or when you cannot cancel yourself), you first confirm it in the support request Aerva raises for you; nothing is cancelled until you do. If check-in is within 48 hours, Aerva gives the guest a coupon worth 10% of the booking on your behalf. Aerva pays for it, and the amount is deducted from your next payout.',
-          'Cancellations (other than a same-day booking cancelled within 1 hour of being made) count towards your yearly limit and may affect your standing on Aerva.',
+          'Cancellations count towards your yearly limit and may affect your standing on Aerva.',
           'For any breach of this agreement or Aerva’s Policies, Aerva may withhold or adjust payouts, pause or remove listings, cancel bookings, and suspend or close your account.'
         ] },
         { title: '16. Security deposits and damage', points: [
@@ -480,7 +481,7 @@ window.AERVA_POLICIES = {
         'Hosts may cancel before check-in time, and must give a reason. The guest is told the reason.',
         'A host may cancel at most 3 bookings in any 12 months. Further cancellations are handled only by Aerva, on the host’s request and once the host confirms it in a support request: everything the guest paid is held for them as Aerva credit (refundable at any time; any deposit is refunded), and, if check-in is within 48 hours, gets a coupon worth 10% of the booking that Aerva pays for on the host’s behalf and deducts from the host’s next payout.',
         'Whenever the host cancels, everything the guest paid — the booking price, its GST and Aerva’s service fee — is held for them as Aerva credit, which does not expire. They can use it on another stay or experience, or have it refunded in full to the original payment method at any time from My Bookings, and are reminded every 15 days while it is unused. The security deposit is refunded at once.',
-        'Within 48 hours of check-in, the guest also receives an Aerva coupon worth 10% of the booking, valid for 1 month, sent automatically 15 minutes after the cancellation. The host pays for it before the booking is cancelled, and what the host pays is not refunded to them. More than 48 hours before check-in, Aerva may decide further penalties for a host’s repeated cancellations. No coupon is given when the host cancels more than 48 hours before check-in, or cancels a same-day booking within 1 hour of it being made (which also does not count towards the host’s 3 cancellations a year). The coupon is not refundable; the guest can use it together with Aerva credit.',
+        'Within 48 hours of check-in, the guest also receives an Aerva coupon worth 10% of the booking, valid for 1 month, sent automatically 15 minutes after the cancellation. The host pays for it before the booking is cancelled, and what the host pays is not refunded to them. More than 48 hours before check-in, Aerva may decide further penalties for a host’s repeated cancellations. No coupon is given when the host cancels more than 48 hours before check-in. The coupon is not refundable; the guest can use it together with Aerva credit.',
         'What a guest is not refunded after cancelling is paid to the host, less Aerva’s commission, on the usual payout day.'
       ]},
       { title: 'Co-hosts', points: [
@@ -658,8 +659,8 @@ window.AERVA_POLICIES = {
   //
   // Wording rule: tell people what to do and what to expect, never how
   // Aerva weighs or decides (no internal rules, weights or thresholds).
-  // The decision rules for the support team live in adminNotes, which only
-  // the admin tool shows.
+  // The decision rules for the support team live in api/_admin-notes.js,
+  // which only the admin tool shows.
   support: {
     // Contact options. A blank value hides that option on the page, so
     // nothing dead is ever shown. Fill these in when the numbers are live:
@@ -913,7 +914,7 @@ window.AERVA_POLICIES = {
           { title: 'Rules', points: [
             'Cancel before check-in, and give a reason. The guest is told the reason.',
             'At most 3 cancellations in any 12 months. Beyond that, write to us: Aerva raises a support request for you to confirm the cancellation; once you confirm, Aerva cancels it and, within 48 hours of check-in, Aerva issues the 10% coupon for you and deducts it from your next payout.',
-            'Cancelling within 48 hours of check-in: you pay for the guest’s coupon (10% of the booking) before the booking is cancelled. It is not refundable. More than 48 hours before check-in, or a same-day booking cancelled within 1 hour of being made, no coupon is needed (and a same-day booking cancelled within that hour does not count towards your 3).',
+            'Cancelling within 48 hours of check-in: you pay for the guest’s coupon (10% of the booking) before the booking is cancelled. It is not refundable. More than 48 hours before check-in, no coupon is needed.',
             'Block dates for maintenance, repairs or anything else that stops you hosting, so guests cannot book them and you never need to cancel.',
             'More than 48 hours before check-in, no coupon is owed; Aerva may decide further penalties for repeated cancellations.'
           ]},
@@ -1128,51 +1129,5 @@ window.AERVA_POLICIES = {
       { country: 'Australia', points: ['Rules vary by state. New South Wales: register, and follow the 180-night cap for unhosted stays in Greater Sydney.'] },
       { country: 'Maldives, Bhutan, Bangladesh, New Zealand', points: ['Register with the national or local tourism authority before hosting.'] }
     ]
-  },
-
-  // ---- Admin only ----------------------------------------------------
-  adminNotes: [
-    { title: 'Laws Aerva itself follows (India)', points: [
-      'Consumer Protection (E-Commerce) Rules, 2020: display the Grievance Officer’s name, designation and contact; acknowledge complaints within 48 hours; resolve within one month; give a complaint reference number.',
-      'Consumer Protection (E-Commerce) Rules, 2020: do not charge consumers cancellation fees unless Aerva bears similar charges when it cancels.',
-      'Digital Personal Data Protection Act, 2023 and Rules, 2025: tell affected users without delay after a breach; send the Data Protection Board a detailed report within 72 hours; publish a contact for data requests; keep processing logs at least 1 year; give 48 hours’ notice before erasing inactive users’ data.',
-      'Income-tax Act, section 194-O (s.393 of the 2025 Act): deduct TDS on every payment to hosts and co-hosts, deposit compensation included, on the amount due after commission (CA’s advice, Oct 2026); 5% without a PAN or with an inoperative one; issue certificates.',
-      'CGST Act, section 9(5): Aerva collects and pays GST on accommodation booked through it.',
-      'Immigration and Foreigners Act, 2025: hosts file Form III for foreign guests within 24 hours; ₹50,000 penalty per case.'
-    ]},
-    { title: 'How Aerva stores sensitive data', points: [
-      'ID verification (guests, hosts and co-hosts): the ID is read in memory by an automated check and never stored, uploaded or logged. Only the result is kept: type of ID, name as on it, last 4 characters, date. Full ID numbers are never kept.',
-      'Aadhaar documents uploaded for a manual check before October 2026: deleted on approve or reject, or as soon as the host verifies instantly; only the status is kept.',
-      'Guest ID proofs uploaded before September 2026: erased from ID Verifications, or when the account is deleted.',
-      'PAN: card image deleted on review; number kept encrypted (AES-256-GCM, key in Vercel).',
-      'Bank account and co-host GSTIN: kept encrypted.',
-      'Audit log: every admin, host, co-host and system action is recorded and never deleted.'
-    ]},
-    { title: 'How admins apply these policies', points: [
-      'Deposit disputes: the host asks for an amount (up to the deposit) with photos or videos; review the proof and the guest’s side, then approve the amount in the dispute tab (prefilled with the host’s request). With no proof, refund the deposit in full.',
-      'Stay disputes (Guest Safety tab): give the host’s account more weight; refund only when the guest’s evidence stands and the host cannot justify.',
-      'Listing photos with phone numbers or other contact details: use “Block: phone number in photo” on the listing.',
-      'Hazard reports: rebook or refund the guest when the property is unsafe; review the listing.',
-      'Reviews: remove only when false, abusive or retaliatory; the badge recalculates.',
-      'Compliance flags: hosts have 15 days; listings are blocked automatically after that.',
-      'Every admin action is in the Audit Log tab, with the admin who did it.'
-    ]}
-  ],
-
-  // Gaps between these policies and the product, for the admin to close.
-  openItems: [
-    'Have the lawyer review the Aerva Host Agreement 2026-10-28a (every host cancellation: all as Aerva credit that never expires (refundable any time); coupon not refundable; coupon from the host only within 48 hours of check-in; Aerva cancels for the host with the coupon from the next payout; commission revisions announced in advance with no fixed number of days, confirm or decline; offered again after it ends; commission revisions acknowledged and confirmed; payout the day after check-in; first night only while a guest’s request is open; amounts recovered from the next payout) and its earlier terms (29 clauses): accepted per listing; commission revisions on at least 33 days’ notice (31 + 2), acknowledged by each host, the agreement ending if declined or not acknowledged by the date; ending the agreement if a revision is declined or not accepted within 30 days; the non-disparagement clause; indemnity and liability limits.',
-    'Add the Grievance Officer’s name to support.grievanceOfficer in this file (required by the E-Commerce Rules); it then shows in the Resolution Center.',
-    'Resolution Center: fill in support.contacts.tollFree, whatsapp and hours in this file when the numbers are live. Until then those buttons stay hidden.',
-    'Display Aerva’s legal entity name and registered office address on the site (required by the E-Commerce Rules).',
-    'Have the lawyer review booking agreement 2026-10-28a — a host’s cancellation held as Aerva credit (refundable any time), plus a 10% coupon within 48 hours; coupon value returned only when the host cancels or a reported problem is upheld; the deposit decided by the host with photo or video proof, refunded within 2 bank working days when the host confirms no damage; contact details until 15 days after check-out, aerva.in links always allowed; credit and coupons earn no interest; no cancellation once a stay has started; changes and problem reports only until 10 AM on the day after check-in; the check-in night never refunded; a shorter stay agreed by the host returned as Aerva credit (never expires, refundable whenever the guest asks); nothing refunded after that time — and its earlier terms: ID checked by the host at check-in (not by Aerva), the 3-minute payment window and next-day refunds, stay disputes weighted to the host, and immediate blocking for contact details in photos.',
-    'Erase the guest ID proofs uploaded before September 2026: Admin → ID Verifications → “Erase reviewed documents & encrypt stored numbers”.',
-    'Confirm with the CA how GST is treated on the part of a booking price kept after a guest cancels.',
-    'TDS rules follow the CA’s review of October 2026 (no ₹5 lakh exemption, base after commission, deposits included). Hosts or co-hosts outside India are not handled; flag any non-resident payee to the CA (s.195).',
-    'Remind hosts to file Form III when a foreign guest books (not built).',
-    'Aadhaar and PAN files waiting for review sit in public storage until reviewed. Review them promptly.',
-    'Privacy policy is published (Aerva Privacy). Add a consent tick to sign-up that links to it (DPDP Rules).',
-    'Update the Google consent screen’s privacy policy link to https://aerva.in/index.html?view=privacy, and its Terms of Service link to https://aerva.in/index.html?view=terms.',
-    'Have a lawyer review the three Terms of Service versions (India, European users, everyone else), especially liability and indemnity.'
-  ]
+  }
 };
