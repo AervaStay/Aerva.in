@@ -1081,6 +1081,19 @@ module.exports = async (req, res) => {
       // POST { mode: 'supportCreate', category, subject, description, orderId?, listingId?, attachments?, callback? }
       // POST { mode: 'supportReply', ref, text, attachments? }
       // POST { mode: 'supportClose', ref }
+      // POST { mode: 'hostCancelAnswer', ref, accept } — the host confirms (or declines)
+      // Aerva cancelling a booking for them (_host-cancel-confirm.js).
+      if (mode === 'hostCancelAnswer') {
+        if (actingCtx) return res.status(403).json({ error: 'Only the host can confirm this, from their own account.' });
+        try {
+          const b = req.body || {};
+          const r = await require('./_host-cancel-confirm').answer(sql, razorpayClient(), { guestId, ref: b.ref, accept: b.accept === true });
+          return res.status(200).json({ ...r, request: await support.getRequest(sql, guestId, b.ref) });
+        } catch (err) {
+          if (!err.isUserFacing) console.error('hostCancelAnswer failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again.' });
+        }
+      }
       if (mode === 'supportCreate' || mode === 'supportReply' || mode === 'supportClose' || mode === 'supportFeedback') {
         if (actingCtx) return res.status(403).json({ error: 'Requests are raised from your own account.' });
         try {

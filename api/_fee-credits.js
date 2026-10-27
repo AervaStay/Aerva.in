@@ -227,7 +227,7 @@ async function creditForWholeBooking(sql, orderIds, reason) {
     catch (err) { if (err && err.code === '42703') c = (await ins(false))[0]; else { console.error('credit not made (needs follow-up):', r.id, err.message); continue; } }
     if (!c) continue;
     await entry(sql, c.id, 'issued', money, { orderId: r.id, reference: r.razorpay_payment_id,
-      note: reason === 'experience_cancelled' ? 'Experience (with its stay) cancelled by its host: all of it' : 'Host cancelled within 48 hours: all of it' });
+      note: reason === 'experience_cancelled' ? 'Experience (with its stay) cancelled by its host: all of it' : 'Host cancelled: all of it' });
     out.total += money; out.expiresAt = c.expires_at; guestEmail = r.guest_email; suite = suite || r.suite_name;
   }
   if (out.total > 0 && guestEmail) {

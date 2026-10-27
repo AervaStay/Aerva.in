@@ -611,6 +611,22 @@
           + '<div class="hc-actions"><button type="button" class="btn solid" id="hcCloseConfirm">Close with this rating</button><button type="button" class="btn" id="hcCloseCancel">Keep it open</button></div>'
           + '<p class="hc-error" id="hcCloseErr" role="alert" hidden></p></div>' : '')
       : '';
+    // Aerva cancelling a booking for this host: they confirm (or decline) here.
+    var hcx = r.hostCancel, rupees = function(n){ return '\u20B9' + Math.round(Number(n) || 0).toLocaleString('en-IN'); };
+    var hostCancelCard = !hcx ? '' : hcx.status === 'pending'
+      ? '<div class="hc-feedback" id="hcHostCancel"><h2>Confirm the cancellation of ' + esc(hcx.booking || ('booking #' + hcx.orderId)) + '</h2>'
+        + '<ul class="hc-muted" style="text-align:left; line-height:1.6;">'
+        + '<li>Everything the guest paid — <strong>' + esc(rupees(hcx.refund)) + '</strong> (the booking, GST and Aerva\u2019s service fee) — is held for them as Aerva credit, which they can use or have refunded at any time. Any deposit is refunded to them.</li>'
+        + '<li>It counts as one of your cancellations.</li>'
+        + (hcx.couponAmount > 0
+          ? '<li>Check-in is within 48 hours, so the guest also gets an Aerva coupon of <strong>' + esc(rupees(hcx.couponAmount)) + '</strong>. Aerva pays it for you, and <strong>it is deducted from your next payout</strong>.</li>'
+          : '<li>No coupon is needed: check-in is more than 48 hours away.</li>')
+        + '</ul><p class="hc-muted">Nothing is cancelled until you confirm. This cannot be undone.</p>'
+        + '<div class="hc-actions"><button type="button" class="btn solid" id="hcHostCancelYes">Confirm the cancellation</button><button type="button" class="btn" id="hcHostCancelNo">Do not cancel</button></div>'
+        + '<p class="hc-error" id="hcHostCancelErr" role="alert" hidden></p></div>'
+      : '<p class="hc-status-note">' + esc(hcx.status === 'confirmed'
+          ? 'You confirmed the cancellation. Everything the guest paid is held for them as Aerva credit.' + (hcx.couponAmount > 0 ? ' The guest\u2019s ' + rupees(hcx.couponAmount) + ' coupon is ' + (hcx.couponIssued ? 'issued' : 'being issued') + ' by Aerva and deducted from your next payout.' : '')
+          : hcx.status === 'declined' ? 'You chose not to cancel. The booking stays as it is.' : 'This cancellation was not completed. Aerva support will follow up.') + '</p>';
     var html = head
       + '<div class="hc-req-head"><div><div class="privacy-eyebrow">' + esc(r.ref) + ' · ' + esc(r.categoryLabel) + '</div>'
       + '<h1 class="policies-title hc-req-title">' + esc(r.subject) + '</h1>'
@@ -618,6 +634,7 @@
       + (r.callbackPhone ? ' · We will call you on ' + esc(r.callbackPhone) : '') + '</p></div>'
       + statusChip(r.status, r.statusLabel) + '</div>'
       + (statusNote ? '<p class="hc-status-note hc-status-note-' + esc(r.status) + '">' + esc(statusNote) + '</p>' : '')
+      + hostCancelCard
       + feedbackDone
       + feedbackCard
       + '<h2 class="hc-timeline-title">Timeline</h2><ol class="hc-thread">' + thread + '</ol>'
@@ -625,6 +642,16 @@
       + (!r.canReply ? '<div class="hc-actions">' + hlink('new=1', 'Raise a new request', 'btn solid') + '</div>' : '');
     root.innerHTML = frame('mine', html);
     wireLinks(root);
+    [['hcHostCancelYes', true], ['hcHostCancelNo', false]].forEach(function(p){
+      var b = document.getElementById(p[0]); if(!b) return;
+      b.addEventListener('click', async function(){
+        var err = document.getElementById('hcHostCancelErr'); err.hidden = true;
+        if(p[1] && !confirm('Cancel this booking now? Everything the guest paid is held for them as Aerva credit.' + (hcx.couponAmount > 0 ? ' ' + rupees(hcx.couponAmount) + ' is deducted from your next payout for their coupon.' : ''))) return;
+        b.disabled = true;
+        try{ drawRequest((await api('POST', '', { mode: 'hostCancelAnswer', ref: r.ref, accept: p[1] })).request); }
+        catch(e){ err.textContent = e.message; err.hidden = false; b.disabled = false; }
+      });
+    });
     if(!r.canReply) return;
 
     var picked = wireFilePicker('hcReplyFiles');

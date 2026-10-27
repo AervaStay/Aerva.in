@@ -2659,13 +2659,11 @@ module.exports = async (req, res) => {
     return Math.max(1, Math.round(base * 0.10));
   }
   // The terms of a host cancellation:
-  //   • more than 48 hours before check-in: the guest is refunded (price,
-  //     GST, deposit), Aerva's service fee is held as Aerva credit, and the
-  //     host pays a 10% coupon first;
-  //   • within 48 hours: the host still pays the 10% coupon first, and
-  //     EVERYTHING the guest paid (price, GST and the fee) is held as Aerva
-  //     credit — refundable by the guest at any time, refunded automatically
-  //     at the end of the credit period; the deposit is refunded;
+  //   • always: EVERYTHING the guest paid (price, GST and the fee) is held as
+  //     Aerva credit — refundable by the guest at any time, refunded
+  //     automatically at the end of the credit period; the deposit is refunded;
+  //   • within 48 hours of check-in: the host also pays a 10% coupon first
+  //     (not for a same-day booking cancelled within 1 hour of being made);
   //   • an experience that includes a stay, cancelled by the experience's
   //     host: everything as credit, no coupon; cancelled by the stay's host:
   //     the coupon is on the stay's amount only.
@@ -2676,7 +2674,16 @@ module.exports = async (req, res) => {
     const pairExperience = sibs.length > 0 && (order.order_type || 'stay') === 'experience';
     const late = Number.isFinite(order.hoursToCheckIn) ? order.hoursToCheckIn < CANCELLATION_CUTOFF_HOURS : false;
     const inr = String(order.charge_currency || 'INR') === 'INR';
-    return { late, pairExperience, couponNeeded: !pairExperience, asCredit: inr && (late || pairExperience) };
+    // Any host cancellation: everything the guest paid (price, GST, Aerva's
+    // fee) is first held for them as Aerva credit — refundable at any time —
+    // and the deposit is refunded (bookings charged in another currency are
+    // refunded instead).
+    // The host pays for a coupon for the guest only when cancelling within
+    // 48 hours of check-in (never for the experience half of a pair) — and
+    // not for a same-day booking cancelled within 1 hour of being made.
+    const { sameDayGrace } = require('./_booking-rules');
+    const grace = sameDayGrace(order.arrival_day || order.arrival, order.booked_at, order.timezone);
+    return { late, pairExperience, sameDayGrace: grace, couponNeeded: late && !pairExperience && !grace, asCredit: inr };
   }
   // The other half of an "Includes a Stay" purchase: the experience and
   // the nights at the home that hosts it, bought as one thing (same
@@ -2757,7 +2764,7 @@ module.exports = async (req, res) => {
     const rows = await sql`
       SELECT o.id, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_id, o.status, COALESCE(o.order_type, 'stay') AS order_type,
              o.total, o.deposit_status, o.deposit_amount, o.charge_currency, o.razorpay_payment_id, o.razorpay_order_id, o.guest_service_fee,
-             l.timezone, l.check_in_time,
+             l.timezone, l.check_in_time, o.created_at AS booked_at, o.arrival::text AS arrival_day,
              (o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS stay_ended
       FROM orders o
       JOIN listings l ON o.listing_id = l.id
@@ -2913,8 +2920,11 @@ module.exports = async (req, res) => {
     if (!flipped.length) return false;
     const cancelledIds = [Number(orderId)];
 
+    // A same-day booking cancelled within 1 hour of being made does not
+    // count towards the 3-a-year limit: logged under its own name.
     await logAudit(sql, {
-      action: auditAction, success: true, actorType: 'host', actorIdentifier: String(hostId),
+      action: terms.sameDayGrace && auditAction === 'booking_cancelled_by_host' ? 'booking_cancelled_by_host_grace' : auditAction,
+      success: true, actorType: 'host', actorIdentifier: String(hostId),
       targetType: 'order', targetId: orderId
     });
 
@@ -3005,9 +3015,9 @@ module.exports = async (req, res) => {
       const couponAmount = held ? Number(held.amount) : await cancellationCouponAmount(loaded.order, orderId);
       const terms = await cancelTerms(loaded.order, orderId);
       return res.status(200).json({
-        late: terms.late, asCredit: terms.asCredit, couponNeeded: terms.couponNeeded, pairExperience: terms.pairExperience,
-        canCancel: used < HOST_CANCELLATIONS_PER_YEAR,
-        message: used >= HOST_CANCELLATIONS_PER_YEAR ? HOST_LIMIT_MESSAGE : null,
+        late: terms.late, asCredit: terms.asCredit, couponNeeded: terms.couponNeeded, pairExperience: terms.pairExperience, sameDayGrace: terms.sameDayGrace,
+        canCancel: used < HOST_CANCELLATIONS_PER_YEAR || terms.sameDayGrace,
+        message: used >= HOST_CANCELLATIONS_PER_YEAR && !terms.sameDayGrace ? HOST_LIMIT_MESSAGE : null,
         cancellationsUsed: used, cancellationsLimit: HOST_CANCELLATIONS_PER_YEAR,
         couponAmount, couponPaid: !!held, canDeductFromPayout: false, // the host always pays the coupon before cancelling
         couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES,
@@ -3043,7 +3053,8 @@ module.exports = async (req, res) => {
       let reply;
       try {
       reply = await (async () => {
-      if (await hostLimitReached(loaded.guest.host_id)) return [403, { error: HOST_LIMIT_MESSAGE, limitReached: true }];
+      const earlyTerms = await cancelTerms(loaded.order, orderId);
+      if (!earlyTerms.sameDayGrace && await hostLimitReached(loaded.guest.host_id)) return [403, { error: HOST_LIMIT_MESSAGE, limitReached: true }];
 
       // The guest's 10% coupon is paid for by the host, one of two ways:
       //  1. up front: buyCouponOrder → verifyCouponPayment (coupon held), or
@@ -3105,7 +3116,7 @@ module.exports = async (req, res) => {
   // then cancels) is replaced: every host cancellation now refunds in full
   // AND gives the guest a 10% coupon, charged to the host's next payout.
   if (req.method === 'POST' && req.body && req.body.cancelWithCoupon) {
-    return res.status(410).json({ error: 'Use Cancel Booking. The guest is refunded (Aerva’s service fee is held for them as a credit) and gets a 10% Aerva coupon.' });
+    return res.status(410).json({ error: 'Use Cancel Booking. Everything the guest paid is held for them as Aerva credit (within 48 hours of check-in they also get a 10% Aerva coupon).' });
   }
 
   // GET ?myPenalties=1 — cancellation coupons to be deducted from this
