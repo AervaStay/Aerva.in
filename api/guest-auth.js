@@ -564,8 +564,11 @@ module.exports = async (req, res) => {
         console.error('notifications failed (non-fatal):', err);
       }
 
+      // Aerva credit and coupons, for the reminder shown after signing in.
+      let wallet = { credit: 0, coupons: [] };
+      try { wallet = await require('./_fee-credits').wallet(sql, guest.id); } catch (err) { /* non-fatal */ }
       return res.status(200).json({ guest: { ...safeGuest(guest), profile_photo_url: guest.profile_photo_url || null,
-        hasActiveListing, isCohost, tier, pendingReviews, notifications } });
+        hasActiveListing, isCohost, tier, pendingReviews, notifications, wallet } });
     } catch (err) {
       console.error('guest-auth (GET) error:', err);
       return res.status(500).json({ error: 'Could not verify your session.' });

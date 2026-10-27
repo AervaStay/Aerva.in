@@ -6419,6 +6419,40 @@
   // Fed by the session check, which already knows what is outstanding.
   // Read state is per browser, keyed by item, so the count reflects what
   // this person has actually looked at.
+  // ---- Credit and coupons: a small reminder once after each sign-in ----
+  // Shown when the guest has Aerva credit or a coupon, once per sign-in
+  // (remembered against this session), with the days left on each coupon.
+  function showWalletReminder(w, token){
+    try{
+      if(!w || (!(w.credit > 0) && !(w.coupons || []).length)) return;
+      if(document.getElementById('walletReminder')) return;
+      const key = 'aerva_wallet_seen';
+      const mark = String(token || '').slice(-24);
+      if(safeStorage.get(key) === mark) return;
+      safeStorage.set(key, mark);
+      const inr = (n) => '\u20B9' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+      const when = (d) => d <= 0 ? 'today' : d === 1 ? 'tomorrow' : `in ${d} days`;
+      const lines = [];
+      if(w.credit > 0) lines.push(`<p style="margin:0 0 8px;"><strong>${inr(w.credit)} of Aerva credit</strong> is waiting — your next stay is partly paid for. It comes off automatically at checkout.</p>`);
+      (w.coupons || []).slice(0, 3).forEach(c => lines.push(`<p style="margin:0 0 8px;">Your <strong>${inr(c.amount)} coupon</strong> <code style="background:#f4eadc; padding:1px 6px; border-radius:5px; font-size:13px;">${escapeMessageHtml(c.code)}</code> expires <strong>${when(Number(c.daysLeft))}</strong>${Number(c.daysLeft) > 1 ? ` (${escapeMessageHtml(new Date(c.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long' }))})` : ''}.</p>`));
+      const box = document.createElement('div');
+      box.id = 'walletReminder';
+      box.setAttribute('role', 'dialog');
+      box.setAttribute('aria-label', 'Your Aerva credit and coupons');
+      box.style.cssText = 'position:fixed; right:16px; bottom:16px; left:auto; z-index:9000; max-width:360px; width:calc(100% - 32px); background:#fdfbf7; color:#1c1a17; border:1px solid #d9cfc2; border-radius:14px; box-shadow:0 12px 40px rgba(28,26,23,0.18); padding:18px 18px 14px; font-size:14.5px; line-height:1.5;';
+      box.innerHTML = `<button type="button" aria-label="Close" data-wr-close style="position:absolute; top:6px; right:8px; background:none; border:none; font-size:22px; line-height:1; color:#6e675d; cursor:pointer; padding:6px;">&times;</button>
+        <div style="font-size:11.5px; letter-spacing:0.14em; text-transform:uppercase; color:#8a6c39; margin:0 0 6px;">Good news</div>
+        <div style="font-family:Georgia,serif; font-size:19px; margin:0 0 10px; padding-right:20px;">${w.credit > 0 ? 'Your next getaway is on its way' : 'A coupon is waiting for you'}</div>
+        ${lines.join('')}
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+          <a href="index.html" data-wr-close style="background:#1c1a17; color:#f4eadc; padding:10px 16px; border-radius:8px; text-decoration:none; font-size:14px;">Find a stay</a>
+          <a href="index.html?view=my-bookings" style="padding:10px 4px; color:#8a6c39; text-decoration:underline; font-size:14px;">See it in My Bookings</a>
+        </div>`;
+      document.body.appendChild(box);
+      box.querySelectorAll('[data-wr-close]').forEach(el => el.addEventListener('click', () => box.remove()));
+    }catch(e){ /* a reminder never blocks the page */ }
+  }
+
   const NAV_NOTIF_READ_KEY = 'aerva_notifications_read';
   function navNotifRead(){
     try{ return JSON.parse(safeStorage.get(NAV_NOTIF_READ_KEY) || '[]'); }catch(e){ return []; }
@@ -14048,6 +14082,7 @@
           renderNavTierBadge(data.guest.tier);
           showReviewReminder(Number(data.guest.pendingReviews) || 0);
           renderNavNotifications(data.guest.notifications || []);
+          showWalletReminder(data.guest.wallet, token);
           const greeting = 'Hi, ' + (data.guest.name || data.guest.email || data.guest.phone || 'there');
           if(data.guest.name) safeStorage.set('aerva_guest_name', data.guest.name);
           guestNameDisplay.textContent = greeting;
