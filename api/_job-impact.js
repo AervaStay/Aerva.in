@@ -124,6 +124,32 @@ const IMPACT = {
     return rows.map(r => ({ ...guestOf(r), what: `Deposit ${inr(Number(r.amount) / 100)} ${r.status === 'failed' ? 'refund FAILED — retry in Refunds' : 'refunded'}: ${r.suite_name}` }));
   }),
 
+  // Guests emailed about unused Aerva credit (quarterly reminder).
+  credit_reminders: (sql, since) => safe(async () => {
+    const rows = await sql`
+      SELECT g.name AS guest_name, g.email AS guest_email, sum(f.remaining)::int AS balance
+      FROM fee_credits f JOIN guests g ON g.id = f.guest_id
+      WHERE f.last_email_at >= ${since} GROUP BY g.id, g.name, g.email`;
+    return rows.map(r => ({ ...guestOf(r), what: `Emailed a reminder of ${inr(r.balance)} unused Aerva credit` }));
+  }),
+
+  // Guests emailed that their Aerva credit ends within 7 days.
+  credit_ending_reminders: (sql, since) => safe(async () => {
+    const rows = await sql`
+      SELECT g.name AS guest_name, g.email AS guest_email, sum(f.remaining)::int AS balance, min(f.expires_at) AS ends
+      FROM fee_credits f JOIN guests g ON g.id = f.guest_id
+      WHERE f.ending_reminded_at >= ${since} GROUP BY g.id, g.name, g.email`;
+    return rows.map(r => ({ ...guestOf(r), what: `Emailed that ${inr(r.balance)} Aerva credit ends on ${new Date(r.ends).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'long', year: 'numeric' })}` }));
+  }),
+  // Aerva credit refunded because it ended.
+  fee_credit_refunds: (sql, since) => safe(async () => {
+    const rows = await sql`
+      SELECT g.name AS guest_name, COALESCE(g.email, f.guest_email) AS guest_email, f.refunded_amount
+      FROM fee_credits f LEFT JOIN guests g ON g.id = f.guest_id
+      WHERE f.refunded_at >= ${since} AND f.refund_reason = 'expired'`;
+    return rows.map(r => ({ ...guestOf(r), what: `Aerva credit ended: ${inr(r.refunded_amount)} refunded to the original payment` }));
+  }),
+
   // Reviews published.
   review_publish: (sql, since) => IMPACT._reviews(sql, since),
   _reviews: (sql, since) => safe(async () => {

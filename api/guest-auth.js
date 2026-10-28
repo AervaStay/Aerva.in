@@ -565,8 +565,17 @@ module.exports = async (req, res) => {
       }
 
       // Aerva credit and coupons, for the reminder shown after signing in.
-      let wallet = { credit: 0, coupons: [] };
-      try { wallet = await require('./_fee-credits').wallet(sql, guest.id); } catch (err) { /* non-fatal */ }
+      // The browser sends signin=1 the first time it sees this session; the
+      // credit part shows (pop-up only, no email) only when remindOnSignIn
+      // allows it: 3 sign-ins in the first 3 months, then 1 per 3 months.
+      let wallet = { credit: 0, coupons: [], remindCredit: false };
+      try {
+        wallet = await require('./_fee-credits').wallet(sql, guest.id);
+        wallet.remindCredit = false;
+        if (wallet.credit > 0 && String((req.query || {}).signin || '') === '1') {
+          wallet.remindCredit = await require('./_fee-credits').remindOnSignIn(sql, guest.id);
+        }
+      } catch (err) { /* non-fatal */ }
       return res.status(200).json({ guest: { ...safeGuest(guest), profile_photo_url: guest.profile_photo_url || null,
         hasActiveListing, isCohost, tier, pendingReviews, notifications, wallet } });
     } catch (err) {

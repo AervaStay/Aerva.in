@@ -6431,21 +6431,27 @@
   // Fed by the session check, which already knows what is outstanding.
   // Read state is per browser, keyed by item, so the count reflects what
   // this person has actually looked at.
-  // ---- Credit and coupons: a small reminder once after each sign-in ----
-  // Shown when the guest has Aerva credit or a coupon, once per sign-in
-  // (remembered against this session), with the days left on each coupon.
+  // ---- Credit and coupons: a small reminder after a sign-in ----
+  // Coupons: once per sign-in, with the days left on each. Credit: only
+  // when the server says this sign-in is one of the reminders it allows
+  // (w.remindCredit; 3 in the first 3 months, then 1 per 3 months).
+  // "A sign-in" = the first session check this browser makes with a token.
+  function isNewSignIn(token){
+    return safeStorage.get('aerva_wallet_seen') !== String(token || '').slice(-24);
+  }
   function showWalletReminder(w, token){
     try{
-      if(!w || (!(w.credit > 0) && !(w.coupons || []).length)) return;
-      if(document.getElementById('walletReminder')) return;
-      const key = 'aerva_wallet_seen';
       const mark = String(token || '').slice(-24);
-      if(safeStorage.get(key) === mark) return;
-      safeStorage.set(key, mark);
+      const fresh = safeStorage.get('aerva_wallet_seen') !== mark;
+      safeStorage.set('aerva_wallet_seen', mark);
+      if(!fresh || !w) return;
+      w = Object.assign({}, w, { credit: w.remindCredit ? w.credit : 0 });
+      if(!(w.credit > 0) && !(w.coupons || []).length) return;
+      if(document.getElementById('walletReminder')) return;
       const inr = (n) => '\u20B9' + Math.round(Number(n) || 0).toLocaleString('en-IN');
       const when = (d) => d <= 0 ? 'today' : d === 1 ? 'tomorrow' : `in ${d} days`;
       const lines = [];
-      if(w.credit > 0) lines.push(`<p style="margin:0 0 8px;"><strong>${inr(w.credit)} of Aerva credit</strong> is waiting — your next stay is partly paid for. It comes off automatically at checkout.</p>`);
+      if(w.credit > 0) lines.push(`<p style="margin:0 0 8px;"><strong>${inr(w.credit)} of Aerva credit</strong> is waiting — your next stay is partly paid for. It comes off automatically at checkout.${w.creditEndsAt ? ` Use it by <strong>${escapeMessageHtml(new Date(w.creditEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }))}</strong>.` : ''}</p>`);
       (w.coupons || []).slice(0, 3).forEach(c => lines.push(`<p style="margin:0 0 8px;">Your <strong>${inr(c.amount)} coupon</strong> <code style="background:#f4eadc; padding:1px 6px; border-radius:5px; font-size:13px;">${escapeMessageHtml(c.code)}</code> expires <strong>${when(Number(c.daysLeft))}</strong>${Number(c.daysLeft) > 1 ? ` (${escapeMessageHtml(new Date(c.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long' }))})` : ''}.</p>`));
       const box = document.createElement('div');
       box.id = 'walletReminder';
@@ -14079,7 +14085,7 @@
         return;
       }
       try{
-        const res = await fetch(SUITES_API_BASE + '/api/guest-auth', {
+        const res = await fetch(SUITES_API_BASE + '/api/guest-auth' + (isNewSignIn(token) ? '?signin=1' : ''), {
           headers: { 'Authorization': 'Bearer ' + token }
         });
         if(res.ok){
