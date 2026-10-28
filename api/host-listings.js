@@ -2922,6 +2922,9 @@ module.exports = async (req, res) => {
 
     // A same-day booking cancelled within 1 hour of being made does not
     // count towards the 3-a-year limit: logged under its own name.
+    // The property's host cancellation rate (not for a same-day booking
+    // cancelled within 1 hour of being made).
+    if (auditAction === 'booking_cancelled_by_host' && !terms.sameDayGrace) await require('./_cancellations').markCancelledByHost(sql, orderId);
     await logAudit(sql, {
       action: terms.sameDayGrace && auditAction === 'booking_cancelled_by_host' ? 'booking_cancelled_by_host_grace' : auditAction,
       success: true, actorType: 'host', actorIdentifier: String(hostId),
@@ -4183,6 +4186,11 @@ module.exports = async (req, res) => {
       truncated: bookings.length >= bookingsLimit,
       oldest: bookings.length ? bookings[bookings.length - 1].created_at : null
     };
+    // Each property's host cancellation rate (last 12 months), as guests see it.
+    try {
+      const rates = await require('./_cancellations').listingCancelRates(sql, listingsWithLinks.map(l => l.id));
+      listingsWithLinks.forEach(l => { const r = rates[l.id]; if (r) { l.host_cancel_rate = r.rate; l.host_cancel_count = r.cancelled; l.host_cancel_bookings = r.bookings; } });
+    } catch (err) { /* shown as 0% */ }
     return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, bookingsMeta, verification, complianceNotices, today });
   } catch (err) {
     console.error('host-listings error:', err);

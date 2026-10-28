@@ -3750,6 +3750,7 @@
         <h3>${escapeMessageHtml(exp.property_name)}</h3>
         ${hostedAtLine ? `<div class="loc">${escapeMessageHtml(hostedAtLine)}${durationText ? ` &middot; ${escapeMessageHtml(durationText)}` : ''}</div>` : ''}
         <div class="suite-line">${priceLine}${ratingBit(exp)}</div>
+        ${cancelRateCardHtml(exp)}
       </div>
     `;
     wireLikeButton(card);
@@ -4834,6 +4835,16 @@
     </div>`;
   }
 
+  // On every listing card: how often the host cancelled bookings here,
+  // last 12 months (get-listings.js host_cancel_rate).
+  function cancelRateCardHtml(l){
+    if(l.host_cancel_rate == null) return '';
+    const r = Number(l.host_cancel_rate) || 0;
+    const tone = r === 0 ? ['#e6f1e3', '#2f5a2b', '#b9d6b3'] : r <= 3 ? ['#f6ecd9', '#7a5a22', '#e3cfa6'] : ['#f8e3df', '#8c2f22', '#e9b8af'];
+    return `<div style="margin-top:8px;"><span class="host-cancel-sticker" title="Bookings here that the host cancelled, out of all bookings." style="display:inline-flex; align-items:center; gap:6px; background:${tone[0]}; color:${tone[1]}; border:1px solid ${tone[2]}; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:500; line-height:1.2;"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/></svg>Host Cancellation Rate: <strong>${r}%</strong></span></div>`;
+  }
+
+
   function buildSuiteCard(listing, index){
     const initial = (listing.property_name || '?').trim().charAt(0).toUpperCase();
     const offerLine = formatOffer(listing);
@@ -4974,6 +4985,7 @@
           ${ratingBit(listing)}
         </div>
         ${distanceHtml ? `<div class="suite-near">${distanceHtml}</div>` : ''}
+        ${cancelRateCardHtml(listing)}
       </div>
     `;
     const favBtn = card.querySelector('.fav-heart');

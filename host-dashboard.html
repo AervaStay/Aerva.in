@@ -723,7 +723,7 @@
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-10-13a"></script>
-<script src="aerva-policies.js?v=2026-10-28c"></script>
+<script src="aerva-policies.js?v=2026-10-29b"></script>
 </head>
 <body>
 
@@ -1741,6 +1741,13 @@
   // click-target (stay → full sidebar; experience → blocked-dates-only
   // sidebar), via the data-listing-type attribute the click handler
   // below reads.
+  // The property's host cancellation rate, as guests see it on the listing.
+  function cancelRateHtml(item){
+    if(item.host_cancel_rate == null) return '';
+    const r = Number(item.host_cancel_rate) || 0;
+    const tone = r === 0 ? '#3f6b3a' : r <= 3 ? '#8a6c39' : '#a3402f';
+    return `<div class="listing-meta" style="margin-top:4px; color:${tone};" title="Shown to guests on this listing’s card. It counts against your host badge.">Host Cancellation Rate: <strong>${r}%</strong>${item.host_cancel_bookings ? ` (${Number(item.host_cancel_count) || 0} of ${Number(item.host_cancel_bookings)} bookings)` : ''} · shown to guests</div>`;
+  }
   function buildDashboardCard(item, isExperience){
     const interiorPhotos = Array.isArray(item.interior_photo_urls) ? item.interior_photo_urls : [];
     const exteriorPhotos = Array.isArray(item.exterior_photo_urls) ? item.exterior_photo_urls : [];
@@ -1783,6 +1790,7 @@
           <div class="listing-info">
             <h3>${escH(item.property_name || '(Untitled)')} <span style="font-size:12px; opacity:0.5; text-transform:uppercase; letter-spacing:0.04em;">Experience</span></h3>
             <div class="listing-meta">${stayNote} · ${inrText(item.nightly_rate)}${item.experience_price_unit === 'per_person' ? '/person' : ''} ${statusBadgeHtml(item.status)}</div>
+            ${item.status === 'approved' || item.status === 'deactivated' ? cancelRateHtml(item) : ''}
             ${rejectionNoteHtml}
             ${calendarHintHtml}
           </div>
@@ -1829,6 +1837,7 @@
         <div class="listing-info">
           <h3>${escH(item.property_name || '(Untitled draft)')}</h3>
           <div class="listing-meta">${escH(item.city || 'No city yet')} · ${inrText(item.nightly_rate)}/night ${statusBadgeHtml(item.status)}</div>
+            ${item.status === 'approved' || item.status === 'deactivated' ? cancelRateHtml(item) : ''}
           ${rejectionNoteHtml}
           ${calendarHintHtml}
         </div>
