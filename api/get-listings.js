@@ -413,6 +413,8 @@ async function runTierSnapshot({ asOf, prev, hosts, guests, listings }) {
   `;
   const revByHost = {};
   hostRev.forEach(r => { revByHost[r.host_id] = r; });
+  // Host cancellations, last 12 months, as a share of bookings.
+  const cancelByHost = await require('./_cancellations').hostCancelRates(sql, hostRows.map(h => h.host_id), asOf);
   for (const h of hostRows) {
     const rv = revByHost[h.host_id];
     const n = rv ? Number(rv.n) || 0 : 0;
@@ -420,7 +422,7 @@ async function runTierSnapshot({ asOf, prev, hosts, guests, listings }) {
       hygiene: Number(rv.hygiene), communication: Number(rv.communication),
       services: Number(rv.services), value: Number(rv.value), location: Number(rv.location)
     } : undefined;
-    const earned = hostTier({ totalPayout: Number(h.payout) || 0, reviewCount: n, factors });
+    const earned = hostTier({ totalPayout: Number(h.payout) || 0, reviewCount: n, factors, cancelRate: cancelByHost[h.host_id] || 0 });
     const t = applyDecayCap(HOST_TIERS, prev.host[h.host_id], earned);
     const r = await recordTierChange(sql, {
       subjectType: 'host', subjectId: h.host_id, tier: t,
@@ -1754,6 +1756,10 @@ module.exports = async (req, res) => {
         console.error('experience standing failed (non-fatal):', err);
       }
 
+      try {
+        const rates = await require('./_cancellations').listingCancelRates(sql, filteredExperiences.map(e => e.id));
+        filteredExperiences.forEach(e => { e.host_cancel_rate = (rates[e.id] || { rate: 0 }).rate; });
+      } catch (err) { /* shown as 0% */ }
       await attachLikeCounts(filteredExperiences);
       filteredExperiences.forEach(publicLocation);
       try { const R = require('./_rates'); const now = await R.currentRates(sql); filteredExperiences.forEach(e => { e.guest_fee_rate = now.guest.Experience; }); } catch (err) { /* estimate falls back */ }
@@ -2251,6 +2257,11 @@ module.exports = async (req, res) => {
       // A badge is decoration. If this fails the listings still render.
       console.error('host tier lookup failed (non-fatal):', err);
     }
+    // Each property's host cancellation rate, last 12 months (_cancellations.js).
+    try {
+      const rates = await require('./_cancellations').listingCancelRates(sql, filtered.map(l => l.id));
+      filtered.forEach(l => { l.host_cancel_rate = (rates[l.id] || { rate: 0 }).rate; });
+    } catch (err) { /* shown as 0% */ }
     // host_id is internal — never send it to a browser.
     filtered.forEach(l => { delete l.host_id; });
 

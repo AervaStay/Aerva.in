@@ -499,6 +499,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
       // Counts toward the host's yearly limit (hostCancellationsLastYear) —
       // once per purchase, like a host's own cancellation.
       if (countAgainstHost && Number(r.id) === Number(main.id)) {
+        await markCancelledByHost(sql, r.id);
         await logAudit(sql, { action: 'booking_cancelled_by_host', success: true, actorType: 'admin', actorIdentifier: String(main.host_id || ''),
           targetType: 'order', targetId: r.id, metadata: { byAdmin: adminLabel || 'admin', reason: note } });
       }
@@ -541,6 +542,47 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
 // Host cancellations in the last 12 months (co-host cancellations count for
 // the host). Linked "Includes a Stay" halves are logged separately and do
 // not count twice.
+// Marks a booking as cancelled by its host (or by Aerva for the host), for
+// the property's host cancellation rate. Never throws.
+async function markCancelledByHost(sql, orderId) {
+  try { await sql`UPDATE orders SET cancelled_by_host_at = COALESCE(cancelled_by_host_at, now()) WHERE id = ${Number(orderId) || 0}`; }
+  catch (e) { /* 2026-10-28-05-host-cancel-rate.sql not applied yet */ }
+}
+
+// Host cancellation rate per property: bookings made in the last 12 months
+// that the host cancelled, out of all bookings made then. 0% with no
+// cancellations (and with no bookings yet). { [listingId]: { rate, cancelled, bookings } }
+async function listingCancelRates(sql, listingIds) {
+  const ids = (listingIds || []).map(Number).filter(Boolean);
+  const out = {};
+  ids.forEach(id => { out[id] = { rate: 0, cancelled: 0, bookings: 0 }; });
+  if (!ids.length) return out;
+  try {
+    const rows = await sql`SELECT listing_id, count(*)::int AS n, count(*) FILTER (WHERE cancelled_by_host_at IS NOT NULL)::int AS c
+                           FROM orders WHERE listing_id = ANY(${ids}) AND razorpay_payment_id IS NOT NULL AND status IN ('paid', 'cancelled')
+                             AND created_at > now() - interval '12 months'
+                           GROUP BY listing_id`;
+    rows.forEach(r => { out[r.listing_id] = { rate: r.n > 0 ? Math.round(r.c / r.n * 1000) / 10 : 0, cancelled: r.c, bookings: r.n }; });
+  } catch (e) { /* column not there yet: every rate 0% */ }
+  return out;
+}
+// The same for a host across all their properties (for badges).
+async function hostCancelRates(sql, hostIds, asOf = null) {
+  const ids = (hostIds || []).map(Number).filter(Boolean);
+  const out = {};
+  if (!ids.length) return out;
+  try {
+    const at = asOf ? new Date(asOf).toISOString() : new Date().toISOString();
+    const rows = await sql`SELECT l.host_id, count(*)::int AS n, count(*) FILTER (WHERE o.cancelled_by_host_at IS NOT NULL)::int AS c
+                           FROM orders o JOIN listings l ON l.id = o.listing_id
+                           WHERE l.host_id = ANY(${ids}) AND o.razorpay_payment_id IS NOT NULL AND o.status IN ('paid', 'cancelled')
+                             AND o.created_at > ${at}::timestamptz - interval '12 months' AND o.created_at <= ${at}::timestamptz
+                           GROUP BY l.host_id`;
+    rows.forEach(r => { out[r.host_id] = r.n > 0 ? Math.round(r.c / r.n * 1000) / 10 : 0; });
+  } catch (e) { /* not there yet */ }
+  return out;
+}
+
 async function hostCancellationsLastYear(sql, hostId) {
   try {
     const r = await sql`SELECT count(*)::int AS n FROM audit_log
@@ -711,5 +753,5 @@ module.exports = {
   POLICIES, HOST_DECISION_TIMEOUT_HOURS, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, REQUEST_REASONS,
   policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
   claimForCancellation, releaseClaim, guestGetsBackFor, claimRequest, unclaimRequest, postThreadMessage, hostOption, createCancellationRequest, cancellationCard,
-  cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, issueCouponForHost, hostCouponAmount, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
+  cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, issueCouponForHost, hostCouponAmount, markCancelledByHost, listingCancelRates, hostCancelRates, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
 };

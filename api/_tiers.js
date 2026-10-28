@@ -170,15 +170,15 @@ const HOST_TIERS = [
   // the score, because at this end of the ladder every host already has
   // the revenue and the volume — what separates them is whether the
   // reviews are excellent, near-perfect, or essentially flawless.
-  { key: 'aerva_elite',      label: 'Aerva Elite',      icon: 'feather-diamond', minPayout: 5000000, minScore: 4.96, minFactor: 4.7, minReviews: 30,
+  { key: 'aerva_elite',      label: 'Aerva Elite',      icon: 'feather-diamond', minPayout: 5000000, minScore: 4.96, minFactor: 4.7, minReviews: 30, maxCancelRate: 0,
     blurb: 'The highest standard on Aerva — essentially flawless, sustained.' },
-  { key: 'golden_elite',     label: 'Golden Elite',     icon: 'feather-gold',    minPayout: 2500000, minScore: 4.92, minFactor: 4.6, minReviews: 20,
+  { key: 'golden_elite',     label: 'Golden Elite',     icon: 'feather-gold',    minPayout: 2500000, minScore: 4.92, minFactor: 4.6, minReviews: 20, maxCancelRate: 1,
     blurb: 'Near-perfect reviews across a substantial body of stays.' },
-  { key: 'elite',            label: 'Elite',            icon: 'feather',         minPayout: 1000000, minScore: 4.85, minFactor: 4.5, minReviews: 10,
+  { key: 'elite',            label: 'Elite',            icon: 'feather',         minPayout: 1000000, minScore: 4.85, minFactor: 4.5, minReviews: 10, maxCancelRate: 2,
     blurb: 'Exceptional across every part of the stay.' },
-  { key: 'signature_host',   label: 'Signature Host',   icon: 'feather',         minPayout: 300000,  minScore: 4.60, minFactor: 4.2, minReviews: 6,
+  { key: 'signature_host',   label: 'Signature Host',   icon: 'feather',         minPayout: 300000,  minScore: 4.60, minFactor: 4.2, minReviews: 6, maxCancelRate: 3,
     blurb: 'Consistently well reviewed, with no weak spots.' },
-  { key: 'established_host', label: 'Established Host', icon: 'feather',         minPayout: 75000,   minScore: 4.30, minFactor: 3.8, minReviews: 3,
+  { key: 'established_host', label: 'Established Host', icon: 'feather',         minPayout: 75000,   minScore: 4.30, minFactor: 3.8, minReviews: 3, maxCancelRate: 5,
     blurb: 'A proven track record of happy guests.' },
   { key: 'rising_host',      label: 'Rising Host',      icon: 'feather',         minPayout: 1,       minScore: 0,   minReviews: 0,
     blurb: 'Off to a strong start.' }
@@ -391,6 +391,9 @@ function resolveTier(ladder, stats, moneyField) {
       if (ratedReviews < num(t.minRatedReviews)) continue;
     } else if (rated < t.minReviews) continue;
     if (t.minAvgValue && avgValue < t.minAvgValue) continue;
+    // Hosts: cancellations by the host (share of bookings, last 12 months)
+    // hold a host below the rungs that allow fewer.
+    if (!isGuest && t.maxCancelRate !== undefined && num(stats && stats.cancelRate) > t.maxCancelRate) continue;
     if (rated > 0) {
       if (score < (t.minScore !== undefined ? t.minScore : t.minRating)) continue;
       // No single factor may sit below the tier's floor, however strong
@@ -1050,6 +1053,7 @@ function describeLadders() {
         'Location is exempt from the per-factor minimum because a host cannot move the property. It still counts, lightly, in the average.',
         'A host with no reviews climbs on payout alone up to the point a rung requires reviews \u2014 Elite and above never do.',
         'Only reviews of STAYS count. Experience reviews are scored on their own factors and never enter a host\u2019s or a property\u2019s score.',
+        'Cancellations by the host count against every rung above Rising Host: the share of bookings the host cancelled in the last 12 months must stay within the rung\u2019s limit.',
         'At most one rung is lost per quarterly review, so a full slide takes as long as the climb did.'
       ],
       bands: HOST_TIERS.map(t => ({
@@ -1061,7 +1065,8 @@ function describeLadders() {
           t.minPayout > 1 ? `${money(t.minPayout)} paid out over 12 months` : 'Any completed booking',
           t.minReviews > 0 ? `${t.minReviews} published reviews` : 'No reviews required',
           t.minScore > 0 ? `Score of ${t.minScore} or above` : 'No rating requirement',
-          t.minFactor ? `Every factor except location at ${t.minFactor} or above` : null
+          t.minFactor ? `Every factor except location at ${t.minFactor} or above` : null,
+          t.maxCancelRate !== undefined ? (t.maxCancelRate === 0 ? 'No cancellations by the host in 12 months' : `Host cancellations at most ${t.maxCancelRate}% of bookings over 12 months`) : null
         ].filter(Boolean)
       }))
     }
