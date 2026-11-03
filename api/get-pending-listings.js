@@ -676,6 +676,14 @@ module.exports = async (req, res) => {
     try { return res.status(200).json({ environment: AERVA_ENV, ...(await migrations.status(sql)) }); }
     catch (err) { console.error('dbMigrations failed:', err); return res.status(500).json({ error: 'Could not read the database updates: ' + String(err.message || err).slice(0, 200) }); }
   }
+  // GET ?dbSchema=1 — read-only: the structure (no data) as one .sql file, admin only.
+  if (req.method === 'GET' && req.query.dbSchema === '1') {
+    try {
+      const out = await migrations.schemaExport(sql);
+      await logAudit(sql, { action: 'db_schema_exported', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'database', targetId: null, metadata: { tables: out.tables, environment: AERVA_ENV } });
+      return res.status(200).json({ environment: AERVA_ENV, ...out });
+    } catch (err) { console.error('dbSchema failed:', err); return res.status(500).json({ error: 'Could not export the database structure: ' + String(err.message || err).slice(0, 200) }); }
+  }
   if (req.method === 'POST' && req.body && req.body.applyMigrations) {
     const b = req.body.applyMigrations;
     // On production the admin types the environment name, as a deliberate step.

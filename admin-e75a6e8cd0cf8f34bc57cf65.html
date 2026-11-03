@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-10-29c"></script>
+<script src="aerva-policies.js?v=2026-11-04a"></script>
 </head>
 <body>
 
@@ -3989,7 +3989,8 @@ async function loadDbUpdates(){
     body.innerHTML = `
       <div class="db-apply">${pending.length
         ? `<button type="button" class="lk-btn${d.environment === 'production' ? ' is-danger' : ''}" id="dbApplyBtn" onclick="applyDbUpdates()">Apply ${pending.length} pending update${pending.length === 1 ? '' : 's'}${d.environment === 'production' ? ' to PRODUCTION' : d.environment === 'uat' ? ' to UAT' : ''}</button>`
-        : '<span class="lk-chip">Up to date</span>'}<span class="lk-msg" id="dbMsg"></span></div>
+        : '<span class="lk-chip">Up to date</span>'}<span class="lk-msg" id="dbMsg"></span>
+        <button type="button" class="lk-link" id="dbSchemaBtn" onclick="downloadDbSchema()" style="margin-left:auto;" title="The structure only (tables, columns, keys, indexes) — no data. Used to build an exact test copy.">Download database structure</button></div>
       <div class="lk-list">${d.migrations.slice().reverse().map((m, i) => `
         <div class="db-row"><div class="db-row-head">
           <code>${lkEsc(m.name)}</code>
@@ -4002,6 +4003,20 @@ async function loadDbUpdates(){
         <pre hidden>${lkEsc(m.sql)}</pre></div>`).join('') || '<p class="lk-empty">No .sql files in migrations/ yet.</p>'}</div>
       ${(d.missing || []).length ? `<p class="db-warn" style="margin-top:12px;">Applied earlier but no longer in the folder: ${d.missing.map(x => lkEsc(x.name)).join(', ')}</p>` : ''}`;
   }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
+}
+// The structure only, no data — for building an exact test copy.
+async function downloadDbSchema(){
+  const btn = document.getElementById('dbSchemaBtn'), msg = document.getElementById('dbMsg');
+  btn.disabled = true; msg.className = 'lk-msg'; msg.textContent = 'Preparing…';
+  try{
+    const d = await lkGet('dbSchema=1');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([d.sql], { type: 'application/sql' }));
+    a.download = `aerva-structure-${d.environment || 'db'}-${new Date().toISOString().slice(0, 10)}.sql`;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    msg.className = 'lk-msg is-ok'; msg.textContent = `Downloaded: ${d.tables} tables, ${d.constraints} keys and checks.`;
+  }catch(err){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; }
+  btn.disabled = false;
 }
 async function applyDbUpdates(){
   const d = dbState; if(!d) return;
