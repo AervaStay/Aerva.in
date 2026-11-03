@@ -276,12 +276,48 @@
     return info.symbol + converted.toLocaleString(info.locale, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   }
 
+  // A price in page markup: shown in the guest's currency, and tagged with
+  // its rupee amount so a currency switch updates it in place
+  // (refreshGuestPrices). Only for innerHTML — use fmtGuest for plain text.
+  function guestPrice(amountInInr){
+    const n = Math.round(Number(amountInInr) || 0);
+    return `<span data-inr="${n}">${fmtGuest(n)}</span>`;
+  }
+  // Money that is actually charged or refunded in rupees: the guest's
+  // currency, with the exact rupee amount beside it when they differ.
+  // Plain text, so it is safe in confirm() and textContent too.
+  function moneyBoth(amountInInr){
+    const n = Math.round(Number(amountInInr) || 0);
+    const sign = n < 0 ? '−' : '';
+    const a = Math.abs(n);
+    const inr = SUPPORTED_CURRENCIES.INR.symbol + a.toLocaleString('en-IN');
+    const shown = fmtGuest(a);
+    return sign + (shown === inr ? inr : `${shown} (${inr})`);
+  }
+  function refreshGuestPrices(root){
+    try{
+      (root || document).querySelectorAll('[data-inr]').forEach(el => { el.textContent = fmtGuest(Number(el.dataset.inr) || 0); });
+    }catch(e){}
+  }
+
   // Re-renders whatever's currently on screen so a currency switch takes
   // effect immediately, without a full page reload. applyFiltersAndRender
   // now covers both suite and experience cards together (see the
   // combined-grid rewrite), so a single call handles both.
   function applyCurrencyToPage(){
     if(typeof applyFiltersAndRender === 'function' && document.getElementById('suitesContainer')) applyFiltersAndRender();
+    // Everything else on screen: prices tagged by guestPrice, and the
+    // booking total of an open listing page (re-priced in the new currency).
+    refreshGuestPrices();
+    try{
+      const last = updateListingPriceSummary._last;
+      if(last && document.getElementById('listingPriceSummary')) updateListingPriceSummary(last.listing, last.arrival, last.departure);
+    }catch(e){}
+    try{
+      const lastBooking = showBookingPage._last;
+      const view = document.getElementById('bookingView');
+      if(lastBooking && view && view.style.display !== 'none') showBookingPage(lastBooking);
+    }catch(e){}
   }
 
   function updateCurrencyTriggerLabel(){
@@ -6448,7 +6484,7 @@
       w = Object.assign({}, w, { credit: w.remindCredit ? w.credit : 0 });
       if(!(w.credit > 0) && !(w.coupons || []).length) return;
       if(document.getElementById('walletReminder')) return;
-      const inr = (n) => '\u20B9' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+      const inr = (n) => moneyBoth(n);
       const when = (d) => d <= 0 ? 'today' : d === 1 ? 'tomorrow' : `in ${d} days`;
       const lines = [];
       if(w.credit > 0) lines.push(`<p style="margin:0 0 8px;"><strong>${inr(w.credit)} of Aerva credit</strong> is waiting — your next stay is partly paid for. It comes off automatically at checkout.${w.creditEndsAt ? ` Use it by <strong>${escapeMessageHtml(new Date(w.creditEndsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }))}</strong>.` : ''}</p>`);
@@ -6658,7 +6694,7 @@
     if(!card){ box.style.display = 'none'; box.innerHTML = ''; return; }
     box.style.display = 'block';
     const esc = escapeMessageHtml;
-    const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+    const inr = (n) => moneyBoth(n);
     if(card.pending){ box.innerHTML = '<strong>Cancellation request sent</strong> · waiting for your host.'; return; }
     if(card.canRequest){
       box.innerHTML = '<span>Need to cancel?</span> <button type="button" class="filter-clear" style="margin-left:8px;">Request cancellation</button>';
@@ -6715,7 +6751,7 @@
     if(!card){ box.style.display = 'none'; box.innerHTML = ''; return; }
     box.style.display = 'block';
     const esc = escapeMessageHtml;
-    const inr = (n) => '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
+    const inr = (n) => moneyBoth(Math.abs(Math.round(Number(n) || 0)));
     const money = card.difference > 0 ? `Guest pays ${inr(card.difference)} more` : card.difference < 0 ? `Guest gets back ${inr(card.difference)}` : 'Same total';
     if(card.status){ // guest view
       box.innerHTML = card.status === 'awaiting_payment'
@@ -7018,7 +7054,7 @@
         const ch = b.open_change;
         const changeHtml = !upcoming ? ''
           : ch && ch.status === 'pending' ? `<span class="booking-request-note">Change requested · waiting for your host <a href="#" data-withdraw-change="${ch.id}" style="color:var(--gold-text); margin-left:6px;">Withdraw</a></span>`
-          : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="min-height:44px; padding:10px 18px;">Pay ₹${Number(ch.difference).toLocaleString('en-IN')} to confirm your change</button>`
+          : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="min-height:44px; padding:10px 18px;">Pay ${moneyBoth(ch.difference)} to confirm your change</button>`
           : b.can_change === false ? (b.stay_window_closed ? '<span class="booking-request-note">Changes to this stay closed at 10 AM on the day after check-in</span>' : '')
           : `<button type="button" class="filter-clear" data-change-booking="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Change booking</button>`;
         const codeHtml = b.confirmation_code && b.status === 'paid'
@@ -8047,7 +8083,7 @@
     const paid = conv.subtotal != null ? Number(conv.subtotal) + Number(conv.gst || 0) : null;
     const money = isHostView
       ? [paid != null ? ['Guest paid', fmt(paid), ''] : null, conv.payout_amount != null ? ['Your payout', fmt(conv.payout_amount), 'bd-good'] : null].filter(Boolean)
-      : (paid != null ? [['Total paid', fmt(paid), ''], ...(Number(conv.gst) ? [['Includes GST', fmt(conv.gst), 'bd-muted']] : [])] : []);
+      : (paid != null ? [['Total paid', moneyBoth(paid), ''], ...(Number(conv.gst) ? [['Includes GST', moneyBoth(conv.gst), 'bd-muted']] : [])] : []);
     document.getElementById('inboxBookingDetailsBody').innerHTML = `
       <div class="bd">
         ${photo ? `<div class="bd-photo"><img src="${esc(photo)}" alt=""></div>` : ''}
@@ -9579,7 +9615,7 @@
     const paidAmenities = Array.isArray(listing.paid_amenities) ? listing.paid_amenities : [];
     const paidAmenitiesHtml = paidAmenities.length
       ? `<div class="listing-modal-section-title">Paid Amenities</div>
-         ${paidAmenities.map(a => `<div class="listing-modal-paid-amenity"><span>${escapeMessageHtml(a.name)}</span><span>${fmt(Number(a.price))}/night</span></div>`).join('')}
+         ${paidAmenities.map(a => `<div class="listing-modal-paid-amenity"><span>${escapeMessageHtml(a.name)}</span><span>${guestPrice(a.price)}/night</span></div>`).join('')}
          <p style="font-size:11.5px; opacity:0.55; margin-top:6px;">Availability and exact dates confirmed at booking.</p>`
       : '';
 
@@ -9596,7 +9632,7 @@
         ? `Up to ${listing.max_pets_allowed} pet${Number(listing.max_pets_allowed) === 1 ? '' : 's'}`
         : 'No stated limit on how many';
       const feeLine = listing.pet_fee && Number(listing.pet_fee) > 0
-        ? `${fmt(Number(listing.pet_fee))} per pet, per stay`
+        ? `${guestPrice(listing.pet_fee)} per pet, per stay`
         : 'No pet fee';
       petPolicyHtml = `
         <div class="listing-modal-section-title">Pet Policy</div>
@@ -9694,7 +9730,7 @@
     }
 
     const priceLine = listing.nightly_rate
-      ? `From <strong>${fmt(Number(listing.nightly_rate))}</strong>/night`
+      ? `From <strong>${guestPrice(listing.nightly_rate)}</strong>/night`
       : 'Price on request';
     const offerLine = formatOffer(listing);
     const promoOfferLine = formatPromotionOffer(listing);
@@ -9754,7 +9790,7 @@
             <div class="guest-row">
               <div class="guest-row-text">
                 <div class="guest-row-title">Pets</div>
-                <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? fmt(Number(listing.pet_fee)) + ' per pet, per stay' : 'No pet fee'}</div>
+                <div class="guest-row-sub guest-row-sub-muted">${listing.pet_fee && Number(listing.pet_fee) > 0 ? guestPrice(listing.pet_fee) + ' per pet, per stay' : 'No pet fee'}</div>
               </div>
               <div class="guest-stepper">
                 <button type="button" class="guest-step-btn" data-lg-type="animals" data-lg-action="dec" aria-label="Decrease pets">−</button>
@@ -10553,12 +10589,12 @@
 
       const subtotal = selected.size * Number(a.price);
       const subtotalText = selected.size > 0
-        ? `${selected.size} night${selected.size === 1 ? '' : 's'} selected — ${fmt(subtotal)}`
+        ? `${selected.size} night${selected.size === 1 ? '' : 's'} selected — ${guestPrice(subtotal)}`
         : 'Tap nights to add this';
 
       return `
         <div class="stay-amenity-row">
-          <div class="stay-amenity-head"><strong>${escapeMessageHtml(a.name)}</strong><span>${fmt(Number(a.price))}/night</span></div>
+          <div class="stay-amenity-head"><strong>${escapeMessageHtml(a.name)}</strong><span>${guestPrice(a.price)}/night</span></div>
           <div class="amenity-night-chips">${chips}</div>
           <div class="stay-amenity-subtotal">${subtotalText}</div>
         </div>
@@ -10586,6 +10622,7 @@
     const summaryEl = document.getElementById('listingPriceSummary');
     const actionEl = document.getElementById('listingBookingAction');
     if(!summaryEl) return;
+    updateListingPriceSummary._last = { listing, arrival, departure };
     const counts = (renderAvailabilityCalendar._lgCounts || {})[listing.id] || { adults: 1, children: 0, infants: 0, pets: 0, serviceAnimals: 0, youngLitter: 0 };
 
     // Book Now needs to read the current dates too — stashed here since
@@ -10897,8 +10934,8 @@
         // The discount is already baked into what Razorpay will actually
         // charge (see order.amount below) — this is just confirming to
         // the guest that their code worked, before the payment popup opens.
-        confirmEl.textContent = `Coupon applied: ${fmt(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
-          + (order.couponForfeited > 0 ? ` ${fmt(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
+        confirmEl.textContent = `Coupon applied: ${moneyBoth(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
+          + (order.couponForfeited > 0 ? ` ${moneyBoth(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
         confirmEl.style.display = 'block';
       }
     } catch(err){
@@ -11229,8 +11266,8 @@
       }
       order = await orderRes.json();
       if(order.couponDiscount > 0){
-        confirmEl.textContent = `Coupon applied: ${fmt(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
-          + (order.couponForfeited > 0 ? ` ${fmt(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
+        confirmEl.textContent = `Coupon applied: ${moneyBoth(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
+          + (order.couponForfeited > 0 ? ` ${moneyBoth(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
         confirmEl.style.display = 'block';
       }
     } catch(err){
@@ -11765,8 +11802,8 @@
       }
       order = await orderRes.json();
       if(order.couponDiscount > 0){
-        confirmEl.textContent = `Coupon applied: ${fmt(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
-          + (order.couponForfeited > 0 ? ` ${fmt(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
+        confirmEl.textContent = `Coupon applied: ${moneyBoth(order.couponDiscount)} off the booking price. Service fee and GST are charged in full.`
+          + (order.couponForfeited > 0 ? ` ${moneyBoth(order.couponForfeited)} of the coupon is unused and is not refunded.` : '');
         confirmEl.style.display = 'block';
       }
     } catch(err){
@@ -11957,8 +11994,11 @@
     const asDate = (d) => { const s = String(d || '').slice(0, 10); const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : (d ? new Date(d) : null); };
     const day = (d) => { const x = asDate(d); return x ? x.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '—'; };
     const isExp = b.listing_type === 'experience';
-    // A receipt shows what was actually charged, in rupees — not converted.
-    const inr = (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN');
+    // Shown in the guest's currency; what was actually charged (in rupees)
+    // is stated under the total whenever the two differ.
+    showBookingPage._last = b;
+    const inr = (v) => guestPrice(v);
+    const inrExact = (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN');
     const num = (v) => Math.max(0, Math.round(Number(v) || 0));
     const isCompleted = b.status === 'paid' && b.local_today && String(b.departure).slice(0, 10) < String(b.local_today).slice(0, 10);
     const place = b.listing_city ? (b.listing_area ? `${b.listing_area}, ${b.listing_city}` : b.listing_city) : (listing ? formatCityArea(listing) : '');
@@ -12030,6 +12070,7 @@
           ${priceRows.map(([k, v]) => `<div class="bk-row"><span>${k}</span><span>${v}</span></div>`).join('')}
           <div class="bk-row bk-total"><span>Total paid${b.charge_currency && b.charge_currency !== 'INR' ? ` <em>(charged in ${esc(b.charge_currency)})</em>` : ''}</span><span>${inr(paid)}</span></div>
           ${refund ? `<div class="bk-row bk-refund"><span>${refund.pending ? 'Refund in progress' : 'Refunded'}</span><span>−${inr(refund.amount)}</span></div>` : ''}
+          ${currentCurrency !== 'INR' && fmtGuest(paid) !== inrExact(paid) ? `<p class="bk-fx-note" style="font-size:12px; opacity:0.65; margin:10px 0 0;">Charged in Indian Rupees: ${inrExact(paid)}${refund ? `; ${refund.pending ? 'being refunded' : 'refunded'}: ${inrExact(refund.amount)}` : ''}. Amounts above are shown in ${esc(currentCurrency)} at today's rate.</p>` : ''}
         </div>
         <div class="bk-card">
           <h3>Booking details</h3>
@@ -13585,7 +13626,7 @@
 
     listEl.innerHTML = rows.slice(0, 8).map(r => `
       <div class="exp-row">
-        <div class="exp-time">${fmt(Number(r.price))}/night</div>
+        <div class="exp-time">${guestPrice(r.price)}/night</div>
         <h3>${escapeMessageHtml(r.name)}</h3>
         <p>${r.description ? escapeMessageHtml(r.description) + ' — ' : ''}Available at ${escapeMessageHtml(r.listingName)}.</p>
       </div>
@@ -14685,7 +14726,7 @@ function aervaPricesSeen(items){
 }
 function aervaShowPriceChange(msgEl, data, btn){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const inr = (n) => (n < 0 ? '−' : '') + '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
+  const inr = (n) => moneyBoth(n);
   msgEl.style.display = 'block';
   msgEl.style.color = '#1c1b19';
   msgEl.innerHTML = `<div class="price-changed">
@@ -14984,7 +15025,7 @@ function openReportProblem(orderId, listingName){
 // shown before anything is sent. The request goes to the host in Messages.
 async function openChangeBooking(orderId, listingName){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const inr = (n) => (n < 0 ? '−' : '') + '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
+  const inr = (n) => moneyBoth(n);
   const overlay = document.createElement('div');
   overlay.className = 'payout-overlay';
   overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Change booking">
@@ -15110,7 +15151,7 @@ async function aervaPayChange(changeId, btn){
 // answers there. The guest sees only what applies to THIS booking now.
 async function openPolicyCancel(orderId, listingName){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+  const inr = (n) => moneyBoth(n);
   const overlay = document.createElement('div');
   overlay.className = 'payout-overlay';
   overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Request cancellation">

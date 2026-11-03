@@ -21,7 +21,7 @@ window.AERVA_POLICIES = {
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
     version: '2026-10-29a',       // booking agreement (guests)
-    hostVersion: '2026-10-28a',    // host agreement — accepted for every listing
+    hostVersion: '2026-11-04a',    // host agreement — accepted for every listing
     guest: {
       title: 'Booking agreement',
       points: [
@@ -85,7 +85,7 @@ window.AERVA_POLICIES = {
           'Your payout for a booking is sent the day after check-in (for an experience, the day after its date) to your verified bank account, after Aerva’s commission, any co-host share, applicable deductions and tax deducted at source.',
           'Once your payout for a booking has been sent, the amount is settled. If Aerva later has to refund the guest for that booking, the part you are no longer owed is deducted from your next payout; if the booking’s amount goes up, the difference is paid to you separately. A cancellation coupon Aerva issues for you is also deducted from your next payout.',
           'Aerva may hold, adjust or withhold a payout while a guest’s report, a refund, a damage claim or a dispute is open, where fraud is suspected, or where the law requires.',
-          'You are solely responsible for your income tax, GST registration where applicable, and every other tax on your earnings.'
+          'You are solely responsible for your income tax, GST registration where applicable, and every other compliance on your earnings and your property — state, local, hotel or homestay rules, as applicable to you.'
         ] },
         { title: '7. Tax deducted at source (TDS)', points: [
           'Aerva deducts TDS under section 194-O of the Income-tax Act (section 393 of the Income-tax Act, 2025) from every payment it makes to you, including security deposit compensation, from the first rupee.',
@@ -100,7 +100,7 @@ window.AERVA_POLICIES = {
         ] },
         { title: '9. Bookings and the relationship with guests', points: [
           'You honour every confirmed booking and provide the property as described, safe, clean and ready at check-in.',
-          'You check a valid government photo ID for every adult guest at check-in, and report foreign guests on Form III within 24 hours of arrival and of departure, as the law requires.',
+          'You check a valid government photo ID for every adult guest at check-in, keep a copy of it as government instructions require, and report foreign guests on Form III within 24 hours of arrival and of departure, as the law requires.',
           'All communication about a booking stays on Aerva Messages. Once a booking is confirmed, phone numbers, email addresses and photos may be shared there until 15 days after check-out. Taking bookings or payments outside Aerva, or using a guest’s details to do so, is not allowed.',
           'You use guests’ personal information only for their booking and your legal duties, and keep it secure. No camera or recording device may be placed in a bedroom, bathroom or any private space; every device elsewhere must be disclosed in the listing.'
         ] },
