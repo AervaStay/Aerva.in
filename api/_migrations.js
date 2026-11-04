@@ -190,7 +190,7 @@ async function schemaExport(sql) {
   const cons = await q(`
     SELECT c.relname AS t, k.conname AS name, k.contype AS type, pg_get_constraintdef(k.oid) AS def
     FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' ORDER BY CASE k.contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'c' THEN 2 WHEN 'x' THEN 3 ELSE 4 END, c.relname, k.conname`);
+    WHERE n.nspname = 'public' AND k.contype <> 'n' ORDER BY CASE k.contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'c' THEN 2 WHEN 'x' THEN 3 ELSE 4 END, c.relname, k.conname`);
   for (const k of cons) add(`ALTER TABLE "${k.t}" ADD CONSTRAINT "${k.name}" ${k.def};`);
   for (const ix of await q(`
     SELECT i.indexdef FROM pg_indexes i WHERE i.schemaname = 'public'

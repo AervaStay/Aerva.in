@@ -92,10 +92,17 @@ async function recordPhotoLocations(sql, { listingId = null, urls = [], location
         const other = await pinOfListingWith(sql, url, listingId);
         loc = other ? { lat: other.lat, lng: other.lng, source: 'copied', takenAt: null } : { lat: null, lng: null, source: 'none', takenAt: null };
       }
-      await sql`INSERT INTO photo_locations (url, lat, lng, source, taken_at, listing_id)
-                VALUES (${url}, ${loc.lat}, ${loc.lng}, ${loc.source}, ${loc.takenAt}, ${listingId || null})
-                ON CONFLICT (url) DO NOTHING`;
-      recorded++;
+      // Each photo on its own: one that cannot be recorded never stops the
+      // rest of the save's photos being recorded.
+      try {
+        await sql`INSERT INTO photo_locations (url, lat, lng, source, taken_at, listing_id)
+                  VALUES (${url}, ${loc.lat}, ${loc.lng}, ${loc.source}, ${loc.takenAt}, ${listingId || null})
+                  ON CONFLICT (url) DO NOTHING`;
+        recorded++;
+      } catch (err) {
+        if (isMissingTable(err)) throw err;
+        console.error('photo location record failed:', url.slice(-60), err.message || err);
+      }
     }
     return { recorded };
   } catch (err) {
