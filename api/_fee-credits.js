@@ -208,8 +208,9 @@ async function creditForShorterStay(sql, orderId, amount) {
   return out;
 }
 
-// A host cancels within 48 hours of check-in, or the host of an experience
-// that includes a stay cancels it: EVERYTHING the guest paid for the
+// A host cancels (at any time; within 48 hours of check-in the host also
+// pays the guest a 10% coupon — owner's rule, 29 Oct 2026), or the host of
+// an experience that includes a stay cancels it: EVERYTHING the guest paid for the
 // booking — price, GST and Aerva's service fee — is held as Aerva credit
 // (the deposit is refunded to the payment as usual). The guest uses it on
 // another stay or experience, or has it refunded at any time; what is left
