@@ -258,10 +258,12 @@ async function razorpayx(method, path, body) {
 // One payee, read the same way from either table.
 async function loadPayee(sql, kind, key) {
   if (kind === 'host') {
-    const h = (await sql`SELECT h.id, h.name, h.email, h.pan_number, h.bank_account_number, h.bank_ifsc, h.bank_account_holder_name, h.bank_status,
+    const h = (await sql`SELECT h.id, h.name, h.email, h.pan_number, h.pan_status, h.bank_account_number, h.bank_ifsc, h.bank_account_holder_name, h.bank_status,
                                 to_jsonb(h) AS j FROM hosts h WHERE h.id = ${key}`)[0];
     if (!h) return null;
-    return { kind, key: h.id, name: h.name, email: h.email, pan: decryptField(h.pan_number), gstin: h.j.bank_gstin ? decryptField(h.j.bank_gstin) : null, panName: h.j.pan_name || null, holder: h.bank_account_holder_name,
+    // A rejected PAN is not used: the account is checked against the payout name.
+    const panOk = h.pan_status !== 'rejected';
+    return { kind, key: h.id, name: h.name, email: h.email, pan: panOk ? decryptField(h.pan_number) : null, gstin: h.j.bank_gstin ? decryptField(h.j.bank_gstin) : null, panName: panOk ? (h.j.pan_name || null) : null, holder: h.bank_account_holder_name,
              account: decryptField(h.bank_account_number), ifsc: h.bank_ifsc, status: h.bank_status, checkId: h.j.bank_check_id || null, checkStatus: h.j.bank_check_status || null, changedAt: h.j.bank_changed_at || null };
   }
   const c = (await sql`SELECT p.guest_id, p.pan_number, p.gstin, p.account_holder_name, p.bank_account_number, p.bank_ifsc, p.status, g.name, g.email, to_jsonb(p) AS j
@@ -565,7 +567,24 @@ async function lookupIfsc(code) {
 }
 const IFSC_NOT_FOUND = 'We could not find this IFSC. Check it on your cheque book or passbook, or ask your branch.';
 
+// The admin's decision on a host's PAN, bank account or Aadhaar, emailed to
+// the host (what was decided, and the reason when refused — never how it was
+// checked). Never throws.
+async function tellAdminDecision(sql, hostId, field, approved, reason) {
+  try {
+    const g = (await sql`SELECT email, name FROM guests WHERE host_id = ${Number(hostId) || 0} ORDER BY id LIMIT 1`)[0];
+    if (!g || !g.email) return false;
+    const what = { pan: 'PAN', bank: 'bank account', aadhaar: 'Aadhaar' }[field] || 'details';
+    const hi = `<p>Hi ${esc(String(g.name || '').split(' ')[0] || 'there')},</p>`;
+    return approved
+      ? await sendMail(g.email, `Your ${what} is verified`, `${hi}<p>Your ${what} is verified.${field === 'aadhaar' ? '' : ' Payouts will go out as usual.'}</p>`)
+      : await sendMail(g.email, `Your ${what} could not be verified`, `${hi}<p>Your ${what} could not be verified: ${esc(reason || '')}</p>
+          <p>Update it in your Aerva account (My Earnings → Payout details). ${field === 'aadhaar' ? '' : 'Payouts wait until it is verified.'}</p>`);
+  } catch (e) { return false; }
+}
+
 module.exports = {
+  tellAdminDecision,
   lookupIfsc, IFSC_NOT_FOUND, sameName, payeeBankMatch,
   nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, validGstin, gstinPan, tradeGstinProblem, PERSONAL_PAN, panLetter, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
   bankDetailsChanged, payoutDetailsChanged, payoutItems, payoutNotifications, startCheck, settleCheck, pollChecks, inChangeHold, describeCheck, HOLD_HOURS_AFTER_CHANGE

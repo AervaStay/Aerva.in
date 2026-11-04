@@ -49,6 +49,12 @@ const IMPACT = {
       out.push({ ...guestOf(r), what: `Cancelled with ${m.percent}% refund (${inr(m.refundCash)}): ${r.suite_name}` });
       out.push({ who: 'Host', name: r.host_name || 'Host', email: r.host_email || '', what: `Request settled automatically after 24 hours: ${r.suite_name}` });
     });
+    // Requests still open when the stay started: closed, booking stands.
+    const closed = await sql`
+      SELECT o.suite_name, o.guest_email, g.name AS guest_name
+      FROM audit_log a JOIN orders o ON o.id = a.target_id LEFT JOIN guests g ON g.id = o.guest_id
+      WHERE a.created_at >= ${since} AND a.action = 'cancellation_request_closed_at_checkin'`;
+    closed.forEach(r => out.push({ ...guestOf(r), what: `Cancellation request closed at check-in (booking stands): ${r.suite_name}` }));
     return out;
   }),
 

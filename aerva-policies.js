@@ -471,7 +471,8 @@ window.AERVA_POLICIES = {
       { title: 'How a guest cancels', points: [
         'Send a cancellation request from My Bookings or the booking’s Messages thread. The host accepts or rejects it.',
         'The refund percentage is fixed when you send the request.',
-        'If the host does not answer within 24 hours, a request with a fixed refund is accepted at that refund, and a request where the host decides is settled with no refund.',
+        'If the host does not answer within 24 hours, a request with a fixed refund is accepted at that refund, and a request where the host decides is settled with no refund. A request for an emergency, a hazard or a travel restriction is then decided by Aerva.',
+        'A request still open when the stay starts closes, and the booking stands.',
         'Refunds cover the booking price and its GST at the percentage above. Aerva’s guest service fee is not refunded. The security deposit is always refunded in full.',
         'Before check-in, for an environmental hazard, a life-threatening situation, a medical or family emergency, or a travel restriction, choose that reason. If the host accepts, the booking price, GST and deposit are refunded in full.',
         'Once the stay has started, a booking cannot be cancelled. To leave early, change the check-out date (see Changing a Booking).',
@@ -768,7 +769,7 @@ window.AERVA_POLICIES = {
           { title: 'To cancel', points: [
             'Open the booking in My Bookings and send a cancellation request. The host has 24 hours to answer it.',
             'The refund follows the listing’s refund policy, shown before you paid. The percentage is fixed when you send the request.',
-            'For an emergency, a hazard or a travel restriction, choose that reason when you cancel.',
+            'For an emergency, a hazard or a travel restriction, choose that reason when you cancel. If the host does not answer within 24 hours, Aerva decides.',
             'A booking can be cancelled only before check-in. Once your stay has started, change your check-out date instead (Changing a booking).'
           ]},
           { title: 'If the host cancels', points: [

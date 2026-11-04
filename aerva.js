@@ -8598,12 +8598,28 @@
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ mode: 'send', conversationId: inboxCurrentConversationId, text, role: inboxCurrentRole, photos })
       });
+      // The reason a message was refused (e.g. a template whose details are
+      // not set yet), shown under the box instead of the message silently
+      // not appearing.
+      let errEl = document.getElementById('inboxChatSendError');
+      if(!errEl){
+        errEl = document.createElement('p');
+        errEl.id = 'inboxChatSendError';
+        errEl.style.cssText = 'display:none; font-size:12px; color:#a3402f; margin:0 0 8px;';
+        const warn = document.getElementById('inboxChatWarning');
+        if(warn && warn.parentNode) warn.parentNode.insertBefore(errEl, warn);
+      }
       if(res.ok){
         input.value = '';
         if(inboxPicker) inboxPicker.clear();
         document.getElementById('inboxChatWarning').style.display = 'none';
+        if(errEl) errEl.style.display = 'none';
         await refreshInboxMessages();
         loadInboxConversations(); // refreshes last-message preview in the list
+      } else if(errEl){
+        const d = await res.json().catch(() => ({}));
+        errEl.textContent = d.error || 'This message could not be sent. Please try again.';
+        errEl.style.display = 'block';
       }
     } catch(err){ /* retryable — message just doesn't appear */ }
     input.disabled = false;
@@ -9995,8 +10011,9 @@
   }
 
   function openListingDetail(listingId){
-    const listing = listingsById[listingId];
-    if(!listing) return;
+    // Saved homes come from their own list (renderWishlist), not the search results.
+    const listing = listingsById[listingId] || (typeof wishlistListingsById !== 'undefined' && wishlistListingsById && wishlistListingsById[listingId]);
+    if(!listing){ location.href = 'index.html?listing=' + encodeURIComponent(listingId); return; }
     trackRecentlyViewed('stay', listingId);
     document.getElementById('listingModalBody').innerHTML = buildListingDetailHtml(listing);
     document.getElementById('listingModalOverlay').style.display = 'flex';
@@ -12966,6 +12983,12 @@
   document.getElementById('unavailableContainer').addEventListener('click', handleCardGridClick);
   document.getElementById('specificMatchContainer').addEventListener('click', handleCardGridClick);
   document.getElementById('specificMatchNearbyContainer').addEventListener('click', handleCardGridClick);
+  // Every other row built from the same cards: tapping anywhere on a card
+  // opens it, not only its buttons.
+  ['favoritesContainer', 'nearCityContainer', 'resortsContainer', 'wishlistContainer'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('click', handleCardGridClick);
+  });
 
   document.getElementById('searchBtn').addEventListener('click', performSearch);
 

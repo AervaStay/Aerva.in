@@ -211,6 +211,54 @@ async function postHostMessage(sql, conversationId, text, displayText = text, wa
 // meant for the guest. So the text the HOST wrote (the template and the
 // Description tab's guidance) is filtered first, and the placeholders are
 // filled in afterwards.
+// ---- Details a message needs that are not set ----
+// A message is never sent with filler such as "(check-in time not set
+// yet)": the automatic sends below hold it (and keep trying while its
+// window is open), and the host is emailed once to fill the details in.
+// Hosts sending by hand are stopped the same way (guest-profile.js).
+const FILLER_RE = /\((?:[a-z ,&-]+ not set(?: yet)?|map link not available|arrival date|departure date|nights|no additional guidance set yet)\)/gi;
+const FILLER_LABEL = [
+  [/check-in time/i, 'Check-in time'], [/check-out time/i, 'Check-out time'], [/wifi name/i, 'WiFi name'], [/wifi password/i, 'WiFi password'],
+  [/wifi not set/i, 'WiFi name and password'], [/access code/i, 'Access code'], [/location|map link/i, 'Location'],
+  [/check-in instructions/i, 'Check-in instructions'], [/check-in steps/i, 'Check-in steps'], [/guidance/i, 'Guest guidance'],
+  [/property name/i, 'Property name'], [/guest count|arrival date|departure date|nights/i, 'Booking details']
+];
+function missingDetails(text) {
+  const found = String(text || '').match(FILLER_RE) || [];
+  const out = [];
+  for (const f of found) {
+    const hit = FILLER_LABEL.find(([re]) => re.test(f));
+    const label = hit ? hit[1] : f.replace(/[()]/g, '');
+    if (!out.includes(label)) out.push(label);
+  }
+  return out;
+}
+// Emails the host once per message and booking. Never throws.
+async function noticeHeld(sql, { ctx, key, title, missing }) {
+  try {
+    const seen = await sql`SELECT 1 FROM audit_log WHERE action = 'auto_message_held' AND target_type = 'order' AND target_id = ${Number(ctx.order.id)}
+                             AND metadata->>'key' = ${key} LIMIT 1`;
+    if (seen.length) return;
+    const { logAudit } = require('./_audit-log');
+    await logAudit(sql, { action: 'auto_message_held', success: true, actorType: 'system', targetType: 'order', targetId: ctx.order.id,
+      metadata: { key, title, missing } });
+    const owner = (await sql`SELECT email, name FROM guests WHERE id = ${ctx.ownerAccountId}`)[0];
+    if (!owner || !owner.email || !process.env.RESEND_API_KEY) return;
+    const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const guest = ctx.data.guestName || 'your guest';
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: [owner.email],
+        subject: `A message to ${guest} is waiting for details`,
+        html: `<div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
+          <p>Hi ${esc(String(owner.name || '').split(' ')[0] || 'there')},</p>
+          <p>Your automatic message <strong>${esc(title)}</strong> to ${esc(guest)} (${esc(ctx.data.listingName || 'your listing')}) has not been sent, because it needs details that are not set yet: <strong>${missing.map(esc).join(', ')}</strong>.</p>
+          <p>Add them in <strong>Manage listing → Guest Check-In Info</strong>. ${key.startsWith('confirmed') ? 'You can then send the message from Messages.' : 'It will then go out automatically at its time.'}</p>
+        </div>` })
+    });
+  } catch (err) { console.error('held-message notice failed:', err.message); }
+}
+
 function resolveTemplateForSend(body, data) {
   const bodyCheck = redactContactInfo(body);
   const guidanceCheck = data.guestGuidance ? redactContactInfo(data.guestGuidance) : { displayText: data.guestGuidance, wasRedacted: false };
@@ -256,7 +304,7 @@ async function sendBookingConfirmedTemplates(sql, order) {
       // after its send day or after today's 07:30 run) — so a last-minute
       // guest still gets their check-in details, straight away.
       templates = await sql`
-        SELECT t.id, t.body, t.auto_send_listing_ids FROM message_templates t
+        SELECT t.id, t.title, t.body, t.auto_send_listing_ids FROM message_templates t
         CROSS JOIN LATERAL (
           SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date AS today, o.arrival
           FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${ctx.order.id}
@@ -279,6 +327,8 @@ async function sendBookingConfirmedTemplates(sql, order) {
     }
     const conversationId = await conversationFor(sql, ctx.order);
     for (const t of applicable) {
+      const missing = missingDetails(resolveTemplateText(t.body, ctx.data));
+      if (missing.length) { await noticeHeld(sql, { ctx, key: 'confirmed:' + t.id, title: t.title || 'On booking confirmed', missing }); continue; }
       if (!(await claimSend(sql, t.id, ctx.order.id))) continue;
       await postTemplate(sql, conversationId, t.body, ctx.data);
     }
@@ -292,9 +342,14 @@ async function sendBookingConfirmedTemplates(sql, order) {
       const lateScheduled = plan.trigger !== 'booking_confirmed' && checkinDue(ctx.order, plan, now) === 'due';
       if (wantConfirm || lateScheduled) {
         const kinds = [wantConfirm ? 'confirmed' : null, lateScheduled ? 'scheduled' : null].filter(Boolean);
-        let send = false;
-        for (const k of kinds) if (await claimCheckin(sql, ctx.order.id, k)) send = true;
-        if (send) await postHostMessage(sql, conversationId, buildCheckinInstructionsText(ctx.data));
+        const text = buildCheckinInstructionsText(ctx.data);
+        const missing = missingDetails(text);
+        if (missing.length) await noticeHeld(sql, { ctx, key: (wantConfirm ? 'confirmed' : 'scheduled') + ':checkin', title: 'Check-in instructions', missing });
+        else {
+          let send = false;
+          for (const k of kinds) if (await claimCheckin(sql, ctx.order.id, k)) send = true;
+          if (send) await postHostMessage(sql, conversationId, text);
+        }
       }
     }
     // Booked late: any "before check-in / check-out" message whose time
@@ -401,7 +456,7 @@ async function sendTimedTemplates(sql, { orderId = null, deadlineMs = 7000 } = {
   let rows = [];
   try {
     const load = (withMinutes) => withMinutes
-      ? sql`SELECT t.id AS template_id, t.body, t.send_trigger, t.send_offset_days, t.send_offset_minutes, t.send_offset_unit,
+      ? sql`SELECT t.id AS template_id, t.title, t.body, t.send_trigger, t.send_offset_days, t.send_offset_minutes, t.send_offset_unit,
                    to_jsonb(t)->>'send_at_time' AS send_at_time, t.auto_send_listing_ids,
                    o.id AS order_id, o.listing_id, o.arrival, o.departure, o.created_at, l.check_in_time, l.check_out_time, l.timezone
             FROM message_templates t
@@ -414,7 +469,7 @@ async function sendTimedTemplates(sql, { orderId = null, deadlineMs = 7000 } = {
                    OR o.created_at > now() - interval '3 days')
               AND NOT EXISTS (SELECT 1 FROM template_sends s WHERE s.template_id = t.id AND s.order_id = o.id)
             LIMIT 2000`
-      : sql`SELECT t.id AS template_id, t.body, t.send_trigger, t.send_offset_days, NULL::int AS send_offset_minutes, NULL::text AS send_offset_unit,
+      : sql`SELECT t.id AS template_id, NULL::text AS title, t.body, t.send_trigger, t.send_offset_days, NULL::int AS send_offset_minutes, NULL::text AS send_offset_unit,
                    NULL::text AS send_at_time, t.auto_send_listing_ids,
                    o.id AS order_id, o.listing_id, o.arrival, o.departure, o.created_at, l.check_in_time, l.check_out_time, l.timezone
             FROM message_templates t
@@ -438,9 +493,13 @@ async function sendTimedTemplates(sql, { orderId = null, deadlineMs = 7000 } = {
     const w = timedSendWindow(row);
     if (!w || now < w.at || now > w.until) continue;
     try {
-      if (!(await claimSend(sql, row.template_id, row.order_id))) continue;
       const ctx = await loadBookingContext(sql, row.order_id);
       if (!ctx) continue;
+      // Held (not claimed) while details are missing: tried again each run
+      // until its window closes.
+      const missing = missingDetails(resolveTemplateText(row.body, ctx.data));
+      if (missing.length) { out.held = (out.held || 0) + 1; await noticeHeld(sql, { ctx, key: 'timed:' + row.template_id, title: row.title || 'Scheduled message', missing }); continue; }
+      if (!(await claimSend(sql, row.template_id, row.order_id))) continue;
       const conversationId = await conversationFor(sql, ctx.order);
       await postTemplate(sql, conversationId, row.body, ctx.data);
       out.sent++;
@@ -514,11 +573,14 @@ async function sendScheduledCheckinInfo(sql, { deadlineMs = 3000 } = {}) {
     if (Date.now() - started > deadlineMs) break;
     if (checkinDue(row, checkinPlan(row), now) !== 'due') continue;
     try {
-      if (!(await claimCheckin(sql, row.order_id, 'scheduled'))) continue;
       const ctx = await loadBookingContext(sql, row.order_id);
       if (!ctx) continue;
+      const text = buildCheckinInstructionsText(ctx.data);
+      const missing = missingDetails(text);
+      if (missing.length) { out.held = (out.held || 0) + 1; await noticeHeld(sql, { ctx, key: 'scheduled:checkin', title: 'Check-in instructions', missing }); continue; }
+      if (!(await claimCheckin(sql, row.order_id, 'scheduled'))) continue;
       const conversationId = await conversationFor(sql, ctx.order);
-      await postHostMessage(sql, conversationId, buildCheckinInstructionsText(ctx.data));
+      await postHostMessage(sql, conversationId, text);
       out.sent++;
     } catch (err) {
       out.failed++;
@@ -535,8 +597,8 @@ async function sendScheduledTemplates(sql, { deadlineMs = 7000 } = {}) {
   const started = Date.now();
   const timed = await sendTimedTemplates(sql, { deadlineMs });
   const checkin = await sendScheduledCheckinInfo(sql, { deadlineMs: Math.max(1000, deadlineMs - (Date.now() - started)) });
-  const out = { sent: timed.sent + checkin.sent, failed: timed.failed + checkin.failed };
+  const out = { sent: timed.sent + checkin.sent, failed: timed.failed + checkin.failed, held: (timed.held || 0) + (checkin.held || 0) };
   return out;
 }
 
-module.exports = { atClock, checkinPlan, checkinDue, sendScheduledCheckinInfo, resolveTemplateText, resolveTemplateForSend, buildCheckinInstructionsText, buildCheckinStepsText, sendBookingConfirmedTemplates, sendScheduledTemplates, sendTimedTemplates, timedSendWindow, parseClock, zonedToUtc, loadBookingContext };
+module.exports = { missingDetails, atClock, checkinPlan, checkinDue, sendScheduledCheckinInfo, resolveTemplateText, resolveTemplateForSend, buildCheckinInstructionsText, buildCheckinStepsText, sendBookingConfirmedTemplates, sendScheduledTemplates, sendTimedTemplates, timedSendWindow, parseClock, zonedToUtc, loadBookingContext };

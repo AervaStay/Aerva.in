@@ -1495,6 +1495,13 @@ module.exports = async (req, res) => {
         if (photosIn.length > 6) return res.status(400).json({ error: 'You can send up to 6 photos in one message.' });
         if (photosIn.length && photos.length !== photosIn.length) return res.status(400).json({ error: 'Those photos could not be sent. Please add them again.' });
         if (!conversationId || (!rawText && !photos.length)) return res.status(400).json({ error: 'Message can\'t be empty.' });
+        // A template tapped in while its details are not set leaves filler such
+        // as "(check-in time not set yet)": never sent that way (same rule as
+        // the automatic messages, _template-scheduling.js).
+        const missingBits = require('./_template-scheduling').missingDetails(rawText);
+        if (missingBits.length) {
+          return res.status(400).json({ error: `This message needs details that are not set yet: ${missingBits.join(', ')}. Add them in Manage listing → Guest Check-In Info, or remove those parts, then send.`, missingDetails: missingBits });
+        }
 
         const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${conversationId}`;
         const conv = convRows[0];

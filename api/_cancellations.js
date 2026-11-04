@@ -360,6 +360,8 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
 
   const reason = by === 'admin'
     ? `Cancelled by Aerva${note ? ' — ' + note : ''}`
+    : by === 'aerva_emergency'
+    ? `Cancelled at the guest’s request (emergency) — approved by Aerva, booking price refunded in full`
     : by === 'timeout_no_refund'
     ? `Cancelled at the guest’s request — the host did not answer within ${HOST_DECISION_TIMEOUT_HOURS} hours, so no refund of the booking price`
     : by === 'timeout_policy'
@@ -535,7 +537,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">A booking was cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)}) — the dates are open again.</p>
       ${hostShare > 0 ? `<p>Your payout for this booking: <strong>${inr(hostShare)}</strong>, on the usual payout day.</p>` : ''}</div>`);
-  await postThreadMessage(sql, main.id, by === 'admin' ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}${creditBack > 0 ? ` plus ${inr(creditBack)} back on their Aerva credit` : ''}.`);
+  await postThreadMessage(sql, main.id, (by === 'admin' || by === 'aerva_emergency') ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : by === 'aerva_emergency' ? 'Cancellation approved by Aerva' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}${creditBack > 0 ? ` plus ${inr(creditBack)} back on their Aerva credit` : ''}.`);
   return { ok: true, refundCash, couponBack, creditBack, heldAsCredit, percent };
 }
 
@@ -602,8 +604,11 @@ async function hostCancellationsLastYear(sql, hostId) {
 //   change_of_plans, last window    → choose 0–100% / Reject (no refund)
 //   emergency reasons               → Accept (full refund) / Reject (booking stands)
 // Unanswered after 24 hours: a fixed bracket is accepted at its P%; the last
-// window is settled with no refund of the booking price; an emergency stays
-// open for Aerva to look at.
+// window is settled with no refund of the booking price; an emergency goes
+// to Aerva (Admin → Cancellation requests), who accepts (full refund, as if
+// the host had) or rejects (owner, 4 Nov 2026). Whatever is still open when
+// the stay starts closes then: the booking stands (closeRequestsAtCheckin).
+// Once the stay has started no one sees Accept / Reject any more.
 const EMERGENCY_REASONS = {
   environmental: 'Environmental hazard (flood, fire, landslide or similar)',
   life_threatening: 'Life-threatening situation',
@@ -685,6 +690,12 @@ async function cancellationCard(sql, conversationId, role) {
     const o = (await sql`SELECT o.* FROM conversations c JOIN orders o ON o.id = c.order_id WHERE c.id = ${conversationId}`)[0];
     if (!o || o.status !== 'paid') return null;
     const rq = (await sql`SELECT * FROM cancellation_requests WHERE order_id = ${o.id} AND status = 'pending' ORDER BY id DESC LIMIT 1`)[0];
+    // From check-in on, a booking can no longer be cancelled: no buttons
+    // (the request itself is closed by closeRequestsAtCheckin).
+    if (rq) {
+      const q = await cancellationQuote(sql, o.id, null);
+      if (q.started) return null;
+    }
     if (role === 'host') {
       if (!rq) return null;
       const option = hostOption(rq);
@@ -749,7 +760,96 @@ async function settleUnansweredRequests(sql, razorpay, { deadlineMs = 4000 } = {
   return out;
 }
 
+// ---- Aerva decides an emergency request (Admin → Cancellation requests) ----
+// Open emergency requests the host has not answered in 24 hours, booking
+// still confirmed and the stay not started.
+async function requestsForAerva(sql) {
+  const rows = await sql`
+    SELECT r.id, r.order_id, r.reason_code, r.details, r.created_at, r.days_before,
+           o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_first_name, o.guest_last_name, l.host_name
+    FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id
+    WHERE r.status = 'pending' AND r.decided_at IS NULL AND o.status = 'paid'
+      AND r.reason_code = ANY(${Object.keys(EMERGENCY_REASONS)})
+      AND r.created_at < now() - make_interval(hours => ${HOST_DECISION_TIMEOUT_HOURS})
+    ORDER BY o.arrival, r.id LIMIT 200`;
+  const out = [];
+  for (const r of rows) {
+    const q = await cancellationQuote(sql, r.order_id, null);
+    if (q.started) continue;
+    out.push({ requestId: r.id, orderId: r.order_id, reason: EMERGENCY_REASONS[r.reason_code] || r.reason_code, details: r.details || '',
+      askedAt: r.created_at, listing: r.suite_name, arrival: r.arrival, departure: r.departure, hostName: r.host_name,
+      guest: [r.guest_first_name, r.guest_last_name].filter(Boolean).join(' ') || r.guest_email,
+      guestGetsBack: await guestGetsBackFor(sql, r.order_id, 100) });
+  }
+  return out;
+}
+async function decideByAerva(sql, razorpay, { requestId, accept, note = '', adminLabel = null }) {
+  const err = (m, status = 400) => Object.assign(new Error(m), { isUserFacing: true, status });
+  const rq = (await sql`SELECT * FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
+  if (!rq) throw err('Request not found.', 404);
+  if (!EMERGENCY_REASONS[rq.reason_code]) throw err('Only emergency requests come to Aerva.');
+  if (rq.status !== 'pending' || rq.decided_at) throw err('This request has already been answered.', 409);
+  const q = await cancellationQuote(sql, rq.order_id, null);
+  if (q.status) throw err(q.error, q.status);
+  if (q.started) throw err('This stay has already started, so it can no longer be cancelled.');
+  if (!(await claimRequest(sql, rq.id))) throw err('This request has already been answered.', 409);
+  const why = String(note || '').trim().slice(0, 500);
+  try {
+    if (accept === true) await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct: 100, by: 'aerva_emergency', adminLabel, note: why });
+  } catch (e) { await unclaimRequest(sql, rq.id); throw e; }
+  await sql`UPDATE cancellation_requests SET status = ${accept === true ? 'accepted' : 'declined'}, refund_percent = ${accept === true ? 100 : 0},
+              host_note = ${'Decided by Aerva' + (why ? ': ' + why : '')}, decided_at = now() WHERE id = ${rq.id}`;
+  await logAudit(sql, { action: 'cancellation_request_decided_by_aerva', success: true, actorType: 'admin', actorIdentifier: adminLabel,
+    targetType: 'order', targetId: rq.order_id, metadata: { requestId: rq.id, accept: accept === true, note: why } });
+  const o = (await sql`SELECT o.suite_name, o.guest_email, o.arrival, o.departure, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${rq.order_id}`)[0];
+  const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
+  const stay = `<strong>${escH(o.suite_name)}</strong> (${escH(dateStr(o.arrival))} → ${escH(dateStr(o.departure))})`;
+  await postThreadMessage(sql, rq.order_id, 'system', accept === true
+    ? 'Aerva reviewed the emergency cancellation request and approved it. The booking price, GST and deposit are refunded in full.'
+    : `Aerva reviewed the emergency cancellation request and did not approve it${why ? ': ' + why : ''}. The booking stands.`);
+  if (accept === true) {
+    await email(o.guest_email, `Your cancellation for ${o.suite_name} is approved`, `<div style="font-family:sans-serif; max-width:480px;"><p>Aerva has approved your cancellation of ${stay}. The booking price, GST and deposit are refunded in full to your original payment method. Aerva’s service fee is not refunded.</p></div>`);
+    await email(host && host.email, `Booking cancelled by Aerva: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Your guest asked to cancel ${stay} for an emergency and there was no answer within ${HOST_DECISION_TIMEOUT_HOURS} hours, so Aerva reviewed it and approved the cancellation. The dates are open again.</p></div>`);
+  } else {
+    await email(o.guest_email, `About your cancellation request for ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Aerva has reviewed your request to cancel ${stay} and could not approve it${why ? ': ' + escH(why) : ''}. Your booking stands.</p></div>`);
+    await email(host && host.email, `Cancellation request closed: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Aerva reviewed your guest’s request to cancel ${stay} and did not approve it. The booking stands.</p></div>`);
+  }
+  return { accepted: accept === true };
+}
+// Scheduler: requests still open when the stay starts close; the booking
+// stands. Never throws.
+async function closeRequestsAtCheckin(sql, { deadlineMs = 3000 } = {}) {
+  const started = Date.now();
+  const out = { closed: 0, affected: [] };
+  let rows = [];
+  try {
+    rows = await sql`SELECT r.id, r.order_id FROM cancellation_requests r JOIN orders o ON o.id = r.order_id
+                     WHERE r.status = 'pending' AND r.decided_at IS NULL AND o.status = 'paid'
+                       AND o.arrival <= CURRENT_DATE + 1 LIMIT 50`;
+  } catch (err) { return { ...out, skipped: 'table not ready' }; }
+  for (const r of rows) {
+    if (Date.now() - started > deadlineMs) break;
+    try {
+      const q = await cancellationQuote(sql, r.order_id, null);
+      if (!q.started) continue;
+      const done = await sql`UPDATE cancellation_requests SET status = 'declined', refund_percent = 0, decided_at = now(),
+                               host_note = 'Closed at check-in: no decision before the stay started'
+                             WHERE id = ${r.id} AND status = 'pending' AND decided_at IS NULL RETURNING id`;
+      if (!done.length) continue;
+      const o = (await sql`SELECT o.suite_name, o.guest_email, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${r.order_id}`)[0];
+      await postThreadMessage(sql, r.order_id, 'system', 'The stay has started, so the cancellation request has closed. The booking stands.');
+      const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
+      await email(o.guest_email, `Your cancellation request for ${o.suite_name} has closed`, `<div style="font-family:sans-serif; max-width:480px;"><p>Your stay at <strong>${escH(o.suite_name)}</strong> has started, so your cancellation request has closed and the booking stands. To leave early, change your check-out date in My Bookings.</p></div>`);
+      await email(host && host.email, `Cancellation request closed: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>The stay at <strong>${escH(o.suite_name)}</strong> has started, so your guest’s cancellation request has closed. The booking stands.</p></div>`);
+      await logAudit(sql, { action: 'cancellation_request_closed_at_checkin', success: true, actorType: 'system', targetType: 'order', targetId: r.order_id, metadata: { requestId: r.id } });
+      out.closed++; out.affected.push({ orderId: r.order_id, email: o.guest_email });
+    } catch (err) { console.error('request not closed at check-in:', r.id, err.message); }
+  }
+  return out;
+}
+
 module.exports = {
+  requestsForAerva, decideByAerva, closeRequestsAtCheckin,
   POLICIES, HOST_DECISION_TIMEOUT_HOURS, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, REQUEST_REASONS,
   policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
   claimForCancellation, releaseClaim, guestGetsBackFor, claimRequest, unclaimRequest, postThreadMessage, hostOption, createCancellationRequest, cancellationCard,
