@@ -722,7 +722,7 @@
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
-<script src="aerva-id-verify.js?v=2026-10-13a"></script>
+<script src="aerva-id-verify.js?v=2026-11-05a"></script>
 <script src="aerva-policies.js?v=2026-11-04b"></script>
 </head>
 <body>
@@ -2183,6 +2183,7 @@
             <input type="text" id="panNumberInput" placeholder="PAN number, e.g. ABCPE1234F" style="text-transform:uppercase;">
             <input type="text" id="panNameInput" placeholder="Name exactly as printed on your PAN card" autocomplete="name" value="${escH(v.bankAccountHolderName || '')}">
             ${v.bankAccountHolderName ? `<p class="verify-locked-note">It must be the same as your payout name, ${escH(v.bankAccountHolderName)}. To use a PAN in another name, change <a href="host-payouts.html" style="color:#8a6c39;">Payout details</a> first.</p>` : ''}
+            <p class="verify-locked-note" style="margin:6px 0 4px;">A clear photo of your PAN card, or your e-PAN PDF. It is checked in seconds and not stored.</p>
             <input type="file" id="panFileInput" accept="image/*,.pdf">
             <button type="button" class="btn-small" id="submitPanBtn">Submit PAN</button>
             <p class="verify-error" id="panError"></p>
@@ -2257,37 +2258,47 @@
           errorEl.style.display = 'block';
           return;
         }
-        this.disabled = true;
-        this.textContent = 'Uploading…';
-        try{
-          const { upload } = await import('https://esm.sh/@vercel/blob/client');
-          // Same purpose as Aadhaar — it tells blob-upload.js to allow
-          // PDFs (not just images) for host verification documents, and
-          // that applies equally to a scanned/e-PAN download.
-          const result = await upload(file.name, file, {
-            access: 'public',
-            handleUploadUrl: API_BASE + '/api/blob-upload',
-            clientPayload: uploadClientPayload('aadhaar-verification')
-          });
-          const res = await fetch(API_BASE + '/api/host-listings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
-            body: JSON.stringify({ panNumber, panName, panDocumentUrl: result.url })
-          });
-          const data = await res.json();
-          if(res.ok){
-            loadListings();
-          } else {
-            errorEl.textContent = data.error || 'Something went wrong. Please try again.';
-            errorEl.style.display = 'block';
-            this.disabled = false;
-            this.textContent = 'Submit PAN';
-          }
-        } catch(err){
-          errorEl.textContent = 'Upload failed. Please try again.';
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Checking…';
+        errorEl.style.display = 'none';
+        const old = document.getElementById('panReviewBtn'); if(old) old.remove();
+        const post = (body) => fetch(API_BASE + '/api/host-listings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+          body: JSON.stringify(body)
+        }).then(async r => ({ ok: r.ok, data: await r.json().catch(() => ({})) }));
+        const fail = (msg, offerReview) => {
+          errorEl.textContent = msg || 'Something went wrong. Please try again.';
           errorEl.style.display = 'block';
-          this.disabled = false;
-          this.textContent = 'Submit PAN';
+          btn.disabled = false;
+          btn.textContent = 'Submit PAN';
+          if(!offerReview) return;
+          // The fallback: the card is sent for Aerva to check by hand.
+          const rb = document.createElement('button');
+          rb.type = 'button'; rb.id = 'panReviewBtn'; rb.className = 'btn-small';
+          rb.style.cssText = 'margin-left:8px; background:transparent; color:#8a6c39; border:1px solid #8a6c39;';
+          rb.textContent = 'Send it to Aerva to check instead';
+          rb.onclick = async () => {
+            rb.disabled = true; rb.textContent = 'Sending…';
+            try{
+              const { upload } = await import('https://esm.sh/@vercel/blob/client');
+              const result = await upload(file.name, file, { access: 'public', handleUploadUrl: API_BASE + '/api/blob-upload', clientPayload: uploadClientPayload('aadhaar-verification') });
+              const r = await post({ panNumber, panName, panDocumentUrl: result.url });
+              if(r.ok) loadListings();
+              else { errorEl.textContent = r.data.error || 'Something went wrong. Please try again.'; rb.disabled = false; rb.textContent = 'Send it to Aerva to check instead'; }
+            }catch(e){ errorEl.textContent = 'Upload failed. Please try again.'; rb.disabled = false; rb.textContent = 'Send it to Aerva to check instead'; }
+          };
+          btn.insertAdjacentElement('afterend', rb);
+        };
+        try{
+          // Checked in seconds and never stored (api/_pan-verify.js).
+          const shrunk = await window.AervaIdVerify.shrink(file);
+          const r = await post({ panNumber, panName, panFiles: [shrunk] });
+          if(r.ok) loadListings();
+          else fail(r.data.error, r.data.canSendForReview);
+        } catch(err){
+          fail(err && err.message ? err.message : 'That file could not be read. Try a clear photo of the PAN card.', false);
         }
       });
     }

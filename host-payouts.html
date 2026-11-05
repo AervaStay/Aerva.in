@@ -67,6 +67,7 @@
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
 <script src="aerva-cohost.js"></script>
 <script src="aerva-bank-fields.js?v=2026-10-13a"></script>
+<script src="aerva-id-verify.js?v=2026-11-05a"></script>
 </head>
 <body>
 
@@ -249,7 +250,7 @@
     else if(named && !panFits(pan, type, last, biz)){ ok = false; hint($('payeePan'), 'bad', NO_MATCH); }
     else hint($('payeePan'), named ? 'good' : '', named ? '✓' : '');
     if(pan){
-      if(!($('payeePanFile').files || [])[0]){ ok = false; hint($('payeePanFile'), touch.file ? 'bad' : '', touch.file ? 'Add a photo or PDF of the PAN card.' : 'Seen only by Aerva, then deleted.'); }
+      if(!($('payeePanFile').files || [])[0]){ ok = false; hint($('payeePanFile'), touch.file ? 'bad' : '', touch.file ? 'Add a photo or PDF of the PAN card.' : 'Checked in seconds and not stored.'); }
       else hint($('payeePanFile'), 'good', '✓ ' + $('payeePanFile').files[0].name);
     }
     return ok;
@@ -284,11 +285,15 @@
   }
 
   let bankForm = null;
-  async function save(){
+  // review: true sends the PAN card for Aerva to check by hand (the fallback
+  // when the instant check could not verify it).
+  async function save(opts){
+    const review = !!(opts && opts.review);
     const btn = $('bankSaveBtn');
     const msg = $('bankMsg');
     const bad = (t) => { msg.textContent = t; msg.style.color = '#a3402f'; };
     msg.textContent = '';
+    const oldRb = document.getElementById('panReviewBtn'); if(oldRb) oldRb.remove();
     if(!refresh(true) || (bankForm && !bankForm.valid())) return bad('Please correct the fields marked in red.');
     const name = payeeName();
     const bankAccountNumber = $('bankAccount').value.trim();
@@ -296,7 +301,7 @@
     const bankIfsc = $('bankIfsc').value.trim();
     const bankGstin = ($('bankGstin').value || '').trim().toUpperCase();
     if(!name || !bankAccountNumber || !bankIfsc) return bad('Please fill in all the fields.');
-    if(!confirm('Save these payout details? Payouts will go to ' + name + ' once the account is verified, and wait at least 48 hours after any change.')) return;
+    if(!review && !confirm('Save these payout details? Payouts will go to ' + name + ' once the account is verified, and wait at least 48 hours after any change.')) return;
     btn.disabled = true; btn.textContent = 'Saving…';
     const done = (t) => { if(t) bad(t); btn.textContent = 'Save'; refresh(); };
     try{
@@ -306,20 +311,37 @@
         if(payeeType() === 'person'){ payload.payeeFirstName = $('payeeFirst').value.trim(); payload.payeeLastName = $('payeeLast').value.trim(); }
       }
       if(!payee.panOnFile && $('payeePan').value.trim()){
-        // The PAN card first, then everything together.
+        // The PAN card, checked in seconds and never stored (api/_pan-verify.js);
+        // or, as the fallback, sent for Aerva to check by hand.
         const file = $('payeePanFile').files[0];
-        let url;
-        try{
-          const { upload } = await import('https://esm.sh/@vercel/blob/client');
-          const r = await upload(file.name, file, { access: 'public', handleUploadUrl: (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/blob-upload',
-            clientPayload: JSON.stringify({ purpose: 'aadhaar-verification', token }) });
-          url = r.url;
-        }catch(e){ return done('The PAN card could not be uploaded. Please try again.'); }
-        Object.assign(payload, { panNumber: $('payeePan').value.trim().toUpperCase(), panName: name, panDocumentUrl: url });
+        Object.assign(payload, { panNumber: $('payeePan').value.trim().toUpperCase(), panName: name });
+        if(review){
+          try{
+            const { upload } = await import('https://esm.sh/@vercel/blob/client');
+            const r = await upload(file.name, file, { access: 'public', handleUploadUrl: (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/blob-upload',
+              clientPayload: JSON.stringify({ purpose: 'aadhaar-verification', token }) });
+            payload.panDocumentUrl = r.url;
+          }catch(e){ return done('The PAN card could not be uploaded. Please try again.'); }
+        } else {
+          try{ payload.panFiles = [await window.AervaIdVerify.shrink(file)]; }
+          catch(e){ return done(e && e.message ? e.message : 'That file could not be read. Try a clear photo of the PAN card.'); }
+        }
       }
+      if(!review) btn.textContent = 'Checking…';
       const res = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(payload) });
       const data = await res.json().catch(() => ({}));
-      if(!res.ok) return done(data.error || 'Something went wrong. Please try again.');
+      if(!res.ok){
+        done(data.error || 'Something went wrong. Please try again.');
+        if(data.canSendForReview && !review){
+          const rb = document.createElement('button');
+          rb.type = 'button'; rb.id = 'panReviewBtn';
+          rb.style.cssText = 'margin:8px 0 0; background:transparent; color:#8a6c39; border:1px solid #8a6c39; padding:8px 14px; border-radius:6px; cursor:pointer;';
+          rb.textContent = 'Send it to Aerva to check instead';
+          rb.onclick = () => save({ review: true });
+          msg.insertAdjacentElement('afterend', rb);
+        }
+        return;
+      }
       if(data.bankCheck === 'checking') setTimeout(load, 20000);
       await load();
       const note = $('bankNote');
