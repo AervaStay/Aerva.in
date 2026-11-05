@@ -3522,7 +3522,7 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'List a property first to create your host account.' });
       }
 
-      const { aadhaarDocumentUrl, bankAccountNumber, bankAccountNumberConfirm, bankIfsc, bankAccountHolderName, bankGstin, panNumber, panName, panDocumentUrl, hostName, hostPhone,
+      const { aadhaarDocumentUrl, bankAccountNumber, bankAccountNumberConfirm, bankIfsc, bankAccountHolderName, bankGstin, panNumber, panName, panDocumentUrl, panFiles, hostName, hostPhone,
               payeeType, payeeFirstName, payeeLastName } = req.body || {};
       // Payout details (host-payouts.html): the person or business paid —
       // the host or someone else. A person is asked for first and last
@@ -3572,7 +3572,7 @@ module.exports = async (req, res) => {
       // ---- Name as printed on the PAN, for a PAN already on file without it ----
       // (PANs entered before this was asked.) Once only; checked against the
       // PAN's 5th letter like a new one.
-      if (cleanPanName && !(typeof panDocumentUrl === 'string' && panDocumentUrl)) {
+      if (cleanPanName && !(typeof panDocumentUrl === 'string' && panDocumentUrl) && !(Array.isArray(panFiles) && panFiles.length)) {
         if (host.pan_name) return res.status(400).json({ error: 'The name on your PAN is already on file. Contact hello@aerva.in if it needs to change.' });
         if (!host.pan_number) return res.status(400).json({ error: 'Add your PAN first.' });
         if (host.bank_account_holder_name && !bankCheck.sameName(cleanPanName, host.bank_account_holder_name)) {
@@ -3588,7 +3588,12 @@ module.exports = async (req, res) => {
       }
 
       // ---- PAN: submit once, then locked — unless the admin rejected it ----
-      if (typeof panDocumentUrl === 'string' && panDocumentUrl.startsWith('https://')) {
+      // Two ways in: panFiles (photo/PDF of the card, checked instantly by
+      // _pan-verify.js and never stored → verified at once), or
+      // panDocumentUrl (the card sent for Aerva to check by hand — the
+      // fallback when the instant check could not verify it).
+      const instantPan = Array.isArray(panFiles) && panFiles.length > 0;
+      if (instantPan || (typeof panDocumentUrl === 'string' && panDocumentUrl.startsWith('https://'))) {
         // Decided by the status, not by a stored document: after review the
         // PAN card image is erased; the number stays (encrypted) for TDS.
         // A rejected PAN is submitted again, with a new card photo.
@@ -3612,21 +3617,35 @@ module.exports = async (req, res) => {
         if (await bankCheck.panInUseElsewhere(sql, cleanPan, { hostId: guest.host_id, guestId })) {
           return res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' });
         }
+        if (instantPan) {
+          try { await require('./_pan-verify').checkPanCard(sql, logAudit, guest.host_id, { pan: cleanPan, name: cleanPanName, files: panFiles }); }
+          catch (err) {
+            if (!err.isUserFacing) throw err;
+            return res.status(err.status || 400).json({ error: err.message, canSendForReview: !!err.canSendForReview });
+          }
+        }
+        const newPanStatus = instantPan ? 'verified' : 'pending_review';
+        const docUrl = instantPan ? null : panDocumentUrl;
         try {
           await sql`
-            UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_name = ${cleanPanName}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
+            UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_name = ${cleanPanName}, pan_document_url = ${docUrl}, pan_status = ${newPanStatus}, pan_rejection_reason = NULL
             WHERE id = ${guest.host_id}
           `;
         } catch (e) {
           if (e.code !== '42703') throw e;      // before migration_bank_check.sql: saved without the name
           await sql`
-            UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_document_url = ${panDocumentUrl}, pan_status = 'pending_review', pan_rejection_reason = NULL
+            UPDATE hosts SET pan_number = ${encryptField(cleanPan)}, pan_document_url = ${docUrl}, pan_status = ${newPanStatus}, pan_rejection_reason = NULL
             WHERE id = ${guest.host_id}
           `;
         }
+        if (instantPan) {
+          await logAudit(sql, { action: 'host_pan_verified', success: true, actorType: 'system', actorIdentifier: 'pan-check',
+            targetType: 'host', targetId: guest.host_id, metadata: { method: 'instant' } });
+          await bankCheck.tellAdminDecision(sql, guest.host_id, 'pan', true, null);
+        }
         host.pan_name = cleanPanName;
         host.pan_number = encryptField(cleanPan);      // the bank details below are checked against this PAN
-        host.pan_status = 'pending_review';           // and the bank save below must not put back the old status
+        host.pan_status = newPanStatus;               // and the bank save below must not put back the old status
         // A bank account already on file is checked again against the new PAN,
         // with payouts on hold meanwhile (see below).
         if (host.bank_status && host.bank_status !== 'not_submitted') panChanged = true;

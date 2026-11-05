@@ -216,5 +216,5 @@
     });
   }
 
-  window.AervaIdVerify = { mount: mount };
+  window.AervaIdVerify = { mount: mount, shrink: shrink };
 })();

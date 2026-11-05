@@ -487,6 +487,8 @@ async function badgeFor(sql, guestId) {
 
 module.exports = {
   DOC_TYPES, status, verifyDocument, verifyAadhaarZip, readVerification, describe, badgeFor, provesHostAddress, aadhaarZipAvailable,
+  // shared with _pan-verify.js
+  decodeFiles, fetchWithTimeout, userError,
   // for tests
   namesMatch, sameBirthDate, judgeDocument, aadhaarHash, last4Of
 };
