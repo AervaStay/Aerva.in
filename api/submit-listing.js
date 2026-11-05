@@ -221,6 +221,17 @@ module.exports = async (req, res) => {
   if (await isSessionRevoked(sql, sessionPayload)) return res.status(401).json({ error: 'Please log in again.' });
   const guestId = sessionPayload.listingId; // generically-named token field — see host-auth.js note
 
+  // POST { sortPhotos: { photos: [{ id, data }] } } — small copies of the
+  // host's photos, sorted into the form's sections (_photo-sort.js).
+  // Nothing is saved; the form places them and the host can move them.
+  if (req.body && req.body.sortPhotos) {
+    try { return res.status(200).json(await require('./_photo-sort').sortPhotos(sql, logAudit, guestId, req.body.sortPhotos)); }
+    catch (err) {
+      if (!err.isUserFacing) console.error('sortPhotos failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Sorting is not available right now. Add the photos to each section yourself.' });
+    }
+  }
+
   try {
     const {
       listingId, isDraft, listingType,

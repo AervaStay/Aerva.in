@@ -884,6 +884,13 @@
       <p style="font-size:11.5px; opacity:0.6; margin:6px 0 0;">Use the ‹ › buttons to arrange photos in order — the number shows their current position. Tap ☆ on any photo to set it as your listing's cover, otherwise interior photos show first by default.</p>
       <div class="field">
         <p class="photo-rule" style="font-size:14px; line-height:1.5; color:#7c3a2d; background:#fbf1ee; border:1px solid #ecd2cb; border-radius:8px; padding:10px 12px; margin:0 0 12px;"><strong>Important:</strong> photos must not show phone numbers, email addresses, websites, social media handles or QR codes. Any such photo is removed.</p>
+        <div id="photoSortBox" style="border:1px dashed #c9b48e; border-radius:10px; padding:14px 14px 10px; margin:0 0 18px; background:#fffdf9;">
+          <label for="listPhotosAll" style="display:block;">Add all your photos <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(up to 40 at once)</span></label>
+          <p style="font-size:12px; opacity:0.7; margin:4px 0 8px;">Pick every photo of the property together — we put each one in the right section below (exterior, kitchen, washroom, living room, each bedroom…). You can change any of them afterwards.</p>
+          <input id="listPhotosAll" type="file" accept="image/*" multiple>
+          <p id="photoSortMsg" style="font-size:12px; margin:8px 0 0;" aria-live="polite"></p>
+          <div id="photoSortPanel"></div>
+        </div>
         <label for="listPhotosExterior">Exterior Photos <span class="required-mark">*</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">(1–20, at least 1 required)</span></label>
         <input id="listPhotosExterior" name="attachment_exterior" type="file" accept="image/*" multiple>
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">The front of the property, or whatever gives the best first impression — this becomes the main photo shown on the site unless you set a different cover.</p>
@@ -1562,7 +1569,7 @@
 <script src="aerva-privacy.js?v=2026-10-10i" defer></script>
 <script src="aerva-id-verify.js?v=2026-11-05a" defer></script>
 <script src="aerva-bank-fields.js?v=2026-10-13a" defer></script>
-<script src="aerva.js?v=2026-11-04b" defer></script>
+<script src="aerva.js?v=2026-11-05a" defer></script>
 
 </body>
 </html>

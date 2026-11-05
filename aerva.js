@@ -1454,6 +1454,7 @@
 
         previewContainer.appendChild(item);
       });
+      if(typeof renderPhotoSortPanel === 'function') renderPhotoSortPanel();
     }
 
     inputEl.addEventListener('change', async () => {
@@ -1487,6 +1488,27 @@
           selectedPhotos.push({ id: 'photo_' + (nextPhotoId++), file: null, url });
         });
         renderPreviews();
+      },
+      // Used by "Add all your photos" (sorted by AI): place, find and move
+      // a picked File. addFiles returns the files that did not fit.
+      addFiles: (files) => {
+        const left = [];
+        files.forEach(f => {
+          if(selectedPhotos.some(p => p.file === f)) return;
+          if(selectedPhotos.length >= MAX_LISTING_PHOTOS){ left.push(f); return; }
+          selectedPhotos.push({ id: 'photo_' + (nextPhotoId++), file: f });
+        });
+        syncInput(); renderPreviews();
+        return left;
+      },
+      hasFile: (f) => selectedPhotos.some(p => p.file === f),
+      removeFile: (f) => {
+        const i = selectedPhotos.findIndex(p => p.file === f);
+        if(i < 0) return false;
+        if(coverPhotoId === selectedPhotos[i].id) coverPhotoId = null;
+        selectedPhotos.splice(i, 1);
+        syncInput(); renderPreviews();
+        return true;
       },
       renderPreviews,
       clear: () => {
@@ -1785,6 +1807,7 @@
     }).join('');
 
     container.innerHTML = bedroomEditorHtml + fixedHtml;
+    if(typeof renderPhotoSortPanel === 'function') renderPhotoSortPanel();
 
     // ---- Tab switching ----
     container.querySelectorAll('[data-tab-key]').forEach(tab => {
@@ -1893,6 +1916,203 @@
       if(mainRemove) mainRemove.addEventListener('click', () => { room.file = null; room.url = null; renderRoomSpaces(); });
     });
   }
+  // ---- "Add all your photos": sorted into the sections by AI ----
+  // The host picks every photo at once. Small copies go to
+  // api/submit-listing.js (sortPhotos → _photo-sort.js), which says which
+  // section each belongs to (and groups photos of the same bedroom). They
+  // are then placed in the sections below exactly as if added by hand, and
+  // the panel lists each with a "Section" menu so the host can move any of
+  // them. Photos it could not place wait under "Not placed yet". The
+  // section-by-section controls keep working as before.
+  var photoSort = { files: [], busy: false };      // every File added this way, in order
+  const SORT_FIXED = { kitchen: 'kitchen', washroom: 'washroom', living_room: 'living_room', garden: 'garden', balcony: 'balcony' };
+  const SORT_BUCKET_FOR = { washroom: 'washroomPhotos', living_room: 'livingRoomPhotos', balcony: 'balconyPhotos' };
+  const SORT_BUCKET_LABEL = { photos: '', washroomPhotos: ' – Washroom', livingRoomPhotos: ' – Living Room', balconyPhotos: ' – Balcony' };
+
+  // Where a File is now: 'exterior' | 'fixed:<key>' | 'bed:<rowIdx>:<bucket>' | 'none'.
+  function photoPlace(f){
+    if(exteriorPhotoManager.hasFile && exteriorPhotoManager.hasFile(f)) return 'exterior';
+    for(let i = 0; i < roomSpaceRows.length; i++){
+      const r = roomSpaceRows[i];
+      if(!r.isBedroom){ if(r.file === f) return 'fixed:' + r.key; continue; }
+      for(const b of ['photos', 'washroomPhotos', 'livingRoomPhotos', 'balconyPhotos']){
+        if((r[b] || []).some(p => p.file === f)) return `bed:${i}:${b}`;
+      }
+    }
+    return 'none';
+  }
+  function photoPlaces(){
+    const out = [{ value: 'exterior', label: 'Exterior' }];
+    roomSpaceRows.forEach((r, i) => {
+      if(r.isBedroom){
+        Object.keys(SORT_BUCKET_LABEL).forEach(b => out.push({ value: `bed:${i}:${b}`, label: (r.name || 'Bedroom') + SORT_BUCKET_LABEL[b] }));
+      } else out.push({ value: 'fixed:' + r.key, label: r.name });
+    });
+    out.push({ value: 'none', label: 'Not placed yet' });
+    return out;
+  }
+  function takePhotoOut(f){
+    if(exteriorPhotoManager.removeFile && exteriorPhotoManager.removeFile(f)) return;
+    roomSpaceRows.forEach(r => {
+      if(!r.isBedroom){ if(r.file === f){ r.file = null; r.url = null; } return; }
+      ['photos', 'washroomPhotos', 'livingRoomPhotos', 'balconyPhotos'].forEach(b => {
+        const i = (r[b] || []).findIndex(p => p.file === f);
+        if(i >= 0) r[b].splice(i, 1);
+      });
+    });
+  }
+  // Puts a File in a place; returns false when it did not fit there.
+  function putPhotoIn(f, place, { replace = true } = {}){
+    if(place === 'none') return true;
+    if(place === 'exterior') return exteriorPhotoManager.addFiles([f]).length === 0;
+    if(place.startsWith('fixed:')){
+      const r = roomSpaceRows.find(x => !x.isBedroom && x.key === place.slice(6));
+      if(!r) return false;
+      if((r.file || r.url) && !replace) return false;
+      // The photo it replaces stays in the panel, under "Not placed yet".
+      if(r.file && !photoSort.files.includes(r.file)) photoSort.files.push(r.file);
+      r.file = f; r.url = null;
+      return true;
+    }
+    const [, idx, bucket] = place.split(':');
+    const r = roomSpaceRows[Number(idx)];
+    if(!r || !r.isBedroom) return false;
+    r[bucket].push({ file: f, url: null });
+    return true;
+  }
+  function movePhotoTo(f, place){
+    takePhotoOut(f);
+    if(!putPhotoIn(f, place)) alert('That section is full. The photo is waiting under “Not placed yet”.');
+    renderRoomSpaces();
+  }
+
+  // Small copy for sorting only (the original File is what gets uploaded).
+  function sortThumb(file){
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 640 / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        const data = c.toDataURL('image/jpeg', 0.72).split(',')[1];
+        c.width = c.height = 0;
+        resolve(data);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  }
+
+  // AI result → places. Bedroom letters A, B, … go to Bedroom 1, 2, … in
+  // order; one photo fills each empty single-photo space; an en-suite
+  // washroom / balcony / sitting area goes with its bedroom; the rest wait.
+  function placeSortedPhotos(files, result){
+    const isResort = document.getElementById('listType').value === 'Resort';
+    const bedrooms = roomSpaceRows.map((r, i) => r.isBedroom ? i : -1).filter(i => i >= 0);
+    const bedIdx = (letter) => { const n = String(letter || '').charCodeAt(0) - 65; return n >= 0 && n < bedrooms.length ? bedrooms[n] : null; };
+    const byId = new Map(result.map(x => [x.id, x]));
+    let placed = 0;
+    const later = [];
+    files.forEach((f, i) => {
+      const r = byId.get('p' + i) || { section: 'other' };
+      let place = 'none';
+      if(r.section === 'exterior' || (isResort && ['kitchen', 'living_room', 'garden'].includes(r.section) && !r.with)) place = 'exterior';
+      else if(r.section === 'bedroom') place = bedIdx(r.room) != null ? `bed:${bedIdx(r.room)}:photos` : 'none';
+      else if(SORT_FIXED[r.section]){
+        const row = roomSpaceRows.find(x => !x.isBedroom && x.key === SORT_FIXED[r.section]);
+        if(row && !row.file && !row.url && !r.with) place = 'fixed:' + row.key;
+        else if(r.with && bedIdx(r.with) != null && SORT_BUCKET_FOR[r.section]) place = `bed:${bedIdx(r.with)}:${SORT_BUCKET_FOR[r.section]}`;
+        else if(row && !row.file && !row.url) place = 'fixed:' + row.key;
+        else later.push([f, r]);
+      }
+      if(place !== 'none' && putPhotoIn(f, place, { replace: false })) placed++;
+    });
+    // A second photo of a space already filled: with its bedroom if known.
+    later.forEach(([f, r]) => {
+      if(r.with && bedIdx(r.with) != null && SORT_BUCKET_FOR[r.section] && putPhotoIn(f, `bed:${bedIdx(r.with)}:${SORT_BUCKET_FOR[r.section]}`)) placed++;
+    });
+    return placed;
+  }
+
+  async function addAllPhotos(picked){
+    const msg = document.getElementById('photoSortMsg');
+    const say = (t, bad) => { if(msg){ msg.textContent = t; msg.style.color = bad ? '#a3402f' : ''; } };
+    if(!picked.length || photoSort.busy) return;
+    if(picked.length > 40){ say('Add up to 40 photos at a time.', true); return; }
+    photoSort.busy = true;
+    say('Checking your photos…');
+    try{
+      const files = await screenPhotosAtProperty(picked);
+      files.forEach(f => { if(!photoSort.files.includes(f)) photoSort.files.push(f); });
+      say(`Sorting ${files.length} photo${files.length === 1 ? '' : 's'}…`);
+      const thumbs = await Promise.all(files.map(sortThumb));
+      const send = files.map((f, i) => ({ id: 'p' + i, data: thumbs[i] })).filter(x => x.data);
+      let result = [];
+      if(send.length){
+        const res = await fetch(LISTINGS_API_BASE + '/api/submit-listing', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
+          body: JSON.stringify({ sortPhotos: { photos: send } })
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok){ renderRoomSpaces(); say((data.error || 'Sorting is not available right now.') + ' Your photos are below, under “Not placed yet”.', true); return; }
+        result = data.photos || [];
+      }
+      const placed = placeSortedPhotos(files, result);
+      renderRoomSpaces();
+      const waiting = files.length - placed;
+      say(`${placed} photo${placed === 1 ? '' : 's'} sorted into sections${waiting ? `, ${waiting} not placed yet` : ''}. Check them below and change any section if needed.`);
+    }catch(err){
+      renderRoomSpaces();
+      say('Sorting did not finish. Your photos are below, under “Not placed yet”.', true);
+    }finally{ photoSort.busy = false; }
+  }
+
+  const sortPreviewUrls = new WeakMap();
+  function sortPreviewUrl(f){
+    if(!sortPreviewUrls.has(f)) sortPreviewUrls.set(f, URL.createObjectURL(f));
+    return sortPreviewUrls.get(f);
+  }
+  function renderPhotoSortPanel(){
+    const box = document.getElementById('photoSortPanel');
+    if(!box) return;
+    // Photos the host deleted from a section stay listed under "Not placed yet".
+    if(!photoSort || !photoSort.files.length){ box.innerHTML = ''; return; }
+    const places = photoPlaces();
+    const rows = photoSort.files.map((f, i) => ({ f, i, place: photoPlace(f) }));
+    const waiting = rows.filter(r => r.place === 'none').length;
+    box.innerHTML = `
+      <p style="font-size:12px; margin:12px 0 6px;"><strong>Your photos</strong> · ${rows.length - waiting} in sections${waiting ? ` · <span style="color:#a3402f;">${waiting} not placed yet</span>` : ''}</p>
+      <div class="photo-sort-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:10px;">
+        ${rows.map(r => `
+          <div style="border:1px solid ${r.place === 'none' ? '#ecd2cb' : 'var(--line-dark, #e3d9cb)'}; border-radius:8px; padding:6px; background:#fff;">
+            <img src="${sortPreviewUrl(r.f)}" alt="" style="width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:5px; display:block;">
+            <select data-sort-move="${r.i}" aria-label="Section for this photo" style="width:100%; margin-top:6px; font-size:12px; padding:5px 4px;">
+              ${places.map(p => `<option value="${p.value}"${p.value === r.place ? ' selected' : ''}>${escapeMessageHtml(p.label)}</option>`).join('')}
+            </select>
+            <button type="button" data-sort-drop="${r.i}" style="margin-top:4px; width:100%; font-size:11px; background:none; border:none; color:#8a6c39; cursor:pointer;">Don’t use this photo</button>
+          </div>`).join('')}
+      </div>`;
+    box.querySelectorAll('[data-sort-move]').forEach(sel => sel.addEventListener('change', () => movePhotoTo(photoSort.files[Number(sel.dataset.sortMove)], sel.value)));
+    box.querySelectorAll('[data-sort-drop]').forEach(btn => btn.addEventListener('click', () => {
+      const f = photoSort.files[Number(btn.dataset.sortDrop)];
+      takePhotoOut(f);
+      photoSort.files = photoSort.files.filter(x => x !== f);
+      renderRoomSpaces();
+    }));
+  }
+  (function wireAddAllPhotos(){
+    const input = document.getElementById('listPhotosAll');
+    if(!input) return;
+    input.addEventListener('change', () => {
+      const picked = Array.from(input.files || []);
+      input.value = '';
+      addAllPhotos(picked);
+    });
+  })();
+
   renderRoomSpaces();
   document.getElementById('listBedrooms').addEventListener('input', syncBedroomRowCount);
   syncBedroomRowCount(); // establishes the initial bedroom row(s) from whatever's already in the field
@@ -2477,6 +2697,7 @@
       document.getElementById('draftHintText').style.display = 'none';
       listingForm.reset();
       exteriorPhotoManager.clear();
+      if(typeof photoSort !== 'undefined' && photoSort){ photoSort.files = []; const m = document.getElementById('photoSortMsg'); if(m) m.textContent = ''; }
       roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, file: null, url: null }));
       activeBedroomTabKey = null;
       pickedUpPhoto = null;
@@ -12221,6 +12442,8 @@
           const hasItems = (Array.isArray(body.stays) && body.stays.length > 0) || (Array.isArray(body.experiences) && body.experiences.length > 0);
           const isBooking = isOrderApi && hasItems && !body.quoteOnly;
           if(isOrderApi && !isBooking) return originalFetch(input, init);
+          // Sorting photos ("Add all your photos") submits nothing.
+          if(isListing && body.sortPhotos) return originalFetch(input, init);
           const version = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements && window.AERVA_POLICIES.agreements.version;
           if(isBooking){
             if(!agreementTicked(lastAgreementButton)) return refuse('Please tick the booking agreement to continue.');
