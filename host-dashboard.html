@@ -723,7 +723,7 @@
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-10-13a"></script>
-<script src="aerva-policies.js?v=2026-11-04a"></script>
+<script src="aerva-policies.js?v=2026-11-04b"></script>
 </head>
 <body>
 
@@ -2179,6 +2179,7 @@
                <button type="button" class="btn-small" id="submitPanNameBtn">Save name</button>
                <p class="verify-error" id="panNameError"></p>`}`
           : `
+            ${v.panStatus === 'rejected' ? '<p class="verify-locked-note">Check the reason above, then submit your PAN again with a clear photo of the card.</p>' : ''}
             <input type="text" id="panNumberInput" placeholder="PAN number, e.g. ABCPE1234F" style="text-transform:uppercase;">
             <input type="text" id="panNameInput" placeholder="Name exactly as printed on your PAN card" autocomplete="name" value="${escH(v.bankAccountHolderName || '')}">
             ${v.bankAccountHolderName ? `<p class="verify-locked-note">It must be the same as your payout name, ${escH(v.bankAccountHolderName)}. To use a PAN in another name, change <a href="host-payouts.html" style="color:#8a6c39;">Payout details</a> first.</p>` : ''}

@@ -3561,6 +3561,9 @@ module.exports = async (req, res) => {
         FROM hosts WHERE id = ${guest.host_id}
       `;
       const host = current[0];
+      // A rejected PAN is not on file: the host submits a new one, and its
+      // number and name no longer bind the payout name.
+      if (host.pan_status === 'rejected') { host.pan_number = null; host.pan_name = null; }
       let didSomething = false;
       let bankChanged = false;
       let panChanged = false;
@@ -3584,11 +3587,12 @@ module.exports = async (req, res) => {
         didSomething = true;
       }
 
-      // ---- PAN: submit once, then permanently locked ----
+      // ---- PAN: submit once, then locked — unless the admin rejected it ----
       if (typeof panDocumentUrl === 'string' && panDocumentUrl.startsWith('https://')) {
         // Decided by the status, not by a stored document: after review the
         // PAN card image is erased; the number stays (encrypted) for TDS.
-        if (host.pan_status && host.pan_status !== 'not_submitted') {
+        // A rejected PAN is submitted again, with a new card photo.
+        if (host.pan_status && host.pan_status !== 'not_submitted' && host.pan_status !== 'rejected') {
           return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
         }
         const cleanPan = typeof panNumber === 'string' ? panNumber.trim().toUpperCase() : '';
@@ -4049,7 +4053,7 @@ module.exports = async (req, res) => {
       bankIfsc: h.bank_ifsc,
       panStatus: h.pan_status,
       panRejectionReason: h.pan_rejection_reason,
-      panSubmitted: !!h.pan_status && h.pan_status !== 'not_submitted',
+      panSubmitted: !!h.pan_status && h.pan_status !== 'not_submitted' && h.pan_status !== 'rejected',
       // PAN is shown, unlike the bank account number — it's not a
       // payment credential the way an account number is, and a host
       // benefits from being able to confirm exactly what's on file.

@@ -652,6 +652,26 @@ module.exports = async (req, res) => {
   }
 
   // ---- Stay disputes (guest reported a problem during the stay) ----
+  // GET ?cancellationRequests=1 · POST { decideCancellationRequest: { requestId, accept, note } }
+  // Emergency cancellation requests the host did not answer in 24 hours:
+  // Aerva approves (full refund of price, GST and deposit) or rejects
+  // (_cancellations.js decideByAerva). Closed by itself at check-in.
+  if (req.method === 'GET' && req.query.cancellationRequests === '1') {
+    try { return res.status(200).json({ requests: await require('./_cancellations').requestsForAerva(sql) }); }
+    catch (err) { console.error('cancellationRequests failed:', err); return res.status(500).json({ error: 'Could not load cancellation requests.' }); }
+  }
+  if (req.method === 'POST' && req.body && req.body.decideCancellationRequest) {
+    const b = req.body.decideCancellationRequest;
+    if (b.accept !== true && String(b.note || '').trim().length < 5) return res.status(400).json({ error: 'Write the reason — the guest is told it.' });
+    try {
+      const out = await require('./_cancellations').decideByAerva(sql, razorpay, { requestId: Number(b.requestId) || 0, accept: b.accept === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('decideCancellationRequest failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not decide this request right now.' });
+    }
+  }
+
   // GET ?stayDisputes=1[&status=all] · POST { decideStayDispute: { disputeId, refund, note } }
   // The host's account is given more weight: refund only when the guest's
   // evidence stands and the host cannot justify (_stay-disputes.js).
@@ -2227,6 +2247,7 @@ module.exports = async (req, res) => {
 
         let erased = null;
         let eraseReason = null;
+        let decided = false;
         if (field === 'aadhaar') {
           const upd = await sql`
             UPDATE hosts SET aadhaar_status = ${newStatus}, aadhaar_rejection_reason = ${cleanReason}
@@ -2240,11 +2261,13 @@ module.exports = async (req, res) => {
           `;
           if (upd.length) { const e = await eraseHostIdDocument(hostId, 'pan'); erased = e.erased; eraseReason = e.reason || null; }
         } else {
-          await sql`
+          const upd = await sql`
             UPDATE hosts SET bank_status = ${newStatus}, bank_rejection_reason = ${cleanReason}
-            WHERE id = ${hostId} AND bank_status = 'pending_review'
+            WHERE id = ${hostId} AND bank_status = 'pending_review' RETURNING id
           `;
+          decided = upd.length > 0;
         }
+        if (decided || erased !== null) await require('./_bank-check').tellAdminDecision(sql, hostId, field, action === 'approve', cleanReason);
 
         await logAudit(sql, {
           action: `host_${field}_${action}d`, success: true, actorType: 'admin', ...ADMIN_AUDIT,

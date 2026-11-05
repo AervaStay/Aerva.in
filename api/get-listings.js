@@ -572,8 +572,14 @@ const JOBS = [
     run: (c) => reconcilePayments(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   // Last-days cancellation requests the host has not answered in 24 hours
   // are settled as no refund of the booking price (_cancellations.js).
-  { name: 'unanswered_cancellations', label: 'Settle cancellation requests the host did not answer within 24 hours', everyMinutes: 15,
-    run: (c) => settleUnansweredRequests(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  { name: 'unanswered_cancellations', label: 'Settle cancellation requests the host did not answer within 24 hours, and close requests still open at check-in', everyMinutes: 15,
+    run: async (c) => {
+      const settled = await settleUnansweredRequests(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) });
+      // Still open when the stay starts (e.g. an emergency Aerva has not
+      // decided): closed, the booking stands.
+      const closed = await require('./_cancellations').closeRequestsAtCheckin(c.sql, { deadlineMs: 2000 });
+      return { ...settled, closedAtCheckin: closed.closed || 0 };
+    } },
   // Payments whose amount did not match the booking: refunded in full the
   // day after (_confirm-booking.js).
   { name: 'scheduled_refunds', label: 'Next-day refunds for payments that did not match the booking amount', everyMinutes: 15,
