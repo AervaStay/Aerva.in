@@ -28,7 +28,7 @@ const SYSTEM_PROMPT = `You check Indian PAN cards (Permanent Account Number, iss
  "is_pan_card": true|false,
  "readable": true|false,
  "looks_genuine": true|false,
- "pan_number": "the 10-character PAN exactly as printed, or null",
+ "pan_number": "the 10-character PAN exactly as printed (5 letters, 4 digits, 1 letter — read each character carefully, it is printed under 'Permanent Account Number'), or null",
  "holder_name": "the card holder's name exactly as printed (the line labelled Name, or the first name line), or null",
  "fathers_name": "the father's name as printed, or null",
  "date_of_birth": "YYYY-MM-DD, or null",
@@ -73,6 +73,16 @@ async function readPanCard(files) {
 // the audit log only, never shown.
 const tidyName = (s) => words(s).map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
 const cleanPan = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// A PAN is always 5 letters, 4 digits, 1 letter. Characters that look
+// alike on a card (O/0, I/1, S/5, B/8, Z/2, G/6) are read for the kind
+// the position must hold, so a misread does not fail a real card.
+const AS_LETTER = { '0': 'O', '1': 'I', '5': 'S', '8': 'B', '2': 'Z', '6': 'G' };
+const AS_DIGIT = { O: '0', D: '0', Q: '0', I: '1', L: '1', S: '5', B: '8', Z: '2', G: '6' };
+function panShape(s) {
+  const c = cleanPan(s);
+  if (c.length !== 10) return c;
+  return c.split('').map((ch, i) => (i >= 5 && i <= 8) ? (AS_DIGIT[ch] || ch) : (AS_LETTER[ch] || ch)).join('');
+}
 function judgePan(read, input) {
   const r = read || {};
   const no = (reason) => ({ ok: false, reason });
@@ -83,9 +93,14 @@ function judgePan(read, input) {
   // blur) a model sometimes lists here are ignored.
   const serious = (Array.isArray(r.concerns) ? r.concerns : []).filter(c => /edit|overlay|font|specimen|sample|template|mock|draw|screen|tamper|fake|forg|more than one|another card|altered|pasted/i.test(String(c || '')));
   if (serious.length) return no('concerns');
-  const printed = cleanPan(r.pan_number);
+  const printed = panShape(r.pan_number);
   if (printed.length !== 10) return no('number_unreadable');
-  if (printed !== cleanPan(input.pan)) return no('number');
+  const typed = panShape(input.pan);
+  if (printed !== typed) {
+    // Which positions differ (1–10) — for the audit log; the PAN itself is never logged.
+    const at = printed.split('').map((ch, i) => ch === typed[i] ? 0 : i + 1).filter(Boolean);
+    return { ok: false, reason: 'number', numberDiffAt: at };
+  }
   if (r.holder_name && namesMatch(input.name, r.holder_name)) return { ok: true, name: tidyName(r.holder_name) };
   // The name typed without the middle name(s) printed on the card (e.g.
   // "Tanish Jain" for TANISH KUMAR JAIN): same first and last name, every
@@ -118,7 +133,7 @@ async function checkPanCard(sql, logAudit, hostId, { pan, name, files }) {
   finally { decoded.forEach(f => f.bytes.fill(0)); }       // nothing of the card outlives the request
   const verdict = judgePan(read, { pan, name });
   await logAudit(sql, { action: 'pan_check_attempt', success: verdict.ok, actorType: 'host', actorIdentifier: String(hostId),
-    targetType: 'host', targetId: hostId, metadata: { reason: verdict.reason || null, middleAdded: !!verdict.middleAdded,
+    targetType: 'host', targetId: hostId, metadata: { reason: verdict.reason || null, middleAdded: !!verdict.middleAdded, numberDiffAt: verdict.numberDiffAt || undefined,
       photoNotes: read && Array.isArray(read.photo_notes) ? read.photo_notes.slice(0, 3).map(x => String(x).slice(0, 80)) : [],
       concerns: read && Array.isArray(read.concerns) ? read.concerns.slice(0, 3).map(x => String(x).slice(0, 80)) : [] } });
   if (!verdict.ok) throw userError(NOT_VERIFIED, 400, { canSendForReview: true });
