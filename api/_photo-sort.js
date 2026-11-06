@@ -4,8 +4,11 @@
 // The host adds all their photos at once; the browser sends small copies
 // (about 640 px, JPEG) with an id each. Claude (vision) looks at them
 // together, in one request, and says for each photo:
-//   section   exterior | kitchen | washroom | living_room | garden |
-//             balcony | bedroom | other
+//   section   exterior | kitchen | washroom | living_room | bedroom |
+//             balcony | roof | garden | ground | pool | gym | barbeque |
+//             play_area | wardrobe | utility | garbage |
+//             additional (not clear — the host moves it) |
+//             other (not of the property: people, documents, …)
 //   room      for bedroom photos, a letter per physical bedroom (photos
 //             of the same bedroom share it: "A", "B", …)
 //   with      for a washroom / balcony / sitting area that belongs to a
@@ -20,24 +23,38 @@ const MODEL = () => process.env.PHOTO_SORT_MODEL || process.env.PHOTO_SCAN_MODEL
 const MAX_PHOTOS = 40;
 const MAX_BYTES = 400 * 1024;            // per small copy, after base64 decoding
 const PER_HOUR = 12;                     // sort requests per account
-const SECTIONS = ['exterior', 'kitchen', 'washroom', 'living_room', 'garden', 'balcony', 'bedroom', 'other'];
+const SECTIONS = ['exterior', 'kitchen', 'washroom', 'living_room', 'bedroom', 'balcony', 'roof', 'garden', 'ground', 'pool', 'gym', 'barbeque', 'play_area', 'wardrobe', 'utility', 'garbage', 'additional', 'other'];
 
 const userError = (message, status = 400) => Object.assign(new Error(message), { isUserFacing: true, status });
 
-const SYSTEM_PROMPT = `You sort photos of a holiday-rental property in India (a villa, home, apartment or resort) into the sections of the listing form. You see every photo at once, each preceded by its id. Answer ONLY with one JSON object, no other text:
-{"photos":[{"id":"<id>","section":"exterior|kitchen|washroom|living_room|garden|balcony|bedroom|other","room":"A|B|…|null","with":"A|B|…|null","sure":true|false}]}
-Sections:
-- exterior: the outside of the building, the entrance, gate, facade, driveway, pool, lawn seen with the building, the view of the property from outside, rooftop.
-- kitchen: kitchen or kitchenette, dining nook inside the kitchen.
-- washroom: bathroom, toilet, shower, vanity.
-- living_room: living or sitting room, lounge, dining room, hall.
-- garden: a garden, yard, terrace garden, lawn (without the building as the subject).
-- balcony: a balcony, verandah, deck, sit-out.
-- bedroom: a room with a bed.
-- other: anything else — people, documents, screenshots, food close-ups, a map, a logo, an unclear or blank photo.
+const SYSTEM_PROMPT = `You sort photos of a holiday-rental property in India (a villa, home, apartment, farmhouse or resort) into the sections of the listing form. You see every photo at once, each preceded by its id. Use all the photos together: the same flooring, walls, ceiling, lights, curtains or furniture across photos tells you they are the same space. Answer ONLY with one JSON object, no other text:
+{"photos":[{"id":"<id>","section":"<section>","room":"A|B|…|null","with":"A|B|…|null","sure":true|false}]}
+Sections: exterior, kitchen, washroom, living_room, bedroom, balcony, roof, garden, ground, pool, gym, barbeque, play_area, wardrobe, utility, garbage, additional, other.
+
+How homes are arranged — decide by the whole scene, never by one object alone:
+- One object can be in many places. A TV can be in a bedroom or a living room; a projector or screen can be inside a room or on an open terrace; chairs and tables can be anywhere. Look at what surrounds it: a bed → bedroom; a sofa → living room; open sky above with a parapet or open floor → roof.
+- bedroom: a bed is in the photo, or it is clearly the same room as a bedroom photo (same walls, curtains, lights).
+- kitchen: hob, chimney, oven, microwave, fridge, kitchen sink, kitchen counter or cabinets, crockery shelves, kitchen appliances. An open kitchen in a hall, with a dining table in front of it, is kitchen.
+- living_room: a sofa (with or without a TV), a sofa with a centre table, a TV unit with seating, a dining table with no kitchen fittings, a hall with no bed.
+- washroom: toilet, shower, bathtub, washbasin.
+- wardrobe: wardrobe, walk-in wardrobe, dressing or powder area with no bed in the photo.
+- utility: washing machine, dryer, dishwasher outside the kitchen, ironing or utility sink area.
+- balcony: a balcony, verandah or sit-out with a railing, or a view (sky, garden, parking, city, sea, hills) seen from an upper floor through a door or over a railing.
+- roof: an open terrace or rooftop — open sky above, parapet walls, terrace seating, a projector or screen set up under the sky.
+- garden: plants, lawn or landscaped garden as the main subject.
+- ground: an open ground or field — sports ground, open lawn for events, open land of the property.
+- pool: a swimming pool or pool deck.
+- gym: exercise machines, weights, yoga or workout area.
+- barbeque: a barbeque grill, tandoor or outdoor cooking set-up.
+- play_area: swings, slides, children's play equipment, indoor games (table tennis, pool table, board games corner).
+- exterior: the outside of the building, entrance, gate, facade, driveway, parking, the whole property seen from outside.
+- garbage: the garbage point — dustbins, a rubbish or waste collection point, a dumping area.
+- additional: a photo of the property that is NOT clearly one of the above — decor close-ups, a corridor, stairs, a store room, a puja room, or anything you are not sure about.
+- other: ONLY a photo that is not of the property at all — a person or selfie, a pet, a document, a screenshot, a map, a logo, a blank photo.
+When a photo is not clearly one section, choose additional — the host will move it. Never guess between two sections.
 Bedrooms: give photos of the same physical bedroom the same "room" letter (same bed, walls, furniture, curtains), starting at "A" for the first bedroom you meet. Different bedrooms get different letters.
-"with": for a washroom, balcony or sitting area that is clearly part of a particular bedroom (an en-suite you can see from the bed, the same flooring and door, or the same balcony seen from that bedroom), give that bedroom's letter; otherwise null. Never guess: when unsure, null.
-"sure": false when you cannot tell the section with confidence.
+"with": for a washroom, balcony, sitting area or wardrobe that is clearly part of a particular bedroom (seen from the bed, the same flooring and door, or the same balcony seen from that bedroom), give that bedroom's letter; otherwise null. Never guess "with": when unsure, null.
+"sure": true when the section is clear; false otherwise (then the section must be additional).
 Every id you were given must appear exactly once.`;
 
 function mediaOk(b) {
@@ -82,7 +99,7 @@ function readAnswer(text) {
   return out;
 }
 
-async function ask(photos) {
+async function ask(photos, { modelList = models(), until = Date.now() + 52000, note = '' } = {}) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw failed('no_key', NOT_NOW);
   const content = [];
@@ -90,10 +107,9 @@ async function ask(photos) {
     content.push({ type: 'text', text: `id: ${p.id}` });
     content.push({ type: 'image', source: { type: 'base64', media_type: typeOf(p.bytes), data: p.bytes.toString('base64') } });
   });
-  content.push({ type: 'text', text: 'Sort these photos. Answer with the JSON object only, on one line, no spaces or line breaks.' });
-  const started = Date.now();
-  const left = () => 52000 - (Date.now() - started);
-  const queue = models();
+  content.push({ type: 'text', text: (note ? note + ' ' : '') + 'Sort these photos. Answer with the JSON object only, on one line, no spaces or line breaks.' });
+  const left = () => until - Date.now();
+  const queue = modelList.slice();
   let lastReason = 'ai_error', retried = false;
   while (queue.length && left() > 8000) {
     const model = queue[0];
@@ -130,27 +146,38 @@ async function ask(photos) {
 }
 
 // Claude's answer → a clean result for every id sent, in the order sent.
-// Bedroom letters come only from bedroom photos, renumbered A, B, C… in
-// the order met; a "with" that names no such bedroom is dropped.
+// A photo the AI was not sure about goes to Additional Photos, for the
+// the host; only a missing or unknown answer becomes "other". Bedroom
+// letters come only from bedroom photos, renumbered A, B, C… in the order
+// met; a "with" that names no such bedroom is dropped.
 function normalise(ids, answer) {
   const byId = new Map();
   (Array.isArray(answer) ? answer : []).forEach(a => { if (a && ids.includes(String(a.id)) && !byId.has(String(a.id))) byId.set(String(a.id), a); });
   const key = (x) => { const k = String(x || '').trim().toUpperCase(); return /^[A-Z]{1,2}$/.test(k) ? k : null; };
-  const isSure = (a) => byId.has(String(a.id)) && a.sure !== false && SECTIONS.includes(a.section);
+  // An answer naming no known section is a photo it could not place: kept
+  // as an additional photo (to check). No answer at all → not placed.
+  // Anything not clear goes to Additional Photos (owner's rule) — the host
+  // moves it; nothing is placed on a guess.
+  byId.forEach(a => {
+    if (!SECTIONS.includes(a.section) || (a.sure === false && a.section !== 'other')) { a.section = 'additional'; a.room = null; a.with = null; }
+    if (a.section !== 'other') a.sure = true;
+  });
+  const known = (a) => a && SECTIONS.includes(a.section);
   const letters = new Map();
-  ids.forEach(id => {
+  // Sure bedroom photos set the order of the letters first.
+  [true, false].forEach(firstSure => ids.forEach(id => {
     const a = byId.get(id);
-    if (!a || !isSure(a) || a.section !== 'bedroom') return;
+    if (!known(a) || a.section !== 'bedroom' || (a.sure !== false) !== firstSure) return;
     const k = key(a.room) || 'A';
     if (!letters.has(k)) letters.set(k, String.fromCharCode(65 + letters.size));
-  });
+  }));
   return ids.map(id => {
     const a = byId.get(id);
-    if (!a || !isSure(a)) return { id, section: 'other', room: null, with: null, sure: false };
+    if (!known(a)) return { id, section: 'other', room: null, with: null, sure: false };
     const section = a.section;
     const room = section === 'bedroom' ? letters.get(key(a.room) || 'A') : null;
-    const w = ['washroom', 'balcony', 'living_room'].includes(section) ? letters.get(key(a.with)) || null : null;
-    return { id, section, room, with: w, sure: true };
+    const w = ['washroom', 'balcony', 'living_room', 'wardrobe'].includes(section) ? letters.get(key(a.with)) || null : null;
+    return { id, section, room, with: w, sure: a.sure !== false };
   });
 }
 
@@ -161,8 +188,12 @@ async function sortPhotos(sql, logAudit, guestId, body) {
     if ((r[0] && r[0].n) >= PER_HOUR) throw userError('You have sorted photos many times in the last hour. Add these to each section yourself, or try again later.', 429);
   } catch (e) { if (e.isUserFacing) throw e; }
   const photos = cleanPhotos(body && body.photos);
-  let got;
-  try { got = await ask(photos); }
+  const until = Date.now() + 52000;
+  let got, result;
+  try {
+    got = await ask(photos, { until });
+    result = normalise(photos.map(p => p.id), got.answer);
+  }
   catch (e) {
     // Recorded so the reason can be seen in Admin → Audit log.
     if (e.reason) await logAudit(sql, { action: 'listing_photos_sort_failed', success: false, actorType: 'guest', actorIdentifier: String(guestId),
@@ -170,10 +201,9 @@ async function sortPhotos(sql, logAudit, guestId, body) {
     throw e;
   }
   finally { photos.forEach(p => p.bytes.fill(0)); }
-  const result = normalise(photos.map(p => p.id), got.answer);
   const counts = result.reduce((c, x) => { c[x.section] = (c[x.section] || 0) + 1; return c; }, {});
   await logAudit(sql, { action: 'listing_photos_sorted', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-    targetType: 'guest', targetId: guestId, metadata: { photos: result.length, counts, model: got.model, cutOff: got.cutOff } });
+    targetType: 'guest', targetId: guestId, metadata: { photos: result.length, counts, unsure: result.filter(x => !x.sure).length, model: got.model, cutOff: got.cutOff } });
   return { photos: result };
 }
 

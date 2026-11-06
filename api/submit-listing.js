@@ -520,10 +520,10 @@ module.exports = async (req, res) => {
         const safeRoomPhotosForValidation = Array.isArray(roomPhotos)
           ? roomPhotos.filter(r => {
               if (!r || typeof r.roomName !== 'string' || !r.roomName.trim()) return false;
-              if (r.isBedroom) {
-                return Array.isArray(r.urls) && r.urls.some(isAervaBlobUrl);
-              }
-              return isAervaBlobUrl(r.url);
+              // Every space may carry a gallery ("urls"); an older form
+              // sends a shared space's single photo as "url".
+              if (Array.isArray(r.urls)) return r.urls.some(isAervaBlobUrl);
+              return !r.isBedroom && isAervaBlobUrl(r.url);
             })
           : [];
         const MANDATORY_FIXED_SPACES = propertyType === 'Resort' ? [] : ['Kitchen', 'Washroom', 'Living Room'];
@@ -881,9 +881,9 @@ module.exports = async (req, res) => {
         ? roomPhotos
           .map(r => {
             if (!r || typeof r.roomName !== 'string' || !r.roomName.trim()) return null;
-            const urls = r.isBedroom
-              ? (Array.isArray(r.urls) ? r.urls.filter(isAervaBlobUrl) : [])
-              : (isAervaBlobUrl(r.url) ? [r.url] : []);
+            const urls = (Array.isArray(r.urls)
+              ? r.urls.filter(isAervaBlobUrl)
+              : (!r.isBedroom && isAervaBlobUrl(r.url) ? [r.url] : [])).slice(0, 30);
             if (!urls.length) return null;
             return { roomName: r.roomName.trim().slice(0, 100), urls };
           })

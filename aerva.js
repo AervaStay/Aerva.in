@@ -1540,6 +1540,8 @@
   // room itself, its washroom, its balcony, anything) into that one
   // gallery without the form insisting on a specific label for each.
   //
+  // (Since 7 Nov a resort does get the amenity spaces — pool, gym, play
+  // area, garden… — see AMENITY_SPACES below.)
   // A Resort has NO shared common spaces to document here at all — its
   // one common space is the exterior (grounds, building, pool area,
   // etc.), already covered by the Exterior Photos section above this.
@@ -1551,14 +1553,32 @@
     { key: 'kitchen', name: 'Kitchen', mandatory: true },
     { key: 'washroom', name: 'Washroom', mandatory: true },
     { key: 'living_room', name: 'Living Room', mandatory: true },
+    { key: 'balcony', name: 'Balcony', mandatory: false },
+    { key: 'wardrobe', name: 'Wardrobe / Powder Room', mandatory: false },
+    { key: 'utility', name: 'Utility Area', mandatory: false },
+  ];
+  // Outdoor and shared amenities — optional, for every property type
+  // (a resort shows its pool, gym, play area… here too).
+  const AMENITY_SPACES = [
+    { key: 'roof', name: 'Roof / Terrace', mandatory: false },
     { key: 'garden', name: 'Garden', mandatory: false },
-    { key: 'balcony', name: 'Balcony', mandatory: false }
+    { key: 'ground', name: 'Ground', mandatory: false },
+    { key: 'pool', name: 'Pool', mandatory: false },
+    { key: 'gym', name: 'Gym', mandatory: false },
+    { key: 'barbeque', name: 'Barbeque', mandatory: false },
+    { key: 'play_area', name: 'Play Area', mandatory: false },
+    // Shown to guests: where to leave their rubbish.
+    { key: 'garbage', name: 'Garbage Point', mandatory: false },
+    // Anything not clear (stairs, a corridor, a puja room, decor, …) —
+    // where the photo sorter puts what it is not sure about.
+    { key: 'additional', name: 'Additional Photos', mandatory: false }
   ];
   function currentFixedRoomSpaces(){
-    // Resort has none — see the comment above.
-    return document.getElementById('listType').value === 'Resort' ? [] : FIXED_ROOM_SPACES_STAY;
+    // A resort has no shared kitchen / washroom / living room to show
+    // (see the comment above) — only the amenity spaces.
+    return document.getElementById('listType').value === 'Resort' ? AMENITY_SPACES : [...FIXED_ROOM_SPACES_STAY, ...AMENITY_SPACES];
   }
-  let roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, file: null, url: null }));
+  let roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, photos: [] }));
 
   // Bedroom/Room rows are dynamic, driven by the "Bedrooms"/"Number of
   // Rooms" count field — regenerated on every change, but preserving
@@ -1659,7 +1679,10 @@
   // into afterward. All four combine to satisfy "this room needs at
   // least one photo" — nothing requires actually sorting anything.
   const OPTIONAL_ROOM_BUCKETS = ['washroomPhotos', 'livingRoomPhotos', 'balconyPhotos'];
+  // A shared space (Kitchen, Washroom, …) has just the one "photos"
+  // gallery — several angles of the same space are welcome.
   function allRoomPhotos(room){
+    if(!room.isBedroom) return room.photos || [];
     return [...room.photos, ...room.washroomPhotos, ...room.livingRoomPhotos, ...room.balconyPhotos];
   }
 
@@ -1790,17 +1813,25 @@
       `;
     }
 
+    // Shared spaces: one gallery each — as many angles as the host likes.
     const fixedHtml = fixedRows.map((room) => {
       const idx = roomSpaceRows.indexOf(room);
-      const previewSrc = room.file ? URL.createObjectURL(room.file) : room.url;
       const isLast = idx === roomSpaceRows.length - 1;
+      const thumbs = room.photos.map((photo, photoIdx) => `
+        <div style="position:relative; display:inline-block;">
+          <div class="room-space-photo-box"><img src="${photo.file ? URL.createObjectURL(photo.file) : photo.url}" alt=""></div>
+          <button type="button" class="room-photo-remove-btn" data-fixed-remove="${photoIdx}" aria-label="Remove this photo">×</button>
+        </div>`).join('');
       return `
-        <div class="guest-row" data-room-idx="${idx}" style="align-items:flex-start;">
-          <div class="guest-row-text" style="flex:1; min-width:0; margin-right:12px;">
+        <div class="guest-row" data-room-idx="${idx}" style="align-items:flex-start; flex-wrap:wrap;">
+          <div class="guest-row-text" style="flex:1 1 100%; min-width:0;">
             <div class="guest-row-title">${escapeMessageHtml(room.name)}</div>
-            <div class="guest-row-sub">${room.mandatory ? 'Required' : 'Optional'}</div>
+            <div class="guest-row-sub">${room.mandatory ? 'Required — at least one photo.' : 'Optional.'} Add photos from different angles if you like.</div>
           </div>
-          ${roomPhotoBoxHtml(previewSrc, '+ Photo', 'data-room-photo-pick', 'data-room-photo-remove')}
+          <div class="room-bucket-grid" style="margin-top:8px;">
+            ${thumbs}
+            <div class="room-space-photo-box" data-fixed-add><span>+ Add</span></div>
+          </div>
         </div>
         ${!isLast ? '<div class="guest-row-divider"></div>' : ''}
       `;
@@ -1908,12 +1939,13 @@
     // unchanged simple single-photo layout, each one shared space for
     // the whole property, not something that needs a gallery.
     container.querySelectorAll('[data-room-idx]').forEach(rowEl => {
-      const idx = Number(rowEl.dataset.roomIdx);
-      const room = roomSpaceRows[idx];
-      const mainPick = rowEl.querySelector('[data-room-photo-pick]');
-      if(mainPick) wireRoomPhotoPick(mainPick, () => room.file, f => { room.file = f; room.url = null; }, renderRoomSpaces);
-      const mainRemove = rowEl.querySelector('[data-room-photo-remove]');
-      if(mainRemove) mainRemove.addEventListener('click', () => { room.file = null; room.url = null; renderRoomSpaces(); });
+      const room = roomSpaceRows[Number(rowEl.dataset.roomIdx)];
+      const add = rowEl.querySelector('[data-fixed-add]');
+      if(add) wireGalleryAdd(add, room, 'photos');
+      rowEl.querySelectorAll('[data-fixed-remove]').forEach(btn => btn.addEventListener('click', () => {
+        room.photos.splice(Number(btn.dataset.fixedRemove), 1);
+        renderRoomSpaces();
+      }));
     });
   }
   // ---- "Add all your photos": sorted into the sections by AI ----
@@ -1924,9 +1956,11 @@
   // the panel lists each with a "Section" menu so the host can move any of
   // them. Photos it could not place wait under "Not placed yet". The
   // section-by-section controls keep working as before.
-  var photoSort = { files: [], busy: false };      // every File added this way, in order
-  const SORT_FIXED = { kitchen: 'kitchen', washroom: 'washroom', living_room: 'living_room', garden: 'garden', balcony: 'balcony' };
-  const SORT_BUCKET_FOR = { washroom: 'washroomPhotos', living_room: 'livingRoomPhotos', balcony: 'balconyPhotos' };
+  var photoSort = { files: [], busy: false, guesses: new Set() };      // every File added this way, in order; guesses = placed on the AI's best guess, to check
+  const SORT_FIXED = { kitchen: 'kitchen', washroom: 'washroom', living_room: 'living_room', garden: 'garden', balcony: 'balcony',
+                       wardrobe: 'wardrobe', utility: 'utility', garbage: 'garbage', additional: 'additional',
+                       roof: 'roof', ground: 'ground', pool: 'pool', gym: 'gym', barbeque: 'barbeque', play_area: 'play_area' };
+  const SORT_BUCKET_FOR = { washroom: 'washroomPhotos', living_room: 'livingRoomPhotos', balcony: 'balconyPhotos', wardrobe: 'photos' };
   const SORT_BUCKET_LABEL = { photos: '', washroomPhotos: ' – Washroom', livingRoomPhotos: ' – Living Room', balconyPhotos: ' – Balcony' };
 
   // Where a File is now: 'exterior' | 'fixed:<key>' | 'bed:<rowIdx>:<bucket>' | 'none'.
@@ -1934,7 +1968,7 @@
     if(exteriorPhotoManager.hasFile && exteriorPhotoManager.hasFile(f)) return 'exterior';
     for(let i = 0; i < roomSpaceRows.length; i++){
       const r = roomSpaceRows[i];
-      if(!r.isBedroom){ if(r.file === f) return 'fixed:' + r.key; continue; }
+      if(!r.isBedroom){ if((r.photos || []).some(p => p.file === f)) return 'fixed:' + r.key; continue; }
       for(const b of ['photos', 'washroomPhotos', 'livingRoomPhotos', 'balconyPhotos']){
         if((r[b] || []).some(p => p.file === f)) return `bed:${i}:${b}`;
       }
@@ -1954,7 +1988,7 @@
   function takePhotoOut(f){
     if(exteriorPhotoManager.removeFile && exteriorPhotoManager.removeFile(f)) return;
     roomSpaceRows.forEach(r => {
-      if(!r.isBedroom){ if(r.file === f){ r.file = null; r.url = null; } return; }
+      if(!r.isBedroom){ const i = (r.photos || []).findIndex(p => p.file === f); if(i >= 0) r.photos.splice(i, 1); return; }
       ['photos', 'washroomPhotos', 'livingRoomPhotos', 'balconyPhotos'].forEach(b => {
         const i = (r[b] || []).findIndex(p => p.file === f);
         if(i >= 0) r[b].splice(i, 1);
@@ -1962,16 +1996,13 @@
     });
   }
   // Puts a File in a place; returns false when it did not fit there.
-  function putPhotoIn(f, place, { replace = true } = {}){
+  function putPhotoIn(f, place){
     if(place === 'none') return true;
     if(place === 'exterior') return exteriorPhotoManager.addFiles([f]).length === 0;
     if(place.startsWith('fixed:')){
       const r = roomSpaceRows.find(x => !x.isBedroom && x.key === place.slice(6));
       if(!r) return false;
-      if((r.file || r.url) && !replace) return false;
-      // The photo it replaces stays in the panel, under "Not placed yet".
-      if(r.file && !photoSort.files.includes(r.file)) photoSort.files.push(r.file);
-      r.file = f; r.url = null;
+      r.photos.push({ file: f, url: null });
       return true;
     }
     const [, idx, bucket] = place.split(':');
@@ -1981,6 +2012,7 @@
     return true;
   }
   function movePhotoTo(f, place){
+    photoSort.guesses.delete(f);
     takePhotoOut(f);
     if(!putPhotoIn(f, place)) alert('That section is full. The photo is waiting under “Not placed yet”.');
     renderRoomSpaces();
@@ -2007,32 +2039,29 @@
   }
 
   // AI result → places. Bedroom letters A, B, … go to Bedroom 1, 2, … in
-  // order; one photo fills each empty single-photo space; an en-suite
-  // washroom / balcony / sitting area goes with its bedroom; the rest wait.
+  // order; an en-suite washroom / balcony / sitting area goes with its
+  // bedroom; every other kitchen, washroom, living room, garden or balcony
+  // photo goes to that shared space (each holds several angles); the rest
+  // wait under "Not placed yet".
   function placeSortedPhotos(files, result){
     const isResort = document.getElementById('listType').value === 'Resort';
     const bedrooms = roomSpaceRows.map((r, i) => r.isBedroom ? i : -1).filter(i => i >= 0);
     const bedIdx = (letter) => { const n = String(letter || '').charCodeAt(0) - 65; return n >= 0 && n < bedrooms.length ? bedrooms[n] : null; };
     const byId = new Map(result.map(x => [x.id, x]));
     let placed = 0;
-    const later = [];
     files.forEach((f, i) => {
       const r = byId.get('p' + i) || { section: 'other' };
       let place = 'none';
-      if(r.section === 'exterior' || (isResort && ['kitchen', 'living_room', 'garden'].includes(r.section) && !r.with)) place = 'exterior';
+      if(r.section === 'exterior' || (isResort && ['kitchen', 'living_room'].includes(r.section) && !r.with)) place = 'exterior';
       else if(r.section === 'bedroom') place = bedIdx(r.room) != null ? `bed:${bedIdx(r.room)}:photos` : 'none';
       else if(SORT_FIXED[r.section]){
         const row = roomSpaceRows.find(x => !x.isBedroom && x.key === SORT_FIXED[r.section]);
-        if(row && !row.file && !row.url && !r.with) place = 'fixed:' + row.key;
-        else if(r.with && bedIdx(r.with) != null && SORT_BUCKET_FOR[r.section]) place = `bed:${bedIdx(r.with)}:${SORT_BUCKET_FOR[r.section]}`;
-        else if(row && !row.file && !row.url) place = 'fixed:' + row.key;
-        else later.push([f, r]);
+        const extra = roomSpaceRows.find(x => !x.isBedroom && x.key === 'additional');
+        if(r.with && bedIdx(r.with) != null && SORT_BUCKET_FOR[r.section]) place = `bed:${bedIdx(r.with)}:${SORT_BUCKET_FOR[r.section]}`;
+        else if(row) place = 'fixed:' + row.key;
+        else if(extra) place = 'fixed:additional';
       }
-      if(place !== 'none' && putPhotoIn(f, place, { replace: false })) placed++;
-    });
-    // A second photo of a space already filled: with its bedroom if known.
-    later.forEach(([f, r]) => {
-      if(r.with && bedIdx(r.with) != null && SORT_BUCKET_FOR[r.section] && putPhotoIn(f, `bed:${bedIdx(r.with)}:${SORT_BUCKET_FOR[r.section]}`)) placed++;
+      if(place !== 'none' && putPhotoIn(f, place)){ placed++; if(r.sure === false) photoSort.guesses.add(f); }
     });
     return placed;
   }
@@ -2080,7 +2109,9 @@
       const placed = placeSortedPhotos(files, result);
       renderRoomSpaces();
       const waiting = files.length - placed;
-      say(`${placed} photo${placed === 1 ? '' : 's'} sorted into sections${waiting ? `, ${waiting} not placed yet` : ''}. Check them below and change any section if needed.`);
+      const guessed = files.filter(f => photoSort.guesses.has(f)).length;
+      say(`${placed} photo${placed === 1 ? '' : 's'} sorted into sections${waiting ? `, ${waiting} not placed yet` : ''}.` +
+        (guessed ? ` ${guessed} ${guessed === 1 ? 'is a best guess' : 'are best guesses'} — marked “Check” below.` : '') + ' Change any section if needed.');
     }catch(err){
       renderRoomSpaces();
       say('Sorting did not finish. Your photos are below, under “Not placed yet”.', true);
@@ -2101,21 +2132,29 @@
     const places = photoPlaces();
     const rows = photoSort.files.map((f, i) => ({ f, i, place: photoPlace(f) }));
     const waiting = rows.filter(r => r.place === 'none').length;
+    const toCheck = rows.filter(r => r.place !== 'none' && photoSort.guesses.has(r.f)).length;
     box.innerHTML = `
-      <p style="font-size:12px; margin:12px 0 6px;"><strong>Your photos</strong> · ${rows.length - waiting} in sections${waiting ? ` · <span style="color:#a3402f;">${waiting} not placed yet</span>` : ''}</p>
+      <p style="font-size:12px; margin:12px 0 6px;"><strong>Your photos</strong> · ${rows.length - waiting} in sections${waiting ? ` · <span style="color:#a3402f;">${waiting} not placed yet</span>` : ''}${toCheck ? ` · <span style="color:#8a6c39;">${toCheck} to check</span>` : ''}</p>
       <div class="photo-sort-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:10px;">
         ${rows.map(r => `
-          <div style="border:1px solid ${r.place === 'none' ? '#ecd2cb' : 'var(--line-dark, #e3d9cb)'}; border-radius:8px; padding:6px; background:#fff;">
+          <div style="position:relative; border:1px solid ${r.place === 'none' ? '#ecd2cb' : photoSort.guesses.has(r.f) ? '#d9b46a' : 'var(--line-dark, #e3d9cb)'}; border-radius:8px; padding:6px; background:#fff;">
+            ${r.place !== 'none' && photoSort.guesses.has(r.f) ? `<span data-sort-guess title="Best guess — check the section, or tap OK" style="position:absolute; top:10px; left:10px; background:#fff8e6; color:#8a6c39; border:1px solid #d9b46a; border-radius:10px; font-size:10.5px; padding:1px 7px;">Check</span>` : ''}
             <img src="${sortPreviewUrl(r.f)}" alt="" style="width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:5px; display:block;">
             <select data-sort-move="${r.i}" aria-label="Section for this photo" style="width:100%; margin-top:6px; font-size:12px; padding:5px 4px;">
               ${places.map(p => `<option value="${p.value}"${p.value === r.place ? ' selected' : ''}>${escapeMessageHtml(p.label)}</option>`).join('')}
             </select>
+            ${r.place !== 'none' && photoSort.guesses.has(r.f) ? `<button type="button" data-sort-ok="${r.i}" style="margin-top:4px; width:100%; font-size:11px; background:#fff8e6; border:1px solid #d9b46a; border-radius:5px; color:#8a6c39; cursor:pointer; padding:3px 0;">Looks right</button>` : ''}
             <button type="button" data-sort-drop="${r.i}" style="margin-top:4px; width:100%; font-size:11px; background:none; border:none; color:#8a6c39; cursor:pointer;">Don’t use this photo</button>
           </div>`).join('')}
       </div>`;
     box.querySelectorAll('[data-sort-move]').forEach(sel => sel.addEventListener('change', () => movePhotoTo(photoSort.files[Number(sel.dataset.sortMove)], sel.value)));
+    box.querySelectorAll('[data-sort-ok]').forEach(btn => btn.addEventListener('click', () => {
+      photoSort.guesses.delete(photoSort.files[Number(btn.dataset.sortOk)]);
+      renderPhotoSortPanel();
+    }));
     box.querySelectorAll('[data-sort-drop]').forEach(btn => btn.addEventListener('click', () => {
       const f = photoSort.files[Number(btn.dataset.sortDrop)];
+      photoSort.guesses.delete(f);
       takePhotoOut(f);
       photoSort.files = photoSort.files.filter(x => x !== f);
       renderRoomSpaces();
@@ -2195,7 +2234,7 @@
     const preservedKeys = new Set(preservedFixedRows.map(r => r.key));
     const newFixedRows = currentFixedRoomSpaces()
       .filter(s => !preservedKeys.has(s.key))
-      .map(s => ({ ...s, isBedroom: false, file: null, url: null }));
+      .map(s => ({ ...s, isBedroom: false, photos: [] }));
     roomSpaceRows = [...roomSpaceRows.filter(r => r.isBedroom), ...preservedFixedRows, ...newFixedRows];
     renderRoomSpaces(); // toggles the bedroom price/occupancy fields on or off to match
   });
@@ -2213,7 +2252,7 @@
     exteriorUrls: null,     // cached once photo upload succeeds
     exteriorHashes: null    // SHA-256 content hashes, cached alongside the URLs — used server-side for duplicate-listing detection
     // Room-space photos track their own upload state per row instead
-    // (roomSpaceRows[i].file/.url/.hash) — no separate tracking needed
+    // (each photo's .file/.url/.hash) — no separate tracking needed
     // here the way the old flat interior uploader required.
   };
 
@@ -2422,7 +2461,7 @@
       // as having its photo requirement met once its gallery has at
       // least one photo — no specific label (washroom, balcony, etc.)
       // required within it.
-      const missingMandatorySpaces = roomSpaceRows.filter(r => r.mandatory && (r.isBedroom ? allRoomPhotos(r).length === 0 : !r.file && !r.url));
+      const missingMandatorySpaces = roomSpaceRows.filter(r => r.mandatory && allRoomPhotos(r).length === 0);
       if(missingMandatorySpaces.length){
         errorEl.textContent = `Please add a photo for: ${missingMandatorySpaces.map(r => r.name || 'an unnamed bedroom').join(', ')}.`;
         errorEl.style.display = 'block';
@@ -2474,11 +2513,7 @@
     // haven't succeeded yet.
     const uploadTasks = [];
     roomSpaceRows.forEach(room => {
-      if(room.isBedroom){
-        allRoomPhotos(room).forEach(photo => { if(photo.file && !photo.url) uploadTasks.push(photo); });
-      } else if(room.file && !room.url){
-        uploadTasks.push(room);
-      }
+      allRoomPhotos(room).forEach(photo => { if(photo.file && !photo.url) uploadTasks.push(photo); });
     });
 
     if(exteriorPhotoUrls === null || uploadTasks.length){
@@ -2535,7 +2570,7 @@
         exteriorPhotoUrls = exteriorPhotoUrls || [];
         exteriorPhotoHashes = exteriorPhotoHashes || [];
         const stillMissingMandatory = roomSpaceRows.some(r =>
-          r.mandatory && (r.isBedroom ? allRoomPhotos(r).every(p => !p.url) : (!r.file && !r.url))
+          r.mandatory && allRoomPhotos(r).every(p => !p.url)
         );
         if(!isDraft && (exteriorPhotoUrls.length === 0 || stillMissingMandatory)){
           const detail = uploadErr && uploadErr.message ? ` (${uploadErr.message})` : '';
@@ -2572,7 +2607,7 @@
         return;
       }
       const roomsStillMissingPhotos = roomSpaceRows.filter(r =>
-        r.mandatory && (r.isBedroom ? allRoomPhotos(r).every(p => !p.url) : (!r.file && !r.url))
+        r.mandatory && allRoomPhotos(r).every(p => !p.url)
       );
       if(roomsStillMissingPhotos.length){
         errorEl.textContent = `Please add a photo for: ${roomsStillMissingPhotos.map(r => r.name || 'an unnamed bedroom').join(', ')} — one of the earlier uploads didn't go through, please try again.`;
@@ -2590,7 +2625,7 @@
     // wide gallery guests browse) — every fixed space's photo plus every
     // photo across every bedroom's four buckets.
     const interiorPhotoUrls = [
-      ...roomSpaceRows.filter(r => !r.isBedroom && r.url).map(r => r.url),
+      ...roomSpaceRows.filter(r => !r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.url).map(p => p.url)),
       ...roomSpaceRows.filter(r => r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.url).map(p => p.url))
     ];
     // The NEW named mapping submit-listing.js uses to create properly
@@ -2604,7 +2639,7 @@
     // carries just its one "url", since those never become listing_rooms
     // records regardless (see submit-listing.js).
     const roomPhotos = roomSpaceRows
-      .filter(r => r.isBedroom ? allRoomPhotos(r).some(p => p.url) : r.url)
+      .filter(r => allRoomPhotos(r).some(p => p.url))
       .map(r => r.isBedroom
         ? {
             roomName: r.name, isBedroom: true,
@@ -2615,10 +2650,10 @@
             maxOccupancy: Number(r.maxOccupancy) || undefined,
             price: Number(r.price) || undefined
           }
-        : { roomName: r.name, url: r.url, isBedroom: false }
+        : (() => { const urls = allRoomPhotos(r).filter(p => p.url).map(p => p.url); return { roomName: r.name, isBedroom: false, urls, url: urls[0] }; })()
       );
     const roomPhotoHashes = [
-      ...roomSpaceRows.filter(r => !r.isBedroom && r.hash).map(r => r.hash),
+      ...roomSpaceRows.filter(r => !r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.hash).map(p => p.hash)),
       ...roomSpaceRows.filter(r => r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.hash).map(p => p.hash))
     ];
 
@@ -2715,8 +2750,8 @@
       document.getElementById('draftHintText').style.display = 'none';
       listingForm.reset();
       exteriorPhotoManager.clear();
-      if(typeof photoSort !== 'undefined' && photoSort){ photoSort.files = []; const m = document.getElementById('photoSortMsg'); if(m) m.textContent = ''; }
-      roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, file: null, url: null }));
+      if(typeof photoSort !== 'undefined' && photoSort){ photoSort.files = []; photoSort.guesses = new Set(); const m = document.getElementById('photoSortMsg'); if(m) m.textContent = ''; }
+      roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, photos: [] }));
       activeBedroomTabKey = null;
       pickedUpPhoto = null;
       syncBedroomRowCount();

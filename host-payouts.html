@@ -51,6 +51,8 @@
   .seg{display:flex; gap:8px; flex-wrap:wrap;}
   .seg label{white-space:nowrap; display:inline-flex; align-items:center; gap:8px; border:1px solid #d9cfc2; border-radius:999px; padding:9px 16px; font-size:14px; letter-spacing:0; text-transform:none; opacity:1; cursor:pointer; margin:0;}
   .seg label:has(input:checked){border-color:#1c1a17; background:#faf6ef;}
+  /* Radio buttons and tick boxes keep their own size (the .field input rule above is for text boxes). */
+  .field input[type=radio], .field input[type=checkbox]{width:auto; flex:none; padding:0; margin:0; border:0; border-radius:0; background:none; accent-color:#1c1a17;}
   .field input[type=file]{padding:9px; font-size:14px;}
   .field input[readonly]{background:#f4efe7; color:#4a443c;}
   @media (max-width:600px){
