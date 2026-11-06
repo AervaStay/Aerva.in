@@ -2037,15 +2037,25 @@
     return placed;
   }
 
-  async function addAllPhotos(picked){
+  // again: re-sort photos already added (the "Try again" button) — they
+  // were checked against the property's location the first time.
+  async function addAllPhotos(picked, { again = false } = {}){
     const msg = document.getElementById('photoSortMsg');
     const say = (t, bad) => { if(msg){ msg.textContent = t; msg.style.color = bad ? '#a3402f' : ''; } };
+    const offerAgain = () => {
+      if(!msg || !photoSort.files.some(f => photoPlace(f) === 'none')) return;
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = 'Try sorting again';
+      b.style.cssText = 'margin-left:8px; font-size:12px; background:none; border:1px solid currentColor; border-radius:6px; padding:3px 9px; color:#8a6c39; cursor:pointer;';
+      b.addEventListener('click', () => addAllPhotos(photoSort.files.filter(f => photoPlace(f) === 'none'), { again: true }));
+      msg.appendChild(b);
+    };
     if(!picked.length || photoSort.busy) return;
     if(picked.length > 40){ say('Add up to 40 photos at a time.', true); return; }
     photoSort.busy = true;
-    say('Checking your photos…');
+    say(again ? 'Sorting again…' : 'Checking your photos…');
     try{
-      const files = await screenPhotosAtProperty(picked);
+      const files = again ? picked : await screenPhotosAtProperty(picked);
       files.forEach(f => { if(!photoSort.files.includes(f)) photoSort.files.push(f); });
       say(`Sorting ${files.length} photo${files.length === 1 ? '' : 's'}…`);
       const thumbs = await Promise.all(files.map(sortThumb));
@@ -2057,7 +2067,14 @@
           body: JSON.stringify({ sortPhotos: { photos: send } })
         });
         const data = await res.json().catch(() => ({}));
-        if(!res.ok){ renderRoomSpaces(); say((data.error || 'Sorting is not available right now.') + ' Your photos are below, under “Not placed yet”.', true); return; }
+        if(!res.ok){
+          renderRoomSpaces();
+          // The short code (e.g. "no_key") tells Aerva what went wrong.
+          const ref = data.reason || (data.error ? '' : 'http_' + res.status);
+          say((data.error || 'Sorting is not available right now.') + ' Your photos are below, under “Not placed yet”.' + (ref ? ` (ref: ${ref})` : ''), true);
+          if(res.status !== 429) offerAgain();
+          return;
+        }
         result = data.photos || [];
       }
       const placed = placeSortedPhotos(files, result);
@@ -2067,6 +2084,7 @@
     }catch(err){
       renderRoomSpaces();
       say('Sorting did not finish. Your photos are below, under “Not placed yet”.', true);
+      offerAgain();
     }finally{ photoSort.busy = false; }
   }
 

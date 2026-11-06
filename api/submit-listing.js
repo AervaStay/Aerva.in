@@ -228,7 +228,7 @@ module.exports = async (req, res) => {
     try { return res.status(200).json(await require('./_photo-sort').sortPhotos(sql, logAudit, guestId, req.body.sortPhotos)); }
     catch (err) {
       if (!err.isUserFacing) console.error('sortPhotos failed:', err);
-      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Sorting is not available right now. Add the photos to each section yourself.' });
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Sorting is not available right now. Add the photos to each section yourself.', reason: err.reason || (err.isUserFacing ? undefined : 'server_error') });
     }
   }
 
