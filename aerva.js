@@ -2110,7 +2110,9 @@
       renderRoomSpaces();
       const waiting = files.length - placed;
       const guessed = files.filter(f => photoSort.guesses.has(f)).length;
+      const unreadable = thumbs.filter(t => !t).length;
       say(`${placed} photo${placed === 1 ? '' : 's'} sorted into sections${waiting ? `, ${waiting} not placed yet` : ''}.` +
+        (unreadable ? ` ${unreadable} photo${unreadable === 1 ? '' : 's'} could not be opened in this browser — use JPG or PNG copies of ${unreadable === 1 ? 'it' : 'them'}.` : '') +
         (guessed ? ` ${guessed} ${guessed === 1 ? 'is a best guess' : 'are best guesses'} — marked “Check” below.` : '') + ' Change any section if needed.');
     }catch(err){
       renderRoomSpaces();
