@@ -17,6 +17,7 @@
 // erased then). Messages never say how the check works.
 
 const { decodeFiles, fetchWithTimeout, userError, namesMatch } = require('./_id-verify');
+const words = (s) => String(s || '').toUpperCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z\s]/g, ' ').split(/\s+/).filter(Boolean);
 
 const MODEL = () => process.env.ID_CHECK_MODEL || 'claude-sonnet-5-5';
 const ATTEMPTS_PER_DAY = 5;
@@ -31,9 +32,10 @@ const SYSTEM_PROMPT = `You check Indian PAN cards (Permanent Account Number, iss
  "holder_name": "the card holder's name exactly as printed (the line labelled Name, or the first name line), or null",
  "fathers_name": "the father's name as printed, or null",
  "date_of_birth": "YYYY-MM-DD, or null",
- "concerns": ["short reasons if anything looks wrong: edited or overlaid text, mismatched fonts, a sample/specimen, a template, a drawing, a photo of a screen showing an editing app, details cut off or covered, more than one card"]
+ "concerns": ["ONLY signs the card is fake or tampered with: edited or overlaid text, mismatched fonts, a sample/specimen, a template, a mock-up, a drawing, a photo of a screen showing an editing app, more than one card"],
+ "photo_notes": ["ordinary photo issues that do NOT make the card fake: glare, slight blur, an angle, shadows, a worn or laminated card, a crease"]
 }
-Rules: Never guess a character you cannot read: use null. holder_name is the card holder, never the father's name. looks_genuine is false for samples, specimens, templates, mock-ups, drawings, or any sign of editing. A clear photo of a real card, or an e-PAN PDF, is genuine.`;
+Rules: Never guess a character you cannot read: use null. Ordinary photo issues go in photo_notes, never in concerns, and do not make the card less genuine. holder_name is the card holder, never the father's name. looks_genuine is false for samples, specimens, templates, mock-ups, drawings, or any sign of editing. A clear photo of a real card, or an e-PAN PDF, is genuine.`;
 
 async function readPanCard(files) {
   const key = process.env.ANTHROPIC_API_KEY;
@@ -69,6 +71,7 @@ async function readPanCard(files) {
 
 // What was read against what was typed. { ok, reason } — the reason is for
 // the audit log only, never shown.
+const tidyName = (s) => words(s).map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
 const cleanPan = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 function judgePan(read, input) {
   const r = read || {};
@@ -76,15 +79,23 @@ function judgePan(read, input) {
   if (r.is_pan_card !== true) return no('not_a_pan_card');
   if (r.readable === false) return no('unreadable');
   if (r.looks_genuine !== true) return no('not_genuine');
-  if (Array.isArray(r.concerns) && r.concerns.filter(Boolean).length) return no('concerns');
+  // Only real signs of a fake count; ordinary photo issues (glare, angle,
+  // blur) a model sometimes lists here are ignored.
+  const serious = (Array.isArray(r.concerns) ? r.concerns : []).filter(c => /edit|overlay|font|specimen|sample|template|mock|draw|screen|tamper|fake|forg|more than one|another card|altered|pasted/i.test(String(c || '')));
+  if (serious.length) return no('concerns');
   const printed = cleanPan(r.pan_number);
   if (printed.length !== 10) return no('number_unreadable');
   if (printed !== cleanPan(input.pan)) return no('number');
-  if (!r.holder_name || !namesMatch(input.name, r.holder_name)) {
-    // The father's name typed by mistake: still not verified.
-    return no(r.fathers_name && namesMatch(input.name, r.fathers_name) ? 'fathers_name' : 'name');
+  if (r.holder_name && namesMatch(input.name, r.holder_name)) return { ok: true, name: tidyName(r.holder_name) };
+  // The name typed without the middle name(s) printed on the card (e.g.
+  // "Tanish Jain" for TANISH KUMAR JAIN): same first and last name, every
+  // typed word on the card. Verified, and the full printed name is kept.
+  const t = words(input.name), c = words(r.holder_name);
+  if (t.length >= 2 && c.length > t.length && t[0] === c[0] && t[t.length - 1] === c[c.length - 1] && t.every(w => c.includes(w))) {
+    return { ok: true, name: tidyName(r.holder_name), middleAdded: true };
   }
-  return { ok: true };
+  // The father's name typed by mistake: still not verified.
+  return no(r.fathers_name && namesMatch(input.name, r.fathers_name) ? 'fathers_name' : 'name');
 }
 
 async function attemptsToday(sql, hostId) {
@@ -107,9 +118,12 @@ async function checkPanCard(sql, logAudit, hostId, { pan, name, files }) {
   finally { decoded.forEach(f => f.bytes.fill(0)); }       // nothing of the card outlives the request
   const verdict = judgePan(read, { pan, name });
   await logAudit(sql, { action: 'pan_check_attempt', success: verdict.ok, actorType: 'host', actorIdentifier: String(hostId),
-    targetType: 'host', targetId: hostId, metadata: { reason: verdict.reason || null } });
+    targetType: 'host', targetId: hostId, metadata: { reason: verdict.reason || null, middleAdded: !!verdict.middleAdded,
+      photoNotes: read && Array.isArray(read.photo_notes) ? read.photo_notes.slice(0, 3).map(x => String(x).slice(0, 80)) : [],
+      concerns: read && Array.isArray(read.concerns) ? read.concerns.slice(0, 3).map(x => String(x).slice(0, 80)) : [] } });
   if (!verdict.ok) throw userError(NOT_VERIFIED, 400, { canSendForReview: true });
-  return { ok: true };
+  // The name exactly as printed on the card (kept as the PAN name).
+  return { ok: true, name: verdict.name || null };
 }
 
 module.exports = { checkPanCard, judgePan, ATTEMPTS_PER_DAY, SYSTEM_PROMPT };

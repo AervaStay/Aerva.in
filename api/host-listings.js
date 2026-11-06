@@ -3567,7 +3567,8 @@ module.exports = async (req, res) => {
       let didSomething = false;
       let bankChanged = false;
       let panChanged = false;
-      const cleanPanName = typeof panName === 'string' ? panName.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+      let panNameTypedShort = null;      // the name as typed, when the PAN card adds a middle name
+      let cleanPanName = typeof panName === 'string' ? panName.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
 
       // ---- Name as printed on the PAN, for a PAN already on file without it ----
       // (PANs entered before this was asked.) Once only; checked against the
@@ -3618,7 +3619,11 @@ module.exports = async (req, res) => {
           return res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' });
         }
         if (instantPan) {
-          try { await require('./_pan-verify').checkPanCard(sql, logAudit, guest.host_id, { pan: cleanPan, name: cleanPanName, files: panFiles }); }
+          try {
+            const v = await require('./_pan-verify').checkPanCard(sql, logAudit, guest.host_id, { pan: cleanPan, name: cleanPanName, files: panFiles });
+            // Keep the name as printed on the card (with any middle name the host left out).
+            if (v && v.name) { if (!bankCheck.sameName(v.name, cleanPanName)) panNameTypedShort = cleanPanName; cleanPanName = v.name; }
+          }
           catch (err) {
             if (!err.isUserFacing) throw err;
             return res.status(err.status || 400).json({ error: err.message, canSendForReview: !!err.canSendForReview });
@@ -3701,7 +3706,10 @@ module.exports = async (req, res) => {
         if (knownIfsc && knownIfsc.found === false) return res.status(400).json({ error: bankCheck.IFSC_NOT_FOUND });
         // Payouts go only to the PAN holder: an account typed in a clearly
         // different name is refused here, before any bank check.
-        const typedHolder = String(bankAccountHolderName).trim().slice(0, 100);
+        let typedHolder = String(bankAccountHolderName).trim().slice(0, 100);
+        // Same save as an instant PAN check that found a middle name on the
+        // card: the account holder typed the same way becomes the full name.
+        if (panNameTypedShort && host.pan_name && bankCheck.sameName(panNameTypedShort, typedHolder)) typedHolder = host.pan_name;
         const plainPan = host.pan_number ? decryptField(host.pan_number) : null;
         const companyProblem = bankCheck.companyPanProblem(plainPan, typedHolder);
         if (companyProblem) return res.status(400).json({ error: companyProblem });
@@ -3734,7 +3742,7 @@ module.exports = async (req, res) => {
         await sql`
           UPDATE hosts SET
             bank_account_number = ${encryptField(cleanAccountNumber)}, bank_ifsc = ${cleanIfsc},
-            bank_account_holder_name = ${String(bankAccountHolderName).trim().slice(0, 100)},
+            bank_account_holder_name = ${typedHolder},
             bank_status = 'pending_review', bank_rejection_reason = NULL,
             aadhaar_status = ${reAadhaarStatus}, aadhaar_rejection_reason = ${reAadhaarReason},
             pan_status = ${rePanStatus}, pan_rejection_reason = ${rePanReason}
