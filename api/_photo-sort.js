@@ -62,36 +62,71 @@ function cleanPhotos(list) {
   });
 }
 
+// Models to try, in order: the one set in Vercel, then the current Haiku,
+// then the older one. A model that is not found is skipped; a busy or
+// failing service is tried once more while there is time.
+function models() {
+  const list = [process.env.PHOTO_SORT_MODEL, process.env.PHOTO_SCAN_MODEL, 'claude-haiku-5-5', 'claude-haiku-4-5-20251001'];
+  return list.filter((m, i) => m && list.indexOf(m) === i);
+}
+const failed = (reason, message, status = 503) => Object.assign(userError(message, status), { reason });
+const NOT_NOW = 'Sorting is not available right now. Add the photos to each section yourself.';
+
+// Every complete {"id": …} object in the text, even when the answer was
+// cut off or wrapped in other text.
+function readAnswer(text) {
+  const m = String(text || '').match(/\{[\s\S]*\}/);
+  try { const parsed = m ? JSON.parse(m[0]) : null; if (parsed && Array.isArray(parsed.photos)) return parsed.photos; } catch (e) { /* below */ }
+  const out = [];
+  (String(text || '').match(/\{[^{}]*"id"[^{}]*\}/g) || []).forEach(x => { try { out.push(JSON.parse(x)); } catch (e) { /* skip */ } });
+  return out;
+}
+
 async function ask(photos) {
   const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) throw userError('Sorting is not available right now. Add the photos to each section yourself.', 503);
+  if (!key) throw failed('no_key', NOT_NOW);
   const content = [];
   photos.forEach(p => {
     content.push({ type: 'text', text: `id: ${p.id}` });
     content.push({ type: 'image', source: { type: 'base64', media_type: typeOf(p.bytes), data: p.bytes.toString('base64') } });
   });
-  content.push({ type: 'text', text: 'Sort these photos and answer with the JSON object.' });
-  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
-  const timer = ctrl ? setTimeout(() => ctrl.abort(), 50000) : null;
-  let res;
-  try {
-    res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST', signal: ctrl ? ctrl.signal : undefined,
-      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: MODEL(), max_tokens: 60 + photos.length * 40, system: SYSTEM_PROMPT, messages: [{ role: 'user', content }] })
-    });
-  } catch (err) {
-    throw userError('Sorting is taking too long right now. Try again, or add the photos to each section yourself.', 503);
-  } finally { if (timer) clearTimeout(timer); }
-  if (!res.ok) {
-    console.error('photo sort: Claude HTTP', res.status, (await res.text().catch(() => '')).slice(0, 200));
-    throw userError('Sorting is not available right now. Add the photos to each section yourself.', 503);
+  content.push({ type: 'text', text: 'Sort these photos. Answer with the JSON object only, on one line, no spaces or line breaks.' });
+  const started = Date.now();
+  const left = () => 52000 - (Date.now() - started);
+  const queue = models();
+  let lastReason = 'ai_error', retried = false;
+  while (queue.length && left() > 8000) {
+    const model = queue[0];
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), left()) : null;
+    let res;
+    try {
+      res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST', signal: ctrl ? ctrl.signal : undefined,
+        headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model, max_tokens: Math.min(4096, 400 + photos.length * 70), system: SYSTEM_PROMPT, messages: [{ role: 'user', content }] })
+      });
+    } catch (err) {
+      throw failed('timeout', 'Sorting is taking too long right now. Try again, or add the photos to each section yourself.');
+    } finally { if (timer) clearTimeout(timer); }
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      const text = data && Array.isArray(data.content) ? data.content.filter(c => c.type === 'text').map(c => c.text).join('') : '';
+      const answer = readAnswer(text);
+      if (answer.length) return { answer, model, cutOff: !!(data && data.stop_reason === 'max_tokens') };
+      console.error('photo sort: unreadable answer from', model, (data && data.stop_reason) || '', text.slice(0, 300));
+      throw failed('bad_answer', NOT_NOW);
+    }
+    const body = (await res.text().catch(() => '')).slice(0, 300);
+    console.error('photo sort: Claude HTTP', res.status, model, body);
+    if (res.status === 401 || res.status === 403) throw failed('bad_key', NOT_NOW);
+    if (res.status === 404 || (res.status === 400 && /model/i.test(body))) { queue.shift(); lastReason = 'no_model'; continue; }
+    if (res.status === 400 && /too large|exceed|size/i.test(body)) throw failed('too_big', 'These photos are too many to sort at once. Add fewer at a time, or add them to each section yourself.', 400);
+    if ([429, 500, 502, 503, 529].includes(res.status) && !retried) { retried = true; lastReason = 'busy'; await new Promise(r => setTimeout(r, 1500)); continue; }
+    lastReason = res.status === 429 || res.status === 529 ? 'busy' : res.status === 400 ? 'refused' : 'ai_error';
+    break;
   }
-  const data = await res.json().catch(() => null);
-  const text = data && Array.isArray(data.content) ? data.content.filter(c => c.type === 'text').map(c => c.text).join('') : '';
-  const m = text.match(/\{[\s\S]*\}/);
-  try { const parsed = m ? JSON.parse(m[0]) : null; if (parsed && Array.isArray(parsed.photos)) return parsed.photos; } catch (e) { /* below */ }
-  throw userError('Sorting is not available right now. Add the photos to each section yourself.', 503);
+  throw failed(lastReason, NOT_NOW);
 }
 
 // Claude's answer → a clean result for every id sent, in the order sent.
@@ -126,14 +161,20 @@ async function sortPhotos(sql, logAudit, guestId, body) {
     if ((r[0] && r[0].n) >= PER_HOUR) throw userError('You have sorted photos many times in the last hour. Add these to each section yourself, or try again later.', 429);
   } catch (e) { if (e.isUserFacing) throw e; }
   const photos = cleanPhotos(body && body.photos);
-  let answer;
-  try { answer = await ask(photos); }
+  let got;
+  try { got = await ask(photos); }
+  catch (e) {
+    // Recorded so the reason can be seen in Admin → Audit log.
+    if (e.reason) await logAudit(sql, { action: 'listing_photos_sort_failed', success: false, actorType: 'guest', actorIdentifier: String(guestId),
+      targetType: 'guest', targetId: guestId, metadata: { photos: photos.length, reason: e.reason } }).catch(() => {});
+    throw e;
+  }
   finally { photos.forEach(p => p.bytes.fill(0)); }
-  const result = normalise(photos.map(p => p.id), answer);
+  const result = normalise(photos.map(p => p.id), got.answer);
   const counts = result.reduce((c, x) => { c[x.section] = (c[x.section] || 0) + 1; return c; }, {});
   await logAudit(sql, { action: 'listing_photos_sorted', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-    targetType: 'guest', targetId: guestId, metadata: { photos: result.length, counts } });
+    targetType: 'guest', targetId: guestId, metadata: { photos: result.length, counts, model: got.model, cutOff: got.cutOff } });
   return { photos: result };
 }
 
-module.exports = { sortPhotos, normalise, SECTIONS, MAX_PHOTOS, SYSTEM_PROMPT };
+module.exports = { sortPhotos, normalise, readAnswer, models, SECTIONS, MAX_PHOTOS, SYSTEM_PROMPT };
