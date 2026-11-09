@@ -723,7 +723,7 @@
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-04b"></script>
+<script src="aerva-policies.js?v=2026-11-09a"></script>
 </head>
 <body>
 
@@ -4645,7 +4645,34 @@
     });
   }).catch(() => {});
 
-  // Commission revisions: one banner per notice waiting for an answer.
+  // Material changes to the agreements and policies for hosts
+  // (AERVA_POLICIES.updates, audience 'hosts' or 'all'): shown from the
+  // day they are published until 14 days after they take effect. Nothing
+  // to accept — "Got it" hides it on this browser (owner, 9 Nov 2026).
+  (function policyUpdates(){
+    const P = window.AERVA_POLICIES || {};
+    const now = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Kolkata' });
+    const plus14 = (d) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 14); return x.toISOString().slice(0, 10); };
+    const seen = (id) => { try { return localStorage.getItem('aerva_update_seen_' + id) === '1'; } catch (e) { return false; } };
+    const wrap = document.querySelector('.wrap');
+    if(!wrap) return;
+    (P.updates || []).filter(u => u && (u.audience === 'hosts' || u.audience === 'all') && u.published <= now && now <= plus14(u.effective) && !seen(u.id)).forEach(u => {
+      const box = document.createElement('div');
+      box.className = 'notice-card';
+      box.style.cssText = 'margin:0 0 20px; padding:18px 20px;';
+      const live = now >= u.effective;
+      box.innerHTML = '<strong style="font-size:16px;">' + esc(u.title) + '</strong>'
+        + '<p style="font-size:14px; line-height:1.6; margin:8px 0 4px;">' + (live ? 'In effect since ' : 'Takes effect on ') + '<strong>' + esc(day(u.effective + 'T00:00:00+05:30')) + '</strong>. What is changing:</p>'
+        + '<ul style="font-size:14px; line-height:1.6; margin:0 0 8px; padding-left:20px;">' + u.summary.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>'
+        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">There is nothing you need to do. Continuing to host ' + (live ? '' : 'after that date ') + 'means you accept the update' + (live ? '' : '; if you do not, you may deactivate your listings before then') + '.</p>'
+        + '<div style="margin-top:10px; display:flex; gap:14px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" data-got="1">Got it</button><a href="index.html?view=policies&doc=host-agreement" target="_blank" rel="noopener" style="font-size:13.5px;">Read the Host Agreement</a></div>';
+      wrap.insertBefore(box, wrap.firstChild);
+      box.querySelector('button[data-got]').addEventListener('click', () => { try { localStorage.setItem('aerva_update_seen_' + u.id, '1'); } catch (e) {} box.remove(); });
+    });
+  })();
+
+  // Commission revisions: one notice each — information only (owner, 9 Nov
+  // 2026). "Got it" hides it; nothing to confirm, nothing ends.
   let commissionNow = '';
   fetch(API + '?rateNotices=1', { headers: H }).then(r => r.json()).then(d => {
     commissionNow = (d && d.commission) || '';
@@ -4660,18 +4687,14 @@
       box.innerHTML = '<strong style="font-size:16px;">Notice: revision of Aerva’s commission</strong>'
         + '<p style="font-size:15px; line-height:1.6; margin:8px 0;">Aerva’s commission: ' + (c.from ? 'from ' + esc(c.from) + ' ' : '') + 'to <strong>' + esc(c.to) + '</strong></p>'
         + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">The revised commission applies to bookings made on or after <strong>' + esc(day(n.effectiveFrom)) + '</strong> (12:00 AM, India time). Bookings made before then keep the commission in force when they were made. This notice was given in advance.</p>'
-        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Please acknowledge and confirm, or decline, before that date. If you decline it, or it is not confirmed by then, your agreement with Aerva ends: your listings are deactivated, confirmed bookings go ahead and amounts due to you are paid. You can accept the agreement again at any time to bring them back.</p>'
-        + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" data-a="1">Acknowledge and confirm</button><button type="button" class="ch-btn" data-a="0">Decline</button><span class="rn-msg" style="font-size:13.5px;"></span></div>';
+        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">There is nothing you need to do. If you prefer not to host at the revised commission, you may deactivate your listings before that date; continuing to host after it means you accept it.</p>'
+        + '<div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;"><button type="button" class="ch-btn primary" data-got="1">Got it</button><span class="rn-msg" style="font-size:13.5px;"></span></div>';
       wrap.insertBefore(box, wrap.firstChild);
-      box.querySelectorAll('button[data-a]').forEach(btn => btn.addEventListener('click', async () => {
-        const accept = btn.dataset.a === '1';
-        if(!accept && !confirm('Decline this commission revision? Your agreement with Aerva ends and all your live listings are deactivated. Confirmed bookings go ahead and amounts due to you are paid.')) return;
-        const r = await fetch(API, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, H), body: JSON.stringify({ answerRateNotice: { id: n.id, accept } }) });
-        const j = await r.json().catch(() => ({}));
-        if(!r.ok){ box.querySelector('.rn-msg').textContent = j.error || 'Could not save. Try again.'; return; }
-        box.innerHTML = accept ? '<strong>Thank you — you have acknowledged the revised commission from ' + esc(day(n.effectiveFrom)) + '.</strong>'
-          : '<strong>You declined the revision.</strong> <span style="font-size:14px;">Your agreement has ended and ' + (j.listingsDeactivated || 0) + ' listing(s) were deactivated. Accept the current Host Agreement under Account to bring them back.</span>';
-      }));
+      box.querySelector('button[data-got]').addEventListener('click', async () => {
+        const r = await fetch(API, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, H), body: JSON.stringify({ answerRateNotice: { id: n.id } }) });
+        if(!r.ok){ const j = await r.json().catch(() => ({})); box.querySelector('.rn-msg').textContent = j.error || 'Could not save. Try again.'; return; }
+        box.remove();
+      });
     });
   }).catch(() => {});
 

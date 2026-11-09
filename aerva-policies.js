@@ -13,15 +13,42 @@
 // only in the admin tool.
 window.AERVA_POLICIES = {
   version: '1.0',
-  updated: '26 September 2026',
+  updated: '9 November 2026',
   contact: 'hello@aerva.in',
+
+  // Changes to the agreements and policies (owner, 9 Nov 2026):
+  //   • rewording / corrections that do not change the meaning: just edit
+  //     the text and `updated` above — no entry here, nobody is emailed;
+  //   • a material change: add an entry here, published at least 30 days
+  //     before `effective`. Everyone in `audience` ('guests', 'hosts' or
+  //     'all') is emailed once (job 'policy_update_notices') and sees a
+  //     banner (site and/or host dashboard) until 14 days after it takes
+  //     effect. Continuing to use Aerva after `effective` is acceptance.
+  //   Dates are India dates (YYYY-MM-DD). Never edit a sent entry's id.
+  updates: [
+    { id: '2026-11-09-host-agreement', audience: 'hosts', published: '2026-11-09', effective: '2026-12-09',
+      title: 'Aerva Host Agreement updated (version 2026-11-09a)',
+      summary: [
+        'Commission changes: you are told in advance by email and in your dashboard. You no longer need to confirm them, and your agreement no longer ends if you do not.',
+        'Other changes: wording fixes take effect when published. Any other change is announced at least 30 days ahead with a summary; continuing to host after that date means you accept it.',
+        'You are asked to accept a revised agreement in your dashboard only where the law or the nature of the change requires it.'
+      ] }
+  ],
 
   // Shown before payment (guest) and before listing (host). The version is
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
     version: '2026-10-29a',       // booking agreement (guests)
-    hostVersion: '2026-11-04a',    // host agreement — accepted for every listing
+    hostVersion: '2026-11-09a',    // host agreement — accepted for every listing
+    // How hosts already on an earlier version move to this one (_host-agreement.js):
+    //   'minor'  — rewording / corrections, same meaning: nothing to do;
+    //   'notice' — a material change: told at least 30 days ahead (email +
+    //              dashboard, see `updates` below); continuing to host after
+    //              `effective` is acceptance; nothing ends;
+    //   'accept' — must be accepted in the dashboard within 30 days of the
+    //              notice, or the agreement ends (only for real legal changes).
+    hostRevision: { kind: 'notice', effective: '2026-12-09', update: '2026-11-09-host-agreement' },
     guest: {
       title: 'Booking agreement',
       points: [
@@ -79,7 +106,7 @@ window.AERVA_POLICIES = {
         { title: '5. Commission and fees', points: [
           'Aerva charges you a commission on each booking, at the commission rate shown in your dashboard. It is deducted from your payout. Any service fee Aerva charges guests is Aerva’s own and is not part of your earnings.',
           'Aerva may revise its commission. You are told in advance, by email and in your dashboard, with the date from which the revised commission applies; it applies to bookings made on or after that date. The rates in force when a booking is made apply to that booking.',
-          'You acknowledge and confirm, or decline, each commission revision in your dashboard before the date it applies. If you decline it, or it is not confirmed by that date, this agreement ends, as set out in the Termination clause below.'
+          'You do not need to confirm a commission revision. If you prefer not to host at the revised commission, you may deactivate your listings before the date it applies; continuing to host after that date means you accept it.'
         ] },
         { title: '6. Payouts and taxes', points: [
           'Your payout for a booking is sent the day after check-in (for an experience, the day after its date) to your verified bank account, after Aerva’s commission, any co-host share, applicable deductions and tax deducted at source.',
@@ -189,17 +216,19 @@ window.AERVA_POLICIES = {
           'You are responsible for your own property, contents and liability insurance.'
         ] },
         { title: '26. Acceptance, records and copies', points: [
-          'This agreement is accepted for each listing you submit, and again whenever Aerva revises it. Each acceptance is recorded with the version, the listing, the date and time.',
+          'This agreement is accepted for each listing you submit, and whenever Aerva asks you to accept a revision. Each acceptance is recorded with the version, the listing, the date and time.',
           'A copy of the agreement you accepted is emailed to you each time, and every agreement you have accepted can be viewed in your dashboard under Account → Host Agreement.',
           'The version published by Aerva is the binding version. Aerva’s interpretation of this agreement and its Policies is final.'
         ] },
         { title: '27. Revisions', points: [
-          'Aerva may revise this agreement and its Policies at any time. A revision takes effect when it is published. Commission revisions are announced in advance, as set out in the Commission and fees clause.',
-          'Aerva emails you a formal notice of every revision. You accept the revised agreement in your dashboard, or decline it.',
+          'Aerva may revise this agreement and its Policies. Corrections and rewording that do not change their meaning take effect when published, and the date of the last update is changed.',
+          'Aerva tells you of any other revision at least 30 days before it takes effect, by email and in your dashboard, with a short summary of what is changing. Continuing to host after that date means you accept the revised agreement. If you do not accept it, you may end this agreement by deactivating your listings before then.',
+          'Where the law or the nature of a revision requires it, Aerva asks you to accept the revised agreement in your dashboard; you accept it or decline it there.',
+          'Commission revisions are announced in advance, as set out in the Commission and fees clause.',
           'Bookings already confirmed keep the commission and fees in force when they were made.'
         ] },
         { title: '28. Termination', points: [
-          'If you decline a revised agreement, or do not accept it within 30 days of Aerva’s notice, or you decline a commission revision, or have not acknowledged it by the date it takes effect, this agreement ends. Your listings are deactivated and removed from Aerva, and they take no new bookings.',
+          'If you decline a revised agreement that Aerva asks you to accept, or do not accept it within 30 days of Aerva’s notice, this agreement ends. Your listings are deactivated and removed from Aerva, and they take no new bookings.',
           'Confirmed bookings go ahead unless Aerva decides otherwise. Amounts due to you for completed stays are paid to your verified bank account, less any amounts you owe Aerva, such as cancellation coupons, refunds or penalties.',
           'You may end this agreement at any time by deactivating your listings or your hosting. Aerva may end it, or suspend or remove any listing or account, if this agreement, Aerva’s Policies or the law are broken.',
           'Your account and data are then handled under Aerva’s Deactivating, Removing and Deleting policy. You may delete your account once nothing is open; booking and payment records are kept as the law requires.',
@@ -410,7 +439,7 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Hosts', points: [
         'Aerva’s commission is a percentage of the stay price, paid amenities and pet fees, at the commission rate shown in your dashboard. It is deducted from your payout.',
-        'A revised commission is announced to hosts in advance, by email and in their dashboard, and applies to bookings made from the date given. Hosts acknowledge and confirm, or decline, it in their dashboard.'
+        'A revised commission is announced to hosts in advance, by email and in their dashboard, and applies to bookings made from the date given. There is nothing to confirm: a host who prefers not to continue may deactivate their listings before that date.'
       ]},
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',

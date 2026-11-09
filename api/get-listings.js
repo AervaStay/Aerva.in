@@ -617,13 +617,21 @@ const JOBS = [
   // Host Agreement revisions: a formal email to every host who has not
   // accepted the current version; 30 days later, the agreement ends for those
   // who still have not (their listings are deactivated) — _host-agreement.js.
-  { name: 'host_agreement_notices', label: 'Host Agreement revisions: notices, and ending agreements not accepted in time', everyMinutes: 60, lockMinutes: 10,
+  // A revision of kind 'notice' instead records, from its effective date,
+  // that hosts still hosting have accepted it (nothing ends).
+  { name: 'host_agreement_notices', label: 'Host Agreement revisions: notices, acceptance by continuing to host, and (for must-accept revisions) ending agreements not accepted in time', everyMinutes: 60, lockMinutes: 10,
     run: (c) => { const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours(); return h >= 10 && h < 19
       ? require('./_host-agreement').runAgreementNotices(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) : { waiting: 'runs between 10 am and 7 pm' }; } },
-  // Commission revisions for hosts: formal notices for changes to come;
-  // agreements end for notices not acknowledged by the date (_rates.js).
-  { name: 'commission_notices', label: 'Commission revisions: notices to hosts, and answers due', everyMinutes: 30, lockMinutes: 10,
+  // Commission revisions for hosts: an email for each change to come —
+  // information only, nothing ends (_rates.js).
+  { name: 'commission_notices', label: 'Commission revisions: notices to hosts', everyMinutes: 30, lockMinutes: 10,
     run: (c) => require('./_rates').runRateNotices(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) },
+  // Material changes to the agreements and policies (AERVA_POLICIES.updates):
+  // one email per account, from the publish date until the change takes
+  // effect, at least 30 days ahead (_policy-updates.js).
+  { name: 'policy_update_notices', label: 'Policy updates: tell everyone affected, 30+ days ahead', everyMinutes: 30, lockMinutes: 10,
+    run: (c) => { const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours(); return h >= 10 && h < 19
+      ? require('./_policy-updates').runPolicyUpdateNotices(c.sql, { deadlineMs: Math.min(5000, c.remainingMs) }) : { waiting: 'sends between 10 am and 7 pm' }; } },
   // Daily: any message still showing a contact detail its chat does not
   // allow is removed, and the admin emailed (_contact-checks.js).
   { name: 'contact_check_audit', label: 'Contact check: remove anything the message rules missed', dailyAtHour: 4, lockMinutes: 10,

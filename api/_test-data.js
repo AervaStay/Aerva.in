@@ -75,44 +75,51 @@ async function load(sql) {
   return { guests, hosts, listings, orders, coupons, changes, penalties, credits, pay };
 }
 
-// Made through the site, or added straight into the database? The site
-// leaves traces the back end does not: a listing submitted through the
-// form (audit "listing_submitted" / host agreement accepted / photos in
-// Aerva's own storage); an account that signed in or signed up (any guest,
-// host or co-host entry in the audit log under its id, email or phone); a
-// booking that went through checkout (booking audit entries, a payment
-// confirmation, or a real payment).
+// Made through the site, or added straight into the database? (owner,
+// 9 Nov 2026). The back-end test data came with its own audit rows and
+// payment records, so those prove nothing for bookings. The owner's rule:
+//   • a BOOKING was made through the site only if it cost under ₹10 (every
+//     real test booking was a few rupees) — or Razorpay shows real money;
+//   • an ACCOUNT only if it actually signed in or signed up (OTP / login /
+//     email confirmation recorded in the audit log under its id, email or
+//     phone) — and never an @example.com / .org / .net address;
+//   • a LISTING only if it was submitted through the listing form, its host
+//     agreement was accepted, or its photos are in Aerva's own storage —
+//     and never one named "[Test] …".
+// The preview shows why for each row; the admin can change any tick.
+const SITE_BOOKING_UNDER = 10;              // ₹
+const SIGN_IN_ACTIONS = ['guest_login', 'guest_signup', 'guest_phone_otp_verified', 'guest_email_verified', 'guest_password_reset_completed',
+  'guest_phone_linked', 'host_phone_otp_verified', 'host_account_created'];
+const EXAMPLE_EMAIL = /@example\.(com|org|net)$/i;
 async function origins(sql, d) {
-  const [lsub, agree, gtarget, actors, oaud, pconf] = await Promise.all([
-    sql`SELECT DISTINCT target_id FROM audit_log WHERE target_type = 'listing' AND target_id IS NOT NULL AND actor_type IN ('host', 'cohost')`,
+  const [lsub, agree, gtarget, actors] = await Promise.all([
+    sql`SELECT DISTINCT target_id FROM audit_log WHERE target_type = 'listing' AND target_id IS NOT NULL AND action = 'listing_submitted'`,
     sql`SELECT DISTINCT listing_id FROM host_agreement_acceptances WHERE listing_id IS NOT NULL`,
-    sql`SELECT DISTINCT target_id FROM audit_log WHERE target_type = 'guest' AND target_id IS NOT NULL AND actor_type IN ('guest', 'host', 'cohost')`,
-    sql`SELECT DISTINCT lower(actor_identifier) AS who FROM audit_log WHERE actor_type IN ('guest', 'host', 'cohost') AND actor_identifier IS NOT NULL`,
-    sql`SELECT DISTINCT target_id FROM audit_log WHERE target_type = 'order' AND target_id IS NOT NULL AND action LIKE 'booking%'`,
-    sql`SELECT DISTINCT razorpay_order_id FROM payment_confirmations WHERE razorpay_order_id IS NOT NULL`
+    sql`SELECT DISTINCT target_id FROM audit_log WHERE target_type = 'guest' AND target_id IS NOT NULL AND action = ANY(${SIGN_IN_ACTIONS}) AND success = true`,
+    sql`SELECT DISTINCT lower(actor_identifier) AS who FROM audit_log WHERE action = ANY(${SIGN_IN_ACTIONS}) AND success = true AND actor_identifier IS NOT NULL`
   ]);
   const L = new Set([...lsub.map(r => Number(r.target_id)), ...agree.map(r => Number(r.listing_id))]);
   const G = new Set(gtarget.map(r => Number(r.target_id)));
   const who = new Set(actors.map(r => r.who));
-  const O = new Set(oaud.map(r => Number(r.target_id)));
-  const P = new Set(pconf.map(r => String(r.razorpay_order_id)));
   const phoneKey = (p) => String(p || '').replace(/\D/g, '').slice(-10);
   const whoPhones = new Set([...who].map(phoneKey).filter(x => x.length === 10));
   const listing = new Map(), guest = new Map(), order = new Map();
   d.listings.forEach(l => {
     const test = TEST_NAME.test(String(l.property_name || ''));
     const why = L.has(Number(l.id)) ? 'submitted through the site' : (BLOB.test(String(l.cover_photo_url || '')) || BLOB.test(String(l.ext || ''))) ? 'photos uploaded through the site' : null;
-    listing.set(Number(l.id), { site: !!why, test, why: test ? 'named [Test]' : (why || 'added through the back end') });
+    listing.set(Number(l.id), { site: !!why && !test, test, why: test ? 'named [Test]' : (why || 'added through the back end') });
   });
   d.guests.forEach(g => {
     const em = String(g.email || '').toLowerCase();
+    if (EXAMPLE_EMAIL.test(em)) { guest.set(Number(g.id), { site: false, why: 'example.com test address' }); return; }
     const site = G.has(Number(g.id)) || (em && who.has(em)) || (phoneKey(g.phone).length === 10 && whoPhones.has(phoneKey(g.phone)));
-    guest.set(Number(g.id), { site, why: site ? 'signed in through the site' : 'added through the back end' });
+    guest.set(Number(g.id), { site, why: site ? 'signed in through the site' : 'never signed in — back end' });
   });
   d.orders.forEach(o => {
     const real = !!(o.razorpay_payment_id && d.pay.real.has(o.razorpay_payment_id));
-    const site = real || O.has(Number(o.id)) || (o.razorpay_order_id && P.has(String(o.razorpay_order_id)));
-    order.set(Number(o.id), { site, real, why: real ? 'paid with real money' : site ? 'booked through the site' : 'added through the back end' });
+    const small = Number(o.total) > 0 && Number(o.total) < SITE_BOOKING_UNDER;
+    const site = real || small;
+    order.set(Number(o.id), { site, real, why: real ? 'paid with real money' : small ? `under ₹${SITE_BOOKING_UNDER} — booked through the site` : `₹${SITE_BOOKING_UNDER} or more — dummy` });
   });
   return { listing, guest, order };
 }
