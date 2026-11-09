@@ -580,6 +580,10 @@ const JOBS = [
       const closed = await require('./_cancellations').closeRequestsAtCheckin(c.sql, { deadlineMs: 2000 });
       return { ...settled, closedAtCheckin: closed.closed || 0 };
     } },
+  // The host's morning brief: today's check-ins and check-outs, and arrivals
+  // in the next 7 days (_host-brief.js). Only hosts with something booked.
+  { name: 'host_daily_brief', label: 'Hosts: morning email of today’s check-ins/outs and the next 7 days', dailyAtHour: 7, lockMinutes: 15,
+    run: (c) => require('./_host-brief').sendBriefs(c.sql, { deadlineMs: Math.min(8000, c.remainingMs) }) },
   // Emergency cancellations the host has not answered: Aerva reaches out —
   // support requests for both sides, 3 reminders to the host, then Aerva
   // decides (_emergency-escalation.js). Runs before the check-in closing above matters.
@@ -1326,6 +1330,25 @@ module.exports = async (req, res) => {
     // The summary uses exactly the rule the listing card uses, so the
     // stars on the card and the stars on the page always agree: stays are
     // scored on stay reviews only; experiences on their own factor set.
+    // ---- Nearby: things to do and getting around (_nearby.js) ----
+    // GET ?nearby=<listingId> → OpenStreetMap places near the property (cached 30 days).
+    // GET ?nearbyConsent=1&listing=&item=&link=&kind= → the guest agreed to the
+    //   third-party notice before a link opened (recorded; signed in or not).
+    if (req.query.nearby !== undefined) {
+      const out = await require('./_nearby').nearbyFor(sql, Number(req.query.nearby));
+      if (out.error) return res.status(out.status || 400).json({ error: out.error });
+      res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=3600, stale-while-revalidate=86400');
+      return res.status(200).json(out);
+    }
+    if (req.query.nearbyConsent === '1') {
+      const auth = String(req.headers['authorization'] || '');
+      const who = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
+      const guestId = who && who.action === 'guest-session' ? Number(who.listingId) || null : null;
+      const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || null;
+      await require('./_nearby').recordConsent(sql, { guestId, ip, listingId: req.query.listing, item: req.query.item, link: req.query.link, kind: req.query.kind });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({ recorded: true });
+    }
     if (req.query.reviewsFor !== undefined) {
       const listingId = Number(req.query.reviewsFor);
       const offset = Math.max(0, Math.min(10000, Number(req.query.offset) || 0));

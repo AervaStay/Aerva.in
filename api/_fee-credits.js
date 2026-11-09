@@ -247,6 +247,32 @@ async function creditForTransfer(sql, orderId, amount, { changeId = null, transf
   return out;
 }
 
+// A proven emergency cancellation that is approved (by the host, or by
+// Aerva): Aerva's service fee on the booking comes back as Aerva credit
+// (owner, 9 Nov 2026) — as far as it was paid in money. Same credit rules as
+// any other: use it, or have it refunded from My Bookings. Returns { credit }.
+async function creditForEmergencyFee(sql, orderId) {
+  const out = { credit: 0, expiresAt: null };
+  const o = (await sql`SELECT id, guest_id, guest_email, suite_name, razorpay_payment_id, created_at AS paid_at, guest_service_fee, to_jsonb(orders)->>'confirmation_code' AS code
+                       FROM orders WHERE id = ${Number(orderId) || 0}`)[0];
+  const fee = o ? Math.max(0, Math.round(Number(o.guest_service_fee) || 0)) : 0;
+  if (!fee || !o.razorpay_payment_id || !/^pay_/.test(String(o.razorpay_payment_id))) return out;
+  const c = (await sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at, reason)
+            VALUES (${o.guest_id}, ${o.guest_email}, ${o.id}, ${o.razorpay_payment_id}, ${fee}, ${fee}, ${creditEnd(o.paid_at)}::timestamptz, 'emergency_fee')
+            ON CONFLICT (source_order_id) DO UPDATE SET amount = fee_credits.amount + EXCLUDED.amount, remaining = fee_credits.remaining + EXCLUDED.remaining, status = 'active',
+              expires_at = GREATEST(fee_credits.expires_at, EXCLUDED.expires_at)
+            WHERE fee_credits.status <> 'refunding' RETURNING *`)[0];
+  if (!c) return out;
+  out.credit = fee; out.expiresAt = c.expires_at;
+  await entry(sql, c.id, 'issued', fee, { orderId: o.id, reference: o.razorpay_payment_id, note: `Emergency cancellation with proof${o.code ? ` (booking ${o.code})` : ''}: Aerva’s service fee returned as credit` });
+  await email(o.guest_email, `Aerva’s service fee of ${inr(fee)} is back with you as credit`, `
+    <div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
+      <p>Because your cancellation of <strong>${esc(o.suite_name)}</strong> was for an emergency you showed proof of, Aerva’s service fee of <strong>${inr(fee)}</strong> is held for you as Aerva credit${out.expiresAt ? ` until <strong>${day(out.expiresAt)}</strong>` : ''}.</p>
+      <p>Use it on your next stay or experience, or have it refunded to your original payment method at any time from My Bookings.</p>
+      <p style="font-size:12px; opacity:0.6;">Questions: hello@aerva.in</p></div>`);
+  return out;
+}
+
 // A host cancels (at any time; within 48 hours of check-in the host also
 // pays the guest a 10% coupon — owner's rule, 29 Oct 2026), or the host of
 // an experience that includes a stay cancels it: EVERYTHING the guest paid for the
@@ -603,4 +629,4 @@ async function forGuest(sql, guestId) {
   } catch (e) { return []; }
 }
 
-module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, creditForTransfer, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindOnSignIn, remindQuarterly, remindEnding, creditEnd, bellNotice, wallet };
+module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, creditForTransfer, creditForEmergencyFee, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindOnSignIn, remindQuarterly, remindEnding, creditEnd, bellNotice, wallet };

@@ -799,6 +799,12 @@ module.exports = async (req, res) => {
     const b = req.body.decideCancellationRequest;
     if (b.accept !== true && String(b.note || '').trim().length < 5) return res.status(400).json({ error: 'Write the reason — the guest is told it.' });
     try {
+      // A review of a host's decline (the guest sent proof) or an unanswered request.
+      const isReview = (await sql`SELECT 1 FROM cancellation_requests WHERE id = ${Number(b.requestId) || 0} AND to_jsonb(cancellation_requests)->>'review_requested_at' IS NOT NULL AND to_jsonb(cancellation_requests)->>'review_decided_at' IS NULL`).length > 0;
+      if (isReview) {
+        const rv = await require('./_cancellations').decideReview(sql, razorpay, { requestId: Number(b.requestId) || 0, accept: b.accept === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR, refundPercent: b.refundPercent == null ? 100 : Number(b.refundPercent) });
+        return res.status(200).json({ success: true, review: true, ...rv });
+      }
       const out = await require('./_cancellations').decideByAerva(sql, razorpay, { requestId: Number(b.requestId) || 0, accept: b.accept === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR, refundPercent: b.refundPercent == null ? 100 : Number(b.refundPercent) });
       return res.status(200).json({ success: true, ...out });
     } catch (err) {

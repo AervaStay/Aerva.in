@@ -163,7 +163,7 @@ async function assertChangeable(sql, o, guestId, requestedAt = null) {
 async function changeOptions(sql, orderId, guestId) {
   const o = await loadBooking(sql, orderId);
   const T = require('./_booking-transfers');
-  // After 10 AM on the day after check-in only a transfer may still be open (until 12 PM).
+  // Both close at 10 AM on the day after check-in (kept in case the windows ever differ).
   let onlyTransfer = false;
   try { await assertChangeable(sql, o, guestId); }
   catch (err) {

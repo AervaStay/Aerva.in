@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-09c"></script>
+<script src="aerva-policies.js?v=2026-11-09e"></script>
 </head>
 <body>
 
@@ -4281,6 +4281,8 @@ async function loadCancelRequests(){
         <strong>${lkEsc(x.listing)}</strong> · ${lkEsc(String(x.arrival).slice(0,10))} → ${lkEsc(String(x.departure).slice(0,10))} · booking #${Number(x.orderId)}${x.hoursToCheckIn != null ? ` · <strong>${Number(x.hoursToCheckIn)} h to check-in</strong>` : ''}<br>
         <span>${lkEsc(x.guest)} · host ${lkEsc(x.hostName || '')}${x.hostPhone ? ' · <a href="tel:' + lkEsc(x.hostPhone) + '">' + lkEsc(x.hostPhone) + '</a>' : ''}${x.hostEmail ? ' · ' + lkEsc(x.hostEmail) : ''}</span><br>
         <span><strong>${lkEsc(x.reason)}</strong>${x.details ? ' — ' + lkEsc(x.details) : ''}</span><br>
+        ${(x.evidence || []).length ? `<span style="font-size:13px;">Proof: ${x.evidence.map((u, i) => `<a href="${lkEsc(u)}" target="_blank" rel="noopener noreferrer">file ${i + 1}</a>`).join(' · ')}</span><br>` : '<span style="font-size:13px; color:#a3402f;">No proof attached</span><br>'}
+        ${x.review ? `<p style="margin:8px 0; padding:8px 10px; background:#eef3fb; border-radius:6px; font-size:13px;"><strong>Review asked for:</strong> the host declined${x.hostNote ? ' (“' + lkEsc(x.hostNote) + '”)' : ''}; the guest sent proof and asks Aerva to review.${x.reviewNote ? ' Guest: “' + lkEsc(x.reviewNote) + '”' : ''} Approving overturns the decline; your decision is final.</p>` : ''}
         ${x.lastMinute ? '<p style="margin:8px 0; padding:8px 10px; background:#fbeeea; border-radius:6px; font-size:13px;"><strong>Last-minute request</strong> (asked less than a day before check-in): it is on the host. Even for an emergency, decide on the actual situation — the host may keep 25% or 50%.</p>' : ''}
         <small>Asked ${lkEsc(when(x.askedAt))} · ${stage}</small>
         ${x.escalatedAt ? `<div style="margin-top:10px; padding:10px; background:#f8f5ef; border-radius:8px;">

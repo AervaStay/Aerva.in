@@ -212,7 +212,7 @@ async function accountsReport(sql, month) {
       ORDER BY e.created_at, e.id`).map(e => ({
         date: isoDay(e.created_at, true), credit: 'C-' + e.credit_id, guest: e.guest_email || '',
         movement: { issued: 'Credit made', used: 'Used on a booking', given_back: 'Given back to the credit', refunded: 'Refunded to the guest' }[e.kind] || e.kind,
-        why: e.kind === 'issued' ? (e.reason === 'stay_shortened' ? 'Stay shortened' : e.reason === 'booking_transfer' ? (e.note || 'Booking transferred: difference after Aerva’s transfer fee') : 'Host cancelled') : (e.note || ''),
+        why: e.kind === 'issued' ? (e.reason === 'stay_shortened' ? 'Stay shortened' : e.reason === 'booking_transfer' ? (e.note || 'Booking transferred: difference after Aerva’s transfer fee') : e.reason === 'emergency_fee' ? 'Emergency cancellation with proof: service fee returned as credit' : 'Host cancelled') : (e.note || ''),
         booking: e.booking || '', reference: e.reference || '',
         creditIn: e.kind === 'issued' || e.kind === 'given_back' ? Number(e.amount) : 0,
         creditOut: e.kind === 'used' || e.kind === 'refunded' ? Number(e.amount) : 0,

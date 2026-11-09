@@ -439,11 +439,24 @@
       const res = await fetch(API + '?myPayouts=1', { headers: { 'Authorization': 'Bearer ' + token } });
       const data = await res.json();
       const list = (res.ok && data.payouts) || [];
-      box.innerHTML = '<div class="card"><h2>Payouts sent</h2>' + (list.length
+      const months = []; for (let i = 0; i < 12; i++){ const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); months.push(d.toISOString().slice(0, 7)); }
+      const stmt = '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px;"><span class="sub">Monthly statement for your CA:</span>'
+        + '<select id="stmtMonth" style="padding:6px; border:1px solid #d9cfc2; border-radius:6px;">' + months.map(m => `<option value="${m}">${new Date(m + '-01T00:00:00Z').toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</option>`).join('') + '</select>'
+        + '<button type="button" id="stmtGo" style="padding:7px 14px; border:1px solid #1c1a17; background:#1c1a17; color:#fff; border-radius:6px; cursor:pointer;">Download (CSV)</button></div>';
+      box.innerHTML = '<div class="card"><h2>Payouts sent</h2>' + stmt + (list.length
         ? list.map(p => `<a class="payout" href="index.html?payout=${Number(p.id)}">
             <span><strong>${inr(p.amount)}</strong>${p.mine ? (p.as === 'cohost' ? ' · to you, as co-host' : ' · to you') : ' · to ' + esc(p.payeeName || (p.as === 'cohost' ? 'co-host' : 'host'))}<br><span class="sub">${p.kind === 'deposit' ? 'Security deposit compensation · ' : ''}${esc(p.listing || '')} · ${esc(day(p.arrival))} – ${esc(day(p.departure))}</span></span>
             <span class="when">Sent ${esc(day(p.sentAt))}${p.arrivingBy ? '<br>Arriving by ' + esc(day(p.arrivingBy)) : ''}</span></a>`).join('')
         : '<p class="empty">No payouts yet. Each one appears here once it is sent.</p>') + '</div>';
+      const go = document.getElementById('stmtGo');
+      if(go) go.addEventListener('click', async () => {
+        const m = document.getElementById('stmtMonth').value;
+        const r = await fetch(API + '?payoutStatement=' + encodeURIComponent(m), { headers: { 'Authorization': 'Bearer ' + token } });
+        if(!r.ok){ alert('Could not make the statement right now.'); return; }
+        const blob = await r.blob();
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'aerva-payouts-' + m + '.csv';
+        document.body.appendChild(a); a.click(); a.remove();
+      });
     }catch(err){ /* leave the page as it is */ }
   }
 

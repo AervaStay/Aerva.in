@@ -2748,6 +2748,10 @@
 
       // Fully done — now it's safe to reset everything for a fresh listing.
       confirmEl.style.display = 'block';
+      // Straight on to the next steps, in order: Aadhaar → bank → PAN (owner, 9 Nov 2026).
+      if(!confirmEl.querySelector('.setup-next')){
+        confirmEl.insertAdjacentHTML('beforeend', '<p class="setup-next" style="margin-top:12px;"><a class="btn solid" href="host-dashboard.html?setup=1" style="display:inline-block; text-decoration:none;">Continue: verify your identity, bank and PAN →</a><br><span style="font-size:13px; opacity:0.7;">About 5 minutes. You can skip any step and come back to it.</span></p>');
+      }
       confirmEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       document.getElementById('draftHintText').style.display = 'none';
       listingForm.reset();
@@ -6979,7 +6983,7 @@
     }
     const o = card.option || {};
     const when = card.daysBefore == null ? '' : (card.daysBefore === 0 ? ' · check-in today' : card.daysBefore === 1 ? ' · check-in tomorrow' : ` · ${card.daysBefore} days before check-in`);
-    const head = `<strong>Cancellation request</strong>${esc(when)}<br><span>${esc(card.reason)}</span>${card.details ? `<br><span style="opacity:0.75;">${esc(card.details)}</span>` : ''}`;
+    const head = `<strong>Cancellation request</strong>${esc(when)}<br><span>${esc(card.reason)}</span>${card.details ? `<br><span style="opacity:0.75;">${esc(card.details)}</span>` : ''}${(card.evidence || []).length ? `<br><span style="font-size:13px;">Proof: ${card.evidence.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="color:var(--gold-text);">file ${i + 1}</a>`).join(' · ')}</span>` : ''}`;
     let actions;
     if(o.type === 'emergency_late'){
       // Last-minute emergency (under a day to check-in): refund in full, keep 25% or keep 50% — or reject (no refund).
@@ -7287,7 +7291,7 @@
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
           <div class="fee-credit-body">
             <strong>Aerva credit</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}${c.amount > c.remaining ? ` <span class="fee-credit-from">· ${fmtGuest(c.remaining)} left of ${fmtGuest(c.amount)}</span>` : ''}
-            <p>${c.reason === 'booking_transfer' ? 'Part of your booking moved to another property for less, so the difference (after Aerva’s transfer fee) is held for you.' : c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : (c.reason === 'host_cancelled' ? 'Your host cancelled, so Aerva’s service fee is held for you.' : 'Your host cancelled, so what you paid is held for you.')} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
+            <p>${c.reason === 'emergency_fee' ? 'Your emergency cancellation came with proof, so Aerva’s service fee is held for you.' : c.reason === 'booking_transfer' ? 'Part of your booking moved to another property for less, so the difference (after Aerva’s transfer fee) is held for you.' : c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : (c.reason === 'host_cancelled' ? 'Your host cancelled, so Aerva’s service fee is held for you.' : 'Your host cancelled, so what you paid is held for you.')} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
             <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund it now</button> <span class="fee-credit-msg"></span>
           </div>
         </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
@@ -7313,6 +7317,7 @@
     const container = document.getElementById('myBookingsContainer');
     const token = guestAuthToken();
     loadFeeCredits();
+    if(token) aervaGuestSetupBanner(container, token);
     if(!token){
       container.innerHTML = '<p class="suites-empty">Please <a href="guest-login.html" style="color:var(--gold-deep); text-decoration:underline;">log in</a> to see your bookings.</p>';
       return;
@@ -7360,6 +7365,8 @@
         const reportHtml = inStay && b.can_report !== false ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Report a problem</button>` : '';
         const requestHtml = !upcoming ? ''
           : b.cancel_request_status === 'pending' ? `<span class="booking-request-note">${escapeMessageHtml(b.cancel_request_note || 'Cancellation requested · waiting for the host')}${b.cancel_request_note && /Aerva/.test(b.cancel_request_note) ? ' · <a href="index.html?view=help&mine=1" style="color:var(--gold-text);">See your request</a>' : ''}</span>`
+          : b.cancel_request_status === 'declined' && b.can_request_review ? `<span class="booking-request-note">Your host declined your emergency request.</span> <button type="button" class="filter-clear" data-ask-review="${b.cancel_request_id}">Ask Aerva to review (within 24 hours)</button>`
+          : b.cancel_request_status === 'declined' && b.review_state ? `<span class="booking-request-note">${escapeMessageHtml(b.review_state)}</span>`
           : b.cancel_request_status === 'declined' ? '<span class="booking-request-note">Cancellation request declined by the host</span>'
           : b.can_cancel_request === false ? (b.transferred ? '<span class="booking-request-note">Transferred · cannot be cancelled. Something not right? <a href="#" onclick="if(window.aervaOpenSupportChat){window.aervaOpenSupportChat();}return false;" style="color:var(--gold-text);">Contact Aerva Support</a></span>' : '')
           : `<button type="button" class="filter-clear" data-policy-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Request cancellation</button>`;
@@ -7393,6 +7400,7 @@
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(completed ? 'completed' : b.status)}</div>
               ${codeHtml}
               <div class="booking-actions">${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}</div>
+              ${upcoming && b.status === 'paid' ? aervaBookingGlance(b) : ''}
               <span class="booking-open-hint">View booking summary ›</span>
             </div>
           </div>
@@ -7425,6 +7433,21 @@
       });
       container.querySelectorAll('[data-pay-change]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); aervaPayChange(Number(btn.dataset.payChange), btn); });
+      });
+      container.querySelectorAll('[data-ask-review]').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const note = prompt('Anything Aerva should know? Aerva will look at the proof you sent; its decision is final for you and the host.', '');
+          if(note === null) return;
+          btn.disabled = true;
+          try{
+            const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+              body: JSON.stringify({ mode: 'requestCancellationReview', requestId: Number(btn.dataset.askReview), note }) });
+            const d = await r.json().catch(() => ({}));
+            if(!r.ok){ alert(d.error || 'Could not send it.'); btn.disabled = false; return; }
+            if(typeof loadMyBookings === 'function') loadMyBookings();
+          }catch(err){ btn.disabled = false; }
+        });
       });
       container.querySelectorAll('[data-confirm-transfer]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); aervaConfirmTransfer(Number(btn.dataset.confirmTransfer), btn); });
@@ -10037,6 +10060,7 @@
                 <div class="listing-map-embed" id="listingMapEmbed"></div>
                 <div style="margin-top:8px;">${mapLinkHtml}</div>
               ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
+              <div class="listing-nearby" data-nearby-for="${listing.id}"></div>
             </div>
           </div>
           ${amenitiesHtml}
@@ -10163,6 +10187,7 @@
               <div class="listing-map-embed" id="listingMapEmbed"></div>
               <div style="margin-top:8px;">${mapLinkHtml}</div>
             ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
+              <div class="listing-nearby" data-nearby-for="${listing.id}"></div>
           </div>
         </div>
         ${amenitiesHtml}
@@ -10256,6 +10281,7 @@
   const REVIEW_PAGE_STEPS = [5, 15, 20];
   const REVIEW_PAGE_REST = 100;
   async function loadListingReviews(root, listingId){
+    try { aervaLoadNearby(root); } catch (e) { /* never blocks the reviews */ }
     const slot = root && root.querySelector(`.listing-reviews[data-reviews-for="${Number(listingId)}"]`);
     if(!slot) return;
     slot.innerHTML = '';
@@ -12464,7 +12490,12 @@
     const body = a.clauses
       ? `<div class="agreement-scroll">${a.intro ? `<p class="agreement-intro">${esc(a.intro)}</p>` : ''}${a.clauses.map(c => `<div class="agreement-clause"><div class="agreement-clause-title">${esc(c.title)}</div><ul>${c.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>`).join('')}</div>`
       : `<ul>${a.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>`;
+    const rules = kind === 'guest' && Array.isArray(A.beforeYouPay) && A.beforeYouPay.length
+      ? `<div class="agreement-rules" style="margin:0 0 10px; padding:10px 12px; border:1px solid #c9a96a; border-radius:8px; background:#fbf6ec;">
+          <div style="font-weight:600; margin-bottom:4px;">Before you pay: what you can and cannot do</div>
+          <ul style="margin:0; padding-left:18px; font-size:13.5px; line-height:1.55;">${A.beforeYouPay.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>` : '';
     return `<div class="agreement-box" data-agreement="${kind}">
+      ${rules}
       <div class="agreement-title">${esc(a.title)}${kind === 'host' && A.hostVersion ? ` <span class="agreement-version">version ${esc(A.hostVersion)}</span>` : ''}</div>
       ${body}
       <label class="agreement-accept"><input type="checkbox" class="agreement-check"> <span>${esc(a.accept)}</span></label>
@@ -12991,7 +13022,7 @@
   function renderTodayView(today){
     const box = document.getElementById('todayList');
     if(!box) return;
-    const t = Object.assign({ arrivals: [], departures: [], staying: [], experiences: [] }, today || {});
+    const t = Object.assign({ arrivals: [], departures: [], staying: [], experiences: [], upcoming: [] }, today || {});
     const esc = escapeMessageHtml;
     const total = t.arrivals.length + t.departures.length + t.staying.length + t.experiences.length;
     document.getElementById('todayDate').textContent =
@@ -12999,10 +13030,6 @@
     document.getElementById('todayHeading').textContent = total
       ? (total === 1 ? 'You have 1 reservation' : `You have ${total} reservations`)
       : 'Nothing booked for today';
-    if(!total){
-      box.innerHTML = '<p class="today-empty">No arrivals, departures or guests staying today.</p>';
-      return;
-    }
     const row = (r, when, title) => `
       <button type="button" class="today-row" data-today-order="${Number(r.orderId)}">
         <span class="today-when">${esc(when)}</span>
@@ -13029,6 +13056,19 @@
     // An experience is not checked into — it runs, at its own start time.
     const experiences = t.experiences.map(r => row(r, r.startTime || 'All day',
       `${people(r)} joins ${r.listingName || 'your experience'}`));
+    // Coming up: the next arrivals, grouped by day (host-listings.js today.upcoming).
+    const dayLabel = (r) => r.daysAway === 1 ? 'Tomorrow' : new Date(String(r.arrival).slice(0, 10) + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+    const upcomingHtml = t.upcoming.length
+      ? `<div class="today-staying"><div class="today-group-label">Coming up · next ${Number(t.upcomingDays) || 14} days</div>${t.upcoming.map(r => row(r, dayLabel(r),
+          r.kind === 'experience' ? `${people(r)} joins ${r.listingName || 'your experience'}` : `${people(r)} arrives · ${r.nights === 1 ? '1 night' : (r.nights || '') + ' nights'}`)).join('')}</div>`
+      : `<div class="today-staying"><div class="today-group-label">Coming up</div><p class="today-col-empty">No arrivals in the next ${Number(t.upcomingDays) || 14} days.</p></div>`;
+    if(!total){
+      box.innerHTML = '<p class="today-empty">No arrivals, departures or guests staying today.</p>' + upcomingHtml;
+      todayRowsById = {};
+      t.upcoming.forEach(r => { todayRowsById[r.orderId] = r; });
+      box.querySelectorAll('[data-today-order]').forEach(el => el.addEventListener('click', () => openTodayBooking(Number(el.dataset.todayOrder))));
+      return;
+    }
     box.innerHTML =
       `<div class="today-split">
         ${column('Checking in', t.arrivals.map(r => row(r, r.checkInTime || '1:00 pm', `${people(r)} checks in`)), 'Nobody arriving today.')}
@@ -13039,10 +13079,11 @@
         : '')
       + (staying.length
         ? `<div class="today-staying"><div class="today-group-label">Staying with you</div>${staying.join('')}</div>`
-        : '');
+        : '')
+      + upcomingHtml;
     // Kept so the panel can show the booking without asking again.
     todayRowsById = {};
-    [...t.arrivals, ...t.departures, ...t.staying, ...t.experiences].forEach(r => { todayRowsById[r.orderId] = r; });
+    [...t.arrivals, ...t.departures, ...t.staying, ...t.experiences, ...t.upcoming].forEach(r => { todayRowsById[r.orderId] = r; });
     box.querySelectorAll('[data-today-order]').forEach(el => {
       el.addEventListener('click', () => openTodayBooking(Number(el.dataset.todayOrder)));
     });
@@ -15573,6 +15614,135 @@ function aervaTransferForm(body, o, orderId, { esc, inr, field, auth }){
   });
 }
 
+// ---- Complete your account (guests, under 5 minutes; _setup-steps.js) ----
+// Email → name → phone → photo (optional), in that order, above My Bookings.
+async function aervaGuestSetupBanner(container, token){
+  try{
+    const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=setupSteps', { headers: { 'Authorization': 'Bearer ' + token } });
+    const d = await r.json();
+    const items = (r.ok && d.items) || [];
+    let box = document.getElementById('guestSetupBanner');
+    const left = items.filter(i => !i.done && !i.optional);
+    if(!left.length){ if(box) box.remove(); return; }
+    if(!box && container && container.parentNode){ box = document.createElement('div'); box.id = 'guestSetupBanner'; container.parentNode.insertBefore(box, container); }
+    if(!box) return;
+    const esc = escapeMessageHtml;
+    box.style.cssText = 'margin:0 0 18px; padding:14px 16px; border:1px solid #e3d6c1; border-radius:12px; background:#fbf8f3;';
+    box.innerHTML = `<strong>Complete your account</strong> <span style="opacity:0.7; font-size:13.5px;">· ${left.length} step${left.length === 1 ? '' : 's'} left, about 2 minutes</span>
+      <ol style="margin:8px 0 0; padding-left:20px; font-size:14px; line-height:1.8;">${items.map(i => `<li>${i.done ? `<span style="opacity:0.6;">✅ ${esc(i.label)}</span>` : `<a href="${esc(i.href)}" style="color:var(--gold-text);">${esc(i.label)}</a>${i.optional ? ' <span style="opacity:0.6;">(optional)</span>' : ''} <span style="opacity:0.65; font-size:13px;">— ${esc(i.why)}</span>`}</li>`).join('')}</ol>`;
+  }catch(e){ /* the bookings still load */ }
+}
+
+// ---- Your booking at a glance (owner, 9 Nov 2026: no surprises) ----
+// What the guest can still do on this booking, and until when — from the
+// booking's own policy, check-in date and what the server says is open.
+function aervaBookingGlance(b){
+  const esc = escapeMessageHtml;
+  const arr = String(b.arrival || '').slice(0, 10);
+  if(!arr) return '';
+  const minus = (n) => { const d = new Date(arr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - n); return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
+  const next = (() => { const d = new Date(arr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); })();
+  const policy = (b.cancellation_policy || b.listing_cancellation_policy || 'flexible') === 'firm' ? 'firm' : 'flexible';
+  const items = [];
+  if(b.transferred){
+    items.push('This booking was transferred: it can no longer be changed or cancelled. For any problem, contact Aerva Support; Aerva decides.');
+  } else {
+    if(b.can_cancel_request !== false){
+      items.push(policy === 'firm'
+        ? `Cancel (Firm): full refund of the price and GST until ${minus(30)}; 50% until ${minus(5)}; after that your host decides. Service fee not refunded; deposit always refunded.`
+        : `Cancel (Flexible): full refund until ${minus(30)}; 80% until ${minus(10)}; 50% until ${minus(5)}; 30% until ${minus(2)}; after that your host decides. Service fee not refunded; deposit always refunded.`);
+      items.push('Emergency (with proof): your host decides; if they decline, ask Aerva to review within 24 hours.');
+    } else {
+      items.push('Your stay has started: it can no longer be cancelled.');
+    }
+    if(b.can_change !== false) items.push(`Change dates, guests or add-ons, or move nights to another property of this host: until 10 AM on ${next} (the property’s time).`);
+    items.push(`Report a problem during the stay: by 10 AM on ${next}, with photos.`);
+  }
+  return `<details class="booking-glance" style="margin:8px 0 0; font-size:13.5px;" onclick="event.stopPropagation()">
+    <summary style="cursor:pointer; color:var(--gold-text);">Your booking at a glance</summary>
+    <ul style="margin:6px 0 0; padding-left:18px; line-height:1.55;">${items.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>`;
+}
+
+// ---- Nearby: things to do and getting around (api/_nearby.js) ----
+// Places from OpenStreetMap near the property: things to do, metro and
+// railway stations, bus stations, taxi stands, airports, and taxi apps.
+// Every link goes to a third party, so it opens only after the guest has
+// read and agreed to the notice (aervaOpenThirdParty), which Aerva records.
+async function aervaLoadNearby(root){
+  const box = root && root.querySelector('[data-nearby-for]');
+  if(!box || box.dataset.loaded) return;
+  box.dataset.loaded = '1';
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const id = box.dataset.nearbyFor;
+  box.innerHTML = '<div class="listing-modal-section-title" style="margin-top:22px;">Nearby</div><p style="font-size:13px; opacity:0.6;">Finding things to do and ways to get around…</p>';
+  let d;
+  try{
+    const r = await fetch(SUITES_API_BASE + '/api/get-listings?nearby=' + encodeURIComponent(id));
+    d = await r.json();
+    if(!r.ok) throw new Error(d.error || 'unavailable');
+  }catch(e){ box.innerHTML = ''; return; }
+  const T = d.transport || {};
+  const transportRows = [].concat(T.metro || [], T.train || [], T.bus || [], T.taxi || [], T.airport || []);
+  if(!(d.things || []).length && !transportRows.length && !(d.taxiApps || []).length){ box.innerHTML = ''; return; }
+  const dir = (p, mode) => `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}&travelmode=${mode}`;
+  const row = (p, kind, mode) => `<li style="display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #eee; font-size:14px;">
+      <span><strong>${esc(p.name)}</strong><br><span style="opacity:0.7;">${esc(p.label)} · ${Number(p.km)} km</span></span>
+      <span style="white-space:nowrap; text-align:right;"><a href="#" data-tp-link="${esc(p.link)}" data-tp-name="${esc(p.name)}" data-tp-kind="${kind}" style="color:var(--gold-text);">${esc(p.linkKind || 'Details')}</a><br>
+      <a href="#" data-tp-link="${esc(dir(p, mode))}" data-tp-name="${esc('Directions to ' + p.name)}" data-tp-kind="directions" style="color:var(--gold-text);">Directions</a></span></li>`;
+  box.innerHTML = `<div class="listing-modal-section-title" style="margin-top:22px;">Nearby</div>
+    <div style="display:flex; gap:8px; margin:6px 0 8px;">
+      <button type="button" class="filter-clear nb-tab" data-tab="things" style="font-weight:600;">Things to do</button>
+      <button type="button" class="filter-clear nb-tab" data-tab="around">Getting around</button>
+    </div>
+    <div class="nb-pane" data-pane="things">${(d.things || []).length ? '<ul style="list-style:none; margin:0; padding:0;">' + d.things.map(p => row(p, 'thing', 'driving')).join('') + '</ul>' : '<p style="font-size:13px; opacity:0.7;">Nothing listed nearby yet.</p>'}</div>
+    <div class="nb-pane" data-pane="around" style="display:none;">
+      ${transportRows.length ? '<ul style="list-style:none; margin:0; padding:0;">' + transportRows.map(p => row(p, 'transport', p.label === 'Airport' || /Airport/.test(p.label) ? 'driving' : 'transit')).join('') + '</ul>' : '<p style="font-size:13px; opacity:0.7;">No stations listed nearby yet.</p>'}
+      ${(d.taxiApps || []).length ? `<p style="font-size:14px; margin:10px 0 0;">Book a taxi: ${d.taxiApps.map(a => `<a href="#" data-tp-link="${esc(a.link)}" data-tp-name="${esc(a.name)}" data-tp-kind="taxi" style="color:var(--gold-text);">${esc(a.name)}</a>`).join(' · ')}</p>` : ''}
+    </div>
+    <p style="font-size:12px; opacity:0.65; margin:10px 0 0; line-height:1.5;">These are third-party places and services, shown for information only. Aerva does not own, check, book or run them and is not responsible for them. ${esc(d.attribution || '')}</p>`;
+  box.querySelectorAll('.nb-tab').forEach(b => b.addEventListener('click', () => {
+    box.querySelectorAll('.nb-tab').forEach(x => x.style.fontWeight = x === b ? '600' : '');
+    box.querySelectorAll('.nb-pane').forEach(x => x.style.display = x.dataset.pane === b.dataset.tab ? '' : 'none');
+  }));
+  box.querySelectorAll('[data-tp-link]').forEach(a => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    aervaOpenThirdParty({ link: a.dataset.tpLink, name: a.dataset.tpName, kind: a.dataset.tpKind, listingId: id });
+  }));
+}
+// The third-party notice: shown every time, agreed to by ticking, recorded, then the link opens.
+function aervaOpenThirdParty({ link, name, kind, listingId }){
+  if(!/^https?:\/\//i.test(String(link || ''))) return;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let host = ''; try { host = new URL(link).hostname.replace(/^www\./, ''); } catch (e) { return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'payout-overlay';
+  overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Leaving Aerva">
+    <button type="button" class="payout-close" aria-label="Close">×</button>
+    <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:22px; margin:4px 0 8px;">You are leaving Aerva</h2>
+    <p style="font-size:15px; margin:0 0 10px;"><strong>${esc(name)}</strong> opens on <strong>${esc(host)}</strong>, a third-party website.</p>
+    <ul style="font-size:14px; line-height:1.6; padding-left:18px; margin:0 0 12px;">
+      <li>Aerva does not own, check, book, run or recommend this place, activity, transport or service, and is not part of any arrangement you make with it.</li>
+      <li>Aerva is not responsible for anything that happens there or through it — including fraud, scams, violence, injury, loss, damage, delays, prices or the accuracy of what is shown.</li>
+      <li>Any booking, payment, ride or visit is between you and that provider, under their terms. Please take care: check reviews, pay only through official channels, and call 112 in an emergency.</li>
+    </ul>
+    <label style="display:flex; gap:8px; align-items:flex-start; font-size:14px;"><input type="checkbox" id="tpAgree" style="margin-top:3px;"> I understand and agree. I am choosing to visit a third party at my own risk.</label>
+    <button type="button" class="btn solid" id="tpGo" style="width:100%; margin-top:14px;">Continue to ${esc(host)}</button>
+    <p id="tpMsg" style="font-size:13px; color:#a3402f; margin:8px 0 0;"></p>
+  </div>`;
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
+  overlay.querySelector('.payout-close').addEventListener('click', close);
+  document.body.appendChild(overlay);
+  overlay.querySelector('#tpGo').addEventListener('click', () => {
+    if(!overlay.querySelector('#tpAgree').checked){ overlay.querySelector('#tpMsg').textContent = 'Please tick the box to continue.'; return; }
+    const q = new URLSearchParams({ nearbyConsent: '1', listing: String(listingId || ''), item: String(name || ''), link: String(link), kind: String(kind || '') });
+    const headers = {}; try { const t = guestAuthToken(); if(t) headers['Authorization'] = 'Bearer ' + t; } catch (e) {}
+    fetch(SUITES_API_BASE + '/api/get-listings?' + q.toString(), { headers }).catch(() => {});
+    window.open(link, '_blank', 'noopener,noreferrer');
+    close();
+  });
+}
+
 // ---- Guest: complete an accepted transfer that costs the same or less ----
 async function aervaConfirmTransfer(changeId, btn){
   if(!confirm('Complete this transfer? Your booking will be split as shown and this is final: no part can be changed, moved, split again, shortened or cancelled afterwards. For any problem, contact Aerva Support; Aerva decides. Any difference (after Aerva’s transfer fee) is held for you as Aerva credit, which you can have refunded to your original payment at any time from My Bookings.')) return;
@@ -15660,7 +15830,7 @@ async function openPolicyCancel(orderId, listingName){
   const line = (label, value) => `<div class="payout-line"><span>${esc(label)}</span><span>${value}</span></div>`;
   const planText = () => {
     const reason = overlay.querySelector('#pcReason').value;
-    if(reason !== 'change_of_plans') return '<p class="payout-muted" style="margin:8px 0;">If your host accepts, the booking price and deposit are refunded in full. Aerva\u2019s service fee is non-refundable.' + (q.couponLost || (q.ifFullRefund && q.ifFullRefund.couponLost) ? ' Any part paid by coupon is not returned \u2014 a coupon comes back only when the host cancels.' : '') + '</p>';
+    if(reason !== 'change_of_plans') return '<p class="payout-muted" style="margin:8px 0;">If your host accepts, the booking price, GST and deposit are refunded in full, and Aerva\u2019s service fee comes back as Aerva credit because you attach proof. Less than a day before check-in your host may keep 25% or 50%. If your host declines, there is no refund \u2014 but within 24 hours you can ask Aerva to review your proof; Aerva\u2019s decision is final.' + (q.couponLost || (q.ifFullRefund && q.ifFullRefund.couponLost) ? ' Any part paid by coupon is not returned \u2014 a coupon comes back only when the host cancels.' : '') + '</p>';
     if(!q.allowed) return `<p class="payout-muted" style="margin:8px 0;">${esc(q.error || '')}</p>`;
     if(q.hostDecides) return `<p class="payout-muted" style="margin:8px 0;">Your host decides the refund.</p>${line('Deposit refunded', inr(q.ifNoRefund.deposit))}${line('Aerva service fee (non-refundable)', inr(q.ifNoRefund.feeKept))}`;
     return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
@@ -15674,21 +15844,30 @@ async function openPolicyCancel(orderId, listingName){
       <option value="travel_restriction">Government order or travel restriction</option>
     </select>
     <div id="pcPlan"></div>
+    <div id="pcProofWrap" style="display:none;">
+      <label class="payout-label" for="pcProof">Proof of the emergency (required)</label>
+      <p class="payout-muted" style="margin:2px 0 6px; font-size:13px;">For example a medical note, a government order, or a photo or news report of the hazard. Photos or PDF, up to 5. Only your host and Aerva see it.</p>
+      <input id="pcProof" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" style="margin:0 0 12px; font-size:15px;">
+    </div>
     <label class="payout-label" for="pcNote">Message to your host (optional)</label>
     <textarea id="pcNote" rows="3" maxlength="800" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;"></textarea>
     <button type="button" class="btn" id="pcGo" style="width:100%;">Send request to host</button>
     <p id="pcMsg" class="payout-muted" style="margin-top:10px;"></p>`;
   const plan = overlay.querySelector('#pcPlan');
-  const refresh = () => { plan.innerHTML = planText(); };
+  const refresh = () => { plan.innerHTML = planText(); overlay.querySelector('#pcProofWrap').style.display = overlay.querySelector('#pcReason').value === 'change_of_plans' ? 'none' : ''; };
   overlay.querySelector('#pcReason').addEventListener('change', refresh);
   refresh();
   overlay.querySelector('#pcGo').addEventListener('click', async () => {
     const msg = overlay.querySelector('#pcMsg');
     const btn = overlay.querySelector('#pcGo');
+    const reasonCode = overlay.querySelector('#pcReason').value;
+    const files = [...overlay.querySelector('#pcProof').files].slice(0, 5);
+    if(reasonCode !== 'change_of_plans' && !files.length){ msg.textContent = 'Please attach proof of the emergency.'; return; }
     btn.disabled = true; msg.textContent = '';
     try{
+      const evidence = files.length ? await aervaUploadFiles(files, 'cancellation-proof') : [];
       const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, auth),
-        body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode: overlay.querySelector('#pcReason').value, details: overlay.querySelector('#pcNote').value.trim() }) });
+        body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode, details: overlay.querySelector('#pcNote').value.trim(), evidence }) });
       const d = await r.json().catch(() => ({}));
       if(!r.ok){ msg.textContent = d.error || 'Could not send the request.'; btn.disabled = false; return; }
       body.innerHTML = '<p>Your request has been sent to your host in Messages. We will email you when they answer.</p>';
@@ -15714,6 +15893,8 @@ function openCancelRequest(orderId, listingName){
       <option value="emergency">Medical or family emergency</option>
       <option value="travel_restriction">Government order or travel restriction</option>
     </select>
+    <label class="payout-label" for="crProof">Proof of the emergency (required)</label>
+    <input id="crProof" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" style="margin:6px 0 12px; font-size:15px;">
     <label class="payout-label" for="crDetails">Details for your host</label>
     <textarea id="crDetails" rows="4" maxlength="800" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;"></textarea>
     <button type="button" class="btn" id="crSend" style="width:100%;">Send request</button>
@@ -15727,10 +15908,13 @@ function openCancelRequest(orderId, listingName){
     const reasonCode = overlay.querySelector('#crReason').value;
     const msg = overlay.querySelector('#crMsg');
     if(!reasonCode){ msg.textContent = 'Choose a reason.'; return; }
+    const files = [...overlay.querySelector('#crProof').files].slice(0, 5);
+    if(!files.length){ msg.textContent = 'Please attach proof of the emergency.'; return; }
     const btn = overlay.querySelector('#crSend'); btn.disabled = true;
     try{
+      const evidence = await aervaUploadFiles(files, 'cancellation-proof');
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-        body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode, details: overlay.querySelector('#crDetails').value.trim() }) });
+        body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode, details: overlay.querySelector('#crDetails').value.trim(), evidence }) });
       const data = await res.json().catch(() => ({}));
       if(!res.ok){ msg.textContent = data.error || 'Could not send the request.'; btn.disabled = false; return; }
       close();
