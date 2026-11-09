@@ -2,7 +2,7 @@
   "functions": {
     "api/get-listings.js": {
       "maxDuration": 60,
-      "includeFiles": "node_modules/pdfkit/js/data/**"
+      "includeFiles": "{node_modules/pdfkit/js/data/**,aerva-policies.js}"
     },
     "api/get-pending-listings.js": {
       "maxDuration": 60,

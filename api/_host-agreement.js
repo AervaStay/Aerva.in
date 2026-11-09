@@ -9,14 +9,22 @@
 //
 //   • Every listing submitted for review accepts the current version
 //     (submit-listing.js), saved on the listing and on the host.
-//   • When the version changes (a revision: wording, commission, fees),
-//     every host with listings is emailed a formal notice (job
-//     'host_agreement_notices'), and accepts or declines it in the
-//     dashboard (host-listings.js).
-//   • Declining, or not accepting within NOTICE_DAYS of the notice, ends
-//     the agreement: the host's live listings are deactivated
-//     (deactivated_by = 'agreement'), confirmed bookings go ahead and
-//     payouts are paid as usual. Accepting later restores them.
+//   • When the version changes, hosts already on an earlier version move
+//     to it as its revision kind says (agreements.hostRevision in
+//     aerva-policies.js; owner, 9 Nov 2026):
+//       'minor'  — rewording, same meaning: nothing happens;
+//       'notice' — material change: hosts are told at least 30 days ahead
+//                  (AERVA_POLICIES.updates → job 'policy_update_notices',
+//                  _policy-updates.js); from its effective date, a host
+//                  still hosting has accepted it (recorded here as
+//                  'accepted' via 'continued_hosting'); nothing ends;
+//       'accept' — every host with listings is emailed a formal notice
+//                  (job 'host_agreement_notices') and accepts or declines
+//                  it in the dashboard (host-listings.js). Declining, or
+//                  not accepting within NOTICE_DAYS of the notice, ends the
+//                  agreement: live listings are deactivated
+//                  (deactivated_by = 'agreement'), confirmed bookings go
+//                  ahead and payouts are paid. Accepting later restores them.
 
 const fs = require('fs');
 const path = require('path');
@@ -28,19 +36,24 @@ const SITE = 'https://aerva.in';
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 let cached = null;
+let REVISION = { kind: 'notice', effective: null };
+function revision() { loadAgreement(); return REVISION; }
 function loadAgreement() {
   if (cached) return cached;
   const tries = [path.join(process.cwd(), 'aerva-policies.js'), path.join(__dirname, '..', 'aerva-policies.js')];
   const file = tries.find(f => { try { return fs.statSync(f).isFile(); } catch (e) { return false; } });
-  let host = null, version = null;
+  let host = null, version = null, revision = null;
   if (file) {
     try {
       const box = { window: {} };
       vm.runInNewContext(fs.readFileSync(file, 'utf8'), box, { timeout: 1000 });
       const A = (box.window.AERVA_POLICIES || {}).agreements || {};
-      host = A.host || null; version = A.hostVersion || null;
+      host = A.host || null; version = A.hostVersion || null; revision = A.hostRevision || null;
     } catch (e) { console.error('host agreement text could not be read:', e.message); }
   }
+  // Unreadable or unknown: treated as 'notice' — nothing ends by mistake.
+  const kind = revision && ['minor', 'notice', 'accept'].includes(revision.kind) ? revision.kind : 'notice';
+  REVISION = { kind, effective: revision && /^\d{4}-\d{2}-\d{2}$/.test(String(revision.effective || '')) ? revision.effective : null };
   if (version && version !== HOST_AGREEMENT_VERSION) console.error(`aerva-policies.js hostVersion ${version} does not match HOST_AGREEMENT_VERSION ${HOST_AGREEMENT_VERSION}`);
   cached = host && host.clauses ? { version: HOST_AGREEMENT_VERSION, title: host.title, intro: host.intro || '', clauses: host.clauses, accept: host.accept || '' } : null;
   return cached;
@@ -127,6 +140,34 @@ async function runAgreementNotices(sql, { deadlineMs = 5000 } = {}) {
   // notice goes out either way, with a link to read it on Aerva.
   const a = loadAgreement() || { version: HOST_AGREEMENT_VERSION, title: 'Aerva Host Agreement', intro: '', clauses: null };
   if (a.clauses) await saveVersion(sql, a);
+  const rev = revision();
+  out.kind = rev.kind;
+  if (rev.kind === 'minor') return out;
+  if (rev.kind === 'notice') {
+    // From its effective date, hosts still hosting have accepted it.
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Kolkata' });
+    if (!rev.effective || today < rev.effective) return Object.assign(out, { waitingUntil: rev.effective });
+    out.acceptedByHosting = 0;
+    let due = [];
+    try {
+      due = await sql`SELECT h.id, (SELECT id FROM guests WHERE host_id = h.id ORDER BY id LIMIT 1) AS guest_id FROM hosts h
+                      WHERE COALESCE(h.host_agreement_version, '') <> ${HOST_AGREEMENT_VERSION}
+                        AND EXISTS (SELECT 1 FROM listings l WHERE l.host_id = h.id AND l.status IN ('approved', 'pending'))
+                      ORDER BY h.id LIMIT 50`;
+    } catch (e) { return Object.assign(out, { skipped: 'database update not applied' }); }
+    for (const h of due) {
+      if (Date.now() - started > deadlineMs) break;
+      const done = await sql`UPDATE hosts SET host_agreement_version = ${HOST_AGREEMENT_VERSION}, host_agreement_accepted_at = now()
+                             WHERE id = ${h.id} AND COALESCE(host_agreement_version, '') <> ${HOST_AGREEMENT_VERSION} RETURNING id`;
+      if (!done.length) continue;
+      try {
+        await sql`INSERT INTO host_agreement_acceptances (host_id, guest_id, listing_id, version, action, ip, via, emailed)
+                  VALUES (${h.id}, ${h.guest_id}, NULL, ${HOST_AGREEMENT_VERSION}, 'accepted', NULL, 'continued_hosting', false)`;
+      } catch (e) { /* not applied */ }
+      out.acceptedByHosting++;
+    }
+    return out;
+  }
   let due;
   try {
     due = await sql`
@@ -173,4 +214,4 @@ async function runAgreementNotices(sql, { deadlineMs = 5000 } = {}) {
   return out;
 }
 
-module.exports = { loadAgreement, agreementHtml, recordAcceptance, endAgreement, runAgreementNotices, NOTICE_DAYS, HOST_AGREEMENT_VERSION };
+module.exports = { loadAgreement, revision, agreementHtml, recordAcceptance, endAgreement, runAgreementNotices, NOTICE_DAYS, HOST_AGREEMENT_VERSION };

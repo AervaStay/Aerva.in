@@ -12551,7 +12551,16 @@
     }
     document.getElementById('policiesTitle').textContent = 'Policies';
     document.title = 'Policies — Aerva';
-    body.innerHTML = `<div class="policy-index">` + docs.map(d => `
+    // Upcoming and recent material changes (AERVA_POLICIES.updates), shown
+    // above the list until 60 days after they took effect.
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Kolkata' });
+    const recent = (P.updates || []).filter(u => u && u.published <= today && (new Date(today) - new Date(u.effective)) / 86400e3 <= 60)
+      .sort((a, b) => String(b.published).localeCompare(String(a.published)));
+    const fmt = (d) => new Date(d + 'T00:00:00+05:30').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
+    const updatesHtml = recent.length ? `<div class="policy-section" id="policyUpdates"><h2>Recent updates</h2>` + recent.map(u => `
+        <p style="margin:10px 0 4px;"><strong>${esc(u.title)}</strong> — ${today >= u.effective ? 'in effect since' : 'takes effect on'} ${esc(fmt(u.effective))}${u.audience === 'hosts' ? ' (hosts)' : u.audience === 'guests' ? ' (guests)' : ''}</p>
+        <ul>${u.summary.map(p => `<li>${esc(p)}</li>`).join('')}</ul>`).join('') + `</div>` : '';
+    body.innerHTML = updatesHtml + `<div class="policy-index">` + docs.map(d => `
       <a class="policy-index-item" href="${esc(d.href || POLICY_DOC_LINK(d.id))}">
         <span class="policy-index-title">${esc(d.title)}</span>
         <span class="policy-index-summary">${esc(d.summary || '')}</span>
@@ -14677,6 +14686,31 @@
         </div>`;
     })
     .catch(() => { body.innerHTML = '<p class="payout-muted">Could not load this payout. Try again.</p>'; });
+
+  // Material changes to Aerva's terms and policies for guests
+  // (AERVA_POLICIES.updates, audience 'guests' or 'all'): a slim banner from
+  // the day they are published until 14 days after they take effect.
+  // Nothing to accept; "Got it" hides it on this browser (owner, 9 Nov 2026).
+  window.addEventListener('load', function policyUpdateBanner(){
+    const P = window.AERVA_POLICIES || {};
+    const now = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Kolkata' });
+    const plus14 = (d) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 14); return x.toISOString().slice(0, 10); };
+    const seen = (id) => { try { return localStorage.getItem('aerva_update_seen_' + id) === '1'; } catch (e) { return false; } };
+    const fmt = (d) => new Date(d + 'T00:00:00+05:30').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const u = (P.updates || []).find(x => x && (x.audience === 'guests' || x.audience === 'all') && x.published <= now && now <= plus14(x.effective) && !seen(x.id));
+    if(!u || document.getElementById('policyUpdateBar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'policyUpdateBar';
+    bar.setAttribute('role', 'status');
+    bar.style.cssText = 'background:#faf6ef; border-bottom:1px solid #e3d9cb; color:#1c1a17; font-size:13.5px; line-height:1.5; padding:10px 16px; display:flex; gap:12px; align-items:center; justify-content:center; flex-wrap:wrap; text-align:center;';
+    const live = now >= u.effective;
+    bar.innerHTML = '<span><strong>' + esc(u.title) + '</strong> — ' + (live ? 'in effect since ' : 'takes effect on ') + esc(fmt(u.effective)) + '. '
+      + '<a href="index.html?view=policies" style="color:#8a6c39;">What is changing</a></span>'
+      + '<button type="button" style="font-size:12.5px; border:1px solid #c9b48c; background:#fff; border-radius:6px; padding:3px 10px; cursor:pointer;">Got it</button>';
+    bar.querySelector('button').addEventListener('click', () => { try { localStorage.setItem('aerva_update_seen_' + u.id, '1'); } catch (e) {} bar.remove(); });
+    document.body.insertBefore(bar, document.body.firstChild);
+  });
 })();
 
 

@@ -560,6 +560,8 @@ module.exports = async (req, res) => {
       // Once live, nothing is cleared any more — neither option (owner, 9 Nov 2026).
       if ((action === 'clear_all' || action === 'clear_dummy') && live) throw Object.assign(new Error('Clearing data was switched off when Aerva went live.'), { isUserFacing: true, status: 403 });
       if (action === 'go_live' && live) throw Object.assign(new Error('Aerva is already live.'), { isUserFacing: true, status: 409 });
+      // Going live starts the backups, so their keys must be in Vercel first.
+      if (action === 'go_live' && !safety.neonCfg().ok) throw Object.assign(new Error('Before going live, add the backup keys in Vercel (Settings → Environment Variables): NEON_API_KEY, NEON_PROJECT_ID and NEON_BRANCH_ID — then redeploy and come back.'), { isUserFacing: true, status: 412 });
     };
     try {
       if (req.method === 'GET' && req.query.dataSafety === '1') {
@@ -603,6 +605,7 @@ module.exports = async (req, res) => {
             <b>Kept:</b> the admin accounts, as they are, and the site settings, fee rates and agreement texts.<br>
             Afterwards both "Clear" options are switched off for good and cannot be turned back on from Admin.</p>`;
         }
+        if ((action === 'clear_dummy' || action === 'clear_all') && !safety.neonCfg().ok) summary += `<p style="color:#a3402f;"><b>No backup will be taken first</b> — backups start when Aerva goes live, so this cannot be recovered.</p>`;
         const out = await safety.requestPin(sql, { action, details: d.details, summaryHtml: summary, adminLabel: ADMIN_ACTOR, ip: ADMIN_AUDIT.ip || null });
         await logAudit(sql, { action: 'data_safety_pin_sent', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'database', targetId: null, metadata: { what: action } });
         return res.status(200).json({ success: true, ...out, kept: d.settled ? { accounts: d.settled.guests, listings: d.settled.listings, bookings: d.settled.orders } : undefined });
@@ -615,9 +618,12 @@ module.exports = async (req, res) => {
         if (String(b.confirm || '').trim().toUpperCase() !== safety.CONFIRM_WORDS[action]) return res.status(400).json({ error: `Type ${safety.CONFIRM_WORDS[action]} to confirm.` });
         const d = await detailsFor(action, b);
         await safety.checkPin(sql, { action, details: d.details, pin: b.pin });
-        // A copy first, always (PROD: required; UAT: if set up).
+        // A copy first, when backups are set up. The owner wants backups
+        // only from go-live (9 Nov 2026): until the Neon keys are added in
+        // Vercel, clears run without one (the PIN email says so); once they
+        // are set, a failed backup stops everything (PROD).
         let backup = null;
-        {
+        if (safety.neonCfg().ok) {
           try { backup = (await safety.createBackup(action === 'restore' ? 'before-restore-run' : 'before-' + action.replace('_', '-'))).backup; }
           catch (e) {
             if (!IS_UAT_ENV) return res.status(503).json({ error: 'No backup could be taken, so nothing was deleted. ' + (e.isUserFacing ? e.message : String(e.message || e).slice(0, 200)) });

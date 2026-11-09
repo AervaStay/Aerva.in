@@ -15,11 +15,14 @@
 // and again here when rates are read (a row that breaks it is ignored).
 // Guest rates take effect at once, with no notice.
 //
-// Hosts affected by a host rate change are emailed a formal notice and
-// acknowledge it in their dashboard (host-listings.js). Declining it, or
-// not acknowledging it by the date it takes effect, ends the host's
-// agreement (_host-agreement.js endAgreement). Every notice and answer is
-// kept in fee_rate_notices.
+// Hosts affected by a host rate change are INFORMED (owner, 9 Nov 2026):
+// one email and a dashboard notice, at least 33 days ahead. Nothing to
+// confirm and nothing ends — a host who does not want the new rate can
+// deactivate their listings before it applies; continuing to host means
+// they accept it. "Got it" on the dashboard notice only hides it
+// (acknowledged_at). Every notice is kept in fee_rate_notices.
+// (Until 9 Nov 2026 hosts had to confirm or decline, and an unanswered or
+// declined revision ended the agreement — no longer.)
 
 const DEFAULTS = { host: 5, guest: 5 };
 const NOTICE_DAYS = 31, TZ_DAYS = 2, MIN_HOST_DAYS = NOTICE_DAYS + TZ_DAYS;   // 33
@@ -173,12 +176,10 @@ async function sendEmail(to, subject, html) {
 const typesOf = (row) => row.property_type === '*' ? PROPERTY_TYPES : [row.property_type];
 
 // Notices for every host rate change still to come: each host with a
-// listing of an affected type is emailed once and asked to acknowledge.
-// Then, for changes now in effect, hosts who neither acknowledged nor
-// declined have their agreement ended.
+// listing of an affected type is emailed once. Nothing more.
 async function runRateNotices(sql, { deadlineMs = 5000 } = {}) {
   const started = Date.now();
-  const out = { noticed: 0, ended: 0 };
+  const out = { noticed: 0 };
   let upcoming;
   try {
     upcoming = await sql`SELECT * FROM fee_rates WHERE audience = 'host' AND status = 'set' AND effective_from > now() AND COALESCE(note, '') <> 'starting rate' ORDER BY id`;
@@ -212,27 +213,13 @@ async function runRateNotices(sql, { deadlineMs = 5000 } = {}) {
         <p>Dear ${esc(h.name || 'Host')},</p>
         <p>This is formal notice of a revision of Aerva’s commission on your listings: <strong>from ${esc(one.from)} to ${esc(one.to)}</strong>.</p>
         <p><strong>The revised commission applies to bookings made on or after ${esc(dateLabel(r.effective_from))} (12:00 AM, India time).</strong> This notice is given in advance. Bookings made before that date keep the commission in force when they were made.</p>
-        <p>Please acknowledge and confirm, or decline, the revision in your dashboard before ${esc(dateLabel(r.effective_from))}. If you decline it, or it is not confirmed by then, your agreement with Aerva ends under the Aerva Host Agreement: your listings are deactivated, confirmed bookings go ahead, and amounts due to you are paid.</p>
-        <p><a href="${SITE}/host-dashboard.html" style="background:#1c1a17; color:#f4eadc; padding:11px 20px; text-decoration:none; display:inline-block;">Review the revision</a></p>
+        <p>There is nothing you need to do. If you prefer not to host at the revised commission, you may deactivate your listings in your dashboard before ${esc(dateLabel(r.effective_from))}; continuing to host after that date means you accept it.</p>
+        <p><a href="${SITE}/host-dashboard.html" style="background:#1c1a17; color:#f4eadc; padding:11px 20px; text-decoration:none; display:inline-block;">Open your dashboard</a></p>
         <p style="font-size:13px; color:#6e675d;">Questions: raise a request in the Resolution Center or write to hello@aerva.in.</p></div>`;
       const ok = await sendEmail(h.email, `Notice: revision of Aerva’s commission from ${dateLabel(r.effective_from)}`, html);
       await sql`UPDATE fee_rate_notices SET emailed = ${ok} WHERE id = ${claimed[0].id}`;
       out.noticed++;
     }
-  }
-  // In effect now, never answered: the agreement ends (once per notice).
-  let lapsed = [];
-  try {
-    lapsed = await sql`SELECT n.id, n.host_id FROM fee_rate_notices n JOIN fee_rates r ON r.id = n.rate_id
-                       WHERE r.status = 'set' AND r.effective_from <= now() AND n.acknowledged_at IS NULL AND n.declined_at IS NULL AND n.ended_at IS NULL
-                       ORDER BY n.id LIMIT 20`;
-  } catch (e) { lapsed = []; }
-  for (const n of lapsed) {
-    if (Date.now() - started > deadlineMs) break;
-    const claimed = await sql`UPDATE fee_rate_notices SET ended_at = now() WHERE id = ${n.id} AND ended_at IS NULL RETURNING id`;
-    if (!claimed.length) continue;
-    await require('./_host-agreement').endAgreement(sql, n.host_id, { action: 'terminated', via: 'rate_not_acknowledged' });
-    out.ended++;
   }
   return out;
 }
@@ -250,8 +237,8 @@ function oneChange(changes, fallbackTo) {
   return { from: pct(c.map(x => x.from)), to: pct(c.length ? c.map(x => x.to) : [fallbackTo]) };
 }
 
-// For the host dashboard: notices waiting for this host's answer, with
-// the old and new rate for each of the host's own property types.
+// For the host dashboard: notices of revisions still to come that the host
+// has not hidden ("Got it"), with the host's old and new commission.
 async function pendingNotices(sql, hostId) {
   try {
     const rows = await sql`SELECT n.id, n.sent_at, r.property_type, r.rate, r.effective_from, r.id AS rate_id
