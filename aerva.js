@@ -225,6 +225,8 @@
       // than leaving the guest stuck seeing INR for the rest of the
       // session just because of one earlier network hiccup.
       await fetchCurrencyRates();
+      updateCurrencyTriggerLabel();
+      if(!currencyRatesLoaded && persistToAccount) alert(`Prices in ${code} are not available right now, so they are still shown in Indian Rupees (INR). Please try again later.`);
     }
     applyCurrencyToPage();
     if(persistToAccount && hostSessionToken){
@@ -246,7 +248,9 @@
   // the one shared place this formatting lives, so every card/detail/
   // search-suggestion view stays consistent if the convention ever changes.
   function formatCityArea(listing){
-    return listing.area ? `${listing.area}, ${listing.city}` : (listing.city || '');
+    // An area named like its city ("Lonavala, Lonavala") is shown once.
+    const sameAsCity = listing.area && listing.city && String(listing.area).trim().toLowerCase() === String(listing.city).trim().toLowerCase();
+    return (listing.area && !sameAsCity) ? `${listing.area}, ${listing.city}` : (listing.city || listing.area || '');
   }
 
   // Display label for a pet type value — same set hosts pick from when
@@ -320,11 +324,17 @@
     }catch(e){}
   }
 
+  // Shows the currency prices are really in: without exchange rates
+  // (fmtGuest keeps INR) the button used to say e.g. "USD" over ₹ prices.
   function updateCurrencyTriggerLabel(){
-    const btn = document.getElementById('currencyTriggerBtn');
-    if(btn) btn.textContent = currentCurrency;
-    const btnMobile = document.getElementById('currencyTriggerBtnMobile');
-    if(btnMobile) btnMobile.textContent = currentCurrency;
+    const shown = (currentCurrency !== 'INR' && !currencyRatesLoaded) ? 'INR' : currentCurrency;
+    const title = shown !== currentCurrency ? `Prices in ${currentCurrency} are not available right now, so they are shown in INR.` : '';
+    ['currencyTriggerBtn', 'currencyTriggerBtnMobile'].forEach(id => {
+      const b = document.getElementById(id);
+      if(!b) return;
+      b.textContent = shown;
+      if(title) b.title = title; else b.removeAttribute('title');
+    });
   }
 
   // Mirrors create-order.js's own calculateDiscount exactly — a stay can
@@ -2230,14 +2240,14 @@
     // that don't apply to whatever's now selected. Bedroom/Room rows are
     // preserved as-is; only their default naming going forward changes
     // (syncBedroomRowCount decides that per row, not this).
-    const newFixedKeys = new Set(currentFixedRoomSpaces().map(s => s.key));
+    // Kept in the type's own order (Kitchen, Washroom, Living Room… first),
+    // reusing a space's row — and its photos — where it already exists;
+    // appending the new ones would put the required spaces after
+    // "Additional Photos" after switching from Resort and back.
     const oldFixedRows = roomSpaceRows.filter(r => !r.isBedroom);
-    const preservedFixedRows = oldFixedRows.filter(r => newFixedKeys.has(r.key));
-    const preservedKeys = new Set(preservedFixedRows.map(r => r.key));
-    const newFixedRows = currentFixedRoomSpaces()
-      .filter(s => !preservedKeys.has(s.key))
-      .map(s => ({ ...s, isBedroom: false, photos: [] }));
-    roomSpaceRows = [...roomSpaceRows.filter(r => r.isBedroom), ...preservedFixedRows, ...newFixedRows];
+    const fixedRows = currentFixedRoomSpaces()
+      .map(s => oldFixedRows.find(r => r.key === s.key) || ({ ...s, isBedroom: false, photos: [] }));
+    roomSpaceRows = [...roomSpaceRows.filter(r => r.isBedroom), ...fixedRows];
     renderRoomSpaces(); // toggles the bedroom price/occupancy fields on or off to match
   });
 
@@ -2259,6 +2269,19 @@
   };
 
   const listingDraftBtn = document.getElementById('listingDraftBtn');
+
+  // What's special / Recommended by your host / Aerva experiences for your
+  // guests — optional, shown as recommended (aerva-special.js; saved by
+  // api/submit-listing.js, drafts included).
+  const listSpecialEditor = (window.AervaSpecial && document.getElementById('listSpecialEditor'))
+    ? window.AervaSpecial.mountEditor(document.getElementById('listSpecialEditor'), { idPrefix: 'listSpecial', getCity: () => document.getElementById('listCity').value })
+    : null;
+  function showListSpecialNote(text){
+    const el = document.getElementById('listSpecialNote');
+    if(!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
 
   // Real content fingerprint of a file, computed entirely in the browser
   // via the Web Crypto API — no upload, no server round-trip needed just
@@ -2407,6 +2430,13 @@
 
     if(!document.getElementById('listPropertyName').value.trim()){
       errorEl.textContent = 'Please give your property a name.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    showListSpecialNote('');
+    const specialProblem = listSpecialEditor ? listSpecialEditor.problem() : '';
+    if(specialProblem){
+      errorEl.textContent = specialProblem;
       errorEl.style.display = 'block';
       return;
     }
@@ -2710,10 +2740,12 @@
           // always gets a brand-new Blob URL, so only comparing actual
           // image bytes can catch a genuine duplicate. See submit-listing.js
           // for how this is used to block near-identical resubmissions.
-          photoHashes: [...(exteriorPhotoHashes || []), ...(roomPhotoHashes || [])]
+          photoHashes: [...(exteriorPhotoHashes || []), ...(roomPhotoHashes || [])],
+          ...(listSpecialEditor ? listSpecialEditor.get() : {})
         })
       });
       const data = await res.json();
+      if(res.ok && data.note) showListSpecialNote(data.note);
 
       if(!res.ok){
         // A real failure — data and cached uploads are preserved exactly as
@@ -2755,6 +2787,7 @@
       confirmEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       document.getElementById('draftHintText').style.display = 'none';
       listingForm.reset();
+      if(listSpecialEditor) listSpecialEditor.reset();
       exteriorPhotoManager.clear();
       if(typeof photoSort !== 'undefined' && photoSort){ photoSort.files = []; photoSort.guesses = new Set(); const m = document.getElementById('photoSortMsg'); if(m) m.textContent = ''; }
       roomSpaceRows = currentFixedRoomSpaces().map(s => ({ ...s, isBedroom: false, photos: [] }));
@@ -2866,6 +2899,7 @@
       if(draft.max_guests) document.getElementById('listGuests').value = draft.max_guests;
       document.getElementById('listPrice').value = draft.nightly_rate || '';
       document.getElementById('listDescription').value = draft.description || '';
+      if(listSpecialEditor) listSpecialEditor.set(draft);
       document.getElementById('listHostName').value = draft.host_name || '';
       document.getElementById('listHostPhone').value = draft.host_phone || '';
       (draft.amenities || []).forEach(v => {
@@ -3424,6 +3458,7 @@
     if(source.max_guests) document.getElementById('listGuests').value = source.max_guests;
     document.getElementById('listPrice').value = source.nightly_rate || '';
     document.getElementById('listDescription').value = source.description || '';
+    if(listSpecialEditor) listSpecialEditor.set(source);
     document.getElementById('listHostName').value = source.host_name || '';
     document.getElementById('listHostPhone').value = source.host_phone || '';
     (source.amenities || []).forEach(v => {
@@ -3845,7 +3880,7 @@
   function toggleFavoriteId(listingId, btnEl){
     // Saving a home is personal, so it needs an account — logged out, the
     // heart asks you to log in instead of quietly saving on this device.
-    if(storageOwner === 'anon'){ window.location.href = 'guest-login.html'; return; }
+    if(storageOwner === 'anon'){ window.location.href = 'guest-login.html?next=' + encodeURIComponent(location.pathname.replace(/^\//, '') + location.search); return; }
     const id = String(listingId);
     let favs = getFavoriteIds();
     const isFav = favs.includes(id);
@@ -3936,7 +3971,7 @@
 
   async function toggleLike(id, btn){
     const token = guestAuthToken();
-    if(!token){ window.location.href = 'guest-login.html'; return; }
+    if(!token){ window.location.href = 'guest-login.html?next=' + encodeURIComponent(location.pathname.replace(/^\//, '') + location.search); return; }
     id = String(id);
     const wasLiked = likedListingIds.has(id);
     const shownCount = Number(btn.querySelector('.like-count').textContent) || 0;
@@ -4357,6 +4392,7 @@
           ${r.score ? `<span class="rv-item-score">${starsHtml(r.score, 13)}<b>${Number(r.score).toFixed(1)}</b></span>` : ''}
         </div>
         ${r.comment ? `<p class="rv-item-text">${esc(r.comment)}</p>` : ''}
+        ${reviewPhotosHtml(r.photos)}
       </div>`;
   }
 
@@ -4404,7 +4440,7 @@
       const unit = isExp ? (l.priceUnit ? ` / ${esc(String(l.priceUnit).replace(/^per_?/, ''))}` : '') : '/night';
       const price = l.price ? `${isExp ? '' : 'From '}${fmtGuest(Number(l.price))}${unit}` : '';
       return `
-        <a class="hp-listing" href="${href}" data-hp-open="${isExp ? 'experience' : 'stay'}" data-hp-id="${Number(l.id)}">
+        <a class="hp-listing" href="${href}" data-hp-open="${isExp ? 'experience' : 'stay'}" data-hp-id="${Number(l.id)}" data-hp-city="${esc(String(l.city || '').trim().toLowerCase())}">
           ${l.photoUrl ? `<img src="${esc(l.photoUrl)}" alt="" loading="lazy">` : '<span class="hp-listing-ph"></span>'}
           <span class="hp-listing-body">
             <span class="hp-listing-type">${isExp ? 'Experience' : esc(l.propertyType || 'Stay')}</span>
@@ -4428,7 +4464,9 @@
     ].join('');
     const answers = (p.answers || []).map(a =>
       `<div class="hp-answer"><div class="hp-q">${esc(a.label)}</div><p>${esc(a.answer)}</p></div>`).join('');
-    const cities = (p.hostingIn || []).map(c => `<span class="hp-chip">${esc(c.city)}</span>`).join('');
+    // Tapping a city shows only that city's listings; tapping it again (or
+    // another city) changes the selection. Nothing selected: all are shown.
+    const cities = (p.hostingIn || []).map(c => `<button type="button" class="hp-chip" data-hp-city-chip="${esc(String(c.city || '').trim().toLowerCase())}" aria-pressed="false" style="cursor:pointer; font:inherit;">${esc(c.city)}</button>`).join('');
     // What this host runs: small cards that open the listing itself.
     const listingCards = listingMiniCardsHtml(p.listings);
     const reviews = (p.reviews || []).map(hostReviewItemHtml).join('');
@@ -4498,6 +4536,33 @@
       body.innerHTML = renderHostProfile({ name: knownName || 'Your host', answers: [], hostingIn: [], reviews: [], partial: true }, badgeHtml);
     }
   }
+
+  // "Hosting in": one city at a time filters the host's listings.
+  document.addEventListener('click', function(e){
+    const chip = e.target.closest && e.target.closest('[data-hp-city-chip]');
+    if(!chip) return;
+    e.preventDefault();
+    const root = chip.closest('.hp-chips') ? chip.closest('.hp-chips').parentNode.parentNode : document;
+    const city = chip.getAttribute('data-hp-city-chip');
+    const on = chip.getAttribute('aria-pressed') !== 'true';
+    root.querySelectorAll('[data-hp-city-chip]').forEach(c => {
+      const sel = on && c === chip;
+      c.setAttribute('aria-pressed', sel ? 'true' : 'false');
+      c.style.background = sel ? '#1c1a17' : '';
+      c.style.color = sel ? '#fff' : '';
+      c.style.borderColor = sel ? '#1c1a17' : '';
+    });
+    const cards = root.querySelectorAll('.hp-listing[data-hp-city]');
+    let shown = 0;
+    cards.forEach(card => { const show = !on || card.getAttribute('data-hp-city') === city; card.style.display = show ? '' : 'none'; if(show) shown++; });
+    let note = root.querySelector('.hp-filter-note');
+    const list = root.querySelector('.hp-listings');
+    if(list){
+      if(!note){ note = document.createElement('p'); note.className = 'hp-filter-note'; note.style.cssText = 'font-size:13px; opacity:0.7; margin:6px 0 0;'; list.parentNode.insertBefore(note, list); }
+      note.textContent = on ? `Showing ${shown} in ${chip.textContent.trim()} · tap it again to see all` : '';
+      if(on) list.parentNode.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
 
   // A listing card inside a host profile: open it right here if the page
   // already has it loaded, otherwise follow its link (?listing= / ?experience=).
@@ -6236,7 +6301,10 @@
     document.getElementById('bookingLoginFormView').style.display = 'none';
     document.getElementById('bookingSignupFormView').style.display = 'none';
     document.getElementById('bookingEmailStepError').style.display = 'none';
-    document.getElementById('bookingEmailStepInput').value = '';
+    // The email the guest just typed in "Your details", so they are not
+    // asked for it twice.
+    const typed = ['listingBookEmail', 'resortBookEmail', 'expBookEmail'].map(id => document.getElementById(id)).find(el => el && el.offsetParent && el.value.trim());
+    document.getElementById('bookingEmailStepInput').value = typed ? typed.value.trim() : '';
     document.getElementById('bookingEmailStepInput').focus();
   }
   function closeBookingLoginGate(){
@@ -6472,7 +6540,7 @@
     return `<div class="rv-row" data-factor="${f.key}">
       <span class="rv-label">${escapeMessageHtml(f.label)}</span>
       <span class="rv-stars">${[1,2,3,4,5].map(n =>
-        `<button type="button" class="rv-star" data-factor="${f.key}" data-value="${n}" aria-label="${n} out of 5">\u2605</button>`
+        `<button type="button" class="rv-star" data-factor="${f.key}" data-value="${n}" aria-label="${escapeMessageHtml(f.label)}: ${n} out of 5" aria-pressed="false">\u2605</button>`
       ).join('')}</span>
     </div>`;
   }
@@ -6481,6 +6549,7 @@
     document.querySelectorAll('.rv-star').forEach(btn => {
       const on = (reviewScores[btn.dataset.factor] || 0) >= Number(btn.dataset.value);
       btn.classList.toggle('is-on', on);
+      btn.setAttribute('aria-pressed', String((reviewScores[btn.dataset.factor] || 0) === Number(btn.dataset.value)));
     });
   }
 
@@ -6975,7 +7044,7 @@
     box.style.display = 'block';
     const esc = escapeMessageHtml;
     const inr = (n) => moneyBoth(n);
-    if(card.pending){ box.innerHTML = '<strong>Cancellation request sent</strong> · waiting for your host.'; return; }
+    if(card.pending){ box.innerHTML = card.aervaDecides ? '<strong>Cancellation request sent to Aerva</strong> · Aerva is checking your proof and will decide.' : '<strong>Cancellation request sent</strong> · waiting for your host.'; return; }
     if(card.canRequest){
       box.innerHTML = '<span>Need to cancel?</span> <button type="button" class="filter-clear" style="margin-left:8px;">Request cancellation</button>';
       box.querySelector('button').addEventListener('click', () => openPolicyCancel(card.orderId, ''));
@@ -6985,14 +7054,14 @@
     const when = card.daysBefore == null ? '' : (card.daysBefore === 0 ? ' · check-in today' : card.daysBefore === 1 ? ' · check-in tomorrow' : ` · ${card.daysBefore} days before check-in`);
     const head = `<strong>Cancellation request</strong>${esc(when)}<br><span>${esc(card.reason)}</span>${card.details ? `<br><span style="opacity:0.75;">${esc(card.details)}</span>` : ''}${(card.evidence || []).length ? `<br><span style="font-size:13px;">Proof: ${card.evidence.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="color:var(--gold-text);">file ${i + 1}</a>`).join(' · ')}</span>` : ''}`;
     let actions;
-    if(o.type === 'emergency_late'){
-      // Last-minute emergency (under a day to check-in): refund in full, keep 25% or keep 50% — or reject (no refund).
-      const ch = card.choices || [];
-      const lbl = { 100: 'Refund in full', 75: 'Keep 25%', 50: 'Keep 50%' };
-      actions = `<span style="font-size:13px; flex-basis:100%; opacity:0.85;">Last-minute emergency: choose what to keep. The deposit is always refunded; Aerva’s commission is only on what you keep.</span>`
-        + ch.map(c => `<button type="button" class="btn-small cc-choice" data-pct="${Number(c.refundPercent)}">${lbl[c.refundPercent] || c.refundPercent + '% back'} · guest gets ${inr(c.guestGetsBack)}</button>`).join('')
-        + `<button type="button" class="dispute-btn cc-reject">Reject (no refund)</button>`;
-    } else if(o.type === 'choose'){
+    if(o.type === 'disaster'){
+      // A natural disaster or government order (owner, 10 Nov 2026): Aerva
+      // checks the proof and decides — nothing for the host to answer.
+      const d = card.disaster || {};
+      box.innerHTML = head + `<p style="font-size:13.5px; line-height:1.55; margin:10px 0 0;"><strong>Aerva decides this request</strong> — you cannot accept or decline it. If Aerva approves, everything the guest paid${d.credit ? ` (${inr(d.credit)})` : ''} becomes Aerva credit for new dates and there is <strong>no payout</strong> for this booking; it does not count as your cancellation. If not, the booking stands. You can add anything Aerva should know in this thread.</p>`;
+      return;
+    }
+    if(o.type === 'choose'){
       actions = `<label style="font-size:13px;">Refund <input type="number" min="0" max="100" step="1" value="0" class="cc-pct" style="width:64px; padding:6px; border:1px solid #d9cfc2; border-radius:6px; font-size:16px;"> %</label>
         <button type="button" class="btn-small cc-accept">Confirm</button><button type="button" class="dispute-btn cc-reject">Reject</button>`;
     } else {
@@ -7021,7 +7090,6 @@
     };
     const acc = box.querySelector('.cc-accept');
     if(acc) acc.addEventListener('click', () => answer(true));
-    box.querySelectorAll('.cc-choice').forEach(b => b.addEventListener('click', () => answer(true, Number(b.dataset.pct))));
     box.querySelector('.cc-reject').addEventListener('click', () => answer(false));
   }
 
@@ -7181,6 +7249,16 @@
         <div class="rv-set">${set.map(starRowHtml).join('')}</div>
         <label class="rv-comment-label" for="reviewComment">Tell other guests about it</label>
         <textarea id="reviewComment" rows="4" placeholder="What stood out? What should someone know before booking?"></textarea>
+        <div class="rv-photos" id="reviewPhotos">
+          <div class="rv-photos-head">
+            <button type="button" class="rv-photos-add" id="reviewPhotosAdd">Add photos (up to ${REVIEW_PHOTO_MAX})</button>
+            <span class="rv-photos-count" id="reviewPhotosCount" aria-live="polite"></span>
+          </div>
+          <input type="file" id="reviewPhotosInput" accept="image/jpeg,image/png,image/webp" multiple hidden>
+          <p class="rv-photos-note">Photos of the stay only. No one’s face without their consent, and no phone numbers or other contact details.</p>
+          <div class="rv-photos-strip" id="reviewPhotosStrip"></div>
+          <p class="rv-photos-msg" id="reviewPhotosMsg" role="alert"></p>
+        </div>
         <p class="rv-error" id="reviewError" style="display:none;"></p>
         <button type="button" class="filter-clear" id="reviewSubmitBtn" style="margin-top:12px;">Send review</button>
       </div>`;
@@ -7192,6 +7270,91 @@
       paintStars();
     }));
     document.getElementById('reviewSubmitBtn').addEventListener('click', () => submitReview(set));
+    reviewPhotoPicker = makeReviewPhotoPicker();
+  }
+
+  // ---- Photos on a review (up to 5; guest-profile.js submitReview) ----
+  // Each photo is made smaller in the browser (compressImage), then
+  // uploaded at once as purpose 'review-photo'. Picking more than the
+  // limit is refused as a whole, with the number still free.
+  const REVIEW_PHOTO_MAX = 5;
+  let reviewPhotoPicker = null;
+  function makeReviewPhotoPicker(){
+    const addBtn = document.getElementById('reviewPhotosAdd');
+    const input = document.getElementById('reviewPhotosInput');
+    const strip = document.getElementById('reviewPhotosStrip');
+    const count = document.getElementById('reviewPhotosCount');
+    const msg = document.getElementById('reviewPhotosMsg');
+    if(!addBtn || !input || !strip) return null;
+    let items = [];   // { id, preview, url, status: 'up' | 'ok' | 'err' }
+    const say = (t) => { msg.textContent = t || ''; msg.style.display = t ? 'block' : 'none'; };
+    const draw = () => {
+      strip.innerHTML = items.map(it => `<div class="rv-photo-item${it.status === 'err' ? ' is-err' : ''}">
+          <img src="${it.preview}" alt="">
+          ${it.status === 'up' ? '<span class="rv-photo-busy">Uploading…</span>' : ''}
+          ${it.status === 'err' ? '<span class="rv-photo-busy">Not uploaded</span>' : ''}
+          <button type="button" class="rv-photo-rm" data-rm="${it.id}" aria-label="Remove this photo">×</button>
+        </div>`).join('');
+      count.textContent = items.length ? `${items.length} of ${REVIEW_PHOTO_MAX}` : '';
+      addBtn.disabled = items.length >= REVIEW_PHOTO_MAX;
+      strip.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => {
+        const gone = items.find(x => String(x.id) === b.dataset.rm);
+        if(gone){ try{ URL.revokeObjectURL(gone.preview); }catch(e){} }
+        items = items.filter(x => String(x.id) !== b.dataset.rm);
+        say(''); draw();
+      }));
+    };
+    addBtn.addEventListener('click', () => input.click());
+    input.addEventListener('change', async () => {
+      const files = [...input.files];
+      input.value = '';
+      if(!files.length) return;
+      const free = REVIEW_PHOTO_MAX - items.length;
+      if(files.length > free){
+        say(`You can add up to ${REVIEW_PHOTO_MAX} photos to a review. You picked ${files.length}; ${free === 0 ? 'no more can be added' : free === 1 ? 'only 1 more can be added' : 'only ' + free + ' more can be added'}.`);
+        return;
+      }
+      const bad = files.find(f => !/^image\/(jpeg|png|webp)$/i.test(f.type || ''));
+      if(bad){ say(`"${bad.name}" is not a JPEG, PNG or WebP photo.`); return; }
+      say('');
+      const added = files.map(f => ({ id: String(Date.now()) + Math.random().toString(36).slice(2, 7), preview: URL.createObjectURL(f), status: 'up', file: f }));
+      items.push(...added); draw();
+      for(const it of added){
+        try{
+          const small = await compressImage(it.file);
+          it.url = (await aervaUploadFiles([small], 'review-photo'))[0];
+          it.status = it.url ? 'ok' : 'err';
+        }catch(err){ it.status = 'err'; say(err && err.message ? err.message : 'A photo could not be uploaded. Remove it and try again.'); }
+        delete it.file;
+        if(items.includes(it)) draw();
+      }
+    });
+    draw(); say('');
+    return {
+      busy(){ return items.some(i => i.status === 'up'); },
+      failed(){ return items.some(i => i.status === 'err'); },
+      urls(){ return items.filter(i => i.status === 'ok' && i.url).map(i => i.url); }
+    };
+  }
+
+  // Once a review is in, its bell notice and the "stay to review" bar go
+  // (they were built at page load from pendingReviews / notifications).
+  function reviewDoneClearReminders(orderId){
+    try{
+      ['navNotifList', 'mobileNotifList'].forEach(id => {
+        const box = document.getElementById(id);
+        if(!box) return;
+        box.querySelectorAll(`.nav-notif-item[data-review-order="${Number(orderId)}"]`).forEach(el => el.remove());
+        if(!box.querySelector('.nav-notif-item')) box.innerHTML = '<p class="nav-notif-empty">Nothing needs your attention right now.</p>';
+      });
+      const list = document.getElementById('navNotifList');
+      const unread = list ? list.querySelectorAll('.nav-notif-item.is-unread').length : 0;
+      [['navBellCount', 'block'], ['mobileNotifCount', 'inline-block']].forEach(([id, disp]) => {
+        const el = document.getElementById(id);
+        if(el){ el.textContent = unread > 9 ? '9+' : String(unread); el.style.display = unread ? disp : 'none'; }
+      });
+      showReviewReminder(list ? list.querySelectorAll('.nav-notif-item[data-review-order]').length : 0);
+    }catch(e){ /* reminders only */ }
   }
 
   function closeReviewModal(){
@@ -7217,9 +7380,19 @@
       errEl.textContent = 'Please write at least a sentence about your visit.';
       errEl.style.display = 'block'; return;
     }
+    if(reviewPhotoPicker && reviewPhotoPicker.busy()){
+      errEl.textContent = 'Please wait for your photos to finish uploading.';
+      errEl.style.display = 'block'; return;
+    }
+    if(reviewPhotoPicker && reviewPhotoPicker.failed()){
+      errEl.textContent = 'A photo could not be uploaded. Remove it (×) and add it again, or send the review without it.';
+      errEl.style.display = 'block'; return;
+    }
     btn.disabled = true; btn.textContent = 'Submitting\u2026';
     try{
       const payload = { mode: 'submitReview', orderId: reviewOrderId, comment };
+      const photos = reviewPhotoPicker ? reviewPhotoPicker.urls() : [];
+      if(photos.length) payload.photos = photos;
       set.forEach(f => { payload[f.key] = reviewScores[f.key]; });
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
         method: 'POST',
@@ -7237,7 +7410,10 @@
         <div class="listing-modal-content">
           <h2>Thank you</h2>
           <p style="font-size:14px; margin-top:10px;">Thanks for submitting your review.</p>
+          ${data.notice ? `<p style="font-size:13px; margin-top:8px; color:#6e675d;">${escapeMessageHtml(data.notice)}</p>` : ''}
         </div>`;
+      reviewPhotoPicker = null;
+      reviewDoneClearReminders(payload.orderId);
       loadMyBookings();
     }catch(err){
       errEl.textContent = 'Could not save your review right now.';
@@ -7286,12 +7462,21 @@
               : '<p>On its way — it arrives by email about 15 minutes after the cancellation, and shows here with its code.</p>'}
           </div>
         </div>`).join('');
-      box.innerHTML = couponHtml + list.map(c => c.status === 'active' && c.remaining > 0 ? `
+      box.innerHTML = couponHtml + list.map(c => c.status === 'active' && c.remaining > 0 && c.newDatesOnly ? `
         <div class="fee-credit-card">
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
           <div class="fee-credit-body">
             <strong>Aerva credit</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}${c.amount > c.remaining ? ` <span class="fee-credit-from">· ${fmtGuest(c.remaining)} left of ${fmtGuest(c.amount)}</span>` : ''}
-            <p>${c.reason === 'emergency_fee' ? 'Your emergency cancellation came with proof, so Aerva’s service fee is held for you.' : c.reason === 'booking_transfer' ? 'Part of your booking moved to another property for less, so the difference (after Aerva’s transfer fee) is held for you.' : c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : (c.reason === 'host_cancelled' ? 'Your host cancelled, so Aerva’s service fee is held for you.' : 'Your host cancelled, so what you paid is held for you.')} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
+            <div class="fee-credit-tag" style="display:inline-block; margin:6px 0 2px; padding:3px 10px; border-radius:999px; background:#f4eadc; color:#6b5222; font-size:12.5px; font-weight:600;">Credit for new dates only — can’t be refunded</div>
+            <p>Aerva approved your cancellation, so everything you paid for that booking is held for you. It is taken off what you pay on any stay or experience, automatically — anything left stays here. It does not expire.</p>
+            ${c.canRefund ? `<p style="font-size:13px;">Aerva has allowed this credit to be refunded: what is left goes back to the original payment of that booking, once.</p><button type="button" class="filter-clear" data-refund-credit="${c.id}" data-new-dates="1">Refund to original payment</button> <span class="fee-credit-msg"></span>` : ''}
+          </div>
+        </div>` : c.status === 'active' && c.remaining > 0 ? `
+        <div class="fee-credit-card">
+          <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
+          <div class="fee-credit-body">
+            <strong>Aerva credit</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}${c.amount > c.remaining ? ` <span class="fee-credit-from">· ${fmtGuest(c.remaining)} left of ${fmtGuest(c.amount)}</span>` : ''}
+            <p>${c.reason === 'emergency_fee' ? 'Your emergency cancellation came with proof, so Aerva’s service fee is held for you.' : c.reason === 'booking_transfer' ? 'Part of your booking moved to another property for less, so the difference (after Aerva’s transfer fee) is held for you.' : c.reason === 'checkin_rebook' ? 'Aerva moved you to a place that costs less, so the difference is held for you.' : c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : (c.reason === 'host_cancelled' ? 'Your host cancelled, so Aerva’s service fee is held for you.' : 'Your host cancelled, so what you paid is held for you.')} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
             <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund it now</button> <span class="fee-credit-msg"></span>
           </div>
         </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
@@ -7301,7 +7486,7 @@
         try{ await navigator.clipboard.writeText(btn.dataset.copyCoupon); msg.textContent = 'Copied.'; }catch(e){ msg.textContent = btn.dataset.copyCoupon; }
       }));
       box.querySelectorAll('[data-refund-credit]').forEach(btn => btn.addEventListener('click', async () => {
-        if(!confirm('Refund your Aerva credit now? It goes back to your original payment method and can no longer be used on a booking.')) return;
+        if(!confirm(btn.dataset.newDates ? 'Refund what is left of this credit to the original payment of that booking? This can be done once, and it can no longer be used on a booking.' : 'Refund your Aerva credit now? It goes back to your original payment method and can no longer be used on a booking.')) return;
         btn.disabled = true;
         const msg = btn.parentNode.querySelector('.fee-credit-msg');
         const rr = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -7319,7 +7504,7 @@
     loadFeeCredits();
     if(token) aervaGuestSetupBanner(container, token);
     if(!token){
-      container.innerHTML = '<p class="suites-empty">Please <a href="guest-login.html" style="color:var(--gold-deep); text-decoration:underline;">log in</a> to see your bookings.</p>';
+      container.innerHTML = '<p class="suites-empty">Please <a href="guest-login.html?next=index.html%3Fview%3Dmy-bookings" style="color:var(--gold-deep); text-decoration:underline;">log in</a> to see your bookings.</p>';
       return;
     }
     try{
@@ -7332,6 +7517,9 @@
         return;
       }
       container.innerHTML = bookings.map(b => {
+        // Gifts and group bookings shared with this account, and groups still
+        // collecting: their own cards, never any price or change/cancel action.
+        if(b.pending_group || b.shared) return aervaSharedBookingCard(b);
         const dateLine = b.arrival === b.departure
           ? new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
           : `${new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – ${new Date(b.departure).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
@@ -7358,15 +7546,19 @@
           : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-confirm-transfer="${ch.id}" style="min-height:44px; padding:10px 18px;">Confirm transfer${Number(ch.difference) < 0 ? ` · ${moneyBoth(-Number(ch.difference))} as Aerva credit` : ''}</button>`
           : b.can_change === false ? (b.transferred ? '<span class="booking-request-note">Part of a transferred booking · it cannot be changed or split again</span>' : b.stay_window_closed ? '<span class="booking-request-note">Changes to this stay closed at 10 AM on the day after check-in</span>' : '')
           : `<button type="button" class="filter-clear" data-change-booking="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Change booking</button>`;
+        // Aerva's check-in promise (api/_checkin-promise.js): a report on
+        // arrival, the places Aerva offers, "Is this place real?", and the
+        // one summary of a booking Aerva moved.
+        const promiseHtml = aervaCheckinPromiseHtml(b);
         const codeHtml = b.confirmation_code && b.status === 'paid'
           ? `<div class="confirm-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${escapeMessageHtml(b.confirmation_code)}">Copy</button></div>`
           : '';
         const inStay = !!localToday && (b.listing_type || 'stay') === 'stay' && String(b.arrival).slice(0, 10) <= localToday && localToday < String(b.departure).slice(0, 10);
         const reportHtml = inStay && b.can_report !== false ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Report a problem</button>` : '';
         const requestHtml = !upcoming ? ''
-          : b.cancel_request_status === 'pending' ? `<span class="booking-request-note">${escapeMessageHtml(b.cancel_request_note || 'Cancellation requested · waiting for the host')}${b.cancel_request_note && /Aerva/.test(b.cancel_request_note) ? ' · <a href="index.html?view=help&mine=1" style="color:var(--gold-text);">See your request</a>' : ''}</span>`
-          : b.cancel_request_status === 'declined' && b.can_request_review ? `<span class="booking-request-note">Your host declined your emergency request.</span> <button type="button" class="filter-clear" data-ask-review="${b.cancel_request_id}">Ask Aerva to review (within 24 hours)</button>`
-          : b.cancel_request_status === 'declined' && b.review_state ? `<span class="booking-request-note">${escapeMessageHtml(b.review_state)}</span>`
+          : b.cancel_request_status === 'pending' ? `<span class="booking-request-note">${escapeMessageHtml(b.cancel_request_note || 'Cancellation requested · waiting for the host')}${b.cancel_request_note && /Aerva/.test(b.cancel_request_note) && !b.cancel_request_disaster ? ' · <a href="index.html?view=help&mine=1" style="color:var(--gold-text);">See your request</a>' : ''}</span>`
+          : b.cancel_request_status === 'declined' && b.cancel_request_disaster && !b.cancel_review_state ? '<span class="booking-request-note">Aerva did not approve your cancellation · the booking stands</span>'
+          : b.cancel_request_status === 'declined' && b.cancel_review_state ? `<span class="booking-request-note">${escapeMessageHtml(b.cancel_review_state)}</span>`
           : b.cancel_request_status === 'declined' ? '<span class="booking-request-note">Cancellation request declined by the host</span>'
           : b.can_cancel_request === false ? (b.transferred ? '<span class="booking-request-note">Transferred · cannot be cancelled. Something not right? <a href="#" onclick="if(window.aervaOpenSupportChat){window.aervaOpenSupportChat();}return false;" style="color:var(--gold-text);">Contact Aerva Support</a></span>' : '')
           : `<button type="button" class="filter-clear" data-policy-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Request cancellation</button>`;
@@ -7399,8 +7591,11 @@
               <h3>${escapeMessageHtml(b.suite_name || '')}</h3>
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(completed ? 'completed' : b.status)}</div>
               ${codeHtml}
-              <div class="booking-actions">${chatBtnHtml}${reviewHtml}${changeHtml}${reportHtml}${requestHtml}</div>
+              ${aervaOwnBookingExtrasHtml(b)}
+              <div class="booking-actions">${chatBtnHtml}${reviewHtml}${b.checkin ? '' : changeHtml}${reportHtml}${b.checkin ? '' : requestHtml}${aervaOwnBookingButtonsHtml(b)}</div>
+              ${promiseHtml}
               ${upcoming && b.status === 'paid' ? aervaBookingGlance(b) : ''}
+              ${upcoming && b.status === 'paid' && b.listing_id ? `<div class="sx-slot sx-compact" data-suggest-exp-for="${Number(b.listing_id)}" onclick="event.stopPropagation()"></div>` : ''}
               <span class="booking-open-hint">View booking summary ›</span>
             </div>
           </div>
@@ -7409,6 +7604,7 @@
       container.querySelectorAll('[data-order-id]').forEach(btn => {
         btn.addEventListener('click', () => openChatForOrder(Number(btn.dataset.orderId), btn.dataset.listingName));
       });
+      aervaLoadSuggestedExperiences(container);
       container.querySelectorAll('[data-review-order]').forEach(btn => {
         const booking = bookings.find(x => String(x.id) === btn.dataset.reviewOrder);
         if(booking) btn.addEventListener('click', (e) => { e.stopPropagation(); openReviewModal(booking); });
@@ -7416,8 +7612,6 @@
       container.querySelectorAll('[data-order-id]').forEach(btn => {
         btn.addEventListener('click', (e) => e.stopPropagation()); // the card's own click must not also fire
       });
-      // Ask the host to accept a cancellation (hazard / life-threatening /
-      // emergency / travel restriction). Accepted: full refund.
       container.querySelectorAll('[data-copy-code]').forEach(btn => {
         btn.addEventListener('click', async (e) => {
           e.stopPropagation();
@@ -7425,6 +7619,8 @@
           catch(err){ btn.textContent = btn.dataset.copyCode; }
         });
       });
+      aervaBindCheckinPromise(container, bookings);
+      aervaBindGiftGroupButtons(container, bookings);
       container.querySelectorAll('[data-report-problem]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); openReportProblem(Number(btn.dataset.reportProblem), btn.dataset.listingName || ''); });
       });
@@ -7433,21 +7629,6 @@
       });
       container.querySelectorAll('[data-pay-change]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); aervaPayChange(Number(btn.dataset.payChange), btn); });
-      });
-      container.querySelectorAll('[data-ask-review]').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const note = prompt('Anything Aerva should know? Aerva will look at the proof you sent; its decision is final for you and the host.', '');
-          if(note === null) return;
-          btn.disabled = true;
-          try{
-            const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-              body: JSON.stringify({ mode: 'requestCancellationReview', requestId: Number(btn.dataset.askReview), note }) });
-            const d = await r.json().catch(() => ({}));
-            if(!r.ok){ alert(d.error || 'Could not send it.'); btn.disabled = false; return; }
-            if(typeof loadMyBookings === 'function') loadMyBookings();
-          }catch(err){ btn.disabled = false; }
-        });
       });
       container.querySelectorAll('[data-confirm-transfer]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); aervaConfirmTransfer(Number(btn.dataset.confirmTransfer), btn); });
@@ -7464,12 +7645,9 @@
       container.querySelectorAll('[data-policy-cancel]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); openPolicyCancel(Number(btn.dataset.policyCancel), btn.dataset.listingName || ''); });
       });
-      container.querySelectorAll('[data-request-cancel]').forEach(btn => {
-        btn.addEventListener('click', (e) => { e.stopPropagation(); openCancelRequest(Number(btn.dataset.requestCancel), btn.dataset.listingName || ''); });
-      });
       // The card itself opens the booking.
       container.querySelectorAll('.booking-card').forEach(card => {
-        const booking = bookings.find(x => String(x.id) === card.dataset.booking);
+        const booking = bookings.find(x => String(x.id) === card.dataset.booking && !x.shared && !x.pending_group);
         if(booking) card.addEventListener('click', () => showBookingPage(booking));
       });
     } catch(err){
@@ -7942,7 +8120,7 @@
       // guest-only account just sees its trips.
       const roleLabel = !inboxHasBothRoles ? '' : c.my_role === 'host' ? 'You\u2019re hosting' : 'You\u2019re the guest';
       return `
-        <div class="inbox-conv-card${c.id === inboxCurrentConversationId ? ' active' : ''}" data-conv-id="${c.id}">
+        <div class="inbox-conv-card${c.id === inboxCurrentConversationId ? ' active' : ''}" data-conv-id="${c.id}" role="button" tabindex="0">
           ${thumb ? `<img class="inbox-conv-thumb" src="${escapeMessageHtml(thumb)}" alt="">` : `<div class="inbox-conv-thumb"></div>`}
           <div class="inbox-conv-info">
             <div class="inbox-conv-topline">
@@ -7973,6 +8151,7 @@
     wireSupportCard(listEl);
     listEl.querySelectorAll('[data-conv-id]').forEach(card => {
       card.addEventListener('click', () => openInboxChat(Number(card.dataset.convId)));
+      card.addEventListener('keydown', (e) => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openInboxChat(Number(card.dataset.convId)); } });
     });
   }
 
@@ -7992,6 +8171,9 @@
     const roleLabel = conv.my_role === 'host' ? 'Guest' : 'Host';
     const counterpartEl = document.getElementById('inboxChatCounterpart');
     counterpartEl.textContent = `${roleLabel}: ${conv.counterpart_name || conv.guest_email}`;
+    // @keywords (@checkin…) are resolved only for hosts (sendInboxMessage); a
+    // guest typing one would send the raw word, so only hosts get the hint.
+    document.getElementById('inboxChatInput').placeholder = conv.my_role === 'host' ? 'Type a message… try @checkin' : 'Type a message…';
     // Hosts: the guest's name opens their profile (the details panel).
     counterpartEl.style.cursor = conv.my_role === 'host' ? 'pointer' : '';
     counterpartEl.style.textDecoration = conv.my_role === 'host' ? 'underline' : '';
@@ -9583,6 +9765,15 @@
       overlay.id = 'photoLightboxOverlay';
       document.body.appendChild(overlay);
       overlay.addEventListener('click', (e) => { if(e.target === overlay) closePhotoLightbox(); });
+      // Keyboard: Escape closes the photos, arrow keys step through them.
+      document.addEventListener('keydown', (e) => {
+        if(overlay.style.display !== 'flex') return;
+        if(e.key === 'Escape'){ e.preventDefault(); closePhotoLightbox(); }
+        else if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
+          const b = document.getElementById(e.key === 'ArrowLeft' ? 'photoLightboxPrevBtn' : 'photoLightboxNextBtn');
+          if(b){ e.preventDefault(); b.click(); }
+        }
+      });
     }
     overlay.innerHTML = `
       <button type="button" class="photo-lightbox-close" id="photoLightboxCloseBtn" aria-label="Close">&times;</button>
@@ -10003,6 +10194,7 @@
           ${/* Name, address and type all sit in the strip below, so
                 nothing is repeated above it. */''}
           ${listingStandingHtml(listing, { type: 'stay', subtitle: 'Resort' })}
+          ${aervaSpecialHereHtml(listing)}
           <div class="listing-three-col">
             <div class="listing-col-booking">
               ${bookStep(1, 'Choose your dates')}
@@ -10017,6 +10209,7 @@
               </div>
               <div id="resortPriceSummary" style="display:none;"></div>
               <div id="resortBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+                <div class="sx-slot" data-suggest-exp-for="${Number(listing.id)}"></div>
                 ${bookStep(4, 'Your details')}
                 <p class="step-help">Your name and the number of guests go to your host; we send your confirmation to this email.</p>
                 <div class="field">
@@ -10036,7 +10229,7 @@
                   <input id="resortBookPhone" type="tel" placeholder="10-digit mobile number" autocomplete="tel" required>
                 </div>
                 <div class="field" style="margin-top:12px;">
-                  <label for="resortCouponCode">Coupon code <span class="label-hint">(optional — log in to use one)</span></label>
+                  <label for="resortCouponCode">Coupon code <span class="label-hint">${guestAuthToken() ? '(optional)' : '(optional — log in to use one)'}</span></label>
                   <input id="resortCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
                   <p class="coupon-rule">Coupons cover the booking price only. Service fee, GST and any deposit are charged in full. Any unused coupon balance is not refunded.</p>
                 </div>
@@ -10061,6 +10254,7 @@
                 <div style="margin-top:8px;">${mapLinkHtml}</div>
               ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
               <div class="listing-nearby" data-nearby-for="${listing.id}"></div>
+              ${aervaHostRecsHtml(listing)}
             </div>
           </div>
           ${amenitiesHtml}
@@ -10077,6 +10271,7 @@
     return `
       <div class="listing-modal-content">
         ${listingStandingHtml(listing, { type: 'stay', subtitle: listing.property_type || '' })}
+        ${aervaSpecialHereHtml(listing)}
         <div class="listing-three-col">
           <div class="listing-col-booking">
             <div class="price">${priceLine}</div>
@@ -10144,6 +10339,7 @@
             <div id="listingExperiencesPicker"></div>
             <div id="listingPriceSummary" style="display:none;"></div>
             <div id="listingBookingAction" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line-dark);">
+              <div class="sx-slot" data-suggest-exp-for="${Number(listing.id)}"></div>
               ${bookStep(4, 'Your details')}
               <p class="step-help">Your name and the number of guests go to your host; we send your confirmation to this email.</p>
               <div class="field">
@@ -10162,8 +10358,9 @@
                 <label for="listingBookPhone">Mobile number <span style="color:#a3402f;">*</span></label>
                 <input id="listingBookPhone" type="tel" placeholder="10-digit mobile number" autocomplete="tel" required>
               </div>
-              <div class="field" style="margin-top:12px;">
-                <label for="listingCouponCode">Coupon code <span class="label-hint">(optional — log in to use one)</span></label>
+              ${aervaBookOptionsHtml()}
+              <div class="field" id="listingCouponField" style="margin-top:12px;">
+                <label for="listingCouponCode">Coupon code <span class="label-hint">${guestAuthToken() ? '(optional)' : '(optional — log in to use one)'}</span></label>
                 <input id="listingCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
                 <p class="coupon-rule">Coupons cover the booking price only. Service fee, GST and any deposit are charged in full. Any unused coupon balance is not refunded.</p>
               </div>
@@ -10188,6 +10385,7 @@
               <div style="margin-top:8px;">${mapLinkHtml}</div>
             ` : `<p style="font-size:13px; opacity:0.6;">No location set for this property yet.</p>`}
               <div class="listing-nearby" data-nearby-for="${listing.id}"></div>
+              ${aervaHostRecsHtml(listing)}
           </div>
         </div>
         ${amenitiesHtml}
@@ -10272,9 +10470,25 @@
           ${r.score ? `<span class="rv-item-score">${starsHtml(r.score, 13)}<b>${Number(r.score).toFixed(1)}</b></span>` : ''}
         </div>
         ${r.comment ? `<p class="rv-item-text">${escapeMessageHtml(r.comment)}</p>` : ''}
+        ${reviewPhotosHtml(r.photos)}
         ${reviewChipsHtml(r.factors)}
       </div>`;
   }
+  // A review's photos as small thumbnails under the text; a tap opens
+  // them in the photo viewer (Escape closes, arrow keys move).
+  function reviewPhotosHtml(photos){
+    const list = (Array.isArray(photos) ? photos : []).filter(u => typeof u === 'string' && /^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\//i.test(u)).slice(0, 5);
+    if(!list.length) return '';
+    return `<div class="rv-photo-row" data-review-photos="${escapeMessageHtml(JSON.stringify(list))}">` + list.map((u, i) =>
+      `<button type="button" class="rv-photo-thumb" data-review-photo-index="${i}" aria-label="Open the guest’s photo ${i + 1} of ${list.length}"><img src="${escapeMessageHtml(u)}" alt="" loading="lazy"></button>`).join('') + `</div>`;
+  }
+  document.addEventListener('click', function(e){
+    const thumb = e.target.closest('[data-review-photos] [data-review-photo-index]');
+    if(!thumb) return;
+    let list = [];
+    try{ list = JSON.parse(thumb.closest('[data-review-photos]').dataset.reviewPhotos || '[]'); }catch(err){ list = []; }
+    if(list.length) openPhotoLightbox(list, Number(thumb.dataset.reviewPhotoIndex) || 0);
+  });
   // How many reviews each press of View more brings in. Five on opening
   // the page, then batches that take the list to 20, then 40, then the
   // rest in 100s (the endpoint's own per-request cap).
@@ -10641,7 +10855,10 @@
         const iso = toLocalDateStr(cellDate);
         const isPast = iso < todayIso;
         const isBooked = bookedNights.has(iso);
-        const isDisabled = isPast || isBooked;
+        // A booked night can still be the day you leave (you don't sleep
+        // there), as in the Check availability calendar.
+        const canEnd = isBooked && !isPast && lgArrival && !lgDeparture && iso > lgArrival && !rangeHasConflict(lgArrival, iso);
+        const isDisabled = isPast || (isBooked && !canEnd);
         let classes = 'calendar-day';
         if(isDisabled) classes += ' disabled';
         if(iso === lgArrival || iso === lgDeparture) classes += ' selected-start';
@@ -10677,6 +10894,7 @@
         renderMonth();
       });
       container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+        aervaDayCellA11y(cell, 'data-lg-date');
         cell.addEventListener('click', (e) => {
           e.stopPropagation();
           handleDayClick(cell.dataset.lgDate);
@@ -11094,12 +11312,16 @@
     `;
     summaryEl.style.display = 'block';
     if(actionEl) actionEl.style.display = 'block';
+    if(actionEl) aervaLoadSuggestedExperiences(actionEl);
 
     // The estimate above appears at once; the server's own price (the one
     // charged, api/create-order.js quoteOnly) replaces it a moment later.
     const quoteBody = summaryEl.querySelector('.quote-body');
     aervaQuote('listing', listingCartPayload(listing)).then(q => {
       if(q && quoteBody.isConnected) quoteBody.innerHTML = aervaQuoteBodyHtml(q);
+      if(q) aervaShowFreeCancelOffer(q);
+      // The split-payment preview: the whole quote, split by guests (display only; the server splits).
+      if(q) aervaRefreshSplit({ total: Number(q.total || 0) + Number(q.feeCredit || 0), guests: counts.adults + counts.children });
     }).catch(err => {
       if(!quoteBody.isConnected) return;
       if(err && err.fromServer) quoteBody.innerHTML = aervaQuoteErrorHtml(err);
@@ -11122,7 +11344,9 @@
         guests: counts.adults + counts.children, adults: counts.adults,
         pets: counts.pets, petTypes, serviceAnimals: serviceTypes.map(type => ({ type })),
         youngLitterCount: counts.youngLitter > 0 ? counts.youngLitter : 0,
-        selectedAmenities: Object.entries(selectedAmenities).map(([amenityId, datesSet]) => ({ amenityId: Number(amenityId), dates: [...datesSet] }))
+        selectedAmenities: Object.entries(selectedAmenities).map(([amenityId, datesSet]) => ({ amenityId: Number(amenityId), dates: [...datesSet] })),
+        // The free cancellation add-on (api/_pricing.js), when ticked.
+        freeCancel: !!((document.getElementById('listingFreeCancelToggle') || {}).checked)
       }],
       experiences: selectedExperience && selectedExperience.date
         ? [{ listingId: selectedExperience.listingId, date: selectedExperience.date, guests: selectedExperience.guests || 1 }]
@@ -11232,6 +11456,14 @@
       return;
     }
     const cart = listingCartPayload(listing);
+    // "This stay is for someone else" / "Split the payment with friends".
+    const bookOpts = aervaReadBookOptions(errorEl, counts.adults + counts.children);
+    if(bookOpts === false) return;
+    if(bookOpts.group && cart.experiences.length){
+      errorEl.textContent = 'A split payment is for the home on its own. Please untick the experience, or pay for the whole booking.';
+      errorEl.style.display = 'block';
+      return;
+    }
 
     btn.disabled = true;
     btn.textContent = 'Preparing payment…';
@@ -11249,11 +11481,13 @@
           // international charging server-side (see create-order.js) —
           // otherwise the backend charges INR exactly as it always has.
           preferredCurrency: currentCurrency,
-          couponCode: document.getElementById('listingCouponCode').value.trim() || undefined,
+          couponCode: bookOpts.group ? undefined : (document.getElementById('listingCouponCode').value.trim() || undefined),
           pricesSeen: aervaPricesSeen([listing]),
           phone: phoneTyped,
           firstName: (document.getElementById('listingBookFirstName') || {}).value,
-          lastName: (document.getElementById('listingBookLastName') || {}).value
+          lastName: (document.getElementById('listingBookLastName') || {}).value,
+          gift: bookOpts.gift || undefined,
+          group: bookOpts.group || undefined
         })
       });
       if(!orderRes.ok){
@@ -11264,7 +11498,7 @@
           return;
         }
         if(Array.isArray(errData.needs) && errData.needs.length){
-          if(errData.needs.includes('name')){ errorEl.textContent = errData.error; errorEl.style.display = 'block'; }
+          if(errData.needs.includes('name') || errData.needs.some(n => /^gift/.test(n))){ errorEl.textContent = errData.error; errorEl.style.display = 'block'; }
           else aervaShowNeeds(errorEl, errData, btn);
           btn.disabled = false; btn.textContent = 'Continue to payment';
           return;
@@ -11272,6 +11506,10 @@
         throw new Error(errData.error || 'We could not start your payment. Please try again.');
       }
       order = await orderRes.json();
+      if(order.group){
+        confirmEl.textContent = `You pay ${moneyBoth(order.total)} now for ${order.group.payNow} of ${order.group.places} places. Once paid, your group is open for 2 hours.`;
+        confirmEl.style.display = 'block';
+      }
       if(order.couponDiscount > 0){
         // The discount is already baked into what Razorpay will actually
         // charge (see order.amount below) — this is just confirming to
@@ -11328,7 +11566,7 @@
             body: JSON.stringify(response)
           });
           const verifyData = await verifyRes.json();
-          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn });
+          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn, suggestFor: listing.id });
         } catch(err){
           aervaShowPaymentResult({ pending: true, message: 'Your payment was received, but we could not confirm the booking on this page. We will email you within a few minutes — please do not pay again. Payment ID: ' + response.razorpay_payment_id }, { confirmEl, errorEl, btn });
         }
@@ -11422,6 +11660,7 @@
         viewMonth += 1; if(viewMonth > 11){ viewMonth = 0; viewYear += 1; } renderMonth();
       });
       container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+        aervaDayCellA11y(cell, 'data-resort-date');
         cell.addEventListener('click', (e) => { e.stopPropagation(); handleDayClick(cell.dataset.resortDate); });
       });
     }
@@ -11539,6 +11778,7 @@
     `;
     summaryEl.style.display = 'block';
     actionEl.style.display = 'block';
+    aervaLoadSuggestedExperiences(actionEl);
     const quoteBody = summaryEl.querySelector('.quote-body');
     aervaQuote('resort', { stays: resortCartStays(resortListing) }).then(q => {
       if(q && quoteBody.isConnected) quoteBody.innerHTML = aervaQuoteBodyHtml(q);
@@ -11653,7 +11893,7 @@
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(response)
           });
           const verifyData = await verifyRes.json();
-          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn });
+          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn, suggestFor: listing.id });
         } catch(err){
           aervaShowPaymentResult({ pending: true, message: 'Your payment was received, but we could not confirm the booking on this page. We will email you within a few minutes — please do not pay again. Payment ID: ' + response.razorpay_payment_id }, { confirmEl, errorEl, btn });
         }
@@ -11884,7 +12124,7 @@
                 <input id="expBookPhone" type="tel" placeholder="10-digit mobile number" autocomplete="tel" required>
               </div>
               <div class="field" style="margin-top:12px;">
-                <label for="expCouponCode">Coupon code <span class="label-hint">(optional — log in to use one)</span></label>
+                <label for="expCouponCode">Coupon code <span class="label-hint">${guestAuthToken() ? '(optional)' : '(optional — log in to use one)'}</span></label>
                 <input id="expCouponCode" type="text" placeholder="e.g. AERVA-XXXXXXXXXX" style="text-transform:uppercase;">
                 <p class="coupon-rule">Coupons cover the booking price only. Service fee, GST and any deposit are charged in full. Any unused coupon balance is not refunded.</p>
               </div>
@@ -12029,6 +12269,7 @@
         renderMonth();
       });
       container.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+        aervaDayCellA11y(cell, 'data-exp-date');
         cell.addEventListener('click', (e) => {
           e.stopPropagation();
           handleExpDayClick(cell.dataset.expDate);
@@ -12347,15 +12588,19 @@
 
     // ---- Price details (adds up to what was charged) ----
     const subtotal = num(b.subtotal), gst = num(b.gst), fee = num(b.guest_service_fee), deposit = num(b.deposit_amount);
+    const transferFee = Math.min(fee, num(b.transfer_fee)); // inside guest_service_fee on a transferred part
     const coupon = num(b.coupon_discount), discount = num(b.discount_amount);
-    const paid = Math.max(0, (num(b.total) || subtotal + gst + fee + deposit) - coupon);
+    const freeCancel = num(b.free_cancel_fee), freeCancelGst = num(b.free_cancel_gst);
+    const paid = Math.max(0, (num(b.total) || subtotal + gst + fee + deposit + freeCancel + freeCancelGst) - coupon);
     const unit = isExp ? `${b.guests || 1} guest${Number(b.guests) === 1 ? '' : 's'}` : `${b.nights || 1} night${Number(b.nights) === 1 ? '' : 's'}`;
     const depositWord = { held: 'held', refunding: 'being refunded', refunded: 'refunded', disputed: 'under review', resolving: 'being settled', resolved: 'settled' }[b.deposit_status] || '';
     const priceRows = [
       [`${isExp ? 'Experience' : 'Stay'} · ${unit}`, inr(subtotal + discount)],
       discount ? ['Offer applied', '−' + inr(discount)] : null,
-      fee ? ['Guest service fee', inr(fee)] : null,
-      gst ? ['GST', inr(gst)] : null,
+      freeCancel ? [`Free cancellation${b.free_cancel_until_label ? ` <em>(full refund until ${esc(b.free_cancel_until_label)})</em>` : ''}`, inr(freeCancel)] : null,
+      fee - transferFee ? ['Guest service fee', inr(fee - transferFee)] : null,
+      transferFee ? ['Aerva transfer fee', inr(transferFee)] : null,
+      gst + freeCancelGst ? ['GST', inr(gst + freeCancelGst)] : null,
       deposit ? [`Refundable security deposit${depositWord ? ` <em>(${esc(depositWord)})</em>` : ''}`, inr(deposit)] : null,
       coupon ? ['Aerva coupon', '−' + inr(coupon)] : null
     ].filter(Boolean);
@@ -12406,6 +12651,7 @@
       <div class="bk-facts">${facts.filter(Boolean).map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>
       ${isExp && (b.meeting_point_address || b.meeting_point_details) ? `<p class="bk-note bk-meet"><strong>Meeting point:</strong> ${esc(b.meeting_point_address || '')}${b.meeting_point_details ? ` — ${esc(b.meeting_point_details)}` : ''}</p>` : ''}
       <div class="bk-actions">${actions.join('')}</div>
+      ${aervaPromiseSummaryHtml(b, inr)}
       <div class="bk-summary">
         <div class="bk-card">
           <h3>Price details</h3>
@@ -12471,7 +12717,7 @@
   // Today's had left out the profile, so Today "did nothing" when clicked
   // from the profile (it opened underneath it, out of sight).
   const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
-    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'wishlistView', 'settingsView', 'policiesView', 'privacyView', 'termsView', 'helpView'];
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'wishlistView', 'settingsView', 'policiesView', 'privacyView', 'termsView', 'helpView', 'groupGiftView'];
 
   // ---- Agreements shown before payment and before listing ----
   // The guest booking agreement sits directly above every Book button; the
@@ -12480,7 +12726,7 @@
   // on its way out (below), and the server refuses it without the current
   // version too (create-order.js, submit-listing.js). Text and version come
   // from aerva-policies.js, the same source as the Policies page.
-  const BOOKING_BUTTONS = '#listingBookNowBtn, #resortBookNowBtn, #expBookNowBtn';
+  const BOOKING_BUTTONS = '#listingBookNowBtn, #resortBookNowBtn, #expBookNowBtn, #groupPayBtn';
   const LISTING_BUTTONS = '#listingSubmitBtn, #expSubmitBtn';
   function agreementBoxHtml(kind){
     const A = window.AERVA_POLICIES && window.AERVA_POLICIES.agreements;
@@ -12717,7 +12963,7 @@
     window.scrollTo({ top: 0 });
     const container = document.getElementById('wishlistContainer');
     if(!guestAuthToken()){
-      container.innerHTML = '<div class="wishlist-empty"><p>Log in to see the homes you have saved.</p><a class="btn" href="guest-login.html">Log in</a></div>';
+      container.innerHTML = '<div class="wishlist-empty"><p>Log in to see the homes you have saved.</p><a class="btn" href="guest-login.html?next=index.html%3Fview%3Dwishlist">Log in</a></div>';
       return;
     }
     if(!wishlistListingsById){
@@ -12794,6 +13040,23 @@
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Could not load your profile.');
       renderProfile(data.profile);
+      { // Not saved yet: start the form from the account's full name, if any.
+        const parts = String(data.profile.name || '').trim().split(/\s+/).filter(Boolean);
+        renderProfileNameRow(data.profile.firstName, data.profile.lastName, false,
+          { first: data.profile.firstName || (parts.length > 1 ? parts[0] : ''), last: data.profile.lastName || (parts.length > 1 ? parts.slice(1).join(' ') : '') }); }
+      // "Complete your account" (My Bookings) links here to confirm the
+      // email and add a phone number: offer that same panel checkout uses,
+      // only while one of them is missing (aervaIdPanel checks).
+      let box = document.getElementById('profileContactBox');
+      if(!box){
+        box = document.createElement('div');
+        box.id = 'profileContactBox';
+        box.style.cssText = 'display:none; margin:0 0 20px;';
+        const wrap = document.querySelector('#profileView .profile-wrap');
+        if(wrap) wrap.insertBefore(box, wrap.firstChild);
+      }
+      if(typeof aervaIdPanel === 'function') aervaIdPanel(box, { needs: ['email', 'phone'], message: 'Complete your account',
+        onDone: () => { box.style.display = 'none'; box.innerHTML = ''; } });
     }catch(err){
       document.getElementById('profileFields').innerHTML =
         `<p class="profile-empty">${escapeMessageHtml(err.message || 'Could not load your profile.')}</p>`;
@@ -12850,6 +13113,90 @@
     document.getElementById('profileReviews').innerHTML =
       (asGuest ? `<div class="profile-section-title" style="margin-top:4px;">From hosts you stayed with</div><div class="rv-list">${asGuest}</div>` : '')
       + (asHost ? `<div class="profile-section-title" style="margin-top:18px;">From guests who stayed with you</div><div class="rv-list">${asHost}</div>` : '');
+  }
+
+  // ---- Your name (owner, 9 Nov 2026) ----
+  // First and last name as on the government ID — the host checks it at
+  // check-in. Shown with Edit, or as the form while either is missing
+  // (the "Add your first and last name" setup step links here). Saved by
+  // api/guest-profile.js mode saveName, which has the final say on what
+  // is allowed; the check here only spares a round trip.
+  const PROFILE_NAME_OK = /^[\p{L}\p{M} .'’-]+$/u;
+  function profileNameProblem(v, label){
+    if(!v) return `Please enter your ${label}.`;
+    if([...v].length > 50) return `Your ${label} can be at most 50 characters.`;
+    if(/\d/.test(v)) return `Your ${label} cannot contain numbers — please write it as on your government ID.`;
+    if(!PROFILE_NAME_OK.test(v)) return `Your ${label} can only have letters, spaces, dots, apostrophes and hyphens.`;
+    return '';
+  }
+  function renderProfileNameRow(first, last, editing, draft){
+    const box = document.getElementById('profileNameBox');
+    if(!box) return;
+    const esc = escapeMessageHtml;
+    first = String(first || '').trim(); last = String(last || '').trim();
+    const complete = !!(first && last);
+    const hint = '<p class="profile-hint">As on your government ID — the host checks it at check-in. Bookings you have already made keep the name they were booked with.</p>';
+    if(complete && !editing){
+      box.innerHTML = `<div class="profile-name-row">
+          <span class="profile-name-value" id="profileNameValue">${esc(first + ' ' + last)}</span>
+          <button type="button" class="filter-clear" id="profileNameEdit" aria-label="Edit your name">Edit</button>
+        </div>${hint}`;
+      box.querySelector('#profileNameEdit').addEventListener('click', () => {
+        renderProfileNameRow(first, last, true);
+        const f = document.getElementById('pnFirst'); if(f){ f.focus(); f.select(); }
+      });
+      return;
+    }
+    box.innerHTML = `<div class="profile-name-grid">
+        <div class="profile-field"><label for="pnFirst">First name</label>
+          <input id="pnFirst" maxlength="50" autocomplete="given-name" autocapitalize="words" spellcheck="false" value="${esc(draft ? draft.first : first)}" placeholder="As on your ID"></div>
+        <div class="profile-field"><label for="pnLast">Last name</label>
+          <input id="pnLast" maxlength="50" autocomplete="family-name" autocapitalize="words" spellcheck="false" value="${esc(draft ? draft.last : last)}" placeholder="As on your ID"></div>
+      </div>${hint}
+      <div class="profile-name-actions">
+        <button type="button" class="settings-save-btn profile-save" id="profileNameSave">${complete ? 'Save' : 'Save name'}</button>
+        ${complete ? '<button type="button" class="filter-clear" id="profileNameCancel">Cancel</button>' : ''}
+      </div>
+      <p class="profile-msg" id="profileNameMsg" role="alert"></p>`;
+    const msg = box.querySelector('#profileNameMsg');
+    const btn = box.querySelector('#profileNameSave');
+    const fIn = box.querySelector('#pnFirst'), lIn = box.querySelector('#pnLast');
+    const say = (t) => { msg.textContent = t; msg.style.color = '#8a2b2b'; };
+    const save = async () => {
+      if(btn.disabled) return;
+      const f = fIn.value.replace(/\s+/g, ' ').trim(), l = lIn.value.replace(/\s+/g, ' ').trim();
+      const bad = profileNameProblem(f, 'first name') || profileNameProblem(l, 'last name');
+      if(bad){ say(bad); (profileNameProblem(f, 'first name') ? fIn : lIn).focus(); return; }
+      btn.disabled = true; btn.textContent = 'Saving…'; msg.textContent = '';
+      try{
+        const res = await fetch(SUITES_API_BASE + '/api/guest-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+          body: JSON.stringify({ mode: 'saveName', firstName: f, lastName: l })
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.error || 'Could not save your name. Please try again.');
+        renderProfileNameRow(data.firstName, data.lastName, false);
+        const done = document.createElement('p');
+        done.className = 'profile-msg'; done.style.color = '#2f5c2a'; done.textContent = 'Saved.';
+        box.appendChild(done);
+        document.getElementById('profileName').textContent = data.name;
+        const circle = document.getElementById('profilePhotoCircle');
+        if(circle && !circle.querySelector('img')) circle.textContent = data.name.charAt(0).toUpperCase();
+        safeStorage.set('aerva_guest_name', data.name);
+        // Checkout fills in the name from the account: ask again next time.
+        aervaPrefillPromise = null;
+        // The greeting and the bell ("Complete your account") follow.
+        try{ if(window.aervaRefreshIdentity) window.aervaRefreshIdentity(); }catch(e){}
+      }catch(err){
+        say(err.message || 'Could not save your name. Please try again.');
+        btn.disabled = false; btn.textContent = complete ? 'Save' : 'Save name';
+      }
+    };
+    btn.addEventListener('click', save);
+    [fIn, lIn].forEach(el => el.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); save(); } }));
+    const cancel = box.querySelector('#profileNameCancel');
+    if(cancel) cancel.addEventListener('click', () => renderProfileNameRow(first, last, false));
   }
 
   async function saveProfile(){
@@ -13091,6 +13438,20 @@
 
   let todayRowsById = {};
 
+  // Where the payout stands (host-listings.js payoutStatusFor): the host's
+  // payout, or a co-host's own share. Due the day after check-in until sent.
+  function todayPayoutLabel(r){
+    const day = (v) => { const d = new Date(String(v || '').slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : ' ' + d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
+    switch(r && r.payoutStatus){
+      case 'due': return 'Due' + day(r.payoutDueOn);
+      case 'sent': return 'Sent' + day(r.payoutSentOn) + (r.payoutReference ? ' · Ref ' + r.payoutReference : '');
+      case 'on_hold': return 'On hold';
+      case 'failed': return 'Failed';
+      case 'cancelled': return 'Cancelled';
+      default: return '';
+    }
+  }
+
   // ---- One booking, opened from Today ----
   // The stay's own facts, who the guest is, and the thread — so a host can
   // read what was agreed and reply without leaving the page. Messages go
@@ -13117,24 +13478,29 @@
       <div class="tb-facts">
         ${r.kind === 'experience' ? `
           <div><span>Date</span><strong>${esc(fmtDay(r.arrival))}${r.startTime ? ' · ' + esc(r.startTime) : ''}</strong></div>
-          <div><span>Guests</span><strong>${Number(r.guests) || 1}</strong></div>
+          ${r.shareOnly ? '' : `<div><span>Guests</span><strong>${Number(r.guests) || 1}</strong></div>`}
         ` : `
           <div><span>Check-in</span><strong>${esc(fmtDay(r.arrival))}${r.checkInTime ? ' · ' + esc(r.checkInTime) : ''}</strong></div>
           <div><span>Check-out</span><strong>${esc(fmtDay(r.departure))}${r.checkOutTime ? ' · ' + esc(r.checkOutTime) : ''}</strong></div>
-          <div><span>Guests</span><strong>${Number(r.guests) || 1}</strong></div>
+          ${r.shareOnly ? '' : `<div><span>Guests</span><strong>${Number(r.guests) || 1}</strong></div>`}
           <div><span>Nights</span><strong>${r.nights || '—'}</strong></div>
         `}
         ${r.payout ? `<div><span>Your payout</span><strong>${fmtGuest(r.payout)}</strong></div>` : ''}
         ${/* a co-host gets their own share instead (the host's payout is never sent) */ ''}
         ${!r.payout && Number(r.share) > 0 ? `<div><span>Your share</span><strong>${fmtGuest(r.share)}</strong></div>` : ''}
+        ${todayPayoutLabel(r) ? `<div><span>Payout</span><strong>${esc(todayPayoutLabel(r))}</strong></div>` : ''}
       </div>
+      ${r.shareOnly ? `<p class="tb-muted">Your co-host access covers this stay and your share. Guest messages and contact details stay with the host.</p>` : `
       <div class="tb-section-title">Message ${esc((r.guestName || 'your guest').split(' ')[0])}</div>
       <div class="tb-thread" id="tbThread"><p class="tb-muted">Loading messages…</p></div>
       <div class="tb-compose">
         <textarea id="tbText" rows="2" placeholder="Write a message…"></textarea>
         <button type="button" class="filter-clear" id="tbSend">Send</button>
       </div>
-      <p class="tb-muted" id="tbMsg"></p>`;
+      <p class="tb-muted" id="tbMsg"></p>`}`;
+    // A co-host without bookings access (host-listings.js trimForCohost):
+    // the stay and their share only — no thread to load.
+    if(r.shareOnly) return;
 
     let conversationId = null;
     let tbReload = null;
@@ -13274,7 +13640,7 @@
     document.getElementById('listingFullView').style.display = 'block';
     document.title = listing.property_name + ' — Aerva';
     try{
-      const where = [listing.area, listing.city].filter(Boolean).join(', ');
+      const where = formatCityArea(listing);
       setSeoMeta(`${listing.property_name}: ${listing.property_type || 'home'} in ${where}` + (listing.nightly_rate ? `, from ₹${Math.round(Number(listing.nightly_rate)).toLocaleString('en-IN')} a night` : '') + '. Hand-picked and personally reviewed by Aerva.', stayPathFor(listing));
     }catch(e){}
     if(listing.property_type === 'Resort'){
@@ -13294,6 +13660,19 @@
   document.getElementById('listingModalClose').addEventListener('click', closeListingDetail);
   document.getElementById('listingModalOverlay').addEventListener('click', (e) => {
     if(e.target.id === 'listingModalOverlay') closeListingDetail();
+  });
+  // Escape closes the listing too (it had only the × and a tap outside),
+  // unless something opened over it (photos, host profile, log-in, payment,
+  // a notice) — that layer handles its own Escape first.
+  document.addEventListener('keydown', (e) => {
+    if(e.key !== 'Escape' || e.defaultPrevented) return;
+    const ov = document.getElementById('listingModalOverlay');
+    if(!ov || ov.style.display !== 'flex') return;
+    if(document.getElementById('aervaCheckoutTimer')) return; // payment window open
+    const above = [...document.body.children].some(el => el !== ov && el.offsetParent === null && getComputedStyle(el).position === 'fixed'
+      && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden' && el.getBoundingClientRect().height > 0
+      && (Number(getComputedStyle(el).zIndex) || 0) > (Number(getComputedStyle(ov).zIndex) || 0));
+    if(!above) closeListingDetail();
   });
 
   function handleCardGridClick(e){
@@ -13534,6 +13913,7 @@
     gridEl.innerHTML = html;
 
     gridEl.querySelectorAll('.calendar-day:not(.disabled):not(.empty)').forEach(cell => {
+      aervaDayCellA11y(cell, 'data-date');
       cell.addEventListener('click', (e) => {
         e.stopPropagation();
         handleDayClick(cell.dataset.date);
@@ -14132,6 +14512,9 @@
     // it was told, and landing on the homepage with no explanation is the
     // worst possible answer to a link someone deliberately followed.
     const linkParams = new URLSearchParams(window.location.search);
+    // A group booking's share link, or a gift's link (aervaShowGroupPage / aervaShowGiftPage).
+    if(linkParams.get('group')){ aervaShowGroupPage(linkParams.get('group')); return; }
+    if(linkParams.get('gift') || linkParams.get('giftId')){ aervaShowGiftPage(linkParams.get('gift'), linkParams.get('giftId')); return; }
     const requestedId = linkParams.get('listing') || linkParams.get('experience');
     if(requestedId){
       if(listingsById[requestedId]){ showFullListingPage(listingsById[requestedId]); return; }
@@ -14385,6 +14768,18 @@
     });
     scrim.addEventListener('click', closeMenu);
     panel.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
+    // The open panel covers the header's menu button (its × state), so the
+    // only way out was the thin strip of page beside it. A close button in
+    // the panel itself, and Escape.
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'mobile-nav-close';
+    closeBtn.setAttribute('aria-label', 'Close menu');
+    closeBtn.innerHTML = '&times;';
+    closeBtn.style.cssText = 'position:absolute; top:calc(18px + env(safe-area-inset-top, 0px)); right:18px; width:44px; height:44px; border:none; background:none; font-size:30px; line-height:1; color:var(--ink); cursor:pointer;';
+    closeBtn.addEventListener('click', () => { closeMenu(); toggle.focus(); });
+    panel.insertBefore(closeBtn, panel.firstChild);
+    document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && panel.classList.contains('is-open')){ closeMenu(); toggle.focus(); } });
   })();
 
   // ---- Standing badge beside the name ----
@@ -14843,7 +15238,8 @@ function aervaQuoteRowsHtml(q){
     else if(many && l.item) label = l.item + ': ' + l.label;
     const amount = Number(l.amount) || 0;
     const shown = l.kind === 'service' && amount === 0 ? 'No charge' : (amount < 0 ? '−' + fmtGuest(-amount) : fmtGuest(amount));
-    return `<div class="sum-row"${l.kind === 'deposit' ? ' style="opacity:0.7;"' : ''}><span>${esc(label)}</span><span>${shown}</span></div>`;
+    const why = l.kind === 'free_cancel' ? `<div class="sum-note" style="font-size:11.5px; opacity:0.65; margin:-2px 0 6px;">Cancel before then for a full refund of the booking price, GST and any deposit. This add-on and the service fee are not refunded.</div>` : '';
+    return `<div class="sum-row"${l.kind === 'deposit' ? ' style="opacity:0.7;"' : ''}><span>${esc(label)}</span><span>${shown}</span></div>${why}`;
   }).join('');
 }
 // Rows, the total, and (in another currency) what is actually charged.
@@ -14888,7 +15284,7 @@ function aervaPrefillBooking(){
 // Shown over the page the moment a payment is confirmed: the code to show
 // at check-in, each booking's dates and guests, what was paid, and where the
 // confirmation email went. Built only from what verify-payment.js returns.
-function aervaShowBookingSuccess(summary, codes){
+function aervaShowBookingSuccess(summary, codes, opts){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const day = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
   const money = (n, cur) => (cur && cur !== 'INR' ? cur + ' ' : '₹') + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -14928,6 +15324,7 @@ function aervaShowBookingSuccess(summary, codes){
       <p class="bs-lead">${summary && summary.email ? `We have sent the confirmation to <strong>${esc(summary.email)}</strong>.` : 'We have emailed you the confirmation.'} Show your confirmation code at check-in.</p>
       ${itemHtml}
       ${paid || payId ? `<div class="bs-pay">${paid}${payId}</div>` : ''}
+      ${opts && opts.suggestFor ? `<div class="sx-slot" data-suggest-exp-for="${Number(opts.suggestFor)}"></div>` : ''}
       <div class="bs-actions">
         <a class="bs-btn bs-primary" href="index.html?view=my-bookings">View my bookings</a>
         <button type="button" class="bs-btn bs-secondary" data-bs-close>Done</button>
@@ -14941,6 +15338,7 @@ function aervaShowBookingSuccess(summary, codes){
   document.addEventListener('keydown', onKey);
   wrap.addEventListener('click', (e) => { if(e.target === wrap) close(); });
   wrap.querySelector('[data-bs-close]').addEventListener('click', close);
+  aervaLoadSuggestedExperiences(wrap);
   wrap.querySelectorAll('.bs-copy').forEach(b => b.addEventListener('click', async () => {
     try{ await navigator.clipboard.writeText(b.dataset.code); b.textContent = 'Copied'; }
     catch(e){ b.textContent = 'Select and copy'; }
@@ -14951,8 +15349,10 @@ function aervaShowBookingSuccess(summary, codes){
 
 // ---- After payment: what the guest is told ----
 // verify-payment.js answers with the booking's confirmation code(s).
-function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn }){
+function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn, suggestFor = null }){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // A payment for places in a group booking: back to the group's live status.
+  if(verifyData && verifyData.group && verifyData.group.token && typeof aervaAfterGroupPayment === 'function'){ aervaAfterGroupPayment(verifyData); return; }
   errorEl.style.display = 'none';
   if(verifyData && verifyData.verified){
     const codes = Array.isArray(verifyData.confirmationCodes) ? verifyData.confirmationCodes : [];
@@ -14963,7 +15363,7 @@ function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn }){
     confirmEl.style.display = 'block';
     // Paid: the button stays off, so the same booking is never paid twice.
     if(btn){ btn.disabled = true; btn.textContent = 'Booked'; }
-    aervaShowBookingSuccess(verifyData.summary, codes);
+    aervaShowBookingSuccess(verifyData.summary, codes, { suggestFor });
     return;
   }
   const pending = verifyData && verifyData.pending;
@@ -14972,6 +15372,25 @@ function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn }){
   errorEl.style.display = 'block';
   // Paid but still being confirmed: paying again would pay twice.
   if(pending && btn){ btn.disabled = true; btn.textContent = 'Payment received'; }
+}
+
+// ---- Calendar days work from the keyboard ----
+// The day cells are plain divs, so without this a keyboard or screen-reader
+// user could not reach a date at all and so could not book. Each pickable
+// day becomes a focusable button; Enter or Space picks it, and focus comes
+// back to the same day after the month redraws.
+function aervaDayCellA11y(cell, attr){
+  const iso = cell.getAttribute(attr);
+  cell.tabIndex = 0;
+  cell.setAttribute('role', 'button');
+  const d = iso ? new Date(iso + 'T00:00:00') : null;
+  if(d && !isNaN(d)) cell.setAttribute('aria-label', d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }));
+  cell.addEventListener('keydown', (e) => {
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    cell.click();
+    setTimeout(() => { const again = document.querySelector('.calendar-day[' + attr + '="' + iso + '"]'); if(again && again !== document.activeElement && again.tabIndex === 0) again.focus(); }, 0);
+  });
 }
 
 // ---- Booking steps: a numbered heading for each stage of booking ----
@@ -15155,7 +15574,7 @@ function aervaReleaseHold(orderId, reason){
 function cancellationPolicyText(policy){
   return policy === 'firm'
     ? 'Firm — full refund 30+ days before check-in; 50% from 5 to 29 days; within 4 days the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.'
-    : 'Flexible — full refund 30+ days before check-in; 80% from 10 to 29 days; 50% from 5 to 9 days; 30% from 2 to 4 days; in the last day the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.';
+    : 'Flexible — full refund 30+ days before check-in; 80% from 10 to 29 days; 50% from 5 to 9 days; 30% from 2 to 4 days; less than 2 days before, the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.';
 }
 
 // ---- Photos in a booking's chat ----
@@ -15382,9 +15801,12 @@ function openReportProblem(orderId, listingName){
     <button type="button" class="payout-close" aria-label="Close">×</button>
     <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Report a problem</h2>
     <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
-    <p class="step-help">Tell your host and Aerva what is wrong, with photos. Aerva decides after hearing your host. If the problem is upheld, the nights after the check-in night are refunded.</p>
+    <p class="step-help">Tell your host and Aerva what is wrong, with photos. Aerva decides after hearing your host.</p>
+    <p class="step-help" id="rpPromise" style="background:#f4eadc; border-radius:8px; padding:10px 12px;"><strong>Aerva’s check-in promise:</strong> if the place does not exist, or is not as listed or not available when you arrive, Aerva treats it as urgent. If Aerva confirms it, you are offered other places nearby (you pay only any difference; if it costs less, the difference comes back as Aerva credit) — or everything you paid is refunded in full, including Aerva’s service fee.</p>
     <label class="payout-label" for="rpReason">What is the problem?</label>
     <select id="rpReason" style="${field}">
+      <option value="arrival_fake">On arrival: the property does not exist</option>
+      <option value="arrival_failed">On arrival: not as listed, or not available</option>
       <option value="not_as_described">Not as described in the listing</option>
       <option value="unsafe">Unsafe or not working (water, power, locks, etc.)</option>
       <option value="not_clean">Not clean</option>
@@ -15399,7 +15821,11 @@ function openReportProblem(orderId, listingName){
     <button type="button" class="btn solid" id="rpSend" style="width:100%;">Send report</button>
     <p id="rpMsg" style="font-size:14px; color:#a3402f; margin-top:10px;"></p>
   </div>`;
-  const close = () => overlay.remove();
+  // Escape closes the sheet, and focus starts inside it (keyboard / screen readers).
+  const onEsc = (e) => { if(e.key === 'Escape' && overlay === [...document.querySelectorAll('.payout-overlay')].pop()) close(); };
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onEsc); };
+  document.addEventListener('keydown', onEsc);
+  setTimeout(() => { const b = overlay.querySelector('.payout-close'); if(b && overlay.isConnected) b.focus(); }, 0);
   overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
   overlay.querySelector('.payout-close').addEventListener('click', close);
   document.body.appendChild(overlay);
@@ -15414,7 +15840,10 @@ function openReportProblem(orderId, listingName){
         body: JSON.stringify({ mode: 'raiseDispute', orderId, reason: overlay.querySelector('#rpReason').value, details: overlay.querySelector('#rpDetails').value, evidence }) });
       const d = await r.json();
       if(!r.ok) throw new Error(d.error || 'Could not send your report.');
-      overlay.querySelector('.payout-sheet').innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500;">Report sent</h2><p>Your host has been told, and Aerva will decide after hearing them. We will email you the outcome.</p><button type="button" class="btn solid" style="width:100%;" onclick="this.closest(\'.payout-overlay\').remove()">Close</button>';
+      const urgent = /^arrival_/.test(overlay.querySelector('#rpReason').value);
+      overlay.querySelector('.payout-sheet').innerHTML = urgent
+        ? '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500;">Aerva is on it</h2><p>Your report is urgent: Aerva is checking it with your host now. If it is confirmed, you will see other places to choose from in My Bookings (and by email), or you can have everything refunded in full.</p><button type="button" class="btn solid" style="width:100%;" onclick="this.closest(\'.payout-overlay\').remove(); if(typeof loadMyBookings === \'function\') loadMyBookings();">Close</button>'
+        : '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500;">Report sent</h2><p>Your host has been told, and Aerva will decide after hearing them. We will email you the outcome.</p><button type="button" class="btn solid" style="width:100%;" onclick="this.closest(\'.payout-overlay\').remove()">Close</button>';
     }catch(err){ msg.textContent = err.message; btn.disabled = false; btn.textContent = 'Send report'; }
   });
 }
@@ -15422,7 +15851,7 @@ function openReportProblem(orderId, listingName){
 // ---- Guest: change a booking ----
 // New dates, guests, pets and add-ons; the new price and the difference are
 // shown before anything is sent. The request goes to the host in Messages.
-async function openChangeBooking(orderId, listingName){
+async function openChangeBooking(orderId, listingName, chose){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const inr = (n) => moneyBoth(n);
   const overlay = document.createElement('div');
@@ -15433,7 +15862,11 @@ async function openChangeBooking(orderId, listingName){
     <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
     <div id="chBody"><p class="payout-muted">Loading…</p></div>
   </div>`;
-  const close = () => overlay.remove();
+  // Escape closes the sheet, and focus starts inside it (keyboard / screen readers).
+  const onEsc = (e) => { if(e.key === 'Escape' && overlay === [...document.querySelectorAll('.payout-overlay')].pop()) close(); };
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onEsc); };
+  document.addEventListener('keydown', onEsc);
+  setTimeout(() => { const b = overlay.querySelector('.payout-close'); if(b && overlay.isConnected) b.focus(); }, 0);
   overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
   overlay.querySelector('.payout-close').addEventListener('click', close);
   document.body.appendChild(overlay);
@@ -15453,12 +15886,12 @@ async function openChangeBooking(orderId, listingName){
     aervaTransferForm(body, o, orderId, { esc, inr, field, auth });
     return;
   }
-  if(o.canTransfer && !openChangeBooking._chose){
+  if(o.canTransfer && !chose){
     body.innerHTML = `<p class="step-help">What would you like to do?</p>
       <button type="button" class="btn solid" id="chPickChange" style="width:100%; margin:6px 0;">Change dates, guests or add-ons</button>
       <button type="button" class="btn" id="chPickMove" style="width:100%; margin:6px 0;">Move nights to another property of this host</button>`;
     body.querySelector('#chPickMove').addEventListener('click', () => aervaTransferForm(body, o, orderId, { esc, inr, field, auth }));
-    body.querySelector('#chPickChange').addEventListener('click', () => { overlay.remove(); openChangeBooking._chose = true; try { openChangeBooking(orderId, listingName); } finally { openChangeBooking._chose = false; } });
+    body.querySelector('#chPickChange').addEventListener('click', () => { overlay.remove(); openChangeBooking(orderId, listingName, true); });
     return;
   }
   const num = (id, label, value, min, max) => `<label class="payout-label" for="${id}">${label}</label>
@@ -15468,7 +15901,7 @@ async function openChangeBooking(orderId, listingName){
   body.innerHTML = `
     ${bookStep(1, isStay ? 'New dates' : 'New date')}
     ${o.kind === 'pair' ? '<p class="step-help">This experience includes a stay. Both move together.</p>' : ''}
-    ${o.started ? `<p class="step-help">${isStay ? `You have checked in, so check-in stays ${esc(o.current.arrival)}. You can bring check-out forward: the check-in night stays part of your stay. If your host agrees, the nights you no longer stay come back to you as Aerva credit, which you can use on another booking or have refunded.` : 'This has already started, so the date cannot move. You can change the number of guests.'}${o.windowEndsLabel ? ` Changes during a stay can be asked for until ${esc(o.windowEndsLabel)} (the property’s local time).` : ''}</p>` : ''}
+    ${o.started ? `<p class="step-help">${isStay ? `You have checked in, so check-in stays ${esc(new Date(o.current.arrival + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }))}. You can bring check-out forward: the check-in night stays part of your stay. If your host agrees, the nights you no longer stay come back to you as Aerva credit, which you can use on another booking or have refunded.` : 'This has already started, so the date cannot move. You can change the number of guests.'}${o.windowEndsLabel ? ` Changes during a stay can be asked for until ${esc(o.windowEndsLabel)} (the property’s local time).` : ''}</p>` : ''}
     <label class="payout-label" for="chIn">${isStay ? 'Check-in' : 'Date'}</label>
     <input id="chIn" type="date" value="${esc(o.current.arrival)}" min="${esc(o.today)}" ${o.started ? 'disabled' : ''} style="${field}">
     ${isStay ? `<label class="payout-label" for="chOut">Check-out</label>
@@ -15491,6 +15924,11 @@ async function openChangeBooking(orderId, listingName){
   });
   const post = (payload) => fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, auth), body: JSON.stringify(payload) })
     .then(async r => ({ ok: r.ok, d: await r.json().catch(() => ({})) }));
+  // An edit after pricing makes the shown quote stale: clear it so the
+  // request sent is always the one the guest sees priced.
+  body.querySelectorAll('input, select').forEach(el => el.addEventListener('change', () => {
+    overlay.querySelector('#chResult').innerHTML = ''; overlay.querySelector('#chMsg').textContent = '';
+  }));
   overlay.querySelector('#chQuote').addEventListener('click', async () => {
     const msg = overlay.querySelector('#chMsg'); const out = overlay.querySelector('#chResult');
     msg.textContent = ''; out.innerHTML = '';
@@ -15507,7 +15945,7 @@ async function openChangeBooking(orderId, listingName){
       ${line('Current total', inr(d.oldTotal))}
       ${line('New total', '<strong>' + inr(d.newTotal) + '</strong>')}
       <div class="sum-row" style="font-weight:600; font-size:18px; padding-top:10px;"><span>${diffText}</span><span></span></div>
-      <p class="pay-note" style="text-align:left;">Your host is asked first. ${d.difference > 0 ? 'Once they accept, you pay the difference to confirm.' : d.difference < 0 ? (kept > 0 ? `Once they accept, the difference is refunded, except ${inr(kept)} that was paid by coupon — a coupon is returned only when the host cancels. Aerva\u2019s service fee stays as charged.` : 'Once they accept, the difference is refunded. Aerva\u2019s service fee stays as charged.') : ''} Until then your booking stays as it is.</p>
+      <p class="pay-note" style="text-align:left;">Your host is asked first. ${d.difference > 0 ? 'Once they accept, you pay the difference to confirm.' : d.difference < 0 ? (kept > 0 ? `Once they accept, the difference ${o.started ? 'comes back as Aerva credit' : 'is refunded'}, except ${inr(kept)} that was paid by coupon — a coupon is returned only when the host cancels. Aerva\u2019s service fee stays as charged.` : `Once they accept, the difference ${o.started ? 'comes back as Aerva credit (use it on another booking, or have it refunded from My Bookings)' : 'is refunded'}. Aerva\u2019s service fee stays as charged.`) : ''} Until then your booking stays as it is.</p>
       ${d.summary ? '<button type="button" class="btn solid" id="chSend" style="width:100%; margin-top:10px;">Send change request to host</button>' : ''}`;
     const send = out.querySelector('#chSend');
     if(send) send.addEventListener('click', async () => {
@@ -15568,7 +16006,7 @@ function aervaTransferForm(body, o, orderId, { esc, inr, field, auth }){
         <input type="radio" name="trTarget" value="${i}"${i === 0 ? ' checked' : ''}>
         ${t.photo ? `<img src="${esc(t.photo)}" alt="" style="width:64px; height:48px; object-fit:cover; border-radius:6px;">` : ''}
         <span style="flex:1;"><strong>${esc(t.name)}</strong>${t.city ? `<br><span class="payout-muted">${esc(t.city)}</span>` : ''}<br><span class="payout-muted">${esc(t.cancellationPolicy)} cancellation policy</span></span>
-        <span style="white-space:nowrap;">${inr(t.priceForNights)}</span></label>`).join('')}
+        <span style="white-space:nowrap; text-align:right;">${inr(t.priceForNights)}<br><span class="payout-muted" style="font-size:12px;">incl. GST, fee, deposit</span></span></label>`).join('')}
       <button type="button" class="btn solid" id="trQuote" style="width:100%; margin-top:10px;">See the payment summary</button>`;
     box.querySelector('#trQuote').addEventListener('click', async () => {
       const t = d.targets[Number((box.querySelector('input[name=trTarget]:checked') || {}).value) || 0];
@@ -15633,6 +16071,94 @@ async function aervaGuestSetupBanner(container, token){
   }catch(e){ /* the bookings still load */ }
 }
 
+// ---- Aerva's check-in promise (api/_checkin-promise.js) ----
+// On the booking card: where a report on arrival stands, the places Aerva
+// offers (accept one, or decline all for a full refund), the question
+// "Is this place real and as listed?", and — on a booking Aerva moved —
+// one line saying so. Everything server-side decides; this only shows it.
+function aervaCheckinPromiseHtml(b){
+  const esc = escapeMessageHtml;
+  const money = (n) => moneyBoth(n);
+  const box = 'margin:10px 0 0; padding:12px 14px; border:1px solid #e3d9cb; border-radius:10px; background:#fbf8f3; font-size:14px; line-height:1.55;';
+  let html = '';
+  const c = b.checkin;
+  if(c){
+    const ch = b.open_change;
+    const paying = ch && ch.status === 'awaiting_payment' && Number(ch.difference) > 0;
+    html += `<div class="cp-box" style="${box}" onclick="event.stopPropagation()">
+      <strong>Aerva’s check-in promise</strong><br><span>${esc(c.statusText || '')}</span>${c.note ? `<br><span style="opacity:0.8;">${esc(c.note)}</span>` : ''}`;
+    if(c.offers && c.offers.length){
+      html += `<p style="margin:8px 0 6px;">Choose a place for ${esc(new Date(c.offers[0].from + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }))} – ${esc(new Date(c.offers[0].to + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }))}. You pay only the difference:</p>`;
+      html += c.offers.map(o => `<div class="cp-offer" style="display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; justify-content:space-between; padding:10px 0; border-top:1px solid #eadfcf;">
+          <div style="flex:1 1 220px; min-width:0;"><strong>${esc(o.name)}</strong>${o.distanceKm != null ? ` <span style="opacity:0.7;">· ${esc(String(o.distanceKm))} km away</span>` : ''}<br>
+            <span style="font-size:13px; opacity:0.85;">${o.nights} night${o.nights === 1 ? '' : 's'}: stay ${money(o.subtotal)} · GST ${money(o.gst)} · service fee ${money(o.fee)}${o.deposit ? ` · refundable deposit ${money(o.deposit)}` : ''} = <strong>${money(o.total)}</strong></span><br>
+            <span style="font-size:13px;">You paid ${money(o.oldTotal)} · ${o.difference > 0 ? `<strong>you pay ${money(o.difference)} more</strong>` : o.difference < 0 ? `<strong>${money(-o.difference)} back to you as Aerva credit</strong>` : '<strong>nothing more to pay</strong>'}</span></div>
+          ${paying ? '' : `<button type="button" class="btn solid" data-cp-accept="${b.id}" data-cp-option="${Number(o.n)}" style="min-height:44px; padding:10px 18px;">Choose this place</button>`}
+        </div>`).join('');
+      if(paying) html += `<p style="margin:8px 0;"><button type="button" class="btn solid" data-pay-change="${ch.id}" style="min-height:44px; padding:10px 18px;">Pay ${money(ch.difference)} to confirm your new place</button></p>`;
+    }
+    if(c.canDecline) html += `<p style="margin:8px 0 0;"><button type="button" class="filter-clear" data-cp-decline="${b.id}">${c.offers && c.offers.length ? 'None of these — refund me in full' : 'Refund me in full instead'}</button> <span style="font-size:12.5px; opacity:0.75;">Everything you paid comes back, including Aerva’s service fee.</span></p>`;
+    html += '<p class="cp-msg" style="color:#a3402f; margin:6px 0 0;"></p></div>';
+  }
+  if(b.can_confirm_real){
+    html += `<div class="cp-box" style="${box}" onclick="event.stopPropagation()"><strong>Is this place real and as listed?</strong>
+      <p style="margin:4px 0 8px;">Help other guests: confirm it, or use Report a problem (with a photo) if it does not exist, or is not as listed or not available.</p>
+      <button type="button" class="btn solid" data-cp-real="${b.id}" style="min-height:44px; padding:10px 18px;">This place is real and as listed</button><p class="cp-msg" style="color:#a3402f; margin:6px 0 0;"></p></div>`;
+  } else if(b.confirmed_real && b.status === 'paid'){
+    html += '<p style="font-size:13px; opacity:0.75; margin:8px 0 0;">You confirmed this place is real and as listed. Thank you.</p>';
+  }
+  if(b.checkin_summary){
+    const s = b.checkin_summary;
+    html += `<p style="font-size:13.5px; margin:8px 0 0;">Booked by Aerva under its check-in promise (instead of ${esc(s.from)}). You paid ${money(s.originalTotal)}${s.difference > 0 ? ` + ${money(s.difference)}` : s.difference < 0 ? ` − ${money(-s.difference)} back as Aerva credit` : ''} = <strong>${money(s.total)}</strong>.</p>`;
+  }
+  return html;
+}
+function aervaBindCheckinPromise(container, bookings){
+  const post = async (body) => {
+    const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(d.error || 'Could not do this right now.');
+    return d;
+  };
+  const say = (btn, t) => { const m = btn.closest('.cp-box') && btn.closest('.cp-box').querySelector('.cp-msg'); if(m) m.textContent = t; };
+  container.querySelectorAll('[data-cp-accept]').forEach(btn => btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if(!confirm('Choose this place? Your booking moves there; the price difference is shown above.')) return;
+    btn.disabled = true;
+    try{
+      const d = await post({ mode: 'acceptRebook', orderId: Number(btn.dataset.cpAccept), option: Number(btn.dataset.cpOption) });
+      if(d.pay > 0 && d.changeId){ aervaPayChange(Number(d.changeId), btn); return; }
+      loadMyBookings();
+    }catch(err){ say(btn, err.message); btn.disabled = false; }
+  }));
+  container.querySelectorAll('[data-cp-decline]').forEach(btn => btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if(!confirm('Have everything you paid refunded in full (price, GST, deposit and Aerva’s service fee)? The booking is then closed.')) return;
+    btn.disabled = true;
+    try{ await post({ mode: 'declineRebook', orderId: Number(btn.dataset.cpDecline) }); loadMyBookings(); }
+    catch(err){ say(btn, err.message); btn.disabled = false; }
+  }));
+  container.querySelectorAll('[data-cp-real]').forEach(btn => btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    btn.disabled = true;
+    try{ await post({ mode: 'confirmStay', orderId: Number(btn.dataset.cpReal) }); loadMyBookings(); }
+    catch(err){ say(btn, err.message); btn.disabled = false; }
+  }));
+}
+// The booking summary page: one amount for a booking Aerva moved.
+function aervaPromiseSummaryHtml(b, inr){
+  const s = b.checkin_summary;
+  if(!s) return '';
+  const esc = escapeMessageHtml;
+  return `<div class="bk-card" style="margin:0 0 16px;">
+    <h3>Aerva’s check-in promise</h3>
+    <p class="bk-note" style="margin:0 0 8px;">Your original booking (${esc(s.from)}${s.fromCode ? `, ${esc(s.fromCode)}` : ''}) could not go ahead as listed, so Aerva booked you here instead. It is one booking:</p>
+    <div class="bk-row"><span>Paid for your original booking</span><span>${inr(s.originalTotal)}</span></div>
+    ${s.difference ? `<div class="bk-row"><span>${s.difference > 0 ? 'Difference you paid' : 'Difference back to you as Aerva credit'}</span><span>${s.difference > 0 ? '+' : '−'}${inr(Math.abs(s.difference))}</span></div>` : ''}
+    <div class="bk-row bk-total"><span>Your booking now</span><span>${inr(s.total)}</span></div>
+  </div>`;
+}
+
 // ---- Your booking at a glance (owner, 9 Nov 2026: no surprises) ----
 // What the guest can still do on this booking, and until when — from the
 // booking's own policy, check-in date and what the server says is open.
@@ -15647,16 +16173,26 @@ function aervaBookingGlance(b){
   if(b.transferred){
     items.push('This booking was transferred: it can no longer be changed or cancelled. For any problem, contact Aerva Support; Aerva decides.');
   } else {
+    // The free cancellation add-on: a full refund until 48 hours before check-in.
+    if(Number(b.free_cancel_fee) > 0 && b.free_cancel_until_label && b.can_cancel_request !== false){
+      items.push(b.free_cancel_active
+        ? `Full refund until ${b.free_cancel_until_label} (property’s time): you added free cancellation. Cancel before then and the booking price, GST and deposit come back at once — no wait for your host. The add-on and the service fee are not refunded. After that, the refund policy below applies.`
+        : `Free cancellation ended ${b.free_cancel_until_label} (property’s time); the refund policy below applies. The add-on is not refunded.`);
+    }
     if(b.can_cancel_request !== false){
       items.push(policy === 'firm'
         ? `Cancel (Firm): full refund of the price and GST until ${minus(30)}; 50% until ${minus(5)}; after that your host decides. Service fee not refunded; deposit always refunded.`
         : `Cancel (Flexible): full refund until ${minus(30)}; 80% until ${minus(10)}; 50% until ${minus(5)}; 30% until ${minus(2)}; after that your host decides. Service fee not refunded; deposit always refunded.`);
-      items.push('Emergency (with proof): your host decides; if they decline, ask Aerva to review within 24 hours.');
+      // The brackets end at the check-in time on that date, not at midnight
+      // (_booking-rules.js checkInMomentMs; 2:00 PM when the listing has none).
+      items[items.length - 1] = items[items.length - 1].replace('. Service fee', ` (each date until ${b.check_in_time || '2:00 PM'}, the check-in time, property’s time). Service fee`);
+      items.push('Natural disaster or government order (with proof), any time before check-in: Aerva decides. If approved, everything you paid becomes Aerva credit for new dates — it does not expire, but it can’t be refunded. If not, the booking stands.');
     } else {
       items.push('Your stay has started: it can no longer be cancelled.');
     }
     if(b.can_change !== false) items.push(`Change dates, guests or add-ons, or move nights to another property of this host: until 10 AM on ${next} (the property’s time).`);
-    items.push(`Report a problem during the stay: by 10 AM on ${next}, with photos.`);
+    if(!b.stay_window_closed) items.push(`Report a problem during the stay: by 10 AM on ${next}, with photos.`);
+    items.push('Aerva’s check-in promise: if on arrival the place does not exist, or is not as listed or not available, report it at once (with a photo). Aerva moves you to another place (you pay only any difference) or refunds everything, including the service fee.');
   }
   return `<details class="booking-glance" style="margin:8px 0 0; font-size:13.5px;" onclick="event.stopPropagation()">
     <summary style="cursor:pointer; color:var(--gold-text);">Your booking at a glance</summary>
@@ -15694,9 +16230,9 @@ async function aervaLoadNearby(root){
       <button type="button" class="filter-clear nb-tab" data-tab="things" style="font-weight:600;">Things to do</button>
       <button type="button" class="filter-clear nb-tab" data-tab="around">Getting around</button>
     </div>
-    <div class="nb-pane" data-pane="things">${(d.things || []).length ? '<ul style="list-style:none; margin:0; padding:0;">' + d.things.map(p => row(p, 'thing', 'driving')).join('') + '</ul>' : '<p style="font-size:13px; opacity:0.7;">Nothing listed nearby yet.</p>'}</div>
+    <div class="nb-pane" data-pane="things">${(d.things || []).length ? '<ul style="list-style:none; margin:0; padding:0;">' + d.things.map(p => row(p, 'thing', 'driving')).join('') + '</ul>' : `<p style="font-size:13px; opacity:0.7;">${d.unavailable ? 'Nearby places could not be loaded just now. Please try again later.' : 'Nothing listed nearby yet.'}</p>`}</div>
     <div class="nb-pane" data-pane="around" style="display:none;">
-      ${transportRows.length ? '<ul style="list-style:none; margin:0; padding:0;">' + transportRows.map(p => row(p, 'transport', p.label === 'Airport' || /Airport/.test(p.label) ? 'driving' : 'transit')).join('') + '</ul>' : '<p style="font-size:13px; opacity:0.7;">No stations listed nearby yet.</p>'}
+      ${transportRows.length ? '<ul style="list-style:none; margin:0; padding:0;">' + transportRows.map(p => row(p, 'transport', p.label === 'Airport' || /Airport/.test(p.label) ? 'driving' : 'transit')).join('') + '</ul>' : `<p style="font-size:13px; opacity:0.7;">${d.unavailable ? 'Stations nearby could not be loaded just now. Please try again later.' : 'No stations listed nearby yet.'}</p>`}
       ${(d.taxiApps || []).length ? `<p style="font-size:14px; margin:10px 0 0;">Book a taxi: ${d.taxiApps.map(a => `<a href="#" data-tp-link="${esc(a.link)}" data-tp-name="${esc(a.name)}" data-tp-kind="taxi" style="color:var(--gold-text);">${esc(a.name)}</a>`).join(' · ')}</p>` : ''}
     </div>
     <p style="font-size:12px; opacity:0.65; margin:10px 0 0; line-height:1.5;">These are third-party places and services, shown for information only. Aerva does not own, check, book or run them and is not responsible for them. ${esc(d.attribution || '')}</p>`;
@@ -15721,6 +16257,7 @@ function aervaOpenThirdParty({ link, name, kind, listingId }){
     <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:22px; margin:4px 0 8px;">You are leaving Aerva</h2>
     <p style="font-size:15px; margin:0 0 10px;"><strong>${esc(name)}</strong> opens on <strong>${esc(host)}</strong>, a third-party website.</p>
     <ul style="font-size:14px; line-height:1.6; padding-left:18px; margin:0 0 12px;">
+      ${kind === 'host_recommendation' ? '<li>This is your host’s own suggestion. Aerva has not checked or endorsed it.</li>' : ''}
       <li>Aerva does not own, check, book, run or recommend this place, activity, transport or service, and is not part of any arrangement you make with it.</li>
       <li>Aerva is not responsible for anything that happens there or through it — including fraud, scams, violence, injury, loss, damage, delays, prices or the accuracy of what is shown.</li>
       <li>Any booking, payment, ride or visit is between you and that provider, under their terms. Please take care: check reviews, pay only through official channels, and call 112 in an emergency.</li>
@@ -15729,10 +16266,18 @@ function aervaOpenThirdParty({ link, name, kind, listingId }){
     <button type="button" class="btn solid" id="tpGo" style="width:100%; margin-top:14px;">Continue to ${esc(host)}</button>
     <p id="tpMsg" style="font-size:13px; color:#a3402f; margin:8px 0 0;"></p>
   </div>`;
-  const close = () => overlay.remove();
+  // Keyboard: focus moves into the notice (it is added at the end of the
+  // page, so Tab from the link would otherwise walk the page behind it),
+  // Escape closes only the notice, and focus goes back to the link.
+  const opener = document.activeElement;
+  const onKey = (e) => { if(e.key === 'Escape'){ e.preventDefault(); e.stopImmediatePropagation(); close(); } };
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); if(opener && opener.focus && document.contains(opener)) opener.focus(); };
   overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
   overlay.querySelector('.payout-close').addEventListener('click', close);
   document.body.appendChild(overlay);
+  overlay.querySelector('.payout-sheet').setAttribute('aria-modal', 'true');
+  document.addEventListener('keydown', onKey, true);
+  overlay.querySelector('#tpAgree').focus();
   overlay.querySelector('#tpGo').addEventListener('click', () => {
     if(!overlay.querySelector('#tpAgree').checked){ overlay.querySelector('#tpMsg').textContent = 'Please tick the box to continue.'; return; }
     const q = new URLSearchParams({ nearbyConsent: '1', listing: String(listingId || ''), item: String(name || ''), link: String(link), kind: String(kind || '') });
@@ -15740,6 +16285,90 @@ function aervaOpenThirdParty({ link, name, kind, listingId }){
     fetch(SUITES_API_BASE + '/api/get-listings?' + q.toString(), { headers }).catch(() => {});
     window.open(link, '_blank', 'noopener,noreferrer');
     close();
+  });
+}
+
+// ---- What's special here / Recommended by your host (owner, 9 Nov 2026) ----
+// The host's own words from the listing (api/_listing-special.js). Every
+// piece of text is escaped. A recommendation's link is a third party, so it
+// opens only through the "You are leaving Aerva" notice (aervaOpenThirdParty),
+// recorded with kind 'host_recommendation'.
+function aervaSpecialHereHtml(listing){
+  const esc = escapeMessageHtml;
+  const items = (Array.isArray(listing && listing.special_highlights) ? listing.special_highlights : []).map(t => String(t || '').trim()).filter(Boolean).slice(0, 5);
+  const story = String((listing && listing.special_story) || '').trim();
+  if(!items.length && !story) return '';
+  return `<section class="special-here" aria-labelledby="specialHere${Number(listing.id)}">
+    <h2 class="special-here-title" id="specialHere${Number(listing.id)}">What’s special here</h2>
+    ${items.length ? `<ul class="special-here-list">${items.map(t => `<li><span class="special-here-mark" aria-hidden="true">✦</span><span>${esc(t)}</span></li>`).join('')}</ul>` : ''}
+    ${story ? `<p class="special-here-story">${esc(story)}</p>` : ''}
+  </section>`;
+}
+const AERVA_REC_KINDS = [['things_to_do', 'Things to do'], ['food_drink', 'Food & drink'], ['experience', 'Experience'], ['shopping', 'Shopping'], ['getting_around', 'Getting around'], ['other', 'Other']];
+function aervaHostRecsHtml(listing){
+  const esc = escapeMessageHtml;
+  const recs = (Array.isArray(listing && listing.host_recommendations) ? listing.host_recommendations : []).filter(r => r && String(r.name || '').trim()).slice(0, 10);
+  if(!recs.length) return '';
+  const groups = AERVA_REC_KINDS.map(([k, label]) => ({ label, items: recs.filter(r => (AERVA_REC_KINDS.some(x => x[0] === r.kind) ? r.kind : 'other') === k) })).filter(g => g.items.length);
+  const card = (r) => {
+    const link = /^https?:\/\//i.test(String(r.link || '')) ? String(r.link) : '';
+    let host = '';
+    if(link){ try { host = new URL(link).hostname.replace(/^www\./, ''); } catch (e) { host = ''; } }
+    return `<li class="host-rec">
+      <div class="host-rec-top"><strong>${esc(r.name)}</strong>${r.distance ? `<span class="host-rec-dist">${esc(r.distance)}</span>` : ''}</div>
+      ${r.note ? `<p class="host-rec-note">${esc(r.note)}</p>` : ''}
+      ${link && host ? `<a href="#" class="host-rec-link" data-hrec-link="${esc(link)}" data-hrec-name="${esc(r.name)}" data-hrec-listing="${Number(listing.id)}">Visit ${esc(host)} <span aria-hidden="true">↗</span></a>` : ''}
+    </li>`;
+  };
+  return `<section class="host-recs" aria-labelledby="hostRecs${Number(listing.id)}">
+    <div class="listing-modal-section-title" style="margin-top:22px;" id="hostRecs${Number(listing.id)}">Recommended by your host</div>
+    ${groups.map(g => `<h3 class="host-recs-kind">${esc(g.label)}</h3><ul class="host-recs-list">${g.items.map(card).join('')}</ul>`).join('')}
+    <p class="host-recs-note">Your host’s own suggestions. Aerva has not checked them and does not endorse or run them.</p>
+  </section>`;
+}
+document.addEventListener('click', (e) => {
+  const a = e.target && e.target.closest ? e.target.closest('[data-hrec-link]') : null;
+  if(!a) return;
+  e.preventDefault();
+  aervaOpenThirdParty({ link: a.dataset.hrecLink, name: a.dataset.hrecName, kind: 'host_recommendation', listingId: a.dataset.hrecListing });
+});
+
+// ---- "Make more of your stay": Aerva experiences the host suggests ----
+// Shown only while booking that stay (under the price summary), on the
+// booking confirmation and in My Bookings — never on the listing page.
+// get-listings ?suggestedFor= returns only experiences still live. These
+// are Aerva's own pages, so no third-party notice; they open in a new tab
+// so the booking in progress is not lost. (The experience page does not
+// take a date from its link yet, so the stay's dates are not passed.)
+const aervaSuggestedCache = {};
+function aervaSuggestedExperiences(listingId){
+  const id = Number(listingId) || 0;
+  if(!aervaSuggestedCache[id]){
+    aervaSuggestedCache[id] = fetch(SUITES_API_BASE + '/api/get-listings?suggestedFor=' + id)
+      .then(r => r.ok ? r.json() : { experiences: [] }).then(d => Array.isArray(d.experiences) ? d.experiences : [])
+      .catch(() => { delete aervaSuggestedCache[id]; return []; });
+  }
+  return aervaSuggestedCache[id];
+}
+function aervaLoadSuggestedExperiences(root){
+  if(!root || !root.querySelectorAll) return;
+  const esc = escapeMessageHtml;
+  root.querySelectorAll('.sx-slot[data-suggest-exp-for]').forEach(slot => {
+    if(slot.dataset.loaded) return;
+    slot.dataset.loaded = '1';
+    aervaSuggestedExperiences(slot.dataset.suggestExpFor).then(list => {
+      if(!list.length){ slot.innerHTML = ''; return; }
+      const dur = (e) => e.durationDays && e.durationDays > 1 ? `${e.durationDays} days` : e.durationHours ? `${Number(e.durationHours)} hour${Number(e.durationHours) === 1 ? '' : 's'}` : '';
+      // guestPrice returns trusted markup (the guest's currency); everything else is escaped.
+      const price = (e) => e.price != null && Number.isFinite(Number(e.price)) ? (typeof guestPrice === 'function' ? guestPrice(Number(e.price)) : '₹' + Math.round(Number(e.price)).toLocaleString('en-IN')) + (e.priceUnit === 'per_person' ? ' / person' : '') : '';
+      slot.innerHTML = `<div class="sx-box">
+        <div class="sx-title">Make more of your stay — experiences on Aerva</div>
+        <div class="sx-list">${list.map(e => `<a class="sx-card" href="index.html?experience=${Number(e.id)}" target="_blank" rel="noopener">
+          ${e.photo ? `<img src="${esc(e.photo)}" alt="" loading="lazy">` : '<span class="sx-noimg" aria-hidden="true"></span>'}
+          <span class="sx-text"><span class="sx-name">${esc(e.name)}</span><span class="sx-meta">${[price(e), esc(dur(e))].filter(Boolean).join(' · ')}</span></span>
+        </a>`).join('')}</div>
+      </div>`;
+    });
   });
 }
 
@@ -15815,7 +16444,11 @@ async function openPolicyCancel(orderId, listingName){
     <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
     <div id="pcBody"><p class="payout-muted">Loading…</p></div>
   </div>`;
-  const close = () => overlay.remove();
+  // Escape closes the sheet, and focus starts inside it (keyboard / screen readers).
+  const onEsc = (e) => { if(e.key === 'Escape' && overlay === [...document.querySelectorAll('.payout-overlay')].pop()) close(); };
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onEsc); };
+  document.addEventListener('keydown', onEsc);
+  setTimeout(() => { const b = overlay.querySelector('.payout-close'); if(b && overlay.isConnected) b.focus(); }, 0);
   overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
   overlay.querySelector('.payout-close').addEventListener('click', close);
   document.body.appendChild(overlay);
@@ -15830,31 +16463,43 @@ async function openPolicyCancel(orderId, listingName){
   const line = (label, value) => `<div class="payout-line"><span>${esc(label)}</span><span>${value}</span></div>`;
   const planText = () => {
     const reason = overlay.querySelector('#pcReason').value;
-    if(reason !== 'change_of_plans') return '<p class="payout-muted" style="margin:8px 0;">If your host accepts, the booking price, GST and deposit are refunded in full, and Aerva\u2019s service fee comes back as Aerva credit because you attach proof. Less than a day before check-in your host may keep 25% or 50%. If your host declines, there is no refund \u2014 but within 24 hours you can ask Aerva to review your proof; Aerva\u2019s decision is final.' + (q.couponLost || (q.ifFullRefund && q.ifFullRefund.couponLost) ? ' Any part paid by coupon is not returned \u2014 a coupon comes back only when the host cancels.' : '') + '</p>';
+    if(reason !== 'change_of_plans'){
+      // A natural disaster or government order: Aerva decides (owner, 10 Nov 2026).
+      const nd = q.naturalDisaster || {};
+      return '<p class="payout-muted" style="margin:8px 0;">Aerva checks your proof and decides \u2014 your host can\u2019t decline it. If Aerva approves, everything you paid (booking price, GST, deposit and Aerva\u2019s service fee' + (q.freeCancel ? ', and the free cancellation add-on' : '') + ') becomes <strong>Aerva credit for new dates</strong>: it does not expire, but it can\u2019t be refunded. If not, nothing changes and your booking stands. Aerva\u2019s decision is final.</p>'
+        + (nd.credit ? line('Aerva credit if approved', '<strong>' + inr(nd.credit) + '</strong>') : '') + (nd.coupon ? line('Back as a coupon (the part paid by coupon)', inr(nd.coupon)) : '') + (nd.cash ? line('Refunded to each payer (a group booking)', inr(nd.cash)) : '');
+    }
     if(!q.allowed) return `<p class="payout-muted" style="margin:8px 0;">${esc(q.error || '')}</p>`;
-    if(q.hostDecides) return `<p class="payout-muted" style="margin:8px 0;">Your host decides the refund.</p>${line('Deposit refunded', inr(q.ifNoRefund.deposit))}${line('Aerva service fee (non-refundable)', inr(q.ifNoRefund.feeKept))}`;
-    return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
+    if(q.hostDecides) return `<p class="payout-muted" style="margin:8px 0;">Your host decides the refund.</p>${line('Deposit refunded', inr(q.ifNoRefund.deposit))}${line('Aerva service fee (non-refundable)', inr(q.ifNoRefund.feeKept))}${q.ifNoRefund.addOnKept ? line('Free cancellation add-on (not refunded; its window has passed)', inr(q.ifNoRefund.addOnKept)) : ''}`;
+    // Free cancellation add-on, still in its window: cancelled at once, no host answer.
+    if(q.instant) return `<p class="payout-muted" style="margin:8px 0;">You added free cancellation, and it is still before ${esc((q.freeCancel || {}).untilLabel || '')} (the property’s time): your booking is cancelled at once, with no wait for your host.</p>${line('You get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (non-refundable)', inr(q.addOnKept)) : ''}`;
+    return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (not refunded; its window has passed)', inr(q.addOnKept)) : ''}`;
   };
   body.innerHTML = `<label class="payout-label" for="pcReason">Reason</label>
     <select id="pcReason" style="width:100%; padding:11px; margin:6px 0 10px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;">
       <option value="change_of_plans">Change of plans</option>
-      <option value="emergency">Medical or family emergency</option>
-      <option value="life_threatening">Life-threatening situation</option>
-      <option value="environmental">Environmental hazard (flood, fire, landslide or similar)</option>
-      <option value="travel_restriction">Government order or travel restriction</option>
+      <option value="environmental">Natural disaster (flood, cyclone, earthquake, landslide, fire)</option>
+      <option value="travel_restriction">Government order or travel restriction (lockdown, road closed by authorities)</option>
     </select>
     <div id="pcPlan"></div>
     <div id="pcProofWrap" style="display:none;">
-      <label class="payout-label" for="pcProof">Proof of the emergency (required)</label>
-      <p class="payout-muted" style="margin:2px 0 6px; font-size:13px;">For example a medical note, a government order, or a photo or news report of the hazard. Photos or PDF, up to 5. Only your host and Aerva see it.</p>
+      <label class="payout-label" for="pcProof">Proof (required)</label>
+      <p class="payout-muted" style="margin:2px 0 6px; font-size:13px;">For example a photo or news report of the disaster, or the official order or notice. Photos or PDF, up to 5. Only your host and Aerva see it.</p>
       <input id="pcProof" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" style="margin:0 0 12px; font-size:15px;">
     </div>
-    <label class="payout-label" for="pcNote">Message to your host (optional)</label>
+    <label class="payout-label" for="pcNote" id="pcNoteLabel">Message to your host (optional)</label>
     <textarea id="pcNote" rows="3" maxlength="800" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;"></textarea>
     <button type="button" class="btn" id="pcGo" style="width:100%;">Send request to host</button>
     <p id="pcMsg" class="payout-muted" style="margin-top:10px;"></p>`;
   const plan = overlay.querySelector('#pcPlan');
-  const refresh = () => { plan.innerHTML = planText(); overlay.querySelector('#pcProofWrap').style.display = overlay.querySelector('#pcReason').value === 'change_of_plans' ? 'none' : ''; };
+  const refresh = () => {
+    plan.innerHTML = planText();
+    const cop = overlay.querySelector('#pcReason').value === 'change_of_plans';
+    overlay.querySelector('#pcProofWrap').style.display = cop ? 'none' : '';
+    const go = overlay.querySelector('#pcGo');
+    if(go && !go.disabled) go.textContent = cop && q.instant ? 'Cancel now (free cancellation)' : cop ? 'Send request to host' : 'Send to Aerva with proof';
+    const nl = overlay.querySelector('#pcNoteLabel'); if(nl) nl.textContent = cop ? 'Message to your host (optional)' : 'What happened (optional — your host and Aerva see it)';
+  };
   overlay.querySelector('#pcReason').addEventListener('change', refresh);
   refresh();
   overlay.querySelector('#pcGo').addEventListener('click', async () => {
@@ -15862,7 +16507,7 @@ async function openPolicyCancel(orderId, listingName){
     const btn = overlay.querySelector('#pcGo');
     const reasonCode = overlay.querySelector('#pcReason').value;
     const files = [...overlay.querySelector('#pcProof').files].slice(0, 5);
-    if(reasonCode !== 'change_of_plans' && !files.length){ msg.textContent = 'Please attach proof of the emergency.'; return; }
+    if(reasonCode !== 'change_of_plans' && !files.length){ msg.textContent = 'Please attach proof (a photo, a news report, or the official order or notice).'; return; }
     btn.disabled = true; msg.textContent = '';
     try{
       const evidence = files.length ? await aervaUploadFiles(files, 'cancellation-proof') : [];
@@ -15870,55 +16515,633 @@ async function openPolicyCancel(orderId, listingName){
         body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode, details: overlay.querySelector('#pcNote').value.trim(), evidence }) });
       const d = await r.json().catch(() => ({}));
       if(!r.ok){ msg.textContent = d.error || 'Could not send the request.'; btn.disabled = false; return; }
-      body.innerHTML = '<p>Your request has been sent to your host in Messages. We will email you when they answer.</p>';
+      body.innerHTML = d.cancelled
+        ? `<p>Your booking is cancelled. ${inr(d.refundCash || 0)} is refunded to your original payment method${d.creditBack ? `, and ${inr(d.creditBack)} goes back on your Aerva credit` : ''}. Refunds usually arrive in 5–7 working days.</p>`
+        : reasonCode !== 'change_of_plans' ? '<p>Your request and proof have been sent to Aerva. Aerva checks the proof and decides; we will email you. Your host has been told.</p>'
+        : '<p>Your request has been sent to your host in Messages. We will email you when they answer.</p>';
       if(typeof loadMyBookings === 'function') loadMyBookings();
     }catch(err){ msg.textContent = 'Could not send the request. Try again.'; btn.disabled = false; }
   });
 }
 
-// ---- Guest: request a cancellation the host can accept (full refund) ----
-function openCancelRequest(orderId, listingName){
-  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const overlay = document.createElement('div');
-  overlay.className = 'payout-overlay';
-  overlay.innerHTML = `<div class="payout-sheet" role="dialog" aria-label="Request cancellation">
-    <button type="button" class="payout-close" aria-label="Close">×</button>
-    <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Request cancellation</h2>
-    <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}. If your host accepts, you are refunded in full, except Aerva’s service fee.</p>
-    <label class="payout-label" for="crReason">Reason</label>
-    <select id="crReason" style="width:100%; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;">
-      <option value="">Choose a reason</option>
-      <option value="environmental">Environmental hazard (flood, fire, landslide or similar)</option>
-      <option value="life_threatening">Life-threatening situation</option>
-      <option value="emergency">Medical or family emergency</option>
-      <option value="travel_restriction">Government order or travel restriction</option>
-    </select>
-    <label class="payout-label" for="crProof">Proof of the emergency (required)</label>
-    <input id="crProof" type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" style="margin:6px 0 12px; font-size:15px;">
-    <label class="payout-label" for="crDetails">Details for your host</label>
-    <textarea id="crDetails" rows="4" maxlength="800" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;"></textarea>
-    <button type="button" class="btn" id="crSend" style="width:100%;">Send request</button>
-    <p id="crMsg" class="payout-muted" style="margin-top:10px;"></p>
+// =====================================================================
+// Gift bookings and group (split-payment) bookings — owner's rules, 9 Nov 2026
+// (api/_gifts.js, api/_group-bookings.js).
+// =====================================================================
+const AG_ESC = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const AG_API = () => (window.AERVA_API || 'https://aerva-in.vercel.app');
+const AG_INR = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+const AG_DAY = (d) => d ? new Date(String(d).slice(0, 10) + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '';
+const AG_NAME_OK = (v) => !!v && !/\d/.test(v) && /^[\p{L}\p{M} .'’-]+$/u.test(v) && /\p{L}/u.test(v);
+const agToken = () => (typeof guestAuthToken === 'function' ? guestAuthToken() : null);
+async function agFetch(path, opts = {}){
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, agToken() ? { 'Authorization': 'Bearer ' + agToken() } : {}, opts.headers || {});
+  const r = await fetch(AG_API() + path, Object.assign({}, opts, { headers }));
+  const d = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, data: d };
+}
+function agClock(sec){
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(s).padStart(2, '0');
+}
+// Equal shares in whole rupees, remainder on the last places (as the server).
+function agSplit(total, n){
+  const t = Math.round(Number(total) || 0); n = Math.max(1, Math.round(Number(n) || 1));
+  const base = Math.floor(t / n), rem = t - base * n;
+  return Array.from({ length: n }, (_, i) => base + (i >= n - rem ? 1 : 0));
+}
+
+// ---- Checkout: the two options under "Your details" ----
+function aervaBookOptionsHtml(){
+  return `<div class="ag-options" id="listingBookOptions">
+    <label class="ag-opt" id="listingFreeCancelOpt" hidden><input type="checkbox" id="listingFreeCancelToggle">
+      <span><strong id="listingFreeCancelTitle">Free cancellation</strong><em id="listingFreeCancelText">Cancel for a full refund until 48 hours before check-in.</em></span></label>
+    <label class="ag-opt"><input type="checkbox" id="listingGiftToggle">
+      <span><strong>This stay is for someone else</strong><em>Send it as a gift. You pay for and manage the booking; they get the stay details (never the price) and accept it.</em></span></label>
+    <div class="ag-sub" id="listingGiftFields" hidden>
+      <p class="ag-help">Who is staying? Their name as on their government ID — the host checks it at check-in.</p>
+      <div class="ag-grid">
+        <div class="field"><label for="giftFirstName">Their first name <span style="color:#a3402f;">*</span></label><input id="giftFirstName" type="text" autocomplete="off" placeholder="First name"></div>
+        <div class="field"><label for="giftLastName">Their last name <span style="color:#a3402f;">*</span></label><input id="giftLastName" type="text" autocomplete="off" placeholder="Last name"></div>
+      </div>
+      <div class="field" style="margin-top:10px;"><label for="giftEmail">Their email <span style="color:#a3402f;">*</span></label><input id="giftEmail" type="email" autocomplete="off" placeholder="their@email.com"></div>
+      <div class="field" style="margin-top:10px;"><label for="giftPhone">Their mobile <span class="label-hint">(optional — they confirm it when accepting)</span></label><input id="giftPhone" type="tel" autocomplete="off" placeholder="Mobile number"></div>
+      <div class="field" style="margin-top:10px;"><label for="giftMessage">Gift message <span class="label-hint">(optional)</span></label>
+        <textarea id="giftMessage" maxlength="300" rows="3" placeholder="A few words for them"></textarea>
+        <span class="ag-count" id="giftMessageCount">0 / 300</span></div>
+      <p class="ag-help">Contact details in the message are removed, as in Messages.</p>
+    </div>
+    <label class="ag-opt"><input type="checkbox" id="listingSplitToggle">
+      <span><strong>Split the payment with friends</strong><em>Everyone pays for their own place. You pay for yours now; your friends have 2 hours, and the dates are held for your group.</em></span></label>
+    <div class="ag-sub" id="listingSplitFields" hidden>
+      <div class="field"><label for="splitPayNow">Places you pay for now</label><select id="splitPayNow"></select></div>
+      <p class="ag-help" id="splitSummary">Choose your dates and guests to see each place’s share.</p>
+      <p class="ag-help">If not every place is paid in 2 hours, you confirm the booking for the people who paid (priced again for that number of guests) or it is cancelled and everyone is refunded in full. Coupons and Aerva credit cannot be used on a split payment.</p>
+    </div>
   </div>`;
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
-  overlay.querySelector('.payout-close').addEventListener('click', close);
-  document.body.appendChild(overlay);
-  overlay.querySelector('#crSend').addEventListener('click', async () => {
-    const reasonCode = overlay.querySelector('#crReason').value;
-    const msg = overlay.querySelector('#crMsg');
-    if(!reasonCode){ msg.textContent = 'Choose a reason.'; return; }
-    const files = [...overlay.querySelector('#crProof').files].slice(0, 5);
-    if(!files.length){ msg.textContent = 'Please attach proof of the emergency.'; return; }
-    const btn = overlay.querySelector('#crSend'); btn.disabled = true;
-    try{
-      const evidence = await aervaUploadFiles(files, 'cancellation-proof');
-      const res = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
-        body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode, details: overlay.querySelector('#crDetails').value.trim(), evidence }) });
-      const data = await res.json().catch(() => ({}));
-      if(!res.ok){ msg.textContent = data.error || 'Could not send the request.'; btn.disabled = false; return; }
-      close();
-      if(typeof loadMyBookings === 'function') loadMyBookings();
-    }catch(err){ msg.textContent = 'Could not send the request. Try again.'; btn.disabled = false; }
+}
+let agLastSplit = null;
+function aervaRefreshSplit(q){
+  if(q) agLastSplit = q;
+  const sel = document.getElementById('splitPayNow');
+  const sum = document.getElementById('splitSummary');
+  const toggle = document.getElementById('listingSplitToggle');
+  if(!sel || !agLastSplit) return;
+  const n = Math.max(1, Number(agLastSplit.guests) || 1);
+  if(toggle){
+    toggle.disabled = n < 2;
+    toggle.closest('.ag-opt').classList.toggle('is-off', n < 2);
+    if(n < 2 && toggle.checked){ toggle.checked = false; aervaSyncBookOptions(); }
+  }
+  const keep = Number(sel.value) || 1;
+  sel.innerHTML = Array.from({ length: Math.max(1, n - 1) }, (_, i) => `<option value="${i + 1}">${i + 1} place${i ? 's' : ''}${i === 1 ? ' (e.g. a couple)' : ''}</option>`).join('');
+  sel.value = String(Math.min(keep, Math.max(1, n - 1)));
+  const shares = agSplit(agLastSplit.total, n);
+  const k = Number(sel.value) || 1;
+  if(sum) sum.innerHTML = n < 2 ? 'Splitting needs at least 2 guests.'
+    : `${n} places · each <strong>${AG_INR(shares[0])}</strong>${shares[n - 1] !== shares[0] ? ` (last place ${AG_INR(shares[n - 1])})` : ''} — the whole total, including GST, service fee${/deposit/i.test(document.getElementById('listingPriceSummary') ? document.getElementById('listingPriceSummary').textContent : '') ? ' and deposit' : ''}. You pay <strong>${AG_INR(shares.slice(0, k).reduce((a, b) => a + b, 0))}</strong> now.`;
+}
+function aervaSyncBookOptions(e){
+  const gift = document.getElementById('listingGiftToggle'), split = document.getElementById('listingSplitToggle');
+  if(!gift || !split) return;
+  // One or the other: a gift is paid by the buyer alone.
+  if(e && e.target === gift && gift.checked) split.checked = false;
+  if(e && e.target === split && split.checked) gift.checked = false;
+  // Free cancellation is for a stay one guest pays for: not with a split.
+  const fcToggle = document.getElementById('listingFreeCancelToggle');
+  if(fcToggle){
+    if(e && e.target === split && split.checked && fcToggle.checked){ fcToggle.checked = false; aervaRepriceListing(); }
+    if(e && e.target === fcToggle && fcToggle.checked && split.checked){ split.checked = false; }
+    fcToggle.disabled = split.checked;
+    const opt = document.getElementById('listingFreeCancelOpt');
+    if(opt) opt.classList.toggle('is-off', split.checked);
+  }
+  document.getElementById('listingGiftFields').hidden = !gift.checked;
+  document.getElementById('listingSplitFields').hidden = !split.checked;
+  const coupon = document.getElementById('listingCouponField');
+  if(coupon) coupon.style.display = split.checked ? 'none' : '';
+  const btn = document.getElementById('listingBookNowBtn');
+  if(btn && !btn.disabled) btn.textContent = split.checked ? 'Pay for my places' : gift.checked ? 'Continue to payment (gift)' : 'Continue to payment';
+  aervaRefreshSplit();
+}
+// The listing page priced again (the free cancellation add-on changes the total).
+function aervaRepriceListing(){
+  try{
+    const last = typeof updateListingPriceSummary === 'function' ? updateListingPriceSummary._last : null;
+    if(last) updateListingPriceSummary(last.listing, last.arrival, last.departure);
+  }catch(err){}
+}
+// The add-on as the server's quote offers it: shown only when offered
+// (check-in more than 48 hours away), with its price and end, and unticked
+// when it is not.
+function aervaShowFreeCancelOffer(q){
+  const opt = document.getElementById('listingFreeCancelOpt');
+  const t = document.getElementById('listingFreeCancelToggle');
+  if(!opt || !t) return;
+  const st = q && Array.isArray(q.stays) ? q.stays[0] : null;
+  const fc = st && st.freeCancel;
+  if(!fc || !fc.offered){ opt.hidden = true; if(t.checked){ t.checked = false; } return; }
+  opt.hidden = false;
+  document.getElementById('listingFreeCancelTitle').textContent = `Free cancellation (until ${fc.untilLabel}) — ${fmtGuest(fc.fee)} + GST`;
+  document.getElementById('listingFreeCancelText').textContent = `${fc.percent}% of the booking price. Cancel before ${fc.untilLabel} (the property’s time, 48 hours before check-in) for a full refund of the booking price, its GST and any deposit, at once, with no wait for your host. The add-on and Aerva’s service fee are not refunded. After that, the listing’s refund policy applies.`;
+}
+document.addEventListener('change', (e) => {
+  if(e.target && e.target.id === 'listingFreeCancelToggle'){ aervaSyncBookOptions(e); aervaRepriceListing(); }
+  if(e.target && (e.target.id === 'listingGiftToggle' || e.target.id === 'listingSplitToggle')) aervaSyncBookOptions(e);
+  if(e.target && e.target.id === 'splitPayNow') aervaRefreshSplit();
+});
+document.addEventListener('input', (e) => {
+  if(e.target && e.target.id === 'giftMessage'){ const c = document.getElementById('giftMessageCount'); if(c) c.textContent = [...e.target.value].length + ' / 300'; }
+});
+// Reads the options; false (with the message shown) when something is missing.
+function aervaReadBookOptions(errorEl, guests){
+  const out = {};
+  const fail = (m) => { errorEl.textContent = m; errorEl.style.display = 'block'; return false; };
+  const gift = document.getElementById('listingGiftToggle'), split = document.getElementById('listingSplitToggle');
+  if(gift && gift.checked){
+    const v = (id) => (document.getElementById(id) || {}).value || '';
+    const first = v('giftFirstName').trim(), last = v('giftLastName').trim(), email = v('giftEmail').trim(), phone = v('giftPhone').trim(), message = v('giftMessage').trim();
+    if(!AG_NAME_OK(first) || !AG_NAME_OK(last)) return fail('Please enter the recipient’s first and last name as on their government ID: letters, spaces, dots, apostrophes and hyphens only.');
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail('Please enter the recipient’s email address.');
+    if(phone && phone.replace(/\D/g, '').length < 10) return fail('Please enter a valid mobile number for the recipient, or leave it empty.');
+    if([...message].length > 300) return fail('The gift message can be at most 300 characters.');
+    out.gift = { firstName: first, lastName: last, email, phone: phone || undefined, message: message || undefined };
+  }
+  if(split && split.checked){
+    if(!(guests >= 2)) return fail('Splitting the payment needs at least 2 guests.');
+    out.group = { payNow: Number((document.getElementById('splitPayNow') || {}).value) || 1 };
+  }
+  return out;
+}
+
+// ---- After paying for places: back to the group page ----
+function aervaAfterGroupPayment(verifyData){
+  const token = verifyData.group.token;
+  const note = verifyData.verified ? 'paid' : (verifyData.refunded ? 'refunded' : 'pending');
+  try{ sessionStorage.setItem('aerva_group_note', JSON.stringify({ token, note, message: verifyData.message || '' })); }catch(e){}
+  if(new URLSearchParams(window.location.search).get('group') === token && typeof aervaShowGroupPage === 'function') aervaShowGroupPage(token);
+  else window.location.href = 'index.html?group=' + encodeURIComponent(token);
+}
+
+function agShowView(title){
+  if(typeof hideMainViews === 'function') hideMainViews();
+  document.body.classList.remove('showing-hero');
+  const v = document.getElementById('groupGiftView');
+  if(v) v.style.display = 'block';
+  document.title = title + ' — Aerva';
+  window.scrollTo({ top: 0 });
+  return document.getElementById('groupGiftBody');
+}
+function agStayHead(st, sub){
+  return `<div class="ag-stay">
+    ${st.photo ? `<img class="ag-stay-photo" src="${AG_ESC(st.photo)}" alt="">` : ''}
+    <div class="ag-stay-text"><h2 class="ag-title">${AG_ESC(st.name || 'Your stay')}</h2>
+      <p class="ag-meta">${AG_ESC([st.area, st.city].filter(Boolean).join(', '))}</p>
+      <p class="ag-dates">${AG_ESC(AG_DAY(st.arrival))} → ${AG_ESC(AG_DAY(st.departure))}${st.nights ? ` · ${st.nights} night${st.nights === 1 ? '' : 's'}` : ''}${st.guests ? ` · ${st.guests} guest${st.guests === 1 ? '' : 's'}` : ''}</p>
+      ${sub || ''}</div></div>`;
+}
+const agLoginLinks = (back, email, why) => {
+  const next = encodeURIComponent(back);
+  const em = email ? '&email=' + encodeURIComponent(email) : '';
+  return `<div class="ag-actions"><a class="btn solid" href="guest-login.html?next=${next}&mode=login${em}&reason=${why}">Log in</a>
+    <a class="btn" href="guest-login.html?next=${next}&mode=signup${em}&reason=${why}">Create account</a></div>`;
+};
+
+// ---- The group page: index.html?group=<token> ----
+let agGroupTimer = null, agGroupPoll = null, agGroupFlash = null;
+async function aervaShowGroupPage(token){
+  const box = agShowView('Group booking');
+  if(!box) return;
+  clearInterval(agGroupTimer); clearInterval(agGroupPoll);
+  const back = 'index.html?group=' + encodeURIComponent(token);
+  if(!agToken()){
+    box.innerHTML = '<p class="loading">Loading…</p>';
+    const r = await agFetch('/api/get-listings?groupPreview=' + encodeURIComponent(token), { method: 'GET' });
+    if(!r.ok){ box.innerHTML = `<p class="ag-error">${AG_ESC(r.data.error || 'This link is not valid.')}</p>`; return; }
+    const p = r.data;
+    box.innerHTML = `${agStayHead(p.stay)}
+      <div class="ag-card"><p class="ag-lead"><strong>${AG_ESC(p.organiserFirstName || 'Your friend')}</strong> is booking this stay for ${p.places} people and splitting the payment.</p>
+      <p>Each place is <strong>${AG_INR(p.perPlace)}</strong>${p.lastPlace !== p.perPlace ? ` (last place ${AG_INR(p.lastPlace)})` : ''}.</p>
+      ${p.secondsLeft != null ? `<p class="ag-count-big" data-ag-countdown="${p.secondsLeft}">${agClock(p.secondsLeft)} left</p>` : `<p>${p.status === 'open' ? '' : 'This group is no longer taking payments.'}</p>`}
+      <p>To see who has paid and pay for your place, log in or create an Aerva account.</p>
+      ${agLoginLinks(back, '', 'group')}</div>`;
+    agTickCountdowns(box);
+    return;
+  }
+  let note = null;
+  try{ note = JSON.parse(sessionStorage.getItem('aerva_group_note') || 'null'); if(note && note.token === token) sessionStorage.removeItem('aerva_group_note'); else note = null; }catch(e){}
+  const draw = async () => {
+    const r = await agFetch('/api/guest-profile?mode=group&token=' + encodeURIComponent(token), { method: 'GET' });
+    if(!r.ok){ box.innerHTML = `<p class="ag-error">${AG_ESC(r.data.error || 'Could not load this group.')}</p>`; return null; }
+    const g = r.data;
+    // Keep what the person is typing when the status refreshes.
+    const keep = {}; ['agPayFirst', 'agPayLast', 'agPayPhone', 'agPayPlaces'].forEach(id => { const el = document.getElementById(id); if(el) keep[id] = el.value; });
+    const ticked = !!(document.querySelector('#groupGiftBody .agreement-check') || {}).checked;
+    box.innerHTML = agGroupHtml(g, note || agGroupFlash);
+    note = null; agGroupFlash = null;
+    Object.entries(keep).forEach(([id, v]) => { const el = document.getElementById(id); if(el && v) el.value = v; });
+    agBindGroup(box, g, draw);
+    if(ticked){ setTimeout(() => { const c = document.querySelector('#groupGiftBody .agreement-check'); if(c) c.checked = true; }, 0); }
+    agTickCountdowns(box);
+    return g;
+  };
+  box.innerHTML = '<p class="loading">Loading…</p>';
+  const g = await draw();
+  if(g && ['open', 'awaiting_confirm', 'awaiting_gap', 'confirming'].includes(g.status)){
+    agGroupPoll = setInterval(() => { if(!document.querySelector('.razorpay-container') && !(typeof aervaCheckout !== 'undefined' && aervaCheckout)) draw(); }, 10000);
+  }
+}
+function agTickCountdowns(root){
+  clearInterval(agGroupTimer);
+  const els = [...root.querySelectorAll('[data-ag-countdown]')];
+  if(!els.length) return;
+  const ends = els.map(el => Date.now() + Number(el.dataset.agCountdown) * 1000);
+  agGroupTimer = setInterval(() => {
+    els.forEach((el, i) => {
+      const left = Math.max(0, Math.round((ends[i] - Date.now()) / 1000));
+      el.textContent = agClock(left) + (el.dataset.agSuffix != null ? el.dataset.agSuffix : ' left');
+      el.classList.toggle('is-soon', left <= 300);
+    });
+  }, 1000);
+}
+function agGroupHtml(g, note){
+  const pct = Math.round(100 * g.paidPlaces / g.places);
+  const link = location.origin + location.pathname.replace(/[^/]*$/, '') + 'index.html?group=' + encodeURIComponent(g.token);
+  const statusLine = {
+    open: `<span class="ag-pill ag-open">Open</span> <span class="ag-count-big" data-ag-countdown="${g.secondsLeft || 0}">${agClock(g.secondsLeft)} left</span>`,
+    awaiting_confirm: `<span class="ag-pill ag-wait">Waiting for ${g.isOrganiser ? 'you' : AG_ESC(g.organiserFirstName || 'the organiser')}</span> <span class="ag-count-big" data-ag-countdown="${g.confirmSecondsLeft || 0}">${agClock(g.confirmSecondsLeft)} left</span>`,
+    awaiting_gap: `<span class="ag-pill ag-wait">Waiting for ${g.isOrganiser ? 'your payment' : AG_ESC(g.organiserFirstName || 'the organiser')}</span> <span class="ag-count-big" data-ag-countdown="${g.confirmSecondsLeft || 0}">${agClock(g.confirmSecondsLeft)} left</span>`,
+    confirming: '<span class="ag-pill ag-wait">Being confirmed…</span>',
+    confirmed: '<span class="ag-pill ag-done">Confirmed</span>',
+    cancelled: '<span class="ag-pill ag-off">Did not go ahead</span>',
+    failed: '<span class="ag-pill ag-off">Not opened</span>',
+    starting: '<span class="ag-pill ag-wait">Starting…</span>'
+  }[g.status] || '';
+  const noteHtml = note ? `<div class="ag-note ${note.note === 'paid' || note.note === 'added' ? 'is-ok' : 'is-bad'}">${note.note === 'added' ? AG_ESC(note.message) : note.note === 'paid' ? 'Payment received — thank you. Your place is counted.' : AG_ESC(note.message || 'Your payment is being checked.')}</div>` : '';
+  const payers = g.payers.map(p => `<li><span class="ag-dot is-paid"></span>${AG_ESC(p.firstName)}${p.organiser ? ' <em>(organiser)</em>' : ''} — ${p.places} place${p.places === 1 ? '' : 's'}</li>`).join('');
+  const failed = (g.failed || []).map(f => `<li><span class="ag-dot is-failed"></span>${AG_ESC(f.firstName)}: ${AG_ESC(f.note)}</li>`).join('')
+    + (g.rejected || []).map(f => `<li><span class="ag-dot is-failed"></span>${AG_ESC(f.firstName)}: ${AG_ESC(f.note)}</li>`).join('');
+  const share = g.status === 'open' ? `<div class="ag-card"><h3 class="ag-h3">Share with your group</h3>
+      <div class="ag-share"><input id="agShareLink" readonly value="${AG_ESC(link)}">
+      <button type="button" class="btn" id="agCopyLink">Copy link</button>
+      <a class="btn" id="agWhatsApp" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`Join our stay at ${g.stay.name} (${AG_DAY(g.stay.arrival)}): pay for your place (${AG_INR(g.perPlace)}) here — ${link}`)}">Share on WhatsApp</a></div></div>` : '';
+  let pay = '';
+  if(g.status === 'open'){
+    const opts = Array.from({ length: Math.max(0, g.placesLeft) }, (_, i) => `<option value="${i + 1}">${i + 1} place${i ? 's' : ''}</option>`).join('');
+    pay = g.placesLeft > 0 ? `<div class="ag-card" id="agPayCard"><h3 class="ag-h3">${g.myPlaces ? 'Pay for more places' : 'Pay for your place'}</h3>
+      <p class="ag-help">Your name as on your government ID, and a mobile number — saved to your account.</p>
+      <div class="ag-grid"><div class="field"><label for="agPayFirst">First name</label><input id="agPayFirst" autocomplete="given-name"></div>
+      <div class="field"><label for="agPayLast">Last name</label><input id="agPayLast" autocomplete="family-name"></div></div>
+      <div class="ag-grid" style="margin-top:10px;"><div class="field"><label for="agPayPhone">Mobile number</label><input id="agPayPhone" type="tel" autocomplete="tel"></div>
+      <div class="field"><label for="agPayPlaces">Places</label><select id="agPayPlaces">${opts}</select></div></div>
+      <p class="ag-help" id="agPayAmount"></p>
+      <button type="button" class="btn solid" id="groupPayBtn" style="width:100%; margin-top:8px;">Pay</button>
+      <p class="ag-error" id="agPayError" hidden></p></div>`
+      : `<div class="ag-card"><p>Every place is paid for, or being paid for right now. If a payment does not go through, its place opens again in a few minutes.</p></div>`;
+  }
+  // Guests added after confirmation: one payment confirms them on the same booking.
+  if(g.status === 'confirmed' && g.pendingAdd){
+    const pa = g.pendingAdd;
+    pay = pa.beingPaid ? `<div class="ag-card"><p>Someone is paying for the ${pa.guests} added guest${pa.guests === 1 ? '' : 's'} right now. If it does not go through, you can pay in a few minutes.</p></div>`
+      : `<div class="ag-card" id="agPayCard"><h3 class="ag-h3">Pay for the added guest${pa.guests === 1 ? '' : 's'}</h3>
+      <p>${pa.guests} guest${pa.guests === 1 ? ' was' : 's were'} added. The booking goes from ${AG_INR(pa.oldTotal)} to <strong>${AG_INR(pa.newTotal)}</strong>; the extra <strong>${AG_INR(pa.amount)}</strong> confirms ${pa.guests === 1 ? 'them' : 'them'} at once on the same booking. The organiser or anyone with the link can pay it.</p>
+      <p class="ag-help">Your name as on your government ID, and a mobile number — saved to your account.</p>
+      <div class="ag-grid"><div class="field"><label for="agPayFirst">First name</label><input id="agPayFirst" autocomplete="given-name"></div>
+      <div class="field"><label for="agPayLast">Last name</label><input id="agPayLast" autocomplete="family-name"></div></div>
+      <div class="field" style="margin-top:10px;"><label for="agPayPhone">Mobile number</label><input id="agPayPhone" type="tel" autocomplete="tel"></div>
+      <button type="button" class="btn solid" id="groupPayBtn" data-amount="${pa.amount}" style="width:100%; margin-top:8px;">Pay ${AG_INR(pa.amount)}</button>
+      <p class="ag-error" id="agPayError" hidden></p></div>`;
+  }
+  // The balance the paid places owe after a guest was added.
+  const topup = g.topup && g.topup.owed > 0 ? `<div class="ag-card" id="agTopupCard"><h3 class="ag-h3">Balance to pay: ${AG_INR(g.topup.owed)}</h3>
+      <p>A guest was added and the price per place went up, so the places already paid owe ${AG_INR(g.topup.owed)} more in all. One payment covers it — the organiser or anyone in the group can pay it. The booking is confirmed once every place and this balance are paid.</p>
+      ${g.topup.beingPaid ? '<p class="ag-help">Someone is paying it right now.</p>' : g.topup.canPay ? `<button type="button" class="btn solid" id="agPayTopup">Pay the balance (${AG_INR(g.topup.owed)})</button><p class="ag-error" id="agTopupError" hidden></p>` : ''}</div>` : '';
+  // Add a guest: places only go up; never above the listing's capacity.
+  const addMax = Math.max(0, Number(g.canAddMax) || 0);
+  const capLine = g.maxGuests ? `This place takes at most ${g.maxGuests} guests.` : '';
+  const addControls = (label) => addMax > 0
+    ? `<div class="ag-add-row"><div class="field"><label for="agAddPlaces">Guests to add</label><select id="agAddPlaces">${Array.from({ length: Math.min(addMax, 10) }, (_, i) => `<option value="${i + 1}">${i + 1} guest${i ? 's' : ''}</option>`).join('')}</select></div>
+       <button type="button" class="btn solid" id="agAddGuest">${label}</button></div>
+       <p class="ag-help">${AG_ESC(capLine)} Places can only be added, never removed.</p>`
+    : `<p class="ag-cap" id="agCapMsg">${AG_ESC(capLine)} Your group already has ${g.guestsNow} — no more guests can be added.</p>`;
+  const atDecisionAdd = g.isOrganiser && g.canAdd && (g.status === 'awaiting_confirm' || g.status === 'awaiting_gap');
+  const addCard = g.canAdd && !atDecisionAdd && (g.status === 'open' || g.status === 'confirmed') ? `<div class="ag-card" id="agAddCard"><h3 class="ag-h3">Add a guest</h3>
+      <p>${g.status === 'confirmed' ? 'The booking is priced again for the new number of guests with the listing’s normal price. Once the extra amount is paid, the guests are confirmed on the same booking — no wait for the host.' : 'The stay is priced again for the new number of guests with the listing’s normal price, and split again by places. Places already paid keep what they paid.'}</p>
+      ${addControls('Add')}<p class="ag-error" id="agAddError" hidden></p></div>` : '';
+  const notices = (g.notices || []).length ? `<div class="ag-card"><h3 class="ag-h3">Updates</h3><ul class="ag-list ag-notices">${g.notices.slice().reverse().map(n => `<li>${AG_ESC(n.text)}</li>`).join('')}</ul></div>` : '';
+  let decide = '';
+  if(g.isOrganiser && g.requote && (g.status === 'awaiting_confirm' || g.status === 'awaiting_gap')){
+    const q = g.requote;
+    decide = `<div class="ag-card ag-decide"><h3 class="ag-h3">Not every place was paid</h3>
+      <p>${q.places} of ${g.places} places were paid (${AG_INR(q.paid)}). For ${q.places} guest${q.places === 1 ? '' : 's'} the stay costs <strong>${AG_INR(q.total)}</strong>${q.total >= q.paid ? ' (a home priced per stay may not get cheaper with fewer guests)' : ''}.</p>
+      <p>${q.gap > 0 ? `To book it, you pay the remaining <strong>${AG_INR(q.gap)}</strong>.` : q.excess > 0 ? `If you confirm, <strong>${AG_INR(q.excess)}</strong> is refunded to the people who paid, each their share.` : 'If you confirm, nothing more is paid or refunded.'}</p>
+      <p class="ag-help">Choose within the time left. With no answer, the booking is cancelled and everyone is refunded in full.</p>
+      <ol class="ag-choices">
+        <li><strong>Confirm for the guests who paid</strong>
+          <div class="ag-actions">${g.status === 'awaiting_gap' || q.gap > 0 ? `<button type="button" class="btn solid" id="agPayGap">Pay ${AG_INR(q.gap)} and confirm for ${q.places}</button>` : `<button type="button" class="btn solid" id="agConfirmFewer">Confirm the booking for ${q.places}</button>`}</div></li>
+        ${atDecisionAdd ? `<li><strong>Add guest(s) and pay for them</strong>
+          <p class="ag-help">The group reopens for 30 minutes, priced for the new number of guests; the dates stay held. Pay for the new places yourself or share the link. If they are not paid in time, you choose again here.</p>
+          ${addControls('Add and pay')}<p class="ag-error" id="agAddError" hidden></p></li>` : ''}
+        <li><strong>Cancel</strong>
+          <div class="ag-actions"><button type="button" class="btn" id="agDecline">Cancel and refund everyone</button></div></li>
+      </ol>
+      <p class="ag-error" id="agDecideError" hidden></p></div>`;
+  } else if(!g.isOrganiser && (g.status === 'awaiting_confirm' || g.status === 'awaiting_gap')){
+    decide = `<div class="ag-card"><p>Not every place was paid in 2 hours. ${AG_ESC(g.organiserFirstName || 'The organiser')} is deciding whether to book for the people who paid. If it is cancelled, you are refunded in full. We email you either way.</p></div>`;
+  }
+  const outcome = g.status === 'confirmed'
+    ? `<div class="ag-card"><p><strong>${AG_ESC(g.outcome || 'Confirmed.')}</strong></p>${g.myPlaces || g.isOrganiser ? '<p>It is in your <a href="index.html?view=my-bookings">My Bookings</a>, with the check-in details and the group’s messages with the host.</p>' : ''}</div>`
+    : g.status === 'cancelled' || g.status === 'failed' ? `<div class="ag-card"><p>${AG_ESC(g.outcome || 'This group booking did not go ahead.')}</p>${g.myPaid ? `<p>Your ${AG_INR(g.myPaid)} is refunded in full.</p>` : ''}</div>` : '';
+  return `${noteHtml}${agStayHead(g.stay, `<p class="ag-status">${statusLine}</p>`)}
+    <div class="ag-card"><div class="ag-progress"><span style="width:${pct}%"></span></div>
+      <p class="ag-lead"><strong>${g.paidPlaces} of ${g.places}</strong> places paid${g.status === 'open' ? ` · <strong>${g.placesLeft}</strong> left${g.beingPaid ? ` · ${g.beingPaid} being paid now` : ''}` : ''}</p>
+      <p>${g.status === 'open' && g.placesLeft > 0 ? 'Each place still to pay' : 'Each place'}: <strong>${AG_INR(g.perPlace)}</strong>${g.lastPlace !== g.perPlace ? ` (last place ${AG_INR(g.lastPlace)})` : ''} · whole stay ${AG_INR(g.total)}, including GST, service fee and any deposit.</p>
+      ${g.extraWindow ? '<p class="ag-help">Guests were added at the 2-hour mark: this is the 30-minute extra window. The dates stay held.</p>' : ''}
+      ${payers ? `<ul class="ag-list">${payers}</ul>` : ''}${failed ? `<ul class="ag-list ag-failed">${failed}</ul>` : ''}
+      ${g.myPlaces ? `<p class="ag-help">You paid for ${g.myPlaces} place${g.myPlaces === 1 ? '' : 's'} (${AG_INR(g.myPaid)}).</p>` : ''}
+    </div>
+    ${outcome}${decide}${topup}${pay}${addCard}${share}${notices}
+    ${g.policy ? `<p class="ag-help">Refunds follow the host’s cancellation policy (${AG_ESC(g.policy)}); if the booking is cancelled, each person is refunded their share under that policy. ${AG_ESC(g.organiserFirstName || 'The organiser')} manages the booking.</p>` : ''}`;
+}
+function agBindGroup(box, g, redraw){
+  const copy = document.getElementById('agCopyLink');
+  if(copy) copy.addEventListener('click', async () => {
+    const input = document.getElementById('agShareLink');
+    try{ await navigator.clipboard.writeText(input.value); copy.textContent = 'Copied'; }catch(e){ input.select(); copy.textContent = 'Press Ctrl+C'; }
+    setTimeout(() => { copy.textContent = 'Copy link'; }, 1800);
+  });
+  const placesEl = document.getElementById('agPayPlaces');
+  const amountEl = document.getElementById('agPayAmount');
+  const paintAmount = () => {
+    if(!placesEl || !amountEl) return;
+    const k = Number(placesEl.value) || 1;
+    // The lowest free places are taken; the last places may be a rupee more.
+    let amt;
+    if(Array.isArray(g.freeShares)) amt = g.freeShares.slice(0, k).reduce((a, b) => a + b, 0);
+    else {
+      const free = g.places - g.paidPlaces - g.beingPaid;
+      const start = g.places - free;
+      amt = g.shares.slice(start, start + k).reduce((a, b) => a + b, 0);
+    }
+    amountEl.innerHTML = `You pay <strong>${AG_INR(amt)}</strong> for ${k} place${k === 1 ? '' : 's'}.`;
+    const btn = document.getElementById('groupPayBtn');
+    if(btn && !btn.disabled) btn.textContent = `Pay ${AG_INR(amt)}`;
+  };
+  if(placesEl){ placesEl.addEventListener('change', paintAmount); paintAmount(); }
+  if(document.getElementById('agPayFirst') && typeof aervaPrefillPromise !== 'undefined'){
+    if(typeof aervaPrefillBooking === 'function') aervaPrefillBooking();
+    (aervaPrefillPromise || Promise.resolve({})).then(d => {
+      if(!d) return;
+      const put = (id, v) => { const el = document.getElementById(id); if(el && !el.value && v) el.value = v; };
+      put('agPayFirst', d.firstName); put('agPayLast', d.lastName); put('agPayPhone', String(d.phone || '').replace(/^\+91(?=[6-9]\d{9}$)/, ''));
+    });
+  }
+  const payBtn = document.getElementById('groupPayBtn');
+  if(payBtn) payBtn.addEventListener('click', () => agStartGroupPayment(g, { places: placesEl ? (Number(placesEl.value) || 1) : 1 }, payBtn, document.getElementById('agPayError'), redraw));
+  const topupBtn = document.getElementById('agPayTopup');
+  if(topupBtn) topupBtn.addEventListener('click', () => agStartGroupPayment(g, { topup: true }, topupBtn, document.getElementById('agTopupError'), redraw));
+  const addBtn = document.getElementById('agAddGuest');
+  if(addBtn) addBtn.addEventListener('click', async () => {
+    const err = document.getElementById('agAddError');
+    const k = Number((document.getElementById('agAddPlaces') || {}).value) || 1;
+    if(!confirm(`Add ${k} guest${k === 1 ? '' : 's'}? The stay is priced again for ${Number(g.guestsNow || g.places) + k} guests. Places can never be removed once added.`)) return;
+    addBtn.disabled = true; err.hidden = true;
+    const r = await agFetch('/api/guest-profile', { method: 'POST', body: JSON.stringify({ mode: 'groupAddGuest', token: g.token, places: k }) });
+    addBtn.disabled = false;
+    if(!r.ok){ err.textContent = r.data.error || 'Could not add the guest.'; err.hidden = false; return; }
+    const d = r.data;
+    agGroupFlash = { note: 'added', message: d.status === 'confirmed'
+      ? (d.pendingAdd ? `Guest${k === 1 ? '' : 's'} added. Pay ${AG_INR(d.pendingAdd.amount)} below (or share the link) to confirm ${k === 1 ? 'them' : 'them'} on the booking.` : `Guest${k === 1 ? '' : 's'} added.`)
+      : `Guest${k === 1 ? '' : 's'} added — now ${d.places} places, ${AG_INR(d.perPlace)} each. Pay for the new place${k === 1 ? '' : 's'} below, or share the link.` };
+    await redraw();
+    const sel = document.getElementById('agPayPlaces');
+    if(sel && [...sel.options].some(o => Number(o.value) === k)){ sel.value = String(k); sel.dispatchEvent(new Event('change')); }
+    const card = document.getElementById('agPayCard'); if(card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  const gapBtn = document.getElementById('agPayGap');
+  if(gapBtn) gapBtn.addEventListener('click', async () => {
+    const err = document.getElementById('agDecideError');
+    if(g.status === 'awaiting_confirm'){
+      gapBtn.disabled = true;
+      const r = await agFetch('/api/guest-profile', { method: 'POST', body: JSON.stringify({ mode: 'groupDecide', token: g.token, accept: true }) });
+      gapBtn.disabled = false;
+      if(!r.ok){ err.textContent = r.data.error || 'Could not confirm.'; err.hidden = false; return; }
+    }
+    agStartGroupPayment(g, { gap: true }, gapBtn, err, redraw);
+  });
+  const fewer = document.getElementById('agConfirmFewer');
+  if(fewer) fewer.addEventListener('click', async () => {
+    if(!confirm('Confirm the booking for the people who paid?')) return;
+    fewer.disabled = true;
+    const r = await agFetch('/api/guest-profile', { method: 'POST', body: JSON.stringify({ mode: 'groupDecide', token: g.token, accept: true }) });
+    if(!r.ok){ const err = document.getElementById('agDecideError'); err.textContent = r.data.error || 'Could not confirm.'; err.hidden = false; fewer.disabled = false; return; }
+    redraw();
+  });
+  const decline = document.getElementById('agDecline');
+  if(decline) decline.addEventListener('click', async () => {
+    if(!confirm('Cancel the group booking? Everyone who paid is refunded in full.')) return;
+    decline.disabled = true;
+    const r = await agFetch('/api/guest-profile', { method: 'POST', body: JSON.stringify({ mode: 'groupDecide', token: g.token, accept: false }) });
+    if(!r.ok){ const err = document.getElementById('agDecideError'); err.textContent = r.data.error || 'Could not cancel.'; err.hidden = false; decline.disabled = false; return; }
+    redraw();
+  });
+}
+async function agStartGroupPayment(g, what, btn, errEl, redraw){
+  const fail = (m) => { errEl.textContent = m; errEl.hidden = false; btn.disabled = false; };
+  errEl.hidden = true;
+  const body = { agreementVersion: window.AERVA_POLICIES && window.AERVA_POLICIES.agreements && window.AERVA_POLICIES.agreements.version };
+  if(what.gap) body.groupGap = g.token;
+  else if(what.topup) body.groupTopup = g.token;
+  else {
+    const first = document.getElementById('agPayFirst').value.trim(), last = document.getElementById('agPayLast').value.trim(), phone = document.getElementById('agPayPhone').value.trim();
+    if(!AG_NAME_OK(first) || !AG_NAME_OK(last)) return fail('Please enter your first and last name as on your government ID: letters, spaces, dots, apostrophes and hyphens only.');
+    if(phone.replace(/\D/g, '').length < 10) return fail('Please enter your mobile number.');
+    const box = btn.previousElementSibling && btn.previousElementSibling.classList.contains('agreement-box') ? btn.previousElementSibling : document.querySelector('#agPayCard .agreement-box');
+    const check = box && box.querySelector('.agreement-check');
+    if(check && !check.checked) return fail('Please tick the booking agreement to continue.');
+    Object.assign(body, { groupPay: g.token, places: what.places, firstName: first, lastName: last, phone });
+  }
+  btn.disabled = true;
+  const r = await agFetch('/api/create-order', { method: 'POST', body: JSON.stringify(body) });
+  if(!r.ok) { fail(r.data.error || 'Could not start the payment.'); if(r.status === 409) setTimeout(redraw, 1500); return; }
+  const order = r.data;
+  if(typeof Razorpay === 'undefined') return fail('Payment gateway did not load. Please check your connection and try again.');
+  const rzp = new Razorpay({ key: order.keyId, order_id: order.orderId, amount: order.amount, currency: 'INR', name: 'Aerva', description: g.stay.name + ' — group booking',
+    timeout: order.holdSeconds || undefined, theme: { color: '#a9884f' },
+    prefill: { contact: what.gap || what.topup ? undefined : String(body.phone || '').replace(/\D/g, '') },
+    handler: async function(response){
+      aervaCheckoutSucceeded();
+      try{
+        const v = await fetch(AG_API() + '/api/verify-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(response) });
+        const d = await v.json();
+        if(d.group && d.group.token) aervaAfterGroupPayment(d); else redraw();
+      }catch(e){ redraw(); }
+    },
+    modal: { ondismiss: function(){ aervaEndCheckout('closed'); btn.disabled = false; setTimeout(redraw, 800); } } });
+  rzp.on('payment.failed', function(){ aervaEndCheckout('failed'); btn.disabled = false; setTimeout(redraw, 800); });
+  rzp.open();
+  aervaWatchCheckout(rzp, order, errEl, { holdsDates: false });
+}
+
+// ---- The gift page: index.html?gift=<token> (or ?giftId= from My Bookings) ----
+async function aervaShowGiftPage(token, giftId){
+  const box = agShowView('Your gift');
+  if(!box) return;
+  const back = token ? 'index.html?gift=' + encodeURIComponent(token) : 'index.html?giftId=' + encodeURIComponent(giftId);
+  box.innerHTML = '<p class="loading">Loading…</p>';
+  if(!agToken()){
+    if(!token){ box.innerHTML = `<div class="ag-card"><p>Please log in to see your gift.</p>${agLoginLinks(back, '', 'gift')}</div>`; return; }
+    const r = await agFetch('/api/get-listings?giftPreview=' + encodeURIComponent(token), { method: 'GET' });
+    if(!r.ok){ box.innerHTML = `<p class="ag-error">${AG_ESC(r.data.error || 'This gift link is not valid.')}</p>`; return; }
+    const p = r.data;
+    box.innerHTML = `${agStayHead(p.stay, `<p class="ag-status"><span class="ag-pill ag-gift">A gift from ${AG_ESC(p.gift.from)}</span></p>`)}
+      ${p.gift.message ? `<blockquote class="ag-quote">“${AG_ESC(p.gift.message)}”<cite>— ${AG_ESC(p.gift.from)}</cite></blockquote>` : ''}
+      <div class="ag-card">${p.gift.accepted ? '<p>This gift has already been accepted.</p>' : `<p class="ag-lead">Hello ${AG_ESC(p.gift.to)} — to accept your stay, log in or create your Aerva account. Then add your name and a mobile number your host can reach you on.</p>`}
+      ${agLoginLinks(back, p.gift.email, 'gift')}</div>`;
+    return;
+  }
+  const q = token ? 'token=' + encodeURIComponent(token) : 'giftId=' + encodeURIComponent(giftId);
+  const r = await agFetch('/api/guest-profile?mode=gift&' + q, { method: 'GET' });
+  if(!r.ok){ box.innerHTML = `<div class="ag-card"><p class="ag-error">${AG_ESC(r.data.error || 'This gift could not be opened.')}</p></div>`; return; }
+  agDrawGift(box, r.data, { token, giftId });
+}
+function agAcceptedHtml(v, st){
+  return `${agStayHead(st, `<p class="ag-status"><span class="ag-pill ag-done">Gift accepted</span> <span class="ag-meta">from ${AG_ESC(v.from)}</span></p>`)}
+    <div class="ag-card">
+      ${st.confirmationCode ? `<div class="confirm-code"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${AG_ESC(st.confirmationCode)}</span></div>` : ''}
+      ${st.address ? `<p><strong>Address:</strong> ${AG_ESC(st.address)}</p>` : ''}
+      <p>Check-in from ${AG_ESC(st.checkIn || '2:00 PM')} · check-out by ${AG_ESC(st.checkOut || '11:00 AM')}</p>
+      <p class="ag-help">Carry a government photo ID: your host checks it at check-in. ${AG_ESC(v.from)} manages the booking (dates, changes, cancellations).</p>
+      <div class="ag-actions"><a class="btn solid" href="index.html?view=my-bookings">See it in My Bookings</a>${st.orderId ? `<button type="button" class="btn" id="agGiftChat">Message the host</button>` : ''}</div></div>`;
+}
+function agDrawGift(box, v, ref){
+  const st = v.stay;
+  if(v.status === 'accepted_by_you'){
+    box.innerHTML = agAcceptedHtml(v, st);
+    const chat = document.getElementById('agGiftChat');
+    if(chat && typeof openChatForOrder === 'function') chat.addEventListener('click', () => openChatForOrder(st.orderId, st.name));
+    return;
+  }
+  const head = `${agStayHead(st, `<p class="ag-status"><span class="ag-pill ag-gift">A gift from ${AG_ESC(v.from)}</span></p>`)}
+    ${v.message ? `<blockquote class="ag-quote">“${AG_ESC(v.message)}”<cite>— ${AG_ESC(v.from)}</cite></blockquote>` : ''}`;
+  if(v.isBuyer){ box.innerHTML = head + '<div class="ag-card"><p>This is the gift you sent. Only the person you sent it to can accept it. You can change the recipient in My Bookings until check-in.</p></div>'; return; }
+  if(v.status === 'accepted_by_other'){ box.innerHTML = head + '<div class="ag-card"><p>This gift has already been accepted.</p></div>'; return; }
+  if(!v.canAccept){ box.innerHTML = head + '<div class="ag-card"><p>This gift link has already been used. If this gift is for you, log in with the email it was sent to, or ask the person who sent it for a new link.</p></div>'; return; }
+  box.innerHTML = head + `<div class="ag-card" id="agAcceptCard"><h3 class="ag-h3">Accept the gift</h3>
+    <p class="ag-help">Your name as on your government ID (the host checks it at check-in) and a mobile number your host can reach you on.</p>
+    <div class="ag-grid"><div class="field"><label for="agGiftFirst">First name</label><input id="agGiftFirst" autocomplete="given-name" value="${AG_ESC(v.prefill.firstName)}"></div>
+    <div class="field"><label for="agGiftLast">Last name</label><input id="agGiftLast" autocomplete="family-name" value="${AG_ESC(v.prefill.lastName)}"></div></div>
+    <div class="field" style="margin-top:10px;"><label for="agGiftPhone">Mobile number</label><input id="agGiftPhone" type="tel" autocomplete="tel" value="${AG_ESC(String(v.prefill.phone || '').replace(/^\+91(?=[6-9]\d{9}$)/, ''))}"></div>
+    <button type="button" class="btn solid" id="agAcceptBtn" style="width:100%; margin-top:14px;">Accept the gift</button>
+    <p class="ag-error" id="agAcceptError" hidden></p></div>`;
+  const btn = document.getElementById('agAcceptBtn');
+  btn.addEventListener('click', async () => {
+    const err = document.getElementById('agAcceptError');
+    const first = document.getElementById('agGiftFirst').value.trim(), last = document.getElementById('agGiftLast').value.trim(), phone = document.getElementById('agGiftPhone').value.trim();
+    err.hidden = true;
+    if(!AG_NAME_OK(first) || !AG_NAME_OK(last)){ err.textContent = 'Please enter your first and last name as on your government ID: letters, spaces, dots, apostrophes and hyphens only.'; err.hidden = false; return; }
+    if(phone.replace(/\D/g, '').length < 10){ err.textContent = 'Please enter a mobile number your host can reach you on.'; err.hidden = false; return; }
+    btn.disabled = true; btn.textContent = 'Accepting…';
+    const r = await agFetch('/api/guest-profile', { method: 'POST', body: JSON.stringify({ mode: 'acceptGift', token: ref.token || undefined, giftId: ref.giftId || undefined, firstName: first, lastName: last, phone }) });
+    if(!r.ok){ err.textContent = r.data.error || 'Could not accept the gift.'; err.hidden = false; btn.disabled = false; btn.textContent = 'Accept the gift'; return; }
+    box.innerHTML = agAcceptedHtml(v, r.data.stay);
+    const chat = document.getElementById('agGiftChat');
+    if(chat && typeof openChatForOrder === 'function') chat.addEventListener('click', () => openChatForOrder(r.data.stay.orderId, r.data.stay.name));
+  });
+}
+
+// ---- My Bookings ----
+function aervaSharedBookingCard(b){
+  const esc = AG_ESC;
+  const when = `${esc(AG_DAY(b.arrival))} → ${esc(AG_DAY(b.departure))}`;
+  if(b.pending_group){
+    const g = b.group || {};
+    return `<div class="listing-card booking-card ag-mb" style="margin-bottom:14px;"><div class="listing-info">
+      <h3>${esc(b.suite_name || 'Group booking')}</h3>
+      <div class="listing-meta">${when} · ${g.places} guests · <span class="ag-pill ${b.status === 'cancelled' ? 'ag-off' : 'ag-wait'}">${b.status === 'cancelled' ? 'Did not go ahead' : 'Group booking'}</span></div>
+      <p class="ag-mb-note">${esc(g.note || '')}</p>
+      <div class="booking-actions"><a class="filter-clear" href="index.html?group=${encodeURIComponent(g.token)}" onclick="event.stopPropagation()">${g.organiser && (g.status === 'awaiting_confirm' || g.status === 'awaiting_gap') ? 'Confirm or cancel' : 'Open the group page'}</a></div>
+    </div></div>`;
+  }
+  const upcoming = b.status === 'paid' && String(b.departure).slice(0, 10) >= String(b.local_today || '').slice(0, 10);
+  const tag = b.shared === 'gift'
+    ? `<span class="ag-pill ag-gift">Gifted to you</span> <span class="ag-meta">from ${esc(b.gift_from)}</span>`
+    : `<span class="ag-pill ag-done">Group booking — you paid for ${b.group.myPlaces} place${b.group.myPlaces === 1 ? '' : 's'}</span> <span class="ag-meta">organised by ${esc(b.group.organiserFirstName || 'a friend')}</span>`;
+  const accept = b.shared === 'gift' && !b.gift_accepted && upcoming
+    ? `<a class="btn solid" href="index.html?giftId=${encodeURIComponent(b.gift_id)}" onclick="event.stopPropagation()" style="min-height:44px; padding:10px 18px;">Accept the gift</a>` : '';
+  const canChat = (b.shared === 'group' || b.gift_accepted) && (b.status === 'paid' || b.status === 'cancelled');
+  const checkin = (b.shared === 'group' || b.gift_accepted) && b.status === 'paid'
+    ? `<div class="ag-checkin">${b.confirmation_code ? `<div class="confirm-code"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${esc(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${esc(b.confirmation_code)}">Copy</button></div>` : ''}
+        ${b.listing_address ? `<p><strong>Address:</strong> ${esc(b.listing_address)}</p>` : ''}
+        <p>Check-in from ${esc(b.check_in_time || '2:00 PM')} · check-out by ${esc(b.check_out_time || '11:00 AM')}. Carry a government photo ID.</p></div>` : '';
+  return `<div class="listing-card booking-card ag-mb" style="margin-bottom:14px;"><div class="listing-info">
+    <h3>${esc(b.suite_name || '')}</h3>
+    <div class="listing-meta">${when} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${b.status === 'paid' ? (upcoming ? 'Confirmed' : 'Completed') : 'Cancelled'}</div>
+    <p class="ag-mb-note">${tag}</p>
+    ${b.gift_message ? `<blockquote class="ag-quote ag-quote-sm">“${esc(b.gift_message)}”</blockquote>` : ''}
+    ${checkin}
+    <div class="booking-actions">${accept}${canChat ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${esc(b.suite_name || '')}">${upcoming ? 'Message host' : 'View messages'}</button>` : ''}</div>
+    <p class="ag-help">${b.shared === 'gift' ? esc(b.gift_from) : esc(b.group.organiserFirstName || 'The organiser')} manages this booking (changes and cancellations).</p>
+  </div></div>`;
+}
+function aervaOwnBookingExtrasHtml(b){
+  const esc = AG_ESC;
+  let out = '';
+  if(b.gift) out += `<p class="ag-mb-note"><span class="ag-pill ag-gift">Gift for ${esc(b.gift.recipientName)}</span> <span class="ag-meta">${esc(b.gift.status === 'accepted' ? 'Accepted' : 'Waiting for ' + b.gift.recipientFirstName + ' to accept')}</span></p>`;
+  if(b.group) out += `<p class="ag-mb-note"><span class="ag-pill ag-done">Group booking</span> <span class="ag-meta">${b.group.paidPlaces || b.guests} guests · you paid for ${b.group.myPlaces} place${b.group.myPlaces === 1 ? '' : 's'} · <a href="index.html?group=${encodeURIComponent(b.group.token)}" onclick="event.stopPropagation()">group page</a></span></p>`;
+  return out;
+}
+function aervaOwnBookingButtonsHtml(b){
+  if(b.can_gift) return `<button type="button" class="filter-clear" data-send-gift="${b.id}">Send as a gift</button>`;
+  if(b.gift && b.can_change_gift) return `<button type="button" class="filter-clear" data-change-gift="${b.id}">Change recipient</button><button type="button" class="filter-clear" data-stop-gift="${b.id}">Stop gift</button>`;
+  return '';
+}
+function aervaBindGiftGroupButtons(container, bookings){
+  container.querySelectorAll('[data-send-gift], [data-change-gift]').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const id = Number(btn.dataset.sendGift || btn.dataset.changeGift);
+    aervaOpenGiftForm(bookings.find(x => Number(x.id) === id));
+  }));
+  container.querySelectorAll('[data-stop-gift]').forEach(btn => btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if(!confirm('Stop the gift? You become the guest staying again, and the link stops working.')) return;
+    btn.disabled = true;
+    const r = await agFetch('/api/guest-profile', { method: 'POST', body: JSON.stringify({ mode: 'withdrawGift', orderId: Number(btn.dataset.stopGift) }) });
+    if(!r.ok){ alert(r.data.error || 'Could not stop the gift.'); btn.disabled = false; return; }
+    if(typeof loadMyBookings === 'function') loadMyBookings();
+  }));
+}
+function aervaOpenGiftForm(b){
+  if(!b) return;
+  const old = document.getElementById('agGiftModal'); if(old) old.remove();
+  const g = b.gift || {};
+  const [gf, ...gl] = String(g.recipientName || '').split(' ');
+  const wrap = document.createElement('div');
+  wrap.id = 'agGiftModal'; wrap.className = 'ag-modal'; wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true');
+  wrap.innerHTML = `<div class="ag-modal-box"><button type="button" class="ag-modal-x" aria-label="Close">×</button>
+    <h3 class="ag-h3">${b.gift ? 'Change who this stay is for' : 'Send as a gift'}</h3>
+    <p class="ag-help">${AG_ESC(b.suite_name || '')} · ${AG_ESC(AG_DAY(b.arrival))}. You keep managing the booking; refunds go to your payment. They get the stay details (never the price) and accept it with their name and phone.</p>
+    <div class="ag-grid"><div class="field"><label for="agMFirst">Their first name</label><input id="agMFirst" value="${AG_ESC(b.gift ? gf : '')}"></div>
+    <div class="field"><label for="agMLast">Their last name</label><input id="agMLast" value="${AG_ESC(b.gift ? gl.join(' ') : '')}"></div></div>
+    <div class="field" style="margin-top:10px;"><label for="agMEmail">Their email</label><input id="agMEmail" type="email" value="${AG_ESC(g.recipientEmail || '')}"></div>
+    <div class="field" style="margin-top:10px;"><label for="agMPhone">Their mobile (optional)</label><input id="agMPhone" type="tel"></div>
+    <div class="field" style="margin-top:10px;"><label for="agMMsg">Gift message (optional)</label><textarea id="agMMsg" maxlength="300" rows="3">${AG_ESC(g.message || '')}</textarea></div>
+    <button type="button" class="btn solid" id="agMSend" style="width:100%; margin-top:14px;">${b.gift ? 'Send to the new recipient' : 'Send the gift'}</button>
+    <p class="ag-error" id="agMErr" hidden></p></div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.querySelector('.ag-modal-x').addEventListener('click', close);
+  wrap.addEventListener('click', (e) => { if(e.target === wrap) close(); });
+  wrap.querySelector('#agMSend').addEventListener('click', async () => {
+    const v = (id) => wrap.querySelector('#' + id).value.trim();
+    const err = wrap.querySelector('#agMErr');
+    if(!AG_NAME_OK(v('agMFirst')) || !AG_NAME_OK(v('agMLast'))){ err.textContent = 'Please enter their first and last name as on their government ID: letters only.'; err.hidden = false; return; }
+    const btn = wrap.querySelector('#agMSend'); btn.disabled = true;
+    const r = await agFetch('/api/guest-profile', { method: 'POST', body: JSON.stringify({ mode: 'sendGift', orderId: b.id,
+      recipient: { firstName: v('agMFirst'), lastName: v('agMLast'), email: v('agMEmail'), phone: v('agMPhone') || undefined, message: v('agMMsg') || undefined } }) });
+    if(!r.ok){ err.textContent = r.data.error || 'Could not send the gift.'; err.hidden = false; btn.disabled = false; return; }
+    close();
+    if(typeof loadMyBookings === 'function') loadMyBookings();
   });
 }

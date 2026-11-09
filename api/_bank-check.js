@@ -167,6 +167,24 @@ function accountKind(name) {
   if (TRADE_WORDS.test(t)) return 'trade';
   return 'person';
 }
+// Characters allowed in a payout or PAN name (owner, 9 Nov 2026: a PROD
+// test had "Tanish1 Jain"). A person: letters (any script), spaces, dots,
+// apostrophes and hyphens. A company, a business or a joint account may
+// also use & , ( ) / as banks print them ("A & B", "X (OPC) Pvt. Ltd.").
+// Never digits. Returns the message to show, or null.
+const PERSON_NAME = /^[\p{L}\p{M} .'’-]+$/u;
+const BUSINESS_NAME = /^[\p{L}\p{M} .'’&,()\/-]+$/u;
+function nameCharsProblem(name, what = 'name') {
+  const n = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!n) return null;
+  if (!/\p{L}/u.test(n)) return `Enter the ${what} in letters.`;
+  const business = accountKind(n) !== 'person' || looksJoint(n);
+  if ((business ? BUSINESS_NAME : PERSON_NAME).test(n)) return null;
+  if (/\d/.test(n)) return `The ${what} cannot contain numbers. Type it exactly as printed, letters only.`;
+  return business
+    ? `The ${what} can only use letters, spaces and . ' - & , ( ) /`
+    : `The ${what} can only use letters, spaces, dots, apostrophes and hyphens.`;
+}
 const PERSONAL_PAN = new Set(['P', 'H']);          // a person, a HUF
 const panLetter = (pan) => { const p = String(pan || '').trim().toUpperCase(); return /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(p) ? p[3] : null; };
 // A company or firm account against a personal PAN: refused, with this message. Else null.
@@ -586,6 +604,6 @@ async function tellAdminDecision(sql, hostId, field, approved, reason) {
 module.exports = {
   tellAdminDecision,
   lookupIfsc, IFSC_NOT_FOUND, sameName, payeeBankMatch,
-  nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, validGstin, gstinPan, tradeGstinProblem, PERSONAL_PAN, panLetter, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
+  nameCharsProblem, nameTokens, nameMatch, holderMatch, accountKind, companyPanProblem, validGstin, gstinPan, tradeGstinProblem, PERSONAL_PAN, panLetter, holderNames, looksJoint, panNameProblem, panInUseElsewhere,
   bankDetailsChanged, payoutDetailsChanged, payoutItems, payoutNotifications, startCheck, settleCheck, pollChecks, inChangeHold, describeCheck, HOLD_HOURS_AFTER_CHANGE
 };

@@ -31,7 +31,7 @@ const soft = async (q, fallback = []) => { try { return await q; } catch (e) { r
 
 async function search(sql, raw) {
   const q = String(raw || '').trim().slice(0, 120);
-  if (q.length < 2) throw userError('Type at least two characters.');
+  if (q.length < 2 && !/^\d$/.test(q)) throw userError('Type at least two characters.');   // a single-digit ID is fine
   const digits = q.replace(/\D/g, '');
   const asId = /^#?\d{1,9}$/.test(q) ? Number(q.replace('#', '')) : null;
   const isEmail = q.includes('@');

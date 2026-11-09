@@ -118,7 +118,7 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
     // Totals by kind, so the summary at the bottom adds up to what the
     // guest was actually charged. (It used to total the booking amounts
     // only, leaving out the service fee, deposit and any coupon.)
-    let sumSubtotal = 0, sumGst = 0, sumFee = 0, sumDeposit = 0;
+    let sumSubtotal = 0, sumGst = 0, sumFee = 0, sumDeposit = 0, sumFreeCancel = 0;
     const gstLine = (item) => {
       const g = Math.max(0, Math.round(Number(item.gst) || 0));
       if (g > 0) doc.font('Helvetica').text(`GST${item.gstRate ? ` (${item.gstRate}%)` : ''}: ${fmt(g)}`);
@@ -133,7 +133,16 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
       doc.text(`Check-out: ${fmtDate(s.departure)}`);
       doc.text(`${s.nights} night${s.nights === 1 ? '' : 's'} · ${s.guests} guest${s.guests === 1 ? '' : 's'}`);
       doc.font('Helvetica-Bold').text(`Amount: ${fmt(s.subtotal)}`);
-      sumGst += gstLine(s);
+      // The free cancellation add-on (_pricing.js): its own line; its GST
+      // is in the stay's GST line.
+      const fc = Math.max(0, Math.round(Number(s.freeCancelFee) || 0));
+      if (fc > 0) {
+        doc.font('Helvetica').text(`Free cancellation${s.freeCancelOffer && s.freeCancelOffer.untilLabel ? ` (until ${s.freeCancelOffer.untilLabel}, property’s time)` : ''}: ${fmt(fc)}`);
+        doc.fontSize(8.5).fillColor('#666').text('Cancel before then: the booking price, its GST and the deposit are refunded in full. The add-on and Aerva’s service fee are not refunded.');
+        doc.fontSize(10).fillColor('#333');
+        sumFreeCancel += fc;
+      }
+      sumGst += gstLine(Object.assign({}, s, { gst: (Number(s.gst) || 0) + (Number(s.freeCancelGst) || 0) }));
       doc.fillColor('#000');
       doc.moveDown(1.2);
       sumSubtotal += Number(s.subtotal) || 0;
@@ -166,11 +175,12 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
     doc.moveDown(0.8);
     const row = (label, amount) => doc.fontSize(10.5).font('Helvetica').text(`${label}: ${amount}`, { align: 'right' });
     const coupon = Math.max(0, Math.round(Number(couponDiscount) || 0));
-    const beforeCoupon = sumSubtotal + sumGst + sumFee + sumDeposit;
+    const beforeCoupon = sumSubtotal + sumFreeCancel + sumGst + sumFee + sumDeposit;
     // Paid with Aerva credit (a host cancelled an earlier booking, _fee-credits.js).
     const credit = [...stays, ...experiences].reduce((t, x) => t + Math.max(0, Math.round(Number(x.feeCreditUsed) || 0)), 0);
     const paid = Math.max(0, beforeCoupon - coupon - credit);
     row('Bookings', fmt(sumSubtotal));
+    if (sumFreeCancel > 0) row('Free cancellation', fmt(sumFreeCancel));
     if (sumGst > 0) row('GST', fmt(sumGst));
     if (sumFee > 0) row('Guest service fee', fmt(sumFee));
     if (sumDeposit > 0) row('Refundable deposit', fmt(sumDeposit));
@@ -204,7 +214,9 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, 
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const items = [
     ...stays.map(s => ({ listingId: s.listingId, name: s.suite, when: `${s.arrival} → ${s.departure}`, guests: s.guests,
-                         pets: (s.petTypes || []).length, service: (s.serviceAnimals || []).length })),
+                         pets: (s.petTypes || []).length, service: (s.serviceAnimals || []).length,
+                         freeCancel: Math.round(Number(s.freeCancelFee) || 0), freeCancelNet: Math.round(Number(s.freeCancelFee) || 0) - Math.round(Number(s.freeCancelCommission) || 0),
+                         freeCancelUntil: (s.freeCancelOffer || {}).untilLabel || '' })),
     ...experiences.map(e => ({ listingId: e.listingId, name: e.suite, when: e.date, guests: e.guests, pets: 0, service: 0 }))
   ].filter(i => i.listingId);
   if (!items.length) return;
@@ -223,14 +235,15 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, 
         <div style="font-family:sans-serif; max-width:520px;">
           <h2 style="font-family:Georgia,serif;">New confirmed booking</h2>
           ${guest && (guest.firstName || guest.lastName || guest.phone) ? `<p style="margin:0 0 8px;"><strong>Guest:</strong> ${esc([guest.firstName, guest.lastName].filter(Boolean).join(' ') || 'Name not given')}${guest.phone ? ` · Mobile: ${esc(guest.phone)}` : ''}</p>` : ''}
+          ${guest && guest.note ? `<p style="margin:0 0 8px; color:#6b5222;"><strong>${esc(guest.note)}</strong></p>` : ''}
           <ul>${list.map(i => {
             const code = (confirmationCodes || []).find(c => c.item === i.name);
-            return `<li><strong>${esc(i.name)}</strong> — ${esc(i.when)} — ${Number(i.guests) || 0} guest(s)${i.pets ? `, ${i.pets} pet(s)` : ''}${i.service ? `, ${i.service} service/support animal(s)` : ''}${code ? `<br><span style="font-size:13px; color:#6b5222;">Confirmation code: <strong>${esc(code.code)}</strong> — the guest shows this at check-in</span>` : ''}</li>`;
+            return `<li><strong>${esc(i.name)}</strong> — ${esc(i.when)} — ${Number(i.guests) || 0} guest(s)${i.pets ? `, ${i.pets} pet(s)` : ''}${i.service ? `, ${i.service} service/support animal(s)` : ''}${code ? `<br><span style="font-size:13px; color:#6b5222;">Confirmation code: <strong>${esc(code.code)}</strong> — the guest shows this at check-in</span>` : ''}${i.freeCancel > 0 ? `<br><span style="font-size:13px; color:#6b5222;">The guest added free cancellation: they may cancel for a full refund until ${esc(i.freeCancelUntil)} (your property’s time). You receive the add-on, ₹${i.freeCancelNet.toLocaleString('en-IN')} after Aerva’s commission, even if they cancel.</span>` : ''}</li>`;
           }).join('')}</ul>
           <p><strong>Your responsibilities for this booking:</strong></p>
           <ul>
             <li>Provide the home or experience as listed, safe and clean.</li>
-            <li>Check a government photo ID for every adult guest.</li>
+            <li>Check a government photo ID for every adult guest${guest && guest.gift ? ` — for this gift, the ID of ${esc([guest.firstName, guest.lastName].filter(Boolean).join(' '))}` : ''}.</li>
             <li>Foreign guests: file Form III at indianfrro.gov.in within 24 hours of arrival and of departure.</li>
             <li>Share check-in details in Aerva Messages before arrival.</li>
             <li>Keep all communication and payments on Aerva.</li>
@@ -246,7 +259,9 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, 
   }
 }
 
-async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreementVersion = null, confirmationCodes = null){
+// extraHtml: a paragraph added for gift and group bookings (_gifts.js,
+// _group-bookings.js) — the same email, never a second one.
+async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreementVersion = null, confirmationCodes = null, extraHtml = ''){
   if (!process.env.RESEND_API_KEY) {
     console.error('RESEND_API_KEY not set — booking confirmation email not sent.');
     return { sent: false, error: 'RESEND_API_KEY not set' };
@@ -263,6 +278,8 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
         <p style="margin:0 0 6px; font-size:13px; color:#6b5222;">Your confirmation code${confirmationCodes.length > 1 ? 's' : ''} — show this at check-in:</p>
         ${confirmationCodes.map(c => `<p style="margin:2px 0; font-size:19px; font-weight:600; letter-spacing:0.04em; color:#1c1b19;">${c.code}${confirmationCodes.length > 1 ? ` <span style="font-size:13px; font-weight:400; color:#6b5222;">— ${c.item}</span>` : ''}</p>`).join('')}
       </div>` : ''}
+      ${extraHtml || ''}
+      ${stays.filter(s => Number(s.freeCancelFee) > 0).map(s => `<p style="background:#f6efe3; border-radius:10px; padding:10px 14px; font-size:14px;"><strong>Free cancellation${stays.length > 1 ? ' — ' + String(s.suite).replace(/[&<>"']/g, '') : ''}:</strong> cancel before <strong>${String((s.freeCancelOffer || {}).untilLabel || '').replace(/[&<>"']/g, '')}</strong> (the property’s time) for a full refund of the booking price, its GST and any deposit. The free cancellation add-on (₹${Math.round(Number(s.freeCancelFee)).toLocaleString('en-IN')} + GST) and Aerva’s service fee are not refunded. After that, the listing’s refund policy applies.</p>`).join('')}
       ${pdfBuffer ? `<p>Your full booking details — dates, amounts, and everything else — are attached as a PDF to this email.</p>`
         : `<p>You can see your full booking details any time under <a href="https://aerva.in/index.html?view=my-bookings">My Bookings</a> on aerva.in.</p>`}
       ${agreementVersion ? `<p style="font-size:13px; opacity:0.8;">You accepted Aerva’s booking agreement (version ${agreementVersion}) before paying. Read it and Aerva’s Policies at <a href="https://aerva.in/index.html?view=policies">aerva.in/policies</a>.</p>` : ''}
@@ -394,6 +411,13 @@ function planRows(ctx) {
       effectiveRate = stay.commissionRate != null ? Number(stay.commissionRate) : FALLBACK_COMMISSION_RATE;
       commissionAmount = Math.round(subtotal * (effectiveRate / 100));
     }
+    // The free cancellation add-on (_pricing.js): paid to the host less
+    // Aerva's commission, so it is part of commission_amount and
+    // payout_amount; its own parts are kept in the free_cancel_* columns.
+    const freeCancelFee = Math.max(0, Math.round(Number(stay.freeCancelFee) || 0));
+    const freeCancelGst = freeCancelFee ? Math.max(0, Math.round(Number(stay.freeCancelGst) || 0)) : 0;
+    const freeCancelCommission = freeCancelFee ? Math.max(0, Math.round(Number(stay.freeCancelCommission) || 0)) : 0;
+    commissionAmount += freeCancelCommission;
     let depositReleaseAt = null;
     if (depositAmount > 0) {
       const d = new Date(stay.departure + 'T00:00:00Z');
@@ -404,8 +428,9 @@ function planRows(ctx) {
       type: 'stay', item: stay, suite: stay.suite, listingId: stay.listingId || null, roomId: stay.roomId || null,
       arrival: stay.arrival, departure: stay.departure, guests: stay.guests, nights: stay.nights,
       subtotal, discountAmount: stay.discountAmount || 0, gst, guestServiceFee,
-      total: subtotal + gst + guestServiceFee + depositAmount,
-      effectiveRate, commissionAmount, payoutAmount: subtotal - commissionAmount,
+      total: subtotal + gst + guestServiceFee + depositAmount + freeCancelFee + freeCancelGst,
+      effectiveRate, commissionAmount, payoutAmount: subtotal + freeCancelFee - commissionAmount,
+      freeCancelFee, freeCancelGst, freeCancelCommission,
       depositAmount, depositReleaseAt, feeCreditUsed: Math.round(Number(stay.feeCreditUsed) || 0), ...takeCoupon()
     });
   }
@@ -458,6 +483,14 @@ async function insertRow(sql, ctx, row, cancelledReason) {
     RETURNING id
   `;
   const id = inserted[0].id;
+  // The free cancellation add-on (_pricing.js):
+  // columns of migrations/2026-11-10-01-free-cancellation.sql. Only ever non-zero once
+  // that update has run (_pricing.js offers nothing before), so this never
+  // fails on an older database; when there is nothing, nothing is written.
+  if (row.freeCancelFee > 0) {
+    await sql`UPDATE orders SET free_cancel_fee = ${row.freeCancelFee}, free_cancel_gst = ${row.freeCancelGst}, free_cancel_commission = ${row.freeCancelCommission}
+              WHERE id = ${id}`;
+  }
   // The name of the guest staying, for the host. Written only once
   // migration_guest_details.sql has added the columns; never fails the booking.
   if ((ctx.firstName || ctx.lastName) && await hasGuestNameColumns(sql)) {
@@ -698,6 +731,13 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     if (n.type === 'booking_change') {
       return await confirmChangePayment(sql, razorpay, { order, payment: check.payment, razorpayOrderId, razorpayPaymentId });
     }
+    // A payment for places in a group booking (_group-bookings.js). Counted
+    // once (the claim above, then a guarded update on the claim).
+    if (n.type === 'group_share') {
+      const out = await require('./_group-bookings').confirmGroupPayment(sql, razorpay, { order, payment: check.payment, razorpayOrderId, razorpayPaymentId });
+      if (out.status === 'error' || out.status === 'pending') await release();
+      return out;
+    }
     // The cart: from checkout_carts (notes.cartId), or — for orders made
     // before carts existed — from the notes themselves.
     let src;
@@ -714,6 +754,8 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
         agreement: n.agreement, held: n.held === '1', prices: parse(n.prices, null)
       };
     }
+    // A gift ("This stay is for someone else"): created once the booking is paid (_gifts.js).
+    var giftInput = src.gift && typeof src.gift === 'object' ? src.gift : null;
     const agreement = { version: null, acceptedAt: null, ip: null };
     if (src.agreement) {
       const [v, at, ip] = String(src.agreement).split('|');
@@ -742,7 +784,8 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       // What Razorpay holds of this payment: refunds never exceed it.
       capturedSubunit: Math.max(0, Number(check.payment.amount) - Number(check.payment.amount_refunded || 0)),
       heldAtCheckout: src.held === true || src.held === '1',
-      pricesAtCheckout: src.prices && typeof src.prices === 'object' ? src.prices : null
+      pricesAtCheckout: src.prices && typeof src.prices === 'object' ? src.prices : null,
+      gift: giftInput
     };
   } catch (err) {
     await release();
@@ -763,7 +806,8 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
   // price change after the order was made means the amount no longer
   // matches). Otherwise: cancelled, and refunded in full the next day.
   try {
-    const expected = ctx.stays.reduce((t, x) => t + Number(x.subtotal) + Number(x.gst || 0) + Number(x.guestServiceFee || 0) + Number(x.depositAmount || 0), 0)
+    const expected = ctx.stays.reduce((t, x) => t + Number(x.subtotal) + Number(x.gst || 0) + Number(x.guestServiceFee || 0) + Number(x.depositAmount || 0)
+                                          + Number(x.freeCancelFee || 0) + Number(x.freeCancelGst || 0), 0)
                    + ctx.experiences.reduce((t, x) => t + Number(x.subtotal) + Number(x.gst || 0) + Number(x.guestServiceFee || 0), 0)
                    - Number(ctx.couponDiscount || 0)
                    - [...ctx.stays, ...ctx.experiences].reduce((t, x) => t + Math.max(0, Math.round(Number(x.feeCreditUsed) || 0)), 0);
@@ -922,6 +966,21 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     }
   }
 
+  // A gift: the recipient becomes the guest staying (their name on the
+  // booking for the host) and is emailed; the buyer keeps the booking.
+  let gift = null;
+  if (ctx.gift && written.length) {
+    try {
+      const G = require('./_gifts');
+      const firstStay = written.find(w => w.row.type === 'stay') || written[0];
+      gift = (await G.createGift(sql, { orderId: firstStay.id, buyerGuestId: ctx.guestId, buyerFirst: ctx.firstName,
+        recipient: { first: ctx.gift.first, last: ctx.gift.last, email: ctx.gift.email, phone: ctx.gift.phone || null, message: ctx.gift.message || null } })).gift;
+    } catch (err) {
+      console.error('gift not created (booking kept, buyer can send it from My Bookings):', err.message);
+      await logAudit(sql, { action: 'gift_create_failed', success: false, actorType: 'system', targetType: 'order', targetId: written[0].id, metadata: { error: String(err.message || err).slice(0, 200) } });
+    }
+  }
+
   // The guest's confirmation email. A PDF that cannot be built never stops
   // the email: it goes without the attachment. The outcome is written to
   // Admin → Audit log (booking_confirmation_email), so a missing email can
@@ -933,7 +992,8 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       let pdf = null;
       try { pdf = await generateBookingConfirmationPdf(ctx.stays, ctx.experiences, razorpayOrderId, ctx.chargeCurrency, ctx.couponDiscount, ctx.confirmationCodes); out.pdf = true; }
       catch (err) { console.error('confirmation PDF failed (email goes without it):', err.message); out.pdfError = String(err.message || err).slice(0, 200); }
-      try { Object.assign(out, await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version, ctx.confirmationCodes)); }
+      const giftHtml = gift ? `<p><strong>This stay is a gift for ${String(gift.recipient_first_name + ' ' + gift.recipient_last_name).replace(/[&<>"']/g, '')}.</strong> We have emailed them the stay details (never the price) and a link to accept it. You still manage the booking, and any refund goes to your payment.</p>` : '';
+      try { Object.assign(out, await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version, ctx.confirmationCodes, giftHtml)); }
       catch (err) { console.error('Could not send booking confirmation email:', err); out.error = String(err.message || err).slice(0, 300); }
     }
     try {
@@ -949,8 +1009,10 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       try { phone = ((await sql`SELECT phone FROM guests WHERE id = ${ctx.guestId}`)[0] || {}).phone || null; }
       catch (err) { /* the email still goes, without the number */ }
     }
-    await sendHostBookingEmails(sql, ctx.stays, ctx.experiences, ctx.agreement.version, ctx.confirmationCodes,
-      { firstName: ctx.firstName, lastName: ctx.lastName, phone });
+    await sendHostBookingEmails(sql, ctx.stays, ctx.experiences, ctx.agreement.version, ctx.confirmationCodes, gift
+      ? { firstName: gift.recipient_first_name, lastName: gift.recipient_last_name, phone: null, gift: true,
+          note: `Gift — booked by ${gift.buyer_first_name || 'another guest'} · Gift, not yet accepted (you get their phone number once they accept)` }
+      : { firstName: ctx.firstName, lastName: ctx.lastName, phone });
   }
   catch (err) { console.error('host booking emails failed:', err.message); }
 
@@ -1000,4 +1062,6 @@ async function reconcilePayments(sql, razorpay, { deadlineMs = 4000, limit = 25 
 }
 
 module.exports = { confirmBooking, reconcilePayments, processScheduledRefunds, findDateConflicts, planRows, checkPayment,
-  loadCart, refundWholePayment, sendHostBookingEmails, issueConfirmationCode };
+  loadCart, refundWholePayment, sendHostBookingEmails, issueConfirmationCode,
+  // for group bookings (_group-bookings.js): the same row, emails and steps as any booking
+  insertRow, afterPaidRow, sendBookingConfirmationEmail, generateBookingConfirmationPdf };

@@ -36,7 +36,7 @@
 // together; refunds go through _refunds.js (one per booking, payment and
 // purpose, checked with Razorpay).
 
-const { priceStay, priceExperience, parseMaxGuests } = require('./_pricing');
+const { priceStay, priceExperience, parseMaxGuests, addOnOf, FREE_CANCEL_PERCENT, orderMoneyColumnsReady } = require('./_pricing');
 const { localMidnightMs, dateStr, takeHolds, attachHolds, releaseHolds, holdValidForConfirmation, HOLD_SECONDS, stayWindowEndMs, localDateAt } = require('./_booking-rules');
 const { claimForCancellation, releaseClaim, postThreadMessage, returnCouponValue, returnValue } = require('./_cancellations');
 const { safeRefund, refundAcrossPayments, hasChangePayments, planRefundAcrossPayments, dropPlannedRefunds } = require('./_refunds');
@@ -80,6 +80,37 @@ function feeAfterChange(newFee, row) {
 // coupon (only a host's cancellation does). The price cut is split like the
 // price was paid: the coupon's share of it is not refunded; the rest (and
 // any GST difference) is. Aerva's service fee stays as charged. Returns ₹.
+// The free cancellation add-on (_pricing.js) on a changed stay. It stays
+// with the booking: a change of dates keeps it (its 48-hour window is
+// always worked out from the arrival, so it moves with the new check-in);
+// a shorter stay does not refund it; a change that ADDS nights adds
+// FREE_CANCEL_PERCENT of the added nights' price (the new stay's average
+// nightly price × the nights added), with GST at the stay's rate and Aerva's
+// commission at the host's rate on that part. Sets q.freeCancel* in place.
+function addOnAfterChange(q, row) {
+  const fc = addOnOf(row);
+  q.freeCancelFee = fc.fee; q.freeCancelGst = fc.gst; q.freeCancelCommission = fc.commission; q.freeCancelExtra = 0;
+  if (fc.fee <= 0 || fc.refunded) return q;
+  const added = Math.max(0, Number(q.nights) - Number(row.nights));
+  if (added > 0 && Number(q.nights) > 0) {
+    const extra = Math.round(Number(q.subtotal) * added / Number(q.nights) * FREE_CANCEL_PERCENT / 100);
+    q.freeCancelExtra = extra;
+    q.freeCancelFee += extra;
+    q.freeCancelGst += Math.round(extra * (Number(q.gstRate) || 0) / 100);
+    q.freeCancelCommission += Math.round(extra * (Number(q.commissionRatePct) || 0) / 100);
+  }
+  return q;
+}
+// The columns of migrations/2026-11-10-01-free-cancellation.sql that a change moves
+// with the booking row, written in the same transaction as the row (and
+// only once that update has run). Guarded like the row: still paid, still
+// claimed by this change.
+function moneyColumnsUpdate(sql, id, claim, d) {
+  return sql`UPDATE orders SET free_cancel_fee = ${Math.round(Number(d.freeCancelFee) || 0)}, free_cancel_gst = ${Math.round(Number(d.freeCancelGst) || 0)},
+                               free_cancel_commission = ${Math.round(Number(d.freeCancelCommission) || 0)}
+             WHERE id = ${id} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim} RETURNING id`;
+}
+
 async function couponShareOfCut(sql, o, q, refundOwed, ids) {
   if (!(refundOwed > 0)) return 0;
   try {
@@ -217,6 +248,8 @@ async function otherPropertiesOf(sql, o) {
 async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
   // Moving nights to another property of the same host (_booking-transfers.js).
   if (input && input.kind === 'transfer') return require('./_booking-transfers').quoteTransfer(sql, orderId, guestId, input, requestedAt);
+  // Moved by Aerva under its check-in promise (_checkin-promise.js).
+  if (input && input.kind === 'rebook') return require('./_checkin-promise').quoteRebook(sql, orderId, guestId, input, requestedAt);
   const o = await loadBooking(sql, orderId);
   await assertChangeable(sql, o, guestId, requestedAt);
   // The day the guest asked, on the property's calendar.
@@ -262,6 +295,9 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
   const departure = String(input.departure || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(departure)) throw userError('Choose your new dates.');
   if (departure <= arrival) throw userError('Check-out must be after check-in.');
+  // A group (split-payment) booking: guests only ever go up (owner's rule,
+  // 10 Nov 2026) — nobody can remove a place once it is added.
+  if (o.group_booking_id && guests < Number(o.guests)) throw userError(`This is a group booking: the number of guests can only go up (it is ${o.guests} now). Nobody can remove a place once it is added.`);
   // Before check-in: tomorrow or later. During the stay: the day after
   // check-in or later (the check-in night is kept), and not before the day asked.
   if (o.started ? departure < askedOn : departure <= askedOn) throw userError(o.started ? 'During your stay, the new check-out cannot be before today.' : 'Check-out must be tomorrow or later.');
@@ -279,8 +315,9 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
   const q = priced.detail;
   // Aerva's service fee is never refunded: a cheaper change keeps the fee already paid.
   q.guestServiceFee = feeAfterChange(q.guestServiceFee, o);
+  addOnAfterChange(q, o);
   // Whole rupees, as stored (a listing's deposit may have paise).
-  const newTotal = Math.round(q.subtotal + q.gst + q.guestServiceFee + Number(q.depositAmount));
+  const newTotal = Math.round(q.subtotal + q.gst + q.guestServiceFee + Number(q.depositAmount) + q.freeCancelFee + q.freeCancelGst);
   if (arrival !== o.arrivalStr || departure !== o.departureStr) parts.push(`Dates: ${niceDate(o.arrivalStr)} – ${niceDate(o.departureStr)} → ${niceDate(arrival)} – ${niceDate(departure)}`);
   if (guests !== Number(o.guests)) parts.push(`Guests: ${o.guests} → ${guests}`);
   const oldPets = Array.isArray(o.pet_types) ? o.pet_types.length : 0;
@@ -289,6 +326,7 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
   const removed = o.amenityIds.filter(id => !amenityIds.includes(id)).length;
   if (added.length) parts.push(`Added: ${added.join(', ')}`);
   if (removed) parts.push(`Removed ${removed} add-on${removed === 1 ? '' : 's'}`);
+  if (q.freeCancelExtra > 0 && parts.length) parts.push(`Free cancellation for the added night${Math.max(0, q.nights - Number(o.nights)) === 1 ? '' : 's'}: ${inr(q.freeCancelExtra)} + GST`);
   return { booking: o, kind: 'stay', input: { arrival, departure, adults, children, infants: Math.max(0, Math.floor(Number(input.infants) || 0)), pets: s.pets, petTypes: s.petTypes, amenityIds },
            quote: Object.assign({ kind: 'stay' }, q), oldTotal: o.totalNow, newTotal, difference: newTotal - o.totalNow, summary: parts.join('; '),
            couponNotReturned: await couponShareOfCut(sql, o, Object.assign({ kind: 'stay' }, q), Math.max(0, o.totalNow - newTotal), [o.id]) };
@@ -341,6 +379,7 @@ async function withdrawChange(sql, { changeId, guestId }) {
 // them (orders_no_double_booking).
 async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
   if (change.requested && change.requested.kind === 'transfer') return require('./_booking-transfers').applyTransfer(sql, razorpay, change, { paymentId });
+  if (change.requested && change.requested.kind === 'rebook') return require('./_checkin-promise').applyRebook(sql, razorpay, change, { paymentId });
   const o = await loadBooking(sql, change.order_id);
   if (!o || o.status !== 'paid') throw userError('This booking is no longer active.', 409);
   if (!beforeCutoff(o, change.created_at)) throw userError(CLOSED);
@@ -357,15 +396,27 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
   const refundOwed = refundOwedFull - couponLostPart;
   const kindBase = `change-${change.id}`;
   // The values one stay row takes from a priced stay detail.
+  // The free cancellation add-on (addOnAfterChange) is part of the row's
+  // commission and payout, as at booking (_confirm-booking.js planRows).
   const stayValues = (d) => {
-    const commission = Number(d.baseCommission) + Number(d.amenityCommission);
+    const stayCommission = Number(d.baseCommission) + Number(d.amenityCommission);
+    const fcFee = Math.round(Number(d.freeCancelFee) || 0), fcGst = Math.round(Number(d.freeCancelGst) || 0), fcCommission = Math.round(Number(d.freeCancelCommission) || 0);
+    const commission = stayCommission + fcCommission;
     let releaseAt = null;
     if (d.depositAmount > 0) { const x = new Date(input.departure + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
-    return { commission, releaseAt, total: Math.round(d.subtotal + d.gst + d.guestServiceFee + Number(d.depositAmount)),
-             rate: d.subtotal > 0 ? Number(((commission / d.subtotal) * 100).toFixed(2)) : 0 };
+    return { commission, releaseAt, total: Math.round(d.subtotal + d.gst + d.guestServiceFee + Number(d.depositAmount) + fcFee + fcGst),
+             payout: Math.round(d.subtotal + fcFee - commission),
+             rate: d.subtotal > 0 ? Number(((stayCommission / d.subtotal) * 100).toFixed(2)) : 0 };
+  };
+  const moneyReady = await orderMoneyColumnsReady(sql);
+  // The row's update, with the money columns in the same transaction once they exist.
+  const withMoney = async (main, extras) => {
+    if (!moneyReady || !extras.length) return await main;
+    const res = await sql.transaction(extras.concat([main]));
+    return res[res.length - 1];
   };
   // What follows the stay row itself: its add-ons and co-host shares.
-  const afterStay = async (orderId, d, commission) => {
+  const afterStay = async (orderId, d, payout) => {
     try {
       await sql`DELETE FROM order_amenities WHERE order_id = ${orderId}`;
       for (const a of (d.amenities || [])) {
@@ -373,7 +424,7 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
                   VALUES (${orderId}, ${a.id || null}, ${a.name}, ${a.pricePerNight}, ${JSON.stringify(a.dates)}, ${a.total})`;
       }
     } catch (err) { console.error('order_amenities not updated:', err.message); }
-    try { await sql`UPDATE order_cohost_shares SET amount = round(${d.subtotal - commission}::numeric * percent / 100) WHERE order_id = ${orderId}`; } catch (e) { /* none */ }
+    try { await sql`UPDATE order_cohost_shares SET amount = round(${payout}::numeric * percent / 100) WHERE order_id = ${orderId}`; } catch (e) { /* none */ }
   };
   // A shorter stay agreed during the stay: held as Aerva credit, not refunded.
   const asCredit = refundOwed > 0 && o.started && (o.charge_currency || 'INR') === 'INR';
@@ -398,7 +449,7 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
           s AS (
             UPDATE orders SET arrival = ${input.arrival}, departure = ${input.departure}, nights = ${d.nights}, guests = ${d.guests},
               subtotal = ${d.subtotal}, discount_amount = ${d.discountAmount || 0}, gst = ${d.gst}, guest_service_fee = ${d.guestServiceFee},
-              total = ${v.total}, commission_rate = ${v.rate}, commission_amount = ${v.commission}, payout_amount = ${d.subtotal - v.commission},
+              total = ${v.total}, commission_rate = ${v.rate}, commission_amount = ${v.commission}, payout_amount = ${v.payout},
               deposit_amount = ${d.depositAmount}, deposit_status = ${d.depositAmount > 0 ? 'held' : 'none'}, deposit_release_at = ${v.releaseAt},
               pet_types = ${JSON.stringify(d.petTypes || [])}, service_animal_types = ${JSON.stringify(d.serviceAnimals || [])}, young_litter_count = ${Number(d.youngLitterCount) || 0},
               cancel_claim = NULL, cancel_claimed_at = NULL
@@ -418,7 +469,7 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
           await logAudit(sql, { action: 'booking_change_half_applied', success: false, actorType: 'system', targetType: 'order', targetId: o.id,
             metadata: { changeId: change.id, stayUpdated: up.s, experienceUpdated: up.e } });
         }
-        await afterStay(q.stayOrderId, d, v.commission);
+        await afterStay(q.stayOrderId, d, v.payout);
         try { await sql`UPDATE order_cohost_shares SET amount = round(${x.subtotal - x.commissionAmount}::numeric * percent / 100) WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
       } else if (q.kind === 'experience') {
         const x = q.experience;
@@ -433,17 +484,17 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
         try { await sql`UPDATE order_cohost_shares SET amount = round(${x.subtotal - x.commissionAmount}::numeric * percent / 100) WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
       } else {
         const d = q, v = stayValues(d);
-        const up = await sql`
+        const up = await withMoney(sql`
           UPDATE orders SET arrival = ${input.arrival}, departure = ${input.departure}, nights = ${d.nights}, guests = ${d.guests},
             subtotal = ${d.subtotal}, discount_amount = ${d.discountAmount || 0}, gst = ${d.gst}, guest_service_fee = ${d.guestServiceFee},
-            total = ${v.total}, commission_rate = ${v.rate}, commission_amount = ${v.commission}, payout_amount = ${d.subtotal - v.commission},
+            total = ${v.total}, commission_rate = ${v.rate}, commission_amount = ${v.commission}, payout_amount = ${v.payout},
             deposit_amount = ${d.depositAmount}, deposit_status = ${d.depositAmount > 0 ? 'held' : 'none'}, deposit_release_at = ${v.releaseAt},
             pet_types = ${JSON.stringify(d.petTypes || [])}, service_animal_types = ${JSON.stringify(d.serviceAnimals || [])}, young_litter_count = ${Number(d.youngLitterCount) || 0},
             cancel_claim = NULL, cancel_claimed_at = NULL
           WHERE id = ${o.id} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}
-          RETURNING id`;
+          RETURNING id`, (Number(d.freeCancelFee) > 0 ? [moneyColumnsUpdate(sql, o.id, claim, d)] : []));
         if (!up.length) throw userError('This booking changed while the change was being made. Please try again.', 409);
-        await afterStay(o.id, d, v.commission);
+        await afterStay(o.id, d, v.payout);
       }
     } catch (err) {
       if (err && err.code === '23P01') throw userError('The new dates are no longer available.', 409);
@@ -628,6 +679,7 @@ async function startChangePayment(sql, razorpay, { changeId, guestId, ip }) {
   // The payment window holds the nights (a stay, or the stay of a pair).
   // An experience on its own is not date-exclusive, as at checkout.
   const holdStays = c.requested && c.requested.kind === 'transfer' ? require('./_booking-transfers').transferHolds(c)
+    : c.requested && c.requested.kind === 'rebook' ? require('./_checkin-promise').rebookHolds(c)
     : o.kind === 'stay' ? [{ listingId: o.listing_id, roomId: o.room_id, arrival: c.requested.arrival, departure: c.requested.departure }]
     : o.kind === 'pair' ? [{ listingId: o.hosting_listing_id, roomId: null, arrival: c.requested.arrival, departure: c.requested.departure }] : [];
   const held = await takeHolds(sql, holdStays, { guestKey: 'g:' + guestId, ip });

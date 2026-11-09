@@ -835,6 +835,11 @@ module.exports = async (req, res) => {
   const cleanEmail = email.trim().toLowerCase();
 
   if (!password || typeof password !== 'string' || password.length < 8) {
+    // Signing in with a mistyped short password is just a wrong password:
+    // the length rule is for choosing one, not for logging in.
+    if (mode === 'login' && typeof password === 'string' && password) {
+      return res.status(401).json({ error: 'Incorrect email or password.' });
+    }
     return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   }
 
@@ -857,41 +862,41 @@ module.exports = async (req, res) => {
     }
 
     try {
-      const existing = await sql`SELECT id FROM guests WHERE email = ${cleanEmail}`;
-      if (existing[0]) {
-        await logAudit(sql, {
-          action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
-          metadata: { reason: 'email_already_registered', ip: clientIp }
-        });
-        return res.status(409).json({ error: 'An account with this email already exists. Try logging in instead.' });
-      }
-
-      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-
-      // Phone is stored in ONE format platform-wide — E.164 — so that a
-      // guest who signs up here with "9876543210" and later logs in via
-      // phone/OTP with "+919876543210" lands on the SAME account. Before
-      // this, those were two different strings, the partial unique index
-      // on guests.phone saw no conflict, and the person quietly ended up
-      // with two accounts holding separate bookings and coupons.
+      // Each problem gets its own message (owner, 9 Nov 2026): the email,
+      // the phone number, or both. Emails are compared without case and
+      // phones by their digits, so an older row saved as "9876543210" or
+      // "Name@Gmail.com" is still found (it used to slip through, or end in
+      // "Could not create your account").
       let normalizedPhone = null;
       if (phone && String(phone).trim()) {
         normalizedPhone = normalizeToE164(phone);
         if (!normalizedPhone) {
-          return res.status(400).json({ error: "That phone number doesn't look right. Include your country code, like +919876543210." });
-        }
-        // idx_guests_phone_unique would reject this at the database level
-        // anyway, but as an opaque 500 — checking here means the person
-        // gets told what actually happened.
-        const phoneTaken = await sql`SELECT id FROM guests WHERE phone = ${normalizedPhone}`;
-        if (phoneTaken[0]) {
-          await logAudit(sql, {
-            action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
-            metadata: { reason: 'phone_already_registered', ip: clientIp }
-          });
-          return res.status(409).json({ error: 'An account already uses this phone number. Log in to that account, or leave the phone blank and add it later.' });
+          return res.status(400).json({ error: "That phone number doesn't look right. Include your country code, like +919876543210.", field: 'phone' });
         }
       }
+      const emailTaken = (await sql`SELECT id FROM guests WHERE lower(btrim(email)) = ${cleanEmail} LIMIT 1`).length > 0;
+      let phoneTaken = false;
+      if (normalizedPhone) {
+        const digits = normalizedPhone.replace(/\D/g, '');
+        phoneTaken = (await sql`SELECT id FROM guests WHERE phone IS NOT NULL
+          AND (regexp_replace(phone, '[^0-9]', '', 'g') = ${digits}
+               OR (${digits.startsWith('91') && digits.length === 12} AND regexp_replace(phone, '[^0-9]', '', 'g') IN (${digits.slice(2)}, ${'0' + digits.slice(2)})))
+          LIMIT 1`).length > 0;
+      }
+      if (emailTaken || phoneTaken) {
+        await logAudit(sql, {
+          action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,
+          metadata: { reason: emailTaken && phoneTaken ? 'email_and_phone_already_registered' : emailTaken ? 'email_already_registered' : 'phone_already_registered', ip: clientIp }
+        });
+        const error = emailTaken && phoneTaken
+          ? 'This email and this phone number are already linked to an Aerva account. Log in instead.'
+          : emailTaken
+            ? 'An account with this email already exists. Log in instead, or use a different email.'
+            : 'This phone number is already linked to another Aerva account. Log in with it, use a different number, or leave the phone blank and add it later.';
+        return res.status(409).json({ error, field: emailTaken && phoneTaken ? 'both' : emailTaken ? 'email' : 'phone' });
+      }
+
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
       const inserted = await sql`
         INSERT INTO guests (email, password_hash, name, phone, email_verified)
@@ -925,6 +930,13 @@ module.exports = async (req, res) => {
       // the guest clicks the verification link.
       return res.status(200).json({ success: true, requiresVerification: true, email: cleanEmail });
     } catch (err) {
+      // Two sign-ups at the same moment: the database's own unique rule.
+      if (err && err.code === '23505') {
+        const phoneClash = /phone/i.test(String(err.constraint || err.detail || err.message));
+        return res.status(409).json({ field: phoneClash ? 'phone' : 'email', error: phoneClash
+          ? 'This phone number is already linked to another Aerva account. Log in with it, or use a different number.'
+          : 'An account with this email already exists. Log in instead, or use a different email.' });
+      }
       console.error('guest-auth (signup) error:', err);
       await logAudit(sql, {
         action: 'guest_signup', success: false, actorType: 'guest', actorIdentifier: cleanEmail,

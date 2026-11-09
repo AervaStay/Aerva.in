@@ -43,8 +43,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="aerva.css?v=2026-10-29c">
-<script src="aerva-cohost.js"></script>
+<link rel="stylesheet" href="aerva.css?v=2026-11-10b">
+<script src="aerva-cohost.js?v=2026-11-09a"></script>
 </head>
 <body class="showing-hero">
 
@@ -268,7 +268,7 @@
           <div class="guest-row">
             <div class="guest-row-text">
               <div class="guest-row-title">Adults</div>
-              <div class="guest-row-sub">Ages 13 or above</div>
+              <div class="guest-row-sub">18 or over</div>
             </div>
             <div class="guest-stepper">
               <button type="button" class="guest-step-btn" data-type="adults" data-action="dec" aria-label="Decrease adults">−</button>
@@ -280,7 +280,7 @@
           <div class="guest-row">
             <div class="guest-row-text">
               <div class="guest-row-title">Children</div>
-              <div class="guest-row-sub">Ages 2–12</div>
+              <div class="guest-row-sub">Ages 2–17</div>
             </div>
             <div class="guest-stepper">
               <button type="button" class="guest-step-btn" data-type="children" data-action="dec" aria-label="Decrease children">−</button>
@@ -581,6 +581,13 @@
       </div>
     </div>
 
+    <!-- Your first and last name, as on your government ID (aerva.js
+         renderProfileNameRow; api/guest-profile.js mode saveName). -->
+    <div class="profile-section" id="profileNameSection">
+      <div class="profile-section-title">Your name</div>
+      <div id="profileNameBox"></div>
+    </div>
+
     <div class="profile-section">
       <div class="profile-section-title">Get to know me</div>
       <p class="profile-hint">Shown to a host once you book with them, and to guests who book with you. All optional.</p>
@@ -805,6 +812,10 @@
         <label for="listDescription">Tell us about the property <span class="required-mark">*</span></label>
         <textarea id="listDescription" name="Description" rows="4" placeholder="What makes this place worth staying at? Style, setting, story — whatever you'd want a guest to know." style="background:transparent; border:none; border-bottom:1px solid var(--line-dark); padding:10px 2px; font-family:'Jost', sans-serif; font-size:15px; color:var(--ink); width:100%; max-width:100%; box-sizing:border-box; resize:vertical;" required></textarea>
       </div>
+      <!-- What's special / Recommended by your host / Aerva experiences for
+           your guests: optional, drawn by aerva-special.js (owner, 9 Nov 2026). -->
+      <div id="listSpecialEditor"></div>
+      <p id="listSpecialNote" style="font-size:12.5px; color:#6d5427; margin:-12px 0 18px; display:none;"></p>
 
       <div class="eyebrow" style="margin-top:10px; margin-bottom:-4px;">Amenities</div>
       <div class="check-grid">
@@ -1154,6 +1165,17 @@
       <p class="listing-confirm" id="expConfirmMsg" style="display:none; font-size:14.5px; font-weight:600; color:#3a7d44; background:#eef6ef; border:1px solid #3a7d44; padding:12px 16px; border-radius:4px;">✓ Thank you — we've received your experience. Our team reviews every submission personally and will follow up by email within a few days.</p>
       <p class="listing-error" id="expErrorMsg" style="display:none; font-size:13px; color:#a3402f;"></p>
     </form>
+  </div>
+</section>
+
+<!-- ================= GROUP BOOKING / GIFT (index.html?group= / ?gift=) ================= -->
+<section class="pad" id="groupGiftView" style="display:none;">
+  <div class="wrap ag-wrap">
+    <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      Back to all homes
+    </a>
+    <div id="groupGiftBody" aria-live="polite"></div>
   </div>
 </section>
 
@@ -1564,12 +1586,13 @@
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <script src="aerva-photo-location.js?v=2026-11-07a" defer></script>
-<script src="aerva-policies.js?v=2026-11-09e" defer></script>
-<script src="aerva-help.js" defer></script>
+<script src="aerva-policies.js?v=2026-11-10b" defer></script>
+<script src="aerva-help.js?v=2026-11-09a" defer></script>
 <script src="aerva-privacy.js?v=2026-10-10i" defer></script>
 <script src="aerva-id-verify.js?v=2026-11-05a" defer></script>
 <script src="aerva-bank-fields.js?v=2026-10-13a" defer></script>
-<script src="aerva.js?v=2026-11-09f" defer></script>
+<script src="aerva-special.js?v=2026-11-10a" defer></script>
+<script src="aerva.js?v=2026-11-10b" defer></script>
 
 </body>
 </html>

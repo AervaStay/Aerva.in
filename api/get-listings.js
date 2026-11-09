@@ -64,7 +64,7 @@ const { neon } = require('@neondatabase/serverless');
 const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
         propertyCutoffs, PROPERTY_TIERS, experienceTier, EXPERIENCE_FACTORS,
         cityCutoffs, cutoffsForCity, isReviewDay, nextReviewDate, reviewPeriodStart } = require('./_tiers');
-const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { REVIEW_WINDOW_DAYS, reviewPhotosOut } = require('./_review-policy');
 const { guestTier, GUEST_FACTORS, QUALIFYING_BOOKING_MIN, GUEST_TIERS, HOST_TIERS,
         tierByKey, applyDecayCap } = require('./_tiers');
 const { verifyToken, secretMatches } = require('./_approval-token');
@@ -597,8 +597,22 @@ const JOBS = [
   // or the 24 hours to pay the difference have passed.
   { name: 'booking_changes_expiry', label: 'Close booking changes past their time limit', everyMinutes: 15,
     run: (c) => expireChanges(c.sql) },
+  // Group bookings (_group-bookings.js): close groups at 2 hours (confirm, or
+  // ask the organiser about a smaller booking), cancel unanswered ones after
+  // 30 minutes with full refunds, remind organisers 30 minutes before the end.
+  { name: 'group_bookings', label: 'Group bookings: close at 2 hours, confirm or ask the organiser, refund when they do not go ahead, reminders', everyMinutes: 5,
+    run: (c) => require('./_group-bookings').runJob(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  // Gift bookings (_gifts.js): remind recipients who have not accepted (3 days
+  // and 1 day before check-in, the buyer told too); tell recipients of a cancellation.
+  { name: 'gift_reminders', label: 'Gift bookings: remind recipients to accept (3 days and 1 day before check-in); cancellation notices', everyMinutes: 60, lockMinutes: 10,
+    run: (c) => require('./_gifts').runReminders(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'coupon_release', label: 'Release cancellation coupons (15 minutes after a cancellation)', everyMinutes: 5,
     run: (c) => releaseDueCoupons(c.sql, { force: true }) },
+  // Aerva's check-in promise (_checkin-promise.js): at check-in, ask guests
+  // of listings no guest has confirmed yet whether the place is real; send
+  // payouts that were on hold once their hold ends.
+  { name: 'checkin_promise', label: 'Check-in promise: ask guests if the place is real (at check-in); release payouts whose hold has ended', everyMinutes: 15,
+    run: (c) => require('./_checkin-promise').runJob(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'payouts', label: 'Payouts (5 PM on the day after check-in; retries every 4 hours; payout and refund status)', everyMinutes: 5,
     run: (c) => runAutoPayouts(c.sql, { deadlineMs: Math.min(4000, c.remainingMs), razorpay: razorpayClient() }) },
   { name: 'template_messages', label: 'Scheduled message templates', everyMinutes: 5,
@@ -958,6 +972,23 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- Gift and group booking links, before sign-in ----
+  // GET ?giftPreview=<token>  → the gift (stay, who sent it, message; no price, no address)
+  // GET ?groupPreview=<token> → the stay and the per-place amount (no names)
+  if (req.method === 'GET' && (req.query.giftPreview || req.query.groupPreview)) {
+    try {
+      const out = req.query.giftPreview
+        ? await require('./_gifts').publicView(sql, String(req.query.giftPreview).slice(0, 100))
+        : await require('./_group-bookings').publicPreview(sql, String(req.query.groupPreview).slice(0, 64));
+      if (out.error) return res.status(out.status || 400).json({ error: out.error });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json(out);
+    } catch (err) {
+      console.error('gift/group preview failed:', err);
+      return res.status(500).json({ error: 'Could not load this right now. Please try again.' });
+    }
+  }
+
   // ---- The scheduler (see JOBS above and _scheduler.js) ----
   // GET ?runSchedules=1 (cron secret): ONE external pinger every 5 minutes
   // (cron-job.org) runs every job that is due. ?releaseCoupons=1 kept for
@@ -1181,7 +1212,7 @@ module.exports = async (req, res) => {
         const PAGE = Number.isFinite(askedLimit) && askedLimit >= 1 ? Math.min(100, askedLimit) : 5;
         const reviewPage = a.host_id ? await sql`
           SELECT r.published_at, r.comment, r.hygiene, r.communication, r.services, r.value_rating, r.location,
-                 l.property_name
+                 l.property_name, COALESCE(to_jsonb(r)->'photos', '[]'::jsonb) AS photos
           FROM listing_reviews r JOIN listings l ON l.id = r.listing_id
           WHERE l.host_id = ${a.host_id} AND l.status = 'approved'
             AND COALESCE(l.listing_type, 'stay') = 'stay'
@@ -1194,7 +1225,8 @@ module.exports = async (req, res) => {
           month: r.published_at ? new Date(r.published_at).toISOString().slice(0, 7) : null,
           property: r.property_name,
           score: reviewScore({ hygiene: n(r.hygiene), communication: n(r.communication), services: n(r.services), value: n(r.value_rating), location: n(r.location) }, REVIEW_FACTORS),
-          comment: String(r.comment || '')
+          comment: String(r.comment || ''),
+          photos: reviewPhotosOut(r.photos)
         }));
         const hasMoreReviews = reviewPage.length > PAGE;
         // Asked for a further page only: send just that.
@@ -1253,7 +1285,8 @@ module.exports = async (req, res) => {
             listings: hostListings.filter(l => privacy.show_other_listings || Number(l.id) === listingId).map(l => ({
               id: l.id,
               name: l.property_name,
-              place: [l.area, l.city].filter(Boolean).join(', '),
+              place: [l.area, l.city].filter(Boolean).filter((v, i, a) => a.findIndex(x => String(x).trim().toLowerCase() === String(v).trim().toLowerCase()) === i).join(', '),
+              city: l.city || null,   // for the "Hosting in" filter on the profile
               type: l.listing_type === 'experience' ? 'experience' : 'stay',
               propertyType: l.property_type || null,
               price: Number(l.nightly_rate) || null,
@@ -1340,6 +1373,21 @@ module.exports = async (req, res) => {
       res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=3600, stale-while-revalidate=86400');
       return res.status(200).json(out);
     }
+    // ---- Aerva experiences a host suggests on a stay (_listing-special.js) ----
+    // GET ?suggestedFor=<stayId> → the live ones, for the guest's booking
+    //   step, booking confirmation and My Bookings (never the listing page).
+    // GET ?experiencePick=1&q=&city=&ids= → live experiences from any host
+    //   for the host's picker (same city first); ids= the ones already picked.
+    if (req.query.suggestedFor !== undefined) {
+      const experiences = await require('./_listing-special').suggestedFor(sql, Number(req.query.suggestedFor));
+      res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=300');
+      return res.status(200).json({ experiences });
+    }
+    if (req.query.experiencePick === '1') {
+      const experiences = await require('./_listing-special').pickExperiences(sql, { q: req.query.q, city: req.query.city, ids: req.query.ids });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({ experiences });
+    }
     if (req.query.nearbyConsent === '1') {
       const auth = String(req.headers['authorization'] || '');
       const who = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
@@ -1384,6 +1432,7 @@ module.exports = async (req, res) => {
           SELECT r.published_at, r.comment,
                  r.hygiene, r.communication, r.services, r.value_rating, r.location,
                  r.organisation, r.guide, r.safety,
+                 COALESCE(to_jsonb(r)->'photos', '[]'::jsonb) AS photos,
                  g.name AS guest_name
           FROM listing_reviews r
           LEFT JOIN guests g ON g.id = r.guest_id
@@ -1423,7 +1472,8 @@ module.exports = async (req, res) => {
             month: isNaN(d) ? null : d.toISOString().slice(0, 7),
             score: reviewScore(f, set),
             factors: pick(f, set),
-            comment: String(r.comment || '')
+            comment: String(r.comment || ''),
+            photos: reviewPhotosOut(r.photos)
           };
         });
         return res.status(200).json({
@@ -1908,6 +1958,13 @@ module.exports = async (req, res) => {
         pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
         created_at, timezone,
         COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough,
+        -- What's special / Recommended by your host (_listing-special.js),
+        -- read this way so search works before the migration. The host's
+        -- suggested experiences are NOT here: they are shown only while
+        -- booking (?suggestedFor= below).
+        COALESCE(to_jsonb(listings)->'special_highlights', '[]'::jsonb) AS special_highlights,
+        to_jsonb(listings)->>'special_story' AS special_story,
+        COALESCE(to_jsonb(listings)->'host_recommendations', '[]'::jsonb) AS host_recommendations,
         (
           ${arrivalFilter}::date IS NULL OR (
             NOT EXISTS (

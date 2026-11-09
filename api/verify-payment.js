@@ -30,6 +30,15 @@ const razorpay = new Razorpay({
 });
 const sql = neon(process.env.DATABASE_URL);
 
+// Group booking payments (_group-bookings.js) have no checkout cart: they
+// are found by their claim.
+async function isGroupPayment(oid) {
+  try { return (await sql`SELECT 1 FROM group_claims WHERE razorpay_order_id = ${oid}`).length > 0; } catch (e) { return false; }
+}
+async function groupClaimFor(oid) {
+  try { return (await sql`SELECT g.token, c.status, c.failed_reason FROM group_claims c JOIN group_bookings g ON g.id = c.group_id WHERE c.razorpay_order_id = ${oid}`)[0] || null; } catch (e) { return null; }
+}
+
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -54,6 +63,7 @@ module.exports = async (req, res) => {
       if (!tok || tok.action !== 'guest-session') return res.status(401).json({ error: 'Please log in again.' });
       let cart = null;
       try { cart = (await sql`SELECT guest_id FROM checkout_carts WHERE razorpay_order_id = ${oid} LIMIT 1`)[0]; } catch (e) { /* no carts table */ }
+      if (!cart) { try { cart = (await sql`SELECT guest_id FROM group_claims WHERE razorpay_order_id = ${oid} LIMIT 1`)[0]; } catch (e) { /* before the database update */ } }
       if (!cart || Number(cart.guest_id) !== Number(tok.listingId)) return res.status(404).json({ error: 'Payment not found.' });
       let pay = null;
       try {
@@ -127,6 +137,18 @@ module.exports = async (req, res) => {
         };
       } catch (err) { console.error('booking summary failed:', err.message); return null; }
     };
+    // A payment for places in a group booking: the page goes back to the
+    // group's live status (a repeat call finds the same answer).
+    if (result.group || (result.status === 'duplicate' && await isGroupPayment(razorpay_order_id))) {
+      if (result.status === 'conflict') return res.status(200).json({ verified: false, refunded: true, message: result.message, group: result.group || null });
+      if (result.status === 'confirmed') return res.status(200).json({ verified: true, group: result.group });
+      if (result.status === 'duplicate') {
+        const c = await groupClaimFor(razorpay_order_id) || {};
+        if (c.status === 'paid') return res.status(200).json({ verified: true, alreadyConfirmed: true, group: { token: c.token } });
+        return res.status(200).json({ verified: false, refunded: c.status === 'rejected', alreadyHandled: true, group: { token: c.token },
+          message: c.status === 'rejected' ? `${c.failed_reason || 'This payment was not counted.'} It is being refunded in full.` : 'This payment is still being checked. Please do not pay again.' });
+      }
+    }
     switch (result.status) {
       case 'confirmed': return res.status(200).json({ verified: true, confirmationCodes: result.confirmationCodes || [], summary: await summaryFor() });
       case 'duplicate': {

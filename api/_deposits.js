@@ -96,7 +96,11 @@ async function releaseDueDeposits(sql, razorpay, { deadlineMs = 6000 } = {}) {
         ? Math.round(Number(order.deposit_amount) * 100)
         : await refundSubunitForInr(sql, { razorpayOrderId: order.razorpay_order_id, amountInr: Number(order.deposit_amount), currency });
       if (!amount) throw new Error(`No record of the amount charged in ${currency} for this booking — left 'held' for manual review.`);
-      refund = await safeRefund(sql, razorpay, { orderId: order.id, paymentId: order.razorpay_payment_id, amountSubunit: amount, kind: 'deposit' });
+      // A group booking's deposit goes back to every payer, in proportion (_refunds.js).
+      const group = currency === 'INR' ? await require('./_refunds').groupPaymentsOf(sql, order.id) : null;
+      refund = group && group.length
+        ? { id: (await require('./_refunds').refundAcrossPayments(sql, razorpay, { orderId: order.id, amountInr: Number(order.deposit_amount), kindBase: 'deposit' })).firstRefundId }
+        : await safeRefund(sql, razorpay, { orderId: order.id, paymentId: order.razorpay_payment_id, amountSubunit: amount, kind: 'deposit' });
     } catch (err) {
       await sql`UPDATE orders SET deposit_status = 'held' WHERE id = ${order.id} AND deposit_status = 'refunding'`;
       const msg = (err && err.error && err.error.description) ? 'Razorpay: ' + err.error.description : String((err && err.message) || err);

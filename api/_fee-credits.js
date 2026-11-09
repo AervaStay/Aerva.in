@@ -27,6 +27,28 @@
 //
 // Only bookings paid in rupees get a credit; one paid in another currency
 // has its service fee refunded with the rest, at once.
+//
+// CREDIT FOR NEW DATES ONLY (owner, 10 Nov 2026): a natural disaster (or a
+// government order / travel restriction) approved by Aerva turns everything
+// the guest paid into credit with reason 'natural_disaster' and
+// cash_refundable = false (migrations/2026-11-10-02-cancellation-rules.sql).
+// It never expires (expires_at = 'infinity'), is never refunded at its end
+// (runExpired), cannot be refunded on request (refundCredit), and its
+// reminders never speak of a refund or an end date. Until the database
+// update has run, reason 'natural_disaster' alone marks it.
+//   The one exception (owner, 00:54): an admin may allow ONE guest's
+//   non-cash credit to be refunded (allowCashRefund, Admin → Lookup →
+//   guest): only the unused part, only to the original payment of the
+//   booking that made it, once. Switched off again until the guest uses it.
+//   The guest sees "Refund to original payment" only while it is allowed.
+const NON_CASH_REASONS = ['natural_disaster'];
+// A row (from SELECT f.* or to_jsonb): credit for new dates only?
+function nonCash(c) {
+  if (!c) return false;
+  return c.cash_refundable === false || String(c.cash_refundable) === 'false' || NON_CASH_REASONS.includes(c.reason);
+}
+// May this credit go back to the original payment now?
+function refundableNow(c) { return !nonCash(c) || !!c.cash_refund_allowed_at; }
 
 const FEE_CREDIT_DAYS = 30;            // a credit given back after it ended gets at least this long
 // Every credit lasts CREDIT_MONTHS from the day it is issued; what is left
@@ -247,31 +269,37 @@ async function creditForTransfer(sql, orderId, amount, { changeId = null, transf
   return out;
 }
 
-// A proven emergency cancellation that is approved (by the host, or by
-// Aerva): Aerva's service fee on the booking comes back as Aerva credit
-// (owner, 9 Nov 2026) — as far as it was paid in money. Same credit rules as
-// any other: use it, or have it refunded from My Bookings. Returns { credit }.
-async function creditForEmergencyFee(sql, orderId) {
+// Aerva's check-in promise (_checkin-promise.js): the guest was moved to a
+// cheaper place, so the difference is held as Aerva credit (owner, 9 Nov
+// 2026) — used on another booking, or refunded whenever the guest asks.
+// orderId: the original booking (its payment paid it). Returns { credit, expiresAt }.
+async function creditForCheckinRebook(sql, orderId, amount, { newOrderId = null, toName = '' } = {}) {
+  const want = Math.max(0, Math.round(Number(amount) || 0));
   const out = { credit: 0, expiresAt: null };
-  const o = (await sql`SELECT id, guest_id, guest_email, suite_name, razorpay_payment_id, created_at AS paid_at, guest_service_fee, to_jsonb(orders)->>'confirmation_code' AS code
+  if (!want) return out;
+  const o = (await sql`SELECT id, guest_id, guest_email, suite_name, razorpay_payment_id, created_at AS paid_at, to_jsonb(orders)->>'confirmation_code' AS code
                        FROM orders WHERE id = ${Number(orderId) || 0}`)[0];
-  const fee = o ? Math.max(0, Math.round(Number(o.guest_service_fee) || 0)) : 0;
-  if (!fee || !o.razorpay_payment_id || !/^pay_/.test(String(o.razorpay_payment_id))) return out;
+  if (!o) return out;
   const c = (await sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at, reason)
-            VALUES (${o.guest_id}, ${o.guest_email}, ${o.id}, ${o.razorpay_payment_id}, ${fee}, ${fee}, ${creditEnd(o.paid_at)}::timestamptz, 'emergency_fee')
+            VALUES (${o.guest_id}, ${o.guest_email}, ${o.id}, ${o.razorpay_payment_id}, ${want}, ${want}, ${creditEnd(o.paid_at)}::timestamptz, 'checkin_rebook')
             ON CONFLICT (source_order_id) DO UPDATE SET amount = fee_credits.amount + EXCLUDED.amount, remaining = fee_credits.remaining + EXCLUDED.remaining, status = 'active',
               expires_at = GREATEST(fee_credits.expires_at, EXCLUDED.expires_at)
             WHERE fee_credits.status <> 'refunding' RETURNING *`)[0];
-  if (!c) return out;
-  out.credit = fee; out.expiresAt = c.expires_at;
-  await entry(sql, c.id, 'issued', fee, { orderId: o.id, reference: o.razorpay_payment_id, note: `Emergency cancellation with proof${o.code ? ` (booking ${o.code})` : ''}: Aerva’s service fee returned as credit` });
-  await email(o.guest_email, `Aerva’s service fee of ${inr(fee)} is back with you as credit`, `
+  if (!c) throw Object.assign(new Error('Your Aerva credit is being refunded right now. Please try again in a few minutes.'), { isUserFacing: true, status: 409 });
+  out.credit = want; out.expiresAt = c.expires_at;
+  await entry(sql, c.id, 'issued', want, { orderId: o.id, reference: o.razorpay_payment_id,
+    note: `Check-in promise${o.code ? ` (booking ${o.code})` : ''}: moved to a cheaper place${toName ? ` (${String(toName).slice(0, 120)})` : ''}${newOrderId ? `, new booking #${newOrderId}` : ''} — the difference` });
+  await email(o.guest_email, `${inr(want)} is with you as Aerva credit`, `
     <div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
-      <p>Because your cancellation of <strong>${esc(o.suite_name)}</strong> was for an emergency you showed proof of, Aerva’s service fee of <strong>${inr(fee)}</strong> is held for you as Aerva credit${out.expiresAt ? ` until <strong>${day(out.expiresAt)}</strong>` : ''}.</p>
-      <p>Use it on your next stay or experience, or have it refunded to your original payment method at any time from My Bookings.</p>
+      <p>Your new place costs less than your original booking at <strong>${esc(o.suite_name)}</strong>, so the <strong>${inr(want)}</strong> difference is held for you as Aerva credit${out.expiresAt ? ` until <strong>${day(out.expiresAt)}</strong>` : ''}.</p>
+      <p>Book another stay or experience by then and it is taken off what you pay, automatically. Or have it refunded to your original payment method at any time from My Bookings — whatever is left on that date is refunded to it automatically.</p>
       <p style="font-size:12px; opacity:0.6;">Questions: hello@aerva.in</p></div>`);
   return out;
 }
+
+// (creditForEmergencyFee — the service fee back as credit on a proven
+// emergency — was removed on 10 Nov 2026. Its old credits, reason
+// 'emergency_fee', stay as they are: ordinary credit, refundable.)
 
 // A host cancels (at any time; within 48 hours of check-in the host also
 // pays the guest a 10% coupon — owner's rule, 29 Oct 2026), or the host of
@@ -282,7 +310,11 @@ async function creditForEmergencyFee(sql, orderId) {
 // at the end of the credit period is refunded automatically. What the
 // booking was paid with credit comes back onto that credit. reason:
 // 'host_cancelled_late' | 'experience_cancelled'. Returns { total, back }.
-async function creditForWholeBooking(sql, orderIds, reason) {
+// opts.cashRefundable false (a natural disaster, _cancellations.js): the
+// credit is for new dates only — it never expires, is never refunded, and
+// rows paid in any currency are included (the credit is in rupees).
+async function creditForWholeBooking(sql, orderIds, reason, { cashRefundable = true } = {}) {
+  const forever = cashRefundable === false;
   const ids = (orderIds || []).map(Number).filter(Boolean);
   const out = { total: 0, back: 0, expiresAt: null };
   if (!ids.length) return out;
@@ -293,7 +325,7 @@ async function creditForWholeBooking(sql, orderIds, reason) {
   let guestEmail = null, suite = null;
   for (const r of rows) {
     out.back += await giveBack(sql, r.id);
-    if (r.currency !== 'INR' || !r.razorpay_payment_id) continue;
+    if ((r.currency !== 'INR' && !forever) || !r.razorpay_payment_id) continue;
     let money = 0;
     try {
       const p = (await paidByOrderRow(sql, r.razorpay_order_id))[r.id];
@@ -305,9 +337,38 @@ async function creditForWholeBooking(sql, orderIds, reason) {
     } catch (e) { money = 0; }
     if (money <= 0) continue;
     let c;
+    const ends = forever ? 'infinity' : creditEnd(r.paid_at);
+    if (forever) {
+      // Credit for new dates only: marked on the row (after the database
+      // update), and by its reason before it.
+      try {
+        c = (await sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at, reason, cash_refundable)
+                       VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, 'infinity'::timestamptz, ${reason}, false)
+                       ON CONFLICT (source_order_id) DO NOTHING RETURNING *`)[0];
+      } catch (err) {
+        if (!err || err.code !== '42703') { console.error('credit not made (needs follow-up):', r.id, err.message); continue; }
+        c = (await sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at, reason)
+                       VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, 'infinity'::timestamptz, ${reason})
+                       ON CONFLICT (source_order_id) DO NOTHING RETURNING *`)[0];
+      }
+      if (!c) {
+        // One credit per booking: an earlier credit from this booking (of
+        // another kind) is never merged into credit for new dates only.
+        const had = (await sql`SELECT id, reason FROM fee_credits WHERE source_order_id = ${r.id}`)[0];
+        if (!had || had.reason !== reason) {
+          const { logAudit } = require('./_audit-log');
+          await logAudit(sql, { action: 'disaster_credit_not_made', success: false, actorType: 'system', targetType: 'order', targetId: r.id,
+            metadata: { amount: money, existingCredit: had ? had.id : null, error: 'this booking already has an Aerva credit of another kind — make it by hand' } });
+        }
+        continue;
+      }
+      await entry(sql, c.id, 'issued', money, { orderId: r.id, reference: r.razorpay_payment_id, note: 'Natural disaster (approved by Aerva): everything paid, deposit included — credit for new dates only, not refundable' });
+      out.total += money; out.forever = true; guestEmail = r.guest_email; suite = suite || r.suite_name;
+      continue;
+    }
     const ins = (withReason) => withReason
       ? sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at, reason)
-            VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, ${creditEnd(r.paid_at)}::timestamptz, ${reason})
+            VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, ${ends}::timestamptz, ${reason})
             ON CONFLICT (source_order_id) DO NOTHING RETURNING *`
       : sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at)
             VALUES (${r.guest_id}, ${r.guest_email}, ${r.id}, ${r.razorpay_payment_id}, ${money}, ${money}, ${creditEnd(r.paid_at)}::timestamptz)
@@ -319,7 +380,13 @@ async function creditForWholeBooking(sql, orderIds, reason) {
       note: reason === 'experience_cancelled' ? 'Experience (with its stay) cancelled by its host: all of it' : 'Host cancelled: all of it' });
     out.total += money; out.expiresAt = (!out.expiresAt || new Date(c.expires_at) < new Date(out.expiresAt)) ? c.expires_at : out.expiresAt; guestEmail = r.guest_email; suite = suite || r.suite_name;
   }
-  if (out.total > 0 && guestEmail) {
+  if (out.total > 0 && guestEmail && forever) {
+    await email(guestEmail, `${inr(out.total)} is held for you as Aerva credit for new dates`, `
+      <div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
+        <p>Aerva approved the cancellation of your booking at <strong>${esc(suite || 'Aerva')}</strong>. Everything you paid for it — <strong>${inr(out.total)}</strong>, including GST, any deposit and Aerva’s service fee — is held for you as Aerva credit for new dates.</p>
+        <p>Book any stay or experience on Aerva and it is taken off what you pay, automatically. Anything left stays on your credit. It does not expire. It is credit for new dates only: it can’t be refunded or paid out.</p>
+        <p style="font-size:12px; opacity:0.6;">Questions: hello@aerva.in</p></div>`);
+  } else if (out.total > 0 && guestEmail) {
     await email(guestEmail, `${inr(out.total)} is held for you as Aerva credit`, `
       <div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
         <p>Your booking at <strong>${esc(suite || 'Aerva')}</strong> was cancelled by the host. Everything you paid for it — <strong>${inr(out.total)}</strong>, including GST and Aerva’s service fee — is held for you as Aerva credit${out.expiresAt ? ` until <strong>${day(out.expiresAt)}</strong>` : ''}.</p>
@@ -397,8 +464,18 @@ async function recordUses(sql, allocations, rows) {
 // Refunds what is left of a credit to the original payment. reason:
 // 'asked' | 'expired'. Returns { refunded: ₹ } or throws a user-facing error.
 async function refundCredit(sql, razorpay, creditId, reason) {
-  const c = (await sql`UPDATE fee_credits SET status = 'refunding' WHERE id = ${Number(creditId) || 0} AND status = 'active' AND remaining > 0 RETURNING *`)[0];
-  if (!c) throw Object.assign(new Error('There is nothing left on this credit to refund.'), { isUserFacing: true, status: 409 });
+  // Credit for new dates only is never refunded when it ends, and on request
+  // only while an admin allows it (checked again inside the guarded UPDATE).
+  const before = (await sql`SELECT to_jsonb(f) AS j FROM fee_credits f WHERE id = ${Number(creditId) || 0}`)[0];
+  const row = before ? before.j : null;
+  if (row && nonCash(row) && (reason === 'expired' || !row.cash_refund_allowed_at)) {
+    throw Object.assign(new Error('This Aerva credit is for new dates only — it can’t be refunded.'), { isUserFacing: true, status: 409 });
+  }
+  const c = (await sql`UPDATE fee_credits f SET status = 'refunding' WHERE id = ${Number(creditId) || 0} AND status = 'active' AND remaining > 0
+                         AND (COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(to_jsonb(f)->>'reason', '') <> ALL(${NON_CASH_REASONS})
+                              OR (${reason}::text = 'asked' AND to_jsonb(f)->>'cash_refund_allowed_at' IS NOT NULL))
+                       RETURNING *`)[0];
+  if (!c) throw Object.assign(new Error(row && nonCash(row) && Number(row.refunded_amount) > 0 ? 'This credit has already been refunded.' : 'There is nothing left on this credit to refund.'), { isUserFacing: true, status: 409 });
   try {
     const { safeRefund } = require('./_refunds');
     const rf = await safeRefund(sql, razorpay, { orderId: c.source_order_id, paymentId: c.razorpay_payment_id, amountSubunit: c.remaining * 100,
@@ -426,13 +503,15 @@ async function runExpired(sql, razorpay, { deadlineMs = 4000 } = {}) {
     try {
       // A refund the bank refused is tried again after a day, not every hour
       // (it stays listed in Admin → Refunds meanwhile).
-      due = await sql`SELECT id FROM fee_credits WHERE status = 'active' AND remaining > 0
+      // Credit for new dates only never ends and is never refunded here.
+      due = await sql`SELECT id FROM fee_credits f WHERE status = 'active' AND remaining > 0
                         AND expires_at < now() - make_interval(mins => ${REFUND_GRACE_MINUTES})
+                        AND COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(reason, '') <> ALL(${NON_CASH_REASONS})
                         AND (refund_failed_at IS NULL OR refund_failed_at < now() - interval '1 day') ORDER BY expires_at LIMIT 20`;
     } catch (e) {
       if (!e || e.code !== '42703') throw e;
       due = await sql`SELECT id FROM fee_credits WHERE status = 'active' AND remaining > 0
-                        AND expires_at < now() - make_interval(mins => ${REFUND_GRACE_MINUTES}) ORDER BY expires_at LIMIT 20`;
+                        AND expires_at < now() - make_interval(mins => ${REFUND_GRACE_MINUTES}) AND COALESCE(reason, '') <> ALL(${NON_CASH_REASONS}) ORDER BY expires_at LIMIT 20`;
     }
     await sql`UPDATE fee_credits SET status = 'used' WHERE status = 'active' AND remaining <= 0`;
   } catch (e) { return Object.assign(out, { skipped: 'database update not applied' }); }
@@ -509,7 +588,11 @@ async function remindQuarterly(sql, { deadlineMs = 4000, at } = {}) {
   try {
     // Only guests with an open account and an email address are claimed,
     // so Batch Jobs lists exactly the people who were sent one.
-    due = await sql`SELECT f.guest_id, sum(f.remaining)::int AS balance, array_agg(f.id) AS ids, min(f.expires_at) AS ends
+    // ends / cash: only credit that can go back to the payment has an end
+    // date or a refund to mention (credit for new dates only has neither).
+    due = await sql`SELECT f.guest_id, sum(f.remaining)::int AS balance, array_agg(f.id) AS ids,
+                           min(f.expires_at) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(f.reason, '') <> ALL(${NON_CASH_REASONS})) AS ends,
+                           COALESCE(sum(f.remaining) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(f.reason, '') <> ALL(${NON_CASH_REASONS})), 0)::int AS cash
                     FROM fee_credits f JOIN guests g ON g.id = f.guest_id
                     WHERE f.status = 'active' AND f.remaining > 0 AND g.deleted_at IS NULL AND COALESCE(g.email, '') <> ''
                     GROUP BY f.guest_id
@@ -532,7 +615,7 @@ async function remindQuarterly(sql, { deadlineMs = 4000, at } = {}) {
         <h2 style="font-family:Georgia,serif; font-weight:normal; margin:0 0 12px;">${amount} is ready when you are</h2>
         <p>Hi ${esc(String(who.name || '').split(' ')[0] || 'there')}, ${t.line(amount)}</p>
         <p style="margin:22px 0;"><a href="https://aerva.in/index.html" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">Find a stay</a></p>
-        <p style="font-size:13px; color:#6e675d;">It is taken off your next booking automatically${g.ends && isFinite(new Date(g.ends)) ? `. Use it by <strong>${day(g.ends)}</strong> — anything left then is refunded to your original payment method` : ''}. Prefer the money back? Have it refunded to your original payment method at any time from <a href="https://aerva.in/index.html?view=my-bookings" style="color:#8a6c39;">My Bookings</a>.</p>
+        <p style="font-size:13px; color:#6e675d;">It is taken off your next booking automatically${g.ends && isFinite(new Date(g.ends)) ? `. Use it by <strong>${day(g.ends)}</strong> — anything left then is refunded to your original payment method` : ''}.${Number(g.cash) > 0 ? ` Prefer the money back? Have ${Number(g.cash) < Number(g.balance) ? inr(g.cash) + ' of it' : 'it'} refunded to your original payment method at any time from <a href="https://aerva.in/index.html?view=my-bookings" style="color:#8a6c39;">My Bookings</a>.` : ''}${Number(g.cash) < Number(g.balance) ? ` ${inr(Number(g.balance) - Number(g.cash))} is credit for new dates only: it does not expire and can’t be refunded.` : ''}</p>
       </div>`);
     out.emailed++;
     out.affected.push({ guestId: g.guest_id, email: who.email, balance: g.balance });
@@ -554,6 +637,7 @@ async function remindEnding(sql, { deadlineMs = 4000, at } = {}) {
     due = await sql`SELECT f.guest_id, sum(f.remaining)::int AS balance, array_agg(f.id) AS ids, min(f.expires_at) AS ends
                     FROM fee_credits f JOIN guests g ON g.id = f.guest_id
                     WHERE f.status = 'active' AND f.remaining > 0 AND f.ending_reminded_at IS NULL
+                      AND COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(f.reason, '') <> ALL(${NON_CASH_REASONS})
                       AND f.expires_at > now() AND f.expires_at <= now() + make_interval(days => ${ENDING_NOTICE_DAYS})
                       AND g.deleted_at IS NULL AND COALESCE(g.email, '') <> ''
                     GROUP BY f.guest_id LIMIT 50`;
@@ -583,8 +667,12 @@ async function remindEnding(sql, { deadlineMs = 4000, at } = {}) {
 async function wallet(sql, guestId) {
   const out = { credit: 0, coupons: [] };
   try {
-    const r = (await sql`SELECT COALESCE(sum(remaining), 0)::int AS balance, min(expires_at) AS ends FROM fee_credits WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0`)[0];
+    const r = (await sql`SELECT COALESCE(sum(remaining), 0)::int AS balance,
+                                min(expires_at) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(f.reason, '') <> ALL(${NON_CASH_REASONS})) AS ends,
+                                COALESCE(sum(remaining) FILTER (WHERE NOT (COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(f.reason, '') <> ALL(${NON_CASH_REASONS}))), 0)::int AS new_dates_only
+                         FROM fee_credits f WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0`)[0];
     out.credit = r ? r.balance : 0;
+    out.creditNewDatesOnly = r ? r.new_dates_only : 0;
     out.creditEndsAt = r && r.ends && isFinite(new Date(r.ends)) ? new Date(r.ends).toISOString() : null;
   } catch (e) { /* not there yet */ }
   try {
@@ -599,13 +687,17 @@ async function wallet(sql, guestId) {
 async function bellNotice(sql, guestId) {
   try {
     const out = [];
-    const r = (await sql`SELECT COALESCE(sum(remaining), 0)::int AS balance, max(created_at) AS at, min(expires_at) AS ends FROM fee_credits
-                         WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0`)[0];
+    const r = (await sql`SELECT COALESCE(sum(remaining), 0)::int AS balance, max(created_at) AS at,
+                                min(expires_at) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(f.reason, '') <> ALL(${NON_CASH_REASONS})) AS ends,
+                                COALESCE(sum(remaining) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) AND COALESCE(f.reason, '') <> ALL(${NON_CASH_REASONS})), 0)::int AS cash
+                         FROM fee_credits f WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0`)[0];
     if (r && r.balance > 0) {
       const a = inr(r.balance);
       const ends = r.ends && isFinite(new Date(r.ends)) ? ` Use it by ${day(r.ends)}; anything left then is refunded automatically.` : '';
       out.push({ id: 'aerva-credit:' + r.balance, kind: 'action', title: `${a} of Aerva credit is waiting for you`,
-                 body: 'Your next getaway is partly paid for. It comes off your next booking automatically — or have it refunded any time.' + ends,
+                 body: (Number(r.cash) > 0 ? 'Your next getaway is partly paid for. It comes off your next booking automatically — or have it refunded any time.' + ends
+                   : 'Your next getaway is partly paid for. It comes off your next booking automatically. It is credit for new dates: it does not expire.')
+                   + (Number(r.cash) > 0 && Number(r.cash) < Number(r.balance) ? ` (${inr(Number(r.balance) - Number(r.cash))} of it is for new dates only and can’t be refunded.)` : ''),
                  href: 'index.html?view=my-bookings' });
     }
     try {
@@ -620,13 +712,61 @@ async function bellNotice(sql, guestId) {
 // For the guest: open credits, and ones refunded in the last 60 days.
 async function forGuest(sql, guestId) {
   try {
-    const rows = await sql`SELECT f.id, f.amount, f.remaining, f.status, CASE WHEN f.expires_at = 'infinity' THEN NULL ELSE f.expires_at END AS expires_at, f.refunded_amount, f.refunded_at, o.suite_name, COALESCE(to_jsonb(f)->>'reason', 'host_cancelled') AS reason
+    const rows = await sql`SELECT f.id, f.amount, f.remaining, f.status, CASE WHEN f.expires_at = 'infinity' THEN NULL ELSE f.expires_at END AS expires_at, f.refunded_amount, f.refunded_at, o.suite_name, COALESCE(to_jsonb(f)->>'reason', 'host_cancelled') AS reason,
+                                  (to_jsonb(f)->>'cash_refundable')::boolean AS cash_refundable, to_jsonb(f)->>'cash_refund_allowed_at' AS cash_refund_allowed_at
                            FROM fee_credits f LEFT JOIN orders o ON o.id = f.source_order_id
                            WHERE f.guest_id = ${guestId} AND (f.status IN ('active', 'refunding') OR f.refunded_at > now() - interval '60 days')
                            ORDER BY f.created_at DESC LIMIT 20`;
-    return rows.map(r => ({ id: r.id, amount: r.amount, remaining: r.remaining, status: r.status, expiresAt: r.expires_at,
-      refunded: r.refunded_amount, refundedAt: r.refunded_at, from: r.suite_name || '', reason: r.reason }));
+    // canRefund: the guest may have it refunded now. For credit for new dates
+    // only it is present (true) only while an admin allows it — never
+    // otherwise, so the option does not exist for the guest at all.
+    return rows.map(r => Object.assign({ id: r.id, amount: r.amount, remaining: r.remaining, status: r.status, expiresAt: r.expires_at,
+      refunded: r.refunded_amount, refundedAt: r.refunded_at, from: r.suite_name || '', reason: r.reason },
+      nonCash(r) ? { newDatesOnly: true } : {},
+      refundableNow(r) && r.status === 'active' && r.remaining > 0 ? { canRefund: true } : {}));
   } catch (e) { return []; }
 }
 
-module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, creditForTransfer, creditForEmergencyFee, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindOnSignIn, remindQuarterly, remindEnding, creditEnd, bellNotice, wallet };
+// ---- Admin: allow one guest's credit for new dates to be refunded ----
+// (owner, 00:54) Admin only (get-pending-listings.js checks the role).
+// allow true: every open non-cash credit of the guest (or the one creditId)
+// may be refunded by the guest — only its unused part, only to its original
+// payment, once (refundCredit). allow false: switched off again (until it
+// has been refunded). Audited with who, when and the note.
+async function allowCashRefund(sql, { guestId, creditId = null, allow, note = '', adminLabel = 'admin' }) {
+  const err = (m, st = 400) => Object.assign(new Error(m), { isUserFacing: true, status: st });
+  try { await sql`SELECT cash_refund_allowed_at, cash_refund_allowed_by, cash_refund_note FROM fee_credits LIMIT 0`; }
+  catch (e) { throw err('Apply the database update 2026-11-10-02-cancellation-rules.sql first (Admin → Database updates).', 503); }
+  const why = String(note || '').replace(/\s+/g, ' ').trim().slice(0, 300) || null;
+  const gid = Number(guestId) || 0, cid = creditId == null ? null : Number(creditId) || 0;
+  const rows = allow === true
+    ? await sql`UPDATE fee_credits f SET cash_refund_allowed_at = now(), cash_refund_allowed_by = ${adminLabel}, cash_refund_note = ${why}
+                WHERE f.guest_id = ${gid} AND (${cid}::int IS NULL OR f.id = ${cid}) AND f.status = 'active' AND f.remaining > 0
+                  AND (f.cash_refundable = false OR f.reason = ANY(${NON_CASH_REASONS})) AND f.cash_refund_allowed_at IS NULL
+                RETURNING f.id, f.remaining`
+    : await sql`UPDATE fee_credits f SET cash_refund_allowed_at = NULL, cash_refund_allowed_by = ${adminLabel}, cash_refund_note = ${why}
+                WHERE f.guest_id = ${gid} AND (${cid}::int IS NULL OR f.id = ${cid}) AND f.status = 'active'
+                  AND (f.cash_refundable = false OR f.reason = ANY(${NON_CASH_REASONS})) AND f.cash_refund_allowed_at IS NOT NULL
+                RETURNING f.id, f.remaining`;
+  if (!rows.length) throw err(allow === true ? 'This guest has no open credit for new dates to allow (or it is already allowed).' : 'Nothing to switch off: no allowed credit for new dates is open (a refunded one cannot be undone).', 409);
+  const { logAudit } = require('./_audit-log');
+  for (const r of rows) {
+    await logAudit(sql, { action: allow === true ? 'credit_cash_refund_allowed' : 'credit_cash_refund_disallowed', success: true, actorType: 'admin', actorIdentifier: adminLabel,
+      targetType: 'guest', targetId: gid, metadata: { creditId: r.id, remaining: Number(r.remaining), note: why } });
+  }
+  return { credits: rows.map(r => ({ id: r.id, remaining: Number(r.remaining) })), allowed: allow === true };
+}
+// Admin: a guest's non-cash credits and whether a refund is allowed.
+async function nonCashForAdmin(sql, guestId) {
+  try {
+    return (await sql`SELECT f.id, f.amount, f.remaining, f.status, f.created_at, f.reason, o.suite_name, to_jsonb(f)->>'cash_refund_allowed_at' AS allowed_at,
+                             to_jsonb(f)->>'cash_refund_allowed_by' AS allowed_by, to_jsonb(f)->>'cash_refund_note' AS note, f.refunded_amount
+                      FROM fee_credits f LEFT JOIN orders o ON o.id = f.source_order_id
+                      WHERE f.guest_id = ${Number(guestId) || 0} AND (COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true) = false OR f.reason = ANY(${NON_CASH_REASONS}))
+                      ORDER BY f.id DESC LIMIT 20`)
+      .map(r => ({ id: r.id, amount: Number(r.amount), remaining: Number(r.remaining), status: r.status, createdAt: r.created_at, from: r.suite_name || '',
+        refundAllowed: !!r.allowed_at, allowedAt: r.allowed_at, allowedBy: r.allowed_by, note: r.note, refunded: Number(r.refunded_amount) || 0 }));
+  } catch (e) { return []; }
+}
+
+module.exports = { NON_CASH_REASONS, nonCash, refundableNow, allowCashRefund, nonCashForAdmin, FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, creditForTransfer, creditForCheckinRebook, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindOnSignIn, remindQuarterly, remindEnding, creditEnd, bellNotice, wallet };

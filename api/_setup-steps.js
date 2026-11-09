@@ -23,7 +23,7 @@ async function hostSteps(sql, accountId) {
     { key: 'identity', label: 'Verify your identity (Aadhaar)', why: 'Required before your listing goes live and before any payout.', done: h.aadhaar_status === 'verified', waiting: h.aadhaar_status === 'pending_review', waitingText: 'Sent — waiting for Aerva', href: V },
     { key: 'bank', label: 'Add your bank account for payouts', why: 'Where your earnings are paid, the day after each check-in.', done: h.bank_status === 'verified', waiting: h.bank_status === 'pending_review', waitingText: 'Added — being verified', href: 'host-payouts.html' },
     { key: 'pan', label: 'Add your PAN', why: 'Optional: without it TDS is 5% of each payout instead of 0.1%.', optional: true, done: h.pan_status === 'verified', waiting: h.pan_status === 'pending_review', waitingText: 'Sent — being checked', href: V },
-    { key: 'phone', label: 'Verify your phone number', why: 'So guests and Aerva can reach you about a booking.', done: !!h.phone_verified, href: V },
+    { key: 'phone', label: 'Verify your phone number', why: 'So guests and Aerva can reach you about a booking.', done: !!h.phone_verified, href: 'host-dashboard.html?openProfile=1' },
     { key: 'profile', label: 'Add a photo and a few lines about you', why: 'Guests book hosts they can put a face to.', optional: true, done: !!(g.profile_photo_url && about && String(about.about_me || '').trim()), href: 'host-dashboard.html?openProfile=1' }
   ];
 }

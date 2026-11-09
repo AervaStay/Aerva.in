@@ -34,7 +34,11 @@ const REASONS = {
   not_clean: 'Not clean',
   no_access: 'Could not get in',
   host_conduct: 'Host behaviour',
-  other: 'Something else'
+  other: 'Something else',
+  // Aerva's check-in promise (_checkin-promise.js): urgent, decided by Aerva
+  // in Admin → Approvals → Check-in promise; rebook first, refund otherwise.
+  arrival_fake: 'On arrival: the property does not exist (fake listing)',
+  arrival_failed: 'On arrival: not as listed, or not available'
 };
 const MAX_FILES = 8;
 const userError = (message, status = 400) => Object.assign(new Error(message), { isUserFacing: true, status });
@@ -88,6 +92,9 @@ async function raiseDispute(sql, { orderId, guestId, reason, details, evidence }
     raisedOn = localDateAt(ch.created_at, o.timezone);
   }
   if (!REASONS[reason]) throw userError('Choose what the problem is.');
+  const CP = require('./_checkin-promise');
+  const onArrival = CP.isArrivalReason(reason);
+  if (onArrival && !(await CP.ready(sql))) throw userError(CP.NOT_READY, 503);
   const files = cleanFiles(evidence);
   if (!files.length) throw userError('Please add at least one photo or document as evidence.');
   const text = String(details || '').trim().slice(0, 2000);
@@ -103,6 +110,19 @@ async function raiseDispute(sql, { orderId, guestId, reason, details, evidence }
   await logAudit(sql, { action: 'stay_dispute_raised', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: orderId,
     metadata: { disputeId: row.id, reason, files: files.length } });
   await postThreadMessage(sql, orderId, 'guest', `I have reported a problem with this stay to Aerva: ${REASONS[reason]}. ${text}`);
+  // On arrival: Aerva's check-in promise takes it from here (urgent requests, holds, emails).
+  if (onArrival) {
+    let report;
+    try { report = await CP.openReport(sql, { dispute: row, order: o }); }
+    catch (err) {
+      // Nothing half made: without its report, the dispute row goes too.
+      const made = await sql`SELECT 1 FROM checkin_reports WHERE dispute_id = ${row.id}`.catch(() => []);
+      if (!made.length) await sql`DELETE FROM stay_disputes WHERE id = ${row.id}`;
+      throw err;
+    }
+    row.checkinReportId = report.id;
+    return row;
+  }
   await email(await hostEmail(sql, o.host_id), `A guest reported a problem at ${o.property_name}`,
     `<h2 style="font-family:Georgia,serif;">A guest reported a problem</h2><p><strong>${esc(o.property_name)}</strong></p><p>${esc(REASONS[reason])}: ${esc(text)}</p>
      <p>Please reply in Messages with your side and any photos. Aerva decides; part of your payout for this booking is held until then.</p>
@@ -126,6 +146,8 @@ async function respondDispute(sql, { disputeId, hostId, response, evidence }) {
 // Aerva's decision. refund: true → the nights from the day it was raised to
 // check-out come back; the host keeps the nights used.
 async function decideDispute(sql, razorpay, { disputeId, refund, note = '', adminLabel = 'admin' }) {
+  const kind = (await sql`SELECT reason FROM stay_disputes WHERE id = ${disputeId}`)[0];
+  if (kind && require('./_checkin-promise').isArrivalReason(kind.reason)) throw userError('A report made on arrival is decided in Admin → Approvals → Check-in promise.', 409);
   const claim = await sql`UPDATE stay_disputes SET decided_at = now(), decided_by = ${adminLabel}, decision_note = ${String(note).slice(0, 1000) || null}
                           WHERE id = ${disputeId} AND status IN ('open', 'host_responded') AND decided_at IS NULL RETURNING *`;
   if (!claim.length) throw userError('This dispute has already been decided.', 409);
@@ -171,8 +193,14 @@ async function decideDispute(sql, razorpay, { disputeId, refund, note = '', admi
     // now cover the nights not yet refunded (an earlier upheld report may
     // have reduced them): they shrink to the nights still kept.
     const kept = (nights - before - refundNights) / (nights - before);
-    const commissionKept = Math.round(Number(o.commission_amount) * kept);
-    const hostPayout = Math.max(0, Math.round((Number(o.payout_amount) + Number(o.commission_amount)) * kept) - commissionKept);
+    // The free cancellation add-on (_pricing.js) is not refunded here: the
+    // host keeps it whole (less its commission); only the stay part shrinks.
+    const fc = require('./_pricing').addOnOf(o);
+    const fcKeep = fc.refunded ? { fee: 0, commission: 0 } : fc;
+    const stayCommission = Math.max(0, Number(o.commission_amount) - fcKeep.commission);
+    const stayPayout = Math.max(0, Number(o.payout_amount) - (fcKeep.fee - fcKeep.commission));
+    const commissionKept = Math.round(stayCommission * kept) + fcKeep.commission;
+    const hostPayout = Math.max(0, Math.round((stayPayout + stayCommission) * kept) - Math.round(stayCommission * kept)) + (fcKeep.fee - fcKeep.commission);
     // Cash as far as the booking's payments allow; the coupon part (and any
     // cash no payment has left) comes back as a coupon.
     const r = await refundAcrossPayments(sql, razorpay, { orderId: o.id, amountInr: cash, kindBase: `dispute-${disputeId}` });
@@ -213,6 +241,7 @@ async function disputesForAdmin(sql, { status = 'open' } = {}) {
       FROM stay_disputes d JOIN orders o ON o.id = d.order_id JOIN listings l ON l.id = o.listing_id
       LEFT JOIN guests g ON g.id = d.guest_id LEFT JOIN hosts h ON h.id = l.host_id
       WHERE (${status} = 'all' OR (${status} = 'open' AND d.status IN ('open', 'host_responded')))
+        AND d.reason NOT IN ('arrival_fake', 'arrival_failed')   -- Admin → Approvals → Check-in promise
       ORDER BY d.raised_at DESC LIMIT 100`;
   } catch (e) { return []; }
 }

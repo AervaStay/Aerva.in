@@ -67,7 +67,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js"></script>
+<script src="aerva-cohost.js?v=2026-11-09a"></script>
 <script src="aerva-bank-fields.js?v=2026-10-13a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
 </head>
@@ -87,7 +87,8 @@
   const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
   const body = document.getElementById('payoutsBody');
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const statusLabel = (s) => ({ approved: 'Approved', rejected: 'Needs attention', pending: 'Being checked', not_submitted: 'Not added' }[s] || (s ? String(s).replace(/_/g, ' ') : 'Not added'));
+  // hosts.bank_status is 'verified' / 'pending_review' (approved / pending kept for older rows).
+  const statusLabel = (s) => ({ verified: 'Approved', approved: 'Approved', rejected: 'Needs attention', pending_review: 'Being checked', pending: 'Being checked', not_submitted: 'Not added' }[s] || (s ? String(s).replace(/_/g, ' ') : 'Not added'));
   const inr = (n) => '\u20b9' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
 
@@ -116,7 +117,7 @@
       return;
     }
     const s = v.bankStatus || 'not_submitted';
-    const cls = s === 'approved' ? 'status-approved' : s === 'rejected' ? 'status-rejected' : s === 'pending' ? 'status-pending' : '';
+    const cls = (s === 'verified' || s === 'approved') ? 'status-approved' : s === 'rejected' ? 'status-rejected' : (s === 'pending_review' || s === 'pending') ? 'status-pending' : '';
     // Who is paid: one person (or business) — the host or someone else —
     // whose name, PAN and bank account must all be the same. Once a PAN is
     // on file the name is the name on that PAN and cannot be changed here.
@@ -303,6 +304,7 @@
     const bankIfsc = $('bankIfsc').value.trim();
     const bankGstin = ($('bankGstin').value || '').trim().toUpperCase();
     if(!name || !bankAccountNumber || !bankIfsc) return bad('Please fill in all the fields.');
+    if(/\d/.test(name)) return bad('The payout name cannot contain numbers. Type it exactly as on your bank account, letters only.');
     if(!review && !confirm('Save these payout details? Payouts will go to ' + name + ' once the account is verified, and wait at least 48 hours after any change.')) return;
     btn.disabled = true; btn.textContent = 'Saving…';
     const done = (t) => { if(t) bad(t); btn.textContent = 'Save'; refresh(); };
@@ -439,7 +441,9 @@
       const res = await fetch(API + '?myPayouts=1', { headers: { 'Authorization': 'Bearer ' + token } });
       const data = await res.json();
       const list = (res.ok && data.payouts) || [];
-      const months = []; for (let i = 0; i < 12; i++){ const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); months.push(d.toISOString().slice(0, 7)); }
+      // Built from the local year and month: toISOString() is UTC, which in
+      // India before 5:30 AM is still the day before (and on the 1st, last month).
+      const months = []; for (let i = 0; i < 12; i++){ const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); months.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')); }
       const stmt = '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px;"><span class="sub">Monthly statement for your CA:</span>'
         + '<select id="stmtMonth" style="padding:6px; border:1px solid #d9cfc2; border-radius:6px;">' + months.map(m => `<option value="${m}">${new Date(m + '-01T00:00:00Z').toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</option>`).join('') + '</select>'
         + '<button type="button" id="stmtGo" style="padding:7px 14px; border:1px solid #1c1a17; background:#1c1a17; color:#fff; border-radius:6px; cursor:pointer;">Download (CSV)</button></div>';
@@ -461,6 +465,32 @@
   }
 
   load();
+})();
+</script>
+<script>
+// Aerva's check-in promise (api/_checkin-promise.js): what this host owes
+// Aerva and payouts on hold, in a block of its own (hosts only).
+(function(){
+  const API = (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/host-listings';
+  let token = null; try{ token = localStorage.getItem('aerva_guest_session'); }catch(e){ token = null; }
+  if(!token || (window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get())) return;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inr = (n) => '\u20b9' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  fetch(API + '?checkinPromise=1', { headers: { 'Authorization': 'Bearer ' + token } }).then(r => r.ok ? r.json() : null).then(d => {
+    if(!d || !(Number(d.owed) > 0 || (d.held || []).length || (d.reports || []).length || (d.blocked || []).length)) return;
+    const box = document.createElement('div');
+    box.className = 'card';
+    box.id = 'checkinPromiseBox';
+    box.style.cssText = 'border-left:3px solid #a9884f;';
+    box.innerHTML = '<h2>Balance and payouts on hold</h2>'
+      + ((d.reports || []).length ? '<p style="color:#a3402f;"><strong>Urgent:</strong> ' + d.reports.map(r => esc(r.listing) + ' (booking ' + esc(r.code) + '): ' + esc(r.reason)).join('; ') + '. Reply in Messages with your side and photos; Aerva decides.</p>' : '')
+      + ((d.blocked || []).length ? '<p>Blocked by Aerva (a guest found the property does not exist): ' + d.blocked.map(l => '<strong>' + esc(l.name) + '</strong>').join(', ') + '. Only Aerva can unblock a listing.</p>' : '')
+      + (Number(d.owed) > 0 ? '<p>You owe Aerva <strong>' + inr(d.owed) + '</strong> — paid to you for bookings whose guests were then moved or refunded. It is deducted from your next payouts automatically.</p>' : '')
+      + ((d.held || []).length ? '<p style="margin-bottom:4px;">On hold:</p><ul style="margin:0; padding-left:18px; font-size:14px;">' + d.held.map(x => '<li>' + esc(x.listing) + ' · ' + esc(x.arrival) + ' → ' + esc(x.departure) + ' (' + esc(x.code) + '): ' + esc(x.why) + '</li>').join('') + '</ul>'
+        + '<p class="sub" style="margin-top:8px;">Until a guest confirms a listing is real and as listed, each booking of it is paid at that booking’s check-out time instead of the day after check-in.</p>' : '');
+    const lead = document.querySelector('.wrap .lead');
+    if(lead && lead.parentNode) lead.parentNode.insertBefore(box, lead.nextSibling);
+  }).catch(() => {});
 })();
 </script>
 <script src="aerva-header.js?v=2026-10-10a" defer></script>

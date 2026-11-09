@@ -342,6 +342,22 @@
   #guestReviewComment,
   #reviewComment{width:100%; box-sizing:border-box; padding:10px 12px; font-size:14px; font-family:inherit; border:1px solid var(--line-dark); background:white; resize:vertical;}
   .rv-error{color:#a3402f; font-size:13px; margin-top:10px;}
+  /* Photos on a review (up to 5): picker in the review form. */
+  .rv-photos{margin-top:14px;}
+  .rv-photos-head{display:flex; align-items:center; gap:12px; flex-wrap:wrap;}
+  .rv-photos-add{background:#fff; border:1px solid var(--line-dark); color:#1c1b19; font:inherit; font-size:13.5px; padding:8px 14px; border-radius:999px; cursor:pointer;}
+  .rv-photos-add:hover{border-color:#1c1b19;}
+  .rv-photos-add[disabled]{opacity:0.45; cursor:default;}
+  .rv-photos-count{font-size:12.5px; color:#6e675d;}
+  .rv-photos-note{font-size:12px; color:#6e675d; margin:6px 0 0; line-height:1.5;}
+  .rv-photos-strip{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
+  .rv-photos-strip:empty{display:none;}
+  .rv-photo-item{position:relative; width:72px; height:72px; border-radius:8px; overflow:hidden; background:#f2ece3;}
+  .rv-photo-item img{width:100%; height:100%; object-fit:cover; display:block;}
+  .rv-photo-item.is-err{outline:2px solid #a3402f; outline-offset:-2px;}
+  .rv-photo-busy{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; background:rgba(255,255,255,0.72); font-size:11px; font-weight:500; padding:4px; color:#1c1b19;}
+  .rv-photo-rm{position:absolute; top:3px; right:3px; width:24px; height:24px; border-radius:50%; border:none; background:rgba(28,26,23,0.78); color:#fff; font-size:15px; line-height:24px; padding:0; cursor:pointer;}
+  .rv-photos-msg{color:#a3402f; font-size:13px; margin:8px 0 0;}
   /* On a white page the old cream gradient card read as a second surface.
      A plain rule under the row does the same job of setting the header
      apart, with less furniture. */
@@ -552,7 +568,7 @@
   .photo-collage-single img{aspect-ratio:16/8; object-fit:cover; width:100%; display:block;}
 
   .photo-lightbox-overlay{
-    position:fixed; inset:0; background:rgba(10,9,8,0.94); z-index:300;
+    position:fixed; inset:0; background:rgba(10,9,8,0.94); z-index:450; /* above the host profile (400): review photos open from there too */
     display:flex; align-items:center; justify-content:center; padding:24px;
   }
   .photo-lightbox-img{max-width:100%; max-height:80vh; object-fit:contain; display:block;}
@@ -821,9 +837,14 @@
 
   /* Above the fixed header, which moves down by the bar's height (--rr-h,
      set in showReviewReminder) so the two never overlap. */
+  /* Fixed (it sits near the end of the markup, so sticky left it down by
+     the footer while the header still moved down for it, leaving a blank
+     band at the top and the header over the hero text); the page itself
+     moves down by the same height. */
   #reviewReminderBar{
-    position:sticky; top:0; z-index:101; background:var(--ink); color:var(--cream);
+    position:fixed; top:0; left:0; right:0; z-index:101; background:var(--ink); color:var(--cream);
   }
+  body{ margin-top:var(--rr-h, 0px); }
   .rr-inner{
     max-width:1180px; margin:0 auto; padding:11px 40px;
     display:flex; align-items:center; gap:14px; flex-wrap:wrap;
@@ -874,6 +895,11 @@
   /* A review's own factor scores, which the page used to discard. Quiet
      enough that they never out-weigh what the guest actually wrote. */
   .rv-chips{display:flex; flex-wrap:wrap; gap:5px; margin-top:8px;}
+  /* A review's photos: small thumbnails under the text, opening the photo viewer. */
+  .rv-photo-row{display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;}
+  .rv-photo-thumb{width:64px; height:64px; padding:0; border:none; border-radius:6px; overflow:hidden; cursor:zoom-in; background:#f2ece3;}
+  .rv-photo-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+  .rv-photo-thumb:focus-visible{outline:2px solid #1c1b19; outline-offset:2px;}
   .rv-chip{
     font-size:11.5px; padding:2px 9px; border-radius:999px;
     background:#f7f3ee; border:1px solid #ece5da; color:#6e675d;
@@ -1865,6 +1891,14 @@
 .profile-save{padding:11px 26px; border-radius:4px; background:var(--ink); color:var(--cream); border:none; cursor:pointer;
   font-family:'Jost', sans-serif; font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase;}
 .profile-msg{font-size:13px; margin:12px 0 0;}
+/* "Your name": first and last name as on the government ID */
+.profile-name-row{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.profile-name-value{font-size:16px; overflow-wrap:anywhere; min-width:0;}
+.profile-name-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+.profile-name-actions{display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-top:14px;}
+#profileNameBox .profile-hint{margin:8px 0 0;}
+#profileNameBox .profile-msg:empty{display:none;}
+@media (max-width:520px){ .profile-name-grid{grid-template-columns:1fr;} }
 .profile-places{display:flex; flex-wrap:wrap; gap:8px;}
 .profile-place{background:#fff; border:1px solid var(--line-dark); border-radius:999px; padding:7px 14px; font-size:13px;}
 .profile-empty{font-size:13px; opacity:0.6;}
@@ -3033,8 +3067,9 @@ footer .foot-bottom{ margin-top:0; }
 .hc-new{ display:grid; grid-template-columns:minmax(0, 1fr) 280px; gap:36px; align-items:start; }
 .hc-form{ display:flex; flex-direction:column; gap:18px; }
 .hc-field{ display:flex; flex-direction:column; gap:7px; }
+.hc-field[hidden]{ display:none; }
 .hc-field label{ font-size:14.5px; font-weight:500; color:var(--ink-2); }
-.hc-field select, .hc-field input[type="text"], .hc-field textarea{
+.hc-field select, .hc-field input[type="text"], .hc-field input[type="tel"], .hc-field textarea{
   width:100%; font-family:'Jost', sans-serif; font-size:16px; color:var(--ink); background:#fff;
   border:1px solid #d6cbbd; border-radius:10px; padding:12px 14px; line-height:1.5;
 }
@@ -3494,6 +3529,12 @@ button.msg-react-chip{ cursor:pointer; font-family:inherit; }
   .support-chips:not(:empty){padding:8px 12px 2px;}
   .support-feedback{padding:0 10px 10px;}
   #supportHumanBtn{padding:7px 10px; font-size:12px;}
+  /* Phones: "Speak to an agent" drops under the title rather than cutting
+     "Aerva Support" down to "Aerva S…". */
+  #supportChatContent .inbox-chat-header{flex-wrap:wrap; row-gap:8px;}
+  #supportChatContent .inbox-chat-header-left{flex:1 1 240px;}
+  #supportChatContent .inbox-chat-header-right{margin-left:auto;}
+  #supportChatSub{white-space:normal;}
 }
 .sup-cb[hidden], .support-feedback[hidden], #supportHumanBtn[hidden]{display:none !important;}
 
@@ -3624,3 +3665,98 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .fee-credit-body p{ font-size:14px; line-height:1.6; margin:6px 0 10px; }
 .fee-credit-from{ font-size:13px; opacity:0.7; }
 .fee-credit-msg{ font-size:13px; color:#a3402f; }
+
+/* ---- What's special here / Recommended by your host / suggested
+   experiences (aerva.js aervaSpecialHereHtml, aervaHostRecsHtml,
+   aervaLoadSuggestedExperiences; owner, 9 Nov 2026) ---- */
+.special-here{ margin:18px 0 6px; padding:18px 20px; border:1px solid #ece4d8; border-radius:16px; background:#fdfaf5; }
+.special-here-title{ font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:22px; line-height:1.25; margin:0 0 10px; color:var(--ink); }
+.special-here-list{ list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:8px 28px; }
+.special-here-list li{ display:flex; gap:10px; align-items:flex-start; font-size:15px; line-height:1.5; color:var(--ink); overflow-wrap:anywhere; }
+.special-here-mark{ flex:none; color:var(--gold-deep); font-size:13px; line-height:1.9; }
+.special-here-story{ margin:14px 0 0; padding-top:12px; border-top:1px solid #ece4d8; font-size:15px; line-height:1.7; color:#3d3830; white-space:pre-line; overflow-wrap:anywhere; }
+.host-recs-kind{ font-size:13px; font-weight:600; letter-spacing:0.02em; color:var(--ink); margin:14px 0 6px; }
+.host-recs-list{ list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+.host-rec{ border:1px solid #ece4d8; border-radius:12px; padding:10px 12px; background:#fff; overflow-wrap:anywhere; }
+.host-rec-top{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; font-size:14.5px; }
+.host-rec-dist{ flex:none; font-size:12px; color:#7b7262; white-space:nowrap; }
+.host-rec-note{ margin:4px 0 0; font-size:13.5px; line-height:1.5; color:#4f483d; }
+.host-rec-link{ display:inline-block; margin-top:6px; font-size:13px; color:var(--gold-text, #7c6030); }
+.host-recs-note{ font-size:12px; opacity:0.7; margin:10px 0 0; line-height:1.5; }
+.sx-box{ margin:0 0 16px; padding:14px; border:1px solid #ece4d8; border-radius:14px; background:#fdfaf5; }
+.sx-title{ font-family:'Bodoni Moda', Georgia, serif; font-size:17px; line-height:1.3; margin:0 0 10px; color:var(--ink); }
+.sx-list{ display:grid; gap:8px; }
+.sx-card{ display:flex; gap:10px; align-items:center; padding:6px; border:1px solid #ece4d8; border-radius:10px; background:#fff; color:var(--ink); text-decoration:none; }
+.sx-card:hover, .sx-card:focus-visible{ border-color:var(--gold-deep); }
+.sx-card img, .sx-noimg{ flex:none; width:60px; height:60px; border-radius:8px; object-fit:cover; background:#efe7da; }
+.sx-text{ display:flex; flex-direction:column; min-width:0; }
+.sx-name{ font-size:14px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sx-meta{ font-size:12.5px; color:#7b7262; }
+.sx-compact .sx-box{ margin:10px 0 4px; }
+.bs-overlay .sx-box{ margin:6px 0 12px; text-align:left; }
+@media (max-width:600px){
+  .special-here{ padding:16px 14px; border-radius:14px; }
+  .special-here-title{ font-size:20px; }
+  .special-here-list{ grid-template-columns:1fr; }
+}
+
+/* ---- Gift and group bookings (aerva.js: aervaShowGroupPage / aervaShowGiftPage) ---- */
+.ag-wrap{max-width:720px;}
+.ag-options{margin-top:16px; display:flex; flex-direction:column; gap:10px;}
+.ag-opt{display:flex; gap:10px; align-items:flex-start; padding:12px 14px; border:1px solid var(--line-dark); border-radius:10px; cursor:pointer; background:#fff;}
+.ag-opt input{margin-top:3px; width:18px; height:18px; accent-color:var(--gold-deep); flex:none;}
+.ag-opt strong{display:block; font-size:14.5px; font-weight:600;}
+.ag-opt em{display:block; font-style:normal; font-size:12.5px; opacity:0.72; line-height:1.5; margin-top:2px;}
+.ag-opt.is-off{opacity:0.5; cursor:not-allowed;}
+.ag-sub{padding:4px 2px 6px 14px; border-left:2px solid var(--gold);}
+.ag-sub textarea, .ag-card textarea, .ag-modal textarea{width:100%; font:inherit; font-size:15px; padding:10px 12px; border:1px solid var(--line-dark); border-radius:8px; resize:vertical;}
+.ag-count{font-size:11.5px; opacity:0.6; align-self:flex-end;}
+.ag-help{font-size:12.5px; opacity:0.75; line-height:1.55; margin:6px 0;}
+.ag-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+@media (max-width:520px){ .ag-grid{grid-template-columns:1fr;} }
+.ag-stay{display:flex; gap:16px; align-items:center; margin-bottom:16px;}
+.ag-stay-photo{width:120px; height:96px; object-fit:cover; border-radius:10px; flex:none; background:var(--cream-deep);}
+.ag-title{font-family:'Bodoni Moda', serif; font-weight:400; font-size:28px; line-height:1.15;}
+.ag-meta{font-size:13px; opacity:0.7;}
+.ag-dates{font-size:14.5px; margin-top:4px;}
+.ag-status{margin-top:8px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
+@media (max-width:520px){ .ag-stay{flex-direction:column; align-items:flex-start;} .ag-stay-photo{width:100%; height:160px;} .ag-title{font-size:24px;} }
+.ag-card{border:1px solid var(--line-dark); border-radius:12px; padding:16px 18px; margin:0 0 14px; background:#fff; font-size:14.5px; line-height:1.6;}
+.ag-card p + p{margin-top:6px;}
+.ag-h3{font-size:16px; font-weight:600; margin-bottom:6px;}
+.ag-lead{font-size:15.5px;}
+.ag-pill{display:inline-block; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; padding:3px 9px; border-radius:999px; background:#f1ece4; color:#5c4a2a;}
+.ag-open{background:#e6f2e8; color:#2f6b3a;} .ag-done{background:#e6f2e8; color:#2f6b3a;} .ag-wait{background:#fbf1de; color:#7a5612;}
+.ag-off{background:#f2e6e3; color:#8a3a2b;} .ag-gift{background:#f6efe3; color:#6b5222;}
+.ag-count-big{font-variant-numeric:tabular-nums; font-weight:600; font-size:17px;}
+.ag-count-big.is-soon{color:#a3402f;}
+.ag-progress{height:10px; border-radius:999px; background:#f1ece4; overflow:hidden; margin-bottom:10px;}
+.ag-progress span{display:block; height:100%; background:var(--gold); border-radius:999px; transition:width .4s;}
+.ag-list{list-style:none; margin:10px 0 0; padding:0;}
+.ag-list li{display:flex; align-items:center; gap:8px; padding:5px 0; border-top:1px solid #f0ebe3; font-size:14px;}
+.ag-dot{width:9px; height:9px; border-radius:50%; flex:none;} .ag-dot.is-paid{background:#3a7d44;} .ag-dot.is-failed{background:#c0662a;}
+.ag-failed li{color:#7a4a22;}
+.ag-share{display:flex; flex-wrap:wrap; gap:8px;}
+.ag-share input{flex:1 1 220px; min-width:0; font:inherit; font-size:13.5px; padding:10px 12px; border:1px solid var(--line-dark); border-radius:8px; background:#faf8f5;}
+.ag-actions{display:flex; flex-wrap:wrap; gap:10px; margin-top:12px;}
+.ag-actions .btn{min-height:44px;}
+/* Add a guest (group bookings, 10 Nov 2026) */
+.ag-add-row{display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px; margin-top:10px;}
+.ag-add-row .field{flex:1 1 160px; min-width:0;}
+.ag-add-row .btn{min-height:44px;}
+.ag-cap{margin-top:10px; padding:10px 12px; border-radius:8px; background:#fff4e5; border:1px solid #e8c48a; font-size:13.5px;}
+.ag-choices{margin:12px 0 0; padding-left:20px; display:grid; gap:14px;}
+.ag-choices li{padding-left:4px;}
+.ag-choices .ag-actions{margin-top:8px;}
+.ag-notices li{font-size:13.5px; line-height:1.5;}
+.ag-error{color:#a3402f; font-size:13.5px; margin-top:8px;}
+.ag-note{border-radius:10px; padding:12px 14px; margin-bottom:14px; font-size:14.5px;}
+.ag-note.is-ok{background:#e6f2e8; color:#2f6b3a;} .ag-note.is-bad{background:#f2e6e3; color:#8a3a2b;}
+.ag-quote{border-left:3px solid var(--gold); margin:0 0 14px; padding:6px 0 6px 14px; font-style:italic; font-size:15.5px;}
+.ag-quote cite{display:block; font-style:normal; font-size:13px; opacity:0.7; margin-top:4px;}
+.ag-quote-sm{font-size:13.5px; margin:6px 0;}
+.ag-mb-note{margin:6px 0; font-size:13.5px;}
+.ag-checkin{margin:8px 0; font-size:13.5px; line-height:1.55;}
+.ag-modal{position:fixed; inset:0; background:rgba(28,26,23,0.45); z-index:5000; display:flex; align-items:center; justify-content:center; padding:16px;}
+.ag-modal-box{background:#fff; border-radius:14px; padding:22px 20px; width:100%; max-width:460px; max-height:90vh; overflow:auto; position:relative;}
+.ag-modal-x{position:absolute; top:8px; right:10px; border:0; background:none; font-size:26px; line-height:1; cursor:pointer; padding:6px;}

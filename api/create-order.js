@@ -162,7 +162,7 @@ function plainError(message, itemCount) {
 
 // The breakdown a guest sees: the price quote, and the "prices have been
 // changed recently" answer. Amounts in rupees; the page formats them.
-function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon = 0, feeCredit = 0 }) {
+function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon = 0, feeCredit = 0, feeGst = 0 }) {
   const lines = [];
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   stayDetails.forEach(x => {
@@ -177,6 +177,9 @@ function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon 
     const amenityTotal = (x.amenities || []).reduce((t, a) => t + Number(a.total || 0), 0);
     const amenityNights = (x.amenities || []).reduce((t, a) => t + (a.dates || []).length, 0);
     if (amenityTotal) lines.push({ kind: 'amenities', item: x.suite, label: `Amenities (${plural(amenityNights, 'night')})`, amount: amenityTotal });
+    // The free cancellation add-on (_pricing.js): its GST is in the GST line.
+    if (x.freeCancelFee) lines.push({ kind: 'free_cancel', item: x.suite, label: `Free cancellation (until ${(x.freeCancelOffer || {}).untilLabel || ''})`, amount: x.freeCancelFee,
+                                     until: (x.freeCancelOffer || {}).until || null, untilLabel: (x.freeCancelOffer || {}).untilLabel || '' });
   });
   experienceDetails.forEach(x => {
     const before = x.subtotalBeforeDiscount != null ? x.subtotalBeforeDiscount : x.subtotal;
@@ -258,8 +261,68 @@ module.exports = async (req, res) => {
   if (req.body.releaseHold) {
     const asked = String(req.body.reason || 'closed');
     const reason = asked === 'failed' ? 'closed' : (RELEASE_REASONS.includes(asked) && asked !== 'paid' ? asked : 'closed');
-    await releaseHolds(sql, { razorpayOrderId: String(req.body.releaseHold).slice(0, 64), reason });
+    const oid = String(req.body.releaseHold).slice(0, 64);
+    // A group booking payment (_group-bookings.js): its places are given back;
+    // the group's dates stay held unless this was the organiser's first payment.
+    const grp = await require('./_group-bookings').releaseByOrder(sql, oid, asked).catch(() => null);
+    if (!grp || !grp.keepHold) await releaseHolds(sql, { razorpayOrderId: oid, reason });
     return res.status(200).json({ released: true });
+  }
+  // ---- Group bookings: a friend pays for places, or the organiser pays the
+  // difference of a smaller booking (_group-bookings.js). The same 3-minute
+  // window as any checkout; the booking agreement must be accepted.
+  // POST { groupPay: <token>, places, firstName, lastName, phone, agreementVersion }
+  // POST { groupGap: <token>, agreementVersion }
+  // POST { groupTopup: <token>, agreementVersion } — the balance the paid places
+  //      owe after a guest was added (the organiser or any member)
+  // groupPay on a confirmed group pays for guests added since (same booking).
+  if (req.body.groupPay || req.body.groupGap || req.body.groupTopup) {
+    const { guestId: gid, payload } = getOptionalGuestId(req);
+    if (!gid) return res.status(401).json({ error: 'Please log in to pay for your place.' });
+    const refused = await sessionRefusal(payload);
+    if (refused) return res.status(401).json({ error: refused });
+    if (req.body.agreementVersion !== AGREEMENT_VERSION) {
+      return res.status(400).json({ error: 'Please read and accept the booking agreement to continue.', agreementVersion: AGREEMENT_VERSION });
+    }
+    const G = require('./_group-bookings');
+    try {
+      if (req.body.groupGap) {
+        const out = await G.startGapPayment(sql, razorpay, { token: String(req.body.groupGap).slice(0, 64), guestId: gid, assertNotesFit });
+        return res.status(200).json({ orderId: out.order.id, keyId: process.env.RAZORPAY_KEY_ID, amount: out.order.amount, currency: 'INR', total: out.amount, holdSeconds: out.holdSeconds, group: true });
+      }
+      if (req.body.groupTopup) {
+        const me = (await sql`SELECT email, phone, first_name, last_name FROM guests WHERE id = ${gid}`)[0] || {};
+        const out = await G.startTopupPayment(sql, razorpay, { token: String(req.body.groupTopup).slice(0, 64), guestId: gid, firstName: me.first_name || null, lastName: me.last_name || null,
+          email: me.email, phone: me.phone || null, assertNotesFit });
+        return res.status(200).json({ orderId: out.order.id, keyId: process.env.RAZORPAY_KEY_ID, amount: out.order.amount, currency: 'INR', total: out.amount, holdSeconds: out.holdSeconds, group: true });
+      }
+      // Everyone paying for a place gives their name (letters only, as on
+      // their ID) and a phone, saved to their account; then the usual checks.
+      const first = String(req.body.firstName || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      const last = String(req.body.lastName || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      if (!first || !last || /\d/.test(first + last) || !/^[\p{L}\p{M} .'’-]+$/u.test(first + ' ' + last)) {
+        return res.status(400).json({ error: 'Please give your first and last name as on your government ID: letters, spaces, dots, apostrophes and hyphens only.', needs: ['name'] });
+      }
+      await saveGuestName(sql, gid, first, last);
+      await savePhoneIfMissing(sql, gid, req.body.phone);
+      try { await assertCanBook(sql, gid); }
+      catch (err) { if (err.isUserFacing) return res.status(err.status).json({ error: err.message, needs: err.needs || [] }); throw err; }
+      const g = await G.load(sql, { token: String(req.body.groupPay).slice(0, 64) });
+      if (!g) return res.status(404).json({ error: 'This group booking link is not valid.' });
+      const blocked = await require('./_support-actions').blockedListingIds(sql, gid);
+      if (blocked.includes(Number(g.listing_id))) return res.status(403).json({ error: 'This listing is not available to book from your account. Please contact Aerva Support if you think this is a mistake.' });
+      const own = await sql`SELECT 1 FROM listings l WHERE l.id = ${g.listing_id} AND (l.host_id = (SELECT host_id FROM guests WHERE id = ${gid})
+                              OR EXISTS (SELECT 1 FROM cohosts c WHERE c.host_id = l.host_id AND c.cohost_guest_id = ${gid} AND c.status = 'active' AND l.id = ANY(c.listing_ids)))`.catch(() => []);
+      if (own.length) return res.status(400).json({ error: 'Hosts and co-hosts can’t book listings they run.' });
+      const me = (await sql`SELECT email, phone FROM guests WHERE id = ${gid}`)[0] || {};
+      const out = await G.startPayment(sql, razorpay, { token: g.token, guestId: gid, places: req.body.places, firstName: first, lastName: last,
+        email: me.email, phone: normalizeToE164(String(req.body.phone || me.phone || '')) || me.phone || null, assertNotesFit });
+      return res.status(200).json({ orderId: out.order.id, keyId: process.env.RAZORPAY_KEY_ID, amount: out.order.amount, currency: 'INR', total: out.amount,
+        seats: out.seats, holdSeconds: out.holdSeconds, group: true });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('group payment start failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json(err.isUserFacing ? { error: err.message, placesLeft: err.placesLeft, closed: err.closed || undefined } : { error: 'Could not start the payment. Nothing has been charged. Please try again.' });
+    }
   }
   // Paying the difference for a change the host accepted: the same strict
   // 3-minute window as a booking (_booking-changes.js).
@@ -282,7 +345,22 @@ module.exports = async (req, res) => {
   // closed (and the dates released) the moment the answer is no.
   // POST { holdStatus: '<razorpay order id>' }
   if (req.body.holdStatus) {
-    return res.status(200).json(await holdStatus(sql, String(req.body.holdStatus).slice(0, 64)));
+    const oid = String(req.body.holdStatus).slice(0, 64);
+    // A friend's group payment has no dates of its own: its window is its claim's.
+    try {
+      const c = (await sql`SELECT status, GREATEST(0, ceil(extract(epoch FROM expires_at - now())))::int AS secs FROM group_claims WHERE razorpay_order_id = ${oid}`)[0];
+      const g = c ? (await sql`SELECT hold_order_id FROM group_bookings g JOIN group_claims x ON x.group_id = g.id WHERE x.razorpay_order_id = ${oid}`)[0] : null;
+      if (c && !(g && g.hold_order_id === oid && c.status === 'open')) {
+        if (c.status === 'paid') return res.status(200).json({ active: false, reason: 'paid' });
+        if (c.status !== 'open') return res.status(200).json({ active: false, reason: 'released' });
+        if (c.secs <= 0) {
+          await require('./_group-bookings').releaseByOrder(sql, oid, 'expired');
+          return res.status(200).json({ active: false, reason: 'expired' });
+        }
+        return res.status(200).json({ active: true, secondsLeft: c.secs });
+      }
+    } catch (err) { /* before the database update: a normal checkout */ }
+    return res.status(200).json(await holdStatus(sql, oid));
   }
   // What the booking form can fill in for a signed-in guest.
   // POST { prefill: true } → { firstName, lastName, email, phone }
@@ -312,6 +390,7 @@ module.exports = async (req, res) => {
     return res.status(429).json({ error: 'Too many price checks. Please wait a minute and try again.' });
   }
   let holdIds = [];
+  let giftRecipient = null;
   try {
     const { stays, experiences, email, preferredCurrency, couponCode, pricesSeen } = req.body;
 
@@ -336,7 +415,10 @@ module.exports = async (req, res) => {
     // Anything the server alone decides is never taken from the browser:
     // the stay an experience includes, and keeping a past arrival (only a
     // change to a booking already under way may, _booking-changes.js).
-    let safeStays = (Array.isArray(stays) ? stays : []).map(x => Object.assign({}, x, { includedWithExperienceId: undefined, keepArrival: undefined }));
+    // The free cancellation add-on is for a stay paid by one guest: never on
+    // a split (group) payment.
+    let safeStays = (Array.isArray(stays) ? stays : []).map(x => Object.assign({}, x, { includedWithExperienceId: undefined, keepArrival: undefined,
+      freeCancel: !req.body.group && x && x.freeCancel === true, noFreeCancel: !!req.body.group }));
     const safeExperiences = (Array.isArray(experiences) ? experiences : []).map(x => Object.assign({}, x, { keepDate: undefined }));
     const requestedItems = safeStays.length + safeExperiences.length;
 
@@ -361,7 +443,28 @@ module.exports = async (req, res) => {
       if (!guestFirst || !guestLast) {
         return res.status(400).json({ error: 'Please give the first and last name of the guest staying.', needs: ['name'] });
       }
+      // As on a government ID: letters only (owner, 9 Nov 2026), same rule as Profile.
+      if (/\d/.test(guestFirst + guestLast) || !/^[\p{L}\p{M} .'’-]+$/u.test(guestFirst + ' ' + guestLast)) {
+        return res.status(400).json({ error: 'Please write the guest’s first and last name as on their government ID: letters, spaces, dots, apostrophes and hyphens only.', needs: ['name'] });
+      }
       await saveGuestName(sql, guestId, guestFirst, guestLast);
+
+      // "This stay is for someone else" (_gifts.js) and "Split the payment
+      // with friends" (_group-bookings.js): both need the database update;
+      // until then they answer "not switched on yet" and nothing is charged.
+      if (req.body.gift && req.body.group) return res.status(400).json({ error: 'A gift cannot also be split with friends. Please choose one.' });
+      if (req.body.gift) {
+        const G = require('./_gifts');
+        if (!(await G.ready(sql))) return res.status(503).json({ error: G.NOT_ON, notSwitchedOn: true });
+        try { giftRecipient = G.parseRecipient(req.body.gift); }
+        catch (err) { if (err.isUserFacing) return res.status(err.status).json({ error: err.message, needs: err.needs || [] }); throw err; }
+        if (String(email || '').trim().toLowerCase() === giftRecipient.email) return res.status(400).json({ error: 'That is your own email. A gift goes to someone else.', needs: ['giftEmail'] });
+      }
+      if (req.body.group) {
+        if (!(await require('./_group-bookings').ready(sql))) return res.status(503).json({ error: require('./_group-bookings').NOT_ON, notSwitchedOn: true });
+        if (couponCode && String(couponCode).trim()) return res.status(400).json({ error: 'A coupon cannot be used on a split payment. Remove the coupon, or pay for the whole stay.' });
+        if (preferredCurrency && preferredCurrency !== 'INR') return res.status(400).json({ error: 'Split payments are in rupees only.' });
+      }
 
       // Every booking needs an account with a confirmed email and a phone
       // number (_guest-id.js). The phone typed at checkout is saved to the
@@ -481,6 +584,12 @@ module.exports = async (req, res) => {
     if (safeStays.length > MAX_STAYS) {
       return res.status(400).json({ error: 'Too many homes in one booking once the stays included with your experiences are counted. Please book them separately.' });
     }
+    if (!quoteOnly && req.body.group && (safeStays.length !== 1 || safeExperiences.length || safeStays[0].roomId)) {
+      return res.status(400).json({ error: 'A split payment is for one home on its own (no add-on experiences). Please remove the experience, or pay for the whole booking.' });
+    }
+    if (!quoteOnly && giftRecipient && !safeStays.length) {
+      return res.status(400).json({ error: 'Only stays can be sent as a gift.' });
+    }
 
     // Dates sold on Airbnb / Agoda / Booking.com… must be closed here before
     // this booking is checked: refresh these listings' imported calendars if
@@ -496,6 +605,7 @@ module.exports = async (req, res) => {
     let grandGuestServiceFee = 0;
     let grandDeposit = 0;
     let grandGst = 0;
+    let grandFreeCancel = 0;     // the add-on, with its GST (_pricing.js)
     const stayDetails = [];
     const experienceDetails = [];
     const seenListingIds = new Set();
@@ -529,6 +639,7 @@ module.exports = async (req, res) => {
       grandDiscount += d.discountAmount;
       grandGuestServiceFee += d.guestServiceFee;
       grandDeposit += d.depositAmount;
+      grandFreeCancel += (d.freeCancelFee || 0) + (d.freeCancelGst || 0);
       stayDetails.push(d);
     }
 
@@ -561,7 +672,9 @@ module.exports = async (req, res) => {
     // re-derived from a grand total. A coupon, applied next, is a voucher:
     // it reduces what the guest pays, not the GST on the booking.
     const gst = grandGst;
-    let totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit;
+    // GST shown to the guest: the stays' and experiences', and the add-on's.
+    const gstShown = gst + stayDetails.reduce((t, x) => t + (x.freeCancelGst || 0), 0);
+    let totalRupees = grandSubtotal + gst + grandGuestServiceFee + grandDeposit + grandFreeCancel;
 
     // ---- Aerva credit (a host cancelled an earlier booking) ----
     // Pays toward this booking — price, GST and service fee, after any
@@ -600,11 +713,14 @@ module.exports = async (req, res) => {
       await applyCredit(0);
       return res.status(200).json({
         quote: true,
-        lines: priceLines(stayDetails, experienceDetails, { gst, fee: grandGuestServiceFee, deposit: grandDeposit, feeCredit: feeCreditUsed }),
-        total: totalRupees, subtotal: grandSubtotal, gst, guestServiceFee: grandGuestServiceFee, deposit: grandDeposit, feeCredit: feeCreditUsed, creditBalance,
+        lines: priceLines(stayDetails, experienceDetails, { gst: gstShown, fee: grandGuestServiceFee, deposit: grandDeposit, feeCredit: feeCreditUsed }),
+        total: totalRupees, subtotal: grandSubtotal, gst: gstShown, guestServiceFee: grandGuestServiceFee, deposit: grandDeposit, feeCredit: feeCreditUsed, creditBalance,
+        freeCancel: grandFreeCancel,
         stays: stayDetails.map(x => ({ listingId: x.listingId, roomId: x.roomId, suite: x.suite, arrival: x.arrival, departure: x.departure, nights: x.nights,
                                        guests: x.guests, subtotal: x.subtotal, gst: x.gst, gstRate: x.gstRate, guestServiceFee: x.guestServiceFee, depositAmount: x.depositAmount,
-                                       withExperienceId: x.withExperienceId })),
+                                       withExperienceId: x.withExperienceId,
+                                       // The add-on: offered or not, its price, and whether it is in this quote.
+                                       freeCancel: Object.assign({}, x.freeCancelOffer || { offered: false }, { chosen: (x.freeCancelFee || 0) > 0 }) })),
         experiences: experienceDetails.map(x => ({ listingId: x.listingId, suite: x.suite, date: x.date, endDate: x.endDate, durationDays: x.durationDays, guests: x.guests,
                                                    subtotal: x.subtotal, gst: x.gst, gstRate: x.gstRate, guestServiceFee: x.guestServiceFee }))
       });
@@ -655,7 +771,8 @@ module.exports = async (req, res) => {
       appliedCouponId = coupon.id;
       totalRupees = Math.max(0, totalRupees - appliedCouponDiscount);
     }
-    await applyCredit(appliedCouponDiscount);
+    // Aerva credit is never split across a group (it is the organiser's own).
+    if (!req.body.group) await applyCredit(appliedCouponDiscount);
 
     // Default path, and the ONLY path until International Payments is
     // actually approved and an admin explicitly enables specific
@@ -704,7 +821,7 @@ module.exports = async (req, res) => {
         return res.status(409).json({
           priceChanged: true,
           error: 'Prices have been changed recently. The new price is below.',
-          lines: priceLines(stayDetails, experienceDetails, { gst, fee: grandGuestServiceFee, deposit: grandDeposit, coupon: appliedCouponDiscount, feeCredit: feeCreditUsed }),
+          lines: priceLines(stayDetails, experienceDetails, { gst: gstShown, fee: grandGuestServiceFee, deposit: grandDeposit, coupon: appliedCouponDiscount, feeCredit: feeCreditUsed }),
           total: totalRupees, pricesSeen: current
         });
       }
@@ -737,6 +854,22 @@ module.exports = async (req, res) => {
       { guestKey, ip: requestContext(req).ip || null });
     holdIds = held.ids;
 
+    // ---- Split the payment with friends: the organiser pays for their
+    // places now; the group then opens for 2 hours (_group-bookings.js). ----
+    if (req.body.group) {
+      const G = require('./_group-bookings');
+      const me = guestId ? ((await sql`SELECT phone FROM guests WHERE id = ${guestId}`)[0] || {}) : {};
+      const started = await G.startGroup(sql, razorpay, { guestId, email: String(email).trim(), firstName: guestFirst, lastName: guestLast, phone: me.phone || null,
+        input: safeStays[0], detail: stayDetails[0], total: totalRupees, payNow: (req.body.group || {}).payNow, agreement: agreementNote, prices: current || null, holdIds, assertNotesFit });
+      await attachHolds(sql, holdIds, started.order.id);
+      return res.status(200).json({
+        orderId: started.order.id, keyId: process.env.RAZORPAY_KEY_ID, chargeCurrency: 'INR', chargeAmount: null,
+        amount: started.order.amount, currency: 'INR', total: started.amount, bookingTotal: totalRupees, totalDeposit: grandDeposit, gst,
+        couponDiscount: 0, couponForfeited: 0, feeCredit: 0, holdSeconds: holdIds.length ? HOLD_SECONDS : null, pricesSeen: current || undefined,
+        group: { token: started.token, places: stayDetails[0].guests, shares: started.shares, payNow: started.claim.places }
+      });
+    }
+
     // What is being paid for, kept in full in our own database. Razorpay's
     // notes carry only this cart's id (they allow 15 short values; a cart
     // with a few amenities is several kilobytes). _confirm-booking.js reads
@@ -759,7 +892,9 @@ module.exports = async (req, res) => {
       // The exact price stamps this order was priced with. At payment, any
       // listing whose stamp differs had its price changed in between —
       // compared stamp to stamp, never by clocks.
-      prices: current || null
+      prices: current || null,
+      // A gift: the recipient, created as a gift once the booking is paid (_gifts.js).
+      gift: giftRecipient || undefined
     };
     await sql`INSERT INTO checkout_carts (id, guest_id, payload) VALUES (${cartId}, ${guestId || null}, ${JSON.stringify(cart)}::jsonb)`;
 

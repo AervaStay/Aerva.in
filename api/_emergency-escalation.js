@@ -1,29 +1,20 @@
-// /api/_emergency-escalation.js — an emergency cancellation the host has not
-// answered. Not an endpoint.
+// /api/_emergency-escalation.js — cancellation requests that come to Aerva.
+// Not an endpoint.
 //
-// THE OWNER'S RULES (9 Nov 2026):
-//   • A guest may ask to cancel before check-in for an emergency (hazard,
-//     life-threatening situation, medical or family emergency, travel
-//     restriction). The host accepts → booking price, GST and deposit are
-//     refunded in full; Aerva's service fee stays charged. The host
-//     declines → no refund, the booking stands.
-//   • The host does not answer within 24 hours (sooner when check-in is
-//     close: once check-in is under ESCALATE_BEFORE_CHECKIN_HOURS away) →
-//     Aerva reaches out to the host FIRST:
-//       – 3 reminders to the host, by email and in the booking's Messages;
-//       – a support request for the guest and one for the host, so each
-//         sees "action needed" in their own Support section (and the bell);
-//       – an urgent item for Aerva's support team (Admin → Support first,
-//         and Admin → Approvals → cancellation requests) to call the host.
-//     The host can still accept or decline at any time until Aerva decides.
-//   • Only when all 3 reminders have gone unanswered (or check-in is under
-//     DECIDE_BEFORE_CHECKIN_HOURS away) can Aerva decide — normally to
-//     refund as the guest asked. Aerva's decision is final and binds the
-//     host and the guest.
-//   • Spacing: the reminders and the last wait are spread over the time
-//     left before check-in — every quarter of it, between 1 and 8 hours —
-//     so Aerva can decide before the stay starts (a request still open at
-//     check-in closes and the booking stands, _cancellations.js).
+// THE OWNER'S RULES (10 Nov 2026, replacing those of 4–9 Nov):
+//   • A NATURAL DISASTER (or a government order / travel restriction, which
+//     counts as one) goes straight to Aerva the moment the guest sends it,
+//     with proof. There is nothing for the host to answer, so there are no
+//     reminders, no 24-hour wait and no "Aerva decides after 3 reminders":
+//     Aerva checks the proof and decides (_cancellations.js decideByAerva).
+//     The host is told, and sees it on the dashboard as information only
+//     (hostActions); the guest sees where it stands (guestStatus).
+//   • What is left here is for OLD requests only — an emergency with a
+//     reason removed on 10 Nov 2026 (medical or family emergency,
+//     life-threatening situation) still open from before: the host has 24
+//     hours, then Aerva reminds them 3 times (email, Messages, a support
+//     request each side, a call from Aerva's team), then decides. The job
+//     (runEscalations) keeps running for those until none is left.
 
 const { logAudit } = require('./_audit-log');
 const { hoursUntilCheckInTime, dateStr } = require('./_booking-rules');
@@ -68,8 +59,8 @@ async function load(sql, requestId) {
     FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id
     WHERE r.id = ${Number(requestId) || 0}`)[0] || null;
 }
-function isEmergency(r) { return !!require('./_cancellations').EMERGENCY_REASONS[r.reason_code]; }
-function reasonLabel(r) { return require('./_cancellations').EMERGENCY_REASONS[r.reason_code] || r.reason_code; }
+function isEmergency(r) { return !!require('./_cancellations').RETIRED_REASONS[r.reason_code]; }   // an old request (see above)
+function reasonLabel(r) { return require('./_cancellations').REASON_LABELS[r.reason_code] || r.reason_code; }
 function stayLine(r) { return `${r.suite_name} (${dateStr(r.arrival)} → ${dateStr(r.departure)}, booking ${r.code})`; }
 
 // May Aerva decide now? After every reminder went unanswered, or when
@@ -150,7 +141,7 @@ async function runEscalations(sql, { deadlineMs = 4000 } = {}) {
   try {
     rows = await sql`SELECT r.id FROM cancellation_requests r JOIN orders o ON o.id = r.order_id
                      WHERE r.status = 'pending' AND r.decided_at IS NULL AND o.status = 'paid'
-                       AND r.reason_code = ANY(${Object.keys(C.EMERGENCY_REASONS)}) AND r.aerva_decides_at IS NULL
+                       AND r.reason_code = ANY(${Object.keys(C.RETIRED_REASONS)}) AND r.aerva_decides_at IS NULL
                      ORDER BY o.arrival, r.id LIMIT 50`;
   } catch (err) { return { ...out, skipped: 'table not ready' }; }
   for (const { id } of rows) {
@@ -227,24 +218,28 @@ function adminView(r) {
     escalatedAt: r.escalated_at || null, reminders: Number(r.host_reminders) || 0, remindersMax: REMINDERS, lastReminderAt: r.last_host_reminder_at || null,
     aervaDecidesAt: r.aerva_decides_at || null, canDecide: canAervaDecide(r), hoursToCheckIn: Math.max(0, Math.round(left * 10) / 10),
     hostEmail: r.host_email || null, hostPhone: r.host_phone || null, contactLog: Array.isArray(r.contact_log) ? r.contact_log : [],
-    decideRule: `Aerva decides only after ${REMINDERS} reminders to the host have gone unanswered (or when check-in is under ${DECIDE_BEFORE_CHECKIN_HOURS} hours away).`
+    decideRule: Number(r.host_reminders) >= REMINDERS && r.last_host_reminder_at && !canAervaDecide(r)
+      // Every reminder has gone out: what is left is the wait after the last one (runEscalations).
+      ? `All ${REMINDERS} reminders have been sent. If the host still has not answered, Aerva can decide from ${when(new Date(new Date(r.last_host_reminder_at).getTime() + gapHours(left) * 3600e3))} (India time), or once check-in is under ${DECIDE_BEFORE_CHECKIN_HOURS} hours away.`
+      : `Aerva decides only after ${REMINDERS} reminders to the host have gone unanswered (or when check-in is under ${DECIDE_BEFORE_CHECKIN_HOURS} hours away).`
   };
 }
 
-// The host's "action needed" list (host dashboard): emergency requests
-// waiting for them, with Aerva's reminders so far.
+// The host's dashboard: a natural disaster Aerva is deciding (information
+// only — info: true), and an old emergency request waiting for the host,
+// with Aerva's reminders so far.
 async function hostActions(sql, hostId) {
   if (!(await ready(sql))) return [];
   try {
     const C = require('./_cancellations');
-    const rows = await sql`SELECT r.id, r.order_id, r.reason_code, r.created_at, r.escalated_at, r.host_reminders, r.aerva_decides_at, o.suite_name, o.arrival, o.departure,
+    const rows = await sql`SELECT r.id, r.order_id, r.reason_code, r.days_before, r.created_at, r.escalated_at, r.host_reminders, r.aerva_decides_at, o.suite_name, o.arrival, o.departure,
                                   COALESCE(o.confirmation_code, '#' || o.id) AS code
                            FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id
                            WHERE l.host_id = ${hostId} AND r.status = 'pending' AND r.decided_at IS NULL AND o.status = 'paid'
-                             AND r.reason_code = ANY(${Object.keys(C.EMERGENCY_REASONS)})
+                             AND r.reason_code = ANY(${Object.keys(C.AERVA_REASONS)})
                            ORDER BY o.arrival`;
     return rows.map(x => ({ requestId: x.id, orderId: x.order_id, listing: x.suite_name, arrival: dateStr(x.arrival), departure: dateStr(x.departure), code: x.code,
-      reason: C.EMERGENCY_REASONS[x.reason_code], askedAt: x.created_at, escalated: !!x.escalated_at, reminders: Number(x.host_reminders) || 0, remindersMax: REMINDERS,
+      reason: C.REASON_LABELS[x.reason_code], info: C.isDisaster(x), askedAt: x.created_at, escalated: !!x.escalated_at, reminders: Number(x.host_reminders) || 0, remindersMax: REMINDERS,
       aervaDeciding: !!x.aerva_decides_at, answerBy: new Date(new Date(x.created_at).getTime() + HOST_TIMEOUT_HOURS * 3600e3).toISOString() }));
   } catch (e) { return []; }
 }
@@ -258,7 +253,8 @@ async function guestStatus(sql, orderIds) {
                            FROM cancellation_requests WHERE order_id = ANY(${orderIds}) AND status = 'pending' ORDER BY order_id, id DESC`;
     const C = require('./_cancellations');
     rows.forEach(x => {
-      if (!C.EMERGENCY_REASONS[x.reason_code]) return;
+      if (C.isDisaster(x)) { out[x.order_id] = 'Sent to Aerva with your proof · Aerva is checking it and will decide (final)'; return; }
+      if (!C.RETIRED_REASONS[x.reason_code]) return;
       out[x.order_id] = x.aerva_decides_at ? 'Your host has not answered after 3 reminders · Aerva is deciding (final)'
         : x.escalated_at ? `With Aerva · contacting your host (reminder ${Number(x.host_reminders) || 0} of ${REMINDERS})`
         : 'Emergency cancellation requested · waiting for the host (24 hours)';

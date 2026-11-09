@@ -281,7 +281,7 @@ function ticketView(t) {
   return {
     ref: t.ref, category: t.category, categoryLabel: (CATEGORIES[t.category] || {}).label || 'Request',
     subject: t.subject, status: t.status, statusLabel: STATUS_LABELS[t.status] || t.status, role: t.role,
-    orderId: t.order_id, listingId: t.listing_id, bookingName: t.suite_name || null, listingName: t.property_name || null,
+    orderId: t.order_id, listingId: t.listing_id, bookingName: t.suite_name || null, bookingCode: t.confirmation_code || null, listingName: t.property_name || null,
     createdAt: t.created_at, updatedAt: t.updated_at, callbackPhone: t.callback_phone || null,
     unread: !!(t.last_support_message_at && (!t.user_last_seen_at || new Date(t.last_support_message_at) > new Date(t.user_last_seen_at)))
   };
@@ -290,7 +290,7 @@ function ticketView(t) {
 async function listRequests(sql, guestId) {
   try {
     const rows = await sql`
-      SELECT t.*, o.suite_name, l.property_name FROM support_tickets t
+      SELECT t.*, o.suite_name, o.confirmation_code, l.property_name FROM support_tickets t
       LEFT JOIN orders o ON o.id = t.order_id LEFT JOIN listings l ON l.id = t.listing_id
       WHERE t.guest_id = ${guestId} ORDER BY t.updated_at DESC LIMIT 100`;
     return rows.map(ticketView);
@@ -301,7 +301,7 @@ async function ownTicket(sql, guestId, ref) {
   let t;
   try {
     t = (await sql`
-      SELECT t.*, o.suite_name, l.property_name FROM support_tickets t
+      SELECT t.*, o.suite_name, o.confirmation_code, l.property_name FROM support_tickets t
       LEFT JOIN orders o ON o.id = t.order_id LEFT JOIN listings l ON l.id = t.listing_id
       WHERE t.ref = ${String(ref || '').trim().toUpperCase()} AND t.guest_id = ${guestId}`)[0];
   } catch (err) { if (notReady(err)) throw NOT_READY(); throw err; }

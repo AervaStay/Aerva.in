@@ -31,6 +31,7 @@ const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '
 async function loadPayoutSummary(sql, payoutId) {
   const r = (await sql`
     SELECT p.*, o.suite_name, o.arrival, o.departure, o.id AS booking_id, o.razorpay_order_id, g.name AS guest_name,
+           COALESCE((to_jsonb(o)->>'free_cancel_fee')::numeric, 0) AS free_cancel_fee,
            CASE WHEN p.payee_type = 'host' THEN h.name ELSE pg.name END AS payee_name
     FROM payouts p JOIN orders o ON o.id = p.order_id LEFT JOIN guests g ON g.id = o.guest_id
     JOIN hosts h ON h.id = p.host_id LEFT JOIN guests pg ON pg.id = p.payee_guest_id
@@ -44,7 +45,10 @@ async function loadPayoutSummary(sql, payoutId) {
     : /^rest/.test(r.kind || '')
     ? [['Rest of your payout for this booking', Number(r.gross)]]
     : r.payee_type === 'host'
-    ? [['Booking earnings', Number(r.gross)], ['Aerva commission', -Number(r.commission)], ['Co-host share', -Number(r.cohost_shares)]]
+    // The free cancellation add-on the guest bought (_pricing.js) is part of
+    // the gross; shown on its own line when the payout covers it in full.
+    ? (() => { const fc = Number(r.free_cancel_fee) > 0 && Number(r.free_cancel_fee) <= Number(r.gross) ? Number(r.free_cancel_fee) : 0;
+        return [['Booking earnings', Number(r.gross) - fc], ['Free cancellation add-on', fc], ['Aerva commission', -Number(r.commission)], ['Co-host share', -Number(r.cohost_shares)]]; })()
     : [['Co-host share', Number(r.gross)]]; // co-hosts: TDS only, no other deductions
   if (Number(r.deductions) > 0) {
     // What was deducted: cancellation coupons, and/or an amount paid before
@@ -273,6 +277,11 @@ async function createPayoutRows(sql, orderId) {
                              AND (to_jsonb(o)->>'cancel_claimed_at')::timestamptz > now() - interval '10 minutes'`;
     if (busy.length) return created;
   } catch (e) { /* before migration_cancellation_policy.sql */ }
+  // Aerva's check-in promise (_checkin-promise.js): a report on arrival
+  // being settled, a listing reported or blocked as fake, or a listing no
+  // guest has confirmed real yet (held until check-out). Created once the
+  // hold ends — then with the host's balance owed to Aerva deducted.
+  if (await require('./_checkin-promise').holdFor(sql, orderId)) return created;
   for (const plan of await planPayouts(sql, orderId, { splitOverpaid: true })) {
     let r;
     try {
@@ -540,6 +549,12 @@ async function refreshTds(sql, row) {
 async function attemptPayout(sql, payoutId, { by = 'automatic' } = {}) {
   if (!razorpayxReady()) return 'not_configured';
   const current = (await sql`SELECT * FROM payouts WHERE id = ${payoutId}`)[0];
+  // On hold under the check-in promise: not sent; picked up when the hold ends.
+  const hold = current ? await require('./_checkin-promise').holdFor(sql, current.order_id) : null;
+  if (hold) {
+    await sql`UPDATE payouts SET failure_reason = ${('On hold: ' + hold).slice(0, 300)} WHERE id = ${payoutId} AND status IN ('due', 'failed')`;
+    return 'held';
+  }
   if (current) await refreshTds(sql, current);
   const claim = await sql`
     UPDATE payouts SET status = 'processing', attempts = attempts + 1, last_attempt_at = now(), failure_reason = NULL

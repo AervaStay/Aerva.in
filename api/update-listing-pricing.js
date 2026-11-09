@@ -44,6 +44,7 @@ const { resolveSatisfiedComplianceFlags } = require('./_compliance');
 const { sanitizeBody } = require('./_plain-text');
 const { assertSafeUrl, syncFeed, newToken } = require('./_calendar-sync');
 const { encryptField, decryptField, encryptionReady } = require('./_secure-fields');
+const special = require('./_listing-special');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -77,7 +78,9 @@ function normalizeMaxGuests(raw) {
 // live straight away on an approved listing. Until there is a proper
 // re-review step, the admin is told every time they change, so a bad
 // photo (a phone number, someone else's property) is seen within hours.
-async function notifyAdminOfListingChange(listingId, listingName, hostEmail, changes, actorType, { email = true } = {}) {
+// extraLines: already-escaped HTML lines (What's special / recommendations,
+// _listing-special.js describeChange) — emailed, not stored in the audit.
+async function notifyAdminOfListingChange(listingId, listingName, hostEmail, changes, actorType, { email = true, extraLines = [] } = {}) {
   try {
     await logAudit(sql, { action: 'listing_photos_changed', success: true, actorType, actorIdentifier: hostEmail || null,
       targetType: 'listing', targetId: listingId, metadata: changes });
@@ -91,6 +94,7 @@ async function notifyAdminOfListingChange(listingId, listingName, hostEmail, cha
   }
   if (changes.photosRemoved) lines.push(`Photos removed: ${Number(changes.photosRemoved)}`);
   if (changes.coverChanged) lines.push('Cover photo changed.');
+  lines.push(...extraLines);
   try {
     await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -147,7 +151,12 @@ module.exports = async (req, res) => {
     try {
       const listingRow = (await sql`SELECT id, property_name, property_type FROM listings WHERE id = ${listingId}`)[0];
       if (!listingRow) return res.status(404).json({ error: 'Listing not found.' });
-      const rooms = await sql`SELECT id, room_name FROM listing_rooms WHERE listing_id = ${listingId} AND is_active = true ORDER BY sort_order, id`;
+      // Only a Resort's rooms are booked on their own. Other stays keep
+      // listing_rooms just to describe their spaces (Kitchen, Washroom…,
+      // submit-listing.js) — they book as one unit, so one calendar.
+      const rooms = listingRow.property_type === 'Resort'
+        ? await sql`SELECT id, room_name FROM listing_rooms WHERE listing_id = ${listingId} AND is_active = true ORDER BY sort_order, id`
+        : [];
       const exportBase = 'https://aerva-in.vercel.app/api/get-listings?ical=';
       const loadState = async () => {
         await sql`UPDATE listings SET ical_token = ${newToken()} WHERE id = ${listingId} AND ical_token IS NULL`;
@@ -285,7 +294,7 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     try {
       const rows = await sql`
-        SELECT id, property_name, property_type, listing_type, bedrooms, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
+        SELECT id, property_name, property_type, listing_type, bedrooms, max_guests, city, area, nightly_rate, discount_type, discount_value, discount_min_nights, discount_description,
                exterior_photo_urls, interior_photo_urls, cover_photo_url, amenities, services,
                latitude, longitude, formatted_address, pincode,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
@@ -298,7 +307,12 @@ module.exports = async (req, res) => {
                to_jsonb(listings)->>'checkin_send_trigger' AS checkin_send_trigger,
                (to_jsonb(listings)->>'checkin_send_offset_minutes')::int AS checkin_send_offset_minutes,
                COALESCE((to_jsonb(listings)->>'checkin_send_also_on_confirm')::boolean, false) AS checkin_send_also_on_confirm,
-               to_jsonb(listings)->>'checkin_send_at_time' AS checkin_send_at_time
+               to_jsonb(listings)->>'checkin_send_at_time' AS checkin_send_at_time,
+               -- _listing-special.js; read this way so the page loads before the migration
+               COALESCE(to_jsonb(listings)->'special_highlights', '[]'::jsonb) AS special_highlights,
+               to_jsonb(listings)->>'special_story' AS special_story,
+               COALESCE(to_jsonb(listings)->'host_recommendations', '[]'::jsonb) AS host_recommendations,
+               COALESCE(to_jsonb(listings)->'suggested_experience_ids', '[]'::jsonb) AS suggested_experience_ids
         FROM listings WHERE id = ${listingId}
       `;
       const listing = rows[0];
@@ -544,6 +558,16 @@ module.exports = async (req, res) => {
             : 'Your listing is still awaiting review — you\'ll be able to manage your rooms and pricing here once it\'s approved.'
         });
       }
+      // ---- What's special / Recommended by your host / suggested experiences ----
+      // Treated like the listing's other guest-facing text (its name): on a
+      // live listing the change goes live at once, cleared of contact
+      // details (_listing-special.js), and the admin is emailed exactly what
+      // it now says. Checked here, before anything is saved; not sent = left
+      // as it is.
+      const specialIn = await special.cleanSpecial(req.body, sql, { selfId: listingId });
+      if (specialIn.error) return res.status(400).json({ error: specialIn.error, field: 'special' });
+      const specialBefore = Object.keys(specialIn.values).length ? await special.readSpecial(sql, listingId) : null;
+
       // ---- Unusual price changes wait for approval (_price-review.js) ----
       // On a live listing, a sharp drop, a price below the minimum or a
       // very large discount is held: the current one stays live and the
@@ -725,6 +749,7 @@ module.exports = async (req, res) => {
         RETURNING id, property_name, host_email, max_guests
       `;
       const listing = updated[0];
+      const specialSaved = await special.saveSpecial(sql, listingId, specialIn.values);
 
       // When the check-in instructions go out (Manage → Guest Check-In Info
       // → Scheduling; _template-scheduling.js). Saved apart, so a save
@@ -1335,10 +1360,13 @@ module.exports = async (req, res) => {
         // by _photo-guard.js, and only one showing a contact detail or an
         // address reaches the admin (Admin → Removed photos, plus an
         // email). A new name still does. Both stay in the audit log.
-        if (added.length || removed || coverChanged || renamed) {
+        const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const specialLines = specialSaved.saved && specialBefore ? special.describeChange(specialBefore, specialIn.values, esc) : [];
+        if (added.length || removed || coverChanged || renamed || specialLines.length) {
           const changes = { photosAdded: added, photosRemoved: removed, coverChanged };
           if (renamed) { changes.nameFrom = before[0].property_name; changes.nameTo = safeName; }
-          await notifyAdminOfListingChange(listingId, listing.property_name, listing.host_email, changes, access.isCohost ? 'cohost' : 'host', { email: !!renamed });
+          if (specialLines.length) changes.specialChanged = true;
+          await notifyAdminOfListingChange(listingId, listing.property_name, listing.host_email, changes, access.isCohost ? 'cohost' : 'host', { email: !!renamed || specialLines.length > 0, extraLines: specialLines });
         }
       }
 
@@ -1348,8 +1376,13 @@ module.exports = async (req, res) => {
         metadata: { newRate: liveRate, askedRate: rate, rateChanged, priceHeld: priceNotes.length, discountType: discountType || null, paidAmenitiesError: !!paidAmenitiesError, blockedDatesError: !!blockedDatesError, promotionsError: !!promotionsError }
       });
 
+      const specialNotes = [];
+      if (specialSaved.note) specialNotes.push(specialSaved.note);
+      else if (specialIn.redacted) specialNotes.push('We took a phone number, email or link out of \u201cWhat\u2019s special\u201d or your recommendations \u2014 guests book and talk through Aerva.');
+      if (specialSaved.saved && specialIn.dropped) specialNotes.push(`${specialIn.dropped === 1 ? 'One suggested experience is' : specialIn.dropped + ' suggested experiences are'} no longer live on Aerva and ${specialIn.dropped === 1 ? 'was' : 'were'} left out.`);
       const warning = [...priceNotes, paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning].filter(Boolean).join(' ') || undefined;
-      return res.status(200).json({ success: true, warning, priceHeld: priceNotes.length ? priceNotes : undefined });
+      return res.status(200).json({ success: true, warning, priceHeld: priceNotes.length ? priceNotes : undefined,
+        note: specialNotes.length ? specialNotes.join(' ') : undefined, specialSkipped: specialSaved.skipped || undefined });
     } catch (err) {
       console.error('update-listing-pricing (POST) error:', err);
       await logAudit(sql, {

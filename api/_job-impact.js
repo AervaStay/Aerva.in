@@ -23,6 +23,32 @@ function dedupe(list) {
 const guestOf = (r) => ({ who: 'Guest', name: r.guest_name || 'Guest', email: r.guest_email || '' });
 
 const IMPACT = {
+  // Group bookings closed, confirmed, cancelled (refunds) and reminders.
+  group_bookings: (sql, since) => safe(async () => {
+    const rows = await sql`SELECT action, metadata FROM audit_log WHERE created_at >= ${since} AND actor_type = 'system'
+                           AND action IN ('group_booking_confirmed', 'group_booking_cancelled', 'group_booking_short', 'group_booking_reminder', 'group_payment_refunded')`;
+    const out = [];
+    rows.forEach(r => {
+      const m = r.metadata || {};
+      if (r.action === 'group_booking_confirmed') (m.payers || []).forEach(p => out.push({ who: 'Guest', name: p.email, email: p.email, what: `Group booking confirmed (${p.places} place${p.places === 1 ? '' : 's'}, ${inr(p.paid)})` }));
+      else if (r.action === 'group_booking_cancelled') (m.refunded || []).forEach(p => out.push({ who: 'Guest', name: p.email, email: p.email, what: `Group booking did not go ahead: refunded ${inr(p.amount)}` }));
+      else if (r.action === 'group_booking_short') out.push({ who: 'Guest', name: m.email, email: m.email, what: `Asked to confirm a smaller group booking (${m.paidPlaces} of ${m.places} places, ${inr(m.requoteTotal)})` });
+      else if (r.action === 'group_booking_reminder') out.push({ who: 'Guest', name: m.email, email: m.email, what: `Reminder: 30 minutes left (${m.paidPlaces} of ${m.places} paid)` });
+      else if (r.action === 'group_payment_refunded') out.push({ who: 'Guest', name: m.firstName || m.email, email: m.email, what: `Refunded ${inr((m.amountPaise || 0) / 100)}: ${m.reason || ''}`.slice(0, 200) });
+    });
+    return dedupe(out);
+  }),
+  // Gift reminders and cancellation notices.
+  gift_reminders: (sql, since) => safe(async () => {
+    const rows = await sql`SELECT action, metadata FROM audit_log WHERE created_at >= ${since} AND action IN ('gift_reminder_sent', 'gift_cancel_notice')`;
+    const out = [];
+    rows.forEach(r => {
+      const m = r.metadata || {};
+      out.push({ who: 'Guest', name: m.recipientEmail, email: m.recipientEmail, what: r.action === 'gift_reminder_sent' ? `Reminded to accept a gift (${m.which === '1d' ? 'day before' : '3 days before'} check-in)` : 'Told the gifted stay was cancelled' });
+      if (m.buyerEmail) out.push({ who: 'Guest', name: m.buyerEmail, email: m.buyerEmail, what: 'Told the gift is not accepted yet' });
+    });
+    return dedupe(out);
+  }),
   // Bookings recorded (or refunded because the dates were taken) for
   // payments whose browser never came back.
   payment_reconcile: (sql, since) => safe(async () => {

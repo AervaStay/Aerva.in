@@ -33,8 +33,10 @@ const photoGuard = require('./_photo-guard');
 const { recordPhotoLocations, tagListing } = require('./_photo-location');
 const { timezoneForAddress } = require('./_timezones');
 const { sanitizeBody } = require('./_plain-text');
+const { redactContactInfo } = require('./_redact');
 const { HOST_AGREEMENT_VERSION } = require('./_agreements');
 const { requestContext } = require('./_audit-log');
+const special = require('./_listing-special');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -173,6 +175,7 @@ async function sendAdminNotification(listing, changeNote = null) {
       <p>${escHtml(priceLabel)}</p>
       ${photoThumbnails}
       <p style="white-space:pre-wrap;">${escHtml(listing.description)}</p>
+      ${specialEmailHtml(listing)}
       <div style="margin-top:24px;">
         <a href="${approveLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; margin-right:12px;">Approve</a>
         <a href="${rejectLink}" style="border:1px solid #a3402f; color:#a3402f; padding:12px 24px; text-decoration:none;">Reject</a>
@@ -194,6 +197,18 @@ async function sendAdminNotification(listing, changeNote = null) {
       html
     })
   });
+}
+
+// "What's special", the host's recommendations and suggested experiences
+// (_listing-special.js), for the admin's review email.
+function specialEmailHtml(listing) {
+  const lines = special.describeChange({}, {
+    special_highlights: Array.isArray(listing.special_highlights) ? listing.special_highlights : [],
+    special_story: listing.special_story || null,
+    host_recommendations: Array.isArray(listing.host_recommendations) ? listing.host_recommendations : [],
+    suggested_experience_ids: Array.isArray(listing.suggested_experience_ids) ? listing.suggested_experience_ids : []
+  }, escHtml);
+  return lines.length ? `<p style="font-size:13px;">${lines.join('</p><p style="font-size:13px;">')}</p>` : '';
 }
 
 module.exports = async (req, res) => {
@@ -236,7 +251,7 @@ module.exports = async (req, res) => {
     const {
       listingId, isDraft, listingType,
       propertyName, city, area, propertyType, bedrooms, maxGuests, nightlyRate,
-      description, amenities, services, hostName, hostPhone,
+      description: descriptionIn, amenities, services, hostName, hostPhone,
       discountType, discountValue, discountMinNights, discountDescription,
       exteriorPhotoUrls, interiorPhotoUrls, roomPhotos, photoHashes, coverPhotoUrl,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
@@ -250,6 +265,17 @@ module.exports = async (req, res) => {
       experienceMeetingPointLat, experienceMeetingPointLng, experienceMeetingPointAddress,
       experienceInstructions, experienceSpecialInstructions
     } = req.body;
+    // The description is public: phone numbers, emails, social handles and
+    // links come out, as in messages and "What's special" (_redact.js) —
+    // drafts and edits too. Left exactly as typed when there is nothing to remove.
+    // Without the messages' "10+ digits anywhere" rule (spread: false): a
+    // description's own figures (bedrooms, sq ft, km, minutes) would all go;
+    // any 7+ digit number still does, and Aerva reviews every listing.
+    let description = descriptionIn, descriptionRedacted = false;
+    if (typeof description === 'string' && description.trim()) {
+      const r = redactContactInfo(description, { spread: false });
+      if (r.wasRedacted) { description = String(r.displayText).trim(); descriptionRedacted = true; }
+    }
     // Defaults to 'stay' for every existing caller — only the new
     // Experience submission path sends 'experience' explicitly.
     const safeListingType = listingType === 'experience' ? 'experience' : 'stay';
@@ -334,6 +360,14 @@ module.exports = async (req, res) => {
     if (!propertyName) {
       return res.status(400).json({ error: isExperience ? 'Please give your experience a name before saving.' : 'Please give your property a name before saving.' });
     }
+
+    // ---- What's special / Recommended by your host / suggested experiences ----
+    // Optional, drafts included (_listing-special.js): limits checked, text
+    // tidied and cleared of contact details. Saved after the listing itself,
+    // in its own step, so a database without the columns never fails this.
+    const specialIn = await special.cleanSpecial(req.body, sql, { selfId: existingDraft ? existingDraft.id : null });
+    if (specialIn.error) return res.status(400).json({ error: specialIn.error, field: 'special' });
+    const specialBefore = existingDraft && existingDraft.status === 'approved' ? await special.readSpecial(sql, existingDraft.id) : null;
 
     // ---- Duplicate-listing detection ----
     // Only checked when actually creating a NEW listing (not editing an
@@ -780,8 +814,8 @@ module.exports = async (req, res) => {
         UPDATE listings SET
           property_name = ${propertyName}, city = ${safeCity}, area = ${area || null}, property_type = ${propertyType || null},
           bedrooms = ${bedrooms || null}, max_guests = ${normalizeMaxGuests(maxGuests)}, nightly_rate = ${rate},
-          description = ${description || null}, amenities = ${JSON.stringify(amenities || [])}, services = ${JSON.stringify(services || [])},
-          host_name = ${hostName || null}, host_phone = ${hostPhone || null},
+          description = ${description || ''}, amenities = ${JSON.stringify(amenities || [])}, services = ${JSON.stringify(services || [])},
+          host_name = ${hostName || ''}, host_phone = ${hostPhone || ''},
           discount_type = ${liveDiscount.type || null}, discount_value = ${liveDiscount.value ? Number(liveDiscount.value) : null},
           discount_min_nights = ${liveDiscount.minNights ? Number(liveDiscount.minNights) : null}, discount_description = ${liveDiscount.description || null},
           exterior_photo_urls = ${JSON.stringify(safeExteriorUrls)}, interior_photo_urls = ${JSON.stringify(safeInteriorUrls)},
@@ -810,6 +844,8 @@ module.exports = async (req, res) => {
       `;
       listing = updated[0];
     } else {
+      // description, host_name and host_phone are NOT NULL (schema.sql); a
+      // draft may leave them blank, so blank is stored as '' rather than NULL.
       const inserted = await sql`
         INSERT INTO listings (
           property_name, city, area, property_type, bedrooms, max_guests, nightly_rate,
@@ -830,8 +866,8 @@ module.exports = async (req, res) => {
         ) VALUES (
           ${propertyName}, ${safeCity}, ${area || null}, ${propertyType || null}, ${bedrooms || null},
           ${normalizeMaxGuests(maxGuests)}, ${rate},
-          ${description || null}, ${JSON.stringify(amenities || [])}, ${JSON.stringify(services || [])},
-          ${hostName || null}, ${authenticatedHostEmail}, ${hostPhone || null}, ${hostId},
+          ${description || ''}, ${JSON.stringify(amenities || [])}, ${JSON.stringify(services || [])},
+          ${hostName || ''}, ${authenticatedHostEmail}, ${hostPhone || ''}, ${hostId},
           ${discountType || null}, ${discountValue ? Number(discountValue) : null},
           ${discountMinNights ? Number(discountMinNights) : null}, ${discountDescription || null},
           ${DEFAULT_COMMISSION_RATE}, ${JSON.stringify(safeExteriorUrls)}, ${JSON.stringify(safeInteriorUrls)},
@@ -851,6 +887,9 @@ module.exports = async (req, res) => {
       `;
       listing = inserted[0];
     }
+
+    const specialSaved = await special.saveSpecial(sql, listing.id, specialIn.values);
+    if (specialSaved.saved) Object.assign(listing, specialIn.values);
 
     // For non-Resort stays, mirror each named room photo as its own
     // listing_rooms record — NOT independently priced or bookable (the
@@ -982,6 +1021,7 @@ module.exports = async (req, res) => {
         if (coverChanged) bits.push('Cover photo changed.');
         if (Number(existingDraft.nightly_rate) !== Number(rate)) bits.push(`Price changed from ₹${escHtml(existingDraft.nightly_rate)} to ₹${escHtml(rate)}.`);
         if (priceNotes.length) bits.push('An unusual price or discount change is waiting in Admin → Approvals.');
+        if (specialSaved.saved && specialBefore) bits.push(...special.describeChange(specialBefore, specialIn.values, escHtml));
         changeNote = bits.length ? bits.join(' ') : 'Details edited (no photo, name or price change).';
         if (added.length || removed || renamed || coverChanged) {
           await logAudit(sql, {
@@ -1008,8 +1048,14 @@ module.exports = async (req, res) => {
           targetType: 'listing', targetId: listing.id, metadata: { version: HOST_AGREEMENT_VERSION, ip: ctx.ip, via: 'listing_submission', emailed: r.emailed } });
       } catch (err) { console.error('host agreement acceptance not recorded:', err.message); }
     }
+    const specialNotes = [];
+    if (descriptionRedacted) specialNotes.push('We took a phone number, email or link out of your description \u2014 guests book and talk through Aerva.');
+    if (specialSaved.note) specialNotes.push(specialSaved.note);
+    else if (specialIn.redacted) specialNotes.push('We took a phone number, email or link out of \u201cWhat\u2019s special\u201d or your recommendations \u2014 guests book and talk through Aerva.');
+    if (specialSaved.saved && specialIn.dropped) specialNotes.push(`${specialIn.dropped === 1 ? 'One suggested experience is' : specialIn.dropped + ' suggested experiences are'} no longer live on Aerva and ${specialIn.dropped === 1 ? 'was' : 'were'} left out.`);
     return res.status(200).json({ success: true, id: listing.id, isDraft: !!isDraft, status: listing.status,
-      warning: priceNotes.length ? priceNotes.join(' ') : undefined, priceHeld: priceNotes.length ? priceNotes : undefined });
+      warning: priceNotes.length ? priceNotes.join(' ') : undefined, priceHeld: priceNotes.length ? priceNotes : undefined,
+      note: specialNotes.length ? specialNotes.join(' ') : undefined, specialSkipped: specialSaved.skipped || undefined });
   } catch (err) {
     console.error('submit-listing error:', err);
     return res.status(500).json({ error: 'Could not save listing' });
