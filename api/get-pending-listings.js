@@ -103,7 +103,8 @@ const lookup = require('./_admin-lookup');
 const migrations = require('./_migrations');
 const actions = require('./_support-actions');
 const priceReview = require('./_price-review');
-const { ENV: AERVA_ENV } = require('./_env');
+const { ENV: AERVA_ENV, IS_UAT: IS_UAT_ENV } = require('./_env');
+const safety = require('./_data-safety');
 const { executePolicyCancellation } = require('./_cancellations');
 const bankCheck = require('./_bank-check');
 const { safeRefund } = require('./_refunds');
@@ -528,7 +529,117 @@ module.exports = async (req, res) => {
   const ADMIN_ME = { id: sessionPayload ? Number(sessionPayload.listingId) : 0, email: ADMIN_ACTOR };
 
   // GET ?adminMe=1 — who is signed in, and their role (the page shows only what it allows)
-  if (req.method === 'GET' && req.query.adminMe === '1') return res.status(200).json(await actions.me(sql, sessionPayload, ADMIN_ROLE));
+  if (req.method === 'GET' && req.query.adminMe === '1') {
+    const me = await actions.me(sql, sessionPayload, ADMIN_ROLE);
+    return res.status(200).json({ ...me, superAdmin: safety.isSuperAdmin(ADMIN_AUDIT) });
+  }
+
+  // ---- Data safety (_data-safety.js, _test-data.js): SUPER ADMIN ONLY ----
+  // Backups, "Clear test data" (dummy only / from the beginning), restore,
+  // go live. Anyone else — other admins included — gets 403, whatever they send.
+  // GET ?dataSafety=1 · GET ?dataSafetyPreview=dummy|all
+  // POST { dataSafetyBackup } · { dataSafetyPin: { action, keep?, backupId? } }
+  //      { dataSafetyRun: { action, keep?, backupId?, pin, confirm } }
+  const DS_KEYS = ['dataSafety', 'dataSafetyPreview', 'dataSafetyBackup', 'dataSafetyPin', 'dataSafetyRun'];
+  const dsAsked = DS_KEYS.some(k => (req.query && req.query[k] !== undefined) || (req.body && typeof req.body === 'object' && req.body[k] !== undefined));
+  if (dsAsked) {
+    if (!safety.isSuperAdmin(ADMIN_AUDIT)) {
+      await logAudit(sql, { action: 'data_safety_refused', success: false, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'database', targetId: null, metadata: { environment: AERVA_ENV } }).catch(() => {});
+      return res.status(403).json({ error: 'Only the super admin can use Data safety.' });
+    }
+    const testData = require('./_test-data');
+    const live = await safety.liveSince(sql);
+    // What a PIN covers, worked out on the server (never trusted from the page).
+    const detailsFor = async (action, b) => {
+      if (action === 'clear_dummy') { const k = await testData.settle(sql, b.keep || {}); return { details: { guests: k.guests, listings: k.listings, orders: k.orders }, settled: k }; }
+      if (action === 'clear_all') return { details: { all: true }, all: await testData.previewAll(sql) };
+      if (action === 'restore') return { details: { backupId: String(b.backupId || '') } };
+      return { details: { goLive: true } };
+    };
+    const allowedNow = (action) => {
+      if (action === 'clear_all' && live) throw Object.assign(new Error('"From the beginning" was switched off when Aerva went live.'), { isUserFacing: true, status: 403 });
+      if (action === 'go_live' && live) throw Object.assign(new Error('Aerva is already live.'), { isUserFacing: true, status: 409 });
+    };
+    try {
+      if (req.method === 'GET' && req.query.dataSafety === '1') {
+        let backups = { configured: false, backups: [] };
+        try { backups = await safety.listBackups(); } catch (e) { backups = { configured: true, backups: [], error: e.message }; }
+        return res.status(200).json({ environment: AERVA_ENV, live, ownerEmail: safety.mask(safety.ownerEmail()), backups,
+          actions: safety.ACTIONS, confirmWords: safety.CONFIRM_WORDS });
+      }
+      if (req.method === 'GET' && req.query.dataSafetyPreview) {
+        if (req.query.dataSafetyPreview === 'all') { allowedNow('clear_all'); return res.status(200).json(await testData.previewAll(sql)); }
+        return res.status(200).json(await testData.preview(sql));
+      }
+      if (req.method === 'POST' && req.body.dataSafetyBackup) {
+        const out = await safety.createBackup('manual');
+        await logAudit(sql, { action: 'db_backup_created', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'database', targetId: null, metadata: { name: out.backup.name, pruned: out.pruned } });
+        return res.status(200).json({ success: true, ...out });
+      }
+      if (req.method === 'POST' && req.body.dataSafetyPin) {
+        const b = req.body.dataSafetyPin || {};
+        const action = String(b.action || '');
+        if (!safety.ACTIONS[action]) return res.status(400).json({ error: 'Choose what to do first.' });
+        allowedNow(action);
+        const d = await detailsFor(action, b);
+        let summary = '';
+        if (action === 'clear_dummy') {
+          const r = d.settled.remove;
+          summary = `<p><b>Will be deleted:</b> ${r.accounts} accounts, ${r.hosts} host profiles, ${r.listings} listings, ${r.bookings} bookings, with their messages, reviews, coupons and other records.<br>
+            <b>Kept:</b> ${d.settled.guests.length} accounts, ${d.settled.listings.length} listings, ${d.settled.orders.length} bookings paid with real money, admin logins, settings and the audit log.</p>`;
+        } else if (action === 'clear_all') {
+          summary = `<p><b>EVERYTHING will be deleted:</b> ${d.all.total} rows in ${d.all.tables.length} tables — every account, host, listing, booking, payment record, message and review, including bookings paid with real money. Aerva starts again from the beginning.<br>
+            <b>Kept:</b> admin logins, settings, fee rates and the audit logs.</p>`;
+        } else if (action === 'restore') {
+          const list = await safety.listBackups();
+          const bk = (list.backups || []).find(x => x.id === d.details.backupId);
+          if (!bk) return res.status(404).json({ error: 'Choose a backup from the list.' });
+          summary = `<p><b>The whole database will be replaced</b> by the backup <b>${safety.esc(bk.name)}</b>. Anything added since then disappears from the site — the current data is kept as its own backup first.</p>`;
+        } else {
+          summary = `<p><b>Aerva will be marked live.</b> After this, "Clear everything — from the beginning" is switched off for good and cannot be turned back on from Admin.</p>`;
+        }
+        const out = await safety.requestPin(sql, { action, details: d.details, summaryHtml: summary, adminLabel: ADMIN_ACTOR, ip: ADMIN_AUDIT.ip || null });
+        await logAudit(sql, { action: 'data_safety_pin_sent', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'database', targetId: null, metadata: { what: action } });
+        return res.status(200).json({ success: true, ...out, kept: d.settled ? { accounts: d.settled.guests, listings: d.settled.listings, bookings: d.settled.orders } : undefined });
+      }
+      if (req.method === 'POST' && req.body.dataSafetyRun) {
+        const b = req.body.dataSafetyRun || {};
+        const action = String(b.action || '');
+        if (!safety.ACTIONS[action]) return res.status(400).json({ error: 'Choose what to do first.' });
+        allowedNow(action);
+        if (String(b.confirm || '').trim().toUpperCase() !== safety.CONFIRM_WORDS[action]) return res.status(400).json({ error: `Type ${safety.CONFIRM_WORDS[action]} to confirm.` });
+        const d = await detailsFor(action, b);
+        await safety.checkPin(sql, { action, details: d.details, pin: b.pin });
+        // A copy first, always (PROD: required; UAT: if set up).
+        let backup = null;
+        if (action !== 'go_live') {
+          try { backup = (await safety.createBackup(action === 'restore' ? 'before-restore-run' : 'before-' + action.replace('_', '-'))).backup; }
+          catch (e) {
+            if (!IS_UAT_ENV) return res.status(503).json({ error: 'No backup could be taken, so nothing was deleted. ' + (e.isUserFacing ? e.message : String(e.message || e).slice(0, 200)) });
+          }
+        }
+        let result;
+        if (action === 'clear_dummy') result = await testData.clear(sql, { guests: d.details.guests, listings: d.details.listings, orders: d.details.orders });
+        else if (action === 'clear_all') result = await testData.clearAll(sql);
+        else if (action === 'restore') result = await safety.restore(d.details.backupId);
+        else result = { live: await safety.goLive(sql, ADMIN_ACTOR) };
+        await logAudit(sql, { action: 'data_safety_' + action, success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'database', targetId: null,
+          metadata: { environment: AERVA_ENV, backup: backup && backup.name, deleted: result.deleted || undefined, kept: result.kept || undefined,
+            restoredFrom: result.restoredFrom, previousDataKeptAs: result.previousDataKeptAs } }).catch(() => {});
+        const lines = result.deleted ? Object.entries(result.deleted).map(([t, n]) => `${safety.esc(t)}: ${n}`).join('<br>') : '';
+        await safety.sendOwner(`Aerva ${String(AERVA_ENV).toUpperCase()}: done — ${safety.ACTIONS[action].toLowerCase()}`,
+          `<p><b>${safety.esc(safety.ACTIONS[action])}</b> was done by ${safety.esc(ADMIN_ACTOR)}.</p>
+           ${backup ? `<p>Copy taken first: <b>${safety.esc(backup.name)}</b> (Admin → Data safety → Backups).</p>` : ''}
+           ${result.restoredFrom ? `<p>Restored from <b>${safety.esc(result.restoredFrom)}</b>; the data it replaced is kept as <b>${safety.esc(result.previousDataKeptAs)}</b>.</p>` : ''}
+           ${lines ? `<p><b>Rows deleted</b><br>${lines}</p>` : ''}`).catch(() => {});
+        return res.status(200).json({ success: true, backup, ...result });
+      }
+    } catch (err) {
+      if (!err.isUserFacing) console.error('data safety failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Data safety: ' + String(err.message || err).slice(0, 200) });
+    }
+    return res.status(400).json({ error: 'Unknown Data safety request.' });
+  }
   // GET ?adminTeam=1 · POST { setAdminRole: { adminId, role } } — admins only (see allowed())
   if (req.method === 'GET' && req.query.adminTeam === '1') return res.status(200).json(await actions.team(sql));
   // POST { addTeamMember: { name, email, role } } — admins only (see allowed()).

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>Aerva photo helper</title>
+<!--
+  Turns iPhone HEIC/HEIF photos into JPEG for the listing form (used by
+  aerva-photo-location.js in a hidden frame). It lives on its own page
+  because the HEIC decoder needs to evaluate code, which the main pages'
+  security policy rightly forbids; this page has no other content and only
+  answers messages from Aerva's own pages.
+-->
+<script src="https://unpkg.com/heic2any@0.0.4/dist/heic2any.min.js"></script>
+</head><body>
+<script>
+(function(){
+  var queue = Promise.resolve();
+  window.addEventListener('message', function(e){
+    if(e.origin !== location.origin || !e.data || e.data.type !== 'aerva-heic') return;
+    var id = e.data.id, blob = e.data.blob, src = e.source;
+    // One photo at a time: decoding is heavy.
+    queue = queue.then(function(){
+      if(typeof heic2any !== 'function') throw new Error('decoder not loaded');
+      return heic2any({ blob: blob, toType: 'image/jpeg', quality: 0.9 });
+    }).then(function(out){
+      src.postMessage({ type: 'aerva-heic-done', id: id, blob: Array.isArray(out) ? out[0] : out }, e.origin);
+    }).catch(function(err){
+      src.postMessage({ type: 'aerva-heic-done', id: id, error: String((err && err.message) || err || 'failed') }, e.origin);
+    });
+  });
+  if(window.parent !== window) window.parent.postMessage({ type: 'aerva-heic-ready' }, location.origin);
+})();
+</script>
+</body></html>

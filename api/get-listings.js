@@ -649,6 +649,10 @@ const JOBS = [
     run: async (c) => { const r = await runReviewSweep(c.sql, { forceTierSnapshot: c.forceTierSnapshot }); if (r.status >= 400) throw new Error(r.body.error || 'failed'); return r.body; } },
   { name: 'currency_rates', label: 'Refresh currency display rates', dailyAtHour: 3, heavy: true,
     run: (c) => refreshCurrencyRates(c.sql) },
+  // A full copy of the database every day (Neon backup branch), the oldest
+  // removed beyond BACKUP_KEEP (_data-safety.js). Quiet until set up.
+  { name: 'db_backup', label: 'Daily database backup (copy kept for recovery)', dailyAtHour: 2, lockMinutes: 10,
+    run: () => require('./_data-safety').dailyBackup() },
 ];
 async function runJobs(sql, opts = {}) {
   return runScheduled(sql, JOBS, Object.assign({}, opts, { ctx: { sql, forceTierSnapshot: !!opts.forceTierSnapshot } }));
