@@ -554,10 +554,11 @@ module.exports = async (req, res) => {
       if (action === 'clear_dummy') { const k = await testData.settle(sql, b.keep || {}); return { details: { guests: k.guests, listings: k.listings, orders: k.orders }, settled: k }; }
       if (action === 'clear_all') return { details: { all: true }, all: await testData.previewAll(sql) };
       if (action === 'restore') return { details: { backupId: String(b.backupId || '') } };
-      return { details: { goLive: true } };
+      return { details: { goLive: true }, all: await testData.previewAll(sql, { includeLogs: true }) };
     };
     const allowedNow = (action) => {
-      if (action === 'clear_all' && live) throw Object.assign(new Error('"From the beginning" was switched off when Aerva went live.'), { isUserFacing: true, status: 403 });
+      // Once live, nothing is cleared any more — neither option (owner, 9 Nov 2026).
+      if ((action === 'clear_all' || action === 'clear_dummy') && live) throw Object.assign(new Error('Clearing data was switched off when Aerva went live.'), { isUserFacing: true, status: 403 });
       if (action === 'go_live' && live) throw Object.assign(new Error('Aerva is already live.'), { isUserFacing: true, status: 409 });
     };
     try {
@@ -568,7 +569,8 @@ module.exports = async (req, res) => {
           actions: safety.ACTIONS, confirmWords: safety.CONFIRM_WORDS });
       }
       if (req.method === 'GET' && req.query.dataSafetyPreview) {
-        if (req.query.dataSafetyPreview === 'all') { allowedNow('clear_all'); return res.status(200).json(await testData.previewAll(sql)); }
+        allowedNow(req.query.dataSafetyPreview === 'all' ? 'clear_all' : 'clear_dummy');
+        if (req.query.dataSafetyPreview === 'all') return res.status(200).json(await testData.previewAll(sql));
         return res.status(200).json(await testData.preview(sql));
       }
       if (req.method === 'POST' && req.body.dataSafetyBackup) {
@@ -596,7 +598,10 @@ module.exports = async (req, res) => {
           if (!bk) return res.status(404).json({ error: 'Choose a backup from the list.' });
           summary = `<p><b>The whole database will be replaced</b> by the backup <b>${safety.esc(bk.name)}</b>. Anything added since then disappears from the site — the current data is kept as its own backup first.</p>`;
         } else {
-          summary = `<p><b>Aerva will be marked live.</b> After this, "Clear everything — from the beginning" is switched off for good and cannot be turned back on from Admin.</p>`;
+          summary = `<p><b>Aerva will be marked live, and EVERYTHING from before today is deleted:</b> ${d.all.total} rows in ${d.all.tables.length} tables — every account, host, listing, booking, payment record, message and review, <b>and every log</b> (audit log, admin log, job history), including bookings paid with real money.<br>
+            <b>Every old backup is deleted too</b>, and a fresh first backup of the empty site is taken.<br>
+            <b>Kept:</b> the admin accounts, as they are, and the site settings, fee rates and agreement texts.<br>
+            Afterwards both "Clear" options are switched off for good and cannot be turned back on from Admin.</p>`;
         }
         const out = await safety.requestPin(sql, { action, details: d.details, summaryHtml: summary, adminLabel: ADMIN_ACTOR, ip: ADMIN_AUDIT.ip || null });
         await logAudit(sql, { action: 'data_safety_pin_sent', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'database', targetId: null, metadata: { what: action } });
@@ -612,7 +617,7 @@ module.exports = async (req, res) => {
         await safety.checkPin(sql, { action, details: d.details, pin: b.pin });
         // A copy first, always (PROD: required; UAT: if set up).
         let backup = null;
-        if (action !== 'go_live') {
+        {
           try { backup = (await safety.createBackup(action === 'restore' ? 'before-restore-run' : 'before-' + action.replace('_', '-'))).backup; }
           catch (e) {
             if (!IS_UAT_ENV) return res.status(503).json({ error: 'No backup could be taken, so nothing was deleted. ' + (e.isUserFacing ? e.message : String(e.message || e).slice(0, 200)) });
@@ -622,14 +627,27 @@ module.exports = async (req, res) => {
         if (action === 'clear_dummy') result = await testData.clear(sql, { guests: d.details.guests, listings: d.details.listings, orders: d.details.orders });
         else if (action === 'clear_all') result = await testData.clearAll(sql);
         else if (action === 'restore') result = await safety.restore(d.details.backupId);
-        else result = { live: await safety.goLive(sql, ADMIN_ACTOR) };
+        else {
+          // Launch day: empty everything, logs included (owner, 9 Nov 2026),
+          // then mark live. The first log entry is the go-live itself.
+          const wiped = await testData.clearAll(sql, { includeLogs: true });
+          result = { deleted: wiped.deleted, live: await safety.goLive(sql, ADMIN_ACTOR) };
+          // Old backups go too (the safety copy taken just above included):
+          // the wipe has already succeeded. Then the first backup of the
+          // fresh, empty site.
+          try {
+            result.backupsDeleted = await safety.deleteAllBackups();
+            backup = safety.neonCfg().ok ? (await safety.createBackup('go-live-start')).backup : null;
+          } catch (e) { result.backupWarning = 'Aerva is live, but the old backups could not all be deleted: ' + String(e.message || e).slice(0, 200) + ' — delete them in the Neon console.'; }
+        }
         await logAudit(sql, { action: 'data_safety_' + action, success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'database', targetId: null,
-          metadata: { environment: AERVA_ENV, backup: backup && backup.name, deleted: result.deleted || undefined, kept: result.kept || undefined,
+          metadata: { environment: AERVA_ENV, backup: backup && backup.name, backupsDeleted: result.backupsDeleted ? result.backupsDeleted.length : undefined, deleted: result.deleted || undefined, kept: result.kept || undefined,
             restoredFrom: result.restoredFrom, previousDataKeptAs: result.previousDataKeptAs } }).catch(() => {});
         const lines = result.deleted ? Object.entries(result.deleted).map(([t, n]) => `${safety.esc(t)}: ${n}`).join('<br>') : '';
         await safety.sendOwner(`Aerva ${String(AERVA_ENV).toUpperCase()}: done — ${safety.ACTIONS[action].toLowerCase()}`,
           `<p><b>${safety.esc(safety.ACTIONS[action])}</b> was done by ${safety.esc(ADMIN_ACTOR)}.</p>
-           ${backup ? `<p>Copy taken first: <b>${safety.esc(backup.name)}</b> (Admin → Data safety → Backups).</p>` : ''}
+           ${backup && action !== 'go_live' ? `<p>Copy taken first: <b>${safety.esc(backup.name)}</b> (Admin → Data safety → Backups).</p>` : ''}
+           ${action === 'go_live' ? `<p>${result.backupsDeleted ? result.backupsDeleted.length : 0} old backups deleted.${backup ? ` First backup of the live site: <b>${safety.esc(backup.name)}</b>.` : ''}</p>${result.backupWarning ? `<p style="color:#a3402f;">${safety.esc(result.backupWarning)}</p>` : ''}` : ''}
            ${result.restoredFrom ? `<p>Restored from <b>${safety.esc(result.restoredFrom)}</b>; the data it replaced is kept as <b>${safety.esc(result.previousDataKeptAs)}</b>.</p>` : ''}
            ${lines ? `<p><b>Rows deleted</b><br>${lines}</p>` : ''}`).catch(() => {});
         return res.status(200).json({ success: true, backup, ...result });

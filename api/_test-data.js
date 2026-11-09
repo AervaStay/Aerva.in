@@ -2,9 +2,13 @@
 // Not an endpoint (get-pending-listings.js, admin role only).
 //
 // Before launch, PROD holds test accounts, listings and bookings. This
-// removes them, keeping (owner, 9 Nov 2026):
+// removes them (owner, 9 Nov 2026): DUMMY = anything added through the
+// back end (straight into the database, never through the site) and every
+// listing named "[Test] …". What was made through the site stays — its
+// listings, their logs, guests, bookings, payments, TDS… Kept:
 //   • Aerva's admin logins, settings, fee rates, migrations — never touched;
-//   • the real hosts and their real listings (ticked in the preview);
+//   • everything made through the site (ticked in the preview), except
+//     "[Test]" listings and their bookings;
 //   • every booking paid with REAL money (a live Razorpay payment), with its
 //     guest, listing and host, so the CA's records and Razorpay match;
 //   • the audit logs (cleared once, separately, at go-live — not here).
@@ -25,9 +29,9 @@
 // something deleted.
 
 const userError = (message, status = 400) => Object.assign(new Error(message), { isUserFacing: true, status });
-// Default "real listing" names (owner's properties) — only a default tick
-// in the preview; the admin decides.
-const REAL_LISTING = /bella\s*vista|manor|prana|vintage\s*heights/i;
+// "[Test] Something" — always dummy (owner's naming).
+const TEST_NAME = /^\s*\[\s*test\s*\]/i;
+const BLOB = /\.blob\.vercel-storage\.com\//i;
 
 const ids = (rows, k = 'id') => [...new Set(rows.map(r => r[k]).filter(v => v !== null && v !== undefined).map(Number))];
 const nums = (a) => [...new Set((Array.isArray(a) ? a : []).map(Number).filter(n => Number.isInteger(n) && n > 0))];
@@ -60,7 +64,7 @@ async function load(sql) {
   const [guests, hosts, listings, orders, coupons, changes, penalties, credits] = await Promise.all([
     sql`SELECT id, name, first_name, last_name, email, phone, host_id, created_at FROM guests ORDER BY id`,
     sql`SELECT id, guest_id, name, email FROM hosts ORDER BY id`,
-    sql`SELECT id, property_name, city, status, listing_type, host_id, created_at FROM listings ORDER BY id`,
+    sql`SELECT id, property_name, city, status, listing_type, host_id, created_at, cover_photo_url, exterior_photo_urls::text AS ext FROM listings ORDER BY id`,
     sql`SELECT id, listing_id, guest_id, guest_email, suite_name, arrival, departure, total, status, coupon_id, razorpay_payment_id, razorpay_order_id, created_at FROM orders ORDER BY id`,
     sql`SELECT id, code, guest_id, paid_by_guest_id, issuing_host_id, source_order_id, redeemed_order_id, razorpay_payment_id FROM coupons`,
     sql`SELECT order_id, guest_id, razorpay_payment_id FROM booking_changes WHERE razorpay_payment_id IS NOT NULL`,
@@ -69,6 +73,48 @@ async function load(sql) {
   ]);
   const pay = await realPayments([...orders, ...coupons, ...changes, ...penalties, ...credits].map(r => r.razorpay_payment_id));
   return { guests, hosts, listings, orders, coupons, changes, penalties, credits, pay };
+}
+
+// Made through the site, or added straight into the database? The site
+// leaves traces the back end does not: a listing submitted through the
+// form (audit "listing_submitted" / host agreement accepted / photos in
+// Aerva's own storage); an account that signed in or signed up (any guest,
+// host or co-host entry in the audit log under its id, email or phone); a
+// booking that went through checkout (booking audit entries, a payment
+// confirmation, or a real payment).
+async function origins(sql, d) {
+  const [lsub, agree, gtarget, actors, oaud, pconf] = await Promise.all([
+    sql`SELECT DISTINCT target_id FROM audit_log WHERE target_type = 'listing' AND target_id IS NOT NULL AND actor_type IN ('host', 'cohost')`,
+    sql`SELECT DISTINCT listing_id FROM host_agreement_acceptances WHERE listing_id IS NOT NULL`,
+    sql`SELECT DISTINCT target_id FROM audit_log WHERE target_type = 'guest' AND target_id IS NOT NULL AND actor_type IN ('guest', 'host', 'cohost')`,
+    sql`SELECT DISTINCT lower(actor_identifier) AS who FROM audit_log WHERE actor_type IN ('guest', 'host', 'cohost') AND actor_identifier IS NOT NULL`,
+    sql`SELECT DISTINCT target_id FROM audit_log WHERE target_type = 'order' AND target_id IS NOT NULL AND action LIKE 'booking%'`,
+    sql`SELECT DISTINCT razorpay_order_id FROM payment_confirmations WHERE razorpay_order_id IS NOT NULL`
+  ]);
+  const L = new Set([...lsub.map(r => Number(r.target_id)), ...agree.map(r => Number(r.listing_id))]);
+  const G = new Set(gtarget.map(r => Number(r.target_id)));
+  const who = new Set(actors.map(r => r.who));
+  const O = new Set(oaud.map(r => Number(r.target_id)));
+  const P = new Set(pconf.map(r => String(r.razorpay_order_id)));
+  const phoneKey = (p) => String(p || '').replace(/\D/g, '').slice(-10);
+  const whoPhones = new Set([...who].map(phoneKey).filter(x => x.length === 10));
+  const listing = new Map(), guest = new Map(), order = new Map();
+  d.listings.forEach(l => {
+    const test = TEST_NAME.test(String(l.property_name || ''));
+    const why = L.has(Number(l.id)) ? 'submitted through the site' : (BLOB.test(String(l.cover_photo_url || '')) || BLOB.test(String(l.ext || ''))) ? 'photos uploaded through the site' : null;
+    listing.set(Number(l.id), { site: !!why, test, why: test ? 'named [Test]' : (why || 'added through the back end') });
+  });
+  d.guests.forEach(g => {
+    const em = String(g.email || '').toLowerCase();
+    const site = G.has(Number(g.id)) || (em && who.has(em)) || (phoneKey(g.phone).length === 10 && whoPhones.has(phoneKey(g.phone)));
+    guest.set(Number(g.id), { site, why: site ? 'signed in through the site' : 'added through the back end' });
+  });
+  d.orders.forEach(o => {
+    const real = !!(o.razorpay_payment_id && d.pay.real.has(o.razorpay_payment_id));
+    const site = real || O.has(Number(o.id)) || (o.razorpay_order_id && P.has(String(o.razorpay_order_id)));
+    order.set(Number(o.id), { site, real, why: real ? 'paid with real money' : site ? 'booked through the site' : 'added through the back end' });
+  });
+  return { listing, guest, order };
 }
 
 // Widen the keep lists until nothing kept depends on something deleted.
@@ -114,9 +160,14 @@ function closure(d, keep) {
 
 async function preview(sql) {
   const d = await load(sql);
+  const src = await origins(sql, d);
+  // Kept by default: made through the site — but never a "[Test]" listing
+  // or a booking on one (real money is kept anyway, by the closure).
+  const keepL = d.listings.filter(l => { const x = src.listing.get(Number(l.id)); return x.site && !x.test; }).map(l => Number(l.id));
   const defaults = {
-    listings: d.listings.filter(l => REAL_LISTING.test(String(l.property_name || ''))).map(l => Number(l.id)),
-    guests: [], orders: []
+    listings: keepL,
+    guests: d.guests.filter(g => src.guest.get(Number(g.id)).site).map(g => Number(g.id)),
+    orders: d.orders.filter(x => src.order.get(Number(x.id)).site && keepL.includes(Number(x.listing_id))).map(x => Number(x.id))
   };
   const c = closure(d, defaults);
   const realOrder = (o) => !!(o.razorpay_payment_id && d.pay.real.has(o.razorpay_payment_id));
@@ -128,13 +179,16 @@ async function preview(sql) {
     listings: d.listings.map(l => ({ id: Number(l.id), name: l.property_name, city: l.city, status: l.status, type: l.listing_type,
       host: hostName.get(Number(l.host_id)) || null, bookings: bookingsOf('listing_id', Number(l.id)),
       realBookings: d.orders.filter(o => Number(o.listing_id) === Number(l.id) && realOrder(o)).length,
+      origin: src.listing.get(Number(l.id)).test ? 'test' : src.listing.get(Number(l.id)).site ? 'site' : 'backend', why: src.listing.get(Number(l.id)).why,
       keep: c.keep.listings.has(Number(l.id)) })),
     accounts: d.guests.map(g => ({ id: Number(g.id), name: g.name || [g.first_name, g.last_name].filter(Boolean).join(' ') || null, email: g.email, phone: g.phone,
       isHost: !!(g.host_id || d.hosts.some(h => Number(h.guest_id) === Number(g.id))), bookings: bookingsOf('guest_id', Number(g.id)),
+      origin: src.guest.get(Number(g.id)).site ? 'site' : 'backend', why: src.guest.get(Number(g.id)).why,
       keep: c.keep.guests.has(Number(g.id)) })),
     bookings: d.orders.map(o => ({ id: Number(o.id), listing: (d.listings.find(l => Number(l.id) === Number(o.listing_id)) || {}).property_name || o.suite_name || null,
       guest: o.guest_email, arrival: o.arrival, departure: o.departure, total: Number(o.total) || 0, status: o.status,
-      realMoney: realOrder(o), keep: c.keep.orders.has(Number(o.id)) })),
+      realMoney: realOrder(o), origin: src.order.get(Number(o.id)).site ? 'site' : 'backend', why: src.order.get(Number(o.id)).why,
+      keep: c.keep.orders.has(Number(o.id)) })),
     remove: { accounts: c.del.guests.length, hosts: c.del.hosts.length, listings: c.del.listings.length, bookings: c.del.orders.length }
   };
 }
@@ -277,27 +331,43 @@ async function counts(sql) {
 // ---- "From the beginning" ----
 // Tables never emptied. Everything else in the database is.
 const KEEP_TABLES = ['admins', 'admin_audit_log', 'audit_log', 'site_settings', 'fee_rates', 'host_agreement_versions', 'schema_migrations', 'job_runs', 'job_run_log'];
-async function allTables(sql) {
+// Going live (owner, 9 Nov 2026): nothing from before launch day is kept —
+// the logs are emptied too. Only the admin accounts (and the site's own
+// settings, fee rates, agreement texts and database-update record, which
+// are configuration, not history) remain.
+const LOG_TABLES = ['admin_audit_log', 'audit_log', 'job_runs', 'job_run_log'];
+async function allTables(sql, { includeLogs = false } = {}) {
+  const keep = includeLogs ? KEEP_TABLES.filter(t => !LOG_TABLES.includes(t)) : KEEP_TABLES;
   const rows = await sql`SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`;
-  return rows.map(r => r.tablename).filter(t => !KEEP_TABLES.includes(t) && /^[a-z_][a-z0-9_]*$/.test(t));
+  return rows.map(r => r.tablename).filter(t => !keep.includes(t) && /^[a-z_][a-z0-9_]*$/.test(t));
 }
-async function previewAll(sql) {
-  const tables = await allTables(sql);
+async function previewAll(sql, opts = {}) {
+  const tables = await allTables(sql, opts);
   const q = tables.map(t => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(' UNION ALL ');
   const rows = tables.length ? (typeof sql.query === 'function' ? await sql.query(q) : await sql(q)) : [];
   const list = (Array.isArray(rows) ? rows : rows.rows || []).filter(r => r.n > 0).sort((a, b) => b.n - a.n);
-  return { tables: list.map(r => ({ table: r.t, rows: r.n })), total: list.reduce((a, r) => a + r.n, 0), kept: KEEP_TABLES };
+  return { tables: list.map(r => ({ table: r.t, rows: r.n })), total: list.reduce((a, r) => a + r.n, 0),
+    kept: opts.includeLogs ? KEEP_TABLES.filter(t => !LOG_TABLES.includes(t)) : KEEP_TABLES };
 }
-async function clearAll(sql) {
-  const before = await previewAll(sql);
-  const tables = await allTables(sql);
+async function clearAll(sql, opts = {}) {
+  const before = await previewAll(sql, opts);
+  const tables = await allTables(sql, opts);
   if (!tables.length) return { deleted: {} };
-  const q = `TRUNCATE TABLE ${tables.join(', ')} RESTART IDENTITY`;
-  try { if (typeof sql.query === 'function') await sql.query(q); else await sql(q); }
+  const q = (text) => (typeof sql.query === 'function' ? sql.query(text) : sql(text));
+  const steps = [];
+  // admin_audit_log is append-only (a trigger refuses DELETE / TRUNCATE).
+  // Going live is the one time it is emptied (owner, 9 Nov 2026): the
+  // guard is lifted for this statement only and put straight back, in the
+  // same transaction — if anything fails, the guard was never off.
+  const guarded = tables.includes('admin_audit_log');
+  if (guarded) steps.push(q('ALTER TABLE admin_audit_log DISABLE TRIGGER admin_audit_log_no_truncate'));
+  steps.push(q(`TRUNCATE TABLE ${tables.join(', ')} RESTART IDENTITY`));
+  if (guarded) steps.push(q('ALTER TABLE admin_audit_log ENABLE TRIGGER admin_audit_log_no_truncate'));
+  try { await sql.transaction(steps); }
   catch (err) { throw userError('Nothing was deleted — ' + String(err && err.message || err).slice(0, 300), 500); }
   const deleted = {};
   before.tables.forEach(r => { deleted[r.table] = r.rows; });
   return { deleted };
 }
 
-module.exports = { preview, settle, clear, previewAll, clearAll, closure, TABLES, KEEP_TABLES };
+module.exports = { preview, settle, clear, previewAll, clearAll, closure, TABLES, KEEP_TABLES, LOG_TABLES };

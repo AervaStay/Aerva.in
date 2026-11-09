@@ -31,7 +31,7 @@ const ACTIONS = {
   clear_dummy: 'Clear dummy data only',
   clear_all: 'Clear everything — from the beginning',
   restore: 'Restore the database from a backup',
-  go_live: 'Go live (switches "From the beginning" off for good)'
+  go_live: 'Go live — delete everything from before today (data, logs and old backups) and switch clearing off for good'
 };
 const CONFIRM_WORDS = { clear_dummy: 'DELETE TEST DATA', clear_all: 'DELETE EVERYTHING', restore: 'RESTORE', go_live: 'GO LIVE' };
 
@@ -179,6 +179,21 @@ async function restore(backupId) {
   return { restoredFrom: b.name, previousDataKeptAs: keptAs };
 }
 
+// Going live (owner, 9 Nov 2026): every backup from before launch is
+// deleted too — only our own prefixed branches, never main or uat.
+async function deleteAllBackups() {
+  const c = neonCfg();
+  if (!c.ok) return [];
+  const { backups } = await listBackups();
+  const gone = [];
+  for (const b of backups) {
+    if (!String(b.name).startsWith(c.prefix)) continue;
+    await neon('DELETE', `/projects/${c.project}/branches/${b.id}`);
+    gone.push(b.name);
+  }
+  return gone;
+}
+
 // Daily job (get-listings JOBS): a backup every day; quiet when not set up.
 async function dailyBackup() {
   if (!neonCfg().ok) return { skipped: 'Neon backups not set up (NEON_API_KEY, NEON_PROJECT_ID, NEON_BRANCH_ID)' };
@@ -187,4 +202,4 @@ async function dailyBackup() {
 }
 
 module.exports = { isSuperAdmin, ACTIONS, CONFIRM_WORDS, requestPin, checkPin, fingerprint, liveSince, goLive, sendOwner,
-  listBackups, createBackup, restore, dailyBackup, neonCfg, ownerEmail, mask, esc };
+  listBackups, createBackup, deleteAllBackups, restore, dailyBackup, neonCfg, ownerEmail, mask, esc };
