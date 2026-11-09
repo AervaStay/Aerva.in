@@ -4013,17 +4013,19 @@ async function loadDataSafety(){
     <section class="ds-card" style="border:1px solid #e3d9cb; border-radius:10px; padding:14px 16px; margin:0 0 18px; max-width:860px;">
       <h3 style="margin:0 0 8px;">Backups</h3>${backupsHtml}
     </section>
+    ${d.live ? `<section class="ds-card" style="border:1px solid #e3d9cb; border-radius:10px; padding:14px 16px; margin:0 0 18px; max-width:860px;">
+      <h3 style="margin:0 0 8px;">Clear data</h3><p style="font-size:13.5px;">Switched off — Aerva is live. Nothing is cleared from the live site any more.</p></section>` : `
     <section class="ds-card" style="border:1px solid #e3d9cb; border-radius:10px; padding:14px 16px; margin:0 0 18px; max-width:860px;">
       <h3 style="margin:0 0 8px;">Clear data</h3>
-      <label style="display:block; margin:4px 0;"><input type="radio" name="dsMode" value="dummy" ${dsMode === 'dummy' ? 'checked' : ''} onchange="dsSetMode('dummy')"> <b>Dummy data only</b> — removes test accounts, listings and bookings. Keeps the real hosts and listings you tick, every booking paid with real money, admin logins, settings and the audit log.</label>
+      <label style="display:block; margin:4px 0;"><input type="radio" name="dsMode" value="dummy" ${dsMode === 'dummy' ? 'checked' : ''} onchange="dsSetMode('dummy')"> <b>Dummy data only</b> — removes everything added through the back end and every listing named [Test]. Keeps what was made through the site (listings, guests, bookings, payments, TDS…), every booking paid with real money, admin logins, settings and the audit log.</label>
       <label style="display:block; margin:4px 0; ${d.live ? 'opacity:0.5;' : ''}"><input type="radio" name="dsMode" value="all" ${dsMode === 'all' && !d.live ? 'checked' : ''} ${d.live ? 'disabled' : ''} onchange="dsSetMode('all')"> <b>From the beginning</b> — removes EVERYTHING (every account, listing, booking and payment record), keeping only admin logins, settings and the audit log. ${d.live ? '<em>Switched off — Aerva is live.</em>' : ''}</label>
       <p><button type="button" class="lk-link" onclick="dsLoadPreview()">Show what will be deleted</button></p>
       <div id="dsPreview"></div>
-    </section>
+    </section>`}
     <section class="ds-card" style="border:1px solid #e3d9cb; border-radius:10px; padding:14px 16px; margin:0 0 18px; max-width:860px;">
       <h3 style="margin:0 0 8px;">Go live</h3>
-      ${d.live ? `<p>Aerva went live on ${lkEsc(dsFmtDate(d.live.at))} (${lkEsc(d.live.by || '')}). "From the beginning" is off for good.</p>`
-        : `<p style="font-size:13.5px;">When Aerva goes live, switch this on. "From the beginning" is then switched off for good — it cannot be turned back on from Admin.</p>
+      ${d.live ? `<p>Aerva went live on ${lkEsc(dsFmtDate(d.live.at))} (${lkEsc(d.live.by || '')}). Clearing data is off for good.</p>`
+        : `<p style="font-size:13.5px;">On launch day. <b>Deletes everything from before today</b> — every account, listing, booking and payment record, <b>every log</b> (audit log, admin log, job history) <b>and every old backup</b>. Only the admin accounts (and site settings, fee rates, agreement texts) stay, and a fresh first backup of the empty site is taken. Afterwards both "Clear" options are switched off for good — they cannot be turned back on from Admin.</p>
            <button type="button" class="lk-link" onclick="dsStart('go_live')">Go live…</button>`}
     </section>
     <div id="dsFlow"></div>`;
@@ -4050,10 +4052,11 @@ async function dsLoadPreview(){
     return;
   }
   const pay = p.payments || {};
-  const row = (kind, x, label, extra, locked) => `<tr><td><input type="checkbox" data-ds-keep="${kind}" value="${x.id}" ${x.keep ? 'checked' : ''} ${locked ? 'disabled title="Paid with real money — always kept"' : ''}></td><td>#${lkEsc(x.id)}</td><td>${label}</td><td style="font-size:12.5px; opacity:0.8;">${extra}</td></tr>`;
+  const tag = (x) => { const c = x.origin === 'site' ? 'background:#e7f3ea; color:#2f6b3a;' : 'background:#fbecea; color:#a3402f;'; return ` <span class="role-badge" style="${c}" title="How Aerva tells">${lkEsc(x.why || x.origin)}</span>`; };
+  const row = (kind, x, label, extra, locked) => `<tr><td><input type="checkbox" data-ds-keep="${kind}" value="${x.id}" ${x.keep ? 'checked' : ''} ${locked ? 'disabled title="Paid with real money — always kept"' : ''}></td><td>#${lkEsc(x.id)}</td><td>${label}${tag(x)}</td><td style="font-size:12.5px; opacity:0.8;">${extra}</td></tr>`;
   box.innerHTML = `
     <p style="font-size:13px;">${pay.liveKeys ? `Checked ${lkEsc(pay.checked)} payments with Razorpay: <b>${lkEsc(pay.real)} real-money</b>${pay.unsure ? ` (${lkEsc(pay.unsure)} could not be checked and are treated as real)` : ''} — those bookings are always kept.` : 'This environment uses Razorpay test keys, so no payment here counts as real money.'}
-      <b>Ticked = kept.</b> Anything a kept item needs (its host, guest, listing) is kept too.</p>
+      <b>Ticked = kept.</b> Ticked by default: everything made through the site. Not ticked: anything added through the back end, and every listing named <b>[Test]</b> with its bookings. Anything a kept item needs (its host, guest, listing) is kept too. Check the list and change any tick before clearing.</p>
     <h4 style="margin:12px 0 4px;">Listings</h4>
     <table class="lk-table" style="width:100%;"><tbody>${p.listings.map(x => row('listings', x, `<b>${lkEsc(x.name || '—')}</b> · ${lkEsc(x.city || '')}`, `${lkEsc(x.status || '')} · host ${lkEsc(x.host || '—')} · ${x.bookings} bookings${x.realBookings ? `, ${x.realBookings} real-money` : ''}`, x.realBookings > 0)).join('') || '<tr><td>None</td></tr>'}</tbody></table>
     <h4 style="margin:12px 0 4px;">Accounts</h4>
@@ -4073,7 +4076,7 @@ async function dsStart(action, backupId){
   dsPending = { action, backupId: backupId || null, keep: action === 'clear_dummy' ? dsKeep() : null };
   flow.innerHTML = `<section class="ds-card" style="border:2px solid #a3402f; border-radius:10px; padding:14px 16px; max-width:860px; background:#fffaf8;">
       <h3 style="margin:0 0 6px; color:#a3402f;">⚠ ${lkEsc(labels[action] || action)}</h3>
-      <p style="font-size:13.5px;">${action === 'go_live' ? 'This switches "From the beginning" off for good.' : 'This cannot be undone in Aerva (a backup is taken first, and the owner is emailed).'} A one-time PIN is sent to the owner, <b>${lkEsc(dsState.ownerEmail)}</b>, with what will happen.</p>
+      <p style="font-size:13.5px;">${action === 'go_live' ? 'This deletes everything from before today — data, logs and old backups — and switches clearing off for good.' : 'This cannot be undone in Aerva (a backup is taken first, and the owner is emailed).'} A one-time PIN is sent to the owner, <b>${lkEsc(dsState.ownerEmail)}</b>, with what will happen.</p>
       <p><button type="button" class="process-btn" id="dsPinBtn" onclick="dsSendPin()">Send PIN to the owner</button> <span id="dsPinMsg" style="font-size:13px;"></span></p>
       <div id="dsRunBox" style="display:none;">
         <p><label>PIN from the email<br><input type="text" id="dsPin" inputmode="numeric" maxlength="6" autocomplete="one-time-code" style="font-size:18px; letter-spacing:4px; width:140px;"></label></p>
@@ -4103,7 +4106,8 @@ async function dsRun(){
     const r = await lkPost({ dataSafetyRun: { action: dsPending.action, keep: dsPending.keep, backupId: dsPending.backupId,
       pin: document.getElementById('dsPin').value, confirm: document.getElementById('dsConfirm').value } });
     const del = r.deleted ? Object.entries(r.deleted) : [];
-    out.innerHTML = `<p style="color:#2f6b3a;"><b>Done.</b>${r.backup ? ` Copy taken first: <code>${lkEsc(r.backup.name)}</code>.` : ''}
+    out.innerHTML = `<p style="color:#2f6b3a;"><b>Done.</b>${r.backup ? (dsPending.action === 'go_live' ? ` First backup of the live site: <code>${lkEsc(r.backup.name)}</code>.` : ` Copy taken first: <code>${lkEsc(r.backup.name)}</code>.`) : ''}
+      ${r.backupsDeleted ? ` ${lkEsc(r.backupsDeleted.length)} old backups deleted.` : ''}${r.backupWarning ? ` <span style="color:#a3402f;">${lkEsc(r.backupWarning)}</span>` : ''}
       ${r.restoredFrom ? ` Restored from <code>${lkEsc(r.restoredFrom)}</code>; the replaced data is kept as <code>${lkEsc(r.previousDataKeptAs)}</code>.` : ''}
       ${r.kept ? ` Kept: ${lkEsc(r.kept.accounts)} accounts, ${lkEsc(r.kept.listings)} listings, ${lkEsc(r.kept.bookings)} bookings.` : ''} The owner has been emailed.</p>
       ${del.length ? `<details open><summary>Rows deleted</summary><p style="font-size:13px;">${del.map(([t, n]) => `${lkEsc(t)}: ${lkEsc(n)}`).join(' · ')}</p></details>` : ''}`;
