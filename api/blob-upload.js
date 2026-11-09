@@ -32,7 +32,7 @@ const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const photoGuard = require('./_photo-guard');
 
 const UPLOADS_PER_DAY = 200;
-const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'support-evidence', 'deposit-evidence'];
+const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'support-evidence', 'deposit-evidence', 'cancellation-proof'];
 // A host's proof of damage to a property (a deposit concern): videos too.
 const VIDEO_PURPOSES = ['deposit-evidence'];
 const SESSION_ACTIONS = ['guest-session', 'manage-pricing', 'manage-cohost', 'admin-session'];

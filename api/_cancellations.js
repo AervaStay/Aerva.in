@@ -652,11 +652,16 @@ function hostOption(rq) {
 }
 
 // The guest sends a request. Returns { request } or { error, status }.
-async function createCancellationRequest(sql, { orderId, guestId, reasonCode, details }) {
+async function createCancellationRequest(sql, { orderId, guestId, reasonCode, details, evidence }) {
   if (!REQUEST_REASONS[reasonCode]) return { error: 'Choose a reason.', status: 400 };
+  // An emergency comes with proof (owner, 9 Nov 2026): a medical note, a
+  // government order, a photo or news report of the hazard — Aerva's own
+  // uploads only (blob-upload.js purpose 'cancellation-proof'), up to 5.
   const q = await cancellationQuote(sql, orderId, guestId);
   if (q.status) return { error: q.error, status: q.status };
   if (q.transferred) return { error: q.error, status: 400 };      // emergencies included: Aerva Support decides
+  const proof = EMERGENCY_REASONS[reasonCode] ? require('./_listing-rules').aervaBlobUrlsOnly(Array.isArray(evidence) ? evidence : [], 5) : [];
+  if (EMERGENCY_REASONS[reasonCode] && !proof.length) return { error: 'Please attach proof of the emergency (for example a medical note, a government order, or a photo or news report of the hazard).', status: 400 };
   // Only before check-in, emergencies included. Once the stay has started
   // the guest changes the booking instead (shorter stay, _booking-changes.js).
   if (!q.allowed && (!EMERGENCY_REASONS[reasonCode] || q.started)) return { error: q.error, status: 400 };
@@ -674,6 +679,10 @@ async function createCancellationRequest(sql, { orderId, guestId, reasonCode, de
   } catch (err) {
     if (/idx_cancel_requests_open|duplicate key/.test(err.message)) return { error: 'You already have a request waiting for the host.', status: 409 };
     throw err;
+  }
+  if (proof.length) {
+    try { await sql`UPDATE cancellation_requests SET evidence = ${JSON.stringify(proof)}::jsonb WHERE id = ${request.id}`; }
+    catch (err) { if (err && err.code === '42703') { await sql`DELETE FROM cancellation_requests WHERE id = ${request.id}`; return { error: 'Emergency cancellations are being updated. Please try again shortly or write to hello@aerva.in.', status: 503 }; } throw err; }
   }
   await logAudit(sql, { action: 'guest_cancellation_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: orderId,
     metadata: { reasonCode, policyPercent, daysBefore: q.daysBefore } });
@@ -714,7 +723,7 @@ async function cancellationCard(sql, conversationId, role) {
       if (!rq) return null;
       const option = hostOption(rq);
       const card = { requestId: rq.id, orderId: o.id, reason: REQUEST_REASONS[rq.reason_code] || 'Cancellation', details: rq.details || '',
-                     daysBefore: rq.days_before, option };
+                     daysBefore: rq.days_before, option, evidence: Array.isArray(rq.evidence) ? rq.evidence : [] };
       if (option.type !== 'choose') card.guestGetsBack = await guestGetsBackFor(sql, o.id, option.percent);
       if (option.type === 'emergency_late') card.choices = await Promise.all(option.choices.map(async p => ({ refundPercent: p, guestGetsBack: await guestGetsBackFor(sql, o.id, p) })));
       return card;
@@ -775,6 +784,98 @@ async function settleUnansweredRequests(sql, razorpay, { deadlineMs = 4000 } = {
   return out;
 }
 
+// ---- After an emergency cancellation is approved ----
+// With proof attached, Aerva's service fee comes back as Aerva credit
+// (owner, 9 Nov 2026). Never throws.
+async function emergencyApproved(sql, requestId) {
+  try {
+    const rq = (await sql`SELECT order_id, reason_code, to_jsonb(cancellation_requests)->'evidence' AS evidence FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
+    if (!rq || !EMERGENCY_REASONS[rq.reason_code] || !Array.isArray(rq.evidence) || !rq.evidence.length) return { credit: 0 };
+    return await require('./_fee-credits').creditForEmergencyFee(sql, rq.order_id);
+  } catch (err) { console.error('emergency fee credit not made (needs follow-up):', requestId, err.message); return { credit: 0, failed: true }; }
+}
+
+// ---- A host declined a proven emergency: the guest may ask Aerva to review ----
+// Within REVIEW_HOURS of the decline, before check-in, only with proof
+// attached. Aerva looks at the proof; its decision is final and may
+// overturn the decline (owner, 9 Nov 2026).
+const REVIEW_HOURS = 24;
+async function reviewable(sql, rq) {
+  if (!rq || rq.status !== 'declined' || !EMERGENCY_REASONS[rq.reason_code]) return false;
+  if (!Array.isArray(rq.evidence) || !rq.evidence.length) return false;
+  if (rq.review_requested_at || !rq.decided_at || /^Decided by Aerva|^Closed at check-in/.test(String(rq.host_note || ''))) return false;
+  if (Date.now() - new Date(rq.decided_at).getTime() > REVIEW_HOURS * 3600e3) return false;
+  const q = await cancellationQuote(sql, rq.order_id, null);
+  return !q.status && !q.started;
+}
+async function requestReview(sql, { requestId, guestId, note }) {
+  const err = (m, st = 400) => Object.assign(new Error(m), { isUserFacing: true, status: st });
+  let rq;
+  try { rq = (await sql`SELECT * FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0]; }
+  catch (e) { throw err('This is not switched on yet.', 503); }
+  if (!rq || rq.guest_id !== guestId) throw err('Request not found.', 404);
+  if (!(await reviewable(sql, rq))) throw err(`A review can be asked for within ${REVIEW_HOURS} hours of the host declining an emergency request sent with proof, before check-in.`, 409);
+  const clean = String(note || '').trim().slice(0, 800);
+  const got = await sql`UPDATE cancellation_requests SET review_requested_at = now(), review_note = ${clean || null} WHERE id = ${rq.id} AND review_requested_at IS NULL RETURNING id`;
+  if (!got.length) throw err('A review has already been asked for.', 409);
+  await postThreadMessage(sql, rq.order_id, 'guest', 'I have asked Aerva to review my emergency cancellation request, with the proof I sent. Aerva’s decision will be final.');
+  const o = (await sql`SELECT o.suite_name, o.guest_email, COALESCE(o.confirmation_code, '#' || o.id) AS code, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${rq.order_id}`)[0];
+  const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
+  await email(host && host.email, `Your guest asked Aerva to review: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>You declined your guest’s emergency cancellation of <strong>${escH(o.suite_name)}</strong> (booking ${escH(o.code)}). The guest sent proof and has asked Aerva to review it. You can add anything that helps in Messages. Aerva’s decision will be final for you and the guest.</p></div>`);
+  await email(process.env.SUPPORT_EMAIL || process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `REVIEW — declined emergency cancellation ${o.code}`, `<p>The host declined an emergency cancellation sent with proof; the guest asked Aerva to review it. Decide in Admin → Approvals → Cancellation requests before check-in.</p>${clean ? `<p>Guest: “${escH(clean)}”</p>` : ''}`);
+  await logAudit(sql, { action: 'cancellation_review_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: rq.order_id, metadata: { requestId: rq.id } });
+  return { requested: true };
+}
+async function decideReview(sql, razorpay, { requestId, accept, refundPercent = 100, note = '', adminLabel = null }) {
+  const err = (m, st = 400) => Object.assign(new Error(m), { isUserFacing: true, status: st });
+  const rq = (await sql`SELECT * FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
+  if (!rq || !rq.review_requested_at) throw err('Review not found.', 404);
+  if (rq.review_decided_at) throw err('This review has already been decided.', 409);
+  const q = await cancellationQuote(sql, rq.order_id, null);
+  if (q.status) throw err(q.error, q.status);
+  if (q.started) throw err('This stay has already started, so it can no longer be cancelled.');
+  const claim = await sql`UPDATE cancellation_requests SET review_decided_at = now() WHERE id = ${rq.id} AND review_decided_at IS NULL RETURNING id`;
+  if (!claim.length) throw err('This review has already been decided.', 409);
+  const why = String(note || '').trim().slice(0, 500);
+  const pct = accept === true ? (lateEmergency(rq) && LATE_EMERGENCY_REFUNDS.includes(Number(refundPercent)) ? Number(refundPercent) : 100) : 0;
+  try {
+    if (accept === true) await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct, by: 'aerva_emergency', adminLabel, note: why });
+  } catch (e) { await sql`UPDATE cancellation_requests SET review_decided_at = NULL WHERE id = ${rq.id}`; throw e; }
+  await sql`UPDATE cancellation_requests SET review_outcome = ${accept === true ? 'overturned' : 'upheld'}, status = ${accept === true ? 'accepted' : 'declined'},
+              refund_percent = ${accept === true ? pct : rq.refund_percent}, host_note = ${(rq.host_note ? rq.host_note + ' · ' : '') + 'Reviewed by Aerva' + (why ? ': ' + why : '')} WHERE id = ${rq.id}`;
+  const fee = accept === true ? await emergencyApproved(sql, rq.id) : { credit: 0 };
+  const binding = 'Aerva’s decision is final and binds both the guest and the host.';
+  const o = (await sql`SELECT o.suite_name, o.guest_email, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${rq.order_id}`)[0];
+  const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
+  const outcome = accept === true
+    ? `Aerva reviewed the proof and approved the emergency cancellation: ${pct === 100 ? 'the booking price, GST and deposit are refunded in full' : `${pct}% of the booking price and its GST, and the deposit in full, are refunded`}${fee.credit ? '; Aerva’s service fee comes back as Aerva credit' : ''}.`
+    : `Aerva reviewed the proof and the host’s decline stands${why ? ': ' + why : ''}. The booking stands.`;
+  await postThreadMessage(sql, rq.order_id, 'system', `${outcome} ${binding}`);
+  await email(o.guest_email, `Aerva’s review of your cancellation: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>${escH(outcome)}</p><p>${binding}</p></div>`);
+  await email(host && host.email, `Aerva’s review: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>${escH(outcome)}</p><p>${binding}</p></div>`);
+  await logAudit(sql, { action: 'cancellation_review_decided', success: true, actorType: 'admin', actorIdentifier: adminLabel, targetType: 'order', targetId: rq.order_id,
+    metadata: { requestId: rq.id, accept: accept === true, refundPercent: pct, note: why, feeCredit: fee.credit || 0 } });
+  return { accepted: accept === true, refundPercent: pct };
+}
+async function reviewsForAerva(sql) {
+  try {
+    const rows = await sql`SELECT r.*, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_first_name, o.guest_last_name, o.status AS order_status, l.host_name
+                           FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id
+                           WHERE r.review_requested_at IS NOT NULL AND r.review_decided_at IS NULL AND o.status = 'paid' ORDER BY o.arrival LIMIT 100`;
+    const out = [];
+    for (const r of rows) {
+      const q = await cancellationQuote(sql, r.order_id, null);
+      if (q.started) continue;
+      out.push({ requestId: r.id, orderId: r.order_id, review: true, reason: EMERGENCY_REASONS[r.reason_code] || r.reason_code, details: r.details || '', reviewNote: r.review_note || '',
+        hostNote: r.host_note || '', evidence: Array.isArray(r.evidence) ? r.evidence : [], askedAt: r.review_requested_at, listing: r.suite_name, arrival: r.arrival, departure: r.departure, hostName: r.host_name,
+        guest: [r.guest_first_name, r.guest_last_name].filter(Boolean).join(' ') || r.guest_email, canDecide: true, lastMinute: lateEmergency(r),
+        guestGetsBack: await guestGetsBackFor(sql, r.order_id, 100),
+        choices: lateEmergency(r) ? await Promise.all(LATE_EMERGENCY_REFUNDS.map(async p => ({ refundPercent: p, guestGetsBack: await guestGetsBackFor(sql, r.order_id, p) }))) : null });
+    }
+    return out;
+  } catch (e) { return []; }
+}
+
 // ---- Aerva decides an emergency request (Admin → Cancellation requests) ----
 // Open emergency requests the host has not answered in 24 hours, booking
 // still confirmed and the stay not started.
@@ -807,6 +908,10 @@ async function requestsForAerva(sql) {
       choices: lateEmergency(r) ? await Promise.all(LATE_EMERGENCY_REFUNDS.map(async p => ({ refundPercent: p, guestGetsBack: await guestGetsBackFor(sql, r.order_id, p) }))) : null,
       ...(full ? E.adminView(full) : { canDecide: true }) });
   }
+  for (const x of out) {
+    try { x.evidence = (await sql`SELECT to_jsonb(cancellation_requests)->'evidence' AS e FROM cancellation_requests WHERE id = ${x.requestId}`)[0].e || []; } catch (e) { x.evidence = []; }
+  }
+  out.push(...(await reviewsForAerva(sql)));
   out.sort((a, b) => String(a.arrival).localeCompare(String(b.arrival)));
   return out;
 }
@@ -835,6 +940,7 @@ async function decideByAerva(sql, razorpay, { requestId, accept, note = '', admi
   } catch (e) { await unclaimRequest(sql, rq.id); throw e; }
   await sql`UPDATE cancellation_requests SET status = ${accept === true ? 'accepted' : 'declined'}, refund_percent = ${pct},
               host_note = ${'Decided by Aerva' + (why ? ': ' + why : '')}, decided_at = now() WHERE id = ${rq.id}`;
+  if (accept === true) await emergencyApproved(sql, rq.id);
   await logAudit(sql, { action: 'cancellation_request_decided_by_aerva', success: true, actorType: 'admin', actorIdentifier: adminLabel,
     targetType: 'order', targetId: rq.order_id, metadata: { requestId: rq.id, accept: accept === true, note: why } });
   const o = (await sql`SELECT o.suite_name, o.guest_email, o.arrival, o.departure, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${rq.order_id}`)[0];
@@ -892,7 +998,7 @@ async function closeRequestsAtCheckin(sql, { deadlineMs = 3000 } = {}) {
 module.exports = {
   requestsForAerva, decideByAerva, closeRequestsAtCheckin,
   POLICIES, HOST_DECISION_TIMEOUT_HOURS, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, REQUEST_REASONS,
-  TRANSFERRED_NO_CANCEL, LATE_EMERGENCY_REFUNDS, lateEmergency, policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
+  TRANSFERRED_NO_CANCEL, LATE_EMERGENCY_REFUNDS, lateEmergency, emergencyApproved, requestReview, decideReview, reviewable, REVIEW_HOURS, policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
   claimForCancellation, releaseClaim, guestGetsBackFor, claimRequest, unclaimRequest, postThreadMessage, hostOption, createCancellationRequest, cancellationCard,
   cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, issueCouponForHost, hostCouponAmount, markCancelledByHost, listingCancelRates, hostCancelRates, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
 };

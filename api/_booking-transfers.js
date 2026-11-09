@@ -12,7 +12,7 @@
 //     becomes up to three linked bookings on the same payment: the nights
 //     before, the moved nights, the nights after. A booking whose dates
 //     were changed earlier can be transferred too (the fee applies).
-//   • When: before check-in, or until 12 PM on the day after check-in
+//   • When: before check-in, or until 10 AM on the day after check-in
 //     (property's clock); never once the host has been paid out; nights
 //     that have passed never move.
 //   • Valid only once the host or a co-host accepts AND the guest then
@@ -93,11 +93,11 @@ async function cohostKey(sql, listingId) {
 }
 
 // WHEN (the owner's rule): any time before check-in; once the stay has
-// started, only until 12 PM (the property's clock) on the day after
+// started, only until 10 AM (the property's clock) on the day after
 // check-in — after that the option is not offered at all. Never once the
 // host has been paid out for the booking (a first-night payout sent while
 // a request is open does not count: the rest is held for the outcome).
-const WINDOW_HOUR = 12;
+const WINDOW_HOUR = 10;   // the same hard deadline as every other change (owner, 9 Nov 2026)
 function transferWindowEndMs(arrivalStr, zone) {
   const d = new Date(arrivalStr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1);
   return localMidnightMs(d.toISOString().slice(0, 10), zone) + WINDOW_HOUR * 3600e3;
@@ -113,7 +113,7 @@ async function payoutSent(sql, orderId) {
                         AND (to_jsonb(o)->>'payout_rest_held_at') IS NULL LIMIT 1`).length > 0;
   } catch (e) { return false; }
 }
-const WINDOW_CLOSED = 'This booking can no longer be moved to another property. Once a stay has started, a transfer can be asked for until 12 PM on the day after check-in.';
+const WINDOW_CLOSED = 'This booking can no longer be moved to another property. Once a stay has started, a transfer can be asked for until 10 AM on the day after check-in.';
 const PAID_OUT = 'This booking can no longer be moved to another property: the host has already been paid for it.';
 const LOCKED = 'This booking was transferred, so it cannot be changed, moved, split again, shortened or cancelled. If something is not working, contact Aerva Support; Aerva will look at it and decide.';
 async function transfersReady(sql) {

@@ -117,6 +117,7 @@ async function sendReminder(sql, r, { by = 'system' } = {}) {
      <p>Please accept or decline it now in Messages. Accept: the guest is refunded the booking price, GST and any deposit, with no charge or penalty to you. Decline: the booking stands, with no refund.</p>
      <p>${last ? `<strong>This is the last reminder.</strong> If there is no answer, Aerva will decide — normally as the guest asked — and its decision is final for you and the guest.` : `Aerva will remind you ${REMINDERS} times in all. If there is still no answer, Aerva will decide, and its decision is final.`}</p>
      <p><a href="https://aerva.in/index.html?view=messages" style="color:#8a6c39;">Open Messages</a></p>`);
+  await require('./_alerts').alertHost(sql, r.host_id, `Aerva: reminder ${n}/${REMINDERS} - your guest's emergency cancellation for ${r.suite_name} needs your answer now in Messages.`);
   const S = require('./_support');
   await S.systemUpdate(sql, r.host_ticket_id, `Reminder ${n} of ${REMINDERS} sent to you by email and in Messages. Please accept or decline the cancellation request now.${last ? ' If there is no answer, Aerva will decide, and its decision is final.' : ''}`);
   await S.systemUpdate(sql, r.guest_ticket_id, `Reminder ${n} of ${REMINDERS} sent to your host.`);

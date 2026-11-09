@@ -723,7 +723,7 @@
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-09c"></script>
+<script src="aerva-policies.js?v=2026-11-09e"></script>
 </head>
 <body>
 
@@ -2165,9 +2165,33 @@
     const aadhaarDone = v.aadhaarStatus === 'verified' || v.aadhaarStatus === 'pending_review';
 
     container.innerHTML = `
+      <div id="verifyPendingList"></div>
       <div class="verify-step">
         <div class="verify-step-head">
-          <strong>Step 1: PAN Verification</strong>
+          <strong>Step 1: Identity (Aadhaar)</strong>
+          <span class="verify-status verify-status-${v.aadhaarStatus}">${verifyStatusLabel(v.aadhaarStatus)}</span>
+        </div>
+        ${v.aadhaarStatus === 'verified'
+          ? `<p class="verify-locked-note">Verified. Your ID was checked once and not stored.</p>`
+          : (v.aadhaarStatus === 'pending_review'
+            ? `<p class="verify-locked-note">A document you sent earlier is waiting for a check. To be verified now instead, use any ID below; the earlier document is then deleted.</p>` : '')}
+        ${v.aadhaarStatus === 'verified' ? '' : '<div id="hostIdVerifyBox"></div>'}
+      </div>
+
+      <div class="verify-step">
+        <div class="verify-step-head">
+          <strong>Step 2: Bank account for payouts</strong>
+          <span class="verify-status verify-status-${v.bankStatus}">${verifyStatusLabel(v.bankStatus)}</span>
+        </div>
+        ${v.bankStatus === 'rejected' && v.bankRejectionReason ? `<p class="verify-rejection-note">${escH(v.bankRejectionReason)}</p>` : ''}
+        ${v.bankCheck && v.bankCheck.message && v.bankStatus !== 'rejected' ? `<p class="verify-locked-note">${escH(v.bankCheck.message)}</p>` : ''}
+        ${v.bankPayoutsFrom ? `<p class="verify-locked-note">Bank details changed recently: payouts resume from ${escH(new Date(v.bankPayoutsFrom).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}.</p>` : ''}
+        <p class="verify-locked-note">${v.bankAccountNumberMasked ? 'Account on file: ' + escH(v.bankAccountNumberMasked) + '. ' : 'No bank details on file yet. '}Manage it on <a href="host-payouts.html" style="color:#8a6c39;">Payout details</a>.</p>
+      </div>
+
+      <div class="verify-step" style="border-bottom:none;">
+        <div class="verify-step-head">
+          <strong>Step 3: PAN <span style="font-weight:400; opacity:0.7;">(optional — without it TDS is 5%)</span></strong>
           <span class="verify-status verify-status-${v.panStatus}">${verifyStatusLabel(v.panStatus)}</span>
         </div>
         ${v.panStatus === 'rejected' && v.panRejectionReason ? `<p class="verify-rejection-note">${escH(v.panRejectionReason)}</p>` : ''}
@@ -2190,32 +2214,17 @@
           `}
       </div>
 
-      <div class="verify-step">
-        <div class="verify-step-head">
-          <strong>Step 2: Identity &amp; address proof</strong>
-          <span class="verify-status verify-status-${v.aadhaarStatus}">${verifyStatusLabel(v.aadhaarStatus)}</span>
-        </div>
-        ${v.aadhaarStatus === 'verified'
-          ? `<p class="verify-locked-note">Verified. Your ID was checked once and not stored.</p>`
-          : (v.aadhaarStatus === 'pending_review'
-            ? `<p class="verify-locked-note">A document you sent earlier is waiting for a check. To be verified now instead, use any ID below; the earlier document is then deleted.</p>` : '')}
-        ${v.aadhaarStatus === 'verified' ? '' : '<div id="hostIdVerifyBox"></div>'}
-      </div>
-
-      <div class="verify-step" style="border-bottom:none;">
-        <div class="verify-step-head">
-          <strong>Step 3: Bank Account Verification</strong>
-          <span class="verify-status verify-status-${v.bankStatus}">${verifyStatusLabel(v.bankStatus)}</span>
-        </div>
-        ${v.bankStatus === 'rejected' && v.bankRejectionReason ? `<p class="verify-rejection-note">${escH(v.bankRejectionReason)}</p>` : ''}
-        ${v.bankCheck && v.bankCheck.message && v.bankStatus !== 'rejected' ? `<p class="verify-locked-note">${escH(v.bankCheck.message)}</p>` : ''}
-        ${v.bankPayoutsFrom ? `<p class="verify-locked-note">Bank details changed recently: payouts resume from ${escH(new Date(v.bankPayoutsFrom).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}.</p>` : ''}
-        <p class="verify-locked-note">${v.bankAccountNumberMasked ? 'Account on file: ' + escH(v.bankAccountNumberMasked) + '. ' : 'No bank details on file yet. '}Manage it on <a href="host-payouts.html" style="color:#8a6c39;">Payout details</a>.</p>
-      </div>
-
-      <p style="margin:14px 0 0; font-size:13.5px; opacity:0.65;">Payouts are held until all three steps show Approved.</p>
+      <p style="margin:14px 0 0; font-size:13.5px; opacity:0.65;">Payouts start once your identity and bank account are approved. You can skip any step for now; it stays on your list.</p>
     `;
 
+
+    // The same steps, in the same order, as the dashboard's "Getting set up".
+    try {
+      const pl = document.getElementById('verifyPendingList');
+      if(pl && window.aervaSetup) window.aervaSetup.load().then(items => {
+        if(items.some(i => !i.done && !i.optional)) pl.innerHTML = '<div style="margin:0 0 14px; padding:12px 14px; border:1px solid #ece4d8; border-radius:10px; background:#fbf8f3;"><strong style="font-size:14px;">Still to do</strong>' + window.aervaSetup.listHtml() + '</div>';
+      });
+    } catch (e) { /* the steps below still work */ }
 
     const panNameBtn = document.getElementById('submitPanNameBtn');
     if(panNameBtn){
@@ -4697,6 +4706,67 @@
       });
     });
   }).catch(() => {});
+
+  // Getting set up (owner, 9 Nov 2026): list → Aadhaar → bank → PAN → phone →
+  // profile, one step at a time, each skippable ("Skip for now" — it stays on
+  // this list, in the profile and in the bell until done). host-listings ?setupChecklist=1.
+  window.aervaSetup = (function(){
+    const skipKey = 'aerva_setup_skipped';
+    const skipped = () => { try { return JSON.parse(sessionStorage.getItem(skipKey) || '[]'); } catch (e) { return []; } };
+    const skip = (k) => { try { sessionStorage.setItem(skipKey, JSON.stringify(skipped().concat(k))); } catch (e) {} };
+    let items = [];
+    function listHtml(){
+      return '<ol style="margin:0; padding-left:20px; font-size:14.5px; line-height:1.9;">' + items.map(i => '<li>' + (i.done ? '<span style="opacity:0.6;">✅ ' + esc(i.label) + '</span>'
+        : i.waiting ? '⏳ ' + esc(i.label) + ' <span style="opacity:0.7;">· ' + esc(i.waitingText || 'waiting for Aerva') + '</span>'
+        : '<a href="' + esc(i.href) + '" style="color:#8a6c39; text-decoration:none; border-bottom:1px solid #d9c7a4;">' + esc(i.label) + '</a>' + (i.optional ? ' <span style="opacity:0.6;">(optional)</span>' : '')) + '</li>').join('') + '</ol>';
+    }
+    function card(){
+      const wrap = document.querySelector('.wrap');
+      if(!wrap) return;
+      let box = document.getElementById('setupCard');
+      const todo = items.filter(i => !i.done && !i.waiting);
+      if(!todo.filter(i => !i.optional).length){ if(box) box.remove(); return; }
+      if(!box){ box = document.createElement('div'); box.id = 'setupCard'; box.className = 'notice-card'; box.style.cssText = 'margin:0 0 20px; padding:18px 20px;'; wrap.insertBefore(box, wrap.firstChild); }
+      const doneN = items.filter(i => i.done).length;
+      box.innerHTML = '<strong style="font-size:16px;">Getting set up · ' + doneN + ' of ' + items.length + ' done</strong>'
+        + '<div style="height:6px; background:#eee5d8; border-radius:4px; margin:10px 0 12px;"><div style="height:6px; width:' + Math.round(doneN / items.length * 100) + '%; background:#a9884f; border-radius:4px;"></div></div>'
+        + listHtml() + '<div style="margin-top:12px;"><button type="button" class="ch-btn primary" id="setupGo">Continue setup</button></div>';
+      box.querySelector('#setupGo').addEventListener('click', () => open(true));
+    }
+    // One step at a time: what it is, why, "Do it now" or "Skip for now".
+    function open(force){
+      const sk = skipped();
+      const open_ = items.filter(i => !i.done && !i.waiting);
+      // The first step not skipped yet; "Continue setup" starts again from the first one left.
+      const next = open_.find(i => !sk.includes(i.key)) || (force ? open_[0] : null);
+      if(!next) return;
+      const n = items.indexOf(next) + 1;
+      const ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed; inset:0; background:rgba(28,26,23,0.45); z-index:3000; display:flex; align-items:center; justify-content:center; padding:16px;';
+      ov.innerHTML = '<div style="background:#fff; border-radius:14px; max-width:440px; width:100%; padding:22px;">'
+        + '<div style="font-size:12px; letter-spacing:0.12em; text-transform:uppercase; color:#8a6c39;">Step ' + n + ' of ' + items.length + '</div>'
+        + '<h2 style="font-family:Georgia,serif; font-weight:500; margin:6px 0 8px;">' + esc(next.label) + '</h2>'
+        + '<p style="font-size:14.5px; line-height:1.6; margin:0 0 16px;">' + esc(next.why) + '</p>'
+        + '<div style="display:flex; gap:10px; flex-wrap:wrap;"><a class="ch-btn primary" href="' + esc(next.href) + '" style="text-decoration:none;">Do it now</a>'
+        + '<button type="button" class="ch-btn" id="setupSkip">Skip for now</button></div>'
+        + '<p style="font-size:12.5px; opacity:0.65; margin:12px 0 0;">Skipped steps stay on your “Getting set up” list, in your profile and in the bell.</p></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener('click', (e) => { if(e.target === ov) ov.remove(); });
+      ov.querySelector('#setupSkip').addEventListener('click', () => { skip(next.key); ov.remove(); if(open_.some(i => i !== next && !skipped().includes(i.key))) open(false); });
+    }
+    function load(){
+      return fetch(API + '?setupChecklist=1', { headers: H }).then(r => r.json()).then(d => {
+        items = (d && d.items) || [];
+        card();
+        // Opened by itself once per visit while required steps are left (e.g. right after listing).
+        let shown = false; try { shown = sessionStorage.getItem('aerva_setup_shown') === '1'; sessionStorage.setItem('aerva_setup_shown', '1'); } catch (e) {}
+        if(!shown || /[?&]setup=1/.test(location.search)) open(false);
+        return items;
+      }).catch(() => []);
+    }
+    load();
+    return { load, items: () => items, listHtml };
+  })();
 
   // Action needed: a guest's emergency cancellation waiting for this host.
   // Aerva reminds the host 3 times and then decides; its decision is final

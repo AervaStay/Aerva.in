@@ -552,6 +552,12 @@ module.exports = async (req, res) => {
             href: 'index.html?view=cohost'
           }));
         } catch (err) { /* co-host tables not there */ }
+        // Setting up (owner, 9 Nov 2026): the next step, in the fixed order (_setup-steps.js).
+        try {
+          const S = require('./_setup-steps');
+          const gb = S.bellItem(await S.guestSteps(sql, guest.id), 'guest'); if (gb) notifications.push(gb);
+          if (guest.host_id) { const hb = S.bellItem(await S.hostSteps(sql, guest.id), 'host'); if (hb) notifications.push(hb); }
+        } catch (err) { /* never blocks the bell */ }
         // Unused Aerva credit: a nudge to use it (_fee-credits.js).
         (await require('./_fee-credits').bellNotice(sql, guest.id)).forEach(n => notifications.push(n));
         // Resolution Center: requests with a reply not opened yet (_support.js).

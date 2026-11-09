@@ -535,7 +535,7 @@ const COHOST_CALENDAR_BOOKING_KEYS = ['id', 'start_date', 'end_date', 'guest_ema
   'confirmation_code', 'guest_phone_verified'];
 const COHOST_TODAY_KEYS = ['orderId', 'guestName', 'guests', 'arrival', 'departure', 'nights', 'listingId', 'listingName',
   'photoUrl', 'guestPhotoUrl', 'checkInTime', 'checkOutTime', 'nightsLeft', 'kind', 'startTime', 'petTypes',
-  'serviceAnimals', 'youngLitter'];
+  'serviceAnimals', 'youngLitter', 'daysAway'];
 
 function trimForCohost(ctx, mode, body) {
   if (!body || typeof body !== 'object' || body.error) return stripHostMoney(body);
@@ -567,7 +567,7 @@ function trimForCohost(ctx, mode, body) {
       verification: null, // never shown to a co-host
       complianceNotices: (body.complianceNotices || []).filter(n => inScope(n.listingId))
         .map(n => ({ ...n, manageLink: cohostManageLink(n.listingId, ctx.cohostId) })),
-      today: { arrivals: [], departures: [], staying: [], experiences: [] },
+      today: { arrivals: [], departures: [], staying: [], experiences: [], upcoming: [] },
       cohost: describeAccess(ctx)
     };
     if (seesBookings && body.today) {
@@ -1372,6 +1372,59 @@ module.exports = async (req, res) => {
   // ---- Payouts sent to me (as host, or as a co-host) ----
   // GET ?myPayouts=1 → list; GET ?payoutDetail=<id> → one summary. Only
   // ever the signed-in person's own payouts.
+  // ---- Host setup checklist (owner, 9 Nov 2026) ----
+  // GET ?setupChecklist=1 → what a host still has to do before they can be
+  // booked and paid smoothly, each with where to do it.
+  if (req.method === 'GET' && (req.query || {}).setupChecklist === '1' && req.query.actingHost === undefined) {
+    try {
+      const items = await require('./_setup-steps').hostSteps(sql, accountId);
+      return res.status(200).json({ items, done: items.every(i => i.done || i.optional) });
+    } catch (err) {
+      console.error('setupChecklist failed:', err);
+      return res.status(500).json({ error: 'Could not load this right now.' });
+    }
+  }
+  // ---- Monthly payout statement for the host's CA (owner, 9 Nov 2026) ----
+  // GET ?payoutStatement=YYYY-MM → CSV of every payout SENT to this account
+  // that month (as host, or as co-host): booking, stay, gross, Aerva's
+  // commission, co-host shares, deductions, TDS (rate, PAN given), net, date
+  // sent and bank reference — with totals. India time.
+  if (req.method === 'GET' && req.query && typeof req.query.payoutStatement === 'string' && req.query.actingHost === undefined) {
+    const m = /^(\d{4})-(\d{2})$/.exec(req.query.payoutStatement);
+    if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return res.status(400).json({ error: 'Choose a month.' });
+    const start = `${m[1]}-${m[2]}-01`;
+    const end = Number(m[2]) === 12 ? `${Number(m[1]) + 1}-01-01` : `${m[1]}-${String(Number(m[2]) + 1).padStart(2, '0')}-01`;
+    try {
+      const me = (await sql`SELECT host_id, name, email FROM guests WHERE id = ${accountId}`)[0] || {};
+      const rows = await sql`
+        SELECT p.id, p.payee_type, COALESCE(to_jsonb(p)->>'kind', 'booking') AS kind, p.gross, p.commission, p.cohost_shares, p.deductions, p.tds, p.tds_rate, p.pan_furnished, p.net,
+               p.sent_at, p.reference, COALESCE(o.confirmation_code, '#' || o.id) AS code, o.suite_name, o.arrival, o.departure
+        FROM payouts p JOIN orders o ON o.id = p.order_id
+        WHERE p.status = 'sent' AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp
+          AND ((p.payee_type = 'host' AND p.host_id = ${me.host_id || 0}) OR (p.payee_type = 'cohost' AND p.payee_guest_id = ${accountId}))
+        ORDER BY p.sent_at, p.id`;
+      const q = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+      const d = (v) => v ? new Date(v).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : '';
+      const n = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
+      const head = ['Payout ID', 'As', 'Type', 'Booking', 'Listing', 'Check-in', 'Check-out', 'Gross (INR)', 'Aerva commission (INR)', 'Co-host shares (INR)', 'Deductions (INR)', 'TDS (INR)', 'TDS rate %', 'PAN given', 'Net paid (INR)', 'Sent on', 'Bank reference'];
+      const lines = [`Aerva payout statement — ${me.name || me.email || ''} — ${m[1]}-${m[2]}`, '', head.join(',')];
+      const tot = { gross: 0, commission: 0, cohost: 0, deductions: 0, tds: 0, net: 0 };
+      for (const r of rows) {
+        lines.push([r.id, r.payee_type === 'host' ? 'Host' : 'Co-host', r.kind === 'deposit' ? 'Deposit compensation' : 'Booking', r.code, r.suite_name, d(r.arrival), d(r.departure),
+          n(r.gross), n(r.commission), n(r.cohost_shares), n(r.deductions), n(r.tds), n(r.tds_rate), r.pan_furnished ? 'Yes' : 'No', n(r.net), d(r.sent_at), r.reference || ''].map(q).join(','));
+        tot.gross += Number(r.gross) || 0; tot.commission += Number(r.commission) || 0; tot.cohost += Number(r.cohost_shares) || 0;
+        tot.deductions += Number(r.deductions) || 0; tot.tds += Number(r.tds) || 0; tot.net += Number(r.net) || 0;
+      }
+      lines.push(['Total', '', '', '', '', '', '', n(tot.gross), n(tot.commission), n(tot.cohost), n(tot.deductions), n(tot.tds), '', '', n(tot.net), '', ''].map(q).join(','));
+      lines.push('', 'TDS is deducted under section 194-O and credited against your PAN; it shows in your Form 26AS. Questions: hello@aerva.in');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="aerva-payouts-${m[1]}-${m[2]}.csv"`);
+      return res.status(200).send('\ufeff' + lines.join('\r\n'));
+    } catch (err) {
+      console.error('payoutStatement failed:', err);
+      return res.status(500).json({ error: 'Could not make the statement right now.' });
+    }
+  }
   if (req.method === 'GET' && req.query && (req.query.myPayouts === '1' || req.query.payoutDetail !== undefined) && req.query.actingHost === undefined) {
     try {
       const me = (await sql`SELECT host_id FROM guests WHERE id = ${accountId}`)[0] || {};
@@ -3345,6 +3398,7 @@ module.exports = async (req, res) => {
           if (!option.choices.includes(pct)) { await unclaimRequest(sql, rq.id); claimedId = null; return res.status(400).json({ error: 'Choose: refund in full, keep 25% or keep 50%.' }); }
           await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct, by: 'emergency', note });
           await decide('accepted', pct);
+          await require('./_cancellations').emergencyApproved(sql, rq.id);
           return res.status(200).json({ success: true, accepted: true, refundPercent: pct });
         }
       } else if (option.type === 'emergency') {
@@ -3353,6 +3407,7 @@ module.exports = async (req, res) => {
         if (accept === true) {
           await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct: 100, by: 'emergency' });
           await decide('accepted', 100);
+          await require('./_cancellations').emergencyApproved(sql, rq.id);
           return res.status(200).json({ success: true, accepted: true, refundPercent: 100 });
         }
       } else if (option.type === 'fixed') {
@@ -4232,6 +4287,21 @@ module.exports = async (req, res) => {
         // multi-day experience it is.
         experiences: all.filter(r => r.kind === 'experience')
       };
+      // Coming up: arrivals in the next UPCOMING_DAYS days (the property's
+      // calendar), so the host can prepare (owner, 9 Nov 2026).
+      const UPCOMING_DAYS = 14;
+      const next = await sql`
+        SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights, o.payout_amount, o.guest_email,
+               g.name AS guest_name, g.profile_photo_url, COALESCE(l.listing_type, 'stay') AS listing_type, l.experience_start_time,
+               l.check_in_time, l.check_out_time, o.pet_types, o.service_animal_types, o.young_litter_count,
+               COALESCE(NULLIF(btrim(l.cover_photo_url), ''), CASE WHEN jsonb_typeof(l.exterior_photo_urls->0) = 'string' THEN l.exterior_photo_urls->>0 ELSE l.exterior_photo_urls->0->>'url' END) AS cover_photo_url,
+               false AS arriving, false AS departing, (o.departure - o.arrival) AS nights_left, (o.arrival - local.today) AS days_away
+        FROM orders o JOIN listings l ON l.id = o.listing_id LEFT JOIN guests g ON g.id = o.guest_id
+        CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS today) local
+        WHERE l.host_id = ${guest.host_id} AND o.status = 'paid' AND o.arrival > local.today AND o.arrival <= local.today + ${UPCOMING_DAYS}::int::int
+        ORDER BY o.arrival ASC, o.id ASC LIMIT 60`;
+      today.upcoming = next.map(r => ({ ...shape(r), daysAway: Number(r.days_away) || 0 }));
+      today.upcomingDays = UPCOMING_DAYS;
     } catch (err) {
       console.error('today view failed (non-fatal):', err);
     }

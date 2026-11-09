@@ -461,6 +461,11 @@ module.exports = async (req, res) => {
 
       // ---- Changing a booking: what can change, and the current booking ----
       // GET ?mode=changeOptions&orderId=
+      // GET ?mode=setupSteps → the guest's own steps to finish their account (_setup-steps.js).
+      if (mode === 'setupSteps') {
+        try { const items = await require('./_setup-steps').guestSteps(sql, guestId); return res.status(200).json({ items, done: items.every(i => i.done || i.optional) }); }
+        catch (err) { return res.status(500).json({ error: 'Could not load this right now.' }); }
+      }
       // GET ?mode=transferTargets&orderId=&from=&to= → the host's other properties free for those nights
       if (mode === 'transferTargets') {
         try { return res.status(200).json(await require('./_booking-transfers').transferTargets(sql, Number(req.query.orderId) || 0, guestId, { moveFrom: req.query.from, moveTo: req.query.to })); }
@@ -872,9 +877,20 @@ module.exports = async (req, res) => {
       try {
         const ids = bookings.map(b => b.id);
         if (ids.length) {
-          const reqs = await sql`SELECT DISTINCT ON (order_id) order_id, status FROM cancellation_requests WHERE order_id = ANY(${ids}) ORDER BY order_id, id DESC`;
-          const byOrder = {}; reqs.forEach(r => { byOrder[r.order_id] = r.status; });
-          bookings.forEach(b => { b.cancel_request_status = byOrder[b.id] || null; });
+          const reqs = await sql`SELECT DISTINCT ON (order_id) * FROM cancellation_requests WHERE order_id = ANY(${ids}) ORDER BY order_id, id DESC`;
+          const byOrder = {}; reqs.forEach(r => { byOrder[r.order_id] = r; });
+          const C = require('./_cancellations');
+          for (const b of bookings) {
+            const r = byOrder[b.id];
+            b.cancel_request_status = r ? r.status : null;
+            b.cancel_request_id = r ? r.id : null;
+            // A declined emergency with proof: the guest may ask Aerva to review it (24 hours).
+            if (r && r.status === 'declined') {
+              try { b.can_request_review = await C.reviewable(sql, r); } catch (e) { b.can_request_review = false; }
+              if (r.review_requested_at && !r.review_decided_at) b.review_state = 'Aerva is reviewing your emergency request (its decision is final)';
+              else if (r.review_outcome === 'upheld') b.review_state = 'Aerva reviewed your request: the host’s decline stands';
+            }
+          }
           // An emergency request Aerva is chasing: where it stands (_emergency-escalation.js).
           const notes = await require('./_emergency-escalation').guestStatus(sql, ids);
           bookings.forEach(b => { if (notes[b.id]) b.cancel_request_note = notes[b.id]; });
@@ -902,7 +918,7 @@ module.exports = async (req, res) => {
           const started = !!today && arr <= today;
           const windowEnd = R.stayWindowEndMs(arr, b.listing_timezone);
           const inWindow = Date.now() < windowEnd;
-          // A transfer to another property stays open until 12 PM on the day after check-in (_booking-transfers.js).
+          // A transfer to another property stays open until 10 AM on the day after check-in (_booking-transfers.js).
           const transferOpen = (b.listing_type || 'stay') === 'stay' && Date.now() < require('./_booking-transfers').transferWindowEndMs(arr, b.listing_timezone);
           b.can_change = !!paid && (!started || inWindow || transferOpen) && !b.transfer_change_id;
           b.transferred = !!b.transfer_change_id;
@@ -1324,10 +1340,18 @@ module.exports = async (req, res) => {
       // A guest never cancels on their own: the request goes into the
       // booking's message thread and the host answers there (or in My
       // Earnings), seeing only the choice for this booking's bracket.
+      // POST { mode: 'requestCancellationReview', requestId, note } — the host declined a proven emergency: Aerva reviews (final).
+      if (mode === 'requestCancellationReview') {
+        try { return res.status(200).json(await require('./_cancellations').requestReview(sql, { requestId: Number((req.body || {}).requestId) || 0, guestId, note: (req.body || {}).note })); }
+        catch (err) {
+          if (!err.isUserFacing) console.error('requestCancellationReview failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now.' });
+        }
+      }
       if (mode === 'cancelBooking' || mode === 'requestCancellation') {
         try {
           const b = req.body || {};
-          const out = await createCancellationRequest(sql, { orderId: Number(b.orderId) || 0, guestId, reasonCode: b.reasonCode || 'change_of_plans', details: b.details });
+          const out = await createCancellationRequest(sql, { orderId: Number(b.orderId) || 0, guestId, reasonCode: b.reasonCode || 'change_of_plans', details: b.details, evidence: b.evidence });
           if (out.error) return res.status(out.status || 400).json({ error: out.error });
           return res.status(200).json({ success: true, requested: true });
         } catch (err) {
