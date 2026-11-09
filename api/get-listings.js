@@ -580,6 +580,11 @@ const JOBS = [
       const closed = await require('./_cancellations').closeRequestsAtCheckin(c.sql, { deadlineMs: 2000 });
       return { ...settled, closedAtCheckin: closed.closed || 0 };
     } },
+  // Emergency cancellations the host has not answered: Aerva reaches out —
+  // support requests for both sides, 3 reminders to the host, then Aerva
+  // decides (_emergency-escalation.js). Runs before the check-in closing above matters.
+  { name: 'emergency_escalation', label: 'Emergency cancellations: remind the host 3 times, then hand to Aerva to decide', everyMinutes: 15,
+    run: (c) => require('./_emergency-escalation').runEscalations(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
   // Payments whose amount did not match the booking: refunded in full the
   // day after (_confirm-booking.js).
   { name: 'scheduled_refunds', label: 'Next-day refunds for payments that did not match the booking amount', everyMinutes: 15,

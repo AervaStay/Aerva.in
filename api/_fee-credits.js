@@ -208,6 +208,45 @@ async function creditForShorterStay(sql, orderId, amount) {
   return out;
 }
 
+// A booking moved in part to another property of the same host for less
+// (_booking-transfers.js): the difference, after Aerva's transfer fee, is
+// held as Aerva credit (owner's rule, 9 Nov 2026) — never refunded to the
+// payment at once. The guest uses it on another booking, or has it refunded
+// to the original payment whenever they ask from My Bookings; what is left
+// when it ends is refunded automatically. A booking paid wholly with earlier
+// credit gets it back onto that credit. The ledger entry names the transfer,
+// its fee and the booking, for the CA.
+// Returns { credit, back, expiresAt }.
+async function creditForTransfer(sql, orderId, amount, { changeId = null, transferFee = 0, summary = '' } = {}) {
+  const want = Math.max(0, Math.round(Number(amount) || 0));
+  const out = { credit: 0, back: 0, expiresAt: null };
+  if (!want) return out;
+  const o = (await sql`SELECT id, guest_id, guest_email, suite_name, razorpay_payment_id, created_at AS paid_at, to_jsonb(orders)->>'confirmation_code' AS code
+                       FROM orders WHERE id = ${Number(orderId) || 0}`)[0];
+  if (!o) return out;
+  // Paid with no money at all (credit only): it goes back onto that credit.
+  if (!o.razorpay_payment_id || !/^pay_/.test(String(o.razorpay_payment_id))) {
+    out.back = await giveBack(sql, o.id, want);
+    if (out.back >= want) return out;
+  }
+  const credit = want - out.back;
+  const note = `Booking transferred${o.code ? ` (booking ${o.code})` : ''}${changeId ? `, change #${changeId}` : ''}: price difference after Aerva’s transfer fee of ${inr(transferFee)}${summary ? ` — ${String(summary).slice(0, 200)}` : ''}`;
+  const c = (await sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at, reason)
+            VALUES (${o.guest_id}, ${o.guest_email}, ${o.id}, ${o.razorpay_payment_id}, ${credit}, ${credit}, ${creditEnd(o.paid_at)}::timestamptz, 'booking_transfer')
+            ON CONFLICT (source_order_id) DO UPDATE SET amount = fee_credits.amount + EXCLUDED.amount, remaining = fee_credits.remaining + EXCLUDED.remaining, status = 'active',
+              expires_at = GREATEST(fee_credits.expires_at, EXCLUDED.expires_at)
+            WHERE fee_credits.status <> 'refunding' RETURNING *`)[0];
+  if (!c) throw Object.assign(new Error('Your Aerva credit is being refunded right now. Please try again in a few minutes.'), { isUserFacing: true, status: 409 });
+  out.credit = credit; out.expiresAt = c.expires_at;
+  await entry(sql, c.id, 'issued', credit, { orderId: o.id, reference: o.razorpay_payment_id, note });
+  await email(o.guest_email, `${inr(want)} is with you as Aerva credit`, `
+    <div style="font-family:sans-serif; max-width:520px; color:#1c1a17; line-height:1.6;">
+      <p>Part of your booking at <strong>${esc(o.suite_name)}</strong> moved to another property for less. After Aerva’s transfer fee of ${inr(transferFee)}, the <strong>${inr(want)}</strong> difference is held for you as Aerva credit${out.expiresAt ? ` until <strong>${day(out.expiresAt)}</strong>` : ''}.</p>
+      <p>Book another stay or experience by then and it is taken off what you pay, automatically. Or have it refunded to your original payment method at any time from My Bookings — whatever is left on that date is refunded to it automatically.</p>
+      <p style="font-size:12px; opacity:0.6;">Questions: hello@aerva.in</p></div>`);
+  return out;
+}
+
 // A host cancels (at any time; within 48 hours of check-in the host also
 // pays the guest a 10% coupon — owner's rule, 29 Oct 2026), or the host of
 // an experience that includes a stay cancels it: EVERYTHING the guest paid for the
@@ -564,4 +603,4 @@ async function forGuest(sql, guestId) {
   } catch (e) { return []; }
 }
 
-module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindOnSignIn, remindQuarterly, remindEnding, creditEnd, bellNotice, wallet };
+module.exports = { FEE_CREDIT_DAYS, createForHostCancellation, creditForWholeBooking, creditForShorterStay, creditForTransfer, giveBack, creditOn, available, allocate, spread, claim, unclaim, recordUses, refundCredit, runExpired, forGuest, remindOnSignIn, remindQuarterly, remindEnding, creditEnd, bellNotice, wallet };

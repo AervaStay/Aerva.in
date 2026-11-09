@@ -799,11 +799,26 @@ module.exports = async (req, res) => {
     const b = req.body.decideCancellationRequest;
     if (b.accept !== true && String(b.note || '').trim().length < 5) return res.status(400).json({ error: 'Write the reason — the guest is told it.' });
     try {
-      const out = await require('./_cancellations').decideByAerva(sql, razorpay, { requestId: Number(b.requestId) || 0, accept: b.accept === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR });
+      const out = await require('./_cancellations').decideByAerva(sql, razorpay, { requestId: Number(b.requestId) || 0, accept: b.accept === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR, refundPercent: b.refundPercent == null ? 100 : Number(b.refundPercent) });
       return res.status(200).json({ success: true, ...out });
     } catch (err) {
       if (!err.isUserFacing) console.error('decideCancellationRequest failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not decide this request right now.' });
+    }
+  }
+
+  // POST { remindHostCancellation: { requestId } } → the next reminder to the host now.
+  // POST { logHostContact: { requestId, outcome, note } } → a call/attempt to reach the host.
+  if (req.method === 'POST' && req.body && (req.body.remindHostCancellation || req.body.logHostContact)) {
+    try {
+      const E = require('./_emergency-escalation');
+      const out = req.body.remindHostCancellation
+        ? await E.remindNow(sql, { requestId: Number(req.body.remindHostCancellation.requestId) || 0, adminLabel: ADMIN_ACTOR })
+        : await E.logContact(sql, { requestId: Number(req.body.logHostContact.requestId) || 0, outcome: String(req.body.logHostContact.outcome || ''), note: req.body.logHostContact.note, adminLabel: ADMIN_ACTOR });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('emergency escalation action failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
     }
   }
 
@@ -2380,6 +2395,27 @@ module.exports = async (req, res) => {
         const newStatus = action === 'approve' ? 'verified' : 'rejected';
         const cleanReason = action === 'reject' ? String(reason).trim().slice(0, 500) : null;
 
+        // PAN and bank are decided independently (the PAN is optional —
+        // without one TDS is 5%). Names were already reconciled when the
+        // second of the two was submitted (host-listings.js refuses a
+        // mismatch); an approval only re-checks that they still match:
+        //  • bank approved in the name on a verified PAN;
+        //  • PAN approved only in the payout name (unless the bank details
+        //    were rejected and will be entered again).
+        let panNow = null;
+        if (action === 'approve' && (field === 'bank' || field === 'pan')) {
+          panNow = (await sql`SELECT pan_status, to_jsonb(hosts)->>'pan_name' AS pan_name, bank_status, bank_account_holder_name AS holder
+                              FROM hosts WHERE id = ${hostId}`)[0];
+          if (!panNow) return res.status(404).json({ error: 'Host not found.' });
+          if (field === 'bank') {
+            if (panNow.pan_status === 'verified' && panNow.pan_name && panNow.holder && !bankCheck.sameName(panNow.pan_name, panNow.holder)) {
+              return res.status(409).json({ error: `The payout name (${panNow.holder}) is not the name on the PAN (${panNow.pan_name}). Reject the bank details so the host can enter them in the PAN's name.` });
+            }
+          } else if (panNow.bank_status !== 'rejected' && panNow.pan_name && panNow.holder && !bankCheck.sameName(panNow.pan_name, panNow.holder)) {
+            return res.status(409).json({ error: `The name on this PAN (${panNow.pan_name}) is not the payout name (${panNow.holder}). Reject the one that is wrong.` });
+          }
+        }
+
         let erased = null;
         let eraseReason = null;
         let decided = false;
@@ -2395,6 +2431,11 @@ module.exports = async (req, res) => {
             WHERE id = ${hostId} AND pan_status = 'pending_review' RETURNING id
           `;
           if (upd.length) { const e = await eraseHostIdDocument(hostId, 'pan'); erased = e.erased; eraseReason = e.reason || null; }
+          // Bank details waiting too: now that the PAN's name is settled, ask
+          // the bank again against it (quietly skipped without RazorpayX).
+          if (upd.length && action === 'approve' && panNow && panNow.bank_status === 'pending_review') {
+            try { await bankCheck.startCheck(sql, 'host', Number(hostId)); } catch (e) { console.error('bank re-check after PAN approval failed:', e.message); }
+          }
         } else {
           const upd = await sql`
             UPDATE hosts SET bank_status = ${newStatus}, bank_rejection_reason = ${cleanReason}

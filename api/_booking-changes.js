@@ -152,6 +152,8 @@ const CLOSED = 'This booking can no longer be changed. Once a stay has started, 
 
 async function assertChangeable(sql, o, guestId, requestedAt = null) {
   if (!o || (guestId != null && o.guest_id !== guestId)) throw userError('Booking not found.', 404);
+  // Split by a transfer: no part can be changed again (owner's rule, 9 Nov 2026).
+  if (o.transfer_change_id) throw userError(require('./_booking-transfers').LOCKED);
   if (o.status !== 'paid' || (o.stayRow && o.stayRow.status !== 'paid')) throw userError('Only a confirmed booking can be changed.');
   if ((o.charge_currency || 'INR') !== 'INR') throw userError('This booking cannot be changed online. Please write to hello@aerva.in.');
   if (!beforeCutoff(o, requestedAt)) throw userError(CLOSED);
@@ -160,7 +162,14 @@ async function assertChangeable(sql, o, guestId, requestedAt = null) {
 // What the change screen offers: the booking now and what can change.
 async function changeOptions(sql, orderId, guestId) {
   const o = await loadBooking(sql, orderId);
-  await assertChangeable(sql, o, guestId);
+  const T = require('./_booking-transfers');
+  // After 10 AM on the day after check-in only a transfer may still be open (until 12 PM).
+  let onlyTransfer = false;
+  try { await assertChangeable(sql, o, guestId); }
+  catch (err) {
+    if (err.isUserFacing && err.message === CLOSED && o && o.kind === 'stay' && !o.transfer_change_id && T.transferOpen(o)) onlyTransfer = true;
+    else throw err;
+  }
   const open = (await sql`SELECT id, status, summary, difference FROM booking_changes WHERE order_id = ${o.id} AND status IN ('pending', 'awaiting_payment') LIMIT 1`)[0] || null;
   let amenities = [];
   if (o.kind === 'stay') {
@@ -183,8 +192,21 @@ async function changeOptions(sql, orderId, guestId) {
       petTypes: Array.isArray(o.allowed_pet_types) ? o.allowed_pet_types : [], petFee: Number(o.pet_fee) || 0,
       amenities: amenities.map(a => ({ id: a.id, name: a.name, price: Number(a.price) }))
     } : { maxGuests: null, petFriendly: false, maxPets: 0, petTypes: [], petFee: 0, amenities: [] },
-    openChange: open
+    openChange: open,
+    // Another property of the same host the nights could move to (_booking-transfers.js).
+    canTransfer: o.kind === 'stay' && T.transferOpen(o) && !(await T.payoutSent(sql, o.id)) && await otherPropertiesOf(sql, o),
+    onlyTransfer,
+    lastNight: (() => { const d = new Date(o.departureStr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); })()
   };
+}
+async function otherPropertiesOf(sql, o) {
+  try {
+    const key = require('./_booking-transfers').cohostKey;
+    const mine = await key(sql, o.listing_id);
+    const rows = await sql`SELECT id FROM listings WHERE host_id = ${o.host_id} AND status = 'approved' AND COALESCE(listing_type, 'stay') <> 'experience' AND id <> ${o.listing_id} LIMIT 60`;
+    for (const r of rows) if ((await key(sql, r.id)) === mine) return true;
+  } catch (e) { /* none */ }
+  return false;
 }
 
 // Prices the requested booking. input: { arrival (the date, for an
@@ -193,6 +215,8 @@ async function changeOptions(sql, orderId, guestId) {
 // requestedAt: when the change was asked for (re-pricing a saved request);
 // its rules are those of that moment.
 async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
+  // Moving nights to another property of the same host (_booking-transfers.js).
+  if (input && input.kind === 'transfer') return require('./_booking-transfers').quoteTransfer(sql, orderId, guestId, input, requestedAt);
   const o = await loadBooking(sql, orderId);
   await assertChangeable(sql, o, guestId, requestedAt);
   // The day the guest asked, on the property's calendar.
@@ -275,6 +299,9 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
 async function requestChange(sql, { orderId, guestId, input }) {
   const qc = await quoteChange(sql, orderId, guestId, input);
   if (!qc.summary) throw userError('Nothing has changed yet — choose new dates, guests or add-ons.');
+  const isTransfer = qc.kind === 'transfer';
+  // The guest must have seen and accepted that a transfer is final (no changes, no cancellation).
+  if (isTransfer && !(input && input.understood === true)) throw userError('Please confirm you understand that a completed transfer is final: the booking cannot be changed or cancelled afterwards.');
   let row;
   try {
     row = (await sql`INSERT INTO booking_changes (order_id, guest_id, requested, quote, old_total, new_total, difference, summary)
@@ -288,10 +315,12 @@ async function requestChange(sql, { orderId, guestId, input }) {
   await logAudit(sql, { action: 'booking_change_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: orderId,
     metadata: { changeId: row.id, difference: qc.difference, summary: qc.summary } });
   const money = qc.difference > 0 ? `I will pay the difference of ${inr(qc.difference)}.` : qc.difference < 0 ? `The new total is ${inr(-qc.difference)} lower.` : 'The total stays the same.';
-  await postThreadMessage(sql, orderId, 'guest', `I’d like to change this booking. ${qc.summary}. ${money}`);
+  await postThreadMessage(sql, orderId, 'guest', isTransfer
+    ? `I’d like to move part of this booking. ${qc.summary}. ${money} (Aerva’s transfer fee of ${inr(qc.quote.transferFee)} is included.) If you decline, nothing changes and nothing is charged. I understand that once completed, the transfer is final and the booking cannot be changed or cancelled.`
+    : `I’d like to change this booking. ${qc.summary}. ${money}`);
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
-  await email(host && host.email, `Change request for ${o.property_name}`,
-    `<h2 style="font-family:Georgia,serif;">A guest has asked to change a booking</h2><p><strong>${esc(o.property_name)}</strong></p><p>${esc(qc.summary)}</p>
+  await email(host && host.email, isTransfer ? `Transfer request for ${o.property_name}` : `Change request for ${o.property_name}`,
+    `<h2 style="font-family:Georgia,serif;">${isTransfer ? 'A guest has asked to move a booking to another of your properties' : 'A guest has asked to change a booking'}</h2><p><strong>${esc(o.property_name)}</strong></p><p>${esc(qc.summary)}</p>
      <p>Please accept or reject it in Messages.</p><p><a href="https://aerva.in/index.html?view=messages" style="color:#8a6c39;">Open Messages</a></p>`);
   return row;
 }
@@ -311,6 +340,7 @@ async function withdrawChange(sql, { changeId, guestId }) {
 // together. The database refuses the new dates if another paid stay holds
 // them (orders_no_double_booking).
 async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
+  if (change.requested && change.requested.kind === 'transfer') return require('./_booking-transfers').applyTransfer(sql, razorpay, change, { paymentId });
   const o = await loadBooking(sql, change.order_id);
   if (!o || o.status !== 'paid') throw userError('This booking is no longer active.', 409);
   if (!beforeCutoff(o, change.created_at)) throw userError(CLOSED);
@@ -525,12 +555,26 @@ async function respondChange(sql, razorpay, { changeId, accept, hostId, accountI
     await postThreadMessage(sql, change.order_id, 'host', 'Prices have changed since this request was sent, so it has closed. Please send a new change request to see the new price.');
     throw userError('Prices have changed since the guest asked, so this request has closed. The guest has been asked to send a new one.', 409);
   }
+  // A transfer to another property: the guest confirms last — by paying the
+  // difference, or by accepting the refund after Aerva's transfer fee
+  // (confirmTransfer). Nothing changes before that.
+  const isTransfer = change.requested && change.requested.kind === 'transfer';
+  if (isTransfer && change.difference <= 0) {
+    await sql`UPDATE booking_changes SET status = 'awaiting_payment', accepted_at = now() WHERE id = ${changeId} AND status = 'pending'`;
+    const back = -Number(change.difference);
+    await postThreadMessage(sql, change.order_id, 'host', `Transfer accepted. To complete it, please confirm it in My Bookings within ${AWAITING_PAYMENT_HOURS} hours${back > 0 ? ` — ${inr(back)} comes back to you as Aerva credit, after Aerva’s transfer fee` : ''}.`);
+    await email(guestTo, `Your transfer was accepted — confirm it to complete`,
+      `<h2 style="font-family:Georgia,serif;">Your transfer was accepted</h2><p>${esc(change.summary)}</p>
+       <p>To complete it, confirm it in My Bookings within ${AWAITING_PAYMENT_HOURS} hours.${back > 0 ? ` <strong>${inr(back)}</strong> (after Aerva’s transfer fee) is then held for you as Aerva credit: use it on another booking, or have it refunded to your original payment method at any time from My Bookings.` : ''} Once confirmed, the transfer cannot be undone, and the booking cannot be changed or split again. Until then your booking stays as it was.</p>
+       <p><a href="https://aerva.in/index.html?view=my-bookings" style="color:#8a6c39;">Open My Bookings</a></p>`);
+    return { accepted: true, applied: false, awaitingConfirmation: true, refund: Math.max(0, back) };
+  }
   if (change.difference <= 0) {
     try { return { accepted: true, applied: true, ...(await applyChange(sql, razorpay, change)) }; }
     catch (err) { await sql`UPDATE booking_changes SET status = 'failed' WHERE id = ${changeId} AND status = 'pending'`; throw err; }
   }
   await sql`UPDATE booking_changes SET status = 'awaiting_payment', accepted_at = now() WHERE id = ${changeId} AND status = 'pending'`;
-  await postThreadMessage(sql, change.order_id, 'host', `Change accepted. To confirm it, please pay the difference of ${inr(change.difference)} within ${AWAITING_PAYMENT_HOURS} hours (My Bookings).`);
+  await postThreadMessage(sql, change.order_id, 'host', `${isTransfer ? 'Transfer' : 'Change'} accepted. To confirm it, please pay the difference of ${inr(change.difference)} within ${AWAITING_PAYMENT_HOURS} hours (My Bookings).`);
   await email(guestTo, `Your change was accepted — pay ${inr(change.difference)} to confirm`,
     `<h2 style="font-family:Georgia,serif;">Your change was accepted</h2><p><strong>${esc(o.property_name)}</strong></p><p>${esc(change.summary)}</p>
      <p>To confirm it, pay the difference of <strong>${inr(change.difference)}</strong> in My Bookings within ${AWAITING_PAYMENT_HOURS} hours. Until then your booking stays as it was.</p>
@@ -539,11 +583,38 @@ async function respondChange(sql, razorpay, { changeId, accept, hostId, accountI
 }
 
 // ---------------------------------------------------------------------
+// The guest completes an accepted transfer that costs the same or less:
+// accepting the refund (after Aerva's transfer fee) applies it.
+async function confirmTransfer(sql, razorpay, { changeId, guestId }) {
+  const c = (await sql`SELECT * FROM booking_changes WHERE id = ${changeId}`)[0];
+  if (!c || c.guest_id !== guestId || !(c.requested && c.requested.kind === 'transfer')) throw userError('Transfer not found.', 404);
+  if (c.status !== 'awaiting_payment') throw userError('This transfer is not waiting for you.', 409);
+  if (Number(c.difference) > 0) throw userError(`Pay ${inr(c.difference)} to complete this transfer.`, 409);
+  if (c.accepted_at && Date.now() - new Date(c.accepted_at).getTime() > AWAITING_PAYMENT_HOURS * 3600e3) {
+    await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId} AND status = 'awaiting_payment'`;
+    throw userError(`The ${AWAITING_PAYMENT_HOURS} hours to confirm this transfer have passed. Please send a new request.`, 409);
+  }
+  let fresh;
+  try { fresh = await quoteChange(sql, c.order_id, guestId, c.requested, c.created_at); }
+  catch (err) {
+    await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId} AND status = 'awaiting_payment'`;
+    throw userError(`This transfer can no longer be made: ${err.message}`, 409);
+  }
+  if (!sameTotals(fresh, c)) {
+    await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId} AND status = 'awaiting_payment'`;
+    throw userError('Prices have changed since your host accepted, so this transfer has closed. Please send a new request to see the new price.', 409);
+  }
+  try { return { applied: true, ...(await applyChange(sql, razorpay, c)) }; }
+  catch (err) { await sql`UPDATE booking_changes SET status = 'failed' WHERE id = ${changeId} AND status = 'awaiting_payment'`; throw err; }
+}
+
+// ---------------------------------------------------------------------
 // The guest pays the difference: same strict 3-minute window as a booking.
 async function startChangePayment(sql, razorpay, { changeId, guestId, ip }) {
   const c = (await sql`SELECT * FROM booking_changes WHERE id = ${changeId}`)[0];
   if (!c || c.guest_id !== guestId) throw userError('Change not found.', 404);
   if (c.status !== 'awaiting_payment') throw userError('This change is not waiting for payment.', 409);
+  if (!(Number(c.difference) > 0)) throw userError('There is nothing to pay for this change.', 409);
   if (c.accepted_at && Date.now() - new Date(c.accepted_at).getTime() > AWAITING_PAYMENT_HOURS * 3600e3) {
     await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${changeId} AND status = 'awaiting_payment'`;
     throw userError(`The ${AWAITING_PAYMENT_HOURS} hours to pay for this change have passed. Please send a new change request.`, 409);
@@ -556,7 +627,8 @@ async function startChangePayment(sql, razorpay, { changeId, guestId, ip }) {
   const o = fresh.booking;
   // The payment window holds the nights (a stay, or the stay of a pair).
   // An experience on its own is not date-exclusive, as at checkout.
-  const holdStays = o.kind === 'stay' ? [{ listingId: o.listing_id, roomId: o.room_id, arrival: c.requested.arrival, departure: c.requested.departure }]
+  const holdStays = c.requested && c.requested.kind === 'transfer' ? require('./_booking-transfers').transferHolds(c)
+    : o.kind === 'stay' ? [{ listingId: o.listing_id, roomId: o.room_id, arrival: c.requested.arrival, departure: c.requested.departure }]
     : o.kind === 'pair' ? [{ listingId: o.hosting_listing_id, roomId: null, arrival: c.requested.arrival, departure: c.requested.departure }] : [];
   const held = await takeHolds(sql, holdStays, { guestKey: 'g:' + guestId, ip });
   let order;
@@ -658,7 +730,7 @@ async function expireChanges(sql) {
   const out = { expired: 0 };
   let rows = [];
   try {
-    rows = await sql`SELECT c.id, c.order_id, c.status, c.accepted_at, o.departure, l.timezone, c.razorpay_order_id
+    rows = await sql`SELECT c.id, c.order_id, c.status, c.accepted_at, c.difference, o.departure, l.timezone, c.razorpay_order_id
                      FROM booking_changes c JOIN orders o ON o.id = c.order_id JOIN listings l ON l.id = o.listing_id
                      WHERE c.status IN ('pending', 'awaiting_payment') LIMIT 200`;
   } catch (e) { return { ...out, skipped: 'table not ready' }; }
@@ -669,13 +741,13 @@ async function expireChanges(sql) {
     const done = await sql`UPDATE booking_changes SET status = 'expired' WHERE id = ${r.id} AND status = ${r.status} RETURNING id`;
     if (!done.length) continue;
     if (r.razorpay_order_id) await releaseHolds(sql, { razorpayOrderId: r.razorpay_order_id, reason: 'expired' });
-    await postThreadMessage(sql, r.order_id, 'host', pastCutoff ? 'The change request has closed: check-out day has begun.' : `The change request has closed: the difference was not paid within ${AWAITING_PAYMENT_HOURS} hours. The booking stays as it was.`);
+    await postThreadMessage(sql, r.order_id, 'host', pastCutoff ? 'The change request has closed: check-out day has begun.' : `The change request has closed: it was not ${Number(r.difference) > 0 ? 'paid' : 'confirmed'} within ${AWAITING_PAYMENT_HOURS} hours. The booking stays as it was.`);
     out.expired++;
   }
   return out;
 }
 
 module.exports = {
-  loadBooking, AWAITING_PAYMENT_HOURS, DECLINED_GRACE_HOURS, changeOptions, quoteChange, requestChange, withdrawChange, respondChange,
-  startChangePayment, confirmChangePayment, applyChange, refundAcrossPayments, hasChangePayments, openChangeFor, expireChanges, beforeCutoff
+  assertChangeable, couponShareOfCut, loadBooking, AWAITING_PAYMENT_HOURS, DECLINED_GRACE_HOURS, changeOptions, quoteChange, requestChange, withdrawChange, respondChange,
+  confirmTransfer, startChangePayment, confirmChangePayment, applyChange, refundAcrossPayments, hasChangePayments, openChangeFor, expireChanges, beforeCutoff
 };

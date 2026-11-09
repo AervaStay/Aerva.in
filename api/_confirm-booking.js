@@ -1000,4 +1000,4 @@ async function reconcilePayments(sql, razorpay, { deadlineMs = 4000, limit = 25 
 }
 
 module.exports = { confirmBooking, reconcilePayments, processScheduledRefunds, findDateConflicts, planRows, checkPayment,
-  loadCart, refundWholePayment, sendHostBookingEmails };
+  loadCart, refundWholePayment, sendHostBookingEmails, issueConfirmationCode };

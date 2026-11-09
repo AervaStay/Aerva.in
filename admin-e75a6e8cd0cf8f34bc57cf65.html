@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-09a"></script>
+<script src="aerva-policies.js?v=2026-11-09c"></script>
 </head>
 <body>
 
@@ -2133,7 +2133,7 @@
     ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Event', 'event'], ['Recognised on', 'recognisedOn'], ['Type', 'type'], ['Guest', 'guest'], ['Listing', 'listing'], ['Host', 'host'],
     ['Arrival', 'arrival'], ['Departure', 'departure'], ['Paid on', 'paidOn'], ['Booking price (INR)', 'bookingPrice'], ['Paid by coupon (INR)', 'paidByCoupon'], ['Paid with Aerva credit (INR)', 'paidByCredit'], ['Credit came from (booking, Razorpay payment)', 'creditFrom'], ['GST on stay charged (INR)', 'gstOnStay'],
     ['Guest service fee (INR)', 'serviceFee'], ['Security deposit (INR)', 'deposit'], ['Charged to guest (INR)', 'charged'], ['Refunded to guest (INR)', 'refundedToGuest'],
-    ['Income: commission (INR)', 'commissionIncome'], ['Income: guest service fee (INR)', 'serviceFeeIncome'], ['Payable to host incl. co-hosts (INR)', 'hostPayable'], ['of which co-hosts (INR)', 'cohostShares'], ['GST payable s.9(5) (INR)', 'gstPayable'], ['Difference to check (INR)', 'difference']
+    ['Income: commission (INR)', 'commissionIncome'], ['Income: guest service fee (INR)', 'serviceFeeIncome'], ['Payable to host incl. co-hosts (INR)', 'hostPayable'], ['of which co-hosts (INR)', 'cohostShares'], ['GST payable s.9(5) (INR)', 'gstPayable'], ['Transfer (split from, fee, difference)', 'transfer'], ['Difference to check (INR)', 'difference']
   ], accData.bookings); });
   document.getElementById('accCsvCash').addEventListener('click', () => { if(accData) accCsv('money-in-out', [
     ['Date', 'date'], ['Type', 'type'], ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Razorpay payment', 'payment'], ['Payee', 'payee'], ['In through Razorpay (INR)', 'amountIn'], ['Out (INR)', 'amountOut'],
@@ -2886,7 +2886,7 @@
         + d.tickets.map(t => `<tr class="sup-row" onclick="openSupport(${Number(t.id)})">
             <td><strong>${escAdmin(t.ref)}</strong><div class="tds-sub">${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}</div></td>
             <td style="white-space:normal; min-width:220px;">${t.category === 'safety' ? '<span class="sup-flag sup-safety">Safety</span>' : ''}${escAdmin(t.subject)}
-              <div>${t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : ''}${t.awaiting_us ? '<span class="sup-flag sup-us">Awaiting our reply</span>' : ''}${t.channel === 'chat' ? '<span class="sup-flag sup-wa">Chat</span>' : ''}${t.callback_phone ? '<span class="sup-flag sup-late">Call back: ' + escAdmin(t.callback_phone) + '</span>' : ''}${t.feedback_rating ? '<span class="sup-flag" style="background:#e9f2ea; color:#2f6b3a;">' + '★'.repeat(Number(t.feedback_rating)) + '</span>' : ''}${t.auto_closed ? '<span class="sup-flag">No feedback</span>' : ''}${t.order_id ? '<span class="sup-flag">Booking #' + Number(t.order_id) + '</span>' : ''}${t.listing_id ? '<span class="sup-flag">Listing #' + Number(t.listing_id) + '</span>' : ''}</div></td>
+              <div>${t.urgent && t.status !== 'resolved' && t.status !== 'closed' ? '<span class="sup-flag sup-late">Action needed now</span>' : ''}${t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : ''}${t.awaiting_us ? '<span class="sup-flag sup-us">Awaiting our reply</span>' : ''}${t.channel === 'chat' ? '<span class="sup-flag sup-wa">Chat</span>' : ''}${t.callback_phone ? '<span class="sup-flag sup-late">Call back: ' + escAdmin(t.callback_phone) + '</span>' : ''}${t.feedback_rating ? '<span class="sup-flag" style="background:#e9f2ea; color:#2f6b3a;">' + '★'.repeat(Number(t.feedback_rating)) + '</span>' : ''}${t.auto_closed ? '<span class="sup-flag">No feedback</span>' : ''}${t.order_id ? '<span class="sup-flag">Booking #' + Number(t.order_id) + '</span>' : ''}${t.listing_id ? '<span class="sup-flag">Listing #' + Number(t.listing_id) + '</span>' : ''}</div></td>
             <td>${escAdmin(t.person_name || '—')}<div class="tds-sub">${escAdmin(t.person_email || '')}</div></td>
             <td>${escAdmin((labels[t.status]) || t.status)}</td>
             <td>${escAdmin(supDate(t.created_at))}</td>
@@ -3334,6 +3334,7 @@
              Account: ${escAdmin(v.bank_account_number || '—')}<br>
              IFSC: ${escAdmin(v.bank_ifsc || '—')}</p>
           ${bankCheckBox(v)}
+          <p class="dispute-meta">Name on PAN: <strong>${escAdmin(v.pan_name || 'not given')}</strong> (${v.pan_status === 'verified' ? 'verified' : v.pan_status === 'pending_review' ? 'waiting for review' : v.pan_status === 'rejected' ? 'rejected' : 'no PAN'})</p>
           <div class="resolve-row">
             <button type="button" class="approve-btn" onclick="decideVerification(${Number(v.id)}, 'bank', 'approve')">Approve</button>
             <button type="button" class="reject-btn" style="border-color:#8a6c39 !important; color:#8a6c39;" onclick="recheckBank(${Number(v.id)})">Ask the bank again</button>
@@ -4258,30 +4259,65 @@ async function loadCancelRequests(){
     const d = await lkGet('cancellationRequests=1');
     const canDecide = window.ADMIN_ROLE === 'admin' || window.ADMIN_ROLE === 'reviewer' || !window.ADMIN_ROLE;
     if(!d.requests.length){ body.innerHTML = '<p class="lk-empty">Nothing is waiting for Aerva.</p>'; return; }
-    body.innerHTML = d.requests.map(x => `
-      <div class="lk-card" style="border:1px solid #e6ded3; border-radius:10px; padding:14px 16px; margin-bottom:12px;">
-        <strong>${lkEsc(x.listing)}</strong> · ${lkEsc(String(x.arrival).slice(0,10))} → ${lkEsc(String(x.departure).slice(0,10))} · booking #${Number(x.orderId)}<br>
-        <span>${lkEsc(x.guest)} · host ${lkEsc(x.hostName || '')}</span><br>
+    const when = (t) => t ? new Date(t).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '—';
+    const OUT = { reached: 'Reached the host', no_answer: 'No answer', left_message: 'Left a message', wrong_number: 'Number not working' };
+    body.innerHTML = d.requests.map(x => {
+      const id = Number(x.requestId);
+      const stage = x.aervaDecidesAt ? '<span style="color:#a3402f; font-weight:600;">Aerva decides now</span> — no answer after all reminders'
+        : x.escalatedAt ? `<span style="color:#8a6c39; font-weight:600;">Contacting the host</span> — reminder ${Number(x.reminders)} of ${Number(x.remindersMax)} sent${x.lastReminderAt ? ' (last ' + lkEsc(when(x.lastReminderAt)) + ')' : ''}`
+        : 'Waiting for the host (24 hours)';
+      const log = (x.contactLog || []).map(c => `<li>${lkEsc(when(c.at))} · ${lkEsc(OUT[c.outcome] || c.outcome)}${c.note ? ' — ' + lkEsc(c.note) : ''} <span style="opacity:0.6;">(${lkEsc(c.by || '')})</span></li>`).join('');
+      const decide = !canDecide ? '<p class="lk-sub">A reviewer or admin decides.</p>'
+        : !x.canDecide ? `<p class="lk-sub" style="color:#8a6c39;">${lkEsc(x.decideRule || 'Aerva contacts the host first.')}</p>`
+        : `<input id="crNote-${id}" placeholder="Reason (required to reject; the guest is told)" style="width:100%; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+          <p class="lk-sub" style="margin:8px 0 0;">Aerva’s decision is final and binds the guest and the host. Aerva’s service fee stays charged; commission is only on what the host keeps.</p>
+          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          ${x.lastMinute && x.choices ? x.choices.map(c => `<button type="button" class="lk-btn" onclick="decideCancelRequest(${id}, true, ${Number(c.refundPercent)})">${c.refundPercent === 100 ? 'Refund in full' : 'Host keeps ' + (100 - c.refundPercent) + '%'} · guest gets ₹${Number(c.guestGetsBack).toLocaleString('en-IN')}</button>`).join('')
+            : `<button type="button" class="lk-btn" onclick="decideCancelRequest(${id}, true, 100)">Approve — cancel with full refund</button>`}
+          <button type="button" class="lk-btn is-danger" onclick="decideCancelRequest(${id}, false)">Reject — booking stands</button>
+        </div>`;
+      return `
+      <div class="lk-card" style="border:1px solid ${x.aervaDecidesAt ? '#a3402f' : '#e6ded3'}; border-radius:10px; padding:14px 16px; margin-bottom:12px;">
+        <strong>${lkEsc(x.listing)}</strong> · ${lkEsc(String(x.arrival).slice(0,10))} → ${lkEsc(String(x.departure).slice(0,10))} · booking #${Number(x.orderId)}${x.hoursToCheckIn != null ? ` · <strong>${Number(x.hoursToCheckIn)} h to check-in</strong>` : ''}<br>
+        <span>${lkEsc(x.guest)} · host ${lkEsc(x.hostName || '')}${x.hostPhone ? ' · <a href="tel:' + lkEsc(x.hostPhone) + '">' + lkEsc(x.hostPhone) + '</a>' : ''}${x.hostEmail ? ' · ' + lkEsc(x.hostEmail) : ''}</span><br>
         <span><strong>${lkEsc(x.reason)}</strong>${x.details ? ' — ' + lkEsc(x.details) : ''}</span><br>
-        <small>Asked ${lkEsc(new Date(x.askedAt).toLocaleString('en-IN'))} · if approved the guest gets back ₹${Number(x.guestGetsBack).toLocaleString('en-IN')}</small>
-        ${canDecide ? `<input id="crNote-${Number(x.requestId)}" placeholder="Reason (required to reject; the guest is told)" style="width:100%; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
-        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button type="button" class="lk-btn" onclick="decideCancelRequest(${Number(x.requestId)}, true)">Approve — cancel with full refund</button>
-          <button type="button" class="lk-btn is-danger" onclick="decideCancelRequest(${Number(x.requestId)}, false)">Reject — booking stands</button>
-        </div>` : '<p class="lk-sub">A reviewer or admin decides.</p>'}
-        <p id="crErr-${Number(x.requestId)}" style="color:#a3402f; font-size:13px;"></p>
-      </div>`).join('');
+        ${x.lastMinute ? '<p style="margin:8px 0; padding:8px 10px; background:#fbeeea; border-radius:6px; font-size:13px;"><strong>Last-minute request</strong> (asked less than a day before check-in): it is on the host. Even for an emergency, decide on the actual situation — the host may keep 25% or 50%.</p>' : ''}
+        <small>Asked ${lkEsc(when(x.askedAt))} · ${stage}</small>
+        ${x.escalatedAt ? `<div style="margin-top:10px; padding:10px; background:#f8f5ef; border-radius:8px;">
+          <strong style="font-size:13px;">Reach the host</strong> — call, then log it:
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+            <select id="crOut-${id}" style="padding:6px; border:1px solid #ddd; border-radius:6px;">${Object.keys(OUT).map(k => `<option value="${k}">${OUT[k]}</option>`).join('')}</select>
+            <input id="crCall-${id}" placeholder="Note (optional)" style="flex:1; min-width:160px; padding:6px; border:1px solid #ddd; border-radius:6px;">
+            <button type="button" class="lk-btn is-ghost" onclick="logHostContact(${id})">Log call</button>
+            ${Number(x.reminders) < Number(x.remindersMax) ? `<button type="button" class="lk-btn is-ghost" onclick="remindHostNow(${id})">Send reminder ${Number(x.reminders) + 1} now</button>` : ''}
+          </div>${log ? `<ul style="margin:8px 0 0; padding-left:18px; font-size:13px;">${log}</ul>` : ''}</div>` : ''}
+        ${decide}
+        <p id="crErr-${id}" style="color:#a3402f; font-size:13px;"></p>
+      </div>`; }).join('');
   }catch(err){ body.innerHTML = '<p class="lk-empty">' + lkEsc(err.message || 'Could not load.') + '</p>'; }
 }
-async function decideCancelRequest(id, accept){
+async function decideCancelRequest(id, accept, refundPercent){
   const note = (document.getElementById('crNote-' + id) || {}).value || '';
   const err = document.getElementById('crErr-' + id);
   if(!accept && note.trim().length < 5){ if(err) err.textContent = 'Write the reason — the guest is told it.'; return; }
-  if(!confirm(accept ? 'Cancel this booking and refund the price, GST and deposit in full?' : 'Reject the request? The booking stands.')) return;
+  const pct = Number(refundPercent) || 100;
+  if(!confirm((accept ? (pct === 100 ? 'Cancel this booking and refund the price, GST and deposit in full?' : `Cancel this booking: refund ${pct}% of the price and GST, and the deposit in full (the host keeps ${100 - pct}%)?`) : 'Reject the request? The booking stands.') + ' This decision is final for the guest and the host.')) return;
   try{
-    await lkPost({ decideCancellationRequest: { requestId: id, accept, note } });
+    await lkPost({ decideCancellationRequest: { requestId: id, accept, note, refundPercent: pct } });
     loadCancelRequests();
   }catch(e){ if(err) err.textContent = e.message || 'Could not decide.'; }
+}
+async function remindHostNow(id){
+  const err = document.getElementById('crErr-' + id);
+  try{ await lkPost({ remindHostCancellation: { requestId: id } }); loadCancelRequests(); }
+  catch(e){ if(err) err.textContent = e.message || 'Could not send the reminder.'; }
+}
+async function logHostContact(id){
+  const err = document.getElementById('crErr-' + id);
+  try{
+    await lkPost({ logHostContact: { requestId: id, outcome: document.getElementById('crOut-' + id).value, note: document.getElementById('crCall-' + id).value } });
+    loadCancelRequests();
+  }catch(e){ if(err) err.textContent = e.message || 'Could not log it.'; }
 }
 async function loadApprovals(){
   loadPriceReviews();

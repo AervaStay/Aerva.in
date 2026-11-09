@@ -6981,7 +6981,14 @@
     const when = card.daysBefore == null ? '' : (card.daysBefore === 0 ? ' · check-in today' : card.daysBefore === 1 ? ' · check-in tomorrow' : ` · ${card.daysBefore} days before check-in`);
     const head = `<strong>Cancellation request</strong>${esc(when)}<br><span>${esc(card.reason)}</span>${card.details ? `<br><span style="opacity:0.75;">${esc(card.details)}</span>` : ''}`;
     let actions;
-    if(o.type === 'choose'){
+    if(o.type === 'emergency_late'){
+      // Last-minute emergency (under a day to check-in): refund in full, keep 25% or keep 50% — or reject (no refund).
+      const ch = card.choices || [];
+      const lbl = { 100: 'Refund in full', 75: 'Keep 25%', 50: 'Keep 50%' };
+      actions = `<span style="font-size:13px; flex-basis:100%; opacity:0.85;">Last-minute emergency: choose what to keep. The deposit is always refunded; Aerva’s commission is only on what you keep.</span>`
+        + ch.map(c => `<button type="button" class="btn-small cc-choice" data-pct="${Number(c.refundPercent)}">${lbl[c.refundPercent] || c.refundPercent + '% back'} · guest gets ${inr(c.guestGetsBack)}</button>`).join('')
+        + `<button type="button" class="dispute-btn cc-reject">Reject (no refund)</button>`;
+    } else if(o.type === 'choose'){
       actions = `<label style="font-size:13px;">Refund <input type="number" min="0" max="100" step="1" value="0" class="cc-pct" style="width:64px; padding:6px; border:1px solid #d9cfc2; border-radius:6px; font-size:16px;"> %</label>
         <button type="button" class="btn-small cc-accept">Confirm</button><button type="button" class="dispute-btn cc-reject">Reject</button>`;
     } else {
@@ -6989,9 +6996,10 @@
         <button type="button" class="btn-small cc-accept">Accept</button><button type="button" class="dispute-btn cc-reject">Reject</button>`;
     }
     box.innerHTML = head + `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">${actions}</div><p class="cc-msg" style="font-size:12.5px; color:#a3402f; margin:6px 0 0;"></p>`;
-    const answer = async (accept) => {
+    const answer = async (accept, choicePct) => {
       const msg = box.querySelector('.cc-msg');
       const body = { requestId: card.requestId, accept };
+      if(choicePct != null) body.refundPercent = choicePct;
       if(o.type === 'choose' && accept){
         const pct = Math.round(Number(box.querySelector('.cc-pct').value));
         if(!(pct >= 0 && pct <= 100)){ msg.textContent = 'Enter 0 to 100.'; return; }
@@ -7007,7 +7015,9 @@
         if(typeof reload === 'function') reload();
       }catch(err){ msg.textContent = 'Could not answer this request. Try again.'; box.querySelectorAll('button').forEach(b => b.disabled = false); }
     };
-    box.querySelector('.cc-accept').addEventListener('click', () => answer(true));
+    const acc = box.querySelector('.cc-accept');
+    if(acc) acc.addEventListener('click', () => answer(true));
+    box.querySelectorAll('.cc-choice').forEach(b => b.addEventListener('click', () => answer(true, Number(b.dataset.pct))));
     box.querySelector('.cc-reject').addEventListener('click', () => answer(false));
   }
 
@@ -7030,14 +7040,23 @@
     const inr = (n) => moneyBoth(Math.abs(Math.round(Number(n) || 0)));
     const money = card.difference > 0 ? `Guest pays ${inr(card.difference)} more` : card.difference < 0 ? `Guest gets back ${inr(card.difference)}` : 'Same total';
     if(card.status){ // guest view
-      box.innerHTML = card.status === 'awaiting_payment'
+      box.innerHTML = card.status === 'awaiting_payment' && Number(card.difference) > 0
         ? `<strong>Your host accepted your change.</strong><br><span>${esc(card.summary)}</span><div style="margin-top:10px;"><button type="button" class="btn solid cc-pay" style="min-height:44px;">Pay ${inr(card.difference)} to confirm</button></div>`
+        : card.status === 'awaiting_payment'
+        ? `<strong>Your host accepted your transfer.</strong><br><span>${esc(card.summary)}</span><div style="margin-top:10px;"><button type="button" class="btn solid cc-confirm" style="min-height:44px;">Confirm transfer${Number(card.difference) < 0 ? ` · ${inr(card.difference)} as Aerva credit` : ''}</button></div>`
         : `<strong>Change requested</strong> · waiting for your host<br><span style="color:var(--ink-2);">${esc(card.summary)}</span>`;
       const pay = box.querySelector('.cc-pay');
       if(pay) pay.addEventListener('click', () => aervaPayChange(card.changeId, pay));
+      const conf = box.querySelector('.cc-confirm');
+      if(conf) conf.addEventListener('click', () => aervaConfirmTransfer(card.changeId, conf));
       return;
     }
-    if(card.awaitingPayment){ box.innerHTML = `<strong>Change accepted</strong> · waiting for the guest to pay ${inr(card.awaitingPayment)}<br><span style="color:var(--ink-2);">${esc(card.summary)}</span>`; return; }
+    if(card.awaitingPayment != null){
+      box.innerHTML = Number(card.awaitingPayment) > 0
+        ? `<strong>Change accepted</strong> · waiting for the guest to pay ${inr(card.awaitingPayment)}<br><span style="color:var(--ink-2);">${esc(card.summary)}</span>`
+        : `<strong>Transfer accepted</strong> · waiting for the guest to confirm<br><span style="color:var(--ink-2);">${esc(card.summary)}</span>`;
+      return;
+    }
     box.innerHTML = `<strong>Change request</strong><br><span>${esc(card.summary)}</span>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
         <span style="font-size:13px; opacity:0.85;">${money}</span>
@@ -7268,7 +7287,7 @@
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
           <div class="fee-credit-body">
             <strong>Aerva credit</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}${c.amount > c.remaining ? ` <span class="fee-credit-from">· ${fmtGuest(c.remaining)} left of ${fmtGuest(c.amount)}</span>` : ''}
-            <p>${c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : (c.reason === 'host_cancelled' ? 'Your host cancelled, so Aerva’s service fee is held for you.' : 'Your host cancelled, so what you paid is held for you.')} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
+            <p>${c.reason === 'booking_transfer' ? 'Part of your booking moved to another property for less, so the difference (after Aerva’s transfer fee) is held for you.' : c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : (c.reason === 'host_cancelled' ? 'Your host cancelled, so Aerva’s service fee is held for you.' : 'Your host cancelled, so what you paid is held for you.')} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
             <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund it now</button> <span class="fee-credit-msg"></span>
           </div>
         </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
@@ -7330,8 +7349,9 @@
         const ch = b.open_change;
         const changeHtml = !upcoming ? ''
           : ch && ch.status === 'pending' ? `<span class="booking-request-note">Change requested · waiting for your host <a href="#" data-withdraw-change="${ch.id}" style="color:var(--gold-text); margin-left:6px;">Withdraw</a></span>`
-          : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="min-height:44px; padding:10px 18px;">Pay ${moneyBoth(ch.difference)} to confirm your change</button>`
-          : b.can_change === false ? (b.stay_window_closed ? '<span class="booking-request-note">Changes to this stay closed at 10 AM on the day after check-in</span>' : '')
+          : ch && ch.status === 'awaiting_payment' && Number(ch.difference) > 0 ? `<button type="button" class="btn solid" data-pay-change="${ch.id}" style="min-height:44px; padding:10px 18px;">Pay ${moneyBoth(ch.difference)} to confirm your change</button>`
+          : ch && ch.status === 'awaiting_payment' ? `<button type="button" class="btn solid" data-confirm-transfer="${ch.id}" style="min-height:44px; padding:10px 18px;">Confirm transfer${Number(ch.difference) < 0 ? ` · ${moneyBoth(-Number(ch.difference))} as Aerva credit` : ''}</button>`
+          : b.can_change === false ? (b.transferred ? '<span class="booking-request-note">Part of a transferred booking · it cannot be changed or split again</span>' : b.stay_window_closed ? '<span class="booking-request-note">Changes to this stay closed at 10 AM on the day after check-in</span>' : '')
           : `<button type="button" class="filter-clear" data-change-booking="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Change booking</button>`;
         const codeHtml = b.confirmation_code && b.status === 'paid'
           ? `<div class="confirm-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${escapeMessageHtml(b.confirmation_code)}">Copy</button></div>`
@@ -7339,9 +7359,9 @@
         const inStay = !!localToday && (b.listing_type || 'stay') === 'stay' && String(b.arrival).slice(0, 10) <= localToday && localToday < String(b.departure).slice(0, 10);
         const reportHtml = inStay && b.can_report !== false ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Report a problem</button>` : '';
         const requestHtml = !upcoming ? ''
-          : b.cancel_request_status === 'pending' ? '<span class="booking-request-note">Cancellation requested · waiting for the host</span>'
+          : b.cancel_request_status === 'pending' ? `<span class="booking-request-note">${escapeMessageHtml(b.cancel_request_note || 'Cancellation requested · waiting for the host')}${b.cancel_request_note && /Aerva/.test(b.cancel_request_note) ? ' · <a href="index.html?view=help&mine=1" style="color:var(--gold-text);">See your request</a>' : ''}</span>`
           : b.cancel_request_status === 'declined' ? '<span class="booking-request-note">Cancellation request declined by the host</span>'
-          : b.can_cancel_request === false ? ''
+          : b.can_cancel_request === false ? (b.transferred ? '<span class="booking-request-note">Transferred · cannot be cancelled. Something not right? <a href="#" onclick="if(window.aervaOpenSupportChat){window.aervaOpenSupportChat();}return false;" style="color:var(--gold-text);">Contact Aerva Support</a></span>' : '')
           : `<button type="button" class="filter-clear" data-policy-cancel="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Request cancellation</button>`;
         const chatBtnHtml = (b.status === 'paid' || b.status === 'cancelled')
           ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">${upcoming ? 'Message host' : 'View messages'}</button>`
@@ -7405,6 +7425,9 @@
       });
       container.querySelectorAll('[data-pay-change]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); aervaPayChange(Number(btn.dataset.payChange), btn); });
+      });
+      container.querySelectorAll('[data-confirm-transfer]').forEach(btn => {
+        btn.addEventListener('click', (e) => { e.stopPropagation(); aervaConfirmTransfer(Number(btn.dataset.confirmTransfer), btn); });
       });
       container.querySelectorAll('[data-withdraw-change]').forEach(a => {
         a.addEventListener('click', async (e) => {
@@ -15383,6 +15406,20 @@ async function openChangeBooking(orderId, listingName){
   }catch(err){ body.innerHTML = '<p class="payout-muted">Could not load this. Try again.</p>'; return; }
   if(o.openChange){ body.innerHTML = `<p>You already have a change open: ${esc(o.openChange.summary)}.</p>`; return; }
   const field = 'width:100%; box-sizing:border-box; padding:11px; margin:6px 0 12px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px; background:#fff;';
+  // A stay whose host has other properties (same co-hosts): choose what to do first.
+  if(o.onlyTransfer){
+    if(!o.canTransfer){ body.innerHTML = '<p class="payout-muted">This booking can no longer be changed.</p>'; return; }
+    aervaTransferForm(body, o, orderId, { esc, inr, field, auth });
+    return;
+  }
+  if(o.canTransfer && !openChangeBooking._chose){
+    body.innerHTML = `<p class="step-help">What would you like to do?</p>
+      <button type="button" class="btn solid" id="chPickChange" style="width:100%; margin:6px 0;">Change dates, guests or add-ons</button>
+      <button type="button" class="btn" id="chPickMove" style="width:100%; margin:6px 0;">Move nights to another property of this host</button>`;
+    body.querySelector('#chPickMove').addEventListener('click', () => aervaTransferForm(body, o, orderId, { esc, inr, field, auth }));
+    body.querySelector('#chPickChange').addEventListener('click', () => { overlay.remove(); openChangeBooking._chose = true; try { openChangeBooking(orderId, listingName); } finally { openChangeBooking._chose = false; } });
+    return;
+  }
   const num = (id, label, value, min, max) => `<label class="payout-label" for="${id}">${label}</label>
     <select id="${id}" style="${field}">${Array.from({ length: max - min + 1 }, (_, i) => min + i).map(n => `<option value="${n}"${n === value ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
   const maxG = o.limits.maxGuests || 16;
@@ -15440,6 +15477,119 @@ async function openChangeBooking(orderId, listingName){
       if(typeof loadMyBookings === 'function') loadMyBookings();
     });
   });
+}
+
+// ---- Guest: move nights to another property of the same host ----
+// 1. Choose the nights. 2. See only the host's properties free for them
+// (same host and co-hosts). 3. See the payment summary — Aerva's 5%
+// transfer fee included — and send the request. The host or a co-host
+// accepts; only then is anything paid or refunded (_booking-transfers.js).
+function aervaTransferForm(body, o, orderId, { esc, inr, field, auth }){
+  const addDay = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+  // At least one night stays at this property: by default the last nights move, and never all of them.
+  let firstAllowed = [o.today, o.started ? addDay(o.current.arrival, 1) : o.current.arrival].sort().pop();
+  const defaultFrom = firstAllowed === o.current.arrival ? addDay(firstAllowed, 1) : firstAllowed;
+  body.innerHTML = `
+    ${bookStep(1, 'Which nights move')}
+    <p class="step-help">Choose the first and last night you would like to spend at another property of this host. Your check-in and check-out dates stay the same — the nights are split between the two properties. Any nights can move (the start, the end or the middle), but at least one night must stay here.${o.started ? ' You have checked in, so the check-in night stays.' : ''}</p>
+    <label class="payout-label" for="trFrom">First night at the other property</label>
+    <input id="trFrom" type="date" value="${esc(defaultFrom > o.lastNight ? firstAllowed : defaultFrom)}" min="${esc(firstAllowed)}" max="${esc(o.lastNight)}" style="${field}">
+    <label class="payout-label" for="trLast">Last night at the other property</label>
+    <input id="trLast" type="date" value="${esc(o.lastNight)}" min="${esc(firstAllowed)}" max="${esc(o.lastNight)}" style="${field}">
+    <button type="button" class="btn solid" id="trFind" style="width:100%; margin-top:6px;">Find available properties</button>
+    <div id="trTargets"></div>
+    <div id="trResult"></div>
+    <p id="trMsg" class="payout-muted" style="margin-top:10px; color:#a3402f;"></p>`;
+  const msg = body.querySelector('#trMsg');
+  const range = () => { const from = body.querySelector('#trFrom').value, last = body.querySelector('#trLast').value; return { from, to: last ? addDay(last, 1) : '' }; };
+  const post = (payload) => fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, auth), body: JSON.stringify(payload) })
+    .then(async r => ({ ok: r.ok, d: await r.json().catch(() => ({})) }));
+  const clearBelow = () => { body.querySelector('#trTargets').innerHTML = ''; body.querySelector('#trResult').innerHTML = ''; msg.textContent = ''; };
+  body.querySelector('#trFrom').addEventListener('change', clearBelow);
+  body.querySelector('#trLast').addEventListener('change', clearBelow);
+  body.querySelector('#trFind').addEventListener('click', async () => {
+    clearBelow();
+    const { from, to } = range();
+    if(!from || !to || to <= from){ msg.textContent = 'Choose the first and last night.'; return; }
+    if(from <= o.current.arrival && to >= o.current.departure){ msg.textContent = 'At least one night must stay at this property. Choose fewer nights to move.'; return; }
+    const box = body.querySelector('#trTargets');
+    box.innerHTML = '<p class="payout-muted">Checking availability…</p>';
+    let d;
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=transferTargets&orderId=' + encodeURIComponent(orderId) + '&from=' + from + '&to=' + to, { headers: auth });
+      d = await r.json();
+      if(!r.ok){ box.innerHTML = ''; msg.textContent = d.error || 'Could not look for other properties.'; return; }
+    }catch(e){ box.innerHTML = ''; msg.textContent = 'Could not look for other properties. Try again.'; return; }
+    if(!d.targets.length){ box.innerHTML = `<p class="step-help">None of this host’s other properties is free for ${d.nights === 1 ? 'that night' : 'those ' + d.nights + ' nights'}. Try other nights.</p>`; return; }
+    box.innerHTML = `${bookStep(2, 'Where to')}
+      <p class="step-help">Free for ${d.nights === 1 ? 'that night' : 'all ' + d.nights + ' nights'}, with the same host and co-hosts:</p>
+      ${d.targets.map((t, i) => `<label style="display:flex; gap:12px; align-items:center; padding:10px; margin:6px 0; border:1px solid #d9cfc2; border-radius:10px; cursor:pointer;">
+        <input type="radio" name="trTarget" value="${i}"${i === 0 ? ' checked' : ''}>
+        ${t.photo ? `<img src="${esc(t.photo)}" alt="" style="width:64px; height:48px; object-fit:cover; border-radius:6px;">` : ''}
+        <span style="flex:1;"><strong>${esc(t.name)}</strong>${t.city ? `<br><span class="payout-muted">${esc(t.city)}</span>` : ''}<br><span class="payout-muted">${esc(t.cancellationPolicy)} cancellation policy</span></span>
+        <span style="white-space:nowrap;">${inr(t.priceForNights)}</span></label>`).join('')}
+      <button type="button" class="btn solid" id="trQuote" style="width:100%; margin-top:10px;">See the payment summary</button>`;
+    box.querySelector('#trQuote').addEventListener('click', async () => {
+      const t = d.targets[Number((box.querySelector('input[name=trTarget]:checked') || {}).value) || 0];
+      const change = { kind: 'transfer', moveFrom: d.moveFrom, moveTo: d.moveTo, targetListingId: t.listingId, targetRoomId: t.roomId };
+      const out = body.querySelector('#trResult'); out.innerHTML = ''; msg.textContent = '';
+      const { ok, d: q } = await post({ mode: 'changeQuote', orderId, change });
+      if(!ok){ msg.textContent = q.error || 'Could not price this.'; return; }
+      const line = (l, v) => `<div class="payout-line"><span>${esc(l)}</span><span>${v}</span></div>`;
+      const kept = Math.max(0, Number(q.couponNotReturned) || 0);
+      const diffText = q.difference > 0 ? `You pay ${inr(q.difference)} more` : q.difference < 0 ? (-q.difference - kept > 0 ? `You get ${inr(-q.difference - kept)} back as Aerva credit` : 'Nothing comes back') : 'The total stays the same';
+      out.innerHTML = `${bookStep(3, 'Payment summary')}
+        <p class="step-help">${esc(q.summary)}.</p>
+        ${q.lines.map(l => line(l.label, inr(l.amount))).join('')}
+        <div style="border-top:1px solid var(--hairline); margin-top:8px; padding-top:4px;"></div>
+        ${line('Current total', inr(q.oldTotal))}
+        ${line('New total', '<strong>' + inr(q.newTotal) + '</strong>')}
+        <div class="sum-row" style="font-weight:600; font-size:18px; padding-top:10px;"><span>${diffText}</span><span></span></div>
+        <p class="pay-note" style="text-align:left;">Your host is asked first. Once they accept, you complete the transfer in My Bookings within 24 hours: ${q.difference > 0 ? 'by paying the difference.' : q.difference < 0 ? `by accepting the difference as Aerva credit${kept > 0 ? ` (except ${inr(kept)} that was paid by coupon)` : ''} — use it on another booking, or have it refunded to your original payment method at any time from My Bookings.` : 'by confirming it.'} Aerva’s transfer fee is ${inr(q.transfer.transferFee)} and is not refundable once the transfer is complete. If your host declines, or you do not complete it, nothing changes and nothing is charged.</p>
+        <div style="margin-top:12px; padding:12px 14px; border:1px solid #c9a96a; border-radius:10px; background:#fbf6ec;">
+          <p style="margin:0 0 6px; font-weight:600;">Before you send this, please read</p>
+          <ul style="margin:0; padding-left:18px; font-size:14px; line-height:1.55;">
+            <li><strong>What is charged:</strong> Aerva’s transfer fee of ${inr(q.transfer.transferFee)} (5% of the moved nights at the current property) is already counted in the new total. ${q.difference > 0 ? `You pay ${inr(q.difference)} more.` : q.difference < 0 ? `After it, ${inr(-q.difference - kept)} comes back to you as Aerva credit${kept > 0 ? ` (${inr(kept)} paid by coupon is not returned)` : ''}.` : 'You pay nothing more and get nothing back.'} Nothing else is added.</li>
+            <li><strong>If your host declines</strong>, or you do not complete it within 24 hours of their acceptance: nothing changes and nothing is charged.</li>
+            <li><strong>Once completed, it is final.</strong> The transfer cannot be undone, and no part of the booking can be changed, moved, split again, shortened <strong>or cancelled</strong> — even if your plans change.</li>
+            <li>Each part gets its own booking code. Your check-in and check-out dates stay the same.</li>
+            ${q.difference < 0 ? '<li>Aerva credit can be used on any booking, or refunded to your original payment method at any time from My Bookings; whatever is left when it ends is refunded automatically.</li>' : ''}
+            <li>If something is not working after the transfer, contact Aerva Support. Aerva will look at it and make the final decision.</li>
+          </ul>
+          <label style="display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:14px;"><input type="checkbox" id="trAgree" style="margin-top:3px;"> I understand: once completed, this transfer is final and the booking cannot be changed or cancelled.</label>
+        </div>
+        <p class="pay-note" style="text-align:left;">The moved nights become a separate booking at ${esc(q.transfer.toName)}. Its ${esc(q.transfer.newPolicy)} cancellation policy applies only if the host or Aerva cancels; you can no longer cancel.</p>
+        <button type="button" class="btn solid" id="trSend" style="width:100%; margin-top:10px;">Send transfer request to host</button>`;
+      out.querySelector('#trSend').addEventListener('click', async (ev) => {
+        const send = ev.currentTarget;
+        if(!out.querySelector('#trAgree').checked){ msg.textContent = 'Please tick the box to confirm you understand the transfer is final.'; return; }
+        send.disabled = true;
+        const res = await post({ mode: 'requestChange', orderId, change: Object.assign({ understood: true }, change) });
+        if(!res.ok){ msg.textContent = res.d.error || 'Could not send the request.'; send.disabled = false; return; }
+        body.innerHTML = '<p>Your transfer request has been sent to your host in Messages. We will email you when they answer.</p>';
+        if(typeof loadMyBookings === 'function') loadMyBookings();
+      });
+    });
+  });
+}
+
+// ---- Guest: complete an accepted transfer that costs the same or less ----
+async function aervaConfirmTransfer(changeId, btn){
+  if(!confirm('Complete this transfer? Your booking will be split as shown and this is final: no part can be changed, moved, split again, shortened or cancelled afterwards. For any problem, contact Aerva Support; Aerva decides. Any difference (after Aerva’s transfer fee) is held for you as Aerva credit, which you can have refunded to your original payment at any time from My Bookings.')) return;
+  const label = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Confirming…'; }
+  const note = document.createElement('p');
+  note.className = 'offer'; note.style.cssText = 'margin-top:8px;';
+  if(btn && btn.parentNode) btn.parentNode.appendChild(note);
+  try{
+    const r = await fetch(SUITES_API_BASE + '/api/guest-profile', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() },
+      body: JSON.stringify({ mode: 'confirmTransfer', changeId }) });
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(d.error || 'Could not confirm the transfer.');
+    note.style.color = '#2f6b3a';
+    note.textContent = 'Transfer complete. We have emailed you the details' + (d.heldAsCredit ? `; ${moneyBoth(d.heldAsCredit)} is held for you as Aerva credit (My Bookings).` : '.');
+    if(typeof loadMyBookings === 'function') setTimeout(loadMyBookings, 1500);
+  }catch(err){ note.style.color = '#a3402f'; note.textContent = err.message; if(btn){ btn.disabled = false; btn.textContent = label; } }
 }
 
 // ---- Guest: pay the difference for an accepted change ----

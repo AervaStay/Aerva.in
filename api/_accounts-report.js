@@ -60,7 +60,7 @@ async function recognisedBookings(sql, from, end) {
            CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN o.commission_amount ELSE 0 END AS commission_amount,
            CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN o.payout_amount ELSE 0 END AS payout_amount, to_jsonb(o)->>'refund_percent' AS refund_percent,
            COALESCE(NULLIF(btrim(concat_ws(' ', to_jsonb(o)->>'guest_first_name', to_jsonb(o)->>'guest_last_name')), ''), g.name, o.guest_email) AS guest_name,
-           h.id AS host_id, h.name AS host_name,
+           h.id AS host_id, h.name AS host_name, (to_jsonb(o)->>'transfer_change_id')::int AS transfer_change_id,
            (SELECT COALESCE(sum(amount), 0) FROM refunds r WHERE r.order_id = o.id AND r.status = 'processed' AND r.kind NOT LIKE 'deposit%' AND r.kind NOT LIKE '%fee-credit-%' AND r.razorpay_refund_id ~ '^rfnd_[A-Za-z0-9]{14}$') AS refunded_paise,
            CASE WHEN (o.status = 'paid' OR (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE) THEN (SELECT COALESCE(sum(amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id) ELSE 0 END AS cohost_shares
     FROM orders o
@@ -81,8 +81,12 @@ async function recognisedBookings(sql, from, end) {
   const held = {};
   if (orders.length) {
     try {
+      // A transfer's credit is the price difference after the split: it is
+      // no longer part of any row's total (the parts add up to the new
+      // total), so it is not taken off this row — it shows in the credit
+      // ledger and the row's Transfer column instead.
       (await sql`SELECT source_order_id AS id, sum(amount) AS v FROM fee_credits
-                 WHERE source_order_id = ANY(${orders.map(o => o.id)}) GROUP BY source_order_id`)
+                 WHERE source_order_id = ANY(${orders.map(o => o.id)}) AND COALESCE(to_jsonb(fee_credits)->>'reason', '') <> 'booking_transfer' GROUP BY source_order_id`)
         .forEach(r => { held[r.id] = Number(r.v) || 0; });
     } catch (e) { /* database update not applied yet */ }
   }
@@ -105,6 +109,23 @@ async function recognisedBookings(sql, from, end) {
         .forEach(r => { back[r.id] = Number(r.v) || 0; });
     } catch (e) { /* database update not applied yet */ }
   }
+  // Parts of a transferred booking: which booking they were split from, the
+  // transfer fee, and the credit the difference became (for the CA).
+  const transferOf = {};
+  if (orders.some(o => o.transfer_change_id)) {
+    try {
+      (await sql`SELECT c.id, c.difference, c.razorpay_payment_id, (c.quote->>'transferFee')::int AS fee, COALESCE(to_jsonb(src)->>'confirmation_code', '#' || src.id) AS src_code,
+                        (SELECT COALESCE(sum(f.amount), 0) FROM fee_credits f WHERE f.source_order_id = c.order_id AND to_jsonb(f)->>'reason' = 'booking_transfer') AS credit
+                 FROM booking_changes c JOIN orders src ON src.id = c.order_id
+                 WHERE c.id = ANY(${[...new Set(orders.map(o => Number(o.transfer_change_id)).filter(Boolean))]})`)
+        .forEach(r => { transferOf[r.id] = r; });
+    } catch (e) { /* database update not applied yet */ }
+  }
+  orders.forEach(o => {
+    const t = transferOf[Number(o.transfer_change_id)];
+    o.transfer_note = t ? `Transfer #${t.id} of booking ${t.src_code}: transfer fee ₹${Number(t.fee) || 0}`
+      + (Number(t.difference) > 0 ? `; difference ₹${t.difference} paid (${t.razorpay_payment_id || 'payment'})` : Number(t.difference) < 0 ? `; ₹${-Number(t.difference)} to Aerva credit (ledger)` : '') : '';
+  });
   orders.forEach(o => { o.fee_credit_held = held[o.id] || 0; o.credit_from = creditFrom[o.id] || ''; o.paid_by_credit = Math.max(0, Number(o.credit_used) - (back[o.id] || 0)); });
   return orders.map(o => {
     const subtotal = r2(o.subtotal), gst = r2(o.gst), fee = r2(o.guest_service_fee), deposit = r2(o.deposit_amount);
@@ -146,6 +167,7 @@ async function recognisedBookings(sql, from, end) {
       // every ledger it went to. Anything else is for the CA to look at
       // (e.g. Aerva refunding its own fee as an exception, or a coupon).
       feeCreditHeld,
+      transfer: o.transfer_note || '',
       difference: r2(keptAll - feeIncome - commission - hostPayable - gstPayable - feeCreditHeld)
     };
   });
@@ -190,7 +212,7 @@ async function accountsReport(sql, month) {
       ORDER BY e.created_at, e.id`).map(e => ({
         date: isoDay(e.created_at, true), credit: 'C-' + e.credit_id, guest: e.guest_email || '',
         movement: { issued: 'Credit made', used: 'Used on a booking', given_back: 'Given back to the credit', refunded: 'Refunded to the guest' }[e.kind] || e.kind,
-        why: e.kind === 'issued' ? (e.reason === 'stay_shortened' ? 'Stay shortened' : 'Host cancelled') : (e.note || ''),
+        why: e.kind === 'issued' ? (e.reason === 'stay_shortened' ? 'Stay shortened' : e.reason === 'booking_transfer' ? (e.note || 'Booking transferred: difference after Aerva’s transfer fee') : 'Host cancelled') : (e.note || ''),
         booking: e.booking || '', reference: e.reference || '',
         creditIn: e.kind === 'issued' || e.kind === 'given_back' ? Number(e.amount) : 0,
         creditOut: e.kind === 'used' || e.kind === 'refunded' ? Number(e.amount) : 0,

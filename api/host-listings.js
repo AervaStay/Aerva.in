@@ -371,6 +371,7 @@ async function cohostGate(req, res, accountId) {
     // The co-host's own cancellation-coupon deductions (never the host's).
     else if (q.myPenalties === '1') { perm = 'cancel'; mode = 'myPenalties'; }
     else if (q.cancellationRequests === '1') { perm = 'cancel'; mode = 'cancellationRequests'; }
+    else if (q.emergencyActions === '1') { perm = 'cancel'; mode = 'emergencyActions'; }
     else if (q.bookingChanges === '1') { perm = 'cancel'; mode = 'bookingChanges'; }
     else if (q.hostCancelPreview !== undefined) {
       perm = 'cancel'; mode = 'hostCancelPreview';
@@ -3294,6 +3295,19 @@ module.exports = async (req, res) => {
       return res.status(500).json({ error: 'Could not load cancellation requests right now.' });
     }
   }
+  // GET ?emergencyActions=1 → emergency cancellations waiting for this host, with Aerva's reminders (host dashboard "Action needed").
+  if (req.method === 'GET' && (req.query || {}).emergencyActions === '1') {
+    try {
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(200).json({ actions: [] });
+      let actions = await require('./_emergency-escalation').hostActions(sql, g.host_id);
+      if (cohostActor) actions = (await Promise.all(actions.map(async a => ({ a, l: (await sql`SELECT listing_id FROM orders WHERE id = ${a.orderId}`)[0] })))).filter(x => x.l && cohostHasListing(cohostActor.ctx, x.l.listing_id)).map(x => x.a);
+      return res.status(200).json({ actions });
+    } catch (err) {
+      console.error('emergencyActions failed:', err);
+      return res.status(500).json({ error: 'Could not load this right now.' });
+    }
+  }
   if (req.method === 'POST' && req.body && req.body.respondCancellationRequest) {
     let claimedId = null;
     try {
@@ -3313,9 +3327,27 @@ module.exports = async (req, res) => {
         await sql`UPDATE cancellation_requests SET status = ${status}, refund_percent = ${pct}, host_note = ${note || null}, decided_at = now(), decided_by = ${accountId}
                   WHERE id = ${rq.id} AND status = 'pending'`;
         claimedId = null;
+        // An emergency request Aerva was chasing: both sides' support requests close with the answer.
+        if (option.type === 'emergency' || option.type === 'emergency_late') {
+          await require('./_emergency-escalation').closeEscalation(sql, rq.id, status === 'accepted'
+            ? { guestText: `Your host accepted your emergency cancellation. ${Number(pct) === 100 ? 'The booking price, GST and any deposit are refunded in full' : `${pct}% of the booking price and its GST, and any deposit in full, are refunded`}; Aerva’s service fee is not refunded.`, hostText: 'Thank you — you accepted the cancellation. The guest has been refunded.' }
+            : { guestText: `Your host declined your emergency cancellation${note ? ': “' + note + '”' : ''}. The booking stands and there is no refund. If you need help, reply here.`, hostText: 'You declined the cancellation. The booking stands.' });
+        }
       };
 
-      if (option.type === 'emergency') {
+      if (option.type === 'emergency_late') {
+        // Asked for with less than a day to check-in: the host chooses —
+        // refund in full, keep 25% or keep 50% — or declines. The deposit
+        // always comes back; Aerva's service fee is kept; Aerva's
+        // commission is taken only on what the host keeps.
+        if (accept === true) {
+          const pct = Math.round(Number(req.body.respondCancellationRequest.refundPercent == null ? 100 : req.body.respondCancellationRequest.refundPercent));
+          if (!option.choices.includes(pct)) { await unclaimRequest(sql, rq.id); claimedId = null; return res.status(400).json({ error: 'Choose: refund in full, keep 25% or keep 50%.' }); }
+          await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct, by: 'emergency', note });
+          await decide('accepted', pct);
+          return res.status(200).json({ success: true, accepted: true, refundPercent: pct });
+        }
+      } else if (option.type === 'emergency') {
         // The booking price, GST and deposit come back in full. Aerva's
         // service fee is kept, as in every cancellation a guest asks for.
         if (accept === true) {
@@ -3565,6 +3597,9 @@ module.exports = async (req, res) => {
       // A rejected PAN is not on file: the host submits a new one, and its
       // number and name no longer bind the payout name.
       if (host.pan_status === 'rejected') { host.pan_number = null; host.pan_name = null; }
+      // Likewise rejected bank details: their name no longer binds the PAN
+      // (the host enters new bank details, checked against the PAN's name).
+      if (host.bank_status === 'rejected') host.bank_account_holder_name = null;
       let didSomething = false;
       let bankChanged = false;
       let panChanged = false;

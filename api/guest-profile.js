@@ -74,6 +74,7 @@ const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 // What the guest sees about a change: never the internal pricing record.
 function changeView(qc) {
+  if (qc.kind === 'transfer') return require('./_booking-transfers').transferView(qc);
   const q = qc.quote;
   if (q.kind === 'experience' || q.kind === 'pair') {
     const x = q.experience, st = q.stay;
@@ -460,6 +461,14 @@ module.exports = async (req, res) => {
 
       // ---- Changing a booking: what can change, and the current booking ----
       // GET ?mode=changeOptions&orderId=
+      // GET ?mode=transferTargets&orderId=&from=&to= → the host's other properties free for those nights
+      if (mode === 'transferTargets') {
+        try { return res.status(200).json(await require('./_booking-transfers').transferTargets(sql, Number(req.query.orderId) || 0, guestId, { moveFrom: req.query.from, moveTo: req.query.to })); }
+        catch (err) {
+          if (!err.isUserFacing) console.error('transferTargets failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not look for other properties right now.' });
+        }
+      }
       if (mode === 'changeOptions') {
         try { return res.status(200).json(await changeOptions(sql, Number(req.query.orderId) || 0, guestId)); }
         catch (err) { return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this right now.' }); }
@@ -831,6 +840,7 @@ module.exports = async (req, res) => {
                to_jsonb(o)->>'guest_first_name' AS guest_first_name,
                to_jsonb(o)->>'guest_last_name' AS guest_last_name,
                to_jsonb(o)->'pet_types' AS pet_types,
+               to_jsonb(o)->>'transfer_change_id' AS transfer_change_id,
                l.property_name AS listing_name, l.city AS listing_city, to_jsonb(l)->>'area' AS listing_area,
                l.formatted_address AS listing_address, l.host_name AS host_name,
                to_jsonb(l)->>'check_in_time' AS check_in_time, to_jsonb(l)->>'check_out_time' AS check_out_time,
@@ -865,6 +875,9 @@ module.exports = async (req, res) => {
           const reqs = await sql`SELECT DISTINCT ON (order_id) order_id, status FROM cancellation_requests WHERE order_id = ANY(${ids}) ORDER BY order_id, id DESC`;
           const byOrder = {}; reqs.forEach(r => { byOrder[r.order_id] = r.status; });
           bookings.forEach(b => { b.cancel_request_status = byOrder[b.id] || null; });
+          // An emergency request Aerva is chasing: where it stands (_emergency-escalation.js).
+          const notes = await require('./_emergency-escalation').guestStatus(sql, ids);
+          bookings.forEach(b => { if (notes[b.id]) b.cancel_request_note = notes[b.id]; });
         }
       } catch (err) { /* migration_cancellation_requests.sql not run yet */ }
 
@@ -889,10 +902,13 @@ module.exports = async (req, res) => {
           const started = !!today && arr <= today;
           const windowEnd = R.stayWindowEndMs(arr, b.listing_timezone);
           const inWindow = Date.now() < windowEnd;
-          b.can_change = !!paid && (!started || inWindow);
-          b.can_cancel_request = !!paid && !started;
+          // A transfer to another property stays open until 12 PM on the day after check-in (_booking-transfers.js).
+          const transferOpen = (b.listing_type || 'stay') === 'stay' && Date.now() < require('./_booking-transfers').transferWindowEndMs(arr, b.listing_timezone);
+          b.can_change = !!paid && (!started || inWindow || transferOpen) && !b.transfer_change_id;
+          b.transferred = !!b.transfer_change_id;
+          b.can_cancel_request = !!paid && !started && !b.transfer_change_id;   // a transferred booking: Aerva Support only
           b.can_report = !!paid && started && (b.listing_type || 'stay') === 'stay' && (inWindow || declined.has(b.id));
-          b.stay_window_closed = !!paid && started && !inWindow;
+          b.stay_window_closed = !!paid && started && !inWindow && !transferOpen;
           delete b.listing_timezone;
         });
       } catch (err) { console.error('booking actions not worked out:', err.message); }
@@ -1288,9 +1304,11 @@ module.exports = async (req, res) => {
       // POST { mode: 'requestChange', orderId, change } → sent to the host in Messages
       // POST { mode: 'withdrawChange', changeId }
       // change: { arrival, departure, adults, children, infants, pets, petTypes, amenityIds }
-      if (mode === 'changeQuote' || mode === 'requestChange' || mode === 'withdrawChange') {
+      if (mode === 'changeQuote' || mode === 'requestChange' || mode === 'withdrawChange' || mode === 'confirmTransfer') {
         try {
           const b = req.body || {};
+          // POST { mode: 'confirmTransfer', changeId } → the guest accepts the refund and completes an accepted transfer
+          if (mode === 'confirmTransfer') return res.status(200).json(await require('./_booking-changes').confirmTransfer(sql, razorpayClient(), { changeId: Number(b.changeId) || 0, guestId }));
           if (mode === 'withdrawChange') return res.status(200).json(await withdrawChange(sql, { changeId: Number(b.changeId) || 0, guestId }));
           if (mode === 'changeQuote') return res.status(200).json(changeView(await quoteChange(sql, Number(b.orderId) || 0, guestId, b.change || {})));
           const row = await requestChange(sql, { orderId: Number(b.orderId) || 0, guestId, input: b.change || {} });
