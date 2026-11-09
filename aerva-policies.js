@@ -413,7 +413,8 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Refunds', points: [
         'Refunds, where due, go to the original payment method. Timing depends on your bank or card issuer.',
-        'If the host cancels, everything you paid is held for you as Aerva credit first. Aerva credit lasts up to 6 months (its end date is shown in My Bookings): use it on any booking, or have it refunded at any time from My Bookings. Whatever is left when it ends is refunded automatically.'
+        'If the host cancels, everything you paid is held for you as Aerva credit first. Aerva credit lasts up to 6 months (its end date is shown in My Bookings): use it on any booking, or have it refunded at any time from My Bookings. Whatever is left when it ends is refunded automatically.',
+        'If you move nights to another property of the same host and the new total is lower, the difference after Aerva’s transfer fee is held as Aerva credit in the same way. If it is higher, you pay the difference after the host accepts.'
       ]},
       { title: 'Coupons', points: [
         'A coupon covers the booking price only. The guest service fee, GST and any security deposit are charged in full, on the full booking price.',
@@ -444,6 +445,7 @@ window.AERVA_POLICIES = {
       { title: 'General', points: [
         'Taxes are added separately (see the Taxes Policy). Security deposits carry no service fee.',
         'Aerva’s guest service fee is not refunded: not when a guest cancels, when a booking is changed to a lower price, or when a stay issue is upheld. When a host cancels (or Aerva cancels for the host), it is held for the guest as Aerva credit with everything else they paid, and can be refunded from there. It is refunded only when a booking fails because of a mistake on Aerva’s side, or in an exceptional case where Aerva, at its sole discretion, decides to refund it.',
+        'Moving nights to another property of the same host carries Aerva’s transfer fee: 5% of what the moved nights cost at the property booked, charged on every completed transfer and not refunded. It is shown in the summary before the request is sent.',
         'Aerva may change the guest service fee at any time, and its commission on the notice above. The fees shown when you book apply to that booking.'
       ]}
     ]},
@@ -500,12 +502,16 @@ window.AERVA_POLICIES = {
       { title: 'How a guest cancels', points: [
         'Send a cancellation request from My Bookings or the booking’s Messages thread. The host accepts or rejects it.',
         'The refund percentage is fixed when you send the request.',
-        'If the host does not answer within 24 hours, a request with a fixed refund is accepted at that refund, and a request where the host decides is settled with no refund. A request for an emergency, a hazard or a travel restriction is then decided by Aerva.',
+        'If the host does not answer within 24 hours, a request with a fixed refund is accepted at that refund, and a request where the host decides is settled with no refund. A request for an emergency, a hazard or a travel restriction follows the emergency rules below.',
         'A request still open when the stay starts closes, and the booking stands.',
         'Refunds cover the booking price and its GST at the percentage above. Aerva’s guest service fee is not refunded. The security deposit is always refunded in full.',
-        'Before check-in, for an environmental hazard, a life-threatening situation, a medical or family emergency, or a travel restriction, choose that reason. If the host accepts, the booking price, GST and deposit are refunded in full.',
+        'Before check-in, for an environmental hazard, a life-threatening situation, a medical or family emergency, or a travel restriction, choose that reason. If the host accepts, the booking price, GST and deposit are refunded in full; Aerva’s service fee stays charged. If the host declines, there is no refund and the booking stands.',
+        'An emergency request sent less than a day before check-in is a last-minute change, and the decision is the host’s: refund in full, keep 25% or keep 50% of the booking price (the rest, its GST share and the deposit are refunded), or decline (no refund). Aerva’s service fee stays charged, and Aerva’s commission is taken only on what the host keeps.',
+        'If the host does not answer an emergency request within 24 hours (sooner when check-in is near), Aerva reaches out to the host first: a support request is opened for the guest and for the host, the host is reminded 3 times by email and in Messages (more often when check-in is near), and Aerva’s support team tries to call. The host can still answer until Aerva decides.',
+        'Only if the host still does not answer after the 3 reminders does Aerva decide — normally as the guest asked; for a last-minute request, on the actual situation, which may be a refund in full or the host keeping 25% or 50%. Aerva’s decision is final and binds the guest and the host.',
         'Once the stay has started, a booking cannot be cancelled. To leave early, change the check-out date (see Changing a Booking).',
-        'A part paid by coupon is not returned when you cancel. It comes back as a new coupon, valid for 1 month, only if the host cancels the booking (or Aerva cancels it for the host).'
+        'A part paid by coupon is not returned when you cancel. It comes back as a new coupon, valid for 1 month, only if the host cancels the booking (or Aerva cancels it for the host).',
+        'A booking that has been transferred to another property of the same host (see Changing a Booking) cannot be cancelled by the guest, in whole or in part. If something is not working, contact Aerva Support; Aerva decides. Each part keeps the cancellation policy of its own property for a cancellation by the host or by Aerva.'
       ]},
       { title: 'Hosts', points: [
         'Hosts may cancel before check-in time, and must give a reason. The guest is told the reason.',
@@ -513,14 +519,15 @@ window.AERVA_POLICIES = {
         'Whenever the host cancels, everything the guest paid — the booking price, its GST and Aerva’s service fee — is held for them as Aerva credit for up to 6 months (its end date is shown in My Bookings); whatever is left when it ends is refunded automatically. They can use it on another stay or experience, or have it refunded in full to the original payment method at any time from My Bookings, and are reminded of it while it is unused: a pop-up when they sign in (3 times in the first 3 months, then once every 3 months) an email on 15 Feb, 15 May, 15 Aug and 15 Nov, and a final email 7 days before it ends. The security deposit is refunded at once.',
         'Within 48 hours of check-in, the guest also receives an Aerva coupon worth 10% of the booking, valid for 1 month, sent automatically 15 minutes after the cancellation. The host pays for it before the booking is cancelled, and what the host pays is not refunded to them. More than 48 hours before check-in, Aerva may decide further penalties for a host’s repeated cancellations. No coupon is given when the host cancels more than 48 hours before check-in. The coupon is not refundable; the guest can use it together with Aerva credit.',
         'Each property shows its host cancellation rate on its listing card: the share of its bookings in the last 12 months that the host cancelled, whatever the timing. It starts at 0%, counts against the host’s badge, and lets guests and hosts see how reliable a booking is.',
-        'What a guest is not refunded after cancelling is paid to the host, less Aerva’s commission, on the usual payout day.'
+        'What a guest is not refunded after cancelling is paid to the host, less Aerva’s commission, on the usual payout day.',
+        'A guest’s emergency cancellation request must be answered promptly in Messages. Unanswered after 24 hours (sooner when check-in is near), Aerva sends the host 3 reminders and tries to call; after that Aerva decides, and its decision is final and binds the host. Accepting carries no penalty and does not count as a host cancellation.'
       ]},
       { title: 'Co-hosts', points: [
         'The same rules apply when a co-host acts for the host. Within 48 hours of check-in, a co-host pays for the coupon from their own account before cancelling.',
         'Any money between a host and a co-host is for them to settle between themselves.'
       ]}
     ]},
-    { id: 'booking-changes', title: 'Changing a Booking', summary: 'How guests change dates, guests, pets or add-ons.', sections: [
+    { id: 'booking-changes', title: 'Changing a Booking', summary: 'How guests change dates, guests, pets or add-ons, or move nights to another property of the same host.', sections: [
       { title: 'What can change', points: [
         'Stays: dates (move, extend or shorten), the number of guests, pets and paid add-ons.',
         'Experiences: the date and the number of guests.',
@@ -536,7 +543,20 @@ window.AERVA_POLICIES = {
         'If the new total is lower, the difference is refunded once the host accepts. During a stay it is held for you as Aerva credit instead, which you can have refunded at any time.',
         'Aerva’s service fee stays as charged on the original booking. If you paid part of the price with a coupon, the coupon’s share of the difference is not returned: a coupon comes back only when the host cancels.',
         'If the new total is higher, pay the difference within 24 hours of the host accepting, through the 3-minute payment window. The change applies only when that payment succeeds.',
-        'If prices change before the host answers or before you pay, the request closes; send a new one.'
+        'If prices change before the host answers or before you pay, the request closes; send a new one.',
+        'A booking that has been transferred to another property (below) can no longer be changed.'
+      ]},
+      { title: 'Moving nights to another property (transfers)', points: [
+        'A stay can be split between its property and another property of the same host. The other property must have the same host and the same co-hosts; only those properties, free for the nights you choose, are shown.',
+        'Choose the nights to move: the start, the end or the middle of your stay. At least one night stays at the property you booked, and your check-in and check-out dates do not change. The booking becomes separate bookings, one for each part, each with its own booking code.',
+        'When: any time before check-in, or once the stay has started, until 12 PM (the property’s local time) on the day after check-in — after that the option is no longer shown. Nights that have passed cannot move. Not possible once the host has been paid for the booking.',
+        'Before you send it you see the full summary: each part and its price, Aerva’s transfer fee, the old and new totals, and what you pay or get back. The nights that stay are priced at your booking’s own rates; the moved nights at the other property’s rates. The other property’s own security deposit and pet fee apply to the moved nights; paid add-ons stay with their nights and are not carried over.',
+        'Aerva’s transfer fee is 5% of what the moved nights cost at the property you booked. It is charged on every completed transfer, including a booking whose dates were changed before, and is not refunded.',
+        'The host or a co-host accepts or declines. Then you complete it within 24 hours: if the new total is higher, by paying the difference through the 3-minute payment window; if it is lower, by accepting the difference, after the transfer fee, as Aerva credit — use it on another booking, or have it refunded to your original payment method at any time from My Bookings (whatever is left when it ends is refunded automatically). A part paid by coupon is not returned.',
+        'If the host declines, or you do not complete it in time, nothing changes and nothing is charged — no fee.',
+        'A completed transfer is final. It cannot be undone, and no part of the booking can be changed, moved, split again, shortened or cancelled by you — even if your plans change. You confirm that you understand this before sending the request.',
+        'If something is not working after a transfer, contact Aerva Support. Aerva will look at it and its decision is final.',
+        'A transfer is not a cancellation: no host penalty applies. Each part is paid out to the host separately, after Aerva’s commission and TDS on that part’s own amount.'
       ]}
     ]},
     { id: 'booking-requirements', title: 'Booking Requirements', summary: 'What every guest needs to book, and same-day bookings.', sections: [
@@ -798,8 +818,11 @@ window.AERVA_POLICIES = {
           { title: 'To cancel', points: [
             'Open the booking in My Bookings and send a cancellation request. The host has 24 hours to answer it.',
             'The refund follows the listing’s refund policy, shown before you paid. The percentage is fixed when you send the request.',
-            'For an emergency, a hazard or a travel restriction, choose that reason when you cancel. If the host does not answer within 24 hours, Aerva decides.',
-            'A booking can be cancelled only before check-in. Once your stay has started, change your check-out date instead (Changing a booking).'
+            'For an emergency, a hazard or a travel restriction, choose that reason when you cancel. If the host accepts, the booking price, GST and deposit are refunded in full (Aerva’s service fee stays charged); if the host declines, there is no refund.',
+            'Less than a day before check-in, an emergency is a last-minute change: the host may refund in full, keep 25% or keep 50%, or decline.',
+            'If the host does not answer within 24 hours (sooner when check-in is near), Aerva opens a support request for you, reminds the host 3 times and tries to call them. You can follow it in Support → My requests. If the host still does not answer, Aerva decides, and its decision is final.',
+            'A booking can be cancelled only before check-in. Once your stay has started, change your check-out date instead (Changing a booking).',
+            'A booking you have transferred to another property cannot be cancelled. If something is not working, raise a request and choose the booking: Aerva will look at it and decide.'
           ]},
           { title: 'If the host cancels', points: [
             'Whenever the host cancels, everything you paid — the booking price, GST and Aerva’s service fee — is held for you as Aerva credit for up to 6 months (its end date is shown in My Bookings); whatever is left when it ends is refunded to your original payment method automatically. Use it on another stay or experience, or have it refunded to your original payment method at any time from My Bookings. Any deposit is refunded at once.',
@@ -816,7 +839,7 @@ window.AERVA_POLICIES = {
         ], docs: ['cancellation-stays', 'cancellation-experiences', 'payments'] },
 
       { id: 'changes', group: 'guest', title: 'Changing a booking', category: 'change_booking',
-        summary: 'Moving dates, extending or shortening a stay, guests, pets and add-ons.',
+        summary: 'Moving dates, extending or shortening a stay, guests, pets and add-ons, or moving nights to another property.',
         sections: [
           { title: 'How', points: [
             'Choose the change in My Bookings. The new price and the difference are shown before you send it.',
@@ -825,6 +848,13 @@ window.AERVA_POLICIES = {
             'During your stay, ask by 10 AM (the property’s local time) on the day after check-in. The check-in night is never refunded. If your host agrees, the nights you no longer stay come back as Aerva credit for up to 6 months (its end date is shown in My Bookings) — use it on another booking or have it refunded from My Bookings whenever you choose; whatever is left when it ends is refunded automatically. After that time the booking cannot be changed.',
             'If the host declines a change you asked for during your stay, or does not answer, you can raise it with Aerva within 24 hours: My Bookings → Report a problem.',
             'A cheaper change refunds the difference, but Aerva’s service fee stays as charged, and any part paid by coupon is not returned.'
+          ]},
+          { title: 'Moving nights to another property', points: [
+            'In My Bookings → Change booking → “Move nights to another property of this host”. Choose the nights, then pick one of the host’s properties with the same co-hosts that is free for them.',
+            'At least one night stays where you booked; your check-in and check-out dates stay the same. Possible before check-in, or until 12 PM (property’s time) on the day after check-in, and not once the host has been paid.',
+            'The summary shows every part, Aerva’s 5% transfer fee, and what you pay or get back before you send it. The host accepts; then you complete it within 24 hours — paying the difference, or accepting it as Aerva credit (refundable at any time from My Bookings). If the host declines or you do not complete it, nothing is charged.',
+            'Once completed, a transfer is final: the booking cannot be changed, split again, shortened or cancelled. Each part has its own booking code.',
+            'If something is not working after a transfer, raise a request and choose the booking. Aerva will look at it and decide.'
           ]},
           { title: 'When we can help', points: [
             'If the change will not send, the price looks wrong, or you paid the difference and the booking did not change, raise a request and choose the booking.'
@@ -903,6 +933,7 @@ window.AERVA_POLICIES = {
             'Payouts are sent automatically at 5 PM (your property’s local time) on the day after check-in — for an experience, the day after its date — to your verified bank account, after Aerva’s commission and TDS.',
             'If a guest has asked to change the stay or reported a problem by then, only the first night is sent; the rest follows once the request is settled.',
             'If the booking changes after a payout is sent, the difference is settled automatically: less is deducted from your next payout, more is paid to you separately.',
+            'If a guest moves nights to another of your properties (you or a co-host accept it in Messages), each part becomes its own booking with its own booking code and is paid out on its own, with commission and TDS worked out on that part’s amount. A transfer is not a cancellation: no penalty applies.',
             'See every payout and its status in My Earnings.'
           ]},
           { title: 'A payout on hold or failed', points: [
@@ -951,6 +982,11 @@ window.AERVA_POLICIES = {
           ]},
           { title: 'Instead of cancelling', points: [
             'If something at the property has gone wrong, raise a request before cancelling. We may be able to help the guest another way.'
+          ]},
+          { title: 'A guest’s emergency cancellation request', points: [
+            'Answer it in Messages within 24 hours. Accept: the guest gets the booking price, GST and any deposit back, with no penalty to you. Decline: the booking stands, with no refund.',
+            'Asked less than a day before check-in, it is a last-minute change: you may refund in full, keep 25% or keep 50%, or decline. Aerva’s commission is only on what you keep.',
+            'Not answered in time, it shows as “Action needed” in your dashboard and in Support → My requests, and Aerva reminds you 3 times by email and in Messages and tries to call you. After that, Aerva decides, and its decision is final for you and the guest.'
           ]}
         ], docs: ['cancellation-stays', 'cancellation-experiences'] },
 

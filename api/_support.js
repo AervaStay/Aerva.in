@@ -472,7 +472,7 @@ async function adminList(sql, { status = 'active', q = '' } = {}) {
   try {
     rows = await sql`
       SELECT t.id, t.ref, t.category, t.subject, t.status, t.role, t.order_id, t.listing_id, t.callback_phone,
-             COALESCE(to_jsonb(t)->>'channel', 'web') AS channel,
+             COALESCE(to_jsonb(t)->>'channel', 'web') AS channel, COALESCE((to_jsonb(t)->>'urgent')::boolean, false) AS urgent,
              (to_jsonb(t)->>'feedback_rating')::int AS feedback_rating, (to_jsonb(t)->>'auto_closed')::boolean AS auto_closed,
              t.created_at, t.updated_at, t.first_response_at, t.last_user_message_at, t.last_support_message_at,
              g.name AS person_name, g.email AS person_email,
@@ -482,7 +482,7 @@ async function adminList(sql, { status = 'active', q = '' } = {}) {
       FROM support_tickets t LEFT JOIN guests g ON g.id = t.guest_id
       WHERE (${want}::text[] IS NULL OR t.status = ANY(${want}::text[]))
         AND (${term} = '' OR t.ref ILIKE ${'%' + term + '%'} OR t.subject ILIKE ${'%' + term + '%'} OR g.email ILIKE ${'%' + term + '%'} OR g.name ILIKE ${'%' + term + '%'})
-      ORDER BY (t.category = 'safety' AND t.status NOT IN ('resolved', 'closed')) DESC, (t.first_response_at IS NULL) DESC, t.updated_at DESC LIMIT 200`;
+      ORDER BY (COALESCE((to_jsonb(t)->>'urgent')::boolean, false) AND t.status NOT IN ('resolved', 'closed')) DESC, (t.category = 'safety' AND t.status NOT IN ('resolved', 'closed')) DESC, (t.first_response_at IS NULL) DESC, t.updated_at DESC LIMIT 200`;
     counts = await sql`SELECT status, count(*)::int AS n FROM support_tickets GROUP BY status`;
   } catch (err) { if (notReady(err)) return { ready: false, tickets: [], counts: {} }; throw err; }
   return {
@@ -607,6 +607,46 @@ async function eraseForAccount(sql, guestId) {
   } catch (err) { if (!notReady(err)) throw err; }
 }
 
+// ---------------------------------------------------------------- requests Aerva opens itself
+// A request Aerva opens for a person about a booking (e.g. an emergency
+// cancellation the host has not answered, _cancellations.js): it shows in
+// their Support → My requests and in the bell as a message from Aerva
+// Support, and in Admin → Support (urgent first). Returns the ticket, or
+// null before the support tables exist. Never sends the generic
+// acknowledgement — the caller emails what matters.
+async function openSystemRequest(sql, { guestId, role = 'guest', category = 'cancellation_refund', subject, body, orderId = null, urgent = false }) {
+  try {
+    let ticket;
+    for (let i = 0; i < 20 && !ticket; i++) {
+      ticket = (await sql`
+        INSERT INTO support_tickets (ref, guest_id, role, category, subject, order_id, status, last_support_message_at, first_response_at)
+        VALUES (${randomRef()}, ${guestId}, ${role}, ${category}, ${clean(subject, SUBJECT_MAX)}, ${orderId}, 'in_progress', now(), now())
+        ON CONFLICT (ref) DO NOTHING RETURNING *`)[0];
+    }
+    if (!ticket) return null;
+    if (urgent) { try { await sql`UPDATE support_tickets SET urgent = true WHERE id = ${ticket.id}`; } catch (e) { /* column not there yet */ } }
+    await sql`INSERT INTO support_messages (ticket_id, sender, body, created_at) VALUES (${ticket.id}, 'system', ${`Request opened by Aerva. Reference ${ticket.ref}.`}, now() - interval '1 millisecond')`;
+    await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${ticket.id}, 'support', ${String(body || '').slice(0, BODY_MAX)})`;
+    await logAudit(sql, { action: 'support_request_created', success: true, actorType: 'system', actorIdentifier: 'aerva',
+      targetType: 'support_ticket', targetId: ticket.id, metadata: { ref: ticket.ref, category, role, orderId, opened: 'by_aerva' } });
+    return ticket;
+  } catch (err) { if (notReady(err)) return null; throw err; }
+}
+// Adds an update from Aerva to such a request (shows as unread for the person).
+// resolve: true closes it as resolved. Never throws.
+async function systemUpdate(sql, ticketId, body, { resolve = false } = {}) {
+  if (!ticketId) return;
+  try {
+    await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${ticketId}, 'support', ${String(body || '').slice(0, BODY_MAX)})`;
+    if (resolve) {
+      await sql`UPDATE support_tickets SET last_support_message_at = now(), updated_at = now(), status = 'resolved', resolved_at = now() WHERE id = ${ticketId} AND status NOT IN ('resolved', 'closed')`;
+      try { await sql`UPDATE support_tickets SET urgent = false WHERE id = ${ticketId}`; } catch (e) { /* column not there yet */ }
+    } else {
+      await sql`UPDATE support_tickets SET last_support_message_at = now(), updated_at = now() WHERE id = ${ticketId}`;
+    }
+  } catch (err) { console.error('support update not written:', ticketId, err.message); }
+}
+
 // The request types, for Admin → Lookup "Raise a request for this customer".
 function categoryList() {
   return Object.keys(CATEGORIES).map(k => ({ key: k, label: CATEGORIES[k].label, audience: CATEGORIES[k].audience, booking: CATEGORIES[k].booking, bookingAs: CATEGORIES[k].bookingAs, listing: CATEGORIES[k].listing }));
@@ -618,5 +658,5 @@ module.exports = {
   CONDUCT, FEEDBACK_HOURS,
   requestOptions, createRequest, listRequests, getRequest, replyToRequest, closeRequest, submitFeedback, autoCloseResolved, bellNotifications,
   createChatRequest, appendUserMessage, applyFeedback, ticketView, bookingRole,
-  adminList, adminGet, adminReply, adminSaveCase, eraseForAccount, cleanFiles
+  adminList, adminGet, adminReply, adminSaveCase, eraseForAccount, cleanFiles, openSystemRequest, systemUpdate
 };

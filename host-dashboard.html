@@ -723,7 +723,7 @@
 <script src="aerva-cohost.js"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-09a"></script>
+<script src="aerva-policies.js?v=2026-11-09c"></script>
 </head>
 <body>
 
@@ -2182,7 +2182,7 @@
             ${v.panStatus === 'rejected' ? '<p class="verify-locked-note">Check the reason above, then submit your PAN again with a clear photo of the card.</p>' : ''}
             <input type="text" id="panNumberInput" placeholder="PAN number, e.g. ABCPE1234F" style="text-transform:uppercase;">
             <input type="text" id="panNameInput" placeholder="Name exactly as printed on your PAN card" autocomplete="name" value="${escH(v.bankAccountHolderName || '')}">
-            ${v.bankAccountHolderName ? `<p class="verify-locked-note">It must be the same as your payout name, ${escH(v.bankAccountHolderName)}. To use a PAN in another name, change <a href="host-payouts.html" style="color:#8a6c39;">Payout details</a> first.</p>` : ''}
+            ${v.bankAccountHolderName && v.bankStatus !== 'rejected' ? `<p class="verify-locked-note">It must be the same as your payout name, ${escH(v.bankAccountHolderName)}. To use a PAN in another name, change <a href="host-payouts.html" style="color:#8a6c39;">Payout details</a> first.</p>` : ''}
             <p class="verify-locked-note" style="margin:6px 0 4px;">A clear photo of your PAN card, or your e-PAN PDF. It is checked in seconds and not stored.</p>
             <input type="file" id="panFileInput" accept="image/*,.pdf">
             <button type="button" class="btn-small" id="submitPanBtn">Submit PAN</button>
@@ -4695,6 +4695,28 @@
         if(!r.ok){ const j = await r.json().catch(() => ({})); box.querySelector('.rn-msg').textContent = j.error || 'Could not save. Try again.'; return; }
         box.remove();
       });
+    });
+  }).catch(() => {});
+
+  // Action needed: a guest's emergency cancellation waiting for this host.
+  // Aerva reminds the host 3 times and then decides; its decision is final
+  // (_emergency-escalation.js, owner's rule 9 Nov 2026). Shown until answered.
+  fetch(API + '?emergencyActions=1', { headers: H }).then(r => r.json()).then(d => {
+    const wrap = document.querySelector('.wrap');
+    if(!wrap) return;
+    ((d && d.actions) || []).forEach(a => {
+      const box = document.createElement('div');
+      box.className = 'notice-card notice-urgent';
+      box.style.cssText = 'margin:0 0 20px; padding:18px 20px;';
+      const status = a.aervaDeciding ? 'You did not answer after ' + a.remindersMax + ' reminders, so <strong>Aerva is now deciding</strong>. Its decision will be final for you and the guest. You can still answer until it does.'
+        : a.escalated ? 'Aerva has sent you reminder <strong>' + a.reminders + ' of ' + a.remindersMax + '</strong>. If there is no answer after ' + a.remindersMax + ' reminders, Aerva will decide, and its decision is final for you and the guest.'
+        : 'Please answer by <strong>' + esc(new Date(a.answerBy).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })) + '</strong>.';
+      box.innerHTML = '<strong style="font-size:16px;">Action needed: your guest asked to cancel for an emergency</strong>'
+        + '<p style="font-size:14.5px; line-height:1.6; margin:8px 0;">' + esc(a.listing) + ' · ' + esc(a.arrival) + ' → ' + esc(a.departure) + ' · booking ' + esc(a.code) + ' · ' + esc(a.reason) + '</p>'
+        + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Accept: the guest gets the booking price, GST and any deposit back, with no charge or penalty to you. Decline: the booking stands and the guest gets no refund.</p>'
+        + '<p class="notice-due" style="font-size:14px; line-height:1.6; margin:6px 0;">' + status + '</p>'
+        + '<div style="margin-top:10px; display:flex; gap:14px; align-items:center; flex-wrap:wrap;"><a class="ch-btn primary" href="index.html?view=messages" style="text-decoration:none;">Answer in Messages</a><a href="index.html?view=help&mine=1" style="font-size:13.5px;">Your support request</a></div>';
+      wrap.insertBefore(box, wrap.firstChild);
     });
   }).catch(() => {});
 
